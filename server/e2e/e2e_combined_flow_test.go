@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -16,7 +15,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	logctx "github.com/onkernel/kernel-images/server/lib/logger"
 	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
@@ -27,18 +25,11 @@ import (
 // This reproduces the race condition where profile loading fails to connect to CDP
 // after the sequence: extension upload (restart) -> viewport change (restart) -> CDP connect.
 func TestExtensionViewportThenCDPConnection(t *testing.T) {
-	image := headlessImage
-	name := containerName + "-combined-flow"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
+	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		require.NoError(t, err, "docker not available: %v", err)
 	}
-
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
 
 	// Start with specific resolution to verify viewport change works
 	env := map[string]string{
@@ -46,116 +37,109 @@ func TestExtensionViewportThenCDPConnection(t *testing.T) {
 		"HEIGHT": "768",
 	}
 
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container: %v", err)
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 3*time.Minute)
+	c := NewTestContainer(t, headlessImage)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	logger.Info("[setup]", "action", "waiting for API", "url", apiBaseURL+"/spec.yaml")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	err := c.Start(ctx, ContainerConfig{Env: env})
+	require.NoError(t, err, "failed to start container: %v", err)
+	defer c.Stop(ctx)
+
+	t.Logf("[setup] waiting for API: %s/spec.yaml", c.APIBaseURL())
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
 
 	// Wait for DevTools to be ready initially
-	_, err = waitDevtoolsWS(ctx)
+	err = c.WaitDevTools(ctx)
 	require.NoError(t, err, "devtools not ready initially")
 
-	client, err := apiClient()
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Step 1: Upload extension (triggers Chromium restart)
-	logger.Info("[test]", "step", 1, "action", "uploading extension")
-	uploadExtension(t, ctx, client, logger)
+	t.Log("[test] step 1: uploading extension")
+	uploadExtension(t, ctx, client)
 
 	// Wait briefly for the system to stabilize after extension upload restart
 	// The extension upload waits for DevTools, but the API may need a moment
-	logger.Info("[test]", "action", "verifying API is still responsive after extension upload")
-	err = waitForAPIHealth(ctx, logger)
+	t.Log("[test] verifying API is still responsive after extension upload")
+	err = waitForAPIHealth(ctx, c.APIBaseURL(), t)
 	require.NoError(t, err, "API not healthy after extension upload")
 
 	// Create a fresh API client to avoid connection reuse issues after restart
 	// The previous client's connection may have been closed by the server
-	client, err = apiClientNoKeepAlive()
+	client, err = c.APIClientNoKeepAlive()
 	require.NoError(t, err, "failed to create fresh API client")
 
 	// Step 2: Change viewport (triggers another Chromium restart)
-	logger.Info("[test]", "step", 2, "action", "changing viewport to 1920x1080")
-	changeViewport(t, ctx, client, 1920, 1080, logger)
+	t.Log("[test] step 2: changing viewport to 1920x1080")
+	changeViewport(t, ctx, client, 1920, 1080)
 
 	// Wait for API to be healthy after viewport change
-	logger.Info("[test]", "action", "verifying API is still responsive after viewport change")
-	err = waitForAPIHealth(ctx, logger)
+	t.Log("[test] verifying API is still responsive after viewport change")
+	err = waitForAPIHealth(ctx, c.APIBaseURL(), t)
 	require.NoError(t, err, "API not healthy after viewport change")
 
 	// Step 3: Immediately attempt CDP connection (this may fail due to race condition)
-	logger.Info("[test]", "step", 3, "action", "attempting CDP connection immediately after restarts")
+	t.Log("[test] step 3: attempting CDP connection immediately after restarts")
 
 	// Try connecting without any delay - this is the most aggressive test case
-	err = attemptCDPConnection(ctx, logger)
+	err = attemptCDPConnection(ctx, c.CDPURL(), t)
 	if err != nil {
-		logger.Error("[test]", "step", 3, "result", "CDP connection failed", "error", err.Error())
+		t.Logf("[test] step 3: CDP connection failed: %v", err)
 		// Log additional diagnostics
-		logCDPDiagnostics(ctx, logger)
+		logCDPDiagnostics(ctx, t)
 	}
 	require.NoError(t, err, "CDP connection failed after extension upload + viewport change")
 
-	logger.Info("[test]", "result", "CDP connection successful after back-to-back restarts")
+	t.Log("[test] result: CDP connection successful after back-to-back restarts")
 }
 
 // TestMultipleCDPConnectionsAfterRestart tests that multiple rapid CDP connections
 // work correctly after Chromium restart.
 func TestMultipleCDPConnectionsAfterRestart(t *testing.T) {
-	image := headlessImage
-	name := containerName + "-multi-cdp"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
+	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		require.NoError(t, err, "docker not available: %v", err)
 	}
 
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
-
 	env := map[string]string{}
 
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container: %v", err)
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 3*time.Minute)
+	c := NewTestContainer(t, headlessImage)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	logger.Info("[setup]", "action", "waiting for API")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	err := c.Start(ctx, ContainerConfig{Env: env})
+	require.NoError(t, err, "failed to start container: %v", err)
+	defer c.Stop(ctx)
 
-	_, err = waitDevtoolsWS(ctx)
+	t.Log("[setup] waiting for API")
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	err = c.WaitDevTools(ctx)
 	require.NoError(t, err, "devtools not ready initially")
 
-	client, err := apiClient()
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Upload extension to trigger a restart
-	logger.Info("[test]", "action", "uploading extension to trigger restart")
-	uploadExtension(t, ctx, client, logger)
+	t.Log("[test] uploading extension to trigger restart")
+	uploadExtension(t, ctx, client)
 
 	// Rapidly attempt multiple CDP connections in sequence
-	logger.Info("[test]", "action", "attempting 5 rapid CDP connections")
+	t.Log("[test] attempting 5 rapid CDP connections")
 	for i := 1; i <= 5; i++ {
-		logger.Info("[test]", "connection_attempt", i)
-		err := attemptCDPConnection(ctx, logger)
+		t.Logf("[test] connection attempt %d", i)
+		err := attemptCDPConnection(ctx, c.CDPURL(), t)
 		require.NoError(t, err, "CDP connection %d failed", i)
-		logger.Info("[test]", "connection_attempt", i, "result", "success")
+		t.Logf("[test] connection attempt %d: success", i)
 	}
 
-	logger.Info("[test]", "result", "all CDP connections successful")
+	t.Log("[test] result: all CDP connections successful")
 }
 
 // uploadExtension uploads a simple MV3 extension and waits for Chromium to restart.
-func uploadExtension(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, logger *slog.Logger) {
+func uploadExtension(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
 	t.Helper()
 
 	// Build simple MV3 extension zip in-memory
@@ -189,11 +173,11 @@ func uploadExtension(t *testing.T, ctx context.Context, client *instanceoapi.Cli
 	elapsed := time.Since(start)
 	require.NoError(t, err, "uploadExtensionsAndRestart request error")
 	require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
-	logger.Info("[extension]", "action", "uploaded", "elapsed", elapsed.String())
+	t.Logf("[extension] uploaded in %s", elapsed)
 }
 
 // changeViewport changes the display resolution, which triggers Chromium restart.
-func changeViewport(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, width, height int, logger *slog.Logger) {
+func changeViewport(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, width, height int) {
 	t.Helper()
 
 	req := instanceoapi.PatchDisplayJSONRequestBody{
@@ -206,18 +190,18 @@ func changeViewport(t *testing.T, ctx context.Context, client *instanceoapi.Clie
 	require.NoError(t, err, "PATCH /display request failed")
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 	require.NotNil(t, rsp.JSON200, "expected JSON200 response")
-	logger.Info("[viewport]", "action", "changed", "width", width, "height", height, "elapsed", elapsed.String())
+	t.Logf("[viewport] changed to %dx%d in %s", width, height, elapsed)
 }
 
 // attemptCDPConnection tries to establish a CDP WebSocket connection and run a simple command.
-func attemptCDPConnection(ctx context.Context, logger *slog.Logger) error {
-	wsURL := "ws://127.0.0.1:9222/"
+func attemptCDPConnection(ctx context.Context, wsURL string, t *testing.T) error {
+	t.Helper()
 
 	// Set a timeout for the connection attempt
 	connCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	logger.Info("[cdp]", "action", "connecting", "url", wsURL)
+	t.Logf("[cdp] connecting to %s", wsURL)
 
 	// Establish WebSocket connection to CDP proxy
 	conn, _, err := websocket.Dial(connCtx, wsURL, nil)
@@ -226,7 +210,7 @@ func attemptCDPConnection(ctx context.Context, logger *slog.Logger) error {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	logger.Info("[cdp]", "action", "connected", "url", wsURL)
+	t.Logf("[cdp] connected to %s", wsURL)
 
 	// Send a simple CDP command: Browser.getVersion
 	// This validates that the proxy can communicate with the browser
@@ -239,7 +223,7 @@ func attemptCDPConnection(ctx context.Context, logger *slog.Logger) error {
 		return fmt.Errorf("failed to marshal CDP request: %w", err)
 	}
 
-	logger.Info("[cdp]", "action", "sending Browser.getVersion")
+	t.Log("[cdp] sending Browser.getVersion")
 
 	if err := conn.Write(connCtx, websocket.MessageText, reqBytes); err != nil {
 		return fmt.Errorf("failed to send CDP command: %w", err)
@@ -269,25 +253,17 @@ func attemptCDPConnection(ctx context.Context, logger *slog.Logger) error {
 
 	// Log some version info for debugging
 	if product, ok := result["product"].(string); ok {
-		logger.Info("[cdp]", "action", "version received", "product", product)
+		t.Logf("[cdp] version received: %s", product)
 	}
 
-	logger.Info("[cdp]", "action", "command successful")
+	t.Log("[cdp] command successful")
 	return nil
 }
 
-// apiClientNoKeepAlive creates an API client that doesn't reuse connections.
-// This is useful after server restarts where existing connections may be stale.
-func apiClientNoKeepAlive() (*instanceoapi.ClientWithResponses, error) {
-	transport := &http.Transport{
-		DisableKeepAlives: true,
-	}
-	httpClient := &http.Client{Transport: transport}
-	return instanceoapi.NewClientWithResponses(apiBaseURL, instanceoapi.WithHTTPClient(httpClient))
-}
-
 // waitForAPIHealth waits until the API server is responsive.
-func waitForAPIHealth(ctx context.Context, logger *slog.Logger) error {
+func waitForAPIHealth(ctx context.Context, apiBaseURL string, t *testing.T) error {
+	t.Helper()
+
 	client := &http.Client{Timeout: 5 * time.Second}
 	maxAttempts := 30
 	for i := 0; i < maxAttempts; i++ {
@@ -295,7 +271,7 @@ func waitForAPIHealth(ctx context.Context, logger *slog.Logger) error {
 		resp, err := client.Do(req)
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
-			logger.Info("[health]", "action", "API healthy", "attempts", i+1)
+			t.Logf("[health] API healthy after %d attempts", i+1)
 			return nil
 		}
 		if resp != nil && resp.Body != nil {
@@ -309,28 +285,30 @@ func waitForAPIHealth(ctx context.Context, logger *slog.Logger) error {
 }
 
 // logCDPDiagnostics logs diagnostic information when CDP connection fails.
-func logCDPDiagnostics(ctx context.Context, logger *slog.Logger) {
+func logCDPDiagnostics(ctx context.Context, t *testing.T) {
+	t.Helper()
+
 	// Try to get the internal CDP endpoint status
 	stdout, err := execCombinedOutput(ctx, "curl", []string{"-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:9223/json/version"})
 	if err != nil {
-		logger.Info("[diagnostics]", "internal_cdp_status", "failed", "error", err.Error())
+		t.Logf("[diagnostics] internal CDP status: failed (%v)", err)
 	} else {
-		logger.Info("[diagnostics]", "internal_cdp_status", stdout)
+		t.Logf("[diagnostics] internal CDP status: %s", stdout)
 	}
 
 	// Check if Chromium process is running
 	psOutput, err := execCombinedOutput(ctx, "pgrep", []string{"-a", "chromium"})
 	if err != nil {
-		logger.Info("[diagnostics]", "chromium_process", "not found or error", "error", err.Error())
+		t.Logf("[diagnostics] chromium process: not found or error (%v)", err)
 	} else {
-		logger.Info("[diagnostics]", "chromium_process", psOutput)
+		t.Logf("[diagnostics] chromium process: %s", psOutput)
 	}
 
 	// Check supervisord status
 	supervisorOutput, err := execCombinedOutput(ctx, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "status"})
 	if err != nil {
-		logger.Info("[diagnostics]", "supervisor_status", "error", "error", err.Error())
+		t.Logf("[diagnostics] supervisor status: error (%v)", err)
 	} else {
-		logger.Info("[diagnostics]", "supervisor_status", supervisorOutput)
+		t.Logf("[diagnostics] supervisor status: %s", supervisorOutput)
 	}
 }

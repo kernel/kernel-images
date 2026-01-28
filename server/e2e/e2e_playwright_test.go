@@ -3,42 +3,32 @@ package e2e
 import (
 	"context"
 	"encoding/json"
-	"log/slog"
 	"net/http"
 	"os/exec"
 	"testing"
 	"time"
 
-	logctx "github.com/onkernel/kernel-images/server/lib/logger"
 	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPlaywrightExecuteAPI(t *testing.T) {
-	image := headlessImage
-	name := containerName + "-playwright-api"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
+	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
-		require.NoError(t, err, "docker not available: %v", err)
+		t.Skipf("docker not available: %v", err)
 	}
 
-	_ = stopContainer(baseCtx, name)
-
-	env := map[string]string{}
-
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container: %v", err)
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
 
-	client, err := apiClient()
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	client, err := c.APIClient()
 	require.NoError(t, err)
 
 	playwrightCode := `
@@ -47,7 +37,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 		return title;
 	`
 
-	logger.Info("[test]", "action", "executing playwright code")
+	t.Log("executing playwright code")
 	req := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: playwrightCode,
 	}
@@ -69,7 +59,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 		if rsp.JSON200.Stderr != nil {
 			stderr = *rsp.JSON200.Stderr
 		}
-		logger.Error("[test]", "error", errorMsg, "stdout", stdout, "stderr", stderr)
+		t.Logf("error=%s stdout=%s stderr=%s", errorMsg, stdout, stderr)
 	}
 
 	require.True(t, rsp.JSON200.Success, "expected success=true, got success=false. Error: %s", func() string {
@@ -83,45 +73,37 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	resultBytes, err := json.Marshal(rsp.JSON200.Result)
 	require.NoError(t, err, "failed to marshal result: %v", err)
 	resultStr := string(resultBytes)
-	logger.Info("[test]", "result", resultStr)
+	t.Logf("result=%s", resultStr)
 	require.Contains(t, resultStr, "Example Domain", "expected result to contain 'Example Domain'")
 
-	logger.Info("[test]", "result", "playwright execute API test passed")
+	t.Log("playwright execute API test passed")
 }
 
 // TestPlaywrightDaemonRecovery tests that the playwright daemon recovers after chromium is restarted.
 // The daemon maintains a warm CDP connection, but when chromium restarts, that connection breaks.
 // The daemon should detect the disconnection and reconnect on the next request.
 func TestPlaywrightDaemonRecovery(t *testing.T) {
-	image := headlessImage
-	name := containerName + "-playwright-recovery"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
+	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
-		require.NoError(t, err, "docker not available: %v", err)
+		t.Skipf("docker not available: %v", err)
 	}
 
-	_ = stopContainer(baseCtx, name)
-
-	env := map[string]string{}
-
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container: %v", err)
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
 
-	client, err := apiClient()
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	client, err := c.APIClient()
 	require.NoError(t, err)
 
 	// Helper to execute playwright code and verify success
 	executeAndVerify := func(description string) {
-		logger.Info("[test]", "action", description)
+		t.Logf("action: %s", description)
 
 		code := `return await page.evaluate(() => navigator.userAgent);`
 		req := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
@@ -143,14 +125,14 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 		}
 
 		require.NotNil(t, rsp.JSON200.Result, "%s: expected result to be non-nil", description)
-		logger.Info("[test]", "result", "success", "description", description)
+		t.Logf("%s: success", description)
 	}
 
 	// Step 1: Execute playwright code to start the daemon and establish CDP connection
 	executeAndVerify("initial execution (starts daemon)")
 
 	// Step 2: Restart chromium via supervisorctl
-	logger.Info("[test]", "action", "restarting chromium via supervisorctl")
+	t.Log("restarting chromium via supervisorctl")
 	{
 		args := []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"}
 		req := instanceoapi.ProcessExecJSONRequestBody{
@@ -162,19 +144,19 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 		require.Equal(t, http.StatusOK, rsp.StatusCode(), "supervisorctl restart unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 
 		if rsp.JSON200.StdoutB64 != nil {
-			logger.Info("[test]", "supervisorctl_stdout_b64", *rsp.JSON200.StdoutB64)
+			t.Logf("supervisorctl stdout_b64: %s", *rsp.JSON200.StdoutB64)
 		}
 		if rsp.JSON200.StderrB64 != nil {
-			logger.Info("[test]", "supervisorctl_stderr_b64", *rsp.JSON200.StderrB64)
+			t.Logf("supervisorctl stderr_b64: %s", *rsp.JSON200.StderrB64)
 		}
 	}
 
 	// Step 3: Wait for chromium to be ready again
-	logger.Info("[test]", "action", "waiting for chromium to be ready after restart")
+	t.Log("waiting for chromium to be ready after restart")
 	time.Sleep(2 * time.Second)
 
 	// Step 4: Execute playwright code again - daemon should recover
 	executeAndVerify("execution after chromium restart (daemon should recover)")
 
-	logger.Info("[test]", "result", "playwright daemon recovery test passed")
+	t.Log("playwright daemon recovery test passed")
 }

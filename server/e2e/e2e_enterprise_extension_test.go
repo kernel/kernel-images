@@ -3,10 +3,10 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os"
@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	logctx "github.com/onkernel/kernel-images/server/lib/logger"
+	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +32,7 @@ import (
 // This test uses a real built extension (web-bot-auth) to reproduce production behavior.
 // It runs against both headless and headful Chrome images.
 func TestEnterpriseExtensionInstallation(t *testing.T) {
+	t.Parallel()
 	ensurePlaywrightDeps(t)
 
 	testCases := []struct {
@@ -43,119 +44,109 @@ func TestEnterpriseExtensionInstallation(t *testing.T) {
 	}
 
 	for _, tc := range testCases {
+		tc := tc // capture range variable
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			runEnterpriseExtensionTest(t, tc.image)
 		})
 	}
 }
 
 func runEnterpriseExtensionTest(t *testing.T, image string) {
-	name := containerName + "-enterprise-ext"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelDebug}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
-
 	if _, err := exec.LookPath("docker"); err != nil {
 		require.NoError(t, err, "docker not available: %v", err)
 	}
 
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
+	// Create and start container with dynamic ports
+	c := NewTestContainer(t, image)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
 
 	// Use default CHROMIUM_FLAGS - the images now have --disable-background-networking removed
 	// (headless) or never had it (headful), allowing Chrome to fetch extensions via
 	// ExtensionInstallForcelist enterprise policy
-	env := map[string]string{}
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
 
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container: %v", err)
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 5*time.Minute)
-	defer cancel()
-
-	logger.Info("[setup]", "action", "waiting for API", "image", image, "url", apiBaseURL+"/spec.yaml")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	t.Logf("[setup] waiting for API image=%s url=%s/spec.yaml", image, c.APIBaseURL())
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
 
 	// Wait for DevTools to be ready
-	_, err = waitDevtoolsWS(ctx)
-	require.NoError(t, err, "devtools not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
 
 	// First upload a simple extension to simulate the kernel extension in production.
 	// This causes Chrome to be launched with --load-extension, which mirrors production
 	// where the kernel extension is always loaded before any enterprise extensions.
-	logger.Info("[test]", "action", "uploading kernel-like extension first (to simulate prod)")
-	uploadKernelLikeExtension(t, ctx, logger)
+	t.Log("[test] uploading kernel-like extension first (to simulate prod)")
+	uploadKernelLikeExtension(t, ctx, c)
 
 	// Wait for Chrome to restart with the new flags
 	time.Sleep(3 * time.Second)
-	_, err = waitDevtoolsWS(ctx)
-	require.NoError(t, err, "devtools not ready after kernel extension")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready after kernel extension")
 
 	// Upload the enterprise test extension (with update.xml and .crx)
-	logger.Info("[test]", "action", "uploading enterprise test extension (with update.xml and .crx)")
-	uploadEnterpriseTestExtension(t, ctx, logger)
+	t.Log("[test] uploading enterprise test extension (with update.xml and .crx)")
+	uploadEnterpriseTestExtension(t, ctx, c)
 
 	// Wait a bit for Chrome to process the enterprise policy
-	logger.Info("[test]", "action", "waiting for Chrome to process enterprise policy")
+	t.Log("[test] waiting for Chrome to process enterprise policy")
 	time.Sleep(5 * time.Second)
 
 	// Check what files were extracted on the server
-	logger.Info("[test]", "action", "checking extracted extension files on server")
-	checkExtractedFiles(t, ctx, logger)
+	t.Log("[test] checking extracted extension files on server")
+	checkExtractedFiles(t, ctx, c)
 
 	// Check the kernel-images-api logs for extension download requests
-	logger.Info("[test]", "action", "checking if Chrome fetched the extension")
-	checkExtensionDownloadLogs(t, ctx, logger)
+	t.Log("[test] checking if Chrome fetched the extension")
+	checkExtensionDownloadLogs(t, ctx, c)
 
 	// Verify enterprise policy was configured correctly
-	logger.Info("[test]", "action", "verifying enterprise policy configuration")
-	verifyEnterprisePolicy(t, ctx, logger)
+	t.Log("[test] verifying enterprise policy configuration")
+	verifyEnterprisePolicy(t, ctx, c)
 
 	// Wait longer and check again if Chrome has downloaded the extension
-	logger.Info("[test]", "action", "waiting for Chrome to download extension via enterprise policy")
+	t.Log("[test] waiting for Chrome to download extension via enterprise policy")
 	time.Sleep(30 * time.Second)
 
 	// Check logs again
-	checkExtensionDownloadLogs(t, ctx, logger)
+	checkExtensionDownloadLogs(t, ctx, c)
 
 	// Check Chrome's extension installation logs
-	logger.Info("[test]", "action", "checking Chrome stderr for extension-related logs")
-	checkChromiumLogs(t, ctx, logger)
+	t.Log("[test] checking Chrome stderr for extension-related logs")
+	checkChromiumLogs(t, ctx, c)
 
 	// Try to trigger extension installation by restarting Chrome
-	logger.Info("[test]", "action", "restarting Chrome to trigger policy refresh")
-	restartChrome(t, ctx, logger)
+	t.Log("[test] restarting Chrome to trigger policy refresh")
+	restartChrome(t, ctx, c)
 
 	time.Sleep(15 * time.Second)
 
 	// Check logs one more time
-	checkExtensionDownloadLogs(t, ctx, logger)
-	checkChromiumLogs(t, ctx, logger)
+	checkExtensionDownloadLogs(t, ctx, c)
+	checkChromiumLogs(t, ctx, c)
 
 	// Check Chrome's policy state
-	logger.Info("[test]", "action", "checking Chrome policy state")
-	checkChromePolicies(t, ctx, logger)
+	t.Log("[test] checking Chrome policy state")
+	checkChromePolicies(t, ctx, c)
 
 	// Check chrome://policy to see if Chrome recognizes the policy
-	logger.Info("[test]", "action", "checking chrome://policy via screenshot")
-	takeChromePolicyScreenshot(t, ctx, logger)
+	t.Log("[test] checking chrome://policy via screenshot")
+	takeChromePolicyScreenshot(t, ctx, c)
 
 	// Verify the extension is installed
-	logger.Info("[test]", "action", "checking if extension is installed in Chrome's user-data")
-	verifyExtensionInstalled(t, ctx, logger)
+	t.Log("[test] checking if extension is installed in Chrome's user-data")
+	verifyExtensionInstalled(t, ctx, c)
 
-	logger.Info("[test]", "result", "enterprise extension installation test completed")
+	t.Log("[test] enterprise extension installation test completed")
 }
 
 // uploadKernelLikeExtension uploads a simple extension to simulate the kernel extension.
 // In production, the kernel extension is always loaded before any enterprise extensions,
 // so this ensures the test mirrors that behavior.
-func uploadKernelLikeExtension(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func uploadKernelLikeExtension(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	client, err := apiClient()
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Get the path to the simple test extension (no webRequest, so no enterprise policy)
@@ -187,15 +178,15 @@ func uploadKernelLikeExtension(t *testing.T, ctx context.Context, logger *slog.L
 		"expected 201 Created but got %d. Body: %s",
 		rsp.StatusCode(), string(rsp.Body))
 
-	logger.Info("[kernel-ext]", "action", "uploaded kernel-like extension", "elapsed", elapsed.String())
+	t.Logf("[kernel-ext] uploaded kernel-like extension elapsed=%s", elapsed.String())
 }
 
 // uploadEnterpriseTestExtension uploads the test extension with update.xml and .crx files.
 // This should trigger enterprise policy handling via ExtensionInstallForcelist.
-func uploadEnterpriseTestExtension(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func uploadEnterpriseTestExtension(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	client, err := apiClient()
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Get the path to the test extension
@@ -206,19 +197,19 @@ func uploadEnterpriseTestExtension(t *testing.T, ctx context.Context, logger *sl
 	manifestPath := filepath.Join(extDir, "manifest.json")
 	manifestData, err := os.ReadFile(manifestPath)
 	require.NoError(t, err, "failed to read manifest.json")
-	logger.Info("[extension]", "manifest", string(manifestData))
+	t.Logf("[extension] manifest=%s", string(manifestData))
 
 	// Read and log the update.xml
 	updateXMLPath := filepath.Join(extDir, "update.xml")
 	updateXMLData, err := os.ReadFile(updateXMLPath)
 	require.NoError(t, err, "failed to read update.xml")
-	logger.Info("[extension]", "update.xml", string(updateXMLData))
+	t.Logf("[extension] update.xml=%s", string(updateXMLData))
 
 	// Verify .crx exists
 	crxPath := filepath.Join(extDir, "extension.crx")
 	crxInfo, err := os.Stat(crxPath)
 	require.NoError(t, err, "failed to stat .crx file")
-	logger.Info("[extension]", "crx_size", crxInfo.Size())
+	t.Logf("[extension] crx_size=%d", crxInfo.Size())
 
 	// Create zip of the extension
 	extZip, err := zipDirToBytes(extDir)
@@ -246,17 +237,17 @@ func uploadEnterpriseTestExtension(t *testing.T, ctx context.Context, logger *sl
 		"expected 201 Created but got %d. Body: %s",
 		rsp.StatusCode(), string(rsp.Body))
 
-	logger.Info("[extension]", "action", "uploaded", "elapsed", elapsed.String())
+	t.Logf("[extension] uploaded elapsed=%s", elapsed.String())
 }
 
 // verifyEnterprisePolicy checks that the enterprise policy was configured correctly.
-func verifyEnterprisePolicy(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func verifyEnterprisePolicy(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
 	// Read policy.json
-	policyContent, err := execCombinedOutput(ctx, "cat", []string{"/etc/chromium/policies/managed/policy.json"})
+	policyContent, err := execCombinedOutputWithClient(ctx, c, "cat", []string{"/etc/chromium/policies/managed/policy.json"})
 	require.NoError(t, err, "failed to read policy.json")
-	logger.Info("[policy]", "content", policyContent)
+	t.Logf("[policy] content=%s", policyContent)
 
 	var policy map[string]interface{}
 	err = json.Unmarshal([]byte(policyContent), &policy)
@@ -269,7 +260,7 @@ func verifyEnterprisePolicy(t *testing.T, ctx context.Context, logger *slog.Logg
 
 	// Log all entries
 	for i, entry := range extensionInstallForcelist {
-		logger.Info("[policy]", "forcelist_entry", i, "value", entry)
+		t.Logf("[policy] forcelist_entry=%d value=%v", i, entry)
 	}
 
 	// Find the enterprise-test entry
@@ -277,7 +268,7 @@ func verifyEnterprisePolicy(t *testing.T, ctx context.Context, logger *slog.Logg
 	for _, entry := range extensionInstallForcelist {
 		if entryStr, ok := entry.(string); ok && strings.Contains(entryStr, "enterprise-test") {
 			found = true
-			logger.Info("[policy]", "found_entry", entryStr)
+			t.Logf("[policy] found_entry=%s", entryStr)
 			break
 		}
 	}
@@ -286,97 +277,97 @@ func verifyEnterprisePolicy(t *testing.T, ctx context.Context, logger *slog.Logg
 	// Check ExtensionSettings
 	extensionSettings, ok := policy["ExtensionSettings"].(map[string]interface{})
 	if ok {
-		logger.Info("[policy]", "extension_settings", fmt.Sprintf("%+v", extensionSettings))
+		t.Logf("[policy] extension_settings=%+v", extensionSettings)
 	}
 }
 
 // checkExtractedFiles checks what files were extracted on the server side.
-func checkExtractedFiles(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func checkExtractedFiles(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
 	// List all files in the extension directory
-	output, err := execCombinedOutput(ctx, "ls", []string{"-la", "/home/kernel/extensions/enterprise-test/"})
+	output, err := execCombinedOutputWithClient(ctx, c, "ls", []string{"-la", "/home/kernel/extensions/enterprise-test/"})
 	if err != nil {
-		logger.Warn("[files]", "error", err.Error())
+		t.Logf("[files] error=%v", err)
 	} else {
-		logger.Info("[files]", "extension_dir", output)
+		t.Logf("[files] extension_dir=%s", output)
 	}
 
 	// Check if update.xml exists
-	updateXML, err := execCombinedOutput(ctx, "cat", []string{"/home/kernel/extensions/enterprise-test/update.xml"})
+	updateXML, err := execCombinedOutputWithClient(ctx, c, "cat", []string{"/home/kernel/extensions/enterprise-test/update.xml"})
 	if err != nil {
-		logger.Warn("[files]", "update_xml_error", err.Error())
+		t.Logf("[files] update_xml_error=%v", err)
 	} else {
-		logger.Info("[files]", "update.xml", updateXML)
+		t.Logf("[files] update.xml=%s", updateXML)
 	}
 
 	// Check if .crx exists
-	crxOutput, err := execCombinedOutput(ctx, "ls", []string{"-la", "/home/kernel/extensions/enterprise-test/*.crx"})
+	crxOutput, err := execCombinedOutputWithClient(ctx, c, "ls", []string{"-la", "/home/kernel/extensions/enterprise-test/*.crx"})
 	if err != nil {
-		logger.Warn("[files]", "crx_error", err.Error())
+		t.Logf("[files] crx_error=%v", err)
 	} else {
-		logger.Info("[files]", "crx_files", crxOutput)
+		t.Logf("[files] crx_files=%s", crxOutput)
 	}
 
 	// Check file types
-	fileOutput, err := execCombinedOutput(ctx, "file", []string{"/home/kernel/extensions/enterprise-test/extension.crx"})
+	fileOutput, err := execCombinedOutputWithClient(ctx, c, "file", []string{"/home/kernel/extensions/enterprise-test/extension.crx"})
 	if err != nil {
-		logger.Warn("[files]", "file_type_error", err.Error())
+		t.Logf("[files] file_type_error=%v", err)
 	} else {
-		logger.Info("[files]", "crx_file_type", fileOutput)
+		t.Logf("[files] crx_file_type=%s", fileOutput)
 	}
 }
 
 // checkExtensionDownloadLogs checks the kernel-images-api logs for extension download requests.
-func checkExtensionDownloadLogs(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func checkExtensionDownloadLogs(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
 	// Check kernel-images-api log for requests to update.xml and .crx
-	apiLog, err := execCombinedOutput(ctx, "cat", []string{"/var/log/supervisord/kernel-images-api"})
+	apiLog, err := execCombinedOutputWithClient(ctx, c, "cat", []string{"/var/log/supervisord/kernel-images-api"})
 	if err != nil {
-		logger.Warn("[logs]", "error", err.Error())
+		t.Logf("[logs] error=%v", err)
 		return
 	}
 
 	lines := strings.Split(apiLog, "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "update.xml") || strings.Contains(line, ".crx") || strings.Contains(line, "extension") {
-			logger.Info("[logs]", "line", line)
+			t.Logf("[logs] line=%s", line)
 		}
 	}
 
 	// Check specifically for GET requests to our extension
 	if strings.Contains(apiLog, "GET") && strings.Contains(apiLog, "enterprise-test") {
-		logger.Info("[logs]", "result", "Chrome made GET requests to fetch the extension!")
+		t.Log("[logs] Chrome made GET requests to fetch the extension!")
 	} else {
-		logger.Warn("[logs]", "result", "No GET requests to enterprise-test extension found")
+		t.Log("[logs] No GET requests to enterprise-test extension found")
 	}
 
 	// Log all GET requests
 	for _, line := range lines {
 		if strings.Contains(line, "GET") {
-			logger.Info("[logs]", "GET_request", line)
+			t.Logf("[logs] GET_request=%s", line)
 		}
 	}
 }
 
 // checkChromePolicies checks how Chrome sees the policies.
-func checkChromePolicies(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func checkChromePolicies(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
 	// Check Chrome's local state for policy info
-	localState, err := execCombinedOutput(ctx, "cat", []string{"/home/kernel/user-data/Local State"})
+	localState, err := execCombinedOutputWithClient(ctx, c, "cat", []string{"/home/kernel/user-data/Local State"})
 	if err != nil {
-		logger.Warn("[policies]", "local_state_error", err.Error())
+		t.Logf("[policies] local_state_error=%v", err)
 	} else {
 		// Try to parse and look for extension-related info
 		var state map[string]interface{}
 		if err := json.Unmarshal([]byte(localState), &state); err != nil {
-			logger.Warn("[policies]", "parse_error", err.Error())
+			t.Logf("[policies] parse_error=%v", err)
 		} else {
 			// Look for extensions in local state
 			if ext, ok := state["extensions"]; ok {
-				logger.Info("[policies]", "extensions_in_local_state", fmt.Sprintf("%+v", ext))
+				t.Logf("[policies] extensions_in_local_state=%+v", ext)
 			}
 		}
 	}
@@ -385,22 +376,22 @@ func checkChromePolicies(t *testing.T, ctx context.Context, logger *slog.Logger)
 	// chrome://policy data could be extracted via CDP but that's complex
 	// Instead, let's check if there's any extension component data
 	extSettingsPath := "/home/kernel/user-data/Default/Extension Settings"
-	extSettings, err := execCombinedOutput(ctx, "ls", []string{"-la", extSettingsPath})
+	extSettings, err := execCombinedOutputWithClient(ctx, c, "ls", []string{"-la", extSettingsPath})
 	if err != nil {
-		logger.Warn("[policies]", "ext_settings_dir_error", err.Error())
+		t.Logf("[policies] ext_settings_dir_error=%v", err)
 	} else {
-		logger.Info("[policies]", "ext_settings_dir", extSettings)
+		t.Logf("[policies] ext_settings_dir=%s", extSettings)
 	}
 }
 
 // checkChromiumLogs checks Chrome's logs for extension-related messages.
-func checkChromiumLogs(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func checkChromiumLogs(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
 	// Check chromium supervisor log for extension-related messages
-	chromiumLog, err := execCombinedOutput(ctx, "cat", []string{"/var/log/supervisord/chromium"})
+	chromiumLog, err := execCombinedOutputWithClient(ctx, c, "cat", []string{"/var/log/supervisord/chromium"})
 	if err != nil {
-		logger.Warn("[chromium-log]", "error", err.Error())
+		t.Logf("[chromium-log] error=%v", err)
 		return
 	}
 
@@ -413,49 +404,42 @@ func checkChromiumLogs(t *testing.T, ctx context.Context, logger *slog.Logger) {
 			strings.Contains(lowLine, "update") ||
 			strings.Contains(lowLine, "error") ||
 			strings.Contains(lowLine, "fail") {
-			logger.Info("[chromium-log]", "line", line)
+			t.Logf("[chromium-log] line=%s", line)
 		}
 	}
 
 	// Also check stdout/stderr for the last 100 lines
-	logger.Info("[chromium-log]", "action", "checking last 100 lines of chromium log")
-	tailOutput, err := execCombinedOutput(ctx, "tail", []string{"-n", "100", "/var/log/supervisord/chromium"})
+	t.Log("[chromium-log] checking last 100 lines of chromium log")
+	tailOutput, err := execCombinedOutputWithClient(ctx, c, "tail", []string{"-n", "100", "/var/log/supervisord/chromium"})
 	if err != nil {
-		logger.Warn("[chromium-log]", "tail_error", err.Error())
+		t.Logf("[chromium-log] tail_error=%v", err)
 	} else {
-		logger.Info("[chromium-log]", "last_100_lines", tailOutput)
+		t.Logf("[chromium-log] last_100_lines=%s", tailOutput)
 	}
 }
 
 // restartChrome restarts Chrome via supervisorctl.
-func restartChrome(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func restartChrome(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	output, err := execCombinedOutput(ctx, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"})
+	output, err := execCombinedOutputWithClient(ctx, c, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"})
 	if err != nil {
-		logger.Warn("[restart]", "error", err.Error(), "output", output)
+		t.Logf("[restart] error=%v output=%s", err, output)
 	} else {
-		logger.Info("[restart]", "result", output)
+		t.Logf("[restart] result=%s", output)
 	}
 }
 
 // takeChromePolicyScreenshot takes a screenshot of chrome://policy to debug what Chrome sees
-func takeChromePolicyScreenshot(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func takeChromePolicyScreenshot(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	// Use the API to take a screenshot after navigating to chrome://policy
-	client, err := apiClient()
-	if err != nil {
-		logger.Warn("[policy-screenshot]", "client_error", err.Error())
-		return
-	}
-
 	// Navigate using playwright then take screenshot
-	cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "-e", `
+	cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "-e", fmt.Sprintf(`
 const { chromium } = require('playwright-core');
 
 (async () => {
-  const browser = await chromium.connectOverCDP('ws://127.0.0.1:9222/');
+  const browser = await chromium.connectOverCDP('%s');
   const contexts = browser.contexts();
   const ctx = contexts[0] || await browser.newContext();
   const pages = ctx.pages();
@@ -498,46 +482,43 @@ const { chromium } = require('playwright-core');
   
   await browser.close();
 })();
-`)
+`, c.CDPURL()))
 	cmd.Dir = getPlaywrightPath()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		logger.Warn("[policy-screenshot]", "error", err.Error(), "output", string(out))
+		t.Logf("[policy-screenshot] error=%v output=%s", err, string(out))
 	} else {
-		logger.Info("[policy-screenshot]", "output", string(out))
+		t.Logf("[policy-screenshot] output=%s", string(out))
 	}
-
-	// Ignore client since we used playwright directly
-	_ = client
 }
 
 // verifyExtensionInstalled checks if the extension was installed by Chrome.
-func verifyExtensionInstalled(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func verifyExtensionInstalled(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
 	// Check the extension directory
-	extDir, err := execCombinedOutput(ctx, "ls", []string{"-la", "/home/kernel/extensions/"})
+	extDir, err := execCombinedOutputWithClient(ctx, c, "ls", []string{"-la", "/home/kernel/extensions/"})
 	if err != nil {
-		logger.Warn("[verify]", "error", err.Error())
+		t.Logf("[verify] error=%v", err)
 	} else {
-		logger.Info("[verify]", "extensions_dir", extDir)
+		t.Logf("[verify] extensions_dir=%s", extDir)
 	}
 
 	// Check if Chrome installed the extension using Playwright to inspect chrome://extensions
 	// Note: When loaded via --load-extension, Chrome generates a NEW extension ID based on the
 	// directory path, which differs from the ID in update.xml (which is for the packed .crx file).
 	// So we verify by extension name instead.
-	
+
 	expectedExtensionName := "Minimal Enterprise Test Extension"
-	logger.Info("[verify]", "expected_extension_name", expectedExtensionName)
+	t.Logf("[verify] expected_extension_name=%s", expectedExtensionName)
 
 	// Use playwright to navigate to chrome://extensions and verify extension is loaded
-	logger.Info("[verify]", "action", "checking chrome://extensions via playwright")
+	t.Log("[verify] checking chrome://extensions via playwright")
 	cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "-e", fmt.Sprintf(`
 const { chromium } = require('playwright-core');
 
 (async () => {
-  const browser = await chromium.connectOverCDP('ws://127.0.0.1:9222/');
+  const browser = await chromium.connectOverCDP('%s');
   const contexts = browser.contexts();
   const ctx = contexts[0] || await browser.newContext();
   const pages = ctx.pages();
@@ -583,9 +564,52 @@ const { chromium } = require('playwright-core');
   
   await browser.close();
 })();
-`, expectedExtensionName))
+`, c.CDPURL(), expectedExtensionName))
 	cmd.Dir = getPlaywrightPath()
 	out, err := cmd.CombinedOutput()
-	logger.Info("[playwright]", "output", string(out))
+	t.Logf("[playwright] output=%s", string(out))
 	require.NoError(t, err, "extension verification failed: expected extension %q to be installed in chrome://extensions", expectedExtensionName)
+}
+
+// execCombinedOutputWithClient executes a command in the container via the API.
+func execCombinedOutputWithClient(ctx context.Context, c *TestContainer, command string, args []string) (string, error) {
+	client, err := c.APIClient()
+	if err != nil {
+		return "", err
+	}
+
+	req := instanceoapi.ProcessExecJSONRequestBody{
+		Command: command,
+		Args:    &args,
+	}
+
+	rsp, err := client.ProcessExecWithResponse(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	if rsp.JSON200 == nil {
+		return "", fmt.Errorf("remote exec failed: %s body=%s", rsp.Status(), string(rsp.Body))
+	}
+
+	var stdout, stderr string
+	if rsp.JSON200.StdoutB64 != nil && *rsp.JSON200.StdoutB64 != "" {
+		if b, decErr := base64.StdEncoding.DecodeString(*rsp.JSON200.StdoutB64); decErr == nil {
+			stdout = string(b)
+		}
+	}
+	if rsp.JSON200.StderrB64 != nil && *rsp.JSON200.StderrB64 != "" {
+		if b, decErr := base64.StdEncoding.DecodeString(*rsp.JSON200.StderrB64); decErr == nil {
+			stderr = string(b)
+		}
+	}
+	combined := stdout + stderr
+
+	exitCode := 0
+	if rsp.JSON200.ExitCode != nil {
+		exitCode = *rsp.JSON200.ExitCode
+	}
+	if exitCode != 0 {
+		return combined, &RemoteExecError{Command: command, Args: args, ExitCode: exitCode, Output: combined}
+	}
+	return combined, nil
 }

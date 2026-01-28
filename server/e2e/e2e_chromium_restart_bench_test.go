@@ -4,13 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"os/exec"
 	"testing"
 	"time"
 
-	logctx "github.com/onkernel/kernel-images/server/lib/logger"
 	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
@@ -43,48 +41,41 @@ func BenchmarkChromiumRestart(b *testing.B) {
 }
 
 func runChromiumRestartBenchmark(b *testing.B, image, imageType string) {
-	name := fmt.Sprintf("%s-restart-bench-%s", containerName, imageType)
-
-	logger := slog.New(slog.NewTextHandler(b.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
-
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
+	c := NewTestContainer(b, image)
 
 	env := map[string]string{
 		"WIDTH":  "1024",
 		"HEIGHT": "768",
 	}
 
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	if err != nil {
-		b.Fatalf("failed to start container: %v", err)
-	}
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	logger.Info("[setup]", "action", "waiting for API", "url", apiBaseURL+"/spec.yaml")
-	if err := waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh); err != nil {
+	// Start container
+	if err := c.Start(ctx, ContainerConfig{Env: env}); err != nil {
+		b.Fatalf("failed to start container: %v", err)
+	}
+	defer c.Stop(ctx)
+
+	b.Logf("[setup] waiting for API at %s/spec.yaml", c.APIBaseURL())
+	if err := c.WaitReady(ctx); err != nil {
 		b.Fatalf("api not ready: %v", err)
 	}
 
 	// Wait for initial DevTools to be ready
-	logger.Info("[setup]", "action", "waiting for DevTools")
-	if err := waitTCP(ctx, "127.0.0.1:9222"); err != nil {
+	b.Logf("[setup] waiting for DevTools at %s", c.CDPAddr())
+	if err := c.WaitDevTools(ctx); err != nil {
 		b.Fatalf("DevTools not ready: %v", err)
 	}
 
-	client, err := apiClient()
+	client, err := c.APIClient()
 	if err != nil {
 		b.Fatalf("failed to create API client: %v", err)
 	}
 
 	// Warmup - do one restart cycle to ensure everything is ready
-	logger.Info("[warmup]", "action", "performing warmup restart")
-	if err := doChromiumRestart(ctx, client, logger); err != nil {
+	b.Log("[warmup] performing warmup restart")
+	if err := doChromiumRestart(ctx, client, b); err != nil {
 		b.Fatalf("warmup restart failed: %v", err)
 	}
 
@@ -94,7 +85,7 @@ func runChromiumRestartBenchmark(b *testing.B, image, imageType string) {
 	var totalStopTime, totalStartTime, totalDevToolsTime time.Duration
 
 	for i := 0; i < b.N; i++ {
-		stopTime, startTime, devtoolsTime, err := measureChromiumRestartCycle(ctx, client, logger)
+		stopTime, startTime, devtoolsTime, err := measureChromiumRestartCycle(ctx, client, b)
 		if err != nil {
 			b.Fatalf("restart cycle %d failed: %v", i, err)
 		}
@@ -103,12 +94,12 @@ func runChromiumRestartBenchmark(b *testing.B, image, imageType string) {
 		totalStartTime += startTime
 		totalDevToolsTime += devtoolsTime
 
-		logger.Info("[iteration]",
-			"i", i,
-			"stop_ms", stopTime.Milliseconds(),
-			"start_ms", startTime.Milliseconds(),
-			"devtools_ms", devtoolsTime.Milliseconds(),
-			"total_ms", (stopTime + startTime + devtoolsTime).Milliseconds(),
+		b.Logf("[iteration] i=%d stop_ms=%d start_ms=%d devtools_ms=%d total_ms=%d",
+			i,
+			stopTime.Milliseconds(),
+			startTime.Milliseconds(),
+			devtoolsTime.Milliseconds(),
+			(stopTime + startTime + devtoolsTime).Milliseconds(),
 		)
 	}
 
@@ -126,20 +117,20 @@ func runChromiumRestartBenchmark(b *testing.B, image, imageType string) {
 		b.ReportMetric(float64(avgDevTools.Milliseconds()), "devtools_ms/op")
 		b.ReportMetric(float64(avgTotal.Milliseconds()), "total_ms/op")
 
-		logger.Info("[summary]",
-			"image", imageType,
-			"iterations", b.N,
-			"avg_stop_ms", avgStop.Milliseconds(),
-			"avg_start_ms", avgStart.Milliseconds(),
-			"avg_devtools_ms", avgDevTools.Milliseconds(),
-			"avg_total_ms", avgTotal.Milliseconds(),
+		b.Logf("[summary] image=%s iterations=%d avg_stop_ms=%d avg_start_ms=%d avg_devtools_ms=%d avg_total_ms=%d",
+			imageType,
+			b.N,
+			avgStop.Milliseconds(),
+			avgStart.Milliseconds(),
+			avgDevTools.Milliseconds(),
+			avgTotal.Milliseconds(),
 		)
 	}
 }
 
 // measureChromiumRestartCycle performs a full stop/start cycle and returns timing for each phase.
 // Returns: stopTime, startTime, devtoolsReadyTime, error
-func measureChromiumRestartCycle(ctx context.Context, client *instanceoapi.ClientWithResponses, logger *slog.Logger) (time.Duration, time.Duration, time.Duration, error) {
+func measureChromiumRestartCycle(ctx context.Context, client *instanceoapi.ClientWithResponses, tb testing.TB) (time.Duration, time.Duration, time.Duration, error) {
 	// Phase 1: Stop chromium
 	stopStart := time.Now()
 	stopDuration, err := execSupervisorctl(ctx, client, "stop", "chromium")
@@ -255,7 +246,7 @@ func waitForDevToolsReady(ctx context.Context, client *instanceoapi.ClientWithRe
 }
 
 // doChromiumRestart performs a full restart cycle (for warmup).
-func doChromiumRestart(ctx context.Context, client *instanceoapi.ClientWithResponses, logger *slog.Logger) error {
+func doChromiumRestart(ctx context.Context, client *instanceoapi.ClientWithResponses, tb testing.TB) error {
 	args := []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"}
 	req := instanceoapi.ProcessExecJSONRequestBody{
 		Command: "supervisorctl",
@@ -294,45 +285,38 @@ func TestChromiumRestartTiming(t *testing.T) {
 
 	for _, img := range images {
 		t.Run(img.name, func(t *testing.T) {
-			name := fmt.Sprintf("%s-restart-timing-%s", containerName, img.name)
-
-			logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-			baseCtx := logctx.AddToContext(context.Background(), logger)
-
-			// Clean slate
-			_ = stopContainer(baseCtx, name)
+			c := NewTestContainer(t, img.image)
 
 			env := map[string]string{
 				"WIDTH":  "1024",
 				"HEIGHT": "768",
 			}
 
-			// Start container
-			_, exitCh, err := runContainer(baseCtx, img.image, name, env)
-			require.NoError(t, err, "failed to start container")
-			defer stopContainer(baseCtx, name)
-
-			ctx, cancel := context.WithTimeout(baseCtx, 5*time.Minute)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 
-			t.Logf("Waiting for API...")
-			require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready")
+			// Start container
+			require.NoError(t, c.Start(ctx, ContainerConfig{Env: env}), "failed to start container")
+			defer c.Stop(ctx)
 
-			t.Logf("Waiting for DevTools...")
-			require.NoError(t, waitTCP(ctx, "127.0.0.1:9222"), "DevTools not ready")
+			t.Logf("Waiting for API at %s...", c.APIBaseURL())
+			require.NoError(t, c.WaitReady(ctx), "api not ready")
 
-			client, err := apiClient()
+			t.Logf("Waiting for DevTools at %s...", c.CDPAddr())
+			require.NoError(t, c.WaitDevTools(ctx), "DevTools not ready")
+
+			client, err := c.APIClient()
 			require.NoError(t, err, "failed to create API client")
 
 			// Warmup
 			t.Logf("Performing warmup restart...")
-			require.NoError(t, doChromiumRestart(ctx, client, logger), "warmup restart failed")
+			require.NoError(t, doChromiumRestart(ctx, client, t), "warmup restart failed")
 
 			// Collect timing data
 			var stopTimes, startTimes, devtoolsTimes []time.Duration
 
 			for i := 0; i < iterations; i++ {
-				stopTime, startTime, devtoolsTime, err := measureChromiumRestartCycle(ctx, client, logger)
+				stopTime, startTime, devtoolsTime, err := measureChromiumRestartCycle(ctx, client, t)
 				require.NoError(t, err, "restart cycle %d failed", i)
 
 				stopTimes = append(stopTimes, stopTime)

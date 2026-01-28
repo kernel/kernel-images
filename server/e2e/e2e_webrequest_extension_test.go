@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os/exec"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	logctx "github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -28,57 +26,46 @@ import (
 // Previously, this required update.xml and .crx files for ExtensionInstallForcelist.
 // The fix allows falling back to --load-extension for unpacked extensions.
 func TestWebRequestExtensionFallback(t *testing.T) {
+	t.Parallel()
 	ensurePlaywrightDeps(t)
-
-	image := headlessImage
-	name := containerName + "-webrequest-ext"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		require.NoError(t, err, "docker not available: %v", err)
 	}
 
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
-
-	env := map[string]string{}
-
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container: %v", err)
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	logger.Info("[setup]", "action", "waiting for API", "url", apiBaseURL+"/spec.yaml")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	// Create and start container with dynamic ports
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
+
+	t.Logf("[setup] waiting for API: %s/spec.yaml", c.APIBaseURL())
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
 
 	// Wait for DevTools to be ready
-	_, err = waitDevtoolsWS(ctx)
-	require.NoError(t, err, "devtools not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
 
 	// Upload the webRequest test extension (no update.xml or .crx)
-	logger.Info("[test]", "action", "uploading webRequest test extension (without update.xml/.crx)")
-	uploadWebRequestTestExtension(t, ctx, logger)
+	t.Log("[test] uploading webRequest test extension (without update.xml/.crx)")
+	uploadWebRequestTestExtension(t, ctx, c)
 
 	// The upload success (201) is the main assertion - that proves the fallback worked.
 	// Additional verification that extension actually loaded in browser is nice-to-have.
-	logger.Info("[test]", "action", "verifying webRequest extension appears in chrome://extensions")
-	verifyWebRequestExtension(t, ctx, logger)
+	t.Log("[test] verifying webRequest extension appears in chrome://extensions")
+	verifyWebRequestExtension(t, ctx, c.CDPURL())
 
-	logger.Info("[test]", "result", "webRequest extension fallback test passed")
+	t.Log("[test] webRequest extension fallback test passed")
 }
 
 // uploadWebRequestTestExtension uploads the test extension with webRequest permission.
 // This extension does NOT have update.xml or .crx files, so it should use the
 // --load-extension fallback path.
-func uploadWebRequestTestExtension(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func uploadWebRequestTestExtension(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	client, err := apiClient()
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Get the path to the test extension
@@ -115,19 +102,19 @@ func uploadWebRequestTestExtension(t *testing.T, ctx context.Context, logger *sl
 			"This likely means the --load-extension fallback is not working for webRequest extensions.",
 		rsp.StatusCode(), string(rsp.Body))
 
-	logger.Info("[extension]", "action", "uploaded", "elapsed", elapsed.String())
+	t.Logf("[extension] uploaded in %s", elapsed)
 }
 
 // verifyWebRequestExtension verifies the extension is loaded by checking chrome://extensions title.
 // This is a lightweight check - the main test assertion is that upload returned 201.
-func verifyWebRequestExtension(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func verifyWebRequestExtension(t *testing.T, ctx context.Context, cdpURL string) {
 	t.Helper()
 
 	// Use verify-title-contains to confirm we can navigate to chrome://extensions
 	// This proves chromium restarted successfully with the extension
 	cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "index.ts",
 		"verify-title-contains",
-		"--ws-url", "ws://127.0.0.1:9222/",
+		"--ws-url", cdpURL,
 		"--url", "chrome://extensions",
 		"--substr", "Extensions",
 		"--timeout", "30000",
@@ -135,10 +122,9 @@ func verifyWebRequestExtension(t *testing.T, ctx context.Context, logger *slog.L
 	cmd.Dir = getPlaywrightPath()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		logger.Warn("[playwright]", "output", string(out), "error", err)
 		// Log but don't fail - the key assertion is the 201 response from upload
-		t.Logf("Warning: chrome://extensions verification failed (non-critical): %v", err)
+		t.Logf("Warning: chrome://extensions verification failed (non-critical): %v\nOutput: %s", err, string(out))
 	} else {
-		logger.Info("[playwright]", "result", "chrome://extensions accessible after extension upload")
+		t.Log("[playwright] chrome://extensions accessible after extension upload")
 	}
 }

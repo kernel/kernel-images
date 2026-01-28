@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os/exec"
@@ -12,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	logctx "github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,54 +22,44 @@ import (
 // 2. Extension appears in chrome://extensions with an active service worker
 // 3. Service worker responds to messages from the popup
 func TestMV3ServiceWorkerRegistration(t *testing.T) {
+	t.Parallel()
 	ensurePlaywrightDeps(t)
-
-	image := headlessImage
-	name := containerName + "-mv3-sw"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		require.NoError(t, err, "docker not available: %v", err)
 	}
 
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
-
-	env := map[string]string{}
-
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container: %v", err)
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 3*time.Minute)
+	c := NewTestContainer(t, headlessImage)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	logger.Info("[setup]", "action", "waiting for API", "url", apiBaseURL+"/spec.yaml")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	err := c.Start(ctx, ContainerConfig{})
+	require.NoError(t, err, "failed to start container")
+	defer c.Stop(ctx)
+
+	t.Logf("[setup] waiting for API url=%s", c.APIBaseURL()+"/spec.yaml")
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
 
 	// Wait for DevTools to be ready
-	_, err = waitDevtoolsWS(ctx)
+	err = c.WaitDevTools(ctx)
 	require.NoError(t, err, "devtools not ready")
 
 	// Upload the MV3 test extension
-	logger.Info("[test]", "action", "uploading MV3 service worker test extension")
-	uploadMV3TestExtension(t, ctx, logger)
+	t.Log("[test] uploading MV3 service worker test extension")
+	uploadMV3TestExtension(t, ctx, c)
 
 	// Run playwright script to verify service worker
-	logger.Info("[test]", "action", "verifying MV3 service worker via playwright")
-	verifyMV3ServiceWorker(t, ctx, logger)
+	t.Log("[test] verifying MV3 service worker via playwright")
+	verifyMV3ServiceWorker(t, ctx, c.CDPURL())
 
-	logger.Info("[test]", "result", "MV3 service worker test passed")
+	t.Log("[test] MV3 service worker test passed")
 }
 
 // uploadMV3TestExtension uploads the test extension from test-extension directory.
-func uploadMV3TestExtension(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func uploadMV3TestExtension(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	client, err := apiClient()
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Get the path to the test extension
@@ -100,23 +88,23 @@ func uploadMV3TestExtension(t *testing.T, ctx context.Context, logger *slog.Logg
 	elapsed := time.Since(start)
 	require.NoError(t, err, "uploadExtensionsAndRestart request error")
 	require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
-	logger.Info("[extension]", "action", "uploaded", "elapsed", elapsed.String())
+	t.Logf("[extension] uploaded elapsed=%s", elapsed.String())
 }
 
 // verifyMV3ServiceWorker runs the playwright script to verify the service worker.
-func verifyMV3ServiceWorker(t *testing.T, ctx context.Context, logger *slog.Logger) {
+func verifyMV3ServiceWorker(t *testing.T, ctx context.Context, cdpURL string) {
 	t.Helper()
 
 	cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "index.ts",
 		"verify-mv3-service-worker",
-		"--ws-url", "ws://127.0.0.1:9222/",
+		"--ws-url", cdpURL,
 		"--timeout", "60000",
 	)
 	cmd.Dir = getPlaywrightPath()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		logger.Error("[playwright]", "output", string(out))
+		t.Logf("[playwright] error output: %s", string(out))
 	}
 	require.NoError(t, err, "MV3 service worker verification failed: %v\noutput=%s", err, string(out))
-	logger.Info("[playwright]", "output", string(out))
+	t.Logf("[playwright] output: %s", string(out))
 }
