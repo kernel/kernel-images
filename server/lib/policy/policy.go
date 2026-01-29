@@ -12,30 +12,94 @@ import (
 )
 
 const PolicyPath = "/etc/chromium/policies/managed/policy.json"
-const DefaultSearchProviderName = "DuckDuckGo"
-const DefaultSearchProviderSearchURL = "https://duckduckgo.com/?q={searchTerms}"
-const DefaultSearchProviderSuggestURL = "https://duckduckgo.com/ac/?q={searchTerms}"
-const NewTabPageLocation = "https://start.duckduckgo.com/"
 
 // Chrome extension IDs are 32 lowercase a-p characters
 var extensionIDRegex = regexp.MustCompile(`^[a-p]{32}$`)
 var extensionPathRegex = regexp.MustCompile(`/extensions/[^/]+/`)
 
-// Policy represents the Chrome enterprise policy structure
+// Policy represents the Chrome enterprise policy structure.
+// Only fields that are programmatically modified are defined here.
+// All other fields (like DefaultGeolocationSetting, PasswordManagerEnabled, etc.)
+// are preserved through the unknownFields mechanism during read-modify-write cycles.
 type Policy struct {
 	mu sync.Mutex
 
-	PasswordManagerEnabled          bool                        `json:"PasswordManagerEnabled"`
-	AutofillCreditCardEnabled       bool                        `json:"AutofillCreditCardEnabled"`
-	TranslateEnabled                bool                        `json:"TranslateEnabled"`
-	DefaultNotificationsSetting     int                         `json:"DefaultNotificationsSetting"`
-	DefaultSearchProviderEnabled    bool                        `json:"DefaultSearchProviderEnabled"`
-	DefaultSearchProviderName       string                      `json:"DefaultSearchProviderName"`
-	DefaultSearchProviderSearchURL  string                      `json:"DefaultSearchProviderSearchURL"`
-	DefaultSearchProviderSuggestURL string                      `json:"DefaultSearchProviderSuggestURL"`
-	NewTabPageLocation              string                      `json:"NewTabPageLocation"`
-	ExtensionInstallForcelist       []string                    `json:"ExtensionInstallForcelist,omitempty"`
-	ExtensionSettings               map[string]ExtensionSetting `json:"ExtensionSettings"`
+	// ExtensionInstallForcelist is modified when adding force-installed extensions
+	ExtensionInstallForcelist []string `json:"ExtensionInstallForcelist,omitempty"`
+	// ExtensionSettings is modified when adding/configuring extensions
+	ExtensionSettings map[string]ExtensionSetting `json:"ExtensionSettings"`
+
+	// unknownFields preserves all JSON fields not explicitly defined in this struct.
+	// This allows policy.json to contain any Chrome policy settings without
+	// requiring updates to this Go struct.
+	unknownFields map[string]json.RawMessage
+}
+
+// knownPolicyFields lists all JSON field names that have corresponding struct fields.
+// All other fields are automatically preserved in unknownFields.
+var knownPolicyFields = map[string]bool{
+	"ExtensionInstallForcelist": true,
+	"ExtensionSettings":         true,
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling that preserves unknown fields.
+func (p *Policy) UnmarshalJSON(data []byte) error {
+	// First, unmarshal into a map to capture all fields
+	var allFields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &allFields); err != nil {
+		return err
+	}
+
+	// Use an alias type to avoid infinite recursion when unmarshaling known fields
+	type PolicyAlias Policy
+	var alias PolicyAlias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+
+	// Copy the alias back to p (excluding unknownFields which we'll set separately)
+	*p = Policy(alias)
+
+	// Extract unknown fields
+	p.unknownFields = make(map[string]json.RawMessage)
+	for key, value := range allFields {
+		if !knownPolicyFields[key] {
+			p.unknownFields[key] = value
+		}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements custom JSON marshaling that includes unknown fields.
+func (p Policy) MarshalJSON() ([]byte, error) {
+	// Use an alias type to avoid infinite recursion
+	type PolicyAlias Policy
+	alias := PolicyAlias(p)
+
+	// Marshal the known fields first
+	knownData, err := json.Marshal(alias)
+	if err != nil {
+		return nil, err
+	}
+
+	// If no unknown fields, return as-is
+	if len(p.unknownFields) == 0 {
+		return knownData, nil
+	}
+
+	// Unmarshal known fields into a map so we can add unknown fields
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(knownData, &result); err != nil {
+		return nil, err
+	}
+
+	// Add unknown fields
+	for key, value := range p.unknownFields {
+		result[key] = value
+	}
+
+	return json.Marshal(result)
 }
 
 // ExtensionSetting represents settings for a specific extension
@@ -54,19 +118,11 @@ func (p *Policy) readPolicyUnlocked() (*Policy, error) {
 	data, err := os.ReadFile(PolicyPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return default policy if file doesn't exist
+			// Return minimal policy if file doesn't exist.
+			// In practice, policy.json ships with the container image.
 			return &Policy{
-				PasswordManagerEnabled:          false,
-				AutofillCreditCardEnabled:       false,
-				TranslateEnabled:                false,
-				DefaultNotificationsSetting:     2,
-				DefaultSearchProviderEnabled:    true,
-				DefaultSearchProviderName:       DefaultSearchProviderName,
-				DefaultSearchProviderSearchURL:  DefaultSearchProviderSearchURL,
-				DefaultSearchProviderSuggestURL: DefaultSearchProviderSuggestURL,
-				NewTabPageLocation:              NewTabPageLocation,
-				ExtensionInstallForcelist:       []string{},
-				ExtensionSettings:               make(map[string]ExtensionSetting),
+				ExtensionInstallForcelist: []string{},
+				ExtensionSettings:         make(map[string]ExtensionSetting),
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to read policy file: %w", err)
