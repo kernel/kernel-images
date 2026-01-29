@@ -35,6 +35,13 @@ type Policy struct {
 	unknownFields map[string]json.RawMessage
 }
 
+// policyJSON is used for JSON marshaling/unmarshaling without the mutex.
+// This avoids go vet warnings about copying mutex values.
+type policyJSON struct {
+	ExtensionInstallForcelist []string                    `json:"ExtensionInstallForcelist,omitempty"`
+	ExtensionSettings         map[string]ExtensionSetting `json:"ExtensionSettings"`
+}
+
 // knownPolicyFields lists all JSON field names that have corresponding struct fields.
 // All other fields are automatically preserved in unknownFields.
 var knownPolicyFields = map[string]bool{
@@ -50,15 +57,15 @@ func (p *Policy) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	// Use an alias type to avoid infinite recursion when unmarshaling known fields
-	type PolicyAlias Policy
-	var alias PolicyAlias
-	if err := json.Unmarshal(data, &alias); err != nil {
+	// Unmarshal known fields into the helper struct (no mutex)
+	var pj policyJSON
+	if err := json.Unmarshal(data, &pj); err != nil {
 		return err
 	}
 
-	// Copy the alias back to p (excluding unknownFields which we'll set separately)
-	*p = Policy(alias)
+	// Copy the known fields to p
+	p.ExtensionInstallForcelist = pj.ExtensionInstallForcelist
+	p.ExtensionSettings = pj.ExtensionSettings
 
 	// Extract unknown fields
 	p.unknownFields = make(map[string]json.RawMessage)
@@ -72,13 +79,15 @@ func (p *Policy) UnmarshalJSON(data []byte) error {
 }
 
 // MarshalJSON implements custom JSON marshaling that includes unknown fields.
-func (p Policy) MarshalJSON() ([]byte, error) {
-	// Use an alias type to avoid infinite recursion
-	type PolicyAlias Policy
-	alias := PolicyAlias(p)
+func (p *Policy) MarshalJSON() ([]byte, error) {
+	// Create helper struct with known fields (no mutex)
+	pj := policyJSON{
+		ExtensionInstallForcelist: p.ExtensionInstallForcelist,
+		ExtensionSettings:         p.ExtensionSettings,
+	}
 
 	// Marshal the known fields first
-	knownData, err := json.Marshal(alias)
+	knownData, err := json.Marshal(pj)
 	if err != nil {
 		return nil, err
 	}
