@@ -1,5 +1,6 @@
 {
   "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
   "AutofillCreditCardEnabled": false,
   "TranslateEnabled": false,
   "DefaultNotificationsSetting": 2,
