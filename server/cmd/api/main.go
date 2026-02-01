@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -199,6 +200,13 @@ func main() {
 		}
 		defer resp.Body.Close()
 
+		// Verify Chrome returned a successful response
+		if resp.StatusCode != http.StatusOK {
+			slogger.Error("Chrome /json returned non-200 status", "status", resp.StatusCode, "url", chromeJSONURL)
+			http.Error(w, fmt.Sprintf("browser returned status %d", resp.StatusCode), http.StatusBadGateway)
+			return
+		}
+
 		// Read and parse the JSON response
 		var targets []map[string]interface{}
 		if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
@@ -284,14 +292,32 @@ func mustFFmpeg() {
 }
 
 // rewriteWSURL replaces the Chrome host with the proxy host in WebSocket URLs.
-// e.g., "ws://127.0.0.1:9223/devtools/page/..." -> "ws://127.0.0.1:9222/devtools/page/..."
+// It handles two cases:
+// 1. Direct WebSocket URLs: "ws://127.0.0.1:9223/devtools/page/..." -> "ws://127.0.0.1:9222/devtools/page/..."
+// 2. DevTools frontend URLs with ws= query param: "https://...?ws=127.0.0.1:9223/..." -> "https://...?ws=127.0.0.1:9222/..."
 func rewriteWSURL(urlStr, chromeHost, proxyHost string) string {
 	parsed, err := url.Parse(urlStr)
 	if err != nil {
 		return urlStr
 	}
+
+	// Case 1: Direct replacement if the URL's host matches Chrome's host
 	if parsed.Host == chromeHost {
 		parsed.Host = proxyHost
 	}
+
+	// Case 2: Check for ws= query parameter (used in devtoolsFrontendUrl)
+	// e.g., https://chrome-devtools-frontend.appspot.com/.../inspector.html?ws=127.0.0.1:9223/devtools/page/...
+	if wsParam := parsed.Query().Get("ws"); wsParam != "" {
+		// The ws param value is like "127.0.0.1:9223/devtools/page/..."
+		// We need to replace the host portion
+		if strings.HasPrefix(wsParam, chromeHost) {
+			newWsParam := strings.Replace(wsParam, chromeHost, proxyHost, 1)
+			q := parsed.Query()
+			q.Set("ws", newWsParam)
+			parsed.RawQuery = q.Encode()
+		}
+	}
+
 	return parsed.String()
 }
