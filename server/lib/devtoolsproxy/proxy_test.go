@@ -189,7 +189,7 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 
 	startChromium := func(port int) (*exec.Cmd, error) {
 		userDir := t.TempDir()
-		args := []string{
+		chromiumArgs := []string{
 			"--headless=new",
 			"--remote-debugging-address=127.0.0.1",
 			fmt.Sprintf("--remote-debugging-port=%d", port),
@@ -203,8 +203,22 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 			fmt.Sprintf("--user-data-dir=%s", userDir),
 			"about:blank",
 		}
-		t.Logf("starting chromium: %s %v", browser, args)
-		cmd := exec.Command(browser, args...)
+
+		// Use stdbuf to force line-buffering on stderr so the "DevTools listening"
+		// line is flushed immediately. Without this, output to a file may be fully
+		// buffered and the line might not appear until the buffer fills or the
+		// process exits, causing the test to flake in CI.
+		var cmd *exec.Cmd
+		if stdbufPath, err := exec.LookPath("stdbuf"); err == nil {
+			// stdbuf -oL -eL: line-buffer stdout (-oL) and stderr (-eL)
+			args := append([]string{"-oL", "-eL", browser}, chromiumArgs...)
+			t.Logf("starting chromium via stdbuf: %s %v", stdbufPath, args)
+			cmd = exec.Command(stdbufPath, args...)
+		} else {
+			t.Logf("stdbuf not found, starting chromium directly: %s %v", browser, chromiumArgs)
+			cmd = exec.Command(browser, chromiumArgs...)
+		}
+
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		if err := cmd.Start(); err != nil {
