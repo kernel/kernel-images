@@ -385,6 +385,19 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /computer/get_mouse_position:
+    post:
+      summary: Get the current mouse cursor position on the host computer
+      operationId: getMousePosition
+      responses:
+        "200":
+          description: Current mouse position
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MousePositionResponse"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /computer/type:
     post:
       summary: Type text on the host computer
@@ -1233,6 +1246,18 @@ components:
           type: boolean
           description: Whether the cursor should be hidden
       additionalProperties: false
+    MousePositionResponse:
+      type: object
+      required:
+        - x
+        - y
+      properties:
+        x:
+          type: integer
+          description: X coordinate of the cursor
+        y:
+          type: integer
+          description: Y coordinate of the cursor
     TypeTextRequest:
       type: object
       required:
