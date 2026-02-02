@@ -161,7 +161,9 @@ func main() {
 	// Expose /json/version endpoint so clients that attempt to resolve a browser
 	// websocket URL via HTTP can succeed. We map the upstream path onto this
 	// proxy's host:port so clients connect back to us.
-	rDevtools.Get("/json/version", func(w http.ResponseWriter, r *http.Request) {
+	// Note: Playwright's connectOverCDP requests /json/version/ with trailing slash,
+	// so we register both variants to avoid 426 errors from the WebSocket handler.
+	jsonVersionHandler := func(w http.ResponseWriter, r *http.Request) {
 		current := upstreamMgr.Current()
 		if current == "" {
 			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
@@ -172,7 +174,9 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"webSocketDebuggerUrl": proxyWSURL,
 		})
-	})
+	}
+	rDevtools.Get("/json/version", jsonVersionHandler)
+	rDevtools.Get("/json/version/", jsonVersionHandler)
 
 	// Handler for /json and /json/list - proxies to Chrome and rewrites URLs.
 	// This is needed for Playwright's connectOverCDP which fetches /json for target discovery.
@@ -233,7 +237,9 @@ func main() {
 		_ = json.NewEncoder(w).Encode(targets)
 	}
 	rDevtools.Get("/json", jsonTargetHandler)
+	rDevtools.Get("/json/", jsonTargetHandler)
 	rDevtools.Get("/json/list", jsonTargetHandler)
+	rDevtools.Get("/json/list/", jsonTargetHandler)
 
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz).ServeHTTP(w, r)

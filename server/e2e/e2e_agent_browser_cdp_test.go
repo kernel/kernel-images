@@ -140,6 +140,102 @@ func TestCDPProxyJSONEndpoints(t *testing.T) {
 	t.Log("All CDP proxy JSON endpoint tests passed")
 }
 
+// TestAgentBrowserCDPProxy tests that agent-browser can connect to Chrome via the CDP proxy on port 9222.
+// This is the primary use case for the /json endpoint - enabling tools like agent-browser to work
+// naturally within the container using `agent-browser --cdp 9222` instead of having to use port 9223.
+func TestAgentBrowserCDPProxy(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
+
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+
+	client, err := c.APIClient()
+	require.NoError(t, err)
+
+	// Install agent-browser globally inside the container
+	// agent-browser is a CLI tool that uses playwright-core's connectOverCDP under the hood
+	t.Log("Installing agent-browser...")
+	timeoutSec := 120 // npm install can take a while
+	installResult := execCommandWithTimeout(t, ctx, client, "npm", []string{"install", "-g", "agent-browser"}, &timeoutSec)
+	require.Zero(t, installResult.exitCode, "failed to install agent-browser: %s", installResult.output)
+	t.Log("agent-browser installed successfully")
+
+	// Test agent-browser with different CDP connection formats
+	// All of these should work through the proxy on port 9222
+
+	// Test 1: Using just the port number (most common usage)
+	t.Run("agent-browser --cdp 9222 snapshot", func(t *testing.T) {
+		t.Log("Testing agent-browser snapshot with --cdp 9222")
+
+		// Get a snapshot of the current page - this exercises:
+		// 1. CDP connection via connectOverCDP
+		// 2. Fetching /json to discover targets
+		// 3. WebSocket connection through the proxy
+		result := execCommand(t, ctx, client, "agent-browser", []string{"--cdp", "9222", "snapshot", "--json"})
+		t.Logf("Snapshot result: exit=%d, output_length=%d", result.exitCode, len(result.output))
+
+		require.Zero(t, result.exitCode, "agent-browser snapshot failed: %s", result.output)
+		// The output should be valid JSON containing the snapshot
+		require.True(t, strings.Contains(result.output, "{") || strings.Contains(result.output, "["),
+			"expected JSON output from snapshot, got: %s", result.output)
+	})
+
+	// Test 2: Using http:// URL format
+	t.Run("agent-browser --cdp http://127.0.0.1:9222 snapshot", func(t *testing.T) {
+		t.Log("Testing agent-browser snapshot with --cdp http://127.0.0.1:9222")
+
+		result := execCommand(t, ctx, client, "agent-browser", []string{"--cdp", "http://127.0.0.1:9222", "snapshot", "--json"})
+		t.Logf("Snapshot result: exit=%d, output_length=%d", result.exitCode, len(result.output))
+
+		require.Zero(t, result.exitCode, "agent-browser snapshot with http URL failed: %s", result.output)
+	})
+
+	// Test 3: Navigate to a URL and verify it works
+	t.Run("agent-browser --cdp 9222 navigate and get url", func(t *testing.T) {
+		t.Log("Testing agent-browser navigation via CDP proxy")
+
+		// Navigate to example.com
+		navResult := execCommand(t, ctx, client, "agent-browser", []string{"--cdp", "9222", "open", "https://example.com"})
+		t.Logf("Navigate result: exit=%d, output=%s", navResult.exitCode, navResult.output)
+		require.Zero(t, navResult.exitCode, "agent-browser open failed: %s", navResult.output)
+
+		// Get the current URL to verify navigation worked
+		urlResult := execCommand(t, ctx, client, "agent-browser", []string{"--cdp", "9222", "get", "url", "--json"})
+		t.Logf("Get URL result: exit=%d, output=%s", urlResult.exitCode, urlResult.output)
+		require.Zero(t, urlResult.exitCode, "agent-browser get url failed: %s", urlResult.output)
+
+		// The URL should contain example.com
+		require.Contains(t, urlResult.output, "example.com",
+			"expected URL to contain example.com, got: %s", urlResult.output)
+	})
+
+	// Test 4: Get page title to verify page loaded correctly
+	t.Run("agent-browser --cdp 9222 get title", func(t *testing.T) {
+		t.Log("Testing agent-browser get title via CDP proxy")
+
+		result := execCommand(t, ctx, client, "agent-browser", []string{"--cdp", "9222", "get", "title", "--json"})
+		t.Logf("Get title result: exit=%d, output=%s", result.exitCode, result.output)
+
+		require.Zero(t, result.exitCode, "agent-browser get title failed: %s", result.output)
+		// Should contain "Example" from example.com's title "Example Domain"
+		require.Contains(t, result.output, "Example",
+			"expected title to contain 'Example', got: %s", result.output)
+	})
+
+	t.Log("All agent-browser CDP proxy tests passed")
+}
+
 // execResult holds the result of a command execution
 type execResult struct {
 	exitCode int
