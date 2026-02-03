@@ -13,6 +13,8 @@
             ref="video"
             :hideControls="hideControls"
             :extraControls="isEmbedMode"
+            :showDomOverlay="showDomOverlay"
+            :domSyncTypes="domSyncTypes"
             @control-attempt="controlAttempt"
           />
         </div>
@@ -186,6 +188,7 @@
   import About from '~/components/about.vue'
   import Header from '~/components/header.vue'
   import Unsupported from '~/components/unsupported.vue'
+  import { DomSyncPayload, DomWebSocketMessage, DomElementType, DOM_ELEMENT_TYPES } from '~/neko/dom-types'
 
   @Component({
     name: 'neko',
@@ -208,6 +211,41 @@
 
     shakeKbd = false
     wasConnected = false
+    private domWebSocket: WebSocket | null = null
+    private domReconnectTimeout: number | null = null
+
+    // dom_sync: enables WebSocket connection for DOM element syncing
+    // Values: false (default), true (inputs only), or comma-separated types (e.g., "inputs,buttons,links")
+    get isDomSyncEnabled(): boolean {
+      const params = new URL(location.href).searchParams
+      const param = params.get('dom_sync') || params.get('domSync')
+      if (!param || param === 'false' || param === '0') return false
+      return true
+    }
+
+    // Get enabled DOM element types from query param
+    // ?dom_sync=true -> ['inputs'] (default, backwards compatible)
+    // ?dom_sync=inputs,buttons,links -> ['inputs', 'buttons', 'links']
+    get domSyncTypes(): DomElementType[] {
+      const params = new URL(location.href).searchParams
+      const param = params.get('dom_sync') || params.get('domSync')
+      if (!param || param === 'false' || param === '0') return []
+      // If true/1, default to inputs only (backwards compatible)
+      if (param === 'true' || param === '1') return ['inputs']
+      // Parse comma-separated list and filter to valid types
+      const types = param.split(',').map((t) => t.trim().toLowerCase()) as DomElementType[]
+      return types.filter((t) => DOM_ELEMENT_TYPES.includes(t))
+    }
+
+    // dom_overlay: shows purple overlay rectangles when dom_sync is enabled (default: true)
+    get showDomOverlay() {
+      if (!this.isDomSyncEnabled) return false
+      const params = new URL(location.href).searchParams
+      const param = params.get('dom_overlay') || params.get('domOverlay')
+      // Default to true if not specified, false only if explicitly set to 'false' or '0'
+      if (param === null) return true
+      return param !== 'false' && param !== '0'
+    }
 
     get volume() {
       const numberParam = parseFloat(new URL(location.href).searchParams.get('volume') || '1.0')
@@ -278,6 +316,10 @@
       if (value) {
         this.wasConnected = true
         this.applyQueryResolution()
+        // Connect to DOM sync if enabled
+        if (this.isDomSyncEnabled) {
+          this.connectDomSync()
+        }
         try {
           if (window.parent !== window) {
             window.parent.postMessage({ type: 'KERNEL_CONNECTED', connected: true }, this.parentOrigin)
@@ -285,6 +327,9 @@
         } catch (e) {
           console.error('Failed to post message to parent', e)
         }
+      } else {
+        // Disconnect DOM sync when main connection is lost
+        this.disconnectDomSync()
       }
     }
 
@@ -330,6 +375,92 @@
     }
 
     // KERNEL: end custom resolution, frame rate, and readOnly control via query params
+
+    // KERNEL: DOM Sync - connects to kernel-images API WebSocket for bounding box overlay
+    private domRetryCount = 0
+    private readonly domMaxRetries = 10
+
+    private connectDomSync() {
+      if (!this.isDomSyncEnabled) return
+      if (this.domWebSocket && this.domWebSocket.readyState === WebSocket.OPEN) return
+
+      const params = new URL(location.href).searchParams
+      const domPort = params.get('dom_port') || '444'
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const domUrl = `${protocol}//${location.hostname}:${domPort}/dom-sync`
+
+      console.log(`[dom-sync] Connecting to ${domUrl} (attempt ${this.domRetryCount + 1})`)
+
+      try {
+        this.domWebSocket = new WebSocket(domUrl)
+
+        this.domWebSocket.onopen = () => {
+          console.log('[dom-sync] Connected')
+          this.domRetryCount = 0 // Reset retry count on success
+          this.$accessor.dom.setEnabled(true)
+          this.$accessor.dom.setConnected(true)
+        }
+
+        this.domWebSocket.onmessage = (event) => {
+          try {
+            const message: DomWebSocketMessage = JSON.parse(event.data)
+            if (message.event === 'dom/sync' && message.data) {
+              this.$accessor.dom.applySync(message.data)
+            }
+          } catch (e) {
+            console.error('[dom-sync] Failed to parse message:', e)
+          }
+        }
+
+        this.domWebSocket.onclose = () => {
+          console.log('[dom-sync] Disconnected')
+          this.$accessor.dom.setConnected(false)
+          this.scheduleDomReconnect()
+        }
+
+        this.domWebSocket.onerror = (error) => {
+          console.error('[dom-sync] WebSocket error:', error)
+          // Error will trigger onclose, which handles reconnect
+        }
+      } catch (e) {
+        console.error('[dom-sync] Failed to connect:', e)
+        this.scheduleDomReconnect()
+      }
+    }
+
+    private scheduleDomReconnect() {
+      if (!this.isDomSyncEnabled || !this.connected) return
+      if (this.domRetryCount >= this.domMaxRetries) {
+        console.log('[dom-sync] Max retries reached, giving up')
+        return
+      }
+      // Exponential backoff: 500ms, 1s, 2s, 4s... capped at 5s
+      const delay = Math.min(500 * Math.pow(2, this.domRetryCount), 5000)
+      this.domRetryCount++
+      console.log(`[dom-sync] Reconnecting in ${delay}ms`)
+      this.domReconnectTimeout = window.setTimeout(() => {
+        this.connectDomSync()
+      }, delay)
+    }
+
+    private disconnectDomSync() {
+      if (this.domReconnectTimeout) {
+        clearTimeout(this.domReconnectTimeout)
+        this.domReconnectTimeout = null
+      }
+      if (this.domWebSocket) {
+        this.domWebSocket.close()
+        this.domWebSocket = null
+      }
+      this.domRetryCount = 0
+      this.$accessor.dom.setEnabled(false)
+      this.$accessor.dom.setConnected(false)
+      this.$accessor.dom.reset()
+    }
+
+    beforeDestroy() {
+      this.disconnectDomSync()
+    }
 
     controlAttempt() {
       if (this.shakeKbd || this.$accessor.remote.hosted) return

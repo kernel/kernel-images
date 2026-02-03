@@ -27,6 +27,7 @@
           @touchstart.stop.prevent="onTouchHandler"
           @touchend.stop.prevent="onTouchHandler"
         />
+        <dom-overlay :screenWidth="width" :screenHeight="height" :showOverlay="showDomOverlay" :enabledTypes="domSyncTypes" />
 <!-- KERNEL
         <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute">
           <i class="fas fa-play-circle" />
@@ -205,6 +206,7 @@
           color: transparent;
           background: transparent;
           resize: none;
+          z-index: 100; // Above dom-overlay (z-index: 110)
         }
 
         .player-aspect {
@@ -224,6 +226,8 @@
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
   import Clipboard from './clipboard.vue'
+  import DomOverlay from './dom-overlay.vue'
+  import { DomElementType } from '~/neko/dom-types'
 
   // @ts-ignore
   import GuacamoleKeyboard from '~/utils/guacamole-keyboard.ts'
@@ -236,6 +240,7 @@
       'neko-emote': Emote,
       'neko-resolution': Resolution,
       'neko-clipboard': Clipboard,
+      'dom-overlay': DomOverlay,
     },
   })
   export default class extends Vue {
@@ -252,6 +257,10 @@
     @Prop(Boolean) readonly hideControls!: boolean
     // extra controls are shown (e.g. for embed mode)
     @Prop(Boolean) readonly extraControls!: boolean
+    // show the purple DOM overlay rectangles (defaults to true)
+    @Prop({ type: Boolean, default: true }) readonly showDomOverlay!: boolean
+    // enabled DOM element types for overlay (defaults to ['inputs'])
+    @Prop({ type: Array, default: () => ['inputs'] }) readonly domSyncTypes!: DomElementType[]
 
     private keyboard = GuacamoleKeyboard()
     private observer = new ResizeObserver(this.onResize.bind(this))

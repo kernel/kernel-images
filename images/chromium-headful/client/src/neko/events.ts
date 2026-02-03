@@ -67,6 +67,12 @@ export const EVENT = {
     RELEASE: 'admin/release',
     GIVE: 'admin/give',
   },
+  GHOST: {
+    SYNC: 'ghost/sync',
+    UPDATE: 'ghost/update',
+    START: 'ghost/start',
+    STOP: 'ghost/stop',
+  },
 } as const
 
 export type Events = typeof EVENT
@@ -82,6 +88,7 @@ export type WebSocketEvents =
   | ScreenEvents
   | BroadcastEvents
   | AdminEvents
+  | GhostEvents
 
 export type ControlEvents =
   | typeof EVENT.CONTROL.LOCKED
@@ -122,3 +129,9 @@ export type AdminEvents =
   | typeof EVENT.ADMIN.CONTROL
   | typeof EVENT.ADMIN.RELEASE
   | typeof EVENT.ADMIN.GIVE
+
+export type GhostEvents =
+  | typeof EVENT.GHOST.SYNC
+  | typeof EVENT.GHOST.UPDATE
+  | typeof EVENT.GHOST.START
+  | typeof EVENT.GHOST.STOP
