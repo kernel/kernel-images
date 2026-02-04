@@ -1,0 +1,79 @@
+# Envoy bootstrap configuration for xDS-managed proxy
+# This config connects to a control plane for dynamic configuration management
+# Requires: INST_NAME, METRO_NAME, XDS_SERVER, XDS_JWT environment variables
+
+# Node identity sent to xDS server for configuration targeting, authenticated by JWT
+node:
+  id: "{INST_NAME}-{METRO_NAME}"
+  cluster: "kernel"
+
+# Dynamic configuration via xDS protocol
+dynamic_resources:
+  # Aggregated Discovery Service - single gRPC stream for all config types
+  ads_config:
+    api_type: GRPC
+    transport_api_version: V3
+    grpc_services:
+    - envoy_grpc:
+        # Reference to xDS server cluster below
+        cluster_name: xds_server
+        authority: "{XDS_SERVER}"
+      # Send JWT authentication for all xDS requests
+      initial_metadata:
+      - key: "authorization"
+        value: "Bearer {XDS_JWT}"
+  
+  # Listener Discovery Service and Cluster Discovery Service use ADS
+  lds_config:
+    ads: {}
+    resource_api_version: V3
+  cds_config:
+    ads: {}
+    resource_api_version: V3
+
+# Static configuration (always present)
+static_resources:
+  clusters:
+  # xDS server: control plane for configuration
+  - name: xds_server
+    # Resolve hostname via DNS, for DNS lookup
+    type: STRICT_DNS
+    connect_timeout: 2s
+    http2_protocol_options: {}
+    dns_lookup_family: V4_ONLY
+    typed_extension_protocol_options:
+       envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+         "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+         explicit_http_config:
+          # Used to detect reconnect needed when resuming from standby.
+          # HTTP/2 keepalive adds minimal overhead: only 17 bytes per request.
+           http2_protocol_options:
+             connection_keepalive:
+               interval: 1s
+               timeout: 1s
+               interval_jitter:
+                value: 10.0
+    # TLS configuration for secure xDS connection
+    transport_socket:
+      name: envoy.transport_sockets.tls
+      typed_config:
+        # Uses TLS to verify xDS server, and SNI hostname for TLS handshake
+        "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+        sni: {XDS_SERVER}
+    load_assignment:
+      cluster_name: xds_server
+      endpoints:
+      - lb_endpoints:
+        - endpoint:
+            address:
+              socket_address:
+                address: {XDS_SERVER}
+                port_value: 443
+
+# Envoy admin interface for debugging (disabled by default for security)
+# To enable locally, uncomment the admin block below
+# admin:
+#   address:
+#     socket_address:
+#       address: 0.0.0.0
+#       port_value: 9901

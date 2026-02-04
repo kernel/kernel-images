@@ -298,6 +298,16 @@ RUN chmod +x /images/chromium-headful/start-pulseaudio.sh
 COPY images/chromium-headful/wrapper.sh /wrapper.sh
 COPY images/chromium-headful/supervisord.conf /etc/supervisor/supervisord.conf
 COPY images/chromium-headful/supervisor/services/ /etc/supervisor/conf.d/services/
+COPY shared/envoy/supervisor-envoy.conf /etc/supervisor/conf.d/services/envoy.conf
+
+# Install Envoy proxy
+COPY shared/envoy/install-proxy.sh /usr/local/bin/install-proxy.sh
+RUN chmod +x /usr/local/bin/install-proxy.sh && /usr/local/bin/install-proxy.sh && rm /usr/local/bin/install-proxy.sh
+
+# Copy Envoy configuration files
+COPY shared/envoy/bootstrap.yaml /etc/envoy/templates/bootstrap.yaml
+COPY shared/envoy/init-envoy.sh /usr/local/bin/init-envoy.sh
+RUN chmod +x /usr/local/bin/init-envoy.sh
 
 # copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api

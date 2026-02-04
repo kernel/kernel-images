@@ -166,6 +166,8 @@ fi
 sleep 0.2
 done
 
+init-envoy.sh
+
 echo "[wrapper] Starting Xorg via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start xorg
 echo "[wrapper] Waiting for Xorg to open display $DISPLAY..."
