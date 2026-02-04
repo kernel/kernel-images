@@ -207,6 +207,8 @@ for i in {1..30}; do
   sleep 0.2
 done
 
+init-envoy.sh
+
 echo "[wrapper] Starting system D-Bus daemon via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start dbus
 for i in {1..50}; do
