@@ -87,7 +87,7 @@ func TestExtensionViewportThenCDPConnection(t *testing.T) {
 	if err != nil {
 		t.Logf("[test] step 3: CDP connection failed: %v", err)
 		// Log additional diagnostics
-		logCDPDiagnostics(ctx, t)
+		logCDPDiagnostics(ctx, t, c)
 	}
 	require.NoError(t, err, "CDP connection failed after extension upload + viewport change")
 
@@ -285,11 +285,11 @@ func waitForAPIHealth(ctx context.Context, apiBaseURL string, t *testing.T) erro
 }
 
 // logCDPDiagnostics logs diagnostic information when CDP connection fails.
-func logCDPDiagnostics(ctx context.Context, t *testing.T) {
+func logCDPDiagnostics(ctx context.Context, t *testing.T, c *TestContainer) {
 	t.Helper()
 
 	// Try to get the internal CDP endpoint status
-	stdout, err := execCombinedOutput(ctx, "curl", []string{"-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:9223/json/version"})
+	stdout, err := execCombinedOutput(ctx, c, "curl", []string{"-s", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:9223/json/version"})
 	if err != nil {
 		t.Logf("[diagnostics] internal CDP status: failed (%v)", err)
 	} else {
@@ -297,7 +297,7 @@ func logCDPDiagnostics(ctx context.Context, t *testing.T) {
 	}
 
 	// Check if Chromium process is running
-	psOutput, err := execCombinedOutput(ctx, "pgrep", []string{"-a", "chromium"})
+	psOutput, err := execCombinedOutput(ctx, c, "pgrep", []string{"-a", "chromium"})
 	if err != nil {
 		t.Logf("[diagnostics] chromium process: not found or error (%v)", err)
 	} else {
@@ -305,7 +305,7 @@ func logCDPDiagnostics(ctx context.Context, t *testing.T) {
 	}
 
 	// Check supervisord status
-	supervisorOutput, err := execCombinedOutput(ctx, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "status"})
+	supervisorOutput, err := execCombinedOutput(ctx, c, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "status"})
 	if err != nil {
 		t.Logf("[diagnostics] supervisor status: error (%v)", err)
 	} else {
