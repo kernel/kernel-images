@@ -112,7 +112,7 @@ func TestDisplayResolutionChange(t *testing.T) {
 	defer cancel()
 
 	logger.Info("[setup]", "action", "waiting for API", "url", apiBaseURL+"/spec.yaml")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready: %v", err)
+	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
 
 	client, err := apiClient()
 	require.NoError(t, err, "failed to create API client: %v", err)
@@ -212,7 +212,7 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(baseCtx, 3*time.Minute)
 	defer cancel()
 
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready: %v", err)
+	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
 
 	// Wait for DevTools
 	_, err = waitDevtoolsWS(ctx)
@@ -306,7 +306,7 @@ func TestScreenshotHeadless(t *testing.T) {
 	ctx, cancel := context.WithTimeout(baseCtx, 2*time.Minute)
 	defer cancel()
 
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready: %v", err)
+	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
 
 	client, err := apiClient()
 	require.NoError(t, err)
@@ -357,7 +357,7 @@ func TestScreenshotHeadful(t *testing.T) {
 	ctx, cancel := context.WithTimeout(baseCtx, 2*time.Minute)
 	defer cancel()
 
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready: %v", err)
+	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
 
 	client, err := apiClient()
 	require.NoError(t, err)
@@ -402,7 +402,7 @@ func TestInputEndpointsSmoke(t *testing.T) {
 	ctx, cancel := context.WithTimeout(baseCtx, 2*time.Minute)
 	defer cancel()
 
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready: %v", err)
+	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
 
 	client, err := apiClient()
 	require.NoError(t, err)
@@ -445,17 +445,46 @@ func isPNG(data []byte) bool {
 	return true
 }
 
+// ContainerOptions configures container startup behavior
+type ContainerOptions struct {
+	// HostAccess adds --add-host=host.docker.internal:host-gateway for tests
+	// that need to reach services on the host machine
+	HostAccess bool
+}
+
 func runContainer(ctx context.Context, image, name string, env map[string]string) (*exec.Cmd, <-chan error, error) {
+	return runContainerWithOptions(ctx, image, name, env, ContainerOptions{})
+}
+
+func runContainerWithOptions(ctx context.Context, image, name string, env map[string]string, opts ContainerOptions) (*exec.Cmd, <-chan error, error) {
 	logger := logctx.FromContext(ctx)
 	args := []string{
 		"run",
 		"--name", name,
 		"--privileged",
 		"-p", "10001:10001", // API server
-		"-p", "9222:9222", // DevTools proxy
-		"--tmpfs", "/dev/shm:size=2g",
+		"-p", "9222:9222",   // DevTools proxy
+		"--tmpfs", "/dev/shm:size=2g,mode=1777",
 	}
+
+	if opts.HostAccess {
+		args = append(args, "--add-host=host.docker.internal:host-gateway")
+	}
+
+	// Ensure CHROMIUM_FLAGS includes --no-sandbox for CI environments where
+	// unprivileged user namespaces may be disabled (e.g., Ubuntu 24.04 GitHub Actions)
+	// Create a copy to avoid mutating the caller's map
+	envCopy := make(map[string]string)
 	for k, v := range env {
+		envCopy[k] = v
+	}
+	if _, ok := envCopy["CHROMIUM_FLAGS"]; !ok {
+		envCopy["CHROMIUM_FLAGS"] = "--no-sandbox"
+	} else if !strings.Contains(envCopy["CHROMIUM_FLAGS"], "--no-sandbox") {
+		envCopy["CHROMIUM_FLAGS"] = envCopy["CHROMIUM_FLAGS"] + " --no-sandbox"
+	}
+
+	for k, v := range envCopy {
 		args = append(args, "-e", fmt.Sprintf("%s=%s", k, v))
 	}
 	args = append(args, image)
@@ -511,6 +540,73 @@ func stopContainer(ctx context.Context, name string) error {
 
 	if lastCheckErr != nil {
 		return lastCheckErr
+	}
+	return nil
+}
+
+// getContainerLogs retrieves the last N lines of container logs for debugging.
+// Uses a fresh context with its own timeout to avoid issues when the parent context is cancelled.
+func getContainerLogs(_ context.Context, name string, tailLines int) string {
+	// Use a fresh context with generous timeout - the parent context may be cancelled
+	logCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(logCtx, "docker", "logs", "--tail", fmt.Sprintf("%d", tailLines), name)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Sprintf("failed to get container logs: %v", err)
+	}
+	return string(output)
+}
+
+// waitHTTPOrExitWithLogs waits for HTTP endpoint and captures container logs on failure.
+// It also periodically logs container status during the wait for better visibility.
+func waitHTTPOrExitWithLogs(ctx context.Context, url string, exitCh <-chan error, containerName string) error {
+	logger := logctx.FromContext(ctx)
+
+	// Start a background goroutine to periodically show container status
+	// Use a separate stopCh that we close to signal the goroutine to stop,
+	// avoiding the race condition of sending to a potentially closed channel
+	stopCh := make(chan struct{})
+	doneCh := make(chan struct{})
+	go func() {
+		defer close(doneCh)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stopCh:
+				return
+			case <-ticker.C:
+				// Check if container is still running
+				checkCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				cmd := exec.CommandContext(checkCtx, "docker", "inspect", "--format", "{{.State.Status}} (pid={{.State.Pid}}, started={{.State.StartedAt}})", containerName)
+				out, err := cmd.Output()
+				cancel()
+				if err == nil {
+					logger.Info("[container-status]", "container", containerName, "status", strings.TrimSpace(string(out)))
+				}
+				// Also show last few log lines
+				recentLogs := getContainerLogs(ctx, containerName, 10)
+				if recentLogs != "" && !strings.Contains(recentLogs, "failed to get") {
+					logger.Info("[container-logs]", "recent_output", strings.TrimSpace(recentLogs))
+				}
+			}
+		}
+	}()
+
+	err := waitHTTPOrExit(ctx, url, exitCh)
+
+	// Signal the status goroutine to stop and wait for it to finish
+	close(stopCh)
+	<-doneCh
+
+	if err != nil {
+		// Capture container logs for debugging
+		logs := getContainerLogs(ctx, containerName, 100)
+		return fmt.Errorf("%w\n\nContainer logs (last 100 lines):\n%s", err, logs)
 	}
 	return nil
 }
@@ -756,7 +852,7 @@ func TestCDPTargetCreation(t *testing.T) {
 	defer cancel()
 
 	logger.Info("[test]", "action", "waiting for API")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready")
 
 	// Wait for CDP endpoint to be ready (via the devtools proxy)
 	logger.Info("[test]", "action", "waiting for CDP endpoint")
@@ -830,7 +926,7 @@ func TestWebBotAuthInstallation(t *testing.T) {
 	defer cancel()
 
 	logger.Info("[setup]", "action", "waiting for API", "url", apiBaseURL+"/spec.yaml")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready: %v", err)
+	require.NoError(t, waitHTTPOrExitWithLogs(ctx, apiBaseURL+"/spec.yaml", exitCh, name), "api not ready: %v", err)
 
 	// Build mock web-bot-auth extension zip in-memory
 	extDir := t.TempDir()

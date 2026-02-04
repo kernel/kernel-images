@@ -60,5 +60,5 @@ jobs:
         run: make test
         working-directory: server
         env:
-          # Prefer explicit images if passed from the caller; otherwise use the commit short sha
-          E2E_IMAGE_TAG: ${{ steps.vars.outputs.short_sha }}
+          E2E_CHROMIUM_HEADFUL_IMAGE: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}
+          E2E_CHROMIUM_HEADLESS_IMAGE: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}

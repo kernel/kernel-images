@@ -154,6 +154,15 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 			log.Error("failed to unzip zip file", "error", err)
 			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid zip file"}}, nil
 		}
+
+		// Rewrite update.xml URLs to match the extension name (directory name)
+		// This ensures URLs like /extensions/web-bot-auth/ become /extensions/<actual-name>/
+		updateXMLPath := filepath.Join(dest, "update.xml")
+		if err := policy.RewriteUpdateXMLUrls(updateXMLPath, p.name); err != nil {
+			log.Warn("failed to rewrite update.xml URLs", "error", err, "extension", p.name)
+			// continue since not all extensions require update.xml
+		}
+
 		if err := exec.Command("chown", "-R", "kernel:kernel", dest).Run(); err != nil {
 			log.Error("failed to chown extension dir", "error", err)
 			return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to chown extension dir"}}, nil
@@ -223,13 +232,12 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 				}
 			}
 
-			// Fail if policy extension is missing required files
+			// If missing required files for ExtensionInstallForcelist, fall back to --load-extension
 			if !hasUpdateXML || !hasCRX {
-				return oapi.UploadExtensionsAndRestart400JSONResponse{
-					BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
-						Message: fmt.Sprintf("extension %s requires enterprise policy (ExtensionInstallForcelist) but is missing required files: update.xml (present: %v), .crx file (present: %v). These files are required for Chrome to install the extension.", extensionName, hasUpdateXML, hasCRX),
-					},
-				}, nil
+				log.Info("extension missing policy files, falling back to --load-extension",
+					"name", extensionName, "hasUpdateXML", hasUpdateXML, "hasCRX", hasCRX)
+				requiresEntPolicy = false
+				pathsNeedingFlags = append(pathsNeedingFlags, extensionPath)
 			}
 		} else {
 			// Only add --load-extension flags for non-policy extensions
@@ -252,10 +260,14 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 
 	// Build flags overlay file in /chromium/flags, merging with existing flags
 	// Only add --load-extension flags for extensions that don't use policy installation
+	// NOTE: We intentionally do NOT use --disable-extensions-except here because it causes
+	// Chrome to disable external providers (including the policy loader), which prevents
+	// enterprise policy extensions (ExtensionInstallForcelist) from being fetched and installed.
+	// See Chromium source: extension_service.cc - external providers are only created when
+	// extensions_enabled() returns true, which is false when --disable-extensions-except is used.
 	var newTokens []string
 	if len(pathsNeedingFlags) > 0 {
 		newTokens = []string{
-			fmt.Sprintf("--disable-extensions-except=%s", strings.Join(pathsNeedingFlags, ",")),
 			fmt.Sprintf("--load-extension=%s", strings.Join(pathsNeedingFlags, ",")),
 		}
 	}

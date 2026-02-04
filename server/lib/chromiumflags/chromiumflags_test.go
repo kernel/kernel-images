@@ -103,44 +103,17 @@ func TestMergeUnion(t *testing.T) {
 
 func TestOverrideSemantics_DisableBase_LoadRuntime(t *testing.T) {
 	// Base has --disable-extensions, runtime has --load-extension → runtime overrides, no disable-all in final
-	baseFlags := "--disable-extensions"
-	runtimeFlags := "--load-extension=/e1"
+	baseFlags := []string{"--disable-extensions"}
+	runtimeFlags := []string{"--load-extension=/e1"}
 
-	baseTokens := parseFlags(baseFlags)
-	runtimeTokens := parseFlags(runtimeFlags)
+	got := MergeFlags(baseFlags, runtimeFlags)
 
-	var (
-		baseLoad    []string
-		baseExcept  []string
-		rtLoad      []string
-		rtExcept    []string
-		baseDisable string
-		rtDisable   string
-	)
-
-	_ = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisable)
-	_ = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtDisable)
-
-	mergedLoad := union(baseLoad, rtLoad)
-	mergedExcept := union(baseExcept, rtExcept)
-
-	var extFlags []string
-	if rtDisable != "" {
-		extFlags = append(extFlags, rtDisable)
-	} else {
-		if baseDisable != "" && len(rtLoad) == 0 {
-			extFlags = append(extFlags, baseDisable)
-		} else if len(mergedLoad) > 0 {
-			extFlags = append(extFlags, "--load-extension="+strings.Join(mergedLoad, ","))
-		}
-		if len(mergedExcept) > 0 {
-			extFlags = append(extFlags, "--disable-extensions-except="+strings.Join(mergedExcept, ","))
-		}
-	}
-
-	for _, f := range extFlags {
+	for _, f := range got {
 		if f == "--disable-extensions" {
-			t.Fatalf("unexpected disable-all in final flags when runtime loads extensions: %#v", extFlags)
+			t.Fatalf("unexpected disable-all in final flags when runtime loads extensions: %#v", got)
+		}
+		if strings.HasPrefix(f, "--disable-extensions-except") {
+			t.Fatalf("unexpected disable-extensions-except in final flags: %#v", got)
 		}
 	}
 }
@@ -285,10 +258,10 @@ func TestMergeFlags(t *testing.T) {
 			want:         []string{"--load-extension=/e1,/e2"},
 		},
 		{
-			name:         "merge disable-extensions-except flags",
+			name:         "disable-extensions-except paths merged into load-extension",
 			baseFlags:    []string{"--disable-extensions-except=/x1"},
 			runtimeFlags: []string{"--disable-extensions-except=/x2"},
-			want:         []string{"--disable-extensions-except=/x1,/x2"},
+			want:         []string{"--load-extension=/x1,/x2"},
 		},
 		{
 			name:         "runtime disable-extensions overrides all",
@@ -312,7 +285,7 @@ func TestMergeFlags(t *testing.T) {
 			name:         "complex merge with extensions and non-extensions",
 			baseFlags:    []string{"--foo", "--load-extension=/e1", "--disable-extensions-except=/x1"},
 			runtimeFlags: []string{"--bar", "--load-extension=/e2", "--disable-extensions-except=/x2"},
-			want:         []string{"--foo", "--bar", "--load-extension=/e1,/e2", "--disable-extensions-except=/x1,/x2"},
+			want:         []string{"--foo", "--bar", "--load-extension=/e1,/e2,/x1,/x2"},
 		},
 	}
 

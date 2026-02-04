@@ -119,7 +119,15 @@ func ReadOptionalFlagFile(path string) ([]string, error) {
 // The merging logic respects extension-related flag semantics:
 // 1) If runtime specifies --disable-extensions, it overrides everything extension related
 // 2) Else if base specifies --disable-extensions and runtime does NOT specify any --load-extension, keep base disable
-// 3) Else, build from merged load/except
+// 3) Else, build from merged load-extension paths
+//
+// NOTE: --disable-extensions-except is intentionally parsed but NOT re-emitted because it causes
+// Chrome to disable external providers (including the policy loader), which prevents enterprise
+// policy extensions (ExtensionInstallForcelist) from being fetched and installed.
+// See Chromium source: extension_service.cc - external providers are only created when
+// extensions_enabled() returns true, which is false when --disable-extensions-except is used.
+// Any paths from --disable-extensions-except are merged into --load-extension instead.
+//
 // Non-extension flags from both base and runtime are combined with deduplication (first occurrence preserved).
 func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	// Buckets
@@ -127,9 +135,9 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 		baseNonExt     []string // Non-extension related flags contained in base
 		runtimeNonExt  []string // Non-extension related flags contained in runtime
 		baseLoad       []string // --load-extension flags contained in base
-		baseExcept     []string // --disable-extensions-except flags for base
+		baseExcept     []string // --disable-extensions-except flags for base (parsed but not re-emitted)
 		rtLoad         []string // --load-extension flags contained in runtime
-		rtExcept       []string // --disable-extensions-except flags contained in runtime
+		rtExcept       []string // --disable-extensions-except flags contained in runtime (parsed but not re-emitted)
 		baseDisableAll string   // --disable-extensions flag contained in base
 		rtDisableAll   string   // --disable-extensions flag contained in runtime
 	)
@@ -137,26 +145,26 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	baseNonExt = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisableAll)
 	runtimeNonExt = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtDisableAll)
 
-	// Merge extension lists
+	// Merge extension lists - include paths from --disable-extensions-except in load paths
+	// since we no longer emit --disable-extensions-except
 	mergedLoad := union(baseLoad, rtLoad)
-	mergedExcept := union(baseExcept, rtExcept)
+	mergedLoad = union(mergedLoad, baseExcept)
+	mergedLoad = union(mergedLoad, rtExcept)
 
 	// Construct final extension-related flags respecting override semantics:
 	// 1) If runtime specifies --disable-extensions, it overrides everything extension related
 	// 2) Else if base specifies --disable-extensions and runtime does NOT specify any --load-extension, keep base disable
-	// 3) Else, build from merged load/except
+	// 3) Else, build from merged load-extension paths
 	var extFlags []string
 	if rtDisableAll != "" {
 		extFlags = append(extFlags, rtDisableAll)
 	} else {
-		if baseDisableAll != "" && len(rtLoad) == 0 {
+		if baseDisableAll != "" && len(rtLoad) == 0 && len(rtExcept) == 0 {
 			extFlags = append(extFlags, baseDisableAll)
 		} else if len(mergedLoad) > 0 {
 			extFlags = append(extFlags, "--load-extension="+strings.Join(mergedLoad, ","))
 		}
-		if len(mergedExcept) > 0 {
-			extFlags = append(extFlags, "--disable-extensions-except="+strings.Join(mergedExcept, ","))
-		}
+		// NOTE: --disable-extensions-except is intentionally NOT emitted here
 	}
 
 	// Combine and dedupe (preserving first occurrence)
@@ -182,6 +190,38 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 func MergeFlagsWithRuntimeTokens(baseFlags string, runtimeTokens []string) []string {
 	base := parseFlags(baseFlags)
 	return MergeFlags(base, runtimeTokens)
+}
+
+// MergeExtensionPath appends an extension path to existing --load-extension flags
+// within an args slice. If the flag exists, the path is appended to its comma-separated
+// list. If it doesn't exist, a new flag is added. This preserves other extensions that
+// may already be configured.
+//
+// NOTE: We intentionally do NOT use --disable-extensions-except here because it causes
+// Chrome to disable external providers (including the policy loader), which prevents
+// enterprise policy extensions (ExtensionInstallForcelist) from being fetched and installed.
+// See Chromium source: extension_service.cc - external providers are only created when
+// extensions_enabled() returns true, which is false when --disable-extensions-except is used.
+func MergeExtensionPath(args []string, extPath string) []string {
+	foundLoad := false
+	result := make([]string, 0, len(args)+1)
+
+	for _, arg := range args {
+		switch {
+		case strings.HasPrefix(arg, "--load-extension="):
+			existing := strings.TrimPrefix(arg, "--load-extension=")
+			result = append(result, "--load-extension="+existing+","+extPath)
+			foundLoad = true
+		default:
+			result = append(result, arg)
+		}
+	}
+
+	if !foundLoad {
+		result = append(result, "--load-extension="+extPath)
+	}
+
+	return result
 }
 
 // WriteFlagFile writes the provided tokens to the given path as JSON in the

@@ -313,6 +313,125 @@ class CDPClient {
     }
   }
 
+  async verifyMV3ServiceWorker(options: CommandOptions): Promise<void> {
+    if (!this.page) throw new Error('Not connected to browser');
+
+    const { timeout = 60000 } = options;
+
+    try {
+      console.log('[cdp] action: verify-mv3-service-worker');
+      this.page.setDefaultTimeout(timeout);
+
+      // Step 1: Navigate to chrome://extensions
+      console.log('[cdp] navigating to chrome://extensions');
+      await this.page.goto('chrome://extensions');
+      await this.page.waitForTimeout(2000);
+
+      // Step 2: Enable developer mode by clicking the toggle
+      console.log('[cdp] enabling developer mode');
+      const devMode = this.page.getByRole('button', { name: 'Developer mode' });
+      await devMode.click();
+      await this.page.waitForTimeout(1000);
+
+      // Step 3: Find the extension and extract the ID
+      // chrome://extensions uses shadow DOM, so we need to use evaluate to pierce it
+      console.log('[cdp] checking for MV3 Service Worker Test extension');
+
+      const extensionInfo = await this.page.evaluate(() => {
+        // Get the extensions-manager element
+        const manager = document.querySelector('extensions-manager');
+        if (!manager || !manager.shadowRoot) return null;
+
+        // Get the item list
+        const itemList = manager.shadowRoot.querySelector('extensions-item-list');
+        if (!itemList || !itemList.shadowRoot) return null;
+
+        // Find all extension items
+        const items = itemList.shadowRoot.querySelectorAll('extensions-item');
+
+        for (const item of items) {
+          if (!item.shadowRoot) continue;
+
+          // Get the extension name
+          const nameEl = item.shadowRoot.querySelector('#name');
+          const name = nameEl?.textContent?.trim() || '';
+
+          if (name === 'MV3 Service Worker Test') {
+            // Get the extension ID from the item's id attribute
+            const id = item.getAttribute('id');
+
+            // Check if service worker is inactive
+            const inspectViews = item.shadowRoot.querySelector('#inspect-views');
+            const isInactive = inspectViews?.textContent?.includes('(Inactive)') || false;
+
+            // Check if service worker link exists
+            const hasServiceWorker = inspectViews?.textContent?.includes('service worker') || false;
+
+            return { id, name, isInactive, hasServiceWorker };
+          }
+        }
+
+        return null;
+      });
+
+      if (!extensionInfo) {
+        await this.captureScreenshot({ filename: 'mv3-extension-not-found.png' });
+        throw new Error('MV3 Service Worker Test extension not found on chrome://extensions');
+      }
+
+      console.log(`[cdp] found extension: ${extensionInfo.name} (ID: ${extensionInfo.id})`);
+      console.log(`[cdp] has service worker: ${extensionInfo.hasServiceWorker}, inactive: ${extensionInfo.isInactive}`);
+
+      if (!extensionInfo.hasServiceWorker) {
+        await this.captureScreenshot({ filename: 'mv3-no-service-worker.png' });
+        throw new Error('Extension does not have a service worker registered');
+      }
+
+      if (extensionInfo.isInactive) {
+        await this.captureScreenshot({ filename: 'mv3-service-worker-inactive.png' });
+        throw new Error('Service worker is marked as (Inactive)');
+      }
+
+      console.log('[cdp] service worker is active');
+
+      // Step 4: Navigate to the extension's popup
+      const extensionId = extensionInfo.id;
+      const popupUrl = `chrome-extension://${extensionId}/popup.html`;
+      console.log(`[cdp] navigating to popup: ${popupUrl}`);
+      await this.page.goto(popupUrl);
+      await this.page.waitForTimeout(1000);
+
+      // Step 5: Click the "Ping Service Worker" button
+      console.log('[cdp] clicking Ping Service Worker button');
+      const pingButton = this.page.getByRole('button', { name: 'Ping Service Worker' });
+      await pingButton.click();
+      await this.page.waitForTimeout(2000);
+
+      // Step 6: Verify the status shows success
+      const statusElement = this.page.locator('#status');
+      const statusText = await statusElement.textContent();
+      console.log(`[cdp] status text: ${statusText}`);
+
+      if (!statusText || !statusText.includes('SUCCESS')) {
+        await this.captureScreenshot({ filename: 'mv3-ping-failed.png' });
+        throw new Error(`Expected status to show SUCCESS, got: ${statusText}`);
+      }
+
+      if (!statusText.includes('Service worker is alive')) {
+        await this.captureScreenshot({ filename: 'mv3-wrong-message.png' });
+        throw new Error(`Expected status to include "Service worker is alive", got: ${statusText}`);
+      }
+
+      console.log('[cdp] MV3 service worker verification successful!');
+      await this.captureScreenshot({ filename: 'mv3-success.png' });
+
+    } catch (error) {
+      console.error('[cdp] MV3 service worker verification failed:', error);
+      await this.captureScreenshot({ filename: 'mv3-verification-error.png' }).catch(console.error);
+      throw error;
+    }
+  }
+
   async disconnect(): Promise<void> {
     // Note: We don't close the browser since it's an existing instance
     // We just disconnect from it
@@ -423,6 +542,14 @@ async function main(): Promise<void> {
           options.substr,
           options.timeout ? parseInt(options.timeout, 10) : undefined,
         );
+        break;
+      }
+
+      case 'verify-mv3-service-worker': {
+        await client.verifyMV3ServiceWorker({
+          wsURL,
+          timeout: options.timeout ? parseInt(options.timeout, 10) : undefined,
+        });
         break;
       }
 

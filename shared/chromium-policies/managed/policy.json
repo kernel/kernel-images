@@ -1,8 +1,15 @@
 {
   "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
   "AutofillCreditCardEnabled": false,
   "TranslateEnabled": false,
   "DefaultNotificationsSetting": 2,
+  "DefaultGeolocationSetting": 2,
+  "DefaultSearchProviderEnabled": true,
+  "DefaultSearchProviderName": "DuckDuckGo",
+  "DefaultSearchProviderSearchURL": "https://duckduckgo.com/?q={searchTerms}",
+  "DefaultSearchProviderSuggestURL": "https://duckduckgo.com/ac/?q={searchTerms}",
+  "NewTabPageLocation": "https://start.duckduckgo.com/",
   "ExtensionSettings": {
     "*": {
       "allowed_types": ["extension"],

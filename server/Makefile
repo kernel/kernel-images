@@ -35,6 +35,7 @@ dev: build $(RECORDING_DIR)
 
 test:
 	go vet ./...
+	# E2E tests use dynamic ports via TestContainer, enabling parallel execution
 	go test -v -race ./...
 
 clean:

@@ -15,17 +15,100 @@ const PolicyPath = "/etc/chromium/policies/managed/policy.json"
 
 // Chrome extension IDs are 32 lowercase a-p characters
 var extensionIDRegex = regexp.MustCompile(`^[a-p]{32}$`)
+var extensionPathRegex = regexp.MustCompile(`/extensions/[^/]+/`)
 
-// Policy represents the Chrome enterprise policy structure
+// Policy represents the Chrome enterprise policy structure.
+// Only fields that are programmatically modified are defined here.
+// All other fields (like DefaultGeolocationSetting, PasswordManagerEnabled, etc.)
+// are preserved through the unknownFields mechanism during read-modify-write cycles.
 type Policy struct {
 	mu sync.Mutex
 
-	PasswordManagerEnabled      bool                        `json:"PasswordManagerEnabled"`
-	AutofillCreditCardEnabled   bool                        `json:"AutofillCreditCardEnabled"`
-	TranslateEnabled            bool                        `json:"TranslateEnabled"`
-	DefaultNotificationsSetting int                         `json:"DefaultNotificationsSetting"`
-	ExtensionInstallForcelist   []string                    `json:"ExtensionInstallForcelist,omitempty"`
-	ExtensionSettings           map[string]ExtensionSetting `json:"ExtensionSettings"`
+	// ExtensionInstallForcelist is modified when adding force-installed extensions
+	ExtensionInstallForcelist []string `json:"ExtensionInstallForcelist,omitempty"`
+	// ExtensionSettings is modified when adding/configuring extensions
+	ExtensionSettings map[string]ExtensionSetting `json:"ExtensionSettings"`
+
+	// unknownFields preserves all JSON fields not explicitly defined in this struct.
+	// This allows policy.json to contain any Chrome policy settings without
+	// requiring updates to this Go struct.
+	unknownFields map[string]json.RawMessage
+}
+
+// policyJSON is used for JSON marshaling/unmarshaling without the mutex.
+// This avoids go vet warnings about copying mutex values.
+type policyJSON struct {
+	ExtensionInstallForcelist []string                    `json:"ExtensionInstallForcelist,omitempty"`
+	ExtensionSettings         map[string]ExtensionSetting `json:"ExtensionSettings"`
+}
+
+// knownPolicyFields lists all JSON field names that have corresponding struct fields.
+// All other fields are automatically preserved in unknownFields.
+var knownPolicyFields = map[string]bool{
+	"ExtensionInstallForcelist": true,
+	"ExtensionSettings":         true,
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling that preserves unknown fields.
+func (p *Policy) UnmarshalJSON(data []byte) error {
+	// First, unmarshal into a map to capture all fields
+	var allFields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &allFields); err != nil {
+		return err
+	}
+
+	// Unmarshal known fields into the helper struct (no mutex)
+	var pj policyJSON
+	if err := json.Unmarshal(data, &pj); err != nil {
+		return err
+	}
+
+	// Copy the known fields to p
+	p.ExtensionInstallForcelist = pj.ExtensionInstallForcelist
+	p.ExtensionSettings = pj.ExtensionSettings
+
+	// Extract unknown fields
+	p.unknownFields = make(map[string]json.RawMessage)
+	for key, value := range allFields {
+		if !knownPolicyFields[key] {
+			p.unknownFields[key] = value
+		}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements custom JSON marshaling that includes unknown fields.
+func (p *Policy) MarshalJSON() ([]byte, error) {
+	// Create helper struct with known fields (no mutex)
+	pj := policyJSON{
+		ExtensionInstallForcelist: p.ExtensionInstallForcelist,
+		ExtensionSettings:         p.ExtensionSettings,
+	}
+
+	// Marshal the known fields first
+	knownData, err := json.Marshal(pj)
+	if err != nil {
+		return nil, err
+	}
+
+	// If no unknown fields, return as-is
+	if len(p.unknownFields) == 0 {
+		return knownData, nil
+	}
+
+	// Unmarshal known fields into a map so we can add unknown fields
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(knownData, &result); err != nil {
+		return nil, err
+	}
+
+	// Add unknown fields
+	for key, value := range p.unknownFields {
+		result[key] = value
+	}
+
+	return json.Marshal(result)
 }
 
 // ExtensionSetting represents settings for a specific extension
@@ -44,14 +127,11 @@ func (p *Policy) readPolicyUnlocked() (*Policy, error) {
 	data, err := os.ReadFile(PolicyPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return default policy if file doesn't exist
+			// Return minimal policy if file doesn't exist.
+			// In practice, policy.json ships with the container image.
 			return &Policy{
-				PasswordManagerEnabled:      false,
-				AutofillCreditCardEnabled:   false,
-				TranslateEnabled:            false,
-				DefaultNotificationsSetting: 2,
-				ExtensionInstallForcelist:   []string{},
-				ExtensionSettings:           make(map[string]ExtensionSetting),
+				ExtensionInstallForcelist: []string{},
+				ExtensionSettings:         make(map[string]ExtensionSetting),
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to read policy file: %w", err)
@@ -248,4 +328,30 @@ func ExtractExtensionIDFromUpdateXML(updateXMLPath string) (string, error) {
 	}
 
 	return appID, nil
+}
+
+// RewriteUpdateXMLUrls rewrites the codebase URLs in update.xml to use the specified extension name.
+// This ensures that regardless of what name was originally in the update.xml, the URLs will match
+// the actual directory name where the extension is installed.
+func RewriteUpdateXMLUrls(updateXMLPath, extensionName string) error {
+	data, err := os.ReadFile(updateXMLPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to read update.xml: %w", err)
+	}
+
+	content := string(data)
+	newPath := fmt.Sprintf("/extensions/%s/", extensionName)
+
+	newContent := extensionPathRegex.ReplaceAllString(content, newPath)
+
+	if newContent != content {
+		if err := os.WriteFile(updateXMLPath, []byte(newContent), 0644); err != nil {
+			return fmt.Errorf("failed to write update.xml: %w", err)
+		}
+	}
+
+	return nil
 }

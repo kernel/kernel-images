@@ -44,13 +44,15 @@ fi
 export HOSTNAME="${HOSTNAME:-kernel-vm}"
 
 # if CHROMIUM_FLAGS is not set, default to the flags used in playwright_stealth
+# NOTE: --disable-background-networking was intentionally removed because it prevents
+# Chrome from fetching extensions via ExtensionInstallForcelist enterprise policy.
+# Enterprise extensions require Chrome to make HTTP requests to fetch update.xml and .crx files.
 if [ -z "${CHROMIUM_FLAGS:-}" ]; then
   CHROMIUM_FLAGS="--accept-lang=en-US,en \
     --allow-pre-commit-input \
     --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 \
     --crash-dumps-dir=/tmp/chromium-dumps \
     --disable-back-forward-cache \
-    --disable-background-networking \
     --disable-background-timer-throttling \
     --disable-backgrounding-occluded-windows \
     --disable-blink-features=AutomationControlled \

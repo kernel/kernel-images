@@ -27,6 +27,12 @@ func main() {
 	_ = os.Remove("/home/kernel/user-data/SingletonSocket")
 	_ = os.Remove("/home/kernel/user-data/SingletonCookie")
 
+	// Kill any existing chromium processes to ensure clean restart.
+	// This is necessary because supervisord's stopwaitsecs=0 doesn't wait for
+	// the old process to fully die before starting the new one, which can cause
+	// the new process to fall back to IPv6 while the old one holds IPv4.
+	killExistingChromium()
+
 	// Inputs
 	internalPort := strings.TrimSpace(os.Getenv("INTERNAL_PORT"))
 	if internalPort == "" {
@@ -157,4 +163,27 @@ func waitForPort(port string, timeout time.Duration) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	// Timeout reached, proceed anyway and let chromium report the error
+}
+
+// killExistingChromium kills any existing chromium browser processes and waits for them to die.
+// This ensures a clean restart where the new process can bind to both IPv4 and IPv6.
+// Note: We use -x for exact match to avoid killing chromium-launcher itself.
+func killExistingChromium() {
+	// Kill chromium processes by exact name match.
+	// Using -x prevents matching "chromium-launcher" which would kill this process.
+	_ = exec.Command("pkill", "-9", "-x", "chromium").Run()
+
+	// Wait up to 2 seconds for processes to fully terminate
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		// Check if any chromium browser processes are still running (exact match)
+		output, err := exec.Command("pgrep", "-x", "chromium").Output()
+		if err != nil || len(strings.TrimSpace(string(output))) == 0 {
+			// No processes found, we're done
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// Timeout - processes may still exist but we continue anyway
+	fmt.Fprintf(os.Stderr, "warning: chromium processes may still be running after kill attempt\n")
 }

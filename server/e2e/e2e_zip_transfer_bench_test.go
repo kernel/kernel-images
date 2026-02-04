@@ -6,14 +6,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"os/exec"
 	"testing"
 	"time"
 
-	logctx "github.com/onkernel/kernel-images/server/lib/logger"
 	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
@@ -24,36 +22,29 @@ import (
 //
 // Run with: go test -v -run TestZipTransferTiming ./e2e/...
 func TestZipTransferTiming(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
-
-	image := headlessImage
-	name := containerName + "-zip-transfer"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
-
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
 
 	env := map[string]string{
 		"WIDTH":  "1024",
 		"HEIGHT": "768",
 	}
 
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container")
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	t.Logf("Waiting for API...")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	// Start container with dynamic ports
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: env}), "failed to start container")
+	defer c.Stop(ctx)
 
-	client, err := apiClient()
+	t.Log("Waiting for API...")
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// First, let's populate user-data with some content by navigating to a page
@@ -264,36 +255,29 @@ func avgInt64(vals []int64) int64 {
 //
 // Run with: go test -v -run TestZstdTransferTiming ./e2e/...
 func TestZstdTransferTiming(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
-
-	image := headlessImage
-	name := containerName + "-zstd-transfer"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
-
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
 
 	env := map[string]string{
 		"WIDTH":  "1024",
 		"HEIGHT": "768",
 	}
 
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container")
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	t.Logf("Waiting for API...")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	// Start container with dynamic ports
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: env}), "failed to start container")
+	defer c.Stop(ctx)
 
-	client, err := apiClient()
+	t.Log("Waiting for API...")
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Populate user-data with some content
@@ -423,36 +407,29 @@ func uploadZstd(ctx context.Context, client *instanceoapi.ClientWithResponses, a
 //
 // Run with: go test -v -run TestZipVsZstdComparison ./e2e/...
 func TestZipVsZstdComparison(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
-
-	image := headlessImage
-	name := containerName + "-comparison"
-
-	logger := slog.New(slog.NewTextHandler(t.Output(), &slog.HandlerOptions{Level: slog.LevelInfo}))
-	baseCtx := logctx.AddToContext(context.Background(), logger)
-
-	// Clean slate
-	_ = stopContainer(baseCtx, name)
 
 	env := map[string]string{
 		"WIDTH":  "1024",
 		"HEIGHT": "768",
 	}
 
-	// Start container
-	_, exitCh, err := runContainer(baseCtx, image, name, env)
-	require.NoError(t, err, "failed to start container")
-	defer stopContainer(baseCtx, name)
-
-	ctx, cancel := context.WithTimeout(baseCtx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	t.Logf("Waiting for API...")
-	require.NoError(t, waitHTTPOrExit(ctx, apiBaseURL+"/spec.yaml", exitCh), "api not ready")
+	// Start container with dynamic ports
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: env}), "failed to start container")
+	defer c.Stop(ctx)
 
-	client, err := apiClient()
+	t.Log("Waiting for API...")
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
 	// Populate user-data

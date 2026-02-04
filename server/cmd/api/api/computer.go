@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -424,6 +425,85 @@ func (s *ApiService) SetCursor(ctx context.Context, request oapi.SetCursorReques
 	}
 
 	return oapi.SetCursor200JSONResponse{Ok: true}, nil
+}
+
+// parseMousePosition parses xdotool getmouselocation --shell output.
+// Expected format:
+//
+//	X=100
+//	Y=200
+//	SCREEN=0
+//	WINDOW=12345
+//
+// Returns x, y coordinates and an error if parsing fails.
+func parseMousePosition(output string) (x, y int, err error) {
+	outStr := strings.TrimSpace(output)
+	if outStr == "" {
+		return 0, 0, fmt.Errorf("empty output")
+	}
+
+	var xParsed, yParsed bool
+
+	for line := range strings.SplitSeq(outStr, "\n") {
+		line = strings.TrimSpace(line)
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key, value := parts[0], parts[1]
+		switch key {
+		case "X":
+			if parsed, parseErr := strconv.Atoi(value); parseErr == nil {
+				x = parsed
+				xParsed = true
+			}
+		case "Y":
+			if parsed, parseErr := strconv.Atoi(value); parseErr == nil {
+				y = parsed
+				yParsed = true
+			}
+		}
+		// Early exit once both coordinates are found
+		if xParsed && yParsed {
+			break
+		}
+	}
+
+	if !xParsed || !yParsed {
+		return 0, 0, fmt.Errorf("failed to parse coordinates from output: %q", outStr)
+	}
+
+	return x, y, nil
+}
+
+func (s *ApiService) GetMousePosition(ctx context.Context, request oapi.GetMousePositionRequestObject) (oapi.GetMousePositionResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	// serialize input operations to avoid race conditions with other xdotool commands
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+
+	// Execute xdotool getmouselocation --shell for parseable output
+	output, err := defaultXdoTool.Run(ctx, "getmouselocation", "--shell")
+	if err != nil {
+		log.Error("xdotool getmouselocation failed", "err", err, "output", string(output))
+		return oapi.GetMousePosition500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+			Message: "failed to get mouse position"},
+		}, nil
+	}
+
+	x, y, err := parseMousePosition(string(output))
+	if err != nil {
+		log.Error("failed to parse mouse position", "err", err, "output", string(output))
+		return oapi.GetMousePosition500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+			Message: "failed to parse mouse position from xdotool output"},
+		}, nil
+	}
+
+	return oapi.GetMousePosition200JSONResponse{
+		X: x,
+		Y: y,
+	}, nil
 }
 
 func (s *ApiService) PressKey(ctx context.Context, request oapi.PressKeyRequestObject) (oapi.PressKeyResponseObject, error) {
