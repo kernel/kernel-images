@@ -869,17 +869,13 @@ func (s *ApiService) DragMouse(ctx context.Context, request oapi.DragMouseReques
 
 const maxSleepDurationMs = 30_000
 
-func (s *ApiService) doSleep(ctx context.Context, body oapi.SleepAction, actionIndex int) error {
-	log := logger.FromContext(ctx)
-
+func (s *ApiService) doSleep(ctx context.Context, body oapi.SleepAction) error {
 	if body.DurationMs < 0 {
 		return &validationError{msg: "duration_ms must be >= 0"}
 	}
 	if body.DurationMs > maxSleepDurationMs {
 		return &validationError{msg: fmt.Sprintf("duration_ms must be <= %d", maxSleepDurationMs)}
 	}
-
-	log.Info("batch sleep", "duration_ms", body.DurationMs, "action_index", actionIndex)
 
 	timer := time.NewTimer(time.Duration(body.DurationMs) * time.Millisecond)
 	defer timer.Stop()
@@ -958,7 +954,7 @@ func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.Batch
 			if action.Sleep == nil {
 				err = &validationError{msg: "sleep field is required when type is sleep"}
 			} else {
-				err = s.doSleep(ctx, *action.Sleep, i)
+				err = s.doSleep(ctx, *action.Sleep)
 			}
 		default:
 			err = &validationError{msg: fmt.Sprintf("unsupported action type: %s", action.Type)}
