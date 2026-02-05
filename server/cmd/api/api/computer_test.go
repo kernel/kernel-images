@@ -1,8 +1,11 @@
 package api
 
 import (
+	"errors"
+	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,4 +142,28 @@ func TestParseMousePosition(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidationError(t *testing.T) {
+	ve := &validationError{msg: "bad input"}
+	assert.Equal(t, "bad input", ve.Error())
+	assert.True(t, isValidationErr(ve))
+
+	// Wrapped validation error should still be detected
+	wrapped := fmt.Errorf("context: %w", ve)
+	assert.True(t, isValidationErr(wrapped))
+}
+
+func TestExecutionError(t *testing.T) {
+	ee := &executionError{msg: "xdotool failed"}
+	assert.Equal(t, "xdotool failed", ee.Error())
+	assert.False(t, isValidationErr(ee))
+
+	// A plain error is not a validation error
+	plain := errors.New("something went wrong")
+	assert.False(t, isValidationErr(plain))
+}
+
+func TestIsValidationErr_Nil(t *testing.T) {
+	assert.False(t, isValidationErr(nil))
 }

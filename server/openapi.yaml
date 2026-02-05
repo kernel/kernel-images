@@ -479,6 +479,29 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /computer/batch:
+    post:
+      summary: Execute a batch of computer actions sequentially
+      description: |
+        Execute an ordered list of computer actions in a single API call. Actions are performed
+        sequentially while holding an exclusive lock, so no other input operations can interleave.
+        Execution stops on the first error and the response indicates which action failed.
+        This is useful for chaining deterministic sequences of mouse and keyboard actions
+        without paying network round-trip latency for each individual action.
+      operationId: batchComputerAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchComputerActionRequest"
+      responses:
+        "200":
+          description: All actions executed successfully
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /logs/stream:
     get:
       summary: Stream logs over SSE
@@ -1746,6 +1769,58 @@ components:
         stderr:
           type: string
           description: Standard error from the execution
+      additionalProperties: false
+    SleepAction:
+      type: object
+      description: Pause execution for a specified duration.
+      required: [duration_ms]
+      properties:
+        duration_ms:
+          type: integer
+          description: Duration to sleep in milliseconds.
+          minimum: 0
+          maximum: 30000
+      additionalProperties: false
+    ComputerAction:
+      type: object
+      description: |
+        A single computer action to execute as part of a batch. The `type` field selects which
+        action to perform, and the corresponding field contains the action parameters.
+        Exactly one action field matching the type must be provided.
+      required: [type]
+      properties:
+        type:
+          type: string
+          description: The type of action to perform.
+          enum: [click_mouse, move_mouse, type_text, press_key, scroll, drag_mouse, set_cursor, sleep]
+        click_mouse:
+          $ref: "#/components/schemas/ClickMouseRequest"
+        move_mouse:
+          $ref: "#/components/schemas/MoveMouseRequest"
+        type_text:
+          $ref: "#/components/schemas/TypeTextRequest"
+        press_key:
+          $ref: "#/components/schemas/PressKeyRequest"
+        scroll:
+          $ref: "#/components/schemas/ScrollRequest"
+        drag_mouse:
+          $ref: "#/components/schemas/DragMouseRequest"
+        set_cursor:
+          $ref: "#/components/schemas/SetCursorRequest"
+        sleep:
+          $ref: "#/components/schemas/SleepAction"
+      additionalProperties: false
+    BatchComputerActionRequest:
+      type: object
+      description: A batch of computer actions to execute sequentially.
+      required: [actions]
+      properties:
+        actions:
+          type: array
+          description: Ordered list of actions to execute. Execution stops on the first error.
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ComputerAction"
       additionalProperties: false
   responses:
     BadRequestError:
