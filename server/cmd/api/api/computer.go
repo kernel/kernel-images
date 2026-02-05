@@ -867,9 +867,32 @@ func (s *ApiService) DragMouse(ctx context.Context, request oapi.DragMouseReques
 	return oapi.DragMouse200Response{}, nil
 }
 
-func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.BatchComputerActionRequestObject) (oapi.BatchComputerActionResponseObject, error) {
+const maxSleepDurationMs = 30_000
+
+func (s *ApiService) doSleep(ctx context.Context, body oapi.SleepAction, actionIndex int) error {
 	log := logger.FromContext(ctx)
 
+	if body.DurationMs < 0 {
+		return &validationError{msg: "duration_ms must be >= 0"}
+	}
+	if body.DurationMs > maxSleepDurationMs {
+		return &validationError{msg: fmt.Sprintf("duration_ms must be <= %d", maxSleepDurationMs)}
+	}
+
+	log.Info("batch sleep", "duration_ms", body.DurationMs, "action_index", actionIndex)
+
+	timer := time.NewTimer(time.Duration(body.DurationMs) * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return &executionError{msg: fmt.Sprintf("sleep interrupted: %s", ctx.Err())}
+	}
+}
+
+func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.BatchComputerActionRequestObject) (oapi.BatchComputerActionResponseObject, error) {
 	s.inputMu.Lock()
 	defer s.inputMu.Unlock()
 
@@ -935,8 +958,7 @@ func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.Batch
 			if action.Sleep == nil {
 				err = &validationError{msg: "sleep field is required when type is sleep"}
 			} else {
-				log.Info("batch sleep", "duration_ms", action.Sleep.DurationMs, "action_index", i)
-				time.Sleep(time.Duration(action.Sleep.DurationMs) * time.Millisecond)
+				err = s.doSleep(ctx, *action.Sleep, i)
 			}
 		default:
 			err = &validationError{msg: fmt.Sprintf("unsupported action type: %s", action.Type)}
