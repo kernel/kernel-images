@@ -557,24 +557,33 @@ func (s *ApiService) doPressKey(ctx context.Context, body oapi.PressKeyRequest) 
 		}
 
 		d := time.Duration(*body.Duration) * time.Millisecond
-		time.Sleep(d)
 
-		argsUp := []string{}
-		for _, key := range body.Keys {
-			argsUp = append(argsUp, "keyup", key)
-		}
-		if body.HoldKeys != nil {
-			for _, key := range *body.HoldKeys {
+		// Best-effort release helper: always attempt to release keys even if sleep was interrupted.
+		releaseKeys := func() error {
+			argsUp := []string{}
+			for _, key := range body.Keys {
 				argsUp = append(argsUp, "keyup", key)
 			}
+			if body.HoldKeys != nil {
+				for _, key := range *body.HoldKeys {
+					argsUp = append(argsUp, "keyup", key)
+				}
+			}
+			// Use background context for cleanup so keys are released even on cancellation.
+			if output, err := defaultXdoTool.Run(context.Background(), argsUp...); err != nil {
+				log.Error("xdotool keyup failed", "err", err, "output", string(output))
+				return &executionError{msg: fmt.Sprintf("failed to release keys. out=%s", string(output))}
+			}
+			return nil
 		}
 
-		if output, err := defaultXdoTool.Run(ctx, argsUp...); err != nil {
-			log.Error("xdotool keyup failed", "err", err, "output", string(output))
-			return &executionError{msg: fmt.Sprintf("failed to release keys. out=%s", string(output))}
+		if err := sleepWithContext(ctx, d); err != nil {
+			// Context cancelled while holding keys down; release them before returning.
+			_ = releaseKeys()
+			return &executionError{msg: fmt.Sprintf("key hold interrupted: %s", err)}
 		}
 
-		return nil
+		return releaseKeys()
 	}
 
 	// Tap behavior: hold modifiers (if any), tap each key, then release modifiers.
@@ -770,7 +779,17 @@ func (s *ApiService) doDragMouse(ctx context.Context, body oapi.DragMouseRequest
 
 	// Optional delay between mousedown and movement
 	if body.Delay != nil && *body.Delay > 0 {
-		time.Sleep(time.Duration(*body.Delay) * time.Millisecond)
+		if err := sleepWithContext(ctx, time.Duration(*body.Delay)*time.Millisecond); err != nil {
+			// Best-effort release: mouseup + modifier keyup
+			cleanupArgs := []string{"mouseup", btn}
+			if body.HoldKeys != nil {
+				for _, key := range *body.HoldKeys {
+					cleanupArgs = append(cleanupArgs, "keyup", key)
+				}
+			}
+			_, _ = defaultXdoTool.Run(context.Background(), cleanupArgs...)
+			return &executionError{msg: fmt.Sprintf("drag delay interrupted: %s", err)}
+		}
 	}
 
 	// Phase 2: move along path (excluding first point) using fixed-count relative steps
@@ -869,6 +888,24 @@ func (s *ApiService) DragMouse(ctx context.Context, request oapi.DragMouseReques
 
 const maxSleepDurationMs = 30_000
 
+// sleepWithContext pauses for the given duration, returning early if the context is cancelled.
+// This should be used instead of time.Sleep when holding the inputMu mutex, so that context
+// cancellation can promptly release the lock.
+func sleepWithContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s *ApiService) doSleep(ctx context.Context, body oapi.SleepAction) error {
 	if body.DurationMs < 0 {
 		return &validationError{msg: "duration_ms must be >= 0"}
@@ -877,15 +914,10 @@ func (s *ApiService) doSleep(ctx context.Context, body oapi.SleepAction) error {
 		return &validationError{msg: fmt.Sprintf("duration_ms must be <= %d", maxSleepDurationMs)}
 	}
 
-	timer := time.NewTimer(time.Duration(body.DurationMs) * time.Millisecond)
-	defer timer.Stop()
-
-	select {
-	case <-timer.C:
-		return nil
-	case <-ctx.Done():
-		return &executionError{msg: fmt.Sprintf("sleep interrupted: %s", ctx.Err())}
+	if err := sleepWithContext(ctx, time.Duration(body.DurationMs)*time.Millisecond); err != nil {
+		return &executionError{msg: fmt.Sprintf("sleep interrupted: %s", err)}
 	}
+	return nil
 }
 
 func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.BatchComputerActionRequestObject) (oapi.BatchComputerActionResponseObject, error) {
