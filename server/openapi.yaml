@@ -502,6 +502,38 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /computer/ambient_mouse:
+    post:
+      summary: Enable or disable ambient mouse activity
+      description: |
+        Toggle a background loop that emits diverse input events (mouse drift, scroll,
+        micro-drag, click, key tap) to make the browser session appear more human-like to
+        anti-bot sensors.
+
+        When enabled, the loop acquires the same input lock used by all other computer-use
+        APIs, so ambient events never interleave with explicit actions. The loop automatically
+        yields the lock between events, allowing explicit API calls to take priority.
+
+        Call with enabled=false to stop the loop. Calling with enabled=true while already
+        running replaces the configuration (restarts the loop).
+      operationId: setAmbientMouse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AmbientMouseRequest"
+      responses:
+        "200":
+          description: Ambient mouse state updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AmbientMouseResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /logs/stream:
     get:
       summary: Stream logs over SSE
@@ -1830,6 +1862,64 @@ components:
           minItems: 1
           items:
             $ref: "#/components/schemas/ComputerAction"
+      additionalProperties: false
+    AmbientMouseRequest:
+      type: object
+      description: |
+        Enable or disable ambient mouse activity. When enabled, the server runs a background
+        loop emitting diverse input events (drift, scroll, micro-drag, click, key tap) to
+        make the session appear human-like to anti-bot sensors.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether ambient mouse activity should be active.
+        min_interval_ms:
+          type: integer
+          description: Minimum delay in milliseconds between ambient events.
+          minimum: 50
+          maximum: 10000
+          default: 200
+        max_interval_ms:
+          type: integer
+          description: Maximum delay in milliseconds between ambient events.
+          minimum: 50
+          maximum: 30000
+          default: 600
+        mouse_drift_weight:
+          type: integer
+          description: Relative weight for mouse drift events.
+          minimum: 0
+          default: 55
+        scroll_weight:
+          type: integer
+          description: Relative weight for scroll events.
+          minimum: 0
+          default: 20
+        micro_drag_weight:
+          type: integer
+          description: Relative weight for micro-drag events.
+          minimum: 0
+          default: 12
+        click_weight:
+          type: integer
+          description: Relative weight for click events.
+          minimum: 0
+          default: 10
+        key_tap_weight:
+          type: integer
+          description: Relative weight for key tap events.
+          minimum: 0
+          default: 3
+      additionalProperties: false
+    AmbientMouseResponse:
+      type: object
+      description: Current state of ambient mouse activity.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether ambient mouse activity is currently active.
       additionalProperties: false
   responses:
     BadRequestError:

@@ -53,6 +53,15 @@ type ApiService struct {
 
 	// policy management
 	policy *policy.Policy
+
+	// ambientCancel stops the ambient mouse loop (protected by inputMu)
+	ambientCancel context.CancelFunc
+
+	// displayGeom caches xdotool getdisplaygeometry to avoid shelling out per ambient event
+	displayGeomMu sync.Mutex
+	displayGeomW  int
+	displayGeomH  int
+	displayGeomAt time.Time
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -298,5 +307,13 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	// Stop ambient mouse loop if running.
+	s.inputMu.Lock()
+	if s.ambientCancel != nil {
+		s.ambientCancel()
+		s.ambientCancel = nil
+	}
+	s.inputMu.Unlock()
+
 	return s.recordManager.StopAll(ctx)
 }
