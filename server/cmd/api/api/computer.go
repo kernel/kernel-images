@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
+	"math/rand"
 	"os"
 	"os/exec"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/onkernel/kernel-images/server/lib/logger"
+	"github.com/onkernel/kernel-images/server/lib/mousetrajectory"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 )
 
@@ -51,28 +54,27 @@ func (s *ApiService) doMoveMouse(ctx context.Context, body oapi.MoveMouseRequest
 		return &validationError{msg: fmt.Sprintf("coordinates exceed screen bounds (max: %dx%d)", screenWidth-1, screenHeight-1)}
 	}
 
-	// Build xdotool arguments
-	args := []string{}
+	useSmooth := body.Smooth != nil && *body.Smooth
+	if useSmooth {
+		return s.moveMouseSmooth(ctx, log, body)
+	}
+	return s.moveMouseInstant(ctx, log, body)
+}
 
-	// Hold modifier keys (keydown)
+func (s *ApiService) moveMouseInstant(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest) (oapi.MoveMouseResponseObject, error) {
+	args := []string{}
 	if body.HoldKeys != nil {
 		for _, key := range *body.HoldKeys {
 			args = append(args, "keydown", key)
 		}
 	}
-
-	// Move the cursor to the desired coordinates
 	args = append(args, "mousemove", strconv.Itoa(body.X), strconv.Itoa(body.Y))
-
-	// Release modifier keys (keyup)
 	if body.HoldKeys != nil {
 		for _, key := range *body.HoldKeys {
 			args = append(args, "keyup", key)
 		}
 	}
-
 	log.Info("executing xdotool", "args", args)
-
 	output, err := defaultXdoTool.Run(ctx, args...)
 	if err != nil {
 		log.Error("xdotool command failed", "err", err, "output", string(output))
@@ -83,6 +85,113 @@ func (s *ApiService) doMoveMouse(ctx context.Context, body oapi.MoveMouseRequest
 }
 
 func (s *ApiService) MoveMouse(ctx context.Context, request oapi.MoveMouseRequestObject) (oapi.MoveMouseResponseObject, error) {
+	return oapi.MoveMouse200Response{}, nil
+}
+
+func (s *ApiService) moveMouseSmooth(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest) (oapi.MoveMouseResponseObject, error) {
+	fromX, fromY, err := s.getMouseLocation(ctx)
+	if err != nil {
+		log.Error("failed to get mouse location for smooth move", "error", err)
+		return oapi.MoveMouse500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+			Message: "failed to get current mouse position: " + err.Error()},
+		}, nil
+	}
+
+	opts := &mousetrajectory.Options{}
+	if body.Steps != nil && *body.Steps > 0 {
+		opts.MaxPoints = *body.Steps
+	}
+	traj := mousetrajectory.NewHumanizeMouseTrajectoryWithOptions(
+		float64(fromX), float64(fromY), float64(body.X), float64(body.Y), opts)
+	points := traj.GetPointsInt()
+	if len(points) < 2 {
+		return s.moveMouseInstant(ctx, log, body)
+	}
+
+	stepDelayMs := 10
+	if body.StepDelayMs != nil && *body.StepDelayMs >= 3 && *body.StepDelayMs <= 30 {
+		stepDelayMs = *body.StepDelayMs
+	}
+
+	// Hold modifiers
+	if body.HoldKeys != nil {
+		args := []string{}
+		for _, key := range *body.HoldKeys {
+			args = append(args, "keydown", key)
+		}
+		if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+			log.Error("xdotool keydown failed", "err", err, "output", string(output))
+			return oapi.MoveMouse500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+				Message: "failed to hold modifier keys"},
+			}, nil
+		}
+		defer func() {
+			if body.HoldKeys != nil {
+				args := []string{}
+				for _, key := range *body.HoldKeys {
+					args = append(args, "keyup", key)
+				}
+				_, _ = defaultXdoTool.Run(ctx, args...)
+			}
+		}()
+	}
+
+	// Move along Bezier path: mousemove_relative for each step with delay
+	for i := 1; i < len(points); i++ {
+		dx := points[i][0] - points[i-1][0]
+		dy := points[i][1] - points[i-1][1]
+		args := []string{"mousemove_relative"}
+		if dx < 0 || dy < 0 {
+			args = append(args, "--", strconv.Itoa(dx), strconv.Itoa(dy))
+		} else {
+			args = append(args, strconv.Itoa(dx), strconv.Itoa(dy))
+		}
+		if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+			log.Error("xdotool mousemove_relative failed", "err", err, "output", string(output), "step", i)
+			return oapi.MoveMouse500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+				Message: "failed during smooth mouse movement"},
+			}, nil
+		}
+		jitter := stepDelayMs
+		if stepDelayMs > 3 {
+			jitter = stepDelayMs + rand.Intn(5) - 2
+			if jitter < 3 {
+				jitter = 3
+			}
+		}
+		time.Sleep(time.Duration(jitter) * time.Millisecond)
+	}
+
+	log.Info("executed smooth mouse movement", "points", len(points))
+	return oapi.MoveMouse200Response{}, nil
+}
+
+// getMouseLocation returns the current cursor position via xdotool getmouselocation --shell.
+func (s *ApiService) getMouseLocation(ctx context.Context) (x, y int, err error) {
+	output, err := defaultXdoTool.Run(ctx, "getmouselocation", "--shell")
+	if err != nil {
+		return 0, 0, fmt.Errorf("xdotool getmouselocation failed: %w (output: %s)", err, string(output))
+	}
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "X=") {
+			if v, e := strconv.Atoi(strings.TrimPrefix(line, "X=")); e == nil {
+				x = v
+			}
+		} else if strings.HasPrefix(line, "Y=") {
+			if v, e := strconv.Atoi(strings.TrimPrefix(line, "Y=")); e == nil {
+				y = v
+			}
+		}
+	}
+	return x, y, nil
+}
+
+func (s *ApiService) ClickMouse(ctx context.Context, request oapi.ClickMouseRequestObject) (oapi.ClickMouseResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	// serialize input operations to avoid overlapping xdotool commands
 	s.inputMu.Lock()
 	defer s.inputMu.Unlock()
 

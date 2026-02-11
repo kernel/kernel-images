@@ -1232,6 +1232,20 @@ components:
           description: Modifier keys to hold during the move
           items:
             type: string
+        smooth:
+          type: boolean
+          description: Use human-like Bezier curve path instead of instant teleport (recommended for bot detection evasion)
+          default: false
+        steps:
+          type: integer
+          description: Override auto-computed point count when smooth=true. If omitted, derived from path length.
+          minimum: 5
+          maximum: 80
+        step_delay_ms:
+          type: integer
+          description: Delay in milliseconds between steps when smooth=true. Adds small random jitter. Omit for auto (5-15ms).
+          minimum: 3
+          maximum: 30
       additionalProperties: false
     ScreenshotRegion:
       type: object
