@@ -1238,7 +1238,7 @@ components:
           default: true
         duration_sec:
           type: number
-          description: Target total duration in seconds when smooth=true. Steps and per-step delay are auto-computed from path length and this value. Aligns with Camoufox humanize:minTime/maxTime. Ignored when smooth=false. Omit for auto (path-length-based timing).
+          description: Target total duration in seconds for the mouse movement when smooth=true. Steps and per-step delay are auto-computed to achieve this duration. Ignored when smooth=false. Omit for automatic timing based on distance.
           minimum: 0.05
           maximum: 5
       additionalProperties: false

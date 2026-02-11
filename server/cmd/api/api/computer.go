@@ -92,40 +92,7 @@ func (s *ApiService) MoveMouse(ctx context.Context, request oapi.MoveMouseReques
 			Message: "request body is required"},
 		}, nil
 	}
-	body := *request.Body
-
-	// Get current resolution for bounds validation
-	screenWidth, screenHeight, _, err := s.getCurrentResolution(ctx)
-	if err != nil {
-		log := logger.FromContext(ctx)
-		log.Error("failed to get current resolution", "error", err)
-		return oapi.MoveMouse500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
-			Message: "failed to get current display resolution"},
-		}, nil
-	}
-
-	// Ensure non-negative coordinates and within screen bounds
-	if body.X < 0 || body.Y < 0 {
-		return oapi.MoveMouse400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
-			Message: "coordinates must be non-negative"},
-		}, nil
-	}
-	if body.X >= screenWidth || body.Y >= screenHeight {
-		return oapi.MoveMouse400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
-			Message: fmt.Sprintf("coordinates exceed screen bounds (max: %dx%d)", screenWidth-1, screenHeight-1)},
-		}, nil
-	}
-
-	useSmooth := body.Smooth == nil || *body.Smooth // default true when omitted
-	log := logger.FromContext(ctx)
-	if useSmooth {
-		return s.moveMouseSmooth(ctx, log, body)
-	}
-	return s.moveMouseInstant(ctx, log, body)
-}
-
-func (s *ApiService) moveMouseInstant(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest) (oapi.MoveMouseResponseObject, error) {
-	if err := s.doMoveMouseInstant(ctx, log, body); err != nil {
+	if err := s.doMoveMouse(ctx, *request.Body); err != nil {
 		if isValidationErr(err) {
 			return oapi.MoveMouse400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 		}
@@ -141,23 +108,38 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 		return &executionError{msg: "failed to get current mouse position: " + err.Error()}
 	}
 
+	// When duration_sec is specified, compute the number of trajectory points
+	// to achieve that duration at a ~10ms step delay (human-like event frequency).
+	// Otherwise let the library auto-compute from path length.
+	const defaultStepDelayMs = 10
+	var opts *mousetrajectory.Options
+	if body.DurationSec != nil && *body.DurationSec >= 0.05 && *body.DurationSec <= 5 {
+		durationMs := int(*body.DurationSec * 1000)
+		targetPoints := durationMs / defaultStepDelayMs
+		if targetPoints < mousetrajectory.MinPoints {
+			targetPoints = mousetrajectory.MinPoints
+		}
+		if targetPoints > mousetrajectory.MaxPoints {
+			targetPoints = mousetrajectory.MaxPoints
+		}
+		opts = &mousetrajectory.Options{MaxPoints: targetPoints}
+	}
+
 	traj := mousetrajectory.NewHumanizeMouseTrajectoryWithOptions(
-		float64(fromX), float64(fromY), float64(body.X), float64(body.Y), nil)
+		float64(fromX), float64(fromY), float64(body.X), float64(body.Y), opts)
 	points := traj.GetPointsInt()
 	if len(points) < 2 {
 		return s.doMoveMouseInstant(ctx, log, body)
 	}
 
+	// Compute per-step delay to achieve the target duration.
 	numSteps := len(points) - 1
-	stepDelayMs := 10 // default when duration_sec not specified
+	stepDelayMs := defaultStepDelayMs
 	if body.DurationSec != nil && *body.DurationSec >= 0.05 && *body.DurationSec <= 5 && numSteps > 0 {
 		durationMs := int(*body.DurationSec * 1000)
 		stepDelayMs = durationMs / numSteps
 		if stepDelayMs < 3 {
 			stepDelayMs = 3
-		}
-		if stepDelayMs > 30 {
-			stepDelayMs = 30
 		}
 	}
 
@@ -172,14 +154,12 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 			return &executionError{msg: "failed to hold modifier keys"}
 		}
 		defer func() {
-			if body.HoldKeys != nil {
-				args := []string{}
-				for _, key := range *body.HoldKeys {
-					args = append(args, "keyup", key)
-				}
-				// Use background context for cleanup so keys are released even on cancellation.
-				_, _ = defaultXdoTool.Run(context.Background(), args...)
+			args := []string{}
+			for _, key := range *body.HoldKeys {
+				args = append(args, "keyup", key)
 			}
+			// Use background context for cleanup so keys are released even on cancellation.
+			_, _ = defaultXdoTool.Run(context.Background(), args...)
 		}()
 	}
 
@@ -193,12 +173,10 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 
 		dx := points[i][0] - points[i-1][0]
 		dy := points[i][1] - points[i-1][1]
-		args := []string{"mousemove_relative"}
-		if dx < 0 || dy < 0 {
-			args = append(args, "--", strconv.Itoa(dx), strconv.Itoa(dy))
-		} else {
-			args = append(args, strconv.Itoa(dx), strconv.Itoa(dy))
+		if dx == 0 && dy == 0 {
+			continue
 		}
+		args := []string{"mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy)}
 		if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
 			log.Error("xdotool mousemove_relative failed", "err", err, "output", string(output), "step", i)
 			return &executionError{msg: "failed during smooth mouse movement"}
@@ -217,16 +195,6 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 
 	log.Info("executed smooth mouse movement", "points", len(points))
 	return nil
-}
-
-func (s *ApiService) moveMouseSmooth(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest) (oapi.MoveMouseResponseObject, error) {
-	if err := s.doMoveMouseSmooth(ctx, log, body); err != nil {
-		if isValidationErr(err) {
-			return oapi.MoveMouse400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
-		}
-		return oapi.MoveMouse500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
-	}
-	return oapi.MoveMouse200Response{}, nil
 }
 
 // getMouseLocation returns the current cursor position via xdotool getmouselocation --shell.

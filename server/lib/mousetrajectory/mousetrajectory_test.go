@@ -51,6 +51,24 @@ func TestHumanizeMouseTrajectory_ZeroLengthPath(t *testing.T) {
 	assert.Equal(t, 0, points[len(points)-1][1])
 }
 
+func TestHumanizeMouseTrajectory_MaxPointsClampedToMin(t *testing.T) {
+	// MaxPoints below MinPoints should be clamped up to MinPoints
+	opts := &Options{MaxPoints: 2}
+	traj := NewHumanizeMouseTrajectoryWithOptions(0, 0, 100, 100, opts)
+	points := traj.GetPointsInt()
+
+	assert.Len(t, points, MinPoints, "MaxPoints below MinPoints should clamp to MinPoints")
+}
+
+func TestHumanizeMouseTrajectory_MaxPointsClampedToMax(t *testing.T) {
+	// MaxPoints above MaxPoints should be clamped down to MaxPoints
+	opts := &Options{MaxPoints: 200}
+	traj := NewHumanizeMouseTrajectoryWithOptions(0, 0, 100, 100, opts)
+	points := traj.GetPointsInt()
+
+	assert.Len(t, points, MaxPoints, "MaxPoints above MaxPoints should clamp to MaxPoints")
+}
+
 func TestHumanizeMouseTrajectory_CurvedPath(t *testing.T) {
 	traj := NewHumanizeMouseTrajectoryWithSeed(0, 0, 100, 0, 999)
 	points := traj.GetPointsInt()

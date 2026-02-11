@@ -72,17 +72,19 @@ const (
 	// Number of internal knots for the Bezier curve (more = curvier).
 	knotsCount = 2
 	// Distortion parameters for human-like jitter: mean, stdev, frequency.
-	distortionMean = 1.0
+	distortionMean  = 1.0
 	distortionStDev = 1.0
-	distortionFreq = 0.5
+	distortionFreq  = 0.5
 )
 
 const (
-	defaultMaxTime  = 150
-	defaultMinTime  = 0
-	pathLengthScale = 20 // Multiplier for path-length-based point count
-	minPoints       = 5
-	maxPoints       = 80
+	defaultMaxPoints = 150 // Upper bound for auto-computed point count
+	defaultMinPoints = 0   // Lower bound for auto-computed point count (before clamp to MinPoints)
+	pathLengthScale  = 20  // Multiplier for path-length-based point count
+	// MinPoints is the minimum number of trajectory points.
+	MinPoints = 5
+	// MaxPoints is the maximum number of trajectory points.
+	MaxPoints = 80
 )
 
 func (t *HumanizeMouseTrajectory) generateCurve(opts *Options) {
@@ -202,16 +204,16 @@ func (t *HumanizeMouseTrajectory) tweenPoints(points [][2]float64, opts *Options
 	}
 
 	targetPoints := int(math.Min(
-		float64(defaultMaxTime),
-		math.Max(float64(defaultMinTime+2), math.Pow(totalLength, 0.25)*pathLengthScale)))
+		float64(defaultMaxPoints),
+		math.Max(float64(defaultMinPoints+2), math.Pow(totalLength, 0.25)*pathLengthScale)))
 
 	if opts != nil && opts.MaxPoints > 0 {
 		maxPts := opts.MaxPoints
-		if maxPts < minPoints {
-			maxPts = minPoints
+		if maxPts < MinPoints {
+			maxPts = MinPoints
 		}
-		if maxPts > maxPoints {
-			maxPts = maxPoints
+		if maxPts > MaxPoints {
+			maxPts = MaxPoints
 		}
 		targetPoints = maxPts
 	}
