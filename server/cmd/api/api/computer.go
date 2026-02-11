@@ -186,7 +186,7 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 	for i := 1; i < len(points); i++ {
 		select {
 		case <-ctx.Done():
-			return &executionError{msg: "smooth mouse movement cancelled"}
+			return &executionError{msg: "mouse movement cancelled"}
 		default:
 		}
 
@@ -210,7 +210,7 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 			}
 		}
 		if err := sleepWithContext(ctx, time.Duration(jitter)*time.Millisecond); err != nil {
-			return &executionError{msg: "smooth mouse movement interrupted"}
+			return &executionError{msg: "mouse movement cancelled"}
 		}
 	}
 
