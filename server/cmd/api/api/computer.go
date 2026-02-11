@@ -177,7 +177,8 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 				for _, key := range *body.HoldKeys {
 					args = append(args, "keyup", key)
 				}
-				_, _ = defaultXdoTool.Run(ctx, args...)
+				// Use background context for cleanup so keys are released even on cancellation.
+				_, _ = defaultXdoTool.Run(context.Background(), args...)
 			}
 		}()
 	}
@@ -234,20 +235,7 @@ func (s *ApiService) getMouseLocation(ctx context.Context) (x, y int, err error)
 	if err != nil {
 		return 0, 0, fmt.Errorf("xdotool getmouselocation failed: %w (output: %s)", err, string(output))
 	}
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "X=") {
-			if v, e := strconv.Atoi(strings.TrimPrefix(line, "X=")); e == nil {
-				x = v
-			}
-		} else if strings.HasPrefix(line, "Y=") {
-			if v, e := strconv.Atoi(strings.TrimPrefix(line, "Y=")); e == nil {
-				y = v
-			}
-		}
-	}
-	return x, y, nil
+	return parseMousePosition(string(output))
 }
 
 func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseRequest) error {
