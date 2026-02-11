@@ -1235,7 +1235,7 @@ components:
         smooth:
           type: boolean
           description: Use human-like Bezier curve path instead of instant teleport (recommended for bot detection evasion)
-          default: false
+          default: true
         steps:
           type: integer
           description: Override auto-computed point count when smooth=true. Ignored when smooth=false. If omitted, derived from path length.

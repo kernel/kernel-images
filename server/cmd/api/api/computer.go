@@ -54,7 +54,7 @@ func (s *ApiService) doMoveMouse(ctx context.Context, body oapi.MoveMouseRequest
 		return &validationError{msg: fmt.Sprintf("coordinates exceed screen bounds (max: %dx%d)", screenWidth-1, screenHeight-1)}
 	}
 
-	useSmooth := body.Smooth != nil && *body.Smooth
+	useSmooth := body.Smooth == nil || *body.Smooth // default true when omitted
 	if useSmooth {
 		return s.doMoveMouseSmooth(ctx, log, body)
 	}
@@ -116,7 +116,7 @@ func (s *ApiService) MoveMouse(ctx context.Context, request oapi.MoveMouseReques
 		}, nil
 	}
 
-	useSmooth := body.Smooth != nil && *body.Smooth
+	useSmooth := body.Smooth == nil || *body.Smooth // default true when omitted
 	log := logger.FromContext(ctx)
 	if useSmooth {
 		return s.moveMouseSmooth(ctx, log, body)
