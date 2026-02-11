@@ -141,20 +141,24 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 		return &executionError{msg: "failed to get current mouse position: " + err.Error()}
 	}
 
-	opts := &mousetrajectory.Options{}
-	if body.Steps != nil && *body.Steps > 0 {
-		opts.MaxPoints = *body.Steps
-	}
 	traj := mousetrajectory.NewHumanizeMouseTrajectoryWithOptions(
-		float64(fromX), float64(fromY), float64(body.X), float64(body.Y), opts)
+		float64(fromX), float64(fromY), float64(body.X), float64(body.Y), nil)
 	points := traj.GetPointsInt()
 	if len(points) < 2 {
 		return s.doMoveMouseInstant(ctx, log, body)
 	}
 
-	stepDelayMs := 10
-	if body.StepDelayMs != nil && *body.StepDelayMs >= 3 && *body.StepDelayMs <= 30 {
-		stepDelayMs = *body.StepDelayMs
+	numSteps := len(points) - 1
+	stepDelayMs := 10 // default when duration_sec not specified
+	if body.DurationSec != nil && *body.DurationSec >= 0.05 && *body.DurationSec <= 5 && numSteps > 0 {
+		durationMs := int(*body.DurationSec * 1000)
+		stepDelayMs = durationMs / numSteps
+		if stepDelayMs < 3 {
+			stepDelayMs = 3
+		}
+		if stepDelayMs > 30 {
+			stepDelayMs = 30
+		}
 	}
 
 	// Hold modifiers

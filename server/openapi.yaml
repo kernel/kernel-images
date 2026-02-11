@@ -1236,16 +1236,11 @@ components:
           type: boolean
           description: Use human-like Bezier curve path instead of instant teleport (recommended for bot detection evasion)
           default: true
-        steps:
-          type: integer
-          description: Override auto-computed point count when smooth=true. Ignored when smooth=false. If omitted, derived from path length.
-          minimum: 5
-          maximum: 80
-        step_delay_ms:
-          type: integer
-          description: Delay in milliseconds between steps when smooth=true. Adds small random jitter. Ignored when smooth=false. Omit for auto (~10ms with jitter).
-          minimum: 3
-          maximum: 30
+        duration_sec:
+          type: number
+          description: Target total duration in seconds when smooth=true. Steps and per-step delay are auto-computed from path length and this value. Aligns with Camoufox humanize:minTime/maxTime. Ignored when smooth=false. Omit for auto (path-length-based timing).
+          minimum: 0.05
+          maximum: 5
       additionalProperties: false
     ScreenshotRegion:
       type: object
