@@ -624,7 +624,6 @@ func (s *ApiService) ProcessResize(ctx context.Context, request oapi.ProcessResi
 	return oapi.ProcessResize200JSONResponse(oapi.OkResponse{Ok: true}), nil
 }
 
-
 // writeJSON writes a JSON response with the given status code.
 // Unlike http.Error, this sets the correct Content-Type for JSON.
 func writeJSON(w http.ResponseWriter, status int, body string) {

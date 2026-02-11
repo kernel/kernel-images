@@ -38,6 +38,7 @@ func (c *unikraftCloudController) Enable(ctx context.Context) error {
 func (c *unikraftCloudController) write(ctx context.Context, char string) error {
 	if _, err := os.Stat(c.path); err != nil {
 		if os.IsNotExist(err) {
+			logger.FromContext(ctx).Info("scale-to-zero control file not found, skipping write", "path", c.path, "value", char)
 			return nil
 		}
 		logger.FromContext(ctx).Error("failed to stat scale-to-zero control file", "path", c.path, "err", err)
@@ -54,6 +55,7 @@ func (c *unikraftCloudController) write(ctx context.Context, char string) error 
 		logger.FromContext(ctx).Error("failed to write scale-to-zero control file", "path", c.path, "err", err)
 		return err
 	}
+	logger.FromContext(ctx).Info("scale-to-zero control file written", "path", c.path, "value", char)
 	return nil
 }
 
