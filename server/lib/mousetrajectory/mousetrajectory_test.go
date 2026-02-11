@@ -39,6 +39,18 @@ func TestHumanizeMouseTrajectory_WithStepsOverride(t *testing.T) {
 	assert.Len(t, points, 15, "should have exactly 15 points when MaxPoints=15")
 }
 
+func TestHumanizeMouseTrajectory_ZeroLengthPath(t *testing.T) {
+	// Same start and end: should produce at least 2 points, both at (0,0)
+	traj := NewHumanizeMouseTrajectoryWithSeed(0, 0, 0, 0, 42)
+	points := traj.GetPointsInt()
+
+	require.GreaterOrEqual(t, len(points), 2, "zero-length path should have at least 2 points")
+	assert.Equal(t, 0, points[0][0])
+	assert.Equal(t, 0, points[0][1])
+	assert.Equal(t, 0, points[len(points)-1][0])
+	assert.Equal(t, 0, points[len(points)-1][1])
+}
+
 func TestHumanizeMouseTrajectory_CurvedPath(t *testing.T) {
 	traj := NewHumanizeMouseTrajectoryWithSeed(0, 0, 100, 0, 999)
 	points := traj.GetPointsInt()

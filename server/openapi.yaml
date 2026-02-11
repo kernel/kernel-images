@@ -1238,12 +1238,12 @@ components:
           default: false
         steps:
           type: integer
-          description: Override auto-computed point count when smooth=true. If omitted, derived from path length.
+          description: Override auto-computed point count when smooth=true. Ignored when smooth=false. If omitted, derived from path length.
           minimum: 5
           maximum: 80
         step_delay_ms:
           type: integer
-          description: Delay in milliseconds between steps when smooth=true. Adds small random jitter. Omit for auto (5-15ms).
+          description: Delay in milliseconds between steps when smooth=true. Adds small random jitter. Ignored when smooth=false. Omit for auto (~10ms with jitter).
           minimum: 3
           maximum: 30
       additionalProperties: false

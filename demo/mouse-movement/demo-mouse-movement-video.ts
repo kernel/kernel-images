@@ -100,5 +100,5 @@ const DEMO_PATH: [number, number][] = [
   await sleep(3000);
 
   console.log("Demo complete. Stop recording.");
-  browser.close();
+  await browser.close();
 })();

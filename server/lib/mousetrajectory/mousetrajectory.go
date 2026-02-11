@@ -66,15 +66,34 @@ func (t *HumanizeMouseTrajectory) GetPointsInt() [][2]int {
 	return out
 }
 
-func (t *HumanizeMouseTrajectory) generateCurve(opts *Options) {
-	left := math.Min(t.fromX, t.toX) - 80
-	right := math.Max(t.fromX, t.toX) + 80
-	down := math.Min(t.fromY, t.toY) - 80
-	up := math.Max(t.fromY, t.toY) + 80
+const (
+	// Bounds padding for Bezier control point region (pixels beyond start/end).
+	boundsPadding = 80
+	// Number of internal knots for the Bezier curve (more = curvier).
+	knotsCount = 2
+	// Distortion parameters for human-like jitter: mean, stdev, frequency.
+	distortionMean = 1.0
+	distortionStDev = 1.0
+	distortionFreq = 0.5
+)
 
-	knots := t.generateInternalKnots(left, right, down, up, 2)
+const (
+	defaultMaxTime  = 150
+	defaultMinTime  = 0
+	pathLengthScale = 20 // Multiplier for path-length-based point count
+	minPoints       = 5
+	maxPoints       = 80
+)
+
+func (t *HumanizeMouseTrajectory) generateCurve(opts *Options) {
+	left := math.Min(t.fromX, t.toX) - boundsPadding
+	right := math.Max(t.fromX, t.toX) + boundsPadding
+	down := math.Min(t.fromY, t.toY) - boundsPadding
+	up := math.Max(t.fromY, t.toY) + boundsPadding
+
+	knots := t.generateInternalKnots(left, right, down, up, knotsCount)
 	curvePoints := t.generatePoints(knots)
-	curvePoints = t.distortPoints(curvePoints, 1.0, 1.0, 0.5)
+	curvePoints = t.distortPoints(curvePoints, distortionMean, distortionStDev, distortionFreq)
 	t.points = t.tweenPoints(curvePoints, opts)
 }
 
@@ -174,11 +193,6 @@ func (t *HumanizeMouseTrajectory) easeOutQuad(n float64) float64 {
 	return -n * (n - 2)
 }
 
-const (
-	defaultMaxTime = 150
-	defaultMinTime = 0
-)
-
 func (t *HumanizeMouseTrajectory) tweenPoints(points [][2]float64, opts *Options) [][2]float64 {
 	var totalLength float64
 	for i := 1; i < len(points); i++ {
@@ -189,16 +203,17 @@ func (t *HumanizeMouseTrajectory) tweenPoints(points [][2]float64, opts *Options
 
 	targetPoints := int(math.Min(
 		float64(defaultMaxTime),
-		math.Max(float64(defaultMinTime+2), math.Pow(totalLength, 0.25)*20)))
+		math.Max(float64(defaultMinTime+2), math.Pow(totalLength, 0.25)*pathLengthScale)))
 
 	if opts != nil && opts.MaxPoints > 0 {
-		if opts.MaxPoints < 5 {
-			opts.MaxPoints = 5
+		maxPts := opts.MaxPoints
+		if maxPts < minPoints {
+			maxPts = minPoints
 		}
-		if opts.MaxPoints > 80 {
-			opts.MaxPoints = 80
+		if maxPts > maxPoints {
+			maxPts = maxPoints
 		}
-		targetPoints = opts.MaxPoints
+		targetPoints = maxPts
 	}
 
 	if targetPoints < 2 {

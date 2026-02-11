@@ -11,7 +11,7 @@ The cursor trail overlay makes the difference visually obvious.
 
 ## Prerequisites
 
-- Kernel browser session running kernel-images-private (with Bezier support in `server/cmd/api/api/computer.go`)
+- Kernel browser session with Bezier support (kernel-images or kernel-images-private)
 - `KERNEL_BROWSER_ID` and `KERNEL_API_KEY` (or equivalent auth)
 - Screen recorder (OBS, QuickTime, or `ffmpeg`)
 
