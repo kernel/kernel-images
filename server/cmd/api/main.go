@@ -275,6 +275,9 @@ func main() {
 	g, _ := errgroup.WithContext(shutdownCtx)
 
 	g.Go(func() error {
+		return stz.Drain(shutdownCtx)
+	})
+	g.Go(func() error {
 		return srv.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {

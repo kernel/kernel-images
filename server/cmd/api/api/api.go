@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/hashicorp/go-multierror"
 	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/nekoclient"
@@ -297,6 +299,48 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 	return oapi.ListRecorders200JSONResponse(infos), nil
 }
 
+// killAllProcesses sends SIGKILL to every tracked process that is still running.
+func (s *ApiService) killAllProcesses(ctx context.Context) error {
+	log := logger.FromContext(ctx)
+	s.procMu.RLock()
+	defer s.procMu.RUnlock()
+
+	var result *multierror.Error
+	for id, h := range s.procs {
+		if h.state() != "running" {
+			continue
+		}
+		if h.cmd.Process == nil {
+			continue
+		}
+		// supervisorctl handles the lifecycle of long running processes so we don't want to kill
+		// any active supervisorctl processes. For example it is used to restart kernel-images-api
+		// and killing that process would break the restart process.
+		if filepath.Base(h.cmd.Path) == "supervisorctl" {
+			continue
+		}
+		if err := h.cmd.Process.Kill(); err != nil {
+			result = multierror.Append(result, fmt.Errorf("process %s: %w", id, err))
+			log.Error("failed to kill process", "process_id", id, "err", err)
+		}
+	}
+	return result.ErrorOrNil()
+}
+
 func (s *ApiService) Shutdown(ctx context.Context) error {
-	return s.recordManager.StopAll(ctx)
+	var wg sync.WaitGroup
+	var killErr, stopErr error
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		killErr = s.killAllProcesses(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		stopErr = s.recordManager.StopAll(ctx)
+	}()
+	wg.Wait()
+
+	return multierror.Append(killErr, stopErr).ErrorOrNil()
 }
