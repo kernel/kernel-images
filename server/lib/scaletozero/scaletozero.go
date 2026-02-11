@@ -102,8 +102,11 @@ func (NoopController) Enable(context.Context) error  { return nil }
 func (NoopController) Drain(context.Context) error   { return nil }
 
 // Oncer wraps a Controller and ensures that Disable and Enable are called at most once.
+// After a successful Drain, Disable and Enable become no-ops per the Controller contract.
 type Oncer struct {
 	ctrl        Controller
+	mu          sync.Mutex
+	drained     bool
 	disableOnce sync.Once
 	enableOnce  sync.Once
 	drainedOnce sync.Once
@@ -115,17 +118,36 @@ type Oncer struct {
 func NewOncer(c Controller) *Oncer { return &Oncer{ctrl: c} }
 
 func (o *Oncer) Disable(ctx context.Context) error {
+	o.mu.Lock()
+	if o.drained {
+		o.mu.Unlock()
+		return nil
+	}
+	o.mu.Unlock()
 	o.disableOnce.Do(func() { o.disableErr = o.ctrl.Disable(ctx) })
 	return o.disableErr
 }
 
 func (o *Oncer) Enable(ctx context.Context) error {
+	o.mu.Lock()
+	if o.drained {
+		o.mu.Unlock()
+		return nil
+	}
+	o.mu.Unlock()
 	o.enableOnce.Do(func() { o.enableErr = o.ctrl.Enable(ctx) })
 	return o.enableErr
 }
 
 func (o *Oncer) Drain(ctx context.Context) error {
-	o.drainedOnce.Do(func() { o.drainedErr = o.ctrl.Drain(ctx) })
+	o.drainedOnce.Do(func() {
+		o.drainedErr = o.ctrl.Drain(ctx)
+		if o.drainedErr == nil {
+			o.mu.Lock()
+			o.drained = true
+			o.mu.Unlock()
+		}
+	})
 	return o.drainedErr
 }
 
@@ -192,17 +214,14 @@ func (c *DebouncedController) Drain(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.disabled {
+		if err := c.ctrl.Drain(ctx); err != nil {
+			return err
+		}
+		c.disabled = false
+	}
+
 	c.drained = true
 	c.activeCount = 0
-
-	if !c.disabled {
-		return nil
-	}
-
-	if err := c.ctrl.Drain(ctx); err != nil {
-		return err
-	}
-
-	c.disabled = false
 	return nil
 }

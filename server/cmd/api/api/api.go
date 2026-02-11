@@ -31,8 +31,9 @@ type ApiService struct {
 	watches map[string]*fsWatch
 
 	// Process management
-	procMu sync.RWMutex
-	procs  map[string]*processHandle
+	procMu       sync.RWMutex
+	procs        map[string]*processHandle
+	shuttingDown bool
 
 	// Neko authenticated client
 	nekoAuthClient *nekoclient.AuthClient
@@ -300,10 +301,13 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 // killAllProcesses sends SIGKILL to every tracked process that is still running.
+// It acquires the write lock and sets shuttingDown so that ProcessSpawn rejects
+// new processes once the kill pass begins.
 func (s *ApiService) killAllProcesses(ctx context.Context) error {
 	log := logger.FromContext(ctx)
-	s.procMu.RLock()
-	defer s.procMu.RUnlock()
+	s.procMu.Lock()
+	defer s.procMu.Unlock()
+	s.shuttingDown = true
 
 	var result *multierror.Error
 	for id, h := range s.procs {
@@ -320,8 +324,12 @@ func (s *ApiService) killAllProcesses(ctx context.Context) error {
 			continue
 		}
 		if err := h.cmd.Process.Kill(); err != nil {
-			result = multierror.Append(result, fmt.Errorf("process %s: %w", id, err))
-			log.Error("failed to kill process", "process_id", id, "err", err)
+			// A process may already have exited between the state check and the
+			// kill call; treat that as a benign race rather than a fatal error.
+			if !errors.Is(err, os.ErrProcessDone) {
+				result = multierror.Append(result, fmt.Errorf("process %s: %w", id, err))
+				log.Error("failed to kill process", "process_id", id, "err", err)
+			}
 		}
 	}
 	return result.ErrorOrNil()
