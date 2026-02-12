@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
+	"github.com/onkernel/kernel-images/server/lib/chromiumflags"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 )
@@ -86,6 +87,21 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	restartChrome := (displayMode == "xvfb") // default true for xvfb, false for xorg
 	if req.Body.RestartChromium != nil {
 		restartChrome = *req.Body.RestartChromium
+	}
+
+	// App mode: Chromium's --app flag removes the tab bar and toolbar chrome,
+	// allowing the window to resize below the normal ~500px minimum width
+	// and ~200px minimum height.
+	// We automatically toggle this based on the requested viewport dimensions.
+	const appModeWidthThreshold = 500
+	const appModeHeightThreshold = 200
+	needsAppMode := width < appModeWidthThreshold || height < appModeHeightThreshold
+	if toggled, err := s.ensureAppMode(ctx, needsAppMode); err != nil {
+		log.Error("failed to toggle app mode", "error", err)
+		// Non-fatal: continue with the resize even if app mode toggle fails.
+	} else if toggled {
+		// App mode changed — force a chromium restart so it picks up the new flags.
+		restartChrome = true
 	}
 
 	// Route to appropriate resolution change handler
@@ -389,4 +405,48 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 
 	log.Info("successfully changed resolution via Neko API", "width", width, "height", height, "refresh_rate", refreshRate)
 	return nil
+}
+
+// ensureAppMode adds or removes the --app=about:blank flag from the Chromium
+// runtime flags file. It returns (true, nil) when the flag state was changed
+// (meaning Chromium needs a restart), or (false, nil) when no change was needed.
+func (s *ApiService) ensureAppMode(ctx context.Context, enable bool) (toggled bool, err error) {
+	log := logger.FromContext(ctx)
+	const flagsPath = "/chromium/flags"
+	const appFlag = "--app"
+
+	existing, err := chromiumflags.ReadOptionalFlagFile(flagsPath)
+	if err != nil {
+		return false, fmt.Errorf("failed to read flags file: %w", err)
+	}
+
+	hasApp := chromiumflags.HasFlagWithPrefix(existing, appFlag)
+
+	if enable && hasApp {
+		log.Info("app mode already enabled, no change needed")
+		return false, nil
+	}
+	if !enable && !hasApp {
+		log.Info("app mode already disabled, no change needed")
+		return false, nil
+	}
+
+	var updated []string
+	if enable {
+		log.Info("enabling app mode (--app=about:blank) for small viewport")
+		updated = append(existing, "--app=https://start.duckduckgo.com")
+	} else {
+		log.Info("disabling app mode for normal viewport")
+		updated = chromiumflags.RemoveFlagsByPrefix(existing, appFlag)
+	}
+
+	if err := os.MkdirAll("/chromium", 0o755); err != nil {
+		return false, fmt.Errorf("failed to create chromium dir: %w", err)
+	}
+	if err := chromiumflags.WriteFlagFile(flagsPath, updated); err != nil {
+		return false, fmt.Errorf("failed to write flags file: %w", err)
+	}
+
+	log.Info("app mode toggled", "enabled", enable, "flags", updated)
+	return true, nil
 }

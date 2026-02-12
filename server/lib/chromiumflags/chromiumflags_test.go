@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestParseFlags(t *testing.T) {
@@ -213,6 +215,62 @@ func TestWriteFlagFileAndReadBack(t *testing.T) {
 }
 
 // TestWriteFlagFileFromString removed: callers should use WriteFlagFile with tokens.
+
+func TestRemoveFlagsByPrefix(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens []string
+		prefix string
+		want   []string
+	}{
+		{
+			name:   "remove exact match",
+			tokens: []string{"--foo", "--app", "--bar"},
+			prefix: "--app",
+			want:   []string{"--foo", "--bar"},
+		},
+		{
+			name:   "remove prefix=value match",
+			tokens: []string{"--foo", "--app=about:blank", "--bar"},
+			prefix: "--app",
+			want:   []string{"--foo", "--bar"},
+		},
+		{
+			name:   "does not remove longer flag names",
+			tokens: []string{"--foo", "--application-name=test", "--app=about:blank"},
+			prefix: "--app",
+			want:   []string{"--foo", "--application-name=test"},
+		},
+		{
+			name:   "nothing to remove",
+			tokens: []string{"--foo", "--bar"},
+			prefix: "--app",
+			want:   []string{"--foo", "--bar"},
+		},
+		{
+			name:   "empty input",
+			tokens: []string{},
+			prefix: "--app",
+			want:   []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RemoveFlagsByPrefix(tt.tokens, tt.prefix)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("RemoveFlagsByPrefix() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHasFlagWithPrefix(t *testing.T) {
+	assert.True(t, HasFlagWithPrefix([]string{"--app=about:blank", "--foo"}, "--app"))
+	assert.True(t, HasFlagWithPrefix([]string{"--foo", "--app"}, "--app"))
+	assert.False(t, HasFlagWithPrefix([]string{"--application-name=test"}, "--app"))
+	assert.False(t, HasFlagWithPrefix([]string{"--foo", "--bar"}, "--app"))
+	assert.False(t, HasFlagWithPrefix([]string{}, "--app"))
+}
 
 func TestMergeFlags(t *testing.T) {
 	tests := []struct {
