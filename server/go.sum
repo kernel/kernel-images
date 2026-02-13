@@ -133,8 +133,8 @@ github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037 h1:G7ERwszslrBzRxj//J
 github.com/oasdiff/yaml v0.0.0-20250309154309-f31be36b4037/go.mod h1:2bpvgLBZEtENV5scfDFEtB/5+1M4hkQhDQrccEJ/qGw=
 github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90 h1:bQx3WeLcUWy+RletIKwUIt4x3t8n2SxavmoclizMb8c=
 github.com/oasdiff/yaml3 v0.0.0-20250309153720-d2182401db90/go.mod h1:y5+oSEHCPT/DGrS++Wc/479ERge0zTFxaF8PbGKcg2o=
-github.com/onkernel/neko/server v0.0.0-20251008185748-46e2fc7d3866 h1:Cix/sgZLCsavpiTFxDLPbUOXob50IekCg5mgh+i4D4Q=
-github.com/onkernel/neko/server v0.0.0-20251008185748-46e2fc7d3866/go.mod h1:0+zactiySvtKwfe5JFjyNrSuQLA+EEPZl5bcfcZf1RM=
+github.com/onkernel/neko/server v0.0.0-20260213021128-abe9ac59a634 h1:Q8v6O/VRVLKcEHMSGC0ItDmLFShKLny/0bBggC/1jjk=
+github.com/onkernel/neko/server v0.0.0-20260213021128-abe9ac59a634/go.mod h1:0+zactiySvtKwfe5JFjyNrSuQLA+EEPZl5bcfcZf1RM=
 github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
 github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/opencontainers/image-spec v1.1.1 h1:y0fUlFfIZhPF1W537XOLg0/fcx6zcHCJwooC2xJA040=

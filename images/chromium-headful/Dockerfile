@@ -146,7 +146,7 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
-FROM ghcr.io/kernel/neko/base:3.0.8-v1.3.0 AS neko
+FROM ghcr.io/kernel/neko/base:3.0.8-v1.4.0 AS neko
 # ^--- now has event.SYSTEM_PONG with legacy support to keepalive
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/ubuntu:22.04
