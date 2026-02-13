@@ -407,46 +407,54 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 	return nil
 }
 
-// ensureAppMode adds or removes the --app=https://start.duckduckgo.com flag from the Chromium
-// runtime flags file. It returns (true, nil) when the flag state was changed
-// (meaning Chromium needs a restart), or (false, nil) when no change was needed.
+// ensureAppMode adds or removes the --app flag from the Chromium runtime flags
+// file. When enabling, any existing --app flag is removed first so the URL is
+// always exactly appModeURL (defined in chromium.go). It returns (true, nil)
+// when the flag state was changed (meaning Chromium needs a restart), or
+// (false, nil) when no change was needed.
 func (s *ApiService) ensureAppMode(ctx context.Context, enable bool) (toggled bool, err error) {
 	log := logger.FromContext(ctx)
-	const flagsPath = "/chromium/flags"
-	const appFlag = "--app"
+	const appPrefix = "--app"
+	wantFlag := appPrefix + "=" + appModeURL
 
-	existing, err := chromiumflags.ReadOptionalFlagFile(flagsPath)
+	existing, err := chromiumflags.ReadOptionalFlagFile(chromiumFlagsPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to read flags file: %w", err)
 	}
 
-	hasApp := chromiumflags.HasFlagWithPrefix(existing, appFlag)
+	// Always strip any --app/--app=... flags so we can compare cleanly.
+	stripped := chromiumflags.RemoveFlagsByPrefix(existing, appPrefix)
 
-	if enable && hasApp {
-		log.Info("app mode already enabled, no change needed")
-		return false, nil
+	if enable {
+		updated := append(stripped, wantFlag)
+		// If the exact flag was already present and nothing else changed, no-op.
+		if chromiumflags.HasFlagWithPrefix(existing, appPrefix) && len(updated) == len(existing) {
+			// Check the existing flag is the exact one we want.
+			for _, tok := range existing {
+				if tok == wantFlag {
+					log.Info("app mode already enabled with correct URL, no change needed")
+					return false, nil
+				}
+			}
+		}
+		log.Info("enabling app mode for small viewport", "flag", wantFlag)
+		if err := writeChromiumFlags(updated); err != nil {
+			return false, err
+		}
+		log.Info("app mode toggled", "enabled", true, "flags", updated)
+		return true, nil
 	}
-	if !enable && !hasApp {
+
+	// Disabling: if nothing was stripped, already disabled.
+	if len(stripped) == len(existing) {
 		log.Info("app mode already disabled, no change needed")
 		return false, nil
 	}
 
-	var updated []string
-	if enable {
-		log.Info("enabling app mode (--app=https://start.duckduckgo.com) for small viewport")
-		updated = append(existing, "--app=https://start.duckduckgo.com")
-	} else {
-		log.Info("disabling app mode for normal viewport")
-		updated = chromiumflags.RemoveFlagsByPrefix(existing, appFlag)
+	log.Info("disabling app mode for normal viewport")
+	if err := writeChromiumFlags(stripped); err != nil {
+		return false, err
 	}
-
-	if err := os.MkdirAll("/chromium", 0o755); err != nil {
-		return false, fmt.Errorf("failed to create chromium dir: %w", err)
-	}
-	if err := chromiumflags.WriteFlagFile(flagsPath, updated); err != nil {
-		return false, fmt.Errorf("failed to write flags file: %w", err)
-	}
-
-	log.Info("app mode toggled", "enabled", enable, "flags", updated)
+	log.Info("app mode toggled", "enabled", false, "flags", stripped)
 	return true, nil
 }
