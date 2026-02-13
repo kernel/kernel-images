@@ -121,6 +121,47 @@ type BatchComputerActionRequest struct {
 	Actions []ComputerAction `json:"actions"`
 }
 
+// ChromiumProxyPacConfig defines model for ChromiumProxyPacConfig.
+type ChromiumProxyPacConfig struct {
+	// Content Current PAC script content (null when not configured).
+	Content *string `json:"content"`
+
+	// DynamicUpdateWithoutRestartSupported Whether PAC updates can be guaranteed without restarting Chromium.
+	// This is true when OS-level transparent proxying is active.
+	DynamicUpdateWithoutRestartSupported bool `json:"dynamic_update_without_restart_supported"`
+
+	// Enabled Whether PAC is currently enabled in runtime configuration.
+	Enabled bool `json:"enabled"`
+
+	// OsLevelApplyAttempted Whether the server attempted OS-level PAC configuration in the container.
+	OsLevelApplyAttempted bool `json:"os_level_apply_attempted"`
+
+	// OsLevelApplyError Last OS-level apply error, if any.
+	OsLevelApplyError *string `json:"os_level_apply_error"`
+
+	// OsLevelApplySucceeded Whether the latest OS-level PAC apply attempt succeeded.
+	OsLevelApplySucceeded bool `json:"os_level_apply_succeeded"`
+
+	// PacPath Filesystem path to the PAC file when configured.
+	PacPath *string `json:"pac_path"`
+
+	// PacUrl HTTP URL used by OS-level PAC autoconfig when enabled.
+	PacUrl *string `json:"pac_url"`
+
+	// RestartRequiredForImmediateApply True when Chromium restart is needed to guarantee immediate PAC apply/unapply.
+	RestartRequiredForImmediateApply bool `json:"restart_required_for_immediate_apply"`
+}
+
+// ChromiumProxyPacUpdateResult defines model for ChromiumProxyPacUpdateResult.
+type ChromiumProxyPacUpdateResult struct {
+	// ChromiumRestarted Whether Chromium was restarted by this update operation.
+	ChromiumRestarted bool                   `json:"chromium_restarted"`
+	Config            ChromiumProxyPacConfig `json:"config"`
+
+	// RestartRequested Whether restart was requested by the caller.
+	RestartRequested bool `json:"restart_requested"`
+}
+
 // ClickMouseRequest defines model for ClickMouseRequest.
 type ClickMouseRequest struct {
 	// Button Mouse button to interact with
@@ -535,6 +576,19 @@ type ProcessStreamEventEvent string
 // ProcessStreamEventStream Source stream of the data chunk.
 type ProcessStreamEventStream string
 
+// PutChromiumProxyPacRequest defines model for PutChromiumProxyPacRequest.
+type PutChromiumProxyPacRequest struct {
+	// Content PAC script content. Required when enabled=true.
+	Content *string `json:"content"`
+
+	// Enabled Enables PAC usage via OS-level container proxy settings when true, disables when false.
+	Enabled bool `json:"enabled"`
+
+	// RestartChromium Optionally restart Chromium after updating PAC config.
+	// Not required for PAC apply/unapply when OS-level transparent proxying is enabled.
+	RestartChromium *bool `json:"restart_chromium,omitempty"`
+}
+
 // RecorderInfo defines model for RecorderInfo.
 type RecorderInfo struct {
 	// FinishedAt Timestamp when recording finished
@@ -784,6 +838,9 @@ type DownloadRecordingParams struct {
 // PatchChromiumFlagsJSONRequestBody defines body for PatchChromiumFlags for application/json ContentType.
 type PatchChromiumFlagsJSONRequestBody PatchChromiumFlagsJSONBody
 
+// PutChromiumProxyPacJSONRequestBody defines body for PutChromiumProxyPac for application/json ContentType.
+type PutChromiumProxyPacJSONRequestBody = PutChromiumProxyPacRequest
+
 // UploadExtensionsAndRestartMultipartRequestBody defines body for UploadExtensionsAndRestart for multipart/form-data ContentType.
 type UploadExtensionsAndRestartMultipartRequestBody UploadExtensionsAndRestartMultipartBody
 
@@ -948,6 +1005,17 @@ type ClientInterface interface {
 	PatchChromiumFlagsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	PatchChromiumFlags(ctx context.Context, body PatchChromiumFlagsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetChromiumProxyPac request
+	GetChromiumProxyPac(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PutChromiumProxyPacWithBody request with any body
+	PutChromiumProxyPacWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PutChromiumProxyPac(ctx context.Context, body PutChromiumProxyPacJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetChromiumProxyPacScript request
+	GetChromiumProxyPacScript(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UploadExtensionsAndRestartWithBody request with any body
 	UploadExtensionsAndRestartWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1143,6 +1211,54 @@ func (c *Client) PatchChromiumFlagsWithBody(ctx context.Context, contentType str
 
 func (c *Client) PatchChromiumFlags(ctx context.Context, body PatchChromiumFlagsJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPatchChromiumFlagsRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetChromiumProxyPac(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetChromiumProxyPacRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutChromiumProxyPacWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutChromiumProxyPacRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutChromiumProxyPac(ctx context.Context, body PutChromiumProxyPacJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutChromiumProxyPacRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetChromiumProxyPacScript(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetChromiumProxyPacScriptRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -2005,6 +2121,100 @@ func NewPatchChromiumFlagsRequestWithBody(server string, contentType string, bod
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetChromiumProxyPacRequest generates requests for GetChromiumProxyPac
+func NewGetChromiumProxyPacRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/chromium/proxy/pac")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPutChromiumProxyPacRequest calls the generic PutChromiumProxyPac builder with application/json body
+func NewPutChromiumProxyPacRequest(server string, body PutChromiumProxyPacJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPutChromiumProxyPacRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPutChromiumProxyPacRequestWithBody generates requests for PutChromiumProxyPac with any type of body
+func NewPutChromiumProxyPacRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/chromium/proxy/pac")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PUT", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetChromiumProxyPacScriptRequest generates requests for GetChromiumProxyPacScript
+func NewGetChromiumProxyPacScriptRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/chromium/proxy/pac/script")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -3830,6 +4040,17 @@ type ClientWithResponsesInterface interface {
 
 	PatchChromiumFlagsWithResponse(ctx context.Context, body PatchChromiumFlagsJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchChromiumFlagsResponse, error)
 
+	// GetChromiumProxyPacWithResponse request
+	GetChromiumProxyPacWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetChromiumProxyPacResponse, error)
+
+	// PutChromiumProxyPacWithBodyWithResponse request with any body
+	PutChromiumProxyPacWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutChromiumProxyPacResponse, error)
+
+	PutChromiumProxyPacWithResponse(ctx context.Context, body PutChromiumProxyPacJSONRequestBody, reqEditors ...RequestEditorFn) (*PutChromiumProxyPacResponse, error)
+
+	// GetChromiumProxyPacScriptWithResponse request
+	GetChromiumProxyPacScriptWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetChromiumProxyPacScriptResponse, error)
+
 	// UploadExtensionsAndRestartWithBodyWithResponse request with any body
 	UploadExtensionsAndRestartWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UploadExtensionsAndRestartResponse, error)
 
@@ -4027,6 +4248,76 @@ func (r PatchChromiumFlagsResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PatchChromiumFlagsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetChromiumProxyPacResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ChromiumProxyPacConfig
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetChromiumProxyPacResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetChromiumProxyPacResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PutChromiumProxyPacResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ChromiumProxyPacUpdateResult
+	JSON400      *BadRequestError
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r PutChromiumProxyPacResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PutChromiumProxyPacResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetChromiumProxyPacScriptResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON404      *NotFoundError
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetChromiumProxyPacScriptResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetChromiumProxyPacScriptResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -5078,6 +5369,41 @@ func (c *ClientWithResponses) PatchChromiumFlagsWithResponse(ctx context.Context
 	return ParsePatchChromiumFlagsResponse(rsp)
 }
 
+// GetChromiumProxyPacWithResponse request returning *GetChromiumProxyPacResponse
+func (c *ClientWithResponses) GetChromiumProxyPacWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetChromiumProxyPacResponse, error) {
+	rsp, err := c.GetChromiumProxyPac(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetChromiumProxyPacResponse(rsp)
+}
+
+// PutChromiumProxyPacWithBodyWithResponse request with arbitrary body returning *PutChromiumProxyPacResponse
+func (c *ClientWithResponses) PutChromiumProxyPacWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutChromiumProxyPacResponse, error) {
+	rsp, err := c.PutChromiumProxyPacWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutChromiumProxyPacResponse(rsp)
+}
+
+func (c *ClientWithResponses) PutChromiumProxyPacWithResponse(ctx context.Context, body PutChromiumProxyPacJSONRequestBody, reqEditors ...RequestEditorFn) (*PutChromiumProxyPacResponse, error) {
+	rsp, err := c.PutChromiumProxyPac(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutChromiumProxyPacResponse(rsp)
+}
+
+// GetChromiumProxyPacScriptWithResponse request returning *GetChromiumProxyPacScriptResponse
+func (c *ClientWithResponses) GetChromiumProxyPacScriptWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetChromiumProxyPacScriptResponse, error) {
+	rsp, err := c.GetChromiumProxyPacScript(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetChromiumProxyPacScriptResponse(rsp)
+}
+
 // UploadExtensionsAndRestartWithBodyWithResponse request with arbitrary body returning *UploadExtensionsAndRestartResponse
 func (c *ClientWithResponses) UploadExtensionsAndRestartWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UploadExtensionsAndRestartResponse, error) {
 	rsp, err := c.UploadExtensionsAndRestartWithBody(ctx, contentType, body, reqEditors...)
@@ -5685,6 +6011,112 @@ func ParsePatchChromiumFlagsResponse(rsp *http.Response) (*PatchChromiumFlagsRes
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetChromiumProxyPacResponse parses an HTTP response from a GetChromiumProxyPacWithResponse call
+func ParseGetChromiumProxyPacResponse(rsp *http.Response) (*GetChromiumProxyPacResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetChromiumProxyPacResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ChromiumProxyPacConfig
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePutChromiumProxyPacResponse parses an HTTP response from a PutChromiumProxyPacWithResponse call
+func ParsePutChromiumProxyPacResponse(rsp *http.Response) (*PutChromiumProxyPacResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PutChromiumProxyPacResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ChromiumProxyPacUpdateResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetChromiumProxyPacScriptResponse parses an HTTP response from a GetChromiumProxyPacScriptWithResponse call
+func ParseGetChromiumProxyPacScriptResponse(rsp *http.Response) (*GetChromiumProxyPacScriptResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetChromiumProxyPacScriptResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -7374,6 +7806,15 @@ type ServerInterface interface {
 	// Update Chromium launch flags and restart
 	// (PATCH /chromium/flags)
 	PatchChromiumFlags(w http.ResponseWriter, r *http.Request)
+	// Get Chromium PAC (Proxy Auto-Configuration) configuration
+	// (GET /chromium/proxy/pac)
+	GetChromiumProxyPac(w http.ResponseWriter, r *http.Request)
+	// Set Chromium PAC (Proxy Auto-Configuration) configuration
+	// (PUT /chromium/proxy/pac)
+	PutChromiumProxyPac(w http.ResponseWriter, r *http.Request)
+	// Get PAC script content as plain text
+	// (GET /chromium/proxy/pac/script)
+	GetChromiumProxyPacScript(w http.ResponseWriter, r *http.Request)
 	// Upload one or more unpacked extensions (as zips) and restart Chromium
 	// (POST /chromium/upload-extensions-and-restart)
 	UploadExtensionsAndRestart(w http.ResponseWriter, r *http.Request)
@@ -7512,6 +7953,24 @@ type Unimplemented struct{}
 // Update Chromium launch flags and restart
 // (PATCH /chromium/flags)
 func (_ Unimplemented) PatchChromiumFlags(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get Chromium PAC (Proxy Auto-Configuration) configuration
+// (GET /chromium/proxy/pac)
+func (_ Unimplemented) GetChromiumProxyPac(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set Chromium PAC (Proxy Auto-Configuration) configuration
+// (PUT /chromium/proxy/pac)
+func (_ Unimplemented) PutChromiumProxyPac(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get PAC script content as plain text
+// (GET /chromium/proxy/pac/script)
+func (_ Unimplemented) GetChromiumProxyPacScript(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -7787,6 +8246,48 @@ func (siw *ServerInterfaceWrapper) PatchChromiumFlags(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PatchChromiumFlags(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetChromiumProxyPac operation middleware
+func (siw *ServerInterfaceWrapper) GetChromiumProxyPac(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetChromiumProxyPac(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutChromiumProxyPac operation middleware
+func (siw *ServerInterfaceWrapper) PutChromiumProxyPac(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutChromiumProxyPac(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetChromiumProxyPacScript operation middleware
+func (siw *ServerInterfaceWrapper) GetChromiumProxyPacScript(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetChromiumProxyPacScript(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8785,6 +9286,15 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Patch(options.BaseURL+"/chromium/flags", wrapper.PatchChromiumFlags)
 	})
 	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/chromium/proxy/pac", wrapper.GetChromiumProxyPac)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/chromium/proxy/pac", wrapper.PutChromiumProxyPac)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/chromium/proxy/pac/script", wrapper.GetChromiumProxyPacScript)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/chromium/upload-extensions-and-restart", wrapper.UploadExtensionsAndRestart)
 	})
 	r.Group(func(r chi.Router) {
@@ -8953,6 +9463,101 @@ func (response PatchChromiumFlags400JSONResponse) VisitPatchChromiumFlagsRespons
 type PatchChromiumFlags500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response PatchChromiumFlags500JSONResponse) VisitPatchChromiumFlagsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetChromiumProxyPacRequestObject struct {
+}
+
+type GetChromiumProxyPacResponseObject interface {
+	VisitGetChromiumProxyPacResponse(w http.ResponseWriter) error
+}
+
+type GetChromiumProxyPac200JSONResponse ChromiumProxyPacConfig
+
+func (response GetChromiumProxyPac200JSONResponse) VisitGetChromiumProxyPacResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetChromiumProxyPac500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetChromiumProxyPac500JSONResponse) VisitGetChromiumProxyPacResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PutChromiumProxyPacRequestObject struct {
+	Body *PutChromiumProxyPacJSONRequestBody
+}
+
+type PutChromiumProxyPacResponseObject interface {
+	VisitPutChromiumProxyPacResponse(w http.ResponseWriter) error
+}
+
+type PutChromiumProxyPac200JSONResponse ChromiumProxyPacUpdateResult
+
+func (response PutChromiumProxyPac200JSONResponse) VisitPutChromiumProxyPacResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PutChromiumProxyPac400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response PutChromiumProxyPac400JSONResponse) VisitPutChromiumProxyPacResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PutChromiumProxyPac500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response PutChromiumProxyPac500JSONResponse) VisitPutChromiumProxyPacResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetChromiumProxyPacScriptRequestObject struct {
+}
+
+type GetChromiumProxyPacScriptResponseObject interface {
+	VisitGetChromiumProxyPacScriptResponse(w http.ResponseWriter) error
+}
+
+type GetChromiumProxyPacScript200TextResponse string
+
+func (response GetChromiumProxyPacScript200TextResponse) VisitGetChromiumProxyPacScriptResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(200)
+
+	_, err := w.Write([]byte(response))
+	return err
+}
+
+type GetChromiumProxyPacScript404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response GetChromiumProxyPacScript404JSONResponse) VisitGetChromiumProxyPacScriptResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetChromiumProxyPacScript500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetChromiumProxyPacScript500JSONResponse) VisitGetChromiumProxyPacScriptResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -10837,6 +11442,15 @@ type StrictServerInterface interface {
 	// Update Chromium launch flags and restart
 	// (PATCH /chromium/flags)
 	PatchChromiumFlags(ctx context.Context, request PatchChromiumFlagsRequestObject) (PatchChromiumFlagsResponseObject, error)
+	// Get Chromium PAC (Proxy Auto-Configuration) configuration
+	// (GET /chromium/proxy/pac)
+	GetChromiumProxyPac(ctx context.Context, request GetChromiumProxyPacRequestObject) (GetChromiumProxyPacResponseObject, error)
+	// Set Chromium PAC (Proxy Auto-Configuration) configuration
+	// (PUT /chromium/proxy/pac)
+	PutChromiumProxyPac(ctx context.Context, request PutChromiumProxyPacRequestObject) (PutChromiumProxyPacResponseObject, error)
+	// Get PAC script content as plain text
+	// (GET /chromium/proxy/pac/script)
+	GetChromiumProxyPacScript(ctx context.Context, request GetChromiumProxyPacScriptRequestObject) (GetChromiumProxyPacScriptResponseObject, error)
 	// Upload one or more unpacked extensions (as zips) and restart Chromium
 	// (POST /chromium/upload-extensions-and-restart)
 	UploadExtensionsAndRestart(ctx context.Context, request UploadExtensionsAndRestartRequestObject) (UploadExtensionsAndRestartResponseObject, error)
@@ -11021,6 +11635,85 @@ func (sh *strictHandler) PatchChromiumFlags(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PatchChromiumFlagsResponseObject); ok {
 		if err := validResponse.VisitPatchChromiumFlagsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetChromiumProxyPac operation middleware
+func (sh *strictHandler) GetChromiumProxyPac(w http.ResponseWriter, r *http.Request) {
+	var request GetChromiumProxyPacRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetChromiumProxyPac(ctx, request.(GetChromiumProxyPacRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetChromiumProxyPac")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetChromiumProxyPacResponseObject); ok {
+		if err := validResponse.VisitGetChromiumProxyPacResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutChromiumProxyPac operation middleware
+func (sh *strictHandler) PutChromiumProxyPac(w http.ResponseWriter, r *http.Request) {
+	var request PutChromiumProxyPacRequestObject
+
+	var body PutChromiumProxyPacJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutChromiumProxyPac(ctx, request.(PutChromiumProxyPacRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutChromiumProxyPac")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutChromiumProxyPacResponseObject); ok {
+		if err := validResponse.VisitPutChromiumProxyPacResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetChromiumProxyPacScript operation middleware
+func (sh *strictHandler) GetChromiumProxyPacScript(w http.ResponseWriter, r *http.Request) {
+	var request GetChromiumProxyPacScriptRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetChromiumProxyPacScript(ctx, request.(GetChromiumProxyPacScriptRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetChromiumProxyPacScript")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetChromiumProxyPacScriptResponseObject); ok {
+		if err := validResponse.VisitGetChromiumProxyPacScriptResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -12298,144 +12991,158 @@ func (sh *strictHandler) StopRecording(w http.ResponseWriter, r *http.Request) {
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"i7R+/eBG/l8AAAD//yIMPJrxsgAA",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

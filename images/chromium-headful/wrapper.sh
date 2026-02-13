@@ -131,6 +131,27 @@ start_dynamic_log_aggregator
 
 export DISPLAY=:1
 
+# Optionally pre-trust a custom CA in Chromium's NSS DB before Chromium starts.
+# This is useful for HTTPS MITM demos without --ignore-certificate-errors.
+import_chromium_nss_ca() {
+  local cert_path="${PAC_MITM_CA_CERT_PATH:-}"
+  local cert_name="${PAC_MITM_CA_CERT_NICKNAME:-pac-mitm}"
+  if [[ -z "$cert_path" || ! -f "$cert_path" ]]; then
+    return 0
+  fi
+
+  echo "[wrapper] Importing custom Chromium NSS CA from $cert_path"
+  runuser -u kernel -- sh -lc "
+    set -e
+    mkdir -p \"\$HOME/.pki/nssdb\"
+    if [ ! -f \"\$HOME/.pki/nssdb/cert9.db\" ]; then
+      certutil -N -d sql:\"\$HOME/.pki/nssdb\" --empty-password
+    fi
+    certutil -D -d sql:\"\$HOME/.pki/nssdb\" -n '$cert_name' >/dev/null 2>&1 || true
+    certutil -A -d sql:\"\$HOME/.pki/nssdb\" -n '$cert_name' -t 'C,,' -i '$cert_path'
+  "
+}
+
 # Predefine ports and export for services
 export INTERNAL_PORT="${INTERNAL_PORT:-9223}"
 export CHROME_PORT="${CHROME_PORT:-9222}"
@@ -144,6 +165,7 @@ cleanup () {
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
+  supervisorctl -c /etc/supervisor/supervisord.conf stop pac-proxy || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop kernel-images-api || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop dbus || true
   # Stop log tailers
@@ -206,6 +228,19 @@ done
 # We will point DBUS_SESSION_BUS_ADDRESS at the system bus socket to suppress
 # autolaunch attempts that failed and spammed logs.
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
+
+echo "[wrapper] Starting PAC transparent proxy via supervisord"
+supervisorctl -c /etc/supervisor/supervisord.conf start pac-proxy
+echo "[wrapper] Waiting for PAC transparent proxy on 127.0.0.1:15080..."
+for i in {1..50}; do
+  if nc -z 127.0.0.1 15080 2>/dev/null; then
+    break
+  fi
+  sleep 0.2
+done
+
+# Optional CA trust import happens before Chromium launch.
+import_chromium_nss_ca
 
 # Start Chromium with display :1 and remote debugging, loading our recorder extension.
 echo "[wrapper] Starting Chromium via supervisord on internal port $INTERNAL_PORT"

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -53,6 +55,17 @@ type ApiService struct {
 
 	// policy management
 	policy *policy.Policy
+
+	// chromiumConfigMu serializes mutable Chromium runtime config under /chromium.
+	chromiumConfigMu sync.Mutex
+	// Runtime Chromium flags overlay path.
+	chromiumFlagsPath string
+	// PAC script path managed by /chromium/proxy/pac endpoints.
+	chromiumPACPath string
+	// PAC script URL served by this API and exposed in PAC status responses.
+	chromiumPACURL string
+	// PAC OS-level apply state path used for GET status reporting.
+	chromiumPACStatePath string
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -69,16 +82,27 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
 	}
 
+	apiPort := 10001
+	if rawPort := strings.TrimSpace(os.Getenv("PORT")); rawPort != "" {
+		if parsed, err := strconv.Atoi(rawPort); err == nil && parsed > 0 {
+			apiPort = parsed
+		}
+	}
+
 	return &ApiService{
-		recordManager:     recordManager,
-		factory:           factory,
-		defaultRecorderID: "default",
-		watches:           make(map[string]*fsWatch),
-		procs:             make(map[string]*processHandle),
-		upstreamMgr:       upstreamMgr,
-		stz:               stz,
-		nekoAuthClient:    nekoAuthClient,
-		policy:            &policy.Policy{},
+		recordManager:        recordManager,
+		factory:              factory,
+		defaultRecorderID:    "default",
+		watches:              make(map[string]*fsWatch),
+		procs:                make(map[string]*processHandle),
+		upstreamMgr:          upstreamMgr,
+		stz:                  stz,
+		nekoAuthClient:       nekoAuthClient,
+		policy:               &policy.Policy{},
+		chromiumFlagsPath:    "/chromium/flags",
+		chromiumPACPath:      "/chromium/proxy.pac",
+		chromiumPACURL:       fmt.Sprintf("http://127.0.0.1:%d/chromium/proxy/pac/script", apiPort),
+		chromiumPACStatePath: "/chromium/pac-state.json",
 	}, nil
 }
 

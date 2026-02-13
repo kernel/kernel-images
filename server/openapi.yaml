@@ -1102,6 +1102,67 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /chromium/proxy/pac:
+    get:
+      summary: Get Chromium PAC (Proxy Auto-Configuration) configuration
+      description: |
+        Returns the current PAC configuration managed by the server.
+        The PAC script content is stored in /chromium/proxy.pac and can be enabled or disabled.
+        PAC is enforced through OS-level transparent proxying in the container.
+      operationId: getChromiumProxyPac
+      responses:
+        "200":
+          description: Current PAC configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChromiumProxyPacConfig"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      summary: Set Chromium PAC (Proxy Auto-Configuration) configuration
+      description: |
+        Updates PAC script content and enable/disable state. The server writes /chromium/proxy.pac
+        and applies PAC settings at OS level inside the container.
+        PAC updates are applied for new outbound connections without restarting Chromium.
+      operationId: putChromiumProxyPac
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutChromiumProxyPacRequest"
+      responses:
+        "200":
+          description: PAC configuration updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChromiumProxyPacUpdateResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /chromium/proxy/pac/script:
+    get:
+      summary: Get PAC script content as plain text
+      description: |
+        Serves the current PAC script as text/plain. This is useful for validation and
+        parity checks against the API-managed PAC content.
+      operationId: getChromiumProxyPacScript
+      responses:
+        "200":
+          description: PAC script body
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
@@ -1710,6 +1771,77 @@ components:
         refresh_rate:
           type: integer
           description: Current display refresh rate in Hz (may be null if not detectable)
+      additionalProperties: false
+    PutChromiumProxyPacRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Enables PAC usage via OS-level container proxy settings when true, disables when false.
+        content:
+          type: [string, "null"]
+          description: PAC script content. Required when enabled=true.
+        restart_chromium:
+          type: boolean
+          default: false
+          description: |
+            Optionally restart Chromium after updating PAC config.
+            Not required for PAC apply/unapply when OS-level transparent proxying is enabled.
+      additionalProperties: false
+    ChromiumProxyPacConfig:
+      type: object
+      required:
+        [
+          enabled,
+          restart_required_for_immediate_apply,
+          dynamic_update_without_restart_supported,
+          os_level_apply_attempted,
+          os_level_apply_succeeded,
+        ]
+      properties:
+        enabled:
+          type: boolean
+          description: Whether PAC is currently enabled in runtime configuration.
+        content:
+          type: [string, "null"]
+          description: Current PAC script content (null when not configured).
+        pac_path:
+          type: [string, "null"]
+          description: Filesystem path to the PAC file when configured.
+        pac_url:
+          type: [string, "null"]
+          description: HTTP URL used by OS-level PAC autoconfig when enabled.
+        restart_required_for_immediate_apply:
+          type: boolean
+          description: True when Chromium restart is needed to guarantee immediate PAC apply/unapply.
+        dynamic_update_without_restart_supported:
+          type: boolean
+          description: |
+            Whether PAC updates can be guaranteed without restarting Chromium.
+            This is true when OS-level transparent proxying is active.
+        os_level_apply_attempted:
+          type: boolean
+          description: Whether the server attempted OS-level PAC configuration in the container.
+        os_level_apply_succeeded:
+          type: boolean
+          description: Whether the latest OS-level PAC apply attempt succeeded.
+        os_level_apply_error:
+          type: [string, "null"]
+          description: Last OS-level apply error, if any.
+      additionalProperties: false
+    ChromiumProxyPacUpdateResult:
+      type: object
+      required: [config, restart_requested, chromium_restarted]
+      properties:
+        config:
+          $ref: "#/components/schemas/ChromiumProxyPacConfig"
+        restart_requested:
+          type: boolean
+          description: Whether restart was requested by the caller.
+        chromium_restarted:
+          type: boolean
+          description: Whether Chromium was restarted by this update operation.
       additionalProperties: false
     LogEvent:
       type: object

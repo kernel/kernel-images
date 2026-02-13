@@ -294,11 +294,11 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 // and writes the result back to /chromium/flags. Returns the merged tokens or an error.
 func (s *ApiService) mergeAndWriteChromiumFlags(ctx context.Context, newTokens []string) ([]string, error) {
 	log := logger.FromContext(ctx)
-
-	const flagsPath = "/chromium/flags"
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
 
 	// Read existing runtime flags from /chromium/flags (if any)
-	existingTokens, err := chromiumflags.ReadOptionalFlagFile(flagsPath)
+	existingTokens, err := chromiumflags.ReadOptionalFlagFile(s.chromiumFlagsPath)
 	if err != nil {
 		log.Error("failed to read existing flags", "error", err)
 		return nil, fmt.Errorf("failed to read existing flags: %w", err)
@@ -310,13 +310,13 @@ func (s *ApiService) mergeAndWriteChromiumFlags(ctx context.Context, newTokens [
 	mergedTokens := chromiumflags.MergeFlags(existingTokens, newTokens)
 
 	// Ensure the chromium directory exists
-	if err := os.MkdirAll("/chromium", 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.chromiumFlagsPath), 0o755); err != nil {
 		log.Error("failed to create chromium dir", "error", err)
 		return nil, fmt.Errorf("failed to create chromium dir: %w", err)
 	}
 
 	// Write flags file with merged flags
-	if err := chromiumflags.WriteFlagFile(flagsPath, mergedTokens); err != nil {
+	if err := chromiumflags.WriteFlagFile(s.chromiumFlagsPath, mergedTokens); err != nil {
 		log.Error("failed to write flags", "error", err)
 		return nil, fmt.Errorf("failed to write flags: %w", err)
 	}

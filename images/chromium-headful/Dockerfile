@@ -27,6 +27,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/chromium-launcher ./cmd/chromium-launcher
 
+# Build PAC transparent proxy
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/pac-proxy ./cmd/pacproxy
+
 # webrtc client
 FROM node:22-bullseye-slim AS client
 WORKDIR /src
@@ -194,6 +200,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     # Network tools
     net-tools \
     netcat \
+    iptables \
     # PPA req
     software-properties-common && \
     # Userland apps
@@ -225,6 +232,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get --no-install-recommends -y install \
     wget ca-certificates python2 supervisor xclip xdotool unclutter \
     pulseaudio dbus-x11 xserver-xorg-video-dummy \
+    libpacparser1 \
     libcairo2 libxcb1 libxrandr2 libxv1 libopus0 libvpx7 \
     x11-xserver-utils \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
@@ -312,6 +320,7 @@ RUN chmod +x /usr/local/bin/init-envoy.sh
 # copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
 COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launcher
+COPY --from=server-builder /out/pac-proxy /usr/local/bin/pac-proxy
 
 # Copy and compile the Playwright daemon
 COPY server/runtime/playwright-daemon.ts /tmp/playwright-daemon.ts
@@ -326,6 +335,7 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:esbuild \
     && rm /tmp/playwright-daemon.ts
 
-RUN useradd -m -s /bin/bash kernel
+RUN useradd -m -s /usr/sbin/nologin pacproxy && \
+    useradd -m -s /bin/bash kernel
 
 ENTRYPOINT [ "/wrapper.sh" ]

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -15,6 +16,8 @@ import (
 	"github.com/onkernel/kernel-images/server/lib/chromiumflags"
 )
 
+const chromiumUserDataDir = "/home/kernel/user-data"
+
 func main() {
 	headless := flag.Bool("headless", false, "Run Chromium with headless flags")
 	chromiumPath := flag.String("chromium", "chromium", "Chromium binary path (default: chromium)")
@@ -23,9 +26,12 @@ func main() {
 
 	// Clean up stale lock file from previous SIGKILL termination
 	// Chromium creates this lock and doesn't clean it up when killed
-	_ = os.Remove("/home/kernel/user-data/SingletonLock")
-	_ = os.Remove("/home/kernel/user-data/SingletonSocket")
-	_ = os.Remove("/home/kernel/user-data/SingletonCookie")
+	_ = os.Remove(chromiumUserDataDir + "/SingletonLock")
+	_ = os.Remove(chromiumUserDataDir + "/SingletonSocket")
+	_ = os.Remove(chromiumUserDataDir + "/SingletonCookie")
+
+	// Make startup deterministic and suppress crash restore prompts from stale profile state.
+	clearCrashRestoreArtifacts(chromiumUserDataDir)
 
 	// Kill any existing chromium processes to ensure clean restart.
 	// This is necessary because supervisord's stopwaitsecs=0 doesn't wait for
@@ -59,9 +65,12 @@ func main() {
 	chromiumArgs := []string{
 		fmt.Sprintf("--remote-debugging-port=%s", internalPort),
 		"--remote-allow-origins=*",
-		"--user-data-dir=/home/kernel/user-data",
+		"--user-data-dir=" + chromiumUserDataDir,
 		"--password-store=basic",
 		"--no-first-run",
+		"--no-default-browser-check",
+		"--disable-session-crashed-bubble",
+		"--hide-crash-restore-bubble",
 	}
 	if *headless {
 		chromiumArgs = append([]string{"--headless=new"}, chromiumArgs...)
@@ -69,43 +78,58 @@ func main() {
 	chromiumArgs = append(chromiumArgs, final...)
 
 	runAsRoot := strings.EqualFold(strings.TrimSpace(os.Getenv("RUN_AS_ROOT")), "true")
+	dbusRunSessionPath, dbusRunSessionErr := execLookPath("dbus-run-session")
 
 	// Prepare environment
-	env := os.Environ()
+	env := removeEnvVar(os.Environ(), "DBUS_SESSION_BUS_ADDRESS")
 	env = append(env,
 		"DISPLAY=:1",
-		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
+		"XDG_CONFIG_HOME=/home/kernel/.config",
+		"XDG_CACHE_HOME=/home/kernel/.cache",
+		"HOME=/home/kernel",
+		"XDG_CURRENT_DESKTOP=GNOME",
+		"DESKTOP_SESSION=gnome",
+		"XDG_SESSION_TYPE=x11",
 	)
 
 	if runAsRoot {
-		// Replace current process with Chromium
-		if p, err := execLookPath(*chromiumPath); err == nil {
-			if err := syscall.Exec(p, append([]string{filepath.Base(p)}, chromiumArgs...), env); err != nil {
-				fmt.Fprintf(os.Stderr, "exec chromium failed: %v\n", err)
-				os.Exit(1)
-			}
-		} else {
-			fmt.Fprintf(os.Stderr, "chromium binary not found: %v\n", err)
+		if dbusRunSessionErr != nil {
+			fmt.Fprintf(os.Stderr, "dbus-run-session not found: %v\n", dbusRunSessionErr)
+			os.Exit(1)
+		}
+		// Replace current process with dbus-run-session so Chromium gets a real user session bus.
+		argv := append([]string{filepath.Base(dbusRunSessionPath), "--", *chromiumPath}, chromiumArgs...)
+		if err := syscall.Exec(dbusRunSessionPath, argv, env); err != nil {
+			fmt.Fprintf(os.Stderr, "exec dbus-run-session failed: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
 
-	// Not running as root: call runuser to exec as kernel user, providing env vars inside
+	// Not running as root: call runuser to exec as kernel user.
 	runuserPath, err := execLookPath("runuser")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "runuser not found: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Build: runuser -u kernel -- env DISPLAY=... DBUS_... XDG_... HOME=... chromium <args>
+	if dbusRunSessionErr != nil {
+		fmt.Fprintf(os.Stderr, "dbus-run-session not found: %v\n", dbusRunSessionErr)
+		os.Exit(1)
+	}
+
+	// Build: runuser -u kernel -- env ... dbus-run-session -- chromium <args>
 	inner := []string{
 		"env",
 		"DISPLAY=:1",
-		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
 		"XDG_CONFIG_HOME=/home/kernel/.config",
 		"XDG_CACHE_HOME=/home/kernel/.cache",
 		"HOME=/home/kernel",
+		"XDG_CURRENT_DESKTOP=GNOME",
+		"DESKTOP_SESSION=gnome",
+		"XDG_SESSION_TYPE=x11",
+		"dbus-run-session",
+		"--",
 		*chromiumPath,
 	}
 	inner = append(inner, chromiumArgs...)
@@ -114,6 +138,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "exec runuser failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func removeEnvVar(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.
@@ -186,4 +222,84 @@ func killExistingChromium() {
 	}
 	// Timeout - processes may still exist but we continue anyway
 	fmt.Fprintf(os.Stderr, "warning: chromium processes may still be running after kill attempt\n")
+}
+
+func clearCrashRestoreArtifacts(userDataDir string) {
+	sessionFiles := []string{
+		filepath.Join(userDataDir, "Default", "Current Session"),
+		filepath.Join(userDataDir, "Default", "Current Tabs"),
+		filepath.Join(userDataDir, "Default", "Last Session"),
+		filepath.Join(userDataDir, "Default", "Last Tabs"),
+	}
+	for _, p := range sessionFiles {
+		_ = os.Remove(p)
+	}
+
+	// Chromium stores session-restore data in Default/Sessions on modern builds.
+	// Removing this directory prevents "Restore pages?" prompts on relaunch.
+	_ = os.RemoveAll(filepath.Join(userDataDir, "Default", "Sessions"))
+
+	_ = patchCrashMetadata(filepath.Join(userDataDir, "Local State"))
+	_ = patchCrashMetadata(filepath.Join(userDataDir, "Default", "Preferences"))
+}
+
+func patchCrashMetadata(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+
+	var payload any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil
+	}
+
+	if !normalizeCrashState(payload) {
+		return nil
+	}
+
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	encoded = append(encoded, '\n')
+	return os.WriteFile(path, encoded, 0o644)
+}
+
+func normalizeCrashState(node any) bool {
+	changed := false
+
+	switch v := node.(type) {
+	case map[string]any:
+		for k, child := range v {
+			switch k {
+			case "exited_cleanly":
+				if b, ok := child.(bool); ok && !b {
+					v[k] = true
+					changed = true
+					child = v[k]
+				}
+			case "exit_type":
+				if s, ok := child.(string); ok && strings.EqualFold(s, "Crashed") {
+					v[k] = "Normal"
+					changed = true
+					child = v[k]
+				}
+			}
+			if normalizeCrashState(child) {
+				changed = true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if normalizeCrashState(child) {
+				changed = true
+			}
+		}
+	}
+
+	return changed
 }
