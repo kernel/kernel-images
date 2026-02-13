@@ -407,7 +407,7 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 	return nil
 }
 
-// ensureAppMode adds or removes the --app=about:blank flag from the Chromium
+// ensureAppMode adds or removes the --app=https://start.duckduckgo.com flag from the Chromium
 // runtime flags file. It returns (true, nil) when the flag state was changed
 // (meaning Chromium needs a restart), or (false, nil) when no change was needed.
 func (s *ApiService) ensureAppMode(ctx context.Context, enable bool) (toggled bool, err error) {
@@ -433,7 +433,7 @@ func (s *ApiService) ensureAppMode(ctx context.Context, enable bool) (toggled bo
 
 	var updated []string
 	if enable {
-		log.Info("enabling app mode (--app=about:blank) for small viewport")
+		log.Info("enabling app mode (--app=https://start.duckduckgo.com) for small viewport")
 		updated = append(existing, "--app=https://start.duckduckgo.com")
 	} else {
 		log.Info("disabling app mode for normal viewport")

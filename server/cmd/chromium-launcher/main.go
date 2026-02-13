@@ -116,15 +116,6 @@ func main() {
 	}
 }
 
-// hasAppFlag returns true if any token in args is "--app" or starts with "--app=".
-func hasAppFlag(args []string) bool {
-	for _, a := range args {
-		if a == "--app" || strings.HasPrefix(a, "--app=") {
-			return true
-		}
-	}
-	return false
-}
 
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.
 func execLookPath(file string) (string, error) {
