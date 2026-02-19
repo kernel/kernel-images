@@ -64,6 +64,10 @@ func NewRelay(cfg RelayConfig) (*Relay, error) {
 // the Neko connection drops or ctx is cancelled. Callers should call
 // Start in a loop for automatic reconnection.
 func (r *Relay) Start(ctx context.Context) error {
+	r.mu.Lock()
+	r.ready = make(chan struct{})
+	r.mu.Unlock()
+
 	token, err := r.nekoLogin(ctx)
 	if err != nil {
 		return fmt.Errorf("neko login: %w", err)
@@ -198,7 +202,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	case <-trackReceived:
 		r.logger.Info("neko video track active, relay ready")
 	case <-time.After(10 * time.Second):
-		r.logger.Warn("timeout waiting for neko video track")
+		return fmt.Errorf("timeout waiting for neko video track")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -243,8 +247,13 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 		Type string `json:"type"`
 		SDP  string `json:"sdp"`
 	}
-	if err := json.Unmarshal(data, &offer); err != nil || offer.Type != "offer" {
+	if err := json.Unmarshal(data, &offer); err != nil {
 		r.logger.Warn("invalid client offer", "error", err)
+		ws.Close(cws.StatusInvalidFramePayloadData, "expected offer")
+		return
+	}
+	if offer.Type != "offer" {
+		r.logger.Warn("unexpected message type from client", "type", offer.Type)
 		ws.Close(cws.StatusInvalidFramePayloadData, "expected offer")
 		return
 	}
@@ -363,6 +372,8 @@ func (r *Relay) Close() {
 // Ready returns a channel that is closed once the relay has received
 // the video track from Neko and is ready to serve clients.
 func (r *Relay) Ready() <-chan struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.ready
 }
 
@@ -375,7 +386,6 @@ func (r *Relay) forwardRTP(track *webrtc.TrackRemote) {
 		}
 		if err := r.localTrack.WriteRTP(pkt); err != nil {
 			r.logger.Debug("local track write failed", "error", err)
-			return
 		}
 	}
 }
