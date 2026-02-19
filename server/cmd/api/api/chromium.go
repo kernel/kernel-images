@@ -21,14 +21,8 @@ import (
 
 var nameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,255}$`)
 
-const (
-	// chromiumFlagsPath is the runtime flags file read by the chromium-launcher at startup.
-	chromiumFlagsPath = "/chromium/flags"
-
-	// appModeURL is the URL loaded in --app mode for small viewports. Keep in
-	// sync with "NewTabPageLocation" in shared/chromium-policies/managed/policy.json.
-	appModeURL = "https://start.duckduckgo.com"
-)
+// chromiumFlagsPath is the runtime flags file read by the chromium-launcher at startup.
+const chromiumFlagsPath = "/chromium/flags"
 
 // UploadExtensionsAndRestart handles multipart upload of one or more extension zips, extracts
 // them under /home/kernel/extensions/<name>, writes /chromium/flags to enable them, restarts

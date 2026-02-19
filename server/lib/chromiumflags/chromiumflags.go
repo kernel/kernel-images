@@ -224,31 +224,6 @@ func MergeExtensionPath(args []string, extPath string) []string {
 	return result
 }
 
-// RemoveFlagsByPrefix returns a new slice with any tokens that match the given
-// prefix removed. For example, prefix "--app" removes "--app", "--app=about:blank", etc.
-// It does NOT match longer flag names that merely share the prefix
-// (e.g. "--app" will not match "--application-name").
-func RemoveFlagsByPrefix(tokens []string, prefix string) []string {
-	out := make([]string, 0, len(tokens))
-	for _, tok := range tokens {
-		if tok == prefix || strings.HasPrefix(tok, prefix+"=") {
-			continue
-		}
-		out = append(out, tok)
-	}
-	return out
-}
-
-// HasFlagWithPrefix returns true if any token equals prefix or starts with prefix + "=".
-func HasFlagWithPrefix(tokens []string, prefix string) bool {
-	for _, tok := range tokens {
-		if tok == prefix || strings.HasPrefix(tok, prefix+"=") {
-			return true
-		}
-	}
-	return false
-}
-
 // WriteFlagFile writes the provided tokens to the given path as JSON in the
 // form: { "flags": ["--foo", "--bar=1"] } with file mode 0644.
 // The function creates or truncates the file.

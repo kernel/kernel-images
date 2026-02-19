@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/chromiumflags"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 )
@@ -87,21 +86,6 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	restartChrome := (displayMode == "xvfb") // default true for xvfb, false for xorg
 	if req.Body.RestartChromium != nil {
 		restartChrome = *req.Body.RestartChromium
-	}
-
-	// App mode: Chromium's --app flag removes the tab bar and toolbar chrome,
-	// allowing the window to resize below the normal ~500px minimum width
-	// and ~200px minimum height.
-	// We automatically toggle this based on the requested viewport dimensions.
-	const appModeWidthThreshold = 500
-	const appModeHeightThreshold = 200
-	needsAppMode := width < appModeWidthThreshold || height < appModeHeightThreshold
-	if toggled, err := s.ensureAppMode(ctx, needsAppMode); err != nil {
-		log.Error("failed to toggle app mode", "error", err)
-		// Non-fatal: continue with the resize even if app mode toggle fails.
-	} else if toggled {
-		// App mode changed — force a chromium restart so it picks up the new flags.
-		restartChrome = true
 	}
 
 	// Route to appropriate resolution change handler
@@ -407,54 +391,3 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 	return nil
 }
 
-// ensureAppMode adds or removes the --app flag from the Chromium runtime flags
-// file. When enabling, any existing --app flag is removed first so the URL is
-// always exactly appModeURL (defined in chromium.go). It returns (true, nil)
-// when the flag state was changed (meaning Chromium needs a restart), or
-// (false, nil) when no change was needed.
-func (s *ApiService) ensureAppMode(ctx context.Context, enable bool) (toggled bool, err error) {
-	log := logger.FromContext(ctx)
-	const appPrefix = "--app"
-	wantFlag := appPrefix + "=" + appModeURL
-
-	existing, err := chromiumflags.ReadOptionalFlagFile(chromiumFlagsPath)
-	if err != nil {
-		return false, fmt.Errorf("failed to read flags file: %w", err)
-	}
-
-	// Always strip any --app/--app=... flags so we can compare cleanly.
-	stripped := chromiumflags.RemoveFlagsByPrefix(existing, appPrefix)
-
-	if enable {
-		updated := append(stripped, wantFlag)
-		// If the exact flag was already present and nothing else changed, no-op.
-		if chromiumflags.HasFlagWithPrefix(existing, appPrefix) && len(updated) == len(existing) {
-			// Check the existing flag is the exact one we want.
-			for _, tok := range existing {
-				if tok == wantFlag {
-					log.Info("app mode already enabled with correct URL, no change needed")
-					return false, nil
-				}
-			}
-		}
-		log.Info("enabling app mode for small viewport", "flag", wantFlag)
-		if err := writeChromiumFlags(updated); err != nil {
-			return false, err
-		}
-		log.Info("app mode toggled", "enabled", true, "flags", updated)
-		return true, nil
-	}
-
-	// Disabling: if nothing was stripped, already disabled.
-	if len(stripped) == len(existing) {
-		log.Info("app mode already disabled, no change needed")
-		return false, nil
-	}
-
-	log.Info("disabling app mode for normal viewport")
-	if err := writeChromiumFlags(stripped); err != nil {
-		return false, err
-	}
-	log.Info("app mode toggled", "enabled", false, "flags", stripped)
-	return true, nil
-}
