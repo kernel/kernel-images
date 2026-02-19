@@ -12,7 +12,6 @@ import (
 
 	cws "github.com/coder/websocket"
 	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 )
 
@@ -64,6 +63,10 @@ func NewRelay(cfg RelayConfig) (*Relay, error) {
 // the Neko connection drops or ctx is cancelled. Callers should call
 // Start in a loop for automatic reconnection.
 func (r *Relay) Start(ctx context.Context) error {
+	r.mu.Lock()
+	r.ready = make(chan struct{})
+	r.mu.Unlock()
+
 	token, err := r.nekoLogin(ctx)
 	if err != nil {
 		return fmt.Errorf("neko login: %w", err)
@@ -110,6 +113,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	}()
 
 	trackReceived := make(chan struct{}, 1)
+	var forwardOnce sync.Once
 
 	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		if track.Kind() != webrtc.RTPCodecTypeVideo {
@@ -125,15 +129,19 @@ func (r *Relay) Start(ctx context.Context) error {
 		default:
 		}
 
-		// Signal that the relay is ready for clients.
-		select {
-		case <-r.ready:
-		default:
-			close(r.ready)
-		}
+		forwardOnce.Do(func() {
+			// Signal that the relay is ready for clients.
+			r.mu.Lock()
+			select {
+			case <-r.ready:
+			default:
+				close(r.ready)
+			}
+			r.mu.Unlock()
 
-		// Forward RTP packets from Neko → local track → all clients.
-		r.forwardRTP(track)
+			// Forward RTP packets from Neko → local track → all clients.
+			r.forwardRTP(track)
+		})
 	})
 
 	disconnected := make(chan struct{})
@@ -198,7 +206,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	case <-trackReceived:
 		r.logger.Info("neko video track active, relay ready")
 	case <-time.After(10 * time.Second):
-		r.logger.Warn("timeout waiting for neko video track")
+		return fmt.Errorf("timeout waiting for neko video track")
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -363,6 +371,8 @@ func (r *Relay) Close() {
 // Ready returns a channel that is closed once the relay has received
 // the video track from Neko and is ready to serve clients.
 func (r *Relay) Ready() <-chan struct{} {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.ready
 }
 
@@ -499,6 +509,3 @@ func (r *Relay) nekoWSLoop(ctx context.Context, ws *cws.Conn, pc *webrtc.PeerCon
 		}
 	}
 }
-
-// rtp.Packet is used in the forwarding path.
-var _ *rtp.Packet

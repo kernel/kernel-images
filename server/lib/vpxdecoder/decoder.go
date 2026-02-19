@@ -69,6 +69,10 @@ func (d *Decoder) Decode(data []byte) (*image.YCbCr, error) {
 	uStride := int(img.stride[1])
 	vStride := int(img.stride[2])
 
+	if uStride != vStride {
+		return nil, fmt.Errorf("U and V plane strides differ (%d vs %d); unsupported by image.YCbCr", uStride, vStride)
+	}
+
 	// Copy plane data to Go-managed memory so it's safe to hold
 	// after the next Decode call.
 	yLen := yStride * h

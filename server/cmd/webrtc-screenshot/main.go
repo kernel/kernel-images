@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"image/jpeg"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -27,6 +26,11 @@ func main() {
 	outputPath := flag.String("output", "/tmp/screen.jpg", "Path to write JPEG screenshots")
 	quality := flag.Int("quality", 85, "JPEG quality (1-100)")
 	flag.Parse()
+
+	if *quality < 1 || *quality > 100 {
+		fmt.Fprintf(os.Stderr, "error: --quality must be between 1 and 100, got %d\n", *quality)
+		os.Exit(1)
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -171,9 +175,8 @@ type frameBuffer struct {
 	quality int
 	logger  *slog.Logger
 
-	mu        sync.RWMutex
-	lastWrite time.Time
-	frames    int64
+	mu     sync.Mutex
+	frames int64
 }
 
 func (fb *frameBuffer) decodeLoop(ctx context.Context, track *webrtc.TrackRemote, disconnected <-chan struct{}) error {
@@ -287,20 +290,4 @@ func (fb *frameBuffer) writeToFile(data []byte) {
 		os.Remove(tmpName)
 		return
 	}
-
-	fb.mu.Lock()
-	fb.lastWrite = time.Now()
-	fb.mu.Unlock()
-}
-
-// http handler to serve the latest screenshot (optional, for debugging)
-func (fb *frameBuffer) serveHTTP(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile(fb.path)
-	if err != nil {
-		http.Error(w, "no screenshot yet", http.StatusServiceUnavailable)
-		return
-	}
-	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Write(data)
 }
