@@ -12,7 +12,6 @@ import (
 
 	cws "github.com/coder/websocket"
 	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 )
 
@@ -114,6 +113,7 @@ func (r *Relay) Start(ctx context.Context) error {
 	}()
 
 	trackReceived := make(chan struct{}, 1)
+	var forwardOnce sync.Once
 
 	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
 		if track.Kind() != webrtc.RTPCodecTypeVideo {
@@ -129,15 +129,17 @@ func (r *Relay) Start(ctx context.Context) error {
 		default:
 		}
 
-		// Signal that the relay is ready for clients.
-		select {
-		case <-r.ready:
-		default:
-			close(r.ready)
-		}
+		forwardOnce.Do(func() {
+			r.mu.Lock()
+			select {
+			case <-r.ready:
+			default:
+				close(r.ready)
+			}
+			r.mu.Unlock()
 
-		// Forward RTP packets from Neko → local track → all clients.
-		r.forwardRTP(track)
+			r.forwardRTP(track)
+		})
 	})
 
 	disconnected := make(chan struct{})
@@ -509,6 +511,3 @@ func (r *Relay) nekoWSLoop(ctx context.Context, ws *cws.Conn, pc *webrtc.PeerCon
 		}
 	}
 }
-
-// rtp.Packet is used in the forwarding path.
-var _ *rtp.Packet
