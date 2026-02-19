@@ -79,12 +79,17 @@ func (d *Decoder) Decode(data []byte) (*image.YCbCr, error) {
 	uData := C.GoBytes(unsafe.Pointer(img.planes[1]), C.int(uLen))
 	vData := C.GoBytes(unsafe.Pointer(img.planes[2]), C.int(vLen))
 
+	cStride := uStride
+	if vStride > uStride {
+		cStride = vStride
+	}
+
 	return &image.YCbCr{
 		Y:              yData,
 		Cb:             uData,
 		Cr:             vData,
 		YStride:        yStride,
-		CStride:        uStride,
+		CStride:        cStride,
 		SubsampleRatio: image.YCbCrSubsampleRatio420,
 		Rect:           image.Rect(0, 0, w, h),
 	}, nil
