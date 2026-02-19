@@ -28,6 +28,7 @@ import (
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/onkernel/kernel-images/server/lib/recorder"
 	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/onkernel/kernel-images/server/lib/webrtcscreen"
 )
 
 func main() {
@@ -134,6 +135,39 @@ func main() {
 		fs := http.StripPrefix("/extensions/", http.FileServer(http.Dir(extensionsDir)))
 		fs.ServeHTTP(w, r)
 	})
+
+	// WebRTC relay: connects to Neko as a headless viewer and re-serves
+	// the VP8 video stream to external WebRTC clients via a single
+	// WebSocket signaling endpoint.
+	if config.WebRTCRelayEnabled {
+		relay, err := webrtcscreen.NewRelay(webrtcscreen.RelayConfig{
+			NekoBaseURL: "http://127.0.0.1:8080",
+			NekoUser:    "admin",
+			NekoPass:    adminPassword,
+			Logger:      slogger,
+		})
+		if err != nil {
+			slogger.Error("failed to create webrtc relay", "err", err)
+			os.Exit(1)
+		}
+		go func() {
+			for {
+				err := relay.Start(ctx)
+				if ctx.Err() != nil {
+					return
+				}
+				slogger.Warn("webrtc relay disconnected, reconnecting in 3s", "err", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(3 * time.Second):
+				}
+			}
+		}()
+
+		r.Get("/display/webrtc", relay.HandleWebSocket)
+		slogger.Info("webrtc relay endpoint enabled at /display/webrtc")
+	}
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.Port),
