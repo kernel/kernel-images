@@ -152,6 +152,7 @@ func main() {
 			os.Exit(1)
 		}
 		go func() {
+			defer relay.Close()
 			for {
 				err := relay.Start(ctx)
 				if ctx.Err() != nil {
