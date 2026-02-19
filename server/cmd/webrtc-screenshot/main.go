@@ -134,8 +134,11 @@ func run(ctx context.Context, logger *slog.Logger, serverURL string, fb *frameBu
 		Type string `json:"type"`
 		SDP  string `json:"sdp"`
 	}
-	if err := json.Unmarshal(answerData, &answer); err != nil || answer.Type != "answer" {
+	if err := json.Unmarshal(answerData, &answer); err != nil {
 		return fmt.Errorf("invalid answer: %w", err)
+	}
+	if answer.Type != "answer" {
+		return fmt.Errorf("unexpected message type: got %q, want \"answer\"", answer.Type)
 	}
 
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{
