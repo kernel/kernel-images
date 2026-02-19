@@ -243,8 +243,13 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 		Type string `json:"type"`
 		SDP  string `json:"sdp"`
 	}
-	if err := json.Unmarshal(data, &offer); err != nil || offer.Type != "offer" {
+	if err := json.Unmarshal(data, &offer); err != nil {
 		r.logger.Warn("invalid client offer", "error", err)
+		ws.Close(cws.StatusInvalidFramePayloadData, "expected offer")
+		return
+	}
+	if offer.Type != "offer" {
+		r.logger.Warn("invalid client offer", "error", fmt.Errorf("unexpected type %q", offer.Type))
 		ws.Close(cws.StatusInvalidFramePayloadData, "expected offer")
 		return
 	}
@@ -375,7 +380,7 @@ func (r *Relay) forwardRTP(track *webrtc.TrackRemote) {
 		}
 		if err := r.localTrack.WriteRTP(pkt); err != nil {
 			r.logger.Debug("local track write failed", "error", err)
-			return
+			continue
 		}
 	}
 }
