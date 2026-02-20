@@ -189,6 +189,10 @@ func (fb *frameBuffer) decodeLoop(ctx context.Context, track *webrtc.TrackRemote
 	}
 	defer dec.Close()
 
+	fb.mu.Lock()
+	fb.frames = 0
+	fb.mu.Unlock()
+
 	var (
 		frameBuf     bytes.Buffer
 		frameStarted bool

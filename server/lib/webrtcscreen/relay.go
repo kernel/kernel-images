@@ -286,6 +286,21 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 		}
 	}()
 
+	// Register state callback before signaling begins so we never miss
+	// a terminal transition (e.g. Failed/Closed/Disconnected).
+	done := make(chan struct{})
+	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+		if state == webrtc.PeerConnectionStateFailed ||
+			state == webrtc.PeerConnectionStateClosed ||
+			state == webrtc.PeerConnectionStateDisconnected {
+			select {
+			case <-done:
+			default:
+				close(done)
+			}
+		}
+	})
+
 	if err := pc.SetRemoteDescription(webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
 		SDP:  offer.SDP,
@@ -336,19 +351,6 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 
 	// Keep the WebSocket open until the PeerConnection closes, so the
 	// client can detect disconnection cleanly.
-	done := make(chan struct{})
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
-		if state == webrtc.PeerConnectionStateFailed ||
-			state == webrtc.PeerConnectionStateClosed ||
-			state == webrtc.PeerConnectionStateDisconnected {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
-		}
-	})
-
 	select {
 	case <-done:
 	case <-ctx.Done():
