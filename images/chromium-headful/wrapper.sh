@@ -98,6 +98,63 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# Generate telemetry configuration from environment variables -----------------
+# -----------------------------------------------------------------------------
+# This creates /var/www/telemetry-config.js from TELEMETRY_* environment variables
+# which the neko client will load at runtime to configure telemetry.
+#
+# Only 2 environment variables:
+#   TELEMETRY_ENDPOINT - URL to send telemetry data. If set, telemetry is enabled.
+#                        If not set, telemetry is disabled.
+#   TELEMETRY_CAPTURE  - Comma-separated event types (defaults to 'all')
+#                        Examples: 'all', 'error_*,perf_fps', 'all,-perf_memory'
+#
+# Usage with Docker:
+#   docker run -e TELEMETRY_ENDPOINT=https://api.example.com/telemetry ...
+#
+# Usage with Kraft:
+#   kraft run -e TELEMETRY_ENDPOINT=https://api.example.com/telemetry ...
+
+generate_telemetry_config() {
+  local config_file="/var/www/telemetry-config.js"
+
+  if [[ -n "${TELEMETRY_ENDPOINT:-}" ]]; then
+    echo "[wrapper] Telemetry ENABLED - endpoint: ${TELEMETRY_ENDPOINT}"
+
+    # Escape single quotes in the endpoint URL
+    local endpoint="${TELEMETRY_ENDPOINT//\'/\\\'}"
+
+    # Build capture config (defaults to 'all' if not specified)
+    local capture="${TELEMETRY_CAPTURE:-all}"
+    capture="${capture//\'/\\\'}"
+
+    echo "[wrapper] Telemetry capture: ${capture}"
+
+    cat > "$config_file" <<EOF
+// Auto-generated telemetry configuration from container environment variables
+// Generated at: $(date -Iseconds)
+// TELEMETRY_ENDPOINT=${TELEMETRY_ENDPOINT}
+// TELEMETRY_CAPTURE=${capture}
+window.__NEKO_TELEMETRY_CONFIG__ = {
+  endpoint: '${endpoint}',
+  capture: '${capture}'
+};
+EOF
+    echo "[wrapper] Telemetry config written to $config_file"
+  else
+    echo "[wrapper] Telemetry DISABLED (TELEMETRY_ENDPOINT not set)"
+    # Create empty config - telemetry will be disabled
+    cat > "$config_file" <<EOF
+// Telemetry disabled - TELEMETRY_ENDPOINT not set
+window.__NEKO_TELEMETRY_CONFIG__ = {};
+EOF
+  fi
+}
+
+# Generate telemetry config before services start
+generate_telemetry_config
+
+# -----------------------------------------------------------------------------
 # Dynamic log aggregation for /var/log/supervisord -----------------------------
 # -----------------------------------------------------------------------------
 # Tails any existing and future files under /var/log/supervisord,

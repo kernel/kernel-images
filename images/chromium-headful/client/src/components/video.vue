@@ -222,6 +222,7 @@
   import { Component, Ref, Watch, Vue, Prop } from 'vue-property-decorator'
   import ResizeObserver from 'resize-observer-polyfill'
   import { elementRequestFullscreen, onFullscreenChange, isFullscreen, lockKeyboard, unlockKeyboard } from '~/utils'
+  import { getConnectionCollector, getTelemetry } from '~/telemetry'
 
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
@@ -482,13 +483,23 @@
       this.observer.observe(this._component)
 
       onFullscreenChange(this._player, () => {
+        const wasFullscreen = this.fullscreen
         this.fullscreen = isFullscreen()
         this.fullscreen ? lockKeyboard() : unlockKeyboard()
         this.onResize()
+
+        // Track fullscreen state change
+        if (wasFullscreen && !this.fullscreen) {
+          getConnectionCollector().trackFullscreen(false)
+        }
       })
 
       this._video.addEventListener('canplaythrough', () => {
         this.$accessor.video.setPlayable(true)
+
+        // Track video ready for playback
+        getConnectionCollector().trackStreamTrackAdded('video', 'main')
+
         if (this.autoplay) {
           this.$nextTick(() => {
             this.$accessor.video.play()
@@ -498,20 +509,38 @@
 
       this._video.addEventListener('ended', () => {
         this.$accessor.video.setPlayable(false)
+        getTelemetry().track('stream_play_started', 'info', { ended: true })
       })
 
       this._video.addEventListener('error', (event) => {
         this.$log.error(event.error)
         this.$accessor.video.setPlayable(false)
+
+        // Track video error
+        if (event.error) {
+          getConnectionCollector().trackStreamPlayFailed(event.error)
+        } else {
+          getTelemetry().track('stream_play_failed', 'error', {
+            message: 'Video playback error',
+            code: this._video.error?.code,
+            mediaError: this._video.error?.message,
+          })
+        }
       })
 
       this._video.addEventListener('volumechange', () => {
         this.$accessor.video.setMuted(this._video.muted)
         this.$accessor.video.setVolume(this._video.volume * 100)
+
+        // Track volume change
+        getConnectionCollector().trackVolumeChange(this._video.volume * 100, this._video.muted)
       })
 
       this._video.addEventListener('playing', () => {
         this.$accessor.video.play()
+
+        // Track video started playing
+        getConnectionCollector().trackStreamPlayStarted()
       })
 
       this._video.addEventListener('pause', () => {
@@ -635,22 +664,32 @@
         return
       }
 
+      // Track control toggle action
+      if (this.hosting) {
+        getConnectionCollector().trackControlRelease()
+      } else {
+        getConnectionCollector().trackControlRequest()
+      }
+
       this.$accessor.remote.toggle()
     }
 
     requestControl() {
+      getConnectionCollector().trackControlRequest()
       this.$accessor.remote.request()
     }
 
     requestFullscreen() {
       // try to fullscreen player element
       if (elementRequestFullscreen(this._player)) {
+        getConnectionCollector().trackFullscreen(true)
         this.onResize()
         return
       }
 
       // fallback to fullscreen video itself (on mobile devices)
       if (elementRequestFullscreen(this._video)) {
+        getConnectionCollector().trackFullscreen(true)
         this.onResize()
         return
       }
@@ -659,6 +698,7 @@
     requestPictureInPicture() {
       //@ts-ignore
       this._video.requestPictureInPicture()
+      getConnectionCollector().trackPictureInPicture(true)
       this.onResize()
     }
 

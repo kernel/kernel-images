@@ -4,6 +4,7 @@ import { BaseClient, BaseEvents } from './base'
 import { Member } from './types'
 import { EVENT } from './events'
 import { accessor } from '~/store'
+import { getConnectionCollector, getTelemetry } from '~/telemetry'
 
 import {
   SystemMessagePayload,
@@ -140,6 +141,16 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
     this.$accessor.remote.setImplicitHosting(implicit_hosting)
     this.$accessor.remote.setFileTransfer(file_transfer)
 
+    // Track server initialization with telemetry
+    getTelemetry().track('connection_webrtc_connected', 'info', {
+      serverInitComplete: true,
+      implicitHosting: implicit_hosting,
+      fileTransferEnabled: file_transfer,
+      heartbeatInterval: heartbeat_interval,
+      locksConfigured: Object.keys(locks).length,
+      timestamp: Date.now(),
+    })
+
     for (const resource in locks) {
       this[EVENT.ADMIN.LOCK]({
         event: EVENT.ADMIN.LOCK,
@@ -158,10 +169,19 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   protected [EVENT.SYSTEM.DISCONNECT]({ message }: SystemMessagePayload) {
-    if (message == 'kicked') {
+    const wasKicked = message == 'kicked'
+    if (wasKicked) {
       this.$accessor.logout()
       message = this.$vue.$t('connection.kicked') as string
     }
+
+    // Track disconnect with telemetry
+    getTelemetry().track('connection_webrtc_disconnected', wasKicked ? 'warning' : 'info', {
+      reason: message,
+      wasKicked,
+      serverInitiated: true,
+      timestamp: Date.now(),
+    })
 
     this.onDisconnected(new Error(message))
 
@@ -174,6 +194,14 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   protected [EVENT.SYSTEM.ERROR]({ title, message }: SystemMessagePayload) {
+    // Track system error with telemetry
+    getTelemetry().track('error_websocket', 'error', {
+      title,
+      message,
+      serverInitiated: true,
+      timestamp: Date.now(),
+    })
+
     this.$vue.$swal({
       title,
       text: message,
@@ -384,6 +412,9 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
 
   protected [EVENT.SCREEN.RESOLUTION]({ id, width, height, rate }: ScreenResolutionPayload) {
     this.$accessor.video.setResolution({ width, height, rate })
+
+    // Track resolution change via telemetry
+    getConnectionCollector().trackResolutionChange(width, height, rate)
 
     if (!id) {
       return

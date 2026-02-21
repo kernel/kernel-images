@@ -9,12 +9,16 @@ import Client from './plugins/neko'
 import Axios from './plugins/axios'
 import Swal from './plugins/swal'
 import Anime from './plugins/anime'
+import Telemetry, { installTelemetryConnectionCollector } from './plugins/telemetry'
 
 import { i18n } from './plugins/i18n'
 import store from './store'
 import app from './app.vue'
 
 Vue.config.productionTip = false
+
+// Install telemetry first to capture any errors during plugin initialization
+Vue.use(Telemetry)
 
 Vue.use(Logger)
 Vue.use(Notifications)
@@ -31,5 +35,8 @@ new Vue({
   created() {
     this.$client.init(this)
     this.$accessor.initialise()
+
+    // Install telemetry connection collector after client is initialized
+    installTelemetryConnectionCollector(this.$client)
   },
 }).$mount('#neko')

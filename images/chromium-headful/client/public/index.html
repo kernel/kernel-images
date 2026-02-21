@@ -13,6 +13,37 @@
     <meta name="msapplication-TileColor" content="#19bd9c">
     <meta name="theme-color" content="#19bd9c">
     <style> /* weird iOS bug, if this is not set right here, video just does not start */ .video-container { width: 100%; height: 100%; } </style>
+    <!--
+      Telemetry Configuration (2 flags only):
+
+      TELEMETRY_ENDPOINT - If set, telemetry is enabled and sends to this URL.
+                           If not set, telemetry is disabled.
+      TELEMETRY_CAPTURE  - Comma-separated event types (defaults to 'all')
+
+      Usage with Docker:
+        docker run -e TELEMETRY_ENDPOINT=https://api.example.com/telemetry ...
+        docker run -e TELEMETRY_ENDPOINT=https://api.example.com/telemetry -e TELEMETRY_CAPTURE='error_*,perf_fps' ...
+
+      Usage with Kraft:
+        kraft run -e TELEMETRY_ENDPOINT=https://api.example.com/telemetry ...
+
+      Query parameters (for testing):
+        ?telemetry_endpoint=https://example.com/telemetry&telemetry_capture=error_*
+
+      TELEMETRY_CAPTURE format:
+        - 'all' (default): Capture all events
+        - 'none': Capture no events
+        - Specific: 'error_js,perf_fps,stream_play_started'
+        - Wildcards: 'error_*,perf_*'
+        - Exclusions: 'all,-perf_*,-stream_*'
+
+      Event types: session_*, app_*, error_*, perf_*, connection_*, action_*, stream_*
+    -->
+    <script>
+      // Runtime telemetry configuration - set by telemetry-config.js (generated at container startup)
+      window.__NEKO_TELEMETRY_CONFIG__ = {};
+    </script>
+    <script src="telemetry-config.js" onerror=""></script>
   </head>
   <body>
     <noscript>
