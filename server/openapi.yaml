@@ -1075,6 +1075,43 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /chromium/policies:
+    patch:
+      summary: Update Chromium enterprise policies and restart
+      description: |
+        Merge user-provided Chromium enterprise policy overrides into the base policy.json,
+        restart Chromium via supervisord, and wait until the Chromium DevTools "listening"
+        log line is observed before returning success.
+        Certain policies managed by kernel infrastructure (e.g. ExtensionSettings,
+        proxy-related policies, and policies required for CDP/automation) are blocked
+        from override.
+      operationId: patchChromiumPolicies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: |
+                Chromium enterprise policy overrides. Keys are policy names
+                (e.g. "DefaultCookiesSetting") and values are the policy values.
+                See https://chromeenterprise.google/policies/ for available policies.
+              additionalProperties: true
+              example:
+                DefaultCookiesSetting: 1
+                BasicAuthOverHttpEnabled: true
+                HttpsUpgradesEnabled: false
+                MaxConnectionsPerProxy: 32
+                PopupsAllowedForUrls:
+                  - "https://example.com"
+      responses:
+        "200":
+          description: Policies updated and Chromium restarted successfully
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /chromium/flags:
     patch:
       summary: Update Chromium launch flags and restart
