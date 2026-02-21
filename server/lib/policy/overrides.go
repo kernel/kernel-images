@@ -74,13 +74,11 @@ var blockedPolicies = map[string]string{
 	"ProxyPacUrl":    "use kernel's proxy API instead",
 }
 
-// policyRegistry maps every Chromium enterprise policy supported on Linux
-// (chrome.* or chrome.linux) to its expected value type.
-// Generated from chromium/src/components/policy/resources/templates/policy_definitions/
-// at Chromium version 133.x.
-//
-// For the full list of 693 policies, see the policy_registry_gen.go file.
-// This subset covers the policies most commonly requested by kernel users.
+// policyRegistry maps commonly requested Chromium enterprise policies supported
+// on Linux (chrome.* or chrome.linux) to their expected value types.
+// Derived from chromium/src/components/policy/resources/templates/policy_definitions/
+// at Chromium version 133.x. Policies not in this registry are still accepted
+// with basic JSON validation (see Validate).
 var policyRegistry = map[string]PolicyValueType{
 	// Content settings
 	"DefaultCookiesSetting":       PolicyTypeInt,
