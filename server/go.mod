@@ -101,4 +101,4 @@ require (
 	modernc.org/sqlite v1.23.1 // indirect
 )
 
-replace github.com/m1k1o/neko/server => github.com/onkernel/neko/server v0.0.0-20251008185748-46e2fc7d3866
+replace github.com/m1k1o/neko/server => github.com/onkernel/neko/server v0.0.0-20260213021128-abe9ac59a634

@@ -33,10 +33,14 @@ build: | $(BIN_DIR)
 dev: build $(RECORDING_DIR)
 	OUTPUT_DIR=$(RECORDING_DIR) DISPLAY_NUM=$(DISPLAY_NUM) ./bin/api
 
+# we run the e2e tests separately so that we can see the logs from the e2e tests as they run instead of waiting for all tests to complete
 test:
 	go vet ./...
-	# E2E tests use dynamic ports via TestContainer, enabling parallel execution
-	go test -v -race ./...
+	go test -v -race $$(go list ./... | grep -v /e2e$$)
+	@echo ""
+	@echo "=== Running e2e tests (testcontainers — this may take a few minutes) ==="
+	@echo ""
+	go test -v -race ./e2e/
 
 clean:
 	@rm -rf $(BIN_DIR)

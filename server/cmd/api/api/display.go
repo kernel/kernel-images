@@ -390,3 +390,4 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 	log.Info("successfully changed resolution via Neko API", "width", width, "height", height, "refresh_rate", refreshRate)
 	return nil
 }
+

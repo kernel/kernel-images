@@ -34,3 +34,4 @@ func TestExecLookPath(t *testing.T) {
 		t.Fatalf("execLookPath PATH search failed: p=%q err=%v", p, err)
 	}
 }
+
