@@ -108,12 +108,16 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 		return &executionError{msg: "failed to get current mouse position: " + err.Error()}
 	}
 
+	if body.DurationSec != nil && (*body.DurationSec < 0.05 || *body.DurationSec > 5) {
+		return &validationError{msg: "duration_sec must be between 0.05 and 5"}
+	}
+
 	// When duration_sec is specified, compute the number of trajectory points
 	// to achieve that duration at a ~10ms step delay (human-like event frequency).
 	// Otherwise let the library auto-compute from path length.
 	const defaultStepDelayMs = 10
 	var opts *mousetrajectory.Options
-	if body.DurationSec != nil && *body.DurationSec >= 0.05 && *body.DurationSec <= 5 {
+	if body.DurationSec != nil {
 		durationMs := int(*body.DurationSec * 1000)
 		targetPoints := durationMs / defaultStepDelayMs
 		if targetPoints < mousetrajectory.MinPoints {
@@ -142,7 +146,7 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 	// Compute per-step delay to achieve the target duration.
 	numSteps := len(points) - 1
 	stepDelayMs := defaultStepDelayMs
-	if body.DurationSec != nil && *body.DurationSec >= 0.05 && *body.DurationSec <= 5 && numSteps > 0 {
+	if body.DurationSec != nil && numSteps > 0 {
 		durationMs := int(*body.DurationSec * 1000)
 		stepDelayMs = durationMs / numSteps
 		if stepDelayMs < 3 {
