@@ -23,12 +23,6 @@ type Options struct {
 	MaxPoints int
 }
 
-// NewHumanizeMouseTrajectory creates a trajectory from (fromX, fromY) to (toX, toY).
-// Uses the default entropy source for randomization.
-func NewHumanizeMouseTrajectory(fromX, fromY, toX, toY float64) *HumanizeMouseTrajectory {
-	return NewHumanizeMouseTrajectoryWithOptions(fromX, fromY, toX, toY, nil)
-}
-
 // NewHumanizeMouseTrajectoryWithOptions creates a trajectory with optional overrides.
 func NewHumanizeMouseTrajectoryWithOptions(fromX, fromY, toX, toY float64, opts *Options) *HumanizeMouseTrajectory {
 	t := &HumanizeMouseTrajectory{
@@ -49,11 +43,6 @@ func NewHumanizeMouseTrajectoryWithSeed(fromX, fromY, toX, toY float64, seed int
 	}
 	t.generateCurve(nil)
 	return t
-}
-
-// GetPoints returns the trajectory as a slice of [x, y] pairs (floats, caller rounds).
-func (t *HumanizeMouseTrajectory) GetPoints() [][2]float64 {
-	return t.points
 }
 
 // GetPointsInt returns the trajectory as integer coordinates suitable for xdotool.
@@ -173,6 +162,7 @@ func (t *HumanizeMouseTrajectory) distortPoints(points [][2]float64, distortionM
 		x, y := points[i][0], points[i][1]
 		if t.rng.Float64() < distortionFreq {
 			delta := math.Round(normalDist(t.rng, distortionMean, distortionStDev))
+			x += delta
 			y += delta
 		}
 		distorted[i] = [2]float64{x, y}
