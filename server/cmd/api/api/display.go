@@ -420,7 +420,8 @@ func (s *ApiService) stopActiveRecordings(ctx context.Context) ([]stoppedRecordi
 		}
 
 		if err := s.recordManager.DeregisterRecorder(ctx, rec); err != nil {
-			log.Error("failed to deregister recorder", "id", id, "error", err)
+			log.Error("failed to deregister recorder, skipping restart to avoid ID conflict", "id", id, "error", err)
+			continue
 		}
 
 		stopped = append(stopped, stoppedRecordingInfo{
