@@ -108,18 +108,17 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 		return &executionError{msg: "failed to get current mouse position: " + err.Error()}
 	}
 
-	if body.DurationSec != nil && (*body.DurationSec < 0.05 || *body.DurationSec > 5) {
-		return &validationError{msg: "duration_sec must be between 0.05 and 5"}
+	if body.DurationMs != nil && (*body.DurationMs < 50 || *body.DurationMs > 5000) {
+		return &validationError{msg: "duration_ms must be between 50 and 5000"}
 	}
 
-	// When duration_sec is specified, compute the number of trajectory points
+	// When duration_ms is specified, compute the number of trajectory points
 	// to achieve that duration at a ~10ms step delay (human-like event frequency).
 	// Otherwise let the library auto-compute from path length.
 	const defaultStepDelayMs = 10
 	var opts *mousetrajectory.Options
-	if body.DurationSec != nil {
-		durationMs := int(*body.DurationSec * 1000)
-		targetPoints := durationMs / defaultStepDelayMs
+	if body.DurationMs != nil {
+		targetPoints := *body.DurationMs / defaultStepDelayMs
 		if targetPoints < mousetrajectory.MinPoints {
 			targetPoints = mousetrajectory.MinPoints
 		}
@@ -146,9 +145,8 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 	// Compute per-step delay to achieve the target duration.
 	numSteps := len(points) - 1
 	stepDelayMs := defaultStepDelayMs
-	if body.DurationSec != nil && numSteps > 0 {
-		durationMs := int(*body.DurationSec * 1000)
-		stepDelayMs = durationMs / numSteps
+	if body.DurationMs != nil && numSteps > 0 {
+		stepDelayMs = *body.DurationMs / numSteps
 		if stepDelayMs < 3 {
 			stepDelayMs = 3
 		}

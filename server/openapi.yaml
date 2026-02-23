@@ -1236,11 +1236,11 @@ components:
           type: boolean
           description: Use human-like Bezier curve path instead of instant teleport (recommended for bot detection evasion)
           default: true
-        duration_sec:
-          type: number
-          description: Target total duration in seconds for the mouse movement when smooth=true. Steps and per-step delay are auto-computed to achieve this duration. Ignored when smooth=false. Omit for automatic timing based on distance.
-          minimum: 0.05
-          maximum: 5
+        duration_ms:
+          type: integer
+          description: Target total duration in milliseconds for the mouse movement when smooth=true. Omit for automatic timing based on distance.
+          minimum: 50
+          maximum: 5000
       additionalProperties: false
     ScreenshotRegion:
       type: object
