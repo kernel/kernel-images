@@ -182,6 +182,22 @@ RUN set -eux; \
 # Install TypeScript, Playwright, Patchright, esbuild globally
 RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g typescript playwright-core patchright esbuild
 
+# Pre-install openssh-server and websocat for faster SSH setup via kernel CLI.
+# Only installed, NOT configured: no host keys, no custom config, service not enabled.
+RUN apt-get update && \
+    apt-get --no-install-recommends -y install openssh-server && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f /etc/ssh/ssh_host_* && \
+    ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+        amd64) WEBSOCAT_ARCH="x86_64" ;; \
+        arm64) WEBSOCAT_ARCH="aarch64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/vi/websocat/releases/download/v1.14.1/websocat.${WEBSOCAT_ARCH}-unknown-linux-musl" \
+        -o /usr/local/bin/websocat && \
+    chmod +x /usr/local/bin/websocat
+
 ENV WITHDOCKER=true
 
 # Create a non-root user with a home directory
