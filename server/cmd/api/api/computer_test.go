@@ -167,3 +167,44 @@ func TestExecutionError(t *testing.T) {
 func TestIsValidationErr_Nil(t *testing.T) {
 	assert.False(t, isValidationErr(nil))
 }
+
+func TestClampPoints(t *testing.T) {
+	tests := []struct {
+		name     string
+		points   [][2]int
+		w, h     int
+		expected [][2]int
+	}{
+		{
+			name:     "no clamping needed",
+			points:   [][2]int{{10, 20}, {50, 50}, {100, 80}},
+			w:        200, h: 200,
+			expected: [][2]int{{10, 20}, {50, 50}, {100, 80}},
+		},
+		{
+			name:     "clamp negative x and y",
+			points:   [][2]int{{-10, -20}, {50, 50}},
+			w:        200, h: 200,
+			expected: [][2]int{{0, 0}, {50, 50}},
+		},
+		{
+			name:     "clamp exceeding screen bounds",
+			points:   [][2]int{{50, 50}, {250, 300}},
+			w:        200, h: 200,
+			expected: [][2]int{{50, 50}, {199, 199}},
+		},
+		{
+			name:     "clamp both directions",
+			points:   [][2]int{{-5, 250}, {300, -10}, {100, 100}},
+			w:        200, h: 200,
+			expected: [][2]int{{0, 199}, {199, 0}, {100, 100}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clampPoints(tt.points, tt.w, tt.h)
+			require.Equal(t, tt.expected, tt.points)
+		})
+	}
+}

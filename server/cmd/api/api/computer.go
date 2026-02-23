@@ -56,7 +56,7 @@ func (s *ApiService) doMoveMouse(ctx context.Context, body oapi.MoveMouseRequest
 
 	useSmooth := body.Smooth == nil || *body.Smooth // default true when omitted
 	if useSmooth {
-		return s.doMoveMouseSmooth(ctx, log, body)
+		return s.doMoveMouseSmooth(ctx, log, body, screenWidth, screenHeight)
 	}
 	return s.doMoveMouseInstant(ctx, log, body)
 }
@@ -101,7 +101,7 @@ func (s *ApiService) MoveMouse(ctx context.Context, request oapi.MoveMouseReques
 	return oapi.MoveMouse200Response{}, nil
 }
 
-func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest) error {
+func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest, screenWidth, screenHeight int) error {
 	fromX, fromY, err := s.getMouseLocation(ctx)
 	if err != nil {
 		log.Error("failed to get mouse location for smooth move", "error", err)
@@ -131,6 +131,13 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 	if len(points) < 2 {
 		return s.doMoveMouseInstant(ctx, log, body)
 	}
+
+	// Clamp trajectory points to screen bounds. The Bezier control-point
+	// padding (boundsPadding=80) can place intermediate curve points outside
+	// the screen when the start/end is near an edge. Because we use
+	// mousemove_relative, X11 clamping at screen boundaries would silently
+	// eat deltas, causing the cursor to land at the wrong final position.
+	clampPoints(points, screenWidth, screenHeight)
 
 	// Compute per-step delay to achieve the target duration.
 	numSteps := len(points) - 1
@@ -173,13 +180,12 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 
 		dx := points[i][0] - points[i-1][0]
 		dy := points[i][1] - points[i-1][1]
-		if dx == 0 && dy == 0 {
-			continue
-		}
-		args := []string{"mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy)}
-		if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
-			log.Error("xdotool mousemove_relative failed", "err", err, "output", string(output), "step", i)
-			return &executionError{msg: "failed during smooth mouse movement"}
+		if dx != 0 || dy != 0 {
+			args := []string{"mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy)}
+			if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+				log.Error("xdotool mousemove_relative failed", "err", err, "output", string(output), "step", i)
+				return &executionError{msg: "failed during smooth mouse movement"}
+			}
 		}
 		jitter := stepDelayMs
 		if stepDelayMs > 3 {
@@ -1108,6 +1114,24 @@ func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.Batch
 	}
 
 	return oapi.BatchComputerAction200Response{}, nil
+}
+
+// clampPoints constrains each trajectory point to [0, screenWidth-1] x [0, screenHeight-1].
+func clampPoints(points [][2]int, screenWidth, screenHeight int) {
+	maxX := screenWidth - 1
+	maxY := screenHeight - 1
+	for i := range points {
+		if points[i][0] < 0 {
+			points[i][0] = 0
+		} else if points[i][0] > maxX {
+			points[i][0] = maxX
+		}
+		if points[i][1] < 0 {
+			points[i][1] = 0
+		} else if points[i][1] > maxY {
+			points[i][1] = maxY
+		}
+	}
 }
 
 // generateRelativeSteps produces a sequence of relative steps that approximate a

@@ -69,6 +69,27 @@ func TestHumanizeMouseTrajectory_MaxPointsClampedToMax(t *testing.T) {
 	assert.Len(t, points, MaxPoints, "MaxPoints above MaxPoints should clamp to MaxPoints")
 }
 
+func TestHumanizeMouseTrajectory_NearEdgeCanProduceNegativeCoords(t *testing.T) {
+	// When the start is near (0,0), boundsPadding=80 places Bezier control
+	// knots into negative territory so intermediate curve points can have
+	// negative coordinates. Consumers that use relative moves must clamp
+	// the trajectory to screen bounds to avoid X11 edge-clamping errors.
+	foundNegative := false
+	for seed := int64(0); seed < 100; seed++ {
+		traj := NewHumanizeMouseTrajectoryWithSeed(10, 10, 200, 200, seed)
+		for _, p := range traj.GetPointsInt() {
+			if p[0] < 0 || p[1] < 0 {
+				foundNegative = true
+				break
+			}
+		}
+		if foundNegative {
+			break
+		}
+	}
+	assert.True(t, foundNegative, "expected at least one seed to produce negative coordinates near screen edge")
+}
+
 func TestHumanizeMouseTrajectory_CurvedPath(t *testing.T) {
 	traj := NewHumanizeMouseTrajectoryWithSeed(0, 0, 100, 0, 999)
 	points := traj.GetPointsInt()
