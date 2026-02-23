@@ -1234,7 +1234,7 @@ components:
             type: string
         smooth:
           type: boolean
-          description: Use human-like Bezier curve path instead of instant teleport (recommended for bot detection evasion)
+          description: Use human-like Bezier curve path instead of instant mouse movement.
           default: true
         duration_ms:
           type: integer
