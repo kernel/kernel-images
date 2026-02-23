@@ -8,10 +8,12 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	"github.com/onkernel/kernel-images/server/lib/recorder"
 )
 
 // PatchDisplay updates the display configuration. When require_idle
@@ -62,18 +64,29 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		requireIdle = *req.Body.RequireIdle
 	}
 
-	// Check if resize is safe (no active sessions or recordings)
+	// Check if resize is safe (no active live view sessions)
 	if requireIdle {
 		live := s.getActiveNekoSessions(ctx)
-		isRecording := s.anyRecordingActive(ctx)
-		resizableNow := (live == 0) && !isRecording
-
-		log.Info("checking if resize is safe", "live_sessions", live, "is_recording", isRecording, "resizable", resizableNow)
-
-		if !resizableNow {
+		if live > 0 {
+			log.Info("resize refused: live view or replay active", "live_sessions", live)
 			return oapi.PatchDisplay409JSONResponse{
 				ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{
-					Message: "resize refused: live view or recording/replay active",
+					Message: "resize refused: live view or replay active",
+				},
+			}, nil
+		}
+
+		// Gracefully stop active recordings so the resize can proceed.
+		// They will be restarted (with new segment files) after the resize completes.
+		stopped, stopErr := s.stopActiveRecordings(ctx)
+		if len(stopped) > 0 {
+			defer s.restartRecordings(context.WithoutCancel(ctx), stopped)
+		}
+		if stopErr != nil {
+			log.Error("failed to stop recordings for resize", "error", stopErr)
+			return oapi.PatchDisplay500JSONResponse{
+				InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+					Message: fmt.Sprintf("failed to stop recordings for resize: %s", stopErr.Error()),
 				},
 			}, nil
 		}
@@ -359,6 +372,105 @@ func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, e
 	}
 
 	return width, height, refreshRate, nil
+}
+
+// stoppedRecordingInfo holds state captured from a recording that was stopped
+// so it can be restarted after a display resize.
+type stoppedRecordingInfo struct {
+	id         string
+	params     recorder.FFmpegRecordingParams
+	outputPath string
+}
+
+// stopActiveRecordings gracefully stops every recording that is currently in
+// progress and deregisters them from the manager. It returns info needed to
+// restart each recording later. Recordings that were successfully stopped are
+// always included in the returned slice, even when a later recording fails to
+// stop (so the caller can restart whatever was stopped).
+func (s *ApiService) stopActiveRecordings(ctx context.Context) ([]stoppedRecordingInfo, error) {
+	log := logger.FromContext(ctx)
+	var stopped []stoppedRecordingInfo
+
+	for _, rec := range s.recordManager.ListActiveRecorders(ctx) {
+		if !rec.IsRecording(ctx) {
+			continue
+		}
+
+		id := rec.ID()
+
+		ffmpegRec, ok := rec.(*recorder.FFmpegRecorder)
+		if !ok {
+			log.Warn("cannot capture params from non-FFmpeg recorder, skipping", "id", id)
+			continue
+		}
+
+		params := ffmpegRec.Params()
+		outputPath := ffmpegRec.OutputPath()
+
+		log.Info("stopping recording for resize", "id", id)
+		if err := rec.Stop(ctx); err != nil {
+			// Stop() returns finalization errors even when the process was
+			// successfully terminated. Only treat it as a hard failure if
+			// the process is still running.
+			if rec.IsRecording(ctx) {
+				log.Error("failed to stop recording for resize", "id", id, "error", err)
+				return stopped, fmt.Errorf("failed to stop recording %s: %w", id, err)
+			}
+			log.Warn("recording stopped with finalization warning", "id", id, "error", err)
+		}
+
+		if err := s.recordManager.DeregisterRecorder(ctx, rec); err != nil {
+			log.Error("failed to deregister recorder", "id", id, "error", err)
+		}
+
+		stopped = append(stopped, stoppedRecordingInfo{
+			id:         id,
+			params:     params,
+			outputPath: outputPath,
+		})
+		log.Info("recording stopped and deregistered for resize", "id", id)
+	}
+
+	return stopped, nil
+}
+
+// restartRecordings re-creates and starts recordings that were previously
+// stopped for a display resize. The old (finalized) recording file is renamed
+// to preserve it before the new recording begins at the same output path.
+func (s *ApiService) restartRecordings(ctx context.Context, stopped []stoppedRecordingInfo) {
+	log := logger.FromContext(ctx)
+
+	for _, info := range stopped {
+		// Preserve the pre-resize segment by renaming the finalized file.
+		if _, err := os.Stat(info.outputPath); err == nil {
+			preservedPath := strings.TrimSuffix(info.outputPath, ".mp4") +
+				fmt.Sprintf("-before-resize-%d.mp4", time.Now().UnixMilli())
+			if err := os.Rename(info.outputPath, preservedPath); err != nil {
+				log.Error("failed to rename pre-resize recording", "id", info.id, "error", err)
+				continue
+			}
+			log.Info("preserved pre-resize recording segment", "id", info.id, "path", preservedPath)
+		}
+
+		rec, err := s.factory(info.id, info.params)
+		if err != nil {
+			log.Error("failed to create recorder for restart", "id", info.id, "error", err)
+			continue
+		}
+
+		if err := s.recordManager.RegisterRecorder(ctx, rec); err != nil {
+			log.Error("failed to register restarted recorder", "id", info.id, "error", err)
+			continue
+		}
+
+		if err := rec.Start(ctx); err != nil {
+			log.Error("failed to start restarted recording", "id", info.id, "error", err)
+			_ = s.recordManager.DeregisterRecorder(ctx, rec)
+			continue
+		}
+
+		log.Info("recording restarted after resize", "id", info.id)
+	}
 }
 
 // isNekoEnabled checks if Neko service is enabled

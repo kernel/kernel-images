@@ -141,6 +141,20 @@ func (fr *FFmpegRecorder) ID() string {
 	return fr.id
 }
 
+// Params returns a copy of the merged recording parameters.
+func (fr *FFmpegRecorder) Params() FFmpegRecordingParams {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	return fr.params
+}
+
+// OutputPath returns the filesystem path where the recording is stored.
+func (fr *FFmpegRecorder) OutputPath() string {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	return fr.outputPath
+}
+
 // Start begins the recording process by launching ffmpeg with the configured parameters.
 func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	log := logger.FromContext(ctx)
