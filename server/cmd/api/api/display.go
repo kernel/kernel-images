@@ -441,15 +441,16 @@ func (s *ApiService) restartRecordings(ctx context.Context, stopped []stoppedRec
 	log := logger.FromContext(ctx)
 
 	for _, info := range stopped {
-		// Preserve the pre-resize segment by renaming the finalized file.
+		// Best-effort: preserve the pre-resize segment by renaming the finalized file.
+		// If this fails the old file may be overwritten, but we still restart recording.
 		if _, err := os.Stat(info.outputPath); err == nil {
 			preservedPath := strings.TrimSuffix(info.outputPath, ".mp4") +
 				fmt.Sprintf("-before-resize-%d.mp4", time.Now().UnixMilli())
 			if err := os.Rename(info.outputPath, preservedPath); err != nil {
-				log.Error("failed to rename pre-resize recording", "id", info.id, "error", err)
-				continue
+				log.Error("failed to rename pre-resize recording, old file may be overwritten", "id", info.id, "error", err)
+			} else {
+				log.Info("preserved pre-resize recording segment", "id", info.id, "path", preservedPath)
 			}
-			log.Info("preserved pre-resize recording segment", "id", info.id, "path", preservedPath)
 		}
 
 		rec, err := s.factory(info.id, info.params)
