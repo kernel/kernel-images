@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="static/images/Kernel-Wordmark_Accent.svg" alt="Kernel Logo" width="55%">
+  <img src="static/images/logo-kernel-light.svg" alt="Kernel Logo" width="55%">
 </p>
 
 <p align="center">
@@ -11,9 +11,9 @@
 
 ## What's Kernel?
 
-Kernel provides sandboxed, ready-to-use Chrome browsers for browser automations and web agents. This repo powers our [hosted services](https://onkernel.com/docs/introduction).
+Kernel provides sandboxed, ready-to-use Chrome browsers for browser automations and web agents. This repo powers our [hosted services](https://kernel.sh/docs/introduction).
 
-Sign up [here](https://www.onkernel.com/)!
+Sign up [here](https://www.kernel.sh/)!
 
 ## Key Features
 
