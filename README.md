@@ -171,7 +171,7 @@ Note: the recording file is encoded into a H.264/MPEG-4 AVC video file. [QuickTi
 
 ## Documentation
 
-This repo powers our managed [browser infrastructure](https://onkernel.com/docs).
+This repo powers our managed [browser infrastructure](https://kernel.sh/docs).
 
 ## Contributing
 
@@ -191,4 +191,4 @@ For issues, questions, or feedback, please [open an issue](https://github.com/on
 - Thank you to [xonkernel](https://github.com/xonkernel) for leading the development of our WebRTC live view.
 - Thank you to the [Unikraft Cloud](https://unikraft.cloud/) team for your help with unikernels.
 
-Made with ❤️ by the [Kernel team](https://www.onkernel.com).
+Made with ❤️ by the [Kernel team](https://www.kernel.sh).
