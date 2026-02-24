@@ -907,15 +907,7 @@ func (s *ApiService) UploadZstd(ctx context.Context, request oapi.UploadZstdRequ
 		return oapi.UploadZstd400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body required"}}, nil
 	}
 
-	// Create temp file for uploaded archive
-	tmpArchive, err := os.CreateTemp("", "upload-*.tar.zst")
-	if err != nil {
-		log.Error("failed to create temporary file", "err", err)
-		return oapi.UploadZstd500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "internal error"}}, nil
-	}
-	defer os.Remove(tmpArchive.Name())
-	defer tmpArchive.Close()
-
+	var archiveBuf bytes.Buffer
 	var destPath string
 	var stripComponents int
 	var archiveReceived bool
@@ -933,7 +925,7 @@ func (s *ApiService) UploadZstd(ctx context.Context, request oapi.UploadZstdRequ
 		switch part.FormName() {
 		case "archive":
 			archiveReceived = true
-			if _, err := io.Copy(tmpArchive, part); err != nil {
+			if _, err := io.Copy(&archiveBuf, part); err != nil {
 				log.Error("failed to read archive data", "err", err)
 				return oapi.UploadZstd400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "failed to read archive"}}, nil
 			}
@@ -961,27 +953,11 @@ func (s *ApiService) UploadZstd(ctx context.Context, request oapi.UploadZstdRequ
 		}
 	}
 
-	// Validate required parts
 	if !archiveReceived || destPath == "" {
 		return oapi.UploadZstd400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "archive and dest_path are required"}}, nil
 	}
 
-	// Close temp writer and reopen for reading
-	if err := tmpArchive.Close(); err != nil {
-		log.Error("failed to finalize temporary archive", "err", err)
-		return oapi.UploadZstd500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "internal error"}}, nil
-	}
-
-	// Open for reading
-	archiveReader, err := os.Open(tmpArchive.Name())
-	if err != nil {
-		log.Error("failed to reopen temporary archive", "err", err)
-		return oapi.UploadZstd500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "internal error"}}, nil
-	}
-	defer archiveReader.Close()
-
-	// Extract the archive
-	if err := zstdutil.UntarZstd(archiveReader, destPath, stripComponents); err != nil {
+	if err := zstdutil.UntarZstd(bytes.NewReader(archiveBuf.Bytes()), destPath, stripComponents); err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "illegal file path") {
 			return oapi.UploadZstd400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid archive: path traversal detected"}}, nil
