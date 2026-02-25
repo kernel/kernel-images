@@ -482,6 +482,12 @@ paths:
   /computer/batch:
     post:
       summary: Execute a batch of computer actions sequentially
+      description: |
+        Execute an ordered list of computer actions in a single API call. Actions are performed
+        sequentially while holding an exclusive lock, so no other input operations can interleave.
+        Execution stops on the first error and the response indicates which action failed.
+        This is useful for chaining deterministic sequences of mouse and keyboard actions
+        without paying network round-trip latency for each individual action.
       operationId: batchComputerAction
       requestBody:
         required: true
