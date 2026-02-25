@@ -204,13 +204,42 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     wget \
     xdg-utils \
     libvulkan1 \
-    fonts-liberation \
-    fonts-noto-cjk \
-    fonts-noto-color-emoji \
-    fonts-nanum \
     fontconfig \
     unzip && \
-    fc-cache -f
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install fonts to match a realistic Ubuntu 22.04 desktop fingerprint.
+# A minimal container has only 3 fonts, which is a strong fingerprinting signal
+# used by reCAPTCHA Enterprise and other bot detection vendors.
+RUN apt-get update && \
+    apt-get --no-install-recommends -y install \
+    fonts-liberation \
+    fonts-liberation2 \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
+    fonts-noto-core \
+    fonts-nanum \
+    fonts-dejavu-core \
+    fonts-dejavu-extra \
+    fonts-freefont-ttf \
+    fonts-ubuntu \
+    fonts-opensymbol \
+    fonts-roboto \
+    fonts-croscore \
+    fonts-smc-chilanka \
+    fonts-hosny-amiri \
+    fonts-indic \
+    fonts-kacst \
+    fonts-khmeros-core \
+    fonts-lao \
+    fonts-lklug-sinhala \
+    fonts-sil-abyssinica \
+    fonts-sil-padauk \
+    fonts-thai-tlwg \
+    fonts-tibetan-machine \
+    fonts-droid-fallback && \
+    fc-cache -f && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # install ffmpeg manually since the version available in apt is from the 4.x branch due to #drama.
 COPY --from=ffmpeg-downloader /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
