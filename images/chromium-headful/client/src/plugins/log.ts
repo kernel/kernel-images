@@ -8,8 +8,6 @@ interface Logger {
 }
 
 declare global {
-  const $log: Logger
-
   interface Window {
     $log: Logger
   }
@@ -46,11 +44,12 @@ function createLoggerForLevel(level: string): Logger {
   if (DISABLED_LEVELS.includes(normalized)) return offLoggers
 
   const enabledIndex = LOG_METHODS.indexOf(normalized as keyof Logger)
-  if (enabledIndex === -1 || enabledIndex === LOG_METHODS.length - 1) return realLoggers
+  if (enabledIndex === -1) return offLoggers
 
-  const logger = { ...offLoggers }
+  const logger: Logger = { ...offLoggers }
   for (let i = 0; i <= enabledIndex; i++) {
-    logger[LOG_METHODS[i]] = realLoggers[LOG_METHODS[i]]
+    const method = LOG_METHODS[i]
+    ;(logger as any)[method] = realLoggers[method]
   }
   return logger
 }
