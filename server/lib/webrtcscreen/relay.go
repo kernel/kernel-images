@@ -168,7 +168,7 @@ func (r *Relay) Start(ctx context.Context) error {
 			}
 			r.mu.Unlock()
 
-			r.forwardRTP(track)
+			go r.forwardRTP(track)
 		})
 	})
 
@@ -329,12 +329,12 @@ func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
 	}()
 
 	// Register state callback before signaling begins so we never miss
-	// a terminal transition (e.g. Failed/Closed/Disconnected).
+	// a terminal transition. Disconnected is transient and can self-recover,
+	// so only Failed/Closed are treated as terminal.
 	done := make(chan struct{})
 	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
 		if state == webrtc.PeerConnectionStateFailed ||
-			state == webrtc.PeerConnectionStateClosed ||
-			state == webrtc.PeerConnectionStateDisconnected {
+			state == webrtc.PeerConnectionStateClosed {
 			select {
 			case <-done:
 			default:
