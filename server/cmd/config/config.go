@@ -22,10 +22,6 @@ type Config struct {
 
 	// DevTools proxy configuration
 	LogCDPMessages bool `envconfig:"LOG_CDP_MESSAGES" default:"false"`
-
-	// WebRTC relay: connects to Neko internally and re-serves the video
-	// stream to external WebRTC clients via /display/webrtc.
-	WebRTCRelayEnabled bool `envconfig:"WEBRTC_RELAY_ENABLED" default:"true"`
 }
 
 // Load loads configuration from environment variables
