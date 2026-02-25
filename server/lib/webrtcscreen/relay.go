@@ -20,15 +20,21 @@ import (
 // WebRTC clients. The API server mounts HandleWebSocket on a
 // single endpoint (e.g., /display/webrtc) — that's all external
 // clients need to connect and receive the live screen.
+//
+// The Neko connection is lazy: it is only established when the
+// first client connects via HandleWebSocket.
 type Relay struct {
 	logger *slog.Logger
 	cfg    RelayConfig
+	ctx    context.Context
 
 	mu         sync.RWMutex
 	localTrack *webrtc.TrackLocalStaticRTP
 	nekoPC     *webrtc.PeerConnection
 	nekoWS     *cws.Conn
 	ready      chan struct{} // closed when localTrack is receiving data
+
+	startOnce sync.Once
 }
 
 type RelayConfig struct {
@@ -38,7 +44,7 @@ type RelayConfig struct {
 	Logger      *slog.Logger
 }
 
-func NewRelay(cfg RelayConfig) (*Relay, error) {
+func NewRelay(ctx context.Context, cfg RelayConfig) (*Relay, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -54,9 +60,33 @@ func NewRelay(cfg RelayConfig) (*Relay, error) {
 	return &Relay{
 		logger:     cfg.Logger.With("component", "webrtc-relay"),
 		cfg:        cfg,
+		ctx:        ctx,
 		localTrack: localTrack,
 		ready:      make(chan struct{}),
 	}, nil
+}
+
+// ensureRunning starts the Neko connection loop in the background
+// on the first call. Subsequent calls are no-ops.
+func (r *Relay) ensureRunning() {
+	r.startOnce.Do(func() {
+		r.logger.Info("first client request, starting neko connection")
+		go func() {
+			defer r.Close()
+			for {
+				err := r.Start(r.ctx)
+				if r.ctx.Err() != nil {
+					return
+				}
+				r.logger.Warn("webrtc relay disconnected, reconnecting in 3s", "err", err)
+				select {
+				case <-r.ctx.Done():
+					return
+				case <-time.After(3 * time.Second):
+				}
+			}
+		}()
+	})
 }
 
 // Start connects to Neko and begins relaying video. It blocks until
@@ -229,6 +259,18 @@ func (r *Relay) Start(ctx context.Context) error {
 // After the exchange, WebRTC media flows directly. The WebSocket
 // can be closed.
 func (r *Relay) HandleWebSocket(w http.ResponseWriter, req *http.Request) {
+	r.ensureRunning()
+
+	// Wait for the relay to be connected to Neko before accepting the client.
+	select {
+	case <-r.Ready():
+	case <-time.After(15 * time.Second):
+		http.Error(w, "relay not ready", http.StatusServiceUnavailable)
+		return
+	case <-req.Context().Done():
+		return
+	}
+
 	ws, err := cws.Accept(w, req, nil)
 	if err != nil {
 		r.logger.Error("websocket accept failed", "error", err)
