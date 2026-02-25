@@ -479,6 +479,23 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /computer/batch:
+    post:
+      summary: Execute a batch of computer actions sequentially
+      operationId: batchComputerAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchComputerActionRequest"
+      responses:
+        "200":
+          description: Batch executed successfully
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /computer/clipboard/read:
     post:
       summary: Read text from the system clipboard
@@ -496,19 +513,6 @@ paths:
     post:
       summary: Write text to the system clipboard
       operationId: writeClipboard
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/WriteClipboardRequest"
-      responses:
-        "200":
-          description: Text written to clipboard successfully
-        "400":
-          $ref: "#/components/responses/BadRequestError"
-        "500":
-          $ref: "#/components/responses/InternalError"
       requestBody:
         required: true
         content:
