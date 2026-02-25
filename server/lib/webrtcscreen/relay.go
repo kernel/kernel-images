@@ -94,7 +94,13 @@ func (r *Relay) ensureRunning() {
 // Start in a loop for automatic reconnection.
 func (r *Relay) Start(ctx context.Context) error {
 	r.mu.Lock()
-	r.ready = make(chan struct{})
+	select {
+	case <-r.ready:
+		// Previous connection closed the channel; create a fresh one.
+		r.ready = make(chan struct{})
+	default:
+		// Channel is still open (first call), keep it.
+	}
 	r.mu.Unlock()
 
 	token, err := r.nekoLogin(ctx)
@@ -124,8 +130,33 @@ func (r *Relay) Start(ctx context.Context) error {
 		r.mu.Unlock()
 	}()
 
-	if err := r.waitForEvent(ctx, ws, "system/init"); err != nil {
+	initPayload, err := r.waitForEvent(ctx, ws, "system/init")
+	if err != nil {
 		return fmt.Errorf("waiting for system/init: %w", err)
+	}
+
+	var initData struct {
+		HeartbeatInterval float64 `json:"heartbeat_interval"`
+	}
+	if initPayload != nil {
+		_ = json.Unmarshal(initPayload, &initData)
+	}
+
+	if initData.HeartbeatInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(time.Duration(initData.HeartbeatInterval * float64(time.Second)))
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := sendWSMsg(ctx, ws, "client/heartbeat", nil); err != nil {
+						return
+					}
+				}
+			}
+		}()
 	}
 
 	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
@@ -502,15 +533,15 @@ func sendWSMsg(ctx context.Context, ws *cws.Conn, event string, payload json.Raw
 	return ws.Write(ctx, cws.MessageText, data)
 }
 
-func (r *Relay) waitForEvent(ctx context.Context, ws *cws.Conn, event string) error {
+func (r *Relay) waitForEvent(ctx context.Context, ws *cws.Conn, event string) (json.RawMessage, error) {
 	for {
 		_, data, err := ws.Read(ctx)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		var msg nekoMsg
 		if json.Unmarshal(data, &msg) == nil && msg.Event == event {
-			return nil
+			return msg.Payload, nil
 		}
 	}
 }
@@ -545,8 +576,6 @@ func (r *Relay) nekoWSLoop(ctx context.Context, ws *cws.Conn, pc *webrtc.PeerCon
 			continue
 		}
 		switch msg.Event {
-		case "system/heartbeat":
-			_ = sendWSMsg(ctx, ws, "client/heartbeat", nil)
 		case "signal/candidate":
 			var candidate webrtc.ICECandidateInit
 			if json.Unmarshal(msg.Payload, &candidate) == nil {
