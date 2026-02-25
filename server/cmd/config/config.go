@@ -21,7 +21,11 @@ type Config struct {
 	PathToFFmpeg string `envconfig:"FFMPEG_PATH" default:"ffmpeg"`
 
 	// DevTools proxy configuration
-	LogCDPMessages bool `envconfig:"LOG_CDP_MESSAGES" default:"false"`
+	DevToolsProxyPort int  `envconfig:"DEVTOOLS_PROXY_PORT" default:"9222"`
+	LogCDPMessages    bool `envconfig:"LOG_CDP_MESSAGES" default:"false"`
+
+	// ChromeDriver proxy: external port where the proxy listens.
+	ChromeDriverProxyPort int `envconfig:"CHROMEDRIVER_PROXY_PORT" default:"9224"`
 }
 
 // Load loads configuration from environment variables

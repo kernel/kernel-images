@@ -143,6 +143,7 @@ cleanup () {
   echo "[wrapper] Cleaning up..."
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
+  supervisorctl -c /etc/supervisor/supervisord.conf stop chromedriver || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop kernel-images-api || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop dbus || true
@@ -241,6 +242,15 @@ API_OUTPUT_DIR="${KERNEL_IMAGES_API_OUTPUT_DIR:-/recordings}"
 
 # Start via supervisord (env overrides are read by the service's command)
 supervisorctl -c /etc/supervisor/supervisord.conf start kernel-images-api
+
+echo "[wrapper] Starting ChromeDriver via supervisord"
+supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
+for i in {1..50}; do
+  if nc -z 127.0.0.1 9225 2>/dev/null; then
+    break
+  fi
+  sleep 0.2
+done
 
 echo "[wrapper] Starting PulseAudio daemon via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start pulseaudio

@@ -184,6 +184,7 @@ cleanup () {
   echo "[wrapper] Cleaning up..."
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
+  supervisorctl -c /etc/supervisor/supervisord.conf stop chromedriver || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop xvfb || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop dbus || true
@@ -243,6 +244,15 @@ API_PORT="${KERNEL_IMAGES_API_PORT:-10001}"
 echo "[wrapper] Waiting for kernel-images API on 127.0.0.1:${API_PORT}..."
 while ! (echo >/dev/tcp/127.0.0.1/"${API_PORT}") >/dev/null 2>&1; do
   sleep 0.5
+done
+
+echo "[wrapper] Starting ChromeDriver via supervisord"
+supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
+for i in {1..50}; do
+  if (echo >/dev/tcp/127.0.0.1/9225) >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
 done
 
 echo "[wrapper] startup complete!"

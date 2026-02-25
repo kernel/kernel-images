@@ -39,6 +39,21 @@ test:
 	go test -v -race $$(go list ./... | grep -v /e2e$$)
 	@echo ""
 	@echo "=== Running e2e tests (testcontainers — this may take a few minutes) ==="
+	@missing=""; \
+	for img in onkernel/chromium-headless-test:latest onkernel/chromium-headful-test:latest; do \
+		age=$$(docker images --format '{{.CreatedSince}}' "$$img" 2>/dev/null); \
+		if [ -n "$$age" ]; then \
+			echo "  $$img — built $$age"; \
+		else \
+			echo "  $$img — not found locally"; \
+			missing="yes"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "  Build with: images/chromium-{headless,headful}/build-docker.sh"; \
+		exit 1; \
+	fi
+	@echo "  Stale? Rebuild: images/chromium-{headless,headful}/build-docker.sh"
 	@echo ""
 	go test -v -race ./e2e/
 
