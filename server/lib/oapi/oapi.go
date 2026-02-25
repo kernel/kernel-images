@@ -170,6 +170,11 @@ type ComputerAction struct {
 // ComputerActionType The type of action to perform.
 type ComputerActionType string
 
+// ClipboardContent defines model for ClipboardContent.
+type ClipboardContent struct {
+	Text string `json:"text"`
+}
+
 // CreateDirectoryRequest defines model for CreateDirectoryRequest.
 type CreateDirectoryRequest struct {
 	// Mode Optional directory mode (octal string, e.g. 755). Defaults to 755.
@@ -659,6 +664,11 @@ type TypeTextRequest struct {
 	Text string `json:"text"`
 }
 
+// WriteClipboardRequest defines model for WriteClipboardRequest.
+type WriteClipboardRequest struct {
+	Text string `json:"text"`
+}
+
 // BadRequestError defines model for BadRequestError.
 type BadRequestError = Error
 
@@ -798,6 +808,9 @@ type BatchComputerActionJSONRequestBody = BatchComputerActionRequest
 
 // ClickMouseJSONRequestBody defines body for ClickMouse for application/json ContentType.
 type ClickMouseJSONRequestBody = ClickMouseRequest
+
+// WriteClipboardJSONRequestBody defines body for WriteClipboard for application/json ContentType.
+type WriteClipboardJSONRequestBody = WriteClipboardRequest
 
 // SetCursorJSONRequestBody defines body for SetCursor for application/json ContentType.
 type SetCursorJSONRequestBody = SetCursorRequest
@@ -967,6 +980,14 @@ type ClientInterface interface {
 	ClickMouseWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	ClickMouse(ctx context.Context, body ClickMouseJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ReadClipboard request
+	ReadClipboard(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// WriteClipboardWithBody request with any body
+	WriteClipboardWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	WriteClipboard(ctx context.Context, body WriteClipboardJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// SetCursorWithBody request with any body
 	SetCursorWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1209,6 +1230,42 @@ func (c *Client) ClickMouseWithBody(ctx context.Context, contentType string, bod
 
 func (c *Client) ClickMouse(ctx context.Context, body ClickMouseJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClickMouseRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ReadClipboard(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewReadClipboardRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) WriteClipboardWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewWriteClipboardRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) WriteClipboard(ctx context.Context, body WriteClipboardJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewWriteClipboardRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2105,6 +2162,73 @@ func NewClickMouseRequestWithBody(server string, contentType string, body io.Rea
 	}
 
 	operationPath := fmt.Sprintf("/computer/click_mouse")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewReadClipboardRequest generates requests for ReadClipboard
+func NewReadClipboardRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/computer/clipboard/read")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewWriteClipboardRequest calls the generic WriteClipboard builder with application/json body
+func NewWriteClipboardRequest(server string, body WriteClipboardJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewWriteClipboardRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewWriteClipboardRequestWithBody generates requests for WriteClipboard with any type of body
+func NewWriteClipboardRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/computer/clipboard/write")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3849,6 +3973,14 @@ type ClientWithResponsesInterface interface {
 
 	ClickMouseWithResponse(ctx context.Context, body ClickMouseJSONRequestBody, reqEditors ...RequestEditorFn) (*ClickMouseResponse, error)
 
+	// ReadClipboardWithResponse request
+	ReadClipboardWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ReadClipboardResponse, error)
+
+	// WriteClipboardWithBodyWithResponse request with any body
+	WriteClipboardWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*WriteClipboardResponse, error)
+
+	WriteClipboardWithResponse(ctx context.Context, body WriteClipboardJSONRequestBody, reqEditors ...RequestEditorFn) (*WriteClipboardResponse, error)
+
 	// SetCursorWithBodyWithResponse request with any body
 	SetCursorWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetCursorResponse, error)
 
@@ -4102,6 +4234,52 @@ func (r ClickMouseResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r ClickMouseResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type ReadClipboardResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *ClipboardContent
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r ReadClipboardResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ReadClipboardResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type WriteClipboardResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON400      *BadRequestError
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r WriteClipboardResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r WriteClipboardResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -5127,6 +5305,32 @@ func (c *ClientWithResponses) ClickMouseWithResponse(ctx context.Context, body C
 	return ParseClickMouseResponse(rsp)
 }
 
+// ReadClipboardWithResponse request returning *ReadClipboardResponse
+func (c *ClientWithResponses) ReadClipboardWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ReadClipboardResponse, error) {
+	rsp, err := c.ReadClipboard(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseReadClipboardResponse(rsp)
+}
+
+// WriteClipboardWithBodyWithResponse request with arbitrary body returning *WriteClipboardResponse
+func (c *ClientWithResponses) WriteClipboardWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*WriteClipboardResponse, error) {
+	rsp, err := c.WriteClipboardWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseWriteClipboardResponse(rsp)
+}
+
+func (c *ClientWithResponses) WriteClipboardWithResponse(ctx context.Context, body WriteClipboardJSONRequestBody, reqEditors ...RequestEditorFn) (*WriteClipboardResponse, error) {
+	rsp, err := c.WriteClipboard(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseWriteClipboardResponse(rsp)
+}
+
 // SetCursorWithBodyWithResponse request with arbitrary body returning *SetCursorResponse
 func (c *ClientWithResponses) SetCursorWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*SetCursorResponse, error) {
 	rsp, err := c.SetCursorWithBody(ctx, contentType, body, reqEditors...)
@@ -5779,6 +5983,72 @@ func ParseClickMouseResponse(rsp *http.Response) (*ClickMouseResponse, error) {
 	}
 
 	response := &ClickMouseResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseReadClipboardResponse parses an HTTP response from a ReadClipboardWithResponse call
+func ParseReadClipboardResponse(rsp *http.Response) (*ReadClipboardResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ReadClipboardResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ClipboardContent
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseWriteClipboardResponse parses an HTTP response from a WriteClipboardWithResponse call
+func ParseWriteClipboardResponse(rsp *http.Response) (*WriteClipboardResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &WriteClipboardResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -7389,6 +7659,12 @@ type ServerInterface interface {
 	// Simulate a mouse click action on the host computer
 	// (POST /computer/click_mouse)
 	ClickMouse(w http.ResponseWriter, r *http.Request)
+	// Read text from the system clipboard
+	// (POST /computer/clipboard/read)
+	ReadClipboard(w http.ResponseWriter, r *http.Request)
+	// Write text to the system clipboard
+	// (POST /computer/clipboard/write)
+	WriteClipboard(w http.ResponseWriter, r *http.Request)
 	// Hide or show the cursor
 	// (POST /computer/cursor)
 	SetCursor(w http.ResponseWriter, r *http.Request)
@@ -7536,6 +7812,18 @@ func (_ Unimplemented) BatchComputerAction(w http.ResponseWriter, r *http.Reques
 // Simulate a mouse click action on the host computer
 // (POST /computer/click_mouse)
 func (_ Unimplemented) ClickMouse(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Read text from the system clipboard
+// (POST /computer/clipboard/read)
+func (_ Unimplemented) ReadClipboard(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Write text to the system clipboard
+// (POST /computer/clipboard/write)
+func (_ Unimplemented) WriteClipboard(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -7835,6 +8123,34 @@ func (siw *ServerInterfaceWrapper) ClickMouse(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClickMouse(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ReadClipboard operation middleware
+func (siw *ServerInterfaceWrapper) ReadClipboard(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReadClipboard(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// WriteClipboard operation middleware
+func (siw *ServerInterfaceWrapper) WriteClipboard(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.WriteClipboard(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8800,6 +9116,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/computer/click_mouse", wrapper.ClickMouse)
 	})
 	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/computer/clipboard/read", wrapper.ReadClipboard)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/computer/clipboard/write", wrapper.WriteClipboard)
+	})
+	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/computer/cursor", wrapper.SetCursor)
 	})
 	r.Group(func(r chi.Router) {
@@ -9061,6 +9383,65 @@ func (response ClickMouse400JSONResponse) VisitClickMouseResponse(w http.Respons
 type ClickMouse500JSONResponse struct{ InternalErrorJSONResponse }
 
 func (response ClickMouse500JSONResponse) VisitClickMouseResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReadClipboardRequestObject struct {
+}
+
+type ReadClipboardResponseObject interface {
+	VisitReadClipboardResponse(w http.ResponseWriter) error
+}
+
+type ReadClipboard200JSONResponse ClipboardContent
+
+func (response ReadClipboard200JSONResponse) VisitReadClipboardResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type ReadClipboard500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response ReadClipboard500JSONResponse) VisitReadClipboardResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WriteClipboardRequestObject struct {
+	Body *WriteClipboardJSONRequestBody
+}
+
+type WriteClipboardResponseObject interface {
+	VisitWriteClipboardResponse(w http.ResponseWriter) error
+}
+
+type WriteClipboard200Response struct {
+}
+
+func (response WriteClipboard200Response) VisitWriteClipboardResponse(w http.ResponseWriter) error {
+	w.WriteHeader(200)
+	return nil
+}
+
+type WriteClipboard400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response WriteClipboard400JSONResponse) VisitWriteClipboardResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type WriteClipboard500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response WriteClipboard500JSONResponse) VisitWriteClipboardResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -10852,6 +11233,12 @@ type StrictServerInterface interface {
 	// Simulate a mouse click action on the host computer
 	// (POST /computer/click_mouse)
 	ClickMouse(ctx context.Context, request ClickMouseRequestObject) (ClickMouseResponseObject, error)
+	// Read text from the system clipboard
+	// (POST /computer/clipboard/read)
+	ReadClipboard(ctx context.Context, request ReadClipboardRequestObject) (ReadClipboardResponseObject, error)
+	// Write text to the system clipboard
+	// (POST /computer/clipboard/write)
+	WriteClipboard(ctx context.Context, request WriteClipboardRequestObject) (WriteClipboardResponseObject, error)
 	// Hide or show the cursor
 	// (POST /computer/cursor)
 	SetCursor(ctx context.Context, request SetCursorRequestObject) (SetCursorResponseObject, error)
@@ -11120,6 +11507,61 @@ func (sh *strictHandler) ClickMouse(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ClickMouseResponseObject); ok {
 		if err := validResponse.VisitClickMouseResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ReadClipboard operation middleware
+func (sh *strictHandler) ReadClipboard(w http.ResponseWriter, r *http.Request) {
+	var request ReadClipboardRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReadClipboard(ctx, request.(ReadClipboardRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReadClipboard")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReadClipboardResponseObject); ok {
+		if err := validResponse.VisitReadClipboardResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// WriteClipboard operation middleware
+func (sh *strictHandler) WriteClipboard(w http.ResponseWriter, r *http.Request) {
+	var request WriteClipboardRequestObject
+
+	var body WriteClipboardJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.WriteClipboard(ctx, request.(WriteClipboardRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "WriteClipboard")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(WriteClipboardResponseObject); ok {
+		if err := validResponse.VisitWriteClipboardResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
