@@ -31,10 +31,6 @@ type Config struct {
 	// DevTools proxy address passed to ChromeDriver as goog:chromeOptions.debuggerAddress.
 	// If empty, it is derived from DevToolsProxyPort as 127.0.0.1:<port>.
 	DevToolsProxyAddr string `envconfig:"DEVTOOLS_PROXY_ADDR" default:""`
-
-	// WebRTC relay: connects to Neko internally and re-serves the video
-	// stream to external WebRTC clients via /display/webrtc.
-	WebRTCRelayEnabled bool `envconfig:"WEBRTC_RELAY_ENABLED" default:"true"`
 }
 
 // Load loads configuration from environment variables
