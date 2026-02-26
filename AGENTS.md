@@ -42,3 +42,7 @@ The Cloud VM runs inside a Firecracker microVM. Docker requires:
 8. **E2e tests** use `testcontainers-go` and require Docker + pre-built images. Set `E2E_CHROMIUM_HEADFUL_IMAGE` and `E2E_CHROMIUM_HEADLESS_IMAGE` env vars to point to the correct image tags.
 
 9. **Go version**: The project requires Go 1.25.0 (per `server/go.mod`). The system Go may be older — ensure `/usr/local/go/bin` is on PATH.
+
+10. **Build headful image**: `cd /workspace && DOCKER_BUILDKIT=1 docker build -f images/chromium-headful/Dockerfile -t kernel-headful-test .` — this takes significantly longer than headless (~10 min) due to Xorg dependencies, Mutter, and the WebRTC client build. The headful `run-docker.sh` runs interactively (`-it`); for background use, run with `-d` instead.
+
+11. **`/process/exec` API schema**: The `command` field is a single string (the binary name), not an array. Arguments go in the separate `args` array field. Response `stdout_b64` / `stderr_b64` are base64-encoded.
