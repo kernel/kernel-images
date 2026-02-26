@@ -169,6 +169,43 @@ func TestDisplayResolutionChange(t *testing.T) {
 	t.Log("all resolution changes verified successfully")
 }
 
+func TestClipboardHeadless(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
+
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	specResp, err := http.Get(c.APIBaseURL() + "/spec.yaml")
+	require.NoError(t, err)
+	specBody, _ := io.ReadAll(specResp.Body)
+	specResp.Body.Close()
+	require.True(t, strings.Contains(string(specBody), "/computer/clipboard/write"),
+		"API spec does not include clipboard routes - rebuild the image with: cd kernel-images/images/chromium-headless && docker build --no-cache -f image/Dockerfile -t %s ../..", headlessImage)
+
+	client, err := c.APIClient()
+	require.NoError(t, err, "failed to create API client")
+
+	writeResp, err := client.WriteClipboardWithResponse(ctx, instanceoapi.WriteClipboardRequest{Text: "e2e-clipboard-test"})
+	require.NoError(t, err, "WriteClipboard request failed")
+	require.Equal(t, http.StatusOK, writeResp.StatusCode(), "unexpected write status: %s body=%s", writeResp.Status(), string(writeResp.Body))
+
+	readResp, err := client.ReadClipboardWithResponse(ctx)
+	require.NoError(t, err, "ReadClipboard request failed")
+	require.Equal(t, http.StatusOK, readResp.StatusCode(), "unexpected read status: %s body=%s", readResp.Status(), string(readResp.Body))
+	require.NotNil(t, readResp.JSON200, "expected JSON200 response")
+	require.Equal(t, "e2e-clipboard-test", readResp.JSON200.Text, "clipboard content mismatch")
+}
+
 func TestExtensionUploadAndActivation(t *testing.T) {
 	t.Parallel()
 	ensurePlaywrightDeps(t)
