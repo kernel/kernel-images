@@ -1136,6 +1136,54 @@ func clampPoints(points [][2]int, screenWidth, screenHeight int) {
 	}
 }
 
+func (s *ApiService) ReadClipboard(ctx context.Context, request oapi.ReadClipboardRequestObject) (oapi.ReadClipboardResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+
+	display := s.resolveDisplayFromEnv()
+	cmd := exec.CommandContext(ctx, "xclip", "-selection", "clipboard", "-o")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=%s", display))
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return oapi.ReadClipboard200JSONResponse{Text: ""}, nil
+		}
+		log.Error("xclip read failed", "err", err)
+		return oapi.ReadClipboard500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+			Message: fmt.Sprintf("failed to read clipboard: %v", err)},
+		}, nil
+	}
+	return oapi.ReadClipboard200JSONResponse{Text: string(output)}, nil
+}
+
+func (s *ApiService) WriteClipboard(ctx context.Context, request oapi.WriteClipboardRequestObject) (oapi.WriteClipboardResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+
+	if request.Body == nil {
+		return oapi.WriteClipboard400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
+			Message: "request body is required"},
+		}, nil
+	}
+
+	display := s.resolveDisplayFromEnv()
+	cmd := exec.CommandContext(ctx, "xclip", "-selection", "clipboard")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=%s", display))
+	cmd.Stdin = strings.NewReader(request.Body.Text)
+	if err := cmd.Run(); err != nil {
+		log.Error("xclip write failed", "err", err)
+		return oapi.WriteClipboard500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+			Message: fmt.Sprintf("failed to write to clipboard: %v", err)},
+		}, nil
+	}
+	return oapi.WriteClipboard200Response{}, nil
+}
+
 // generateRelativeSteps produces a sequence of relative steps that approximate a
 // straight line from (0,0) to (dx,dy) using at most the provided number of
 // steps. Each returned element is a pair {stepX, stepY}. The steps are

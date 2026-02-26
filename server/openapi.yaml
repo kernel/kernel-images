@@ -497,7 +497,37 @@ paths:
               $ref: "#/components/schemas/BatchComputerActionRequest"
       responses:
         "200":
-          description: All actions executed successfully
+          description: Batch executed successfully
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /computer/clipboard/read:
+    post:
+      summary: Read text from the system clipboard
+      operationId: readClipboard
+      responses:
+        "200":
+          description: Clipboard content read successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClipboardContent"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /computer/clipboard/write:
+    post:
+      summary: Write text to the system clipboard
+      operationId: writeClipboard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WriteClipboardRequest"
+      responses:
+        "200":
+          description: Text written to clipboard successfully
         "400":
           $ref: "#/components/responses/BadRequestError"
         "500":
@@ -1303,6 +1333,24 @@ components:
           description: Delay in milliseconds between keystrokes
           minimum: 0
           default: 0
+      additionalProperties: false
+    ClipboardContent:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Current clipboard text content
+      additionalProperties: false
+    WriteClipboardRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to write to the system clipboard
       additionalProperties: false
     PressKeyRequest:
       type: object
