@@ -62,6 +62,7 @@ func main() {
 		"--user-data-dir=/home/kernel/user-data",
 		"--password-store=basic",
 		"--no-first-run",
+		"--disable-features=WebAuthenticationConditionalUI",
 	}
 	if *headless {
 		chromiumArgs = append([]string{"--headless=new"}, chromiumArgs...)
