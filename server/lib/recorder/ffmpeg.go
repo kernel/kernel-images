@@ -173,13 +173,6 @@ func (p FFmpegRecordingParams) clone() FFmpegRecordingParams {
 	return c
 }
 
-// OutputPath returns the filesystem path where the recording is stored.
-func (fr *FFmpegRecorder) OutputPath() string {
-	fr.mu.Lock()
-	defer fr.mu.Unlock()
-	return fr.outputPath
-}
-
 // Start begins the recording process by launching ffmpeg with the configured parameters.
 func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	log := logger.FromContext(ctx)

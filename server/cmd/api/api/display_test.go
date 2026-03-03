@@ -2,9 +2,7 @@ package api
 
 import (
 	"context"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -38,7 +36,7 @@ func newTestServiceWithFactory(t *testing.T, mgr recorder.RecordManager, factory
 }
 
 func TestStopActiveRecordings(t *testing.T) {
-	t.Run("stops and deregisters active recording", func(t *testing.T) {
+	t.Run("stops recording but keeps it registered", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		factory := testFFmpegFactory(t, tempDir)
@@ -57,10 +55,10 @@ func TestStopActiveRecordings(t *testing.T) {
 		require.Len(t, stopped, 1)
 		assert.Equal(t, "test-rec", stopped[0].id)
 		assert.NotNil(t, stopped[0].params.FrameRate)
-		assert.Equal(t, filepath.Join(tempDir, "test-rec.mp4"), stopped[0].outputPath)
 
-		_, exists := mgr.GetRecorder("test-rec")
-		assert.False(t, exists, "recorder should be deregistered after stop")
+		oldRec, exists := mgr.GetRecorder("test-rec")
+		assert.True(t, exists, "old recorder should remain registered")
+		assert.False(t, oldRec.IsRecording(ctx), "old recorder should be stopped")
 	})
 
 	t.Run("stops multiple active recordings", func(t *testing.T) {
@@ -83,14 +81,10 @@ func TestStopActiveRecordings(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, stopped, 2)
 
-		stoppedIDs := map[string]bool{}
-		for _, s := range stopped {
-			stoppedIDs[s.id] = true
-		}
 		for _, id := range ids {
-			assert.True(t, stoppedIDs[id], "recording %s should have been stopped", id)
-			_, exists := mgr.GetRecorder(id)
-			assert.False(t, exists, "recorder %s should be deregistered", id)
+			oldRec, exists := mgr.GetRecorder(id)
+			assert.True(t, exists, "recorder %s should remain registered", id)
+			assert.False(t, oldRec.IsRecording(ctx), "recorder %s should be stopped", id)
 		}
 	})
 
@@ -125,16 +119,13 @@ func TestStopActiveRecordings(t *testing.T) {
 	})
 }
 
-func TestRestartRecordings(t *testing.T) {
-	t.Run("renames old file and starts new recording", func(t *testing.T) {
+func TestStartNewRecordingSegments(t *testing.T) {
+	t.Run("creates new segment with suffixed ID", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		factory := testFFmpegFactory(t, tempDir)
 		mgr := recorder.NewFFmpegManager()
 		svc := newTestServiceWithFactory(t, mgr, factory)
-
-		outputPath := filepath.Join(tempDir, "test-rec.mp4")
-		require.NoError(t, os.WriteFile(outputPath, []byte("fake video data"), 0644))
 
 		fr := 5
 		disp := 0
@@ -147,33 +138,30 @@ func TestRestartRecordings(t *testing.T) {
 				MaxSizeInMB: &size,
 				OutputDir:   &tempDir,
 			},
-			outputPath: outputPath,
 		}
 
-		svc.restartRecordings(ctx, []stoppedRecordingInfo{info})
+		svc.startNewRecordingSegments(ctx, []stoppedRecordingInfo{info})
 
-		entries, err := os.ReadDir(tempDir)
-		require.NoError(t, err)
+		// The new recorder should have a suffixed ID, not the original
+		_, existsOld := mgr.GetRecorder("test-rec")
+		assert.False(t, existsOld, "original ID should not be re-registered")
 
-		foundRenamed := false
-		for _, e := range entries {
-			if strings.Contains(e.Name(), "before-resize") {
-				foundRenamed = true
-				data, readErr := os.ReadFile(filepath.Join(tempDir, e.Name()))
-				require.NoError(t, readErr)
-				assert.Equal(t, []byte("fake video data"), data)
+		// Find the new segment by iterating active recorders
+		var newRec recorder.Recorder
+		for _, r := range mgr.ListActiveRecorders(ctx) {
+			if r.IsRecording(ctx) {
+				newRec = r
+				break
 			}
 		}
-		assert.True(t, foundRenamed, "pre-resize recording should be preserved with renamed file")
+		require.NotNil(t, newRec, "a new recording segment should be active")
+		assert.Contains(t, newRec.ID(), "test-rec-", "new ID should be prefixed with the original ID")
+		assert.True(t, newRec.IsRecording(ctx))
 
-		rec, exists := mgr.GetRecorder("test-rec")
-		require.True(t, exists, "restarted recorder should be registered")
-		assert.True(t, rec.IsRecording(ctx), "restarted recorder should be recording")
-
-		_ = rec.Stop(ctx)
+		_ = newRec.Stop(ctx)
 	})
 
-	t.Run("starts recording even when no old file exists", func(t *testing.T) {
+	t.Run("starts segment even when no old recorder exists in manager", func(t *testing.T) {
 		ctx := context.Background()
 		tempDir := t.TempDir()
 		factory := testFFmpegFactory(t, tempDir)
@@ -191,20 +179,25 @@ func TestRestartRecordings(t *testing.T) {
 				MaxSizeInMB: &size,
 				OutputDir:   &tempDir,
 			},
-			outputPath: filepath.Join(tempDir, "fresh-rec.mp4"),
 		}
 
-		svc.restartRecordings(ctx, []stoppedRecordingInfo{info})
+		svc.startNewRecordingSegments(ctx, []stoppedRecordingInfo{info})
 
-		rec, exists := mgr.GetRecorder("fresh-rec")
-		require.True(t, exists, "recorder should be registered")
-		assert.True(t, rec.IsRecording(ctx))
+		var newRec recorder.Recorder
+		for _, r := range mgr.ListActiveRecorders(ctx) {
+			if r.IsRecording(ctx) {
+				newRec = r
+				break
+			}
+		}
+		require.NotNil(t, newRec, "new segment should be active")
+		assert.Contains(t, newRec.ID(), "fresh-rec-")
 
-		_ = rec.Stop(ctx)
+		_ = newRec.Stop(ctx)
 	})
 }
 
-func TestStopAndRestartRecordings_RoundTrip(t *testing.T) {
+func TestStopAndStartNewSegment_RoundTrip(t *testing.T) {
 	ctx := context.Background()
 	tempDir := t.TempDir()
 	factory := testFFmpegFactory(t, tempDir)
@@ -219,23 +212,36 @@ func TestStopAndRestartRecordings_RoundTrip(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	require.True(t, rec.IsRecording(ctx))
 
-	// Stop all active recordings
+	// Stop active recordings (simulating resize)
 	stopped, err := svc.stopActiveRecordings(ctx)
 	require.NoError(t, err)
 	require.Len(t, stopped, 1)
 	assert.Equal(t, "round-trip", stopped[0].id)
 
-	// Verify the recorder was deregistered
-	_, exists := mgr.GetRecorder("round-trip")
-	require.False(t, exists)
+	// Old recorder should still be registered but stopped
+	oldRec, exists := mgr.GetRecorder("round-trip")
+	require.True(t, exists, "old recorder should remain registered")
+	assert.False(t, oldRec.IsRecording(ctx), "old recorder should be stopped")
 
-	// Restart recordings
-	svc.restartRecordings(ctx, stopped)
+	// Start new segments
+	svc.startNewRecordingSegments(ctx, stopped)
 
-	// Verify the recording resumed with the same ID
-	newRec, exists := mgr.GetRecorder("round-trip")
-	require.True(t, exists, "recorder should be re-registered after restart")
-	assert.True(t, newRec.IsRecording(ctx), "recorder should be actively recording")
+	// Old recorder should still be there
+	oldRec2, exists := mgr.GetRecorder("round-trip")
+	require.True(t, exists, "old recorder should still be registered after new segment starts")
+	assert.False(t, oldRec2.IsRecording(ctx))
+
+	// New recorder should be active with a different ID
+	var newRec recorder.Recorder
+	for _, r := range mgr.ListActiveRecorders(ctx) {
+		if r.ID() != "round-trip" && r.IsRecording(ctx) {
+			newRec = r
+			break
+		}
+	}
+	require.NotNil(t, newRec, "new segment recorder should exist")
+	assert.Contains(t, newRec.ID(), "round-trip-", "new ID should be suffixed")
+	assert.True(t, newRec.IsRecording(ctx))
 
 	_ = newRec.Stop(ctx)
 }

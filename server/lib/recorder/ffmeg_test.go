@@ -68,20 +68,6 @@ func TestFFmpegRecorder_Params(t *testing.T) {
 	assert.Equal(t, *params.OutputDir, *got.OutputDir)
 }
 
-func TestFFmpegRecorder_OutputPath(t *testing.T) {
-	tempDir := t.TempDir()
-	expected := filepath.Join(tempDir, "path-test.mp4")
-	rec := &FFmpegRecorder{
-		id:         "path-test",
-		binaryPath: mockBin,
-		params:     defaultParams(tempDir),
-		outputPath: expected,
-		stz:        scaletozero.NewOncer(scaletozero.NewNoopController()),
-	}
-
-	assert.Equal(t, expected, rec.OutputPath())
-}
-
 func TestFFmpegRecorder_ForceStop(t *testing.T) {
 	tempDir := t.TempDir()
 	rec := &FFmpegRecorder{
