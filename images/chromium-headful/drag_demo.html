@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Drag Movement Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d0d;
+    width: 1920px; height: 1080px;
+    overflow: hidden;
+    font-family: 'Segoe UI', sans-serif;
+    color: #fff;
+    user-select: none;
+  }
+  canvas { position: fixed; top: 0; left: 0; pointer-events: none; z-index: 10; }
+
+  #mode-label {
+    position: fixed;
+    top: 40px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 36px;
+    font-weight: 700;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    padding: 12px 40px;
+    border-radius: 8px;
+    background: rgba(255,255,255,0.07);
+    border: 2px solid rgba(255,255,255,0.15);
+    transition: color 0.3s, border-color 0.3s;
+    z-index: 20;
+  }
+  #mode-label.smooth { color: #4af; border-color: #4af; }
+  #mode-label.linear { color: #f64; border-color: #f64; }
+
+  #draggable {
+    position: absolute;
+    width: 70px; height: 70px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #6cf, #28a);
+    border: 3px solid #fff;
+    box-shadow: 0 0 30px rgba(68,170,255,0.5), 0 0 60px rgba(68,170,255,0.2);
+    cursor: grab;
+    z-index: 15;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 700;
+    transition: box-shadow 0.2s;
+  }
+  #draggable.dragging {
+    cursor: grabbing;
+    box-shadow: 0 0 50px rgba(68,170,255,0.8), 0 0 100px rgba(68,170,255,0.3);
+  }
+
+  .waypoint {
+    position: absolute;
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    border: 2px solid rgba(255,255,255,0.25);
+    transform: translate(-12px, -12px);
+    z-index: 5;
+  }
+  .waypoint .label {
+    position: absolute;
+    top: -22px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+    white-space: nowrap;
+  }
+  .waypoint.visited {
+    border-color: rgba(68,170,255,0.6);
+    background: rgba(68,170,255,0.15);
+  }
+  .waypoint.visited-linear {
+    border-color: rgba(255,100,60,0.6);
+    background: rgba(255,100,60,0.15);
+  }
+
+  #cmd-log {
+    position: fixed;
+    bottom: 40px;
+    left: 48px;
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    line-height: 1.6;
+    color: #ffffff;
+    pointer-events: none;
+    background: rgba(10, 10, 30, 0.92);
+    border: 2px solid rgba(255, 255, 255, 0.5);
+    border-radius: 10px;
+    padding: 16px 24px;
+    min-width: 420px;
+    white-space: pre;
+    z-index: 9999;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+<div id="mode-label" class="smooth">Smooth Drag — Bézier</div>
+<div id="draggable">⬤</div>
+<div id="cmd-log"></div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = 1920;
+canvas.height = 1080;
+
+const ball = document.getElementById('draggable');
+let mode = 'smooth';
+let isDragging = false;
+
+// Persistent path lines: each entry is { points: [{x,y}], color, mode }
+let paths = [];
+let currentPath = null;
+
+function positionBall(x, y) {
+  ball.style.left = (x - 35) + 'px';
+  ball.style.top = (y - 35) + 'px';
+}
+
+document.addEventListener('mousedown', e => {
+  isDragging = true;
+  ball.classList.add('dragging');
+  const color = mode === 'smooth' ? 'rgba(68,170,255,' : 'rgba(255,100,60,';
+  currentPath = { points: [{ x: e.clientX, y: e.clientY }], color, mode };
+  positionBall(e.clientX, e.clientY);
+});
+
+document.addEventListener('mousemove', e => {
+  if (!isDragging) return;
+  positionBall(e.clientX, e.clientY);
+  if (currentPath) {
+    currentPath.points.push({ x: e.clientX, y: e.clientY });
+  }
+});
+
+document.addEventListener('mouseup', e => {
+  isDragging = false;
+  ball.classList.remove('dragging');
+  if (currentPath && currentPath.points.length > 1) {
+    paths.push(currentPath);
+  }
+  currentPath = null;
+});
+
+// Event API for test script
+document.addEventListener('kernel-cmd', e => {
+  document.getElementById('cmd-log').textContent = e.detail;
+});
+document.addEventListener('kernel-mode', e => {
+  window.setMode(e.detail);
+});
+document.addEventListener('kernel-clear', () => {
+  paths = [];
+  currentPath = null;
+  document.querySelectorAll('.waypoint').forEach(w => w.remove());
+});
+document.addEventListener('kernel-waypoints', e => {
+  const wp = e.detail;
+  document.querySelectorAll('.waypoint').forEach(w => w.remove());
+  wp.forEach((p, i) => {
+    const div = document.createElement('div');
+    div.className = 'waypoint';
+    div.id = 'wp-' + i;
+    div.style.left = p[0] + 'px';
+    div.style.top = p[1] + 'px';
+    const label = document.createElement('span');
+    label.className = 'label';
+    label.textContent = String.fromCharCode(65 + i);
+    div.appendChild(label);
+    document.body.appendChild(div);
+  });
+});
+document.addEventListener('kernel-visit', e => {
+  const el = document.getElementById('wp-' + e.detail.index);
+  if (el) el.classList.add(e.detail.mode === 'smooth' ? 'visited' : 'visited-linear');
+});
+document.addEventListener('kernel-ball', e => {
+  positionBall(e.detail.x, e.detail.y);
+});
+
+window.setMode = function(m) {
+  mode = m;
+  const el = document.getElementById('mode-label');
+  if (m === 'smooth') {
+    el.textContent = 'Smooth Drag — Bézier Curves';
+    el.className = 'smooth';
+  } else {
+    el.textContent = 'Linear Drag — Straight Lines';
+    el.className = 'linear';
+  }
+};
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Draw persistent completed paths
+  for (const path of paths) {
+    if (path.points.length < 2) continue;
+    ctx.beginPath();
+    ctx.moveTo(path.points[0].x, path.points[0].y);
+    for (let i = 1; i < path.points.length; i++) {
+      ctx.lineTo(path.points[i].x, path.points[i].y);
+    }
+    ctx.strokeStyle = path.color + '0.7)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Glow
+    ctx.strokeStyle = path.color + '0.15)';
+    ctx.lineWidth = 12;
+    ctx.stroke();
+  }
+
+  // Draw active path
+  if (currentPath && currentPath.points.length > 1) {
+    ctx.beginPath();
+    ctx.moveTo(currentPath.points[0].x, currentPath.points[0].y);
+    for (let i = 1; i < currentPath.points.length; i++) {
+      ctx.lineTo(currentPath.points[i].x, currentPath.points[i].y);
+    }
+    ctx.strokeStyle = currentPath.color + '0.9)';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+    ctx.strokeStyle = currentPath.color + '0.2)';
+    ctx.lineWidth = 14;
+    ctx.stroke();
+  }
+
+  // Cursor glow when dragging
+  if (isDragging) {
+    const bx = parseInt(ball.style.left) + 35;
+    const by = parseInt(ball.style.top) + 35;
+    const color = mode === 'smooth' ? '68,170,255' : '255,100,60';
+    const g = ctx.createRadialGradient(bx, by, 0, bx, by, 50);
+    g.addColorStop(0, `rgba(${color},0.3)`);
+    g.addColorStop(1, `rgba(${color},0)`);
+    ctx.beginPath();
+    ctx.arc(bx, by, 50, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+  }
+
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+</body>
+</html>

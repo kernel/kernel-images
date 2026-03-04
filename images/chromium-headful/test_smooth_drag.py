@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Demo: smooth Bezier drag_mouse vs linear drag_mouse.
-Uploads a custom HTML page with a glowing cursor trail,
-navigates the browser to it, records smooth then linear drags.
+Drags a ball element through waypoints, drawing persistent path lines
+to visually compare Bezier curves vs straight-line interpolation.
 """
 
 import json
@@ -11,15 +11,14 @@ import urllib.request
 import urllib.parse
 import os
 
-BASE_URL = os.environ.get("BASE_URL", "https://mammary-unhorizontal-beula.ngrok-free.dev")
+BASE_URL = os.environ.get("BASE_URL", "http://localhost:444")
 REC_ID = f"smooth-drag-demo-{int(time.time())}"
 OUTPUT_FILE = "smooth_drag_demo.mp4"
-HTML_PATH = "/tmp/cursor_demo.html"
+HTML_PATH = "/tmp/drag_demo.html"
 HEADERS = {"Content-Type": "application/json", "ngrok-skip-browser-warning": "1"}
 
 BROWSER_CHROME_Y = 80
 
-# Drag path through the target circles
 DRAG_PATH = [
     [240,  240 + BROWSER_CHROME_Y],
     [940,  190 + BROWSER_CHROME_Y],
@@ -30,8 +29,6 @@ DRAG_PATH = [
     [540,  520 + BROWSER_CHROME_Y],
     [1440, 520 + BROWSER_CHROME_Y],
 ]
-
-TARGET_IDS = ["t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7"]
 
 
 def post(path, body=None):
@@ -74,10 +71,14 @@ def write_file(remote_path, local_path):
         return e.code, e.read()
 
 
-def drag(path, smooth, duration_ms=None, show=True):
+def drag(path, smooth, duration_ms=None, steps_per_segment=None, step_delay_ms=None, show=True):
     body = {"path": path, "smooth": smooth}
     if duration_ms is not None:
         body["duration_ms"] = duration_ms
+    if steps_per_segment is not None:
+        body["steps_per_segment"] = steps_per_segment
+    if step_delay_ms is not None:
+        body["step_delay_ms"] = step_delay_ms
     if show:
         cmd_text = f"POST /computer/drag_mouse\n{json.dumps(body, indent=2)}"
         run_js("kernel-cmd", cmd_text)
@@ -107,7 +108,7 @@ def run_js(event, detail):
 
 
 # ── Upload HTML page ─────────────────────────────────────────────────────────
-html_file = os.path.join(os.path.dirname(__file__), "cursor_demo.html")
+html_file = os.path.join(os.path.dirname(__file__), "drag_demo.html")
 print(f"Uploading {html_file} -> {HTML_PATH} ...")
 status, body = write_file(HTML_PATH, html_file)
 print(f"  HTTP {status}: {body.decode() or '(empty)'}")
@@ -119,6 +120,18 @@ if status not in (200, 201):
 print("Navigating to demo page...")
 navigate_to(f"file://{HTML_PATH}")
 
+# ── Show waypoint markers ────────────────────────────────────────────────────
+# Waypoints use viewport coordinates (subtract browser chrome offset)
+VIEWPORT_PATH = [[p[0], p[1] - BROWSER_CHROME_Y] for p in DRAG_PATH]
+print("Placing waypoint markers...")
+run_js("kernel-waypoints", VIEWPORT_PATH)
+time.sleep(0.5)
+
+# ── Position ball at start ───────────────────────────────────────────────────
+run_js("kernel-ball", {"x": VIEWPORT_PATH[0][0], "y": VIEWPORT_PATH[0][1]})
+move(DRAG_PATH[0][0], DRAG_PATH[0][1], smooth=False)
+time.sleep(0.5)
+
 # ── Start recording ──────────────────────────────────────────────────────────
 print("Starting recording...")
 status, body = post("/recording/start", {"id": REC_ID, "framerate": 30})
@@ -127,7 +140,7 @@ if status not in (200, 201):
     print("Failed to start recording, aborting.")
     exit(1)
 
-time.sleep(0.5)
+time.sleep(1.0)
 
 # ── Part 1: smooth Bezier drag ───────────────────────────────────────────────
 print("\n[SMOOTH] Bézier curve drag:")
@@ -135,38 +148,28 @@ run_js("kernel-mode", "smooth")
 move(DRAG_PATH[0][0], DRAG_PATH[0][1], smooth=False)
 time.sleep(0.5)
 
-print(f"  Dragging through {len(DRAG_PATH)} waypoints (smooth=true, duration_ms=5000)")
-drag(DRAG_PATH, smooth=True, duration_ms=5000)
+print(f"  Dragging through {len(DRAG_PATH)} waypoints (smooth=true, duration_ms=6000)")
+drag(DRAG_PATH, smooth=True, duration_ms=6000)
 
-for tid in TARGET_IDS:
-    run_js("kernel-hit", {"id": tid, "mode": "smooth"})
-
-time.sleep(1.5)
+for i in range(len(DRAG_PATH)):
+    run_js("kernel-visit", {"index": i, "mode": "smooth"})
+time.sleep(2.0)
 
 # ── Part 2: linear drag ─────────────────────────────────────────────────────
 print("\n[LINEAR] Linear interpolation drag:")
-run_js("kernel-mode", "instant")
+run_js("kernel-clear", None)
+run_js("kernel-waypoints", VIEWPORT_PATH)
+run_js("kernel-mode", "linear")
+run_js("kernel-ball", {"x": VIEWPORT_PATH[0][0], "y": VIEWPORT_PATH[0][1]})
 move(DRAG_PATH[0][0], DRAG_PATH[0][1], smooth=False)
-time.sleep(0.5)
-
-print(f"  Dragging through {len(DRAG_PATH)} waypoints (smooth=false, steps_per_segment=20, step_delay_ms=30)")
-body = {
-    "path": DRAG_PATH,
-    "smooth": False,
-    "steps_per_segment": 20,
-    "step_delay_ms": 30,
-}
-cmd_text = f"POST /computer/drag_mouse\n{json.dumps(body, indent=2)}"
-run_js("kernel-cmd", cmd_text)
-time.sleep(0.3)
-status, resp = post("/computer/drag_mouse", body)
-if status != 200:
-    print(f"  WARNING: drag_mouse returned HTTP {status}: {resp.decode()}")
-
-for tid in TARGET_IDS:
-    run_js("kernel-hit", {"id": tid, "mode": "instant"})
-
 time.sleep(1.0)
+
+print(f"  Dragging through {len(DRAG_PATH)} waypoints (smooth=false, steps_per_segment=30, step_delay_ms=20)")
+drag(DRAG_PATH, smooth=False, steps_per_segment=30, step_delay_ms=20)
+
+for i in range(len(DRAG_PATH)):
+    run_js("kernel-visit", {"index": i, "mode": "linear"})
+time.sleep(2.0)
 
 # ── Stop recording ───────────────────────────────────────────────────────────
 print("\nStopping recording...")

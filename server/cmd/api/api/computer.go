@@ -907,7 +907,7 @@ func (s *ApiService) doDragMouse(ctx context.Context, body oapi.DragMouseRequest
 	}
 
 	// Phase 2: move along path
-	useSmooth := body.Smooth != nil && *body.Smooth
+	useSmooth := body.Smooth == nil || *body.Smooth
 	if useSmooth {
 		if err := s.doDragMouseSmooth(ctx, log, body, btn, screenWidth, screenHeight); err != nil {
 			argsCleanup := []string{"mouseup", btn}
