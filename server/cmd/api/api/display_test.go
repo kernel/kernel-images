@@ -361,6 +361,32 @@ func TestAdjustParamsForRemainingBudget(t *testing.T) {
 		assert.Equal(t, 1, *adjusted.MaxSizeInMB)
 	})
 
+	t.Run("rounds up fractional MB when computing consumed size", func(t *testing.T) {
+		maxSize := 10
+		fr := 5
+		disp := 0
+		dir := t.TempDir()
+
+		segmentFile := filepath.Join(dir, "frac-test.mp4")
+		data := make([]byte, 3*1024*1024+512*1024) // 3.5 MB → rounds up to 4 MB consumed
+		require.NoError(t, os.WriteFile(segmentFile, data, 0644))
+
+		info := stoppedRecordingInfo{
+			id: "frac-test",
+			params: recorder.FFmpegRecordingParams{
+				FrameRate:   &fr,
+				DisplayNum:  &disp,
+				MaxSizeInMB: &maxSize,
+				OutputDir:   &dir,
+			},
+			metadata: &recorder.RecordingMetadata{},
+		}
+
+		adjusted := adjustParamsForRemainingBudget(log, info)
+		require.NotNil(t, adjusted.MaxSizeInMB)
+		assert.Equal(t, 6, *adjusted.MaxSizeInMB) // 10 - 4 = 6
+	})
+
 	t.Run("no adjustment when limits are nil", func(t *testing.T) {
 		fr := 5
 		disp := 0

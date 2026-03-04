@@ -84,11 +84,9 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	}
 
 	// Gracefully stop active recordings so the resize can proceed.
-	// New recording segments (with unique IDs) will be started after the resize.
+	// New recording segments (with unique IDs) will be started only after a
+	// successful resize to avoid restarting at the old resolution on error paths.
 	stopped, stopErr := s.stopActiveRecordings(ctx)
-	if len(stopped) > 0 {
-		defer s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
-	}
 	if stopErr != nil {
 		log.Error("failed to stop recordings for resize", "error", stopErr)
 		return oapi.PatchDisplay500JSONResponse{
@@ -133,6 +131,11 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				Message: fmt.Sprintf("failed to change resolution: %s", err.Error()),
 			},
 		}, nil
+	}
+
+	// Resize succeeded — restart recording segments at the new resolution.
+	if len(stopped) > 0 {
+		go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
 	}
 
 	// Return success with the new dimensions
@@ -453,7 +456,7 @@ func adjustParamsForRemainingBudget(log *slog.Logger, info stoppedRecordingInfo)
 	if params.MaxSizeInMB != nil && params.OutputDir != nil {
 		segmentPath := filepath.Join(*params.OutputDir, info.id+".mp4")
 		if fi, err := os.Stat(segmentPath); err == nil {
-			consumedMB := int(fi.Size() / (1024 * 1024))
+			consumedMB := int((fi.Size() + 1024*1024 - 1) / (1024 * 1024))
 			remaining := *params.MaxSizeInMB - consumedMB
 			if remaining < 1 {
 				remaining = 1
