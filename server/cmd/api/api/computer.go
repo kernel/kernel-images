@@ -1012,42 +1012,61 @@ func (s *ApiService) doDragMouseSmooth(ctx context.Context, log *slog.Logger, bo
 
 	result := mousetrajectory.GenerateMultiSegmentTrajectory(waypoints, screenWidth, screenHeight, body.DurationMs)
 	points := result.Points
-	stepDelayMs := result.StepDelayMs
+	baseDelayMs := result.StepDelayMs
 
 	if len(points) < 2 {
 		return nil
 	}
 
-	for i := 1; i < len(points); i++ {
-		select {
-		case <-ctx.Done():
-			return &executionError{msg: "drag movement cancelled"}
-		default:
-		}
+	numSteps := len(points) - 1
 
+	// Build a single xdotool arg slice with inline sleep directives.
+	// Use smoothstep easing: slow at start (pickup) and end (placement),
+	// fast in the middle, matching natural human drag behavior.
+	args := []string{}
+	for i := 1; i <= numSteps; i++ {
 		dx := points[i][0] - points[i-1][0]
 		dy := points[i][1] - points[i-1][1]
-		if dx != 0 || dy != 0 {
-			args := []string{"mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy)}
-			if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
-				log.Error("xdotool mousemove_relative failed", "err", err, "output", string(output), "step", i)
-				return &executionError{msg: "failed during smooth drag movement"}
-			}
+		if dx == 0 && dy == 0 {
+			continue
 		}
-		jitter := stepDelayMs
-		if stepDelayMs > 3 {
-			jitter = stepDelayMs + rand.Intn(5) - 2
+		args = append(args, "mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy))
+
+		if i < numSteps {
+			delay := smoothStepDelay(i, numSteps, baseDelayMs*2, baseDelayMs/2)
+			jitter := delay + rand.Intn(5) - 2
 			if jitter < 3 {
 				jitter = 3
 			}
+			args = append(args, "sleep", fmt.Sprintf("%.3f", float64(jitter)/1000.0))
 		}
-		if err := sleepWithContext(ctx, time.Duration(jitter)*time.Millisecond); err != nil {
-			return &executionError{msg: "drag movement cancelled"}
+	}
+
+	if len(args) > 0 {
+		log.Info("executing xdotool (smooth drag move)", "steps", numSteps, "segments", len(body.Path)-1)
+		if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+			log.Error("xdotool smooth drag move failed", "err", err, "output", string(output))
+			return &executionError{msg: "failed during smooth drag movement"}
 		}
 	}
 
 	log.Info("executed smooth drag movement", "points", len(points), "segments", len(body.Path)-1)
 	return nil
+}
+
+// smoothStepDelay maps position i/n through a smoothstep curve to produce
+// a delay in [fastMs, slowMs]. Slow at start and end, fast in the middle.
+// smoothstep(t) = 3t² - 2t³
+func smoothStepDelay(i, n, slowMs, fastMs int) int {
+	if n <= 1 {
+		return slowMs
+	}
+	t := float64(i) / float64(n)
+	// Remap t so that 0 and 1 map to 1 (slow) and 0.5 maps to 0 (fast).
+	// Use distance from center: d = |2t - 1|, then smoothstep on d.
+	d := math.Abs(2*t - 1)
+	s := d * d * (3 - 2*d) // smoothstep
+	return fastMs + int(float64(slowMs-fastMs)*s)
 }
 
 func (s *ApiService) DragMouse(ctx context.Context, request oapi.DragMouseRequestObject) (oapi.DragMouseResponseObject, error) {
