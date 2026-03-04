@@ -906,64 +906,22 @@ func (s *ApiService) doDragMouse(ctx context.Context, body oapi.DragMouseRequest
 		}
 	}
 
-	// Phase 2: move along path (excluding first point) using fixed-count relative steps
-	// Insert a small delay between each relative move to smooth the drag
-	args2 := []string{}
-	// Determine per-segment steps and per-step delay from request (with defaults)
-	stepsPerSegment := 10
-	if body.StepsPerSegment != nil && *body.StepsPerSegment >= 1 {
-		stepsPerSegment = *body.StepsPerSegment
-	}
-	stepDelayMs := 50
-	if body.StepDelayMs != nil && *body.StepDelayMs >= 0 {
-		stepDelayMs = *body.StepDelayMs
-	}
-	stepDelaySeconds := fmt.Sprintf("%.3f", float64(stepDelayMs)/1000.0)
-
-	// Precompute total number of relative steps so we can avoid a trailing sleep
-	totalSteps := 0
-	prev := start
-	for _, pt := range body.Path[1:] {
-		x0, y0 := prev[0], prev[1]
-		x1, y1 := pt[0], pt[1]
-		totalSteps += len(generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment))
-		prev = pt
-	}
-
-	prev = start
-	stepIndex := 0
-	for _, pt := range body.Path[1:] {
-		x0, y0 := prev[0], prev[1]
-		x1, y1 := pt[0], pt[1]
-		for _, step := range generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment) {
-			xStr := strconv.Itoa(step[0])
-			yStr := strconv.Itoa(step[1])
-			if step[0] < 0 || step[1] < 0 {
-				args2 = append(args2, "mousemove_relative", "--", xStr, yStr)
-			} else {
-				args2 = append(args2, "mousemove_relative", xStr, yStr)
-			}
-			// add a tiny delay between moves, but not after the last step
-			if stepIndex < totalSteps-1 && stepDelayMs > 0 {
-				args2 = append(args2, "sleep", stepDelaySeconds)
-			}
-			stepIndex++
-		}
-		prev = pt
-	}
-	if len(args2) > 0 {
-		log.Info("executing xdotool (drag move)", "args", args2)
-		if output, err := defaultXdoTool.Run(ctx, args2...); err != nil {
-			log.Error("xdotool drag move failed", "err", err, "output", string(output))
-			// Try to release button and modifiers
+	// Phase 2: move along path
+	useSmooth := body.Smooth != nil && *body.Smooth
+	if useSmooth {
+		if err := s.doDragMouseSmooth(ctx, log, body, btn, screenWidth, screenHeight); err != nil {
 			argsCleanup := []string{"mouseup", btn}
 			if body.HoldKeys != nil {
 				for _, key := range *body.HoldKeys {
 					argsCleanup = append(argsCleanup, "keyup", key)
 				}
 			}
-			_, _ = defaultXdoTool.Run(ctx, argsCleanup...)
-			return &executionError{msg: fmt.Sprintf("failed during drag movement: %s", string(output))}
+			_, _ = defaultXdoTool.Run(context.Background(), argsCleanup...)
+			return err
+		}
+	} else {
+		if err := s.doDragMouseLinear(ctx, log, body, btn); err != nil {
+			return err
 		}
 	}
 
@@ -980,6 +938,115 @@ func (s *ApiService) doDragMouse(ctx context.Context, body oapi.DragMouseRequest
 		return &executionError{msg: fmt.Sprintf("failed to finish drag: %s", string(output))}
 	}
 
+	return nil
+}
+
+func (s *ApiService) doDragMouseLinear(ctx context.Context, log *slog.Logger, body oapi.DragMouseRequest, btn string) error {
+	start := body.Path[0]
+	stepsPerSegment := 10
+	if body.StepsPerSegment != nil && *body.StepsPerSegment >= 1 {
+		stepsPerSegment = *body.StepsPerSegment
+	}
+	stepDelayMs := 50
+	if body.StepDelayMs != nil && *body.StepDelayMs >= 0 {
+		stepDelayMs = *body.StepDelayMs
+	}
+	stepDelaySeconds := fmt.Sprintf("%.3f", float64(stepDelayMs)/1000.0)
+
+	totalSteps := 0
+	prev := start
+	for _, pt := range body.Path[1:] {
+		x0, y0 := prev[0], prev[1]
+		x1, y1 := pt[0], pt[1]
+		totalSteps += len(generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment))
+		prev = pt
+	}
+
+	args2 := []string{}
+	prev = start
+	stepIndex := 0
+	for _, pt := range body.Path[1:] {
+		x0, y0 := prev[0], prev[1]
+		x1, y1 := pt[0], pt[1]
+		for _, step := range generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment) {
+			xStr := strconv.Itoa(step[0])
+			yStr := strconv.Itoa(step[1])
+			if step[0] < 0 || step[1] < 0 {
+				args2 = append(args2, "mousemove_relative", "--", xStr, yStr)
+			} else {
+				args2 = append(args2, "mousemove_relative", xStr, yStr)
+			}
+			if stepIndex < totalSteps-1 && stepDelayMs > 0 {
+				args2 = append(args2, "sleep", stepDelaySeconds)
+			}
+			stepIndex++
+		}
+		prev = pt
+	}
+	if len(args2) > 0 {
+		log.Info("executing xdotool (drag move)", "args", args2)
+		if output, err := defaultXdoTool.Run(ctx, args2...); err != nil {
+			log.Error("xdotool drag move failed", "err", err, "output", string(output))
+			argsCleanup := []string{"mouseup", btn}
+			if body.HoldKeys != nil {
+				for _, key := range *body.HoldKeys {
+					argsCleanup = append(argsCleanup, "keyup", key)
+				}
+			}
+			_, _ = defaultXdoTool.Run(ctx, argsCleanup...)
+			return &executionError{msg: fmt.Sprintf("failed during drag movement: %s", string(output))}
+		}
+	}
+	return nil
+}
+
+func (s *ApiService) doDragMouseSmooth(ctx context.Context, log *slog.Logger, body oapi.DragMouseRequest, btn string, screenWidth, screenHeight int) error {
+	if body.DurationMs != nil && (*body.DurationMs < 50 || *body.DurationMs > 10000) {
+		return &validationError{msg: "duration_ms must be between 50 and 10000"}
+	}
+
+	waypoints := make([][2]int, len(body.Path))
+	for i, pt := range body.Path {
+		waypoints[i] = [2]int{pt[0], pt[1]}
+	}
+
+	result := mousetrajectory.GenerateMultiSegmentTrajectory(waypoints, screenWidth, screenHeight, body.DurationMs)
+	points := result.Points
+	stepDelayMs := result.StepDelayMs
+
+	if len(points) < 2 {
+		return nil
+	}
+
+	for i := 1; i < len(points); i++ {
+		select {
+		case <-ctx.Done():
+			return &executionError{msg: "drag movement cancelled"}
+		default:
+		}
+
+		dx := points[i][0] - points[i-1][0]
+		dy := points[i][1] - points[i-1][1]
+		if dx != 0 || dy != 0 {
+			args := []string{"mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy)}
+			if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+				log.Error("xdotool mousemove_relative failed", "err", err, "output", string(output), "step", i)
+				return &executionError{msg: "failed during smooth drag movement"}
+			}
+		}
+		jitter := stepDelayMs
+		if stepDelayMs > 3 {
+			jitter = stepDelayMs + rand.Intn(5) - 2
+			if jitter < 3 {
+				jitter = 3
+			}
+		}
+		if err := sleepWithContext(ctx, time.Duration(jitter)*time.Millisecond); err != nil {
+			return &executionError{msg: "drag movement cancelled"}
+		}
+	}
+
+	log.Info("executed smooth drag movement", "points", len(points), "segments", len(body.Path)-1)
 	return nil
 }
 

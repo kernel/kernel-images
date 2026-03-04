@@ -55,6 +55,113 @@ func (t *HumanizeMouseTrajectory) GetPointsInt() [][2]int {
 	return out
 }
 
+// MultiSegmentResult holds the generated trajectory and the per-step delay.
+type MultiSegmentResult struct {
+	Points      [][2]int
+	StepDelayMs int
+}
+
+const defaultStepDelayMs = 10
+
+// GenerateMultiSegmentTrajectory creates a human-like Bezier trajectory through
+// a sequence of waypoints. Each consecutive pair gets its own Bezier curve, with
+// point counts distributed proportionally to segment distance. The resulting
+// points are clamped to [0, screenW-1] x [0, screenH-1].
+func GenerateMultiSegmentTrajectory(waypoints [][2]int, screenW, screenH int, totalDurationMs *int) MultiSegmentResult {
+	if len(waypoints) < 2 {
+		return MultiSegmentResult{Points: waypoints, StepDelayMs: defaultStepDelayMs}
+	}
+
+	segDistances := make([]float64, len(waypoints)-1)
+	var totalDist float64
+	for i := 1; i < len(waypoints); i++ {
+		dx := float64(waypoints[i][0] - waypoints[i-1][0])
+		dy := float64(waypoints[i][1] - waypoints[i-1][1])
+		d := math.Sqrt(dx*dx + dy*dy)
+		segDistances[i-1] = d
+		totalDist += d
+	}
+
+	// Determine total number of points across all segments.
+	var totalPoints int
+	if totalDurationMs != nil && *totalDurationMs > 0 {
+		totalPoints = *totalDurationMs / defaultStepDelayMs
+		if totalPoints < MinPoints {
+			totalPoints = MinPoints
+		}
+	} else {
+		totalPoints = int(math.Min(
+			float64(defaultMaxPoints)*float64(len(waypoints)-1),
+			math.Max(float64(MinPoints), math.Pow(totalDist, 0.25)*pathLengthScale*float64(len(waypoints)-1))))
+	}
+
+	var allPoints [][2]int
+
+	for i := 0; i < len(waypoints)-1; i++ {
+		// Distribute points proportionally to segment distance.
+		var segPoints int
+		if totalDist > 0 {
+			segPoints = int(math.Round(float64(totalPoints) * segDistances[i] / totalDist))
+		} else {
+			segPoints = totalPoints / (len(waypoints) - 1)
+		}
+		if segPoints < MinPoints {
+			segPoints = MinPoints
+		}
+		if segPoints > MaxPoints {
+			segPoints = MaxPoints
+		}
+
+		opts := &Options{MaxPoints: segPoints}
+		traj := NewHumanizeMouseTrajectoryWithOptions(
+			float64(waypoints[i][0]), float64(waypoints[i][1]),
+			float64(waypoints[i+1][0]), float64(waypoints[i+1][1]),
+			opts,
+		)
+		segPts := traj.GetPointsInt()
+
+		if i == 0 {
+			allPoints = append(allPoints, segPts...)
+		} else {
+			// Skip first point of subsequent segments to avoid duplicates at junctions.
+			if len(segPts) > 1 {
+				allPoints = append(allPoints, segPts[1:]...)
+			}
+		}
+	}
+
+	// Clamp to screen bounds.
+	clampPoints(allPoints, screenW, screenH)
+
+	stepDelay := defaultStepDelayMs
+	if totalDurationMs != nil && len(allPoints) > 1 {
+		stepDelay = *totalDurationMs / (len(allPoints) - 1)
+		if stepDelay < 3 {
+			stepDelay = 3
+		}
+	}
+
+	return MultiSegmentResult{Points: allPoints, StepDelayMs: stepDelay}
+}
+
+// clampPoints constrains each point to [0, screenW-1] x [0, screenH-1].
+func clampPoints(points [][2]int, screenW, screenH int) {
+	maxX := screenW - 1
+	maxY := screenH - 1
+	for i := range points {
+		if points[i][0] < 0 {
+			points[i][0] = 0
+		} else if points[i][0] > maxX {
+			points[i][0] = maxX
+		}
+		if points[i][1] < 0 {
+			points[i][1] = 0
+		} else if points[i][1] > maxY {
+			points[i][1] = maxY
+		}
+	}
+}
+
 const (
 	// Bounds padding for Bezier control point region (pixels beyond start/end).
 	boundsPadding = 80
