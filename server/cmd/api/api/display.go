@@ -84,8 +84,10 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	}
 
 	// Gracefully stop active recordings so the resize can proceed.
-	// New recording segments (with unique IDs) will be started only after a
-	// successful resize to avoid restarting at the old resolution on error paths.
+	// Recordings are always restarted (via defer) regardless of whether the
+	// resize succeeds — losing recording data is worse than a brief gap. If
+	// the resize fails the display is still at the old resolution, so
+	// restarting at the "old" resolution is correct.
 	stopped, stopErr := s.stopActiveRecordings(ctx)
 	if stopErr != nil {
 		log.Error("failed to stop recordings for resize", "error", stopErr)
@@ -94,6 +96,11 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				Message: fmt.Sprintf("failed to stop recordings for resize: %s", stopErr),
 			},
 		}, nil
+	}
+	if len(stopped) > 0 {
+		defer func() {
+			go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
+		}()
 	}
 
 	// Detect display mode (xorg or xvfb)
@@ -131,11 +138,6 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				Message: fmt.Sprintf("failed to change resolution: %s", err.Error()),
 			},
 		}, nil
-	}
-
-	// Resize succeeded — restart recording segments at the new resolution.
-	if len(stopped) > 0 {
-		go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
 	}
 
 	// Return success with the new dimensions
