@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -381,8 +383,9 @@ func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, e
 // stoppedRecordingInfo holds state captured from a recording that was stopped
 // so it can be restarted after a display resize.
 type stoppedRecordingInfo struct {
-	id     string
-	params recorder.FFmpegRecordingParams
+	id       string
+	params   recorder.FFmpegRecordingParams
+	metadata *recorder.RecordingMetadata
 }
 
 // stopActiveRecordings gracefully stops every recording that is currently in
@@ -421,8 +424,9 @@ func (s *ApiService) stopActiveRecordings(ctx context.Context) ([]stoppedRecordi
 		}
 
 		stopped = append(stopped, stoppedRecordingInfo{
-			id:     id,
-			params: params,
+			id:       id,
+			params:   params,
+			metadata: rec.Metadata(),
 		})
 		log.Info("recording stopped for resize, old segment preserved", "id", id)
 	}
@@ -430,17 +434,55 @@ func (s *ApiService) stopActiveRecordings(ctx context.Context) ([]stoppedRecordi
 	return stopped, nil
 }
 
+// adjustParamsForRemainingBudget reduces MaxDurationInSeconds and MaxSizeInMB
+// in the cloned params to reflect what the previous segment already consumed.
+// This keeps cumulative duration and disk usage within the originally requested limits.
+func adjustParamsForRemainingBudget(log *slog.Logger, info stoppedRecordingInfo) recorder.FFmpegRecordingParams {
+	params := info.params
+
+	if params.MaxDurationInSeconds != nil && info.metadata != nil && !info.metadata.EndTime.IsZero() {
+		elapsed := int(info.metadata.EndTime.Sub(info.metadata.StartTime).Seconds())
+		remaining := *params.MaxDurationInSeconds - elapsed
+		if remaining < 1 {
+			remaining = 1
+		}
+		params.MaxDurationInSeconds = &remaining
+		log.Info("adjusted max duration for new segment", "id", info.id, "elapsed_s", elapsed, "remaining_s", remaining)
+	}
+
+	if params.MaxSizeInMB != nil && params.OutputDir != nil {
+		segmentPath := filepath.Join(*params.OutputDir, info.id+".mp4")
+		if fi, err := os.Stat(segmentPath); err == nil {
+			consumedMB := int(fi.Size() / (1024 * 1024))
+			remaining := *params.MaxSizeInMB - consumedMB
+			if remaining < 1 {
+				remaining = 1
+			}
+			params.MaxSizeInMB = &remaining
+			log.Info("adjusted max size for new segment", "id", info.id, "consumed_mb", consumedMB, "remaining_mb", remaining)
+		}
+	}
+
+	return params
+}
+
 // startNewRecordingSegments creates and starts a new recording segment for
 // each previously-stopped recorder. Each new segment gets a unique suffixed
 // ID so the old (stopped) recorder and its finalized file remain accessible
 // in the manager.
+//
+// Duration and size limits are adjusted to account for what the previous
+// segment already consumed, so the cumulative totals stay within the
+// originally requested bounds.
 func (s *ApiService) startNewRecordingSegments(ctx context.Context, stopped []stoppedRecordingInfo) {
 	log := logger.FromContext(ctx)
 
 	for _, info := range stopped {
 		newID := fmt.Sprintf("%s-%d", info.id, time.Now().UnixMilli())
 
-		rec, err := s.factory(newID, info.params)
+		params := adjustParamsForRemainingBudget(log, info)
+
+		rec, err := s.factory(newID, params)
 		if err != nil {
 			log.Error("failed to create recorder for new segment", "old_id", info.id, "new_id", newID, "error", err)
 			continue

@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -55,6 +57,8 @@ func TestStopActiveRecordings(t *testing.T) {
 		require.Len(t, stopped, 1)
 		assert.Equal(t, "test-rec", stopped[0].id)
 		assert.NotNil(t, stopped[0].params.FrameRate)
+		require.NotNil(t, stopped[0].metadata, "metadata should be captured")
+		assert.False(t, stopped[0].metadata.StartTime.IsZero(), "start time should be set")
 
 		oldRec, exists := mgr.GetRecorder("test-rec")
 		assert.True(t, exists, "old recorder should remain registered")
@@ -244,4 +248,140 @@ func TestStopAndStartNewSegment_RoundTrip(t *testing.T) {
 	assert.True(t, newRec.IsRecording(ctx))
 
 	_ = newRec.Stop(ctx)
+}
+
+func TestAdjustParamsForRemainingBudget(t *testing.T) {
+	log := slog.Default()
+
+	t.Run("reduces MaxDurationInSeconds by elapsed time", func(t *testing.T) {
+		maxDur := 60
+		fr := 5
+		disp := 0
+		size := 500
+		dir := t.TempDir()
+
+		info := stoppedRecordingInfo{
+			id: "dur-test",
+			params: recorder.FFmpegRecordingParams{
+				FrameRate:            &fr,
+				DisplayNum:           &disp,
+				MaxSizeInMB:          &size,
+				MaxDurationInSeconds: &maxDur,
+				OutputDir:            &dir,
+			},
+			metadata: &recorder.RecordingMetadata{
+				StartTime: time.Now().Add(-25 * time.Second),
+				EndTime:   time.Now(),
+			},
+		}
+
+		adjusted := adjustParamsForRemainingBudget(log, info)
+		require.NotNil(t, adjusted.MaxDurationInSeconds)
+		assert.InDelta(t, 35, *adjusted.MaxDurationInSeconds, 2, "remaining duration should be ~35s")
+		assert.Equal(t, 60, maxDur, "original param should not be mutated")
+	})
+
+	t.Run("clamps remaining duration to 1 when budget exhausted", func(t *testing.T) {
+		maxDur := 10
+		fr := 5
+		disp := 0
+		size := 500
+		dir := t.TempDir()
+
+		info := stoppedRecordingInfo{
+			id: "exhausted-dur",
+			params: recorder.FFmpegRecordingParams{
+				FrameRate:            &fr,
+				DisplayNum:           &disp,
+				MaxSizeInMB:          &size,
+				MaxDurationInSeconds: &maxDur,
+				OutputDir:            &dir,
+			},
+			metadata: &recorder.RecordingMetadata{
+				StartTime: time.Now().Add(-30 * time.Second),
+				EndTime:   time.Now(),
+			},
+		}
+
+		adjusted := adjustParamsForRemainingBudget(log, info)
+		require.NotNil(t, adjusted.MaxDurationInSeconds)
+		assert.Equal(t, 1, *adjusted.MaxDurationInSeconds)
+	})
+
+	t.Run("reduces MaxSizeInMB by consumed file size", func(t *testing.T) {
+		maxSize := 10
+		fr := 5
+		disp := 0
+		dir := t.TempDir()
+
+		segmentFile := filepath.Join(dir, "size-test.mp4")
+		data := make([]byte, 3*1024*1024) // 3 MB
+		require.NoError(t, os.WriteFile(segmentFile, data, 0644))
+
+		info := stoppedRecordingInfo{
+			id: "size-test",
+			params: recorder.FFmpegRecordingParams{
+				FrameRate:   &fr,
+				DisplayNum:  &disp,
+				MaxSizeInMB: &maxSize,
+				OutputDir:   &dir,
+			},
+			metadata: &recorder.RecordingMetadata{},
+		}
+
+		adjusted := adjustParamsForRemainingBudget(log, info)
+		require.NotNil(t, adjusted.MaxSizeInMB)
+		assert.Equal(t, 7, *adjusted.MaxSizeInMB)
+		assert.Equal(t, 10, maxSize, "original param should not be mutated")
+	})
+
+	t.Run("clamps remaining size to 1 when budget exhausted", func(t *testing.T) {
+		maxSize := 2
+		fr := 5
+		disp := 0
+		dir := t.TempDir()
+
+		segmentFile := filepath.Join(dir, "big-test.mp4")
+		data := make([]byte, 5*1024*1024) // 5 MB > 2 MB limit
+		require.NoError(t, os.WriteFile(segmentFile, data, 0644))
+
+		info := stoppedRecordingInfo{
+			id: "big-test",
+			params: recorder.FFmpegRecordingParams{
+				FrameRate:   &fr,
+				DisplayNum:  &disp,
+				MaxSizeInMB: &maxSize,
+				OutputDir:   &dir,
+			},
+			metadata: &recorder.RecordingMetadata{},
+		}
+
+		adjusted := adjustParamsForRemainingBudget(log, info)
+		require.NotNil(t, adjusted.MaxSizeInMB)
+		assert.Equal(t, 1, *adjusted.MaxSizeInMB)
+	})
+
+	t.Run("no adjustment when limits are nil", func(t *testing.T) {
+		fr := 5
+		disp := 0
+		size := 500
+		dir := t.TempDir()
+
+		info := stoppedRecordingInfo{
+			id: "no-limits",
+			params: recorder.FFmpegRecordingParams{
+				FrameRate:   &fr,
+				DisplayNum:  &disp,
+				MaxSizeInMB: &size,
+				OutputDir:   &dir,
+			},
+			metadata: &recorder.RecordingMetadata{
+				StartTime: time.Now().Add(-10 * time.Second),
+				EndTime:   time.Now(),
+			},
+		}
+
+		adjusted := adjustParamsForRemainingBudget(log, info)
+		assert.Nil(t, adjusted.MaxDurationInSeconds, "should remain nil when not set")
+	})
 }
