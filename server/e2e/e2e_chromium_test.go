@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 var (
 	headfulImage  = defaultHeadfulImage
 	headlessImage = defaultHeadlessImage
+
+	playwrightDepsOnce sync.Once
+	playwrightDepsErr  error
 )
 
 func init() {
@@ -65,15 +69,20 @@ func getPlaywrightPath() string {
 // ensurePlaywrightDeps ensures playwright dependencies are installed
 func ensurePlaywrightDeps(t *testing.T) {
 	t.Helper()
-	nodeModulesPath := getPlaywrightPath() + "/node_modules"
-	if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
-		t.Log("Installing playwright dependencies...")
-		cmd := exec.Command("pnpm", "install")
-		cmd.Dir = getPlaywrightPath()
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to install playwright dependencies: %v\nOutput: %s", err, string(output))
-		t.Log("Playwright dependencies installed successfully")
-	}
+
+	playwrightDepsOnce.Do(func() {
+		nodeModulesPath := getPlaywrightPath() + "/node_modules"
+		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
+			cmd := exec.Command("pnpm", "install")
+			cmd.Dir = getPlaywrightPath()
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				playwrightDepsErr = fmt.Errorf("failed to install playwright dependencies: %w\noutput: %s", err, string(output))
+			}
+		}
+	})
+
+	require.NoError(t, playwrightDepsErr, "playwright dependency setup failed")
 }
 
 func TestDisplayResolutionChange(t *testing.T) {
