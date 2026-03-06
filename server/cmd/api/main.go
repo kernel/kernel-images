@@ -194,7 +194,10 @@ func main() {
 		},
 		scaletozero.Middleware(stz),
 	)
-	rChromeDriver.Handle("/*", chromedriverproxy.Handler(slogger))
+	rChromeDriver.Handle("/*", chromedriverproxy.Handler(slogger, &chromedriverproxy.Options{
+		ChromeDriverUpstream: config.ChromeDriverUpstreamAddr,
+		DebuggerAddress:      config.DebuggerAddr,
+	}))
 
 	srvChromeDriver := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", config.ChromeDriverProxyPort),
@@ -323,8 +326,8 @@ func rewriteChromeURLs(v interface{}, chromeHost, proxyHost string) {
 
 // rewriteWSURL replaces the Chrome host with the proxy host in WebSocket URLs.
 // It handles two cases:
-// 1. Direct WebSocket URLs: "ws://127.0.0.1:9223/devtools/page/..." -> "ws://127.0.0.1:9222/devtools/page/..."
-// 2. DevTools frontend URLs with ws= query param: "https://...?ws=127.0.0.1:9223/..." -> "https://...?ws=127.0.0.1:9222/..."
+// 1. Direct WebSocket URLs: ws://chrome-host/devtools/... -> ws://proxy-host/devtools/...
+// 2. DevTools frontend URLs with ws= query param: ...?ws=chrome-host/devtools/... -> ...?ws=proxy-host/devtools/...
 func rewriteWSURL(urlStr, chromeHost, proxyHost string) string {
 	parsed, err := url.Parse(urlStr)
 	if err != nil {

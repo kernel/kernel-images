@@ -21,6 +21,15 @@ type Conn interface {
 // It returns the (possibly modified) message bytes to forward.
 type MessageTransform func(direction string, mt websocket.MessageType, msg []byte) []byte
 
+// ProxyOptions configures the proxy accept/dial behavior and optional message
+// transformation. Zero values are valid and use sensible defaults.
+type ProxyOptions struct {
+	AcceptOptions *websocket.AcceptOptions
+	DialOptions   *websocket.DialOptions
+	Logger        *slog.Logger
+	Transform     MessageTransform
+}
+
 // Pump bidirectionally copies messages between client and upstream until
 // either side errors or ctx is cancelled, then calls onClose.
 // If transform is non-nil it is called for every message; the returned bytes
@@ -74,10 +83,15 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(), logger *sl
 }
 
 // Proxy accepts a client WebSocket upgrade, dials the upstream URL, and pumps
-// messages bidirectionally until either side closes. acceptOpts and dialOpts
-// may be nil for defaults. If transform is non-nil it is called for every
-// message and the returned bytes are forwarded.
-func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptOpts *websocket.AcceptOptions, dialOpts *websocket.DialOptions, logger *slog.Logger, transform MessageTransform) {
+// messages bidirectionally until either side closes. ProxyOptions fields are
+// optional and use defaults when omitted.
+func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts ProxyOptions) {
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	acceptOpts := opts.AcceptOptions
 	if acceptOpts == nil {
 		acceptOpts = &websocket.AcceptOptions{OriginPatterns: []string{"*"}}
 	}
@@ -88,7 +102,7 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptOpt
 	}
 	clientConn.SetReadLimit(100 * 1024 * 1024)
 
-	upstreamConn, _, err := websocket.Dial(r.Context(), upstreamURL, dialOpts)
+	upstreamConn, _, err := websocket.Dial(r.Context(), upstreamURL, opts.DialOptions)
 	if err != nil {
 		logger.Error("dial upstream failed", slog.String("err", err.Error()), slog.String("url", upstreamURL))
 		clientConn.Close(websocket.StatusInternalError, "failed to connect to upstream")
@@ -106,5 +120,5 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptOpt
 		})
 	}
 
-	Pump(r.Context(), clientConn, upstreamConn, cleanup, logger, transform)
+	Pump(r.Context(), clientConn, upstreamConn, cleanup, logger, opts.Transform)
 }

@@ -29,6 +29,9 @@ func ensureBidiDeps(t *testing.T) {
 		t.Log("Installing bidi test dependencies...")
 		cmd := exec.Command("npm", "install")
 		cmd.Dir = getBidiPath()
+		// Vibium can download a local browser at install time, which is unnecessary
+		// for remote-BiDi tests running against our containerized browser.
+		cmd.Env = append(os.Environ(), "VIBIUM_SKIP_BROWSER_DOWNLOAD=1")
 		output, err := cmd.CombinedOutput()
 		require.NoError(t, err, "Failed to install bidi dependencies: %v\nOutput: %s", err, string(output))
 		t.Log("Bidi test dependencies installed successfully")
@@ -441,6 +444,81 @@ func TestBidiPuppeteer(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	t.Logf("test-puppeteer-bidi.js output:\n%s", string(out))
 	require.NoError(t, err, "test-puppeteer-bidi.js failed: %v", err)
+}
+
+// TestBidiVibium exercises Vibium's remote browser connection over WebDriver BiDi
+// through the ChromeDriver proxy by running the test-vibium-bidi.js script.
+func TestBidiVibium(t *testing.T) {
+	t.Parallel()
+	ensureBidiDeps(t)
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
+
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitChromeDriver(ctx), "chromedriver not ready")
+
+	chromeDriverURL := c.ChromeDriverURL()
+
+	// Vibium connect mode expects a BiDi WebSocket endpoint backed by an existing
+	// WebDriver session, so create the session first and pass its webSocketUrl.
+	sessionBody, err := json.Marshal(map[string]interface{}{
+		"capabilities": map[string]interface{}{
+			"alwaysMatch": map[string]interface{}{
+				"browserName":             "chrome",
+				"webSocketUrl":            true,
+				"unhandledPromptBehavior": map[string]string{"default": "ignore"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	resp, err := http.Post(chromeDriverURL+"/session", "application/json", bytes.NewReader(sessionBody))
+	require.NoError(t, err, "POST /session request failed")
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode, "expected 200 for POST /session")
+
+	respBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	var sessionResp map[string]interface{}
+	require.NoError(t, json.Unmarshal(respBody, &sessionResp))
+
+	value, ok := sessionResp["value"].(map[string]interface{})
+	require.True(t, ok, "response should have 'value' object")
+	sessionID, ok := value["sessionId"].(string)
+	require.True(t, ok && sessionID != "", "session ID should be a non-empty string")
+
+	caps, ok := value["capabilities"].(map[string]interface{})
+	require.True(t, ok, "response should have 'capabilities'")
+	wsURL, ok := caps["webSocketUrl"].(string)
+	require.True(t, ok && wsURL != "", "webSocketUrl should be present in capabilities")
+
+	endpoint := wsURL
+	t.Logf("running test-vibium-bidi.js against %s", endpoint)
+
+	cmd := exec.CommandContext(ctx, "node", "test-vibium-bidi.js", "--endpoint", endpoint)
+	cmd.Dir = getBidiPath()
+	out, err := cmd.CombinedOutput()
+	t.Logf("test-vibium-bidi.js output:\n%s", string(out))
+	require.NoError(t, err, "test-vibium-bidi.js failed: %v", err)
+
+	// Clean up WebDriver session
+	delReq, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		fmt.Sprintf("%s/session/%s", chromeDriverURL, sessionID), nil)
+	require.NoError(t, err)
+	delResp, err := http.DefaultClient.Do(delReq)
+	require.NoError(t, err, "DELETE /session request failed")
+	delResp.Body.Close()
+	require.Equal(t, http.StatusOK, delResp.StatusCode, "expected 200 for DELETE /session")
 }
 
 // TestBidiSelenium exercises Selenium WebDriver's BiDi support through

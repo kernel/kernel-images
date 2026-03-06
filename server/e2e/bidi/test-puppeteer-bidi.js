@@ -1,6 +1,10 @@
 const puppeteer = require('puppeteer-core');
 
-const endpoint = getArg('--endpoint', 'ws://localhost:9224/session');
+const endpoint = getArg('--endpoint');
+if (!endpoint) {
+    console.error('Usage: node test-puppeteer-bidi.js --endpoint <ws://host:port/session>');
+    process.exit(1);
+}
 
 async function main() {
     const browser = await puppeteer.connect({
@@ -51,10 +55,10 @@ main().catch((err) => {
     process.exit(1);
 });
 
-function getArg(name, defaultValue) {
+function getArg(name) {
     const idx = process.argv.indexOf(name);
     if (idx !== -1 && idx + 1 < process.argv.length) {
         return process.argv[idx + 1];
     }
-    return defaultValue;
+    return null;
 }

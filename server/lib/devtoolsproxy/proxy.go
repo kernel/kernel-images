@@ -226,7 +226,12 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		dialOpts := &websocket.DialOptions{
 			CompressionMode: websocket.CompressionContextTakeover,
 		}
-		wsproxy.Proxy(w, r, upstreamURL, acceptOpts, dialOpts, logger, transform)
+		wsproxy.Proxy(w, r, upstreamURL, wsproxy.ProxyOptions{
+			AcceptOptions: acceptOpts,
+			DialOptions:   dialOpts,
+			Logger:        logger,
+			Transform:     transform,
+		})
 	})
 }
 

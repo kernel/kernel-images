@@ -15,18 +15,45 @@ import (
 	"github.com/onkernel/kernel-images/server/lib/wsproxy"
 )
 
-var (
-	chromeDriverAddr = "127.0.0.1:9225"
-	debuggerAddr     = "127.0.0.1:9222"
+const (
+	defaultChromeDriverUpstream = "127.0.0.1:9225"
+	defaultDebuggerAddress      = "127.0.0.1:9222"
 )
 
-// Handler returns an http.Handler that proxies all requests to the upstream
-// ChromeDriver instance at 127.0.0.1:9225. For POST /session it injects the
-// debuggerAddress capability pointing to the devtools proxy (127.0.0.1:9222)
-// so ChromeDriver attaches to the already-running Chrome. WebSocket upgrade
-// requests (used by WebDriver BiDi) are proxied bidirectionally.
-func Handler(logger *slog.Logger) http.Handler {
-	upstream, _ := url.Parse("http://" + chromeDriverAddr)
+// Options controls which upstream ChromeDriver to proxy to, and which
+// debuggerAddress should be injected into WebDriver/BiDi session creation.
+type Options struct {
+	ChromeDriverUpstream string
+	DebuggerAddress      string
+}
+
+func resolveOptions(opts *Options) Options {
+	resolved := Options{
+		ChromeDriverUpstream: defaultChromeDriverUpstream,
+		DebuggerAddress:      defaultDebuggerAddress,
+	}
+	if opts == nil {
+		return resolved
+	}
+	if opts.ChromeDriverUpstream != "" {
+		resolved.ChromeDriverUpstream = opts.ChromeDriverUpstream
+	}
+	if opts.DebuggerAddress != "" {
+		resolved.DebuggerAddress = opts.DebuggerAddress
+	}
+	return resolved
+}
+
+// Handler proxies HTTP and WebSocket traffic to an internal ChromeDriver
+// instance. It injects `goog:chromeOptions.debuggerAddress` during session
+// creation so ChromeDriver attaches to the existing Chromium process instead of
+// launching another browser.
+func Handler(logger *slog.Logger, opts *Options) http.Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	cfg := resolveOptions(opts)
+	upstream, _ := url.Parse("http://" + cfg.ChromeDriverUpstream)
 
 	reverseProxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
@@ -37,12 +64,12 @@ func Handler(logger *slog.Logger) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if isWebSocketUpgrade(r) {
-			proxyWebSocket(w, r, logger)
+			proxyWebSocket(w, r, logger, cfg)
 			return
 		}
 
 		if r.Method == http.MethodPost && r.URL.Path == "/session" {
-			handleCreateSession(w, r, logger)
+			handleCreateSession(w, r, logger, cfg)
 			return
 		}
 
@@ -51,14 +78,32 @@ func Handler(logger *slog.Logger) http.Handler {
 }
 
 func isWebSocketUpgrade(r *http.Request) bool {
-	return strings.EqualFold(r.Header.Get("Connection"), "upgrade") &&
-		strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
+	if !hasHeaderToken(r.Header.Values("Connection"), "upgrade") {
+		return false
+	}
+	return hasHeaderToken(r.Header.Values("Upgrade"), "websocket")
 }
 
-// handleCreateSession intercepts POST /session, injects goog:chromeOptions
-// with debuggerAddress pointing to the devtools proxy, and forwards to ChromeDriver.
-// It also rewrites the webSocketUrl in the response to point back through the proxy.
-func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
+func hasHeaderToken(values []string, token string) bool {
+	for _, v := range values {
+		for _, part := range strings.Split(v, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), token) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// handleCreateSession intercepts WebDriver session creation and injects
+// `goog:chromeOptions.debuggerAddress`, which tells ChromeDriver to attach to
+// the already-running Chromium instance in this VM.
+// Reference: https://developer.chrome.com/docs/chromedriver/capabilities
+//
+// It then rewrites `capabilities.webSocketUrl` in the response so clients route
+// BiDi traffic through this proxy instead of attempting a direct internal
+// connection to ChromeDriver.
+func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Logger, cfg Options) {
 	body, err := io.ReadAll(r.Body)
 	r.Body.Close()
 	if err != nil {
@@ -72,7 +117,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		return
 	}
 
-	injectDebuggerAddress(payload, debuggerAddr)
+	injectDebuggerAddress(payload, cfg.DebuggerAddress)
 
 	rewritten, err := json.Marshal(payload)
 	if err != nil {
@@ -83,7 +128,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 	logger.Info("chromedriver proxy: injected debuggerAddress into POST /session",
 		slog.String("rewritten", string(rewritten)))
 
-	upstreamURL := fmt.Sprintf("http://%s/session", chromeDriverAddr)
+	upstreamURL := fmt.Sprintf("http://%s/session", cfg.ChromeDriverUpstream)
 	proxyReq, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, bytes.NewReader(rewritten))
 	if err != nil {
 		http.Error(w, "failed to create upstream request", http.StatusInternalServerError)
@@ -123,9 +168,15 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 	w.Write(respBody)
 }
 
-// rewriteWebSocketURL rewrites value.capabilities.webSocketUrl in a session
-// creation response so it points back through the proxy instead of directly
-// to ChromeDriver.
+// rewriteWebSocketURL rewrites `value.capabilities.webSocketUrl` in a
+// WebDriver new-session response to point at this proxy.
+//
+// Why: ChromeDriver often returns an internal host/port, but external clients
+// must connect through the proxy listener.
+//
+// Example:
+//
+//	ws://127.0.0.1:9225/session/abc -> ws://proxy-host:9224/session/abc
 func rewriteWebSocketURL(body []byte, proxyHost string, logger *slog.Logger) []byte {
 	var respPayload map[string]interface{}
 	if err := json.Unmarshal(body, &respPayload); err != nil {
@@ -163,8 +214,9 @@ func rewriteWebSocketURL(body []byte, proxyHost string, logger *slog.Logger) []b
 	return out
 }
 
-// injectDebuggerAddress sets goog:chromeOptions.debuggerAddress in
-// capabilities.alwaysMatch, which ChromeDriver merges into every candidate.
+// injectDebuggerAddress ensures `capabilities.alwaysMatch.goog:chromeOptions`
+// includes debuggerAddress. This is the WebDriver capability ChromeDriver uses
+// to attach to an existing browser instance.
 func injectDebuggerAddress(payload map[string]interface{}, addr string) {
 	caps, ok := payload["capabilities"].(map[string]interface{})
 	if !ok {
@@ -177,26 +229,20 @@ func injectDebuggerAddress(payload map[string]interface{}, addr string) {
 		alwaysMatch = map[string]interface{}{}
 		caps["alwaysMatch"] = alwaysMatch
 	}
-	setChromeOption(alwaysMatch, "debuggerAddress", addr)
-}
-
-func setChromeOption(caps map[string]interface{}, key, value string) {
-	opts, ok := caps["goog:chromeOptions"].(map[string]interface{})
+	opts, ok := alwaysMatch["goog:chromeOptions"].(map[string]interface{})
 	if !ok {
 		opts = map[string]interface{}{}
-		caps["goog:chromeOptions"] = opts
+		alwaysMatch["goog:chromeOptions"] = opts
 	}
-	opts[key] = value
+	opts["debuggerAddress"] = addr
 }
 
-// proxyWebSocket handles WebSocket upgrade requests by proxying them
-// bidirectionally to the upstream ChromeDriver, preserving the request path.
-// Client-to-upstream messages are inspected for BiDi session.new commands;
-// when found, debuggerAddress is injected into the capabilities.
-func proxyWebSocket(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
+// proxyWebSocket proxies BiDi WebSocket traffic to the configured ChromeDriver
+// upstream, preserving the incoming request path/query.
+func proxyWebSocket(w http.ResponseWriter, r *http.Request, logger *slog.Logger, cfg Options) {
 	upstreamURL := (&url.URL{
 		Scheme:   "ws",
-		Host:     chromeDriverAddr,
+		Host:     cfg.ChromeDriverUpstream,
 		Path:     r.URL.Path,
 		RawQuery: r.URL.RawQuery,
 	}).String()
@@ -212,15 +258,20 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, logger *slog.Logger)
 		if direction != "->" || mt != websocket.MessageText {
 			return msg
 		}
-		return maybeInjectBidiSession(msg, logger)
+		return maybeInjectBidiSession(msg, cfg.DebuggerAddress, logger)
 	}
 
-	wsproxy.Proxy(w, r, upstreamURL, acceptOpts, dialOpts, logger, transform)
+	wsproxy.Proxy(w, r, upstreamURL, wsproxy.ProxyOptions{
+		AcceptOptions: acceptOpts,
+		DialOptions:   dialOpts,
+		Logger:        logger,
+		Transform:     transform,
+	})
 }
 
-// maybeInjectBidiSession checks if a WebSocket message is a BiDi session.new
-// command and injects debuggerAddress into its capabilities if so.
-func maybeInjectBidiSession(msg []byte, logger *slog.Logger) []byte {
+// maybeInjectBidiSession mutates outbound BiDi `session.new` commands so
+// ChromeDriver attaches to the existing browser via debuggerAddress.
+func maybeInjectBidiSession(msg []byte, debuggerAddress string, logger *slog.Logger) []byte {
 	var bidiMsg map[string]interface{}
 	if err := json.Unmarshal(msg, &bidiMsg); err != nil {
 		return msg
@@ -237,7 +288,7 @@ func maybeInjectBidiSession(msg []byte, logger *slog.Logger) []byte {
 		bidiMsg["params"] = params
 	}
 
-	injectDebuggerAddress(params, debuggerAddr)
+	injectDebuggerAddress(params, debuggerAddress)
 
 	rewritten, err := json.Marshal(bidiMsg)
 	if err != nil {
@@ -246,6 +297,6 @@ func maybeInjectBidiSession(msg []byte, logger *slog.Logger) []byte {
 	}
 
 	logger.Info("chromedriver proxy: injected debuggerAddress into BiDi session.new",
-		slog.String("debuggerAddress", debuggerAddr))
+		slog.String("debuggerAddress", debuggerAddress))
 	return rewritten
 }

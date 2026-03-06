@@ -2,7 +2,11 @@ const { Builder, Browser } = require('selenium-webdriver');
 const chrome = require('selenium-webdriver/chrome');
 const LogInspector = require('selenium-webdriver/bidi/logInspector');
 
-const endpoint = getArg('--endpoint', 'http://localhost:9224');
+const endpoint = getArg('--endpoint');
+if (!endpoint) {
+    console.error('Usage: node test-selenium-bidi.js --endpoint <http://host:port>');
+    process.exit(1);
+}
 
 async function main() {
     const options = new chrome.Options();
@@ -66,10 +70,10 @@ main().catch((err) => {
     process.exit(1);
 });
 
-function getArg(name, defaultValue) {
+function getArg(name) {
     const idx = process.argv.indexOf(name);
     if (idx !== -1 && idx + 1 < process.argv.length) {
         return process.argv[idx + 1];
     }
-    return defaultValue;
+    return null;
 }

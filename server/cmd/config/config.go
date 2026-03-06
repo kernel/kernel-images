@@ -26,6 +26,11 @@ type Config struct {
 
 	// ChromeDriver proxy: external port where the proxy listens.
 	ChromeDriverProxyPort int `envconfig:"CHROMEDRIVER_PROXY_PORT" default:"9224"`
+	// Internal ChromeDriver upstream used by the ChromeDriver proxy.
+	ChromeDriverUpstreamAddr string `envconfig:"CHROMEDRIVER_UPSTREAM_ADDR" default:"127.0.0.1:9225"`
+	// debuggerAddress injected into WebDriver/BiDi session creation. If empty,
+	// it is derived from DevToolsProxyPort as 127.0.0.1:<port>.
+	DebuggerAddr string `envconfig:"DEBUGGER_ADDR" default:""`
 }
 
 // Load loads configuration from environment variables
@@ -33,6 +38,9 @@ func Load() (*Config, error) {
 	var config Config
 	if err := envconfig.Process("", &config); err != nil {
 		return nil, err
+	}
+	if config.DebuggerAddr == "" {
+		config.DebuggerAddr = fmt.Sprintf("127.0.0.1:%d", config.DevToolsProxyPort)
 	}
 	if err := validate(&config); err != nil {
 		return nil, err
@@ -56,6 +64,12 @@ func validate(config *Config) error {
 	}
 	if config.PathToFFmpeg == "" {
 		return fmt.Errorf("FFMPEG_PATH is required")
+	}
+	if config.ChromeDriverUpstreamAddr == "" {
+		return fmt.Errorf("CHROMEDRIVER_UPSTREAM_ADDR is required")
+	}
+	if config.DebuggerAddr == "" {
+		return fmt.Errorf("DEBUGGER_ADDR is required")
 	}
 
 	return nil

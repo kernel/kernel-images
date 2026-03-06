@@ -20,23 +20,21 @@ func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// withChromeDriverAddr temporarily overrides the package-level chromeDriverAddr
-// for testing, restoring the original value when the test completes.
-func withChromeDriverAddr(t *testing.T, addr string) {
-	t.Helper()
-	orig := chromeDriverAddr
-	chromeDriverAddr = addr
-	t.Cleanup(func() { chromeDriverAddr = orig })
+func testOptions(upstream, debugger string) *Options {
+	return &Options{
+		ChromeDriverUpstream: upstream,
+		DebuggerAddress:      debugger,
+	}
 }
 
 func TestInjectDebuggerAddress_EmptyPayload(t *testing.T) {
 	payload := map[string]interface{}{}
-	injectDebuggerAddress(payload, "127.0.0.1:9222")
+	injectDebuggerAddress(payload, "127.0.0.1:9988")
 
 	caps := payload["capabilities"].(map[string]interface{})
 	alwaysMatch := caps["alwaysMatch"].(map[string]interface{})
 	opts := alwaysMatch["goog:chromeOptions"].(map[string]interface{})
-	assert.Equal(t, "127.0.0.1:9222", opts["debuggerAddress"])
+	assert.Equal(t, "127.0.0.1:9988", opts["debuggerAddress"])
 }
 
 func TestInjectDebuggerAddress_ExistingCapabilities(t *testing.T) {
@@ -49,12 +47,12 @@ func TestInjectDebuggerAddress_ExistingCapabilities(t *testing.T) {
 			},
 		},
 	}
-	injectDebuggerAddress(payload, "127.0.0.1:9222")
+	injectDebuggerAddress(payload, "127.0.0.1:9988")
 
 	caps := payload["capabilities"].(map[string]interface{})
 	alwaysMatch := caps["alwaysMatch"].(map[string]interface{})
 	opts := alwaysMatch["goog:chromeOptions"].(map[string]interface{})
-	assert.Equal(t, "127.0.0.1:9222", opts["debuggerAddress"])
+	assert.Equal(t, "127.0.0.1:9988", opts["debuggerAddress"])
 	assert.Equal(t, []interface{}{"--headless"}, opts["args"], "existing options should be preserved")
 }
 
@@ -68,15 +66,23 @@ func TestInjectDebuggerAddress_OverridesExisting(t *testing.T) {
 			},
 		},
 	}
-	injectDebuggerAddress(payload, "127.0.0.1:9222")
+	injectDebuggerAddress(payload, "127.0.0.1:9988")
 
 	caps := payload["capabilities"].(map[string]interface{})
 	alwaysMatch := caps["alwaysMatch"].(map[string]interface{})
 	opts := alwaysMatch["goog:chromeOptions"].(map[string]interface{})
-	assert.Equal(t, "127.0.0.1:9222", opts["debuggerAddress"])
+	assert.Equal(t, "127.0.0.1:9988", opts["debuggerAddress"])
+}
+
+func TestIsWebSocketUpgrade_MultiValueConnection(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/session", nil)
+	req.Header.Set("Connection", "keep-alive, Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	assert.True(t, isWebSocketUpgrade(req))
 }
 
 func TestHandler_PostSession_InjectsDebuggerAddress(t *testing.T) {
+	debuggerAddr := "127.0.0.1:9911"
 	var capturedBody []byte
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -89,9 +95,7 @@ func TestHandler_PostSession_InjectsDebuggerAddress(t *testing.T) {
 	defer backend.Close()
 
 	backendURL, _ := url.Parse(backend.URL)
-	withChromeDriverAddr(t, backendURL.Host)
-
-	handler := Handler(silentLogger())
+	handler := Handler(silentLogger(), testOptions(backendURL.Host, debuggerAddr))
 
 	reqBody := `{"capabilities":{"alwaysMatch":{"browserName":"chrome"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/session", strings.NewReader(reqBody))
@@ -135,9 +139,7 @@ func TestHandler_HTTPPassthrough(t *testing.T) {
 	defer backend.Close()
 
 	backendURL, _ := url.Parse(backend.URL)
-	withChromeDriverAddr(t, backendURL.Host)
-
-	handler := Handler(silentLogger())
+	handler := Handler(silentLogger(), testOptions(backendURL.Host, "127.0.0.1:9922"))
 
 	tests := []struct {
 		method string
@@ -196,9 +198,7 @@ func TestHandler_WebSocketPassthrough(t *testing.T) {
 	defer echoBackend.Close()
 
 	backendURL, _ := url.Parse(echoBackend.URL)
-	withChromeDriverAddr(t, backendURL.Host)
-
-	handler := Handler(silentLogger())
+	handler := Handler(silentLogger(), testOptions(backendURL.Host, "127.0.0.1:9922"))
 	proxySrv := httptest.NewServer(handler)
 	defer proxySrv.Close()
 
@@ -220,6 +220,7 @@ func TestHandler_WebSocketPassthrough(t *testing.T) {
 }
 
 func TestHandler_WebSocket_BiDiSessionNew_InjectsDebuggerAddress(t *testing.T) {
+	debuggerAddr := "127.0.0.1:9933"
 	var capturedMsg []byte
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
@@ -239,9 +240,7 @@ func TestHandler_WebSocket_BiDiSessionNew_InjectsDebuggerAddress(t *testing.T) {
 	defer backend.Close()
 
 	backendURL, _ := url.Parse(backend.URL)
-	withChromeDriverAddr(t, backendURL.Host)
-
-	handler := Handler(silentLogger())
+	handler := Handler(silentLogger(), testOptions(backendURL.Host, debuggerAddr))
 	proxySrv := httptest.NewServer(handler)
 	defer proxySrv.Close()
 
@@ -292,9 +291,7 @@ func TestHandler_WebSocket_NonSessionNew_PassesThrough(t *testing.T) {
 	defer backend.Close()
 
 	backendURL, _ := url.Parse(backend.URL)
-	withChromeDriverAddr(t, backendURL.Host)
-
-	handler := Handler(silentLogger())
+	handler := Handler(silentLogger(), testOptions(backendURL.Host, "127.0.0.1:9922"))
 	proxySrv := httptest.NewServer(handler)
 	defer proxySrv.Close()
 
