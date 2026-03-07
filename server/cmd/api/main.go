@@ -317,6 +317,9 @@ func rewriteChromeURLs(v interface{}, chromeHost, proxyHost string) {
 				val[field] = rewriteWSURL(s, chromeHost, proxyHost)
 			}
 		}
+		for _, nested := range val {
+			rewriteChromeURLs(nested, chromeHost, proxyHost)
+		}
 	case []interface{}:
 		for _, item := range val {
 			rewriteChromeURLs(item, chromeHost, proxyHost)

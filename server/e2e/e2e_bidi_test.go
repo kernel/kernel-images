@@ -18,24 +18,33 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var (
+	bidiDepsOnce sync.Once
+	bidiDepsErr  error
+)
+
 func getBidiPath() string {
 	return "./bidi"
 }
 
 func ensureBidiDeps(t *testing.T) {
 	t.Helper()
-	nodeModulesPath := getBidiPath() + "/node_modules"
-	if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
-		t.Log("Installing bidi test dependencies...")
-		cmd := exec.Command("npm", "install")
-		cmd.Dir = getBidiPath()
-		// Vibium can download a local browser at install time, which is unnecessary
-		// for remote-BiDi tests running against our containerized browser.
-		cmd.Env = append(os.Environ(), "VIBIUM_SKIP_BROWSER_DOWNLOAD=1")
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to install bidi dependencies: %v\nOutput: %s", err, string(output))
-		t.Log("Bidi test dependencies installed successfully")
-	}
+	bidiDepsOnce.Do(func() {
+		nodeModulesPath := getBidiPath() + "/node_modules"
+		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
+			cmd := exec.Command("npm", "install")
+			cmd.Dir = getBidiPath()
+			// Vibium can download a local browser at install time, which is unnecessary
+			// for remote-BiDi tests running against our containerized browser.
+			cmd.Env = append(os.Environ(), "VIBIUM_SKIP_BROWSER_DOWNLOAD=1")
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				bidiDepsErr = fmt.Errorf("failed to install bidi dependencies: %w\noutput: %s", err, string(output))
+			}
+		}
+	})
+
+	require.NoError(t, bidiDepsErr, "bidi dependency setup failed")
 }
 
 // bidiConn wraps a WebSocket connection for BiDi JSON-RPC communication.
