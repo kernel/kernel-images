@@ -1,8 +1,19 @@
 # For detailed configuration options, please refer to the Neko documentation:
 # https://neko.m1k1o.net/docs/v3/configuration#file
 
+capture:
+  video:
+    codec: "vp9"
+    bitrate: 4000  # kbps — higher budget for motion-heavy frames (scrolling, video)
+    params:
+      vp9enc_deadline: 1            # realtime mode — required for interactive liveview
+      vp9enc_cpu_used: 4            # 0-9; 4 balances quality vs CPU (vs 8 which sacrifices quality)
+      vp9enc_end_usage: 1           # CBR — consistent quality during motion, avoids bitrate-cap degradation
+      vp9enc_lag_in_frames: 0       # no lookahead — minimizes encoding latency for interactive use
+      vp9enc_token_partitions: 2    # split frame into 4 partitions encoded in parallel
+
 desktop:
-  screen: "1920x1080@25"
+  screen: "1920x1080@30"
 
 member:
   provider: multiuser

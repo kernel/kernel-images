@@ -41,6 +41,7 @@ type RelayConfig struct {
 	NekoBaseURL string
 	NekoUser    string
 	NekoPass    string
+	VideoCodec  string // "vp8" or "vp9"
 	Logger      *slog.Logger
 }
 
@@ -49,8 +50,13 @@ func NewRelay(ctx context.Context, cfg RelayConfig) (*Relay, error) {
 		cfg.Logger = slog.Default()
 	}
 
+	mimeType := webrtc.MimeTypeVP8
+	if cfg.VideoCodec == "vp9" {
+		mimeType = webrtc.MimeTypeVP9
+	}
+
 	localTrack, err := webrtc.NewTrackLocalStaticRTP(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeVP8, ClockRate: 90000},
+		webrtc.RTPCodecCapability{MimeType: mimeType, ClockRate: 90000},
 		"video", "screen",
 	)
 	if err != nil {

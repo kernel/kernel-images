@@ -137,13 +137,18 @@ func main() {
 	})
 
 	// WebRTC relay: connects to Neko as a headless viewer and re-serves
-	// the VP8 video stream to external WebRTC clients via a single
+	// the video stream to external WebRTC clients via a single
 	// WebSocket signaling endpoint. The Neko connection is lazy —
 	// it only starts when the first client connects.
+	relayCodec := os.Getenv("WEBRTC_RELAY_CODEC")
+	if relayCodec == "" {
+		relayCodec = "vp8"
+	}
 	relay, err := webrtcscreen.NewRelay(ctx, webrtcscreen.RelayConfig{
 		NekoBaseURL: "http://127.0.0.1:8080",
 		NekoUser:    "admin",
 		NekoPass:    adminPassword,
+		VideoCodec:  relayCodec,
 		Logger:      slogger,
 	})
 	if err != nil {
