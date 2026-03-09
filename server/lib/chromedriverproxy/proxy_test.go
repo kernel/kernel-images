@@ -23,7 +23,7 @@ func silentLogger() *slog.Logger {
 func testOptions(upstream, debugger string) *Options {
 	return &Options{
 		ChromeDriverUpstream: upstream,
-		DebuggerAddress:      debugger,
+		DevToolsProxyAddr:    debugger,
 	}
 }
 

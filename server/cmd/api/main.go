@@ -180,7 +180,8 @@ func main() {
 		Handler: rDevtools,
 	}
 
-	// ChromeDriver proxy: intercepts POST /session to inject debuggerAddress,
+	// ChromeDriver proxy: intercepts POST /session to inject the DevTools proxy
+	// address as goog:chromeOptions.debuggerAddress,
 	// proxies WebSocket (BiDi) and all other HTTP to the internal ChromeDriver.
 	rChromeDriver := chi.NewRouter()
 	rChromeDriver.Use(
@@ -196,7 +197,7 @@ func main() {
 	)
 	rChromeDriver.Handle("/*", chromedriverproxy.Handler(slogger, &chromedriverproxy.Options{
 		ChromeDriverUpstream: config.ChromeDriverUpstreamAddr,
-		DebuggerAddress:      config.DebuggerAddr,
+		DevToolsProxyAddr:    config.DevToolsProxyAddr,
 	}))
 
 	srvChromeDriver := &http.Server{

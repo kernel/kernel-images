@@ -26,7 +26,7 @@ func TestLoad(t *testing.T) {
 				DevToolsProxyPort:        9222,
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
-				DebuggerAddr:             "127.0.0.1:9222",
+				DevToolsProxyAddr:        "127.0.0.1:9222",
 			},
 		},
 		{
@@ -52,14 +52,14 @@ func TestLoad(t *testing.T) {
 				DevToolsProxyPort:        9876,
 				ChromeDriverProxyPort:    5432,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9999",
-				DebuggerAddr:             "127.0.0.1:9876",
+				DevToolsProxyAddr:        "127.0.0.1:9876",
 			},
 		},
 		{
-			name: "explicit debugger addr override",
+			name: "explicit devtools proxy addr override",
 			env: map[string]string{
 				"DEVTOOLS_PROXY_PORT": "7777",
-				"DEBUGGER_ADDR":       "10.0.0.1:1234",
+				"DEVTOOLS_PROXY_ADDR": "10.0.0.1:1234",
 			},
 			wantCfg: &Config{
 				Port:                     10001,
@@ -71,7 +71,7 @@ func TestLoad(t *testing.T) {
 				DevToolsProxyPort:        7777,
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
-				DebuggerAddr:             "10.0.0.1:1234",
+				DevToolsProxyAddr:        "10.0.0.1:1234",
 			},
 		},
 		{

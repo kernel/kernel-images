@@ -17,20 +17,20 @@ import (
 
 const (
 	defaultChromeDriverUpstream = "127.0.0.1:9225"
-	defaultDebuggerAddress      = "127.0.0.1:9222"
+	defaultDevToolsProxyAddr    = "127.0.0.1:9222"
 )
 
-// Options controls which upstream ChromeDriver to proxy to, and which
-// debuggerAddress should be injected into WebDriver/BiDi session creation.
+// Options controls which upstream ChromeDriver to proxy to, and which DevTools
+// proxy address should be injected into WebDriver/BiDi session creation.
 type Options struct {
 	ChromeDriverUpstream string
-	DebuggerAddress      string
+	DevToolsProxyAddr    string
 }
 
 func resolveOptions(opts *Options) Options {
 	resolved := Options{
 		ChromeDriverUpstream: defaultChromeDriverUpstream,
-		DebuggerAddress:      defaultDebuggerAddress,
+		DevToolsProxyAddr:    defaultDevToolsProxyAddr,
 	}
 	if opts == nil {
 		return resolved
@@ -38,8 +38,8 @@ func resolveOptions(opts *Options) Options {
 	if opts.ChromeDriverUpstream != "" {
 		resolved.ChromeDriverUpstream = opts.ChromeDriverUpstream
 	}
-	if opts.DebuggerAddress != "" {
-		resolved.DebuggerAddress = opts.DebuggerAddress
+	if opts.DevToolsProxyAddr != "" {
+		resolved.DevToolsProxyAddr = opts.DevToolsProxyAddr
 	}
 	return resolved
 }
@@ -117,7 +117,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		return
 	}
 
-	injectDebuggerAddress(payload, cfg.DebuggerAddress)
+	injectDebuggerAddress(payload, cfg.DevToolsProxyAddr)
 
 	rewritten, err := json.Marshal(payload)
 	if err != nil {
@@ -258,7 +258,7 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, logger *slog.Logger,
 		if direction != "->" || mt != websocket.MessageText {
 			return msg
 		}
-		return maybeInjectBidiSession(msg, cfg.DebuggerAddress, logger)
+		return maybeInjectBidiSession(msg, cfg.DevToolsProxyAddr, logger)
 	}
 
 	wsproxy.Proxy(w, r, upstreamURL, wsproxy.ProxyOptions{
