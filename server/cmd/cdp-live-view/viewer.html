@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live View</title>
+    <meta charset="utf-8">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
+        #container {
+            width: 100%; height: 100%;
+            display: flex; align-items: center; justify-content: center;
+        }
+        canvas {
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            cursor: default;
+        }
+        #status {
+            position: fixed; top: 8px; right: 8px;
+            font: 12px/1 monospace; color: #888;
+            background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px;
+            pointer-events: none; z-index: 10;
+            transition: opacity 0.3s;
+        }
+        #status.connected { color: #4a4; }
+        #status.error { color: #a44; }
+    </style>
+</head>
+<body>
+<div id="container">
+    <canvas id="screen" tabindex="0"></canvas>
+</div>
+<div id="status">connecting...</div>
+<script>
+(function() {
+    const canvas = document.getElementById('screen');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const container = document.getElementById('container');
+
+    let ws = null;
+    let deviceWidth = 1920;
+    let deviceHeight = 1080;
+    let scaleX = 1;
+    let scaleY = 1;
+    let reconnectDelay = 500;
+
+    function updateCanvasSize() {
+        const cw = container.clientWidth;
+        const ch = container.clientHeight;
+        const aspect = deviceWidth / deviceHeight;
+        let w, h;
+        if (cw / ch > aspect) {
+            h = ch;
+            w = h * aspect;
+        } else {
+            w = cw;
+            h = w / aspect;
+        }
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        canvas.width = deviceWidth;
+        canvas.height = deviceHeight;
+        scaleX = deviceWidth / w;
+        scaleY = deviceHeight / h;
+    }
+
+    function connect() {
+        const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(proto + '//' + location.host + '/ws');
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = function() {
+            status.textContent = 'connected';
+            status.className = 'connected';
+            reconnectDelay = 500;
+            setTimeout(function() { status.style.opacity = '0'; }, 2000);
+        };
+
+        ws.onclose = function() {
+            status.textContent = 'disconnected';
+            status.className = 'error';
+            status.style.opacity = '1';
+            setTimeout(connect, reconnectDelay);
+            reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
+        };
+
+        ws.onerror = function() { ws.close(); };
+
+        ws.onmessage = function(e) {
+            if (typeof e.data === 'string') {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'frame_meta') {
+                    if (msg.deviceWidth > 0 && msg.deviceHeight > 0) {
+                        if (deviceWidth !== msg.deviceWidth || deviceHeight !== msg.deviceHeight) {
+                            deviceWidth = msg.deviceWidth;
+                            deviceHeight = msg.deviceHeight;
+                            updateCanvasSize();
+                        }
+                    }
+                }
+            } else {
+                const blob = new Blob([e.data], { type: 'image/jpeg' });
+                const url = URL.createObjectURL(blob);
+                const img = new Image();
+                img.onload = function() {
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    URL.revokeObjectURL(url);
+                };
+                img.src = url;
+            }
+        };
+    }
+
+    function canvasCoords(e) {
+        const rect = canvas.getBoundingClientRect();
+        return {
+            x: (e.clientX - rect.left) * scaleX,
+            y: (e.clientY - rect.top) * scaleY
+        };
+    }
+
+    function modifiers(e) {
+        let m = 0;
+        if (e.altKey) m |= 1;
+        if (e.ctrlKey) m |= 2;
+        if (e.metaKey) m |= 4;
+        if (e.shiftKey) m |= 8;
+        return m;
+    }
+
+    function buttonName(b) {
+        switch (b) {
+            case 0: return 'left';
+            case 1: return 'middle';
+            case 2: return 'right';
+            default: return 'none';
+        }
+    }
+
+    function send(obj) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify(obj));
+        }
+    }
+
+    canvas.addEventListener('mousemove', function(e) {
+        const c = canvasCoords(e);
+        send({ type: 'mouse', mouseType: 'mouseMoved', x: c.x, y: c.y, modifiers: modifiers(e) });
+    });
+
+    canvas.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        canvas.focus();
+        const c = canvasCoords(e);
+        send({
+            type: 'mouse', mouseType: 'mousePressed',
+            x: c.x, y: c.y,
+            button: buttonName(e.button), clickCount: 1,
+            modifiers: modifiers(e)
+        });
+    });
+
+    canvas.addEventListener('mouseup', function(e) {
+        e.preventDefault();
+        const c = canvasCoords(e);
+        send({
+            type: 'mouse', mouseType: 'mouseReleased',
+            x: c.x, y: c.y,
+            button: buttonName(e.button), clickCount: 1,
+            modifiers: modifiers(e)
+        });
+    });
+
+    canvas.addEventListener('dblclick', function(e) {
+        e.preventDefault();
+        const c = canvasCoords(e);
+        send({
+            type: 'mouse', mouseType: 'mousePressed',
+            x: c.x, y: c.y,
+            button: buttonName(e.button), clickCount: 2,
+            modifiers: modifiers(e)
+        });
+        send({
+            type: 'mouse', mouseType: 'mouseReleased',
+            x: c.x, y: c.y,
+            button: buttonName(e.button), clickCount: 2,
+            modifiers: modifiers(e)
+        });
+    });
+
+    canvas.addEventListener('wheel', function(e) {
+        e.preventDefault();
+        const c = canvasCoords(e);
+        send({
+            type: 'mouse', mouseType: 'mouseWheel',
+            x: c.x, y: c.y,
+            deltaX: e.deltaX, deltaY: e.deltaY,
+            modifiers: modifiers(e)
+        });
+    }, { passive: false });
+
+    canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+    canvas.addEventListener('keydown', function(e) {
+        e.preventDefault();
+        const isPrintable = e.key.length === 1;
+        send({
+            type: 'key', keyType: isPrintable ? 'keyDown' : 'rawKeyDown',
+            key: e.key, code: e.code,
+            text: isPrintable ? e.key : '',
+            keyCode: e.keyCode,
+            modifiers: modifiers(e)
+        });
+        if (isPrintable) {
+            send({
+                type: 'key', keyType: 'char',
+                key: e.key, code: e.code,
+                text: e.key,
+                keyCode: e.keyCode,
+                modifiers: modifiers(e)
+            });
+        }
+    });
+
+    canvas.addEventListener('keyup', function(e) {
+        e.preventDefault();
+        send({
+            type: 'key', keyType: 'keyUp',
+            key: e.key, code: e.code,
+            keyCode: e.keyCode,
+            modifiers: modifiers(e)
+        });
+    });
+
+    window.addEventListener('resize', updateCanvasSize);
+    updateCanvasSize();
+    canvas.focus();
+    connect();
+})();
+</script>
+</body>
+</html>

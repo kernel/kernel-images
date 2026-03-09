@@ -1,0 +1,637 @@
+package main
+
+import (
+	"context"
+	"embed"
+	"encoding/base64"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/coder/websocket"
+)
+
+//go:embed viewer.html
+var viewerFS embed.FS
+
+type cdpMessage struct {
+	ID     int             `json:"id"`
+	Method string          `json:"method,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Result json.RawMessage `json:"result,omitempty"`
+	Error  *cdpError       `json:"error,omitempty"`
+}
+
+type cdpError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type cdpClient struct {
+	ws     *websocket.Conn
+	nextID atomic.Int64
+	mu     sync.Mutex
+
+	pending   map[int]chan json.RawMessage
+	pendingMu sync.Mutex
+
+	handlers   map[string]func(json.RawMessage)
+	handlersMu sync.RWMutex
+
+	log *slog.Logger
+}
+
+func newCDPClient(ctx context.Context, url string, log *slog.Logger) (*cdpClient, error) {
+	ws, _, err := websocket.Dial(ctx, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("dial CDP: %w", err)
+	}
+	ws.SetReadLimit(64 * 1024 * 1024)
+
+	c := &cdpClient{
+		ws:       ws,
+		pending:  make(map[int]chan json.RawMessage),
+		handlers: make(map[string]func(json.RawMessage)),
+		log:      log,
+	}
+	c.nextID.Store(1)
+	go c.readLoop(ctx)
+	return c, nil
+}
+
+func (c *cdpClient) readLoop(ctx context.Context) {
+	for {
+		_, data, err := c.ws.Read(ctx)
+		if err != nil {
+			c.log.Error("CDP read error", "error", err)
+			return
+		}
+		var msg cdpMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+
+		if msg.Method != "" {
+			c.handlersMu.RLock()
+			h, ok := c.handlers[msg.Method]
+			c.handlersMu.RUnlock()
+			if ok {
+				go h(msg.Params)
+			}
+		}
+
+		if msg.ID > 0 {
+			c.pendingMu.Lock()
+			ch, ok := c.pending[msg.ID]
+			if ok {
+				delete(c.pending, msg.ID)
+			}
+			c.pendingMu.Unlock()
+			if ok {
+				if msg.Error != nil {
+					ch <- nil
+				} else {
+					ch <- msg.Result
+				}
+			}
+		}
+	}
+}
+
+func (c *cdpClient) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	id := int(c.nextID.Add(1))
+	var rawParams json.RawMessage
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return nil, err
+		}
+		rawParams = b
+	}
+
+	msg, _ := json.Marshal(cdpMessage{ID: id, Method: method, Params: rawParams})
+
+	ch := make(chan json.RawMessage, 1)
+	c.pendingMu.Lock()
+	c.pending[id] = ch
+	c.pendingMu.Unlock()
+
+	c.mu.Lock()
+	err := c.ws.Write(ctx, websocket.MessageText, msg)
+	c.mu.Unlock()
+	if err != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
+		return nil, err
+	}
+
+	select {
+	case result := <-ch:
+		return result, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *cdpClient) callSession(ctx context.Context, sessionID, method string, params any) (json.RawMessage, error) {
+	id := int(c.nextID.Add(1))
+	var rawParams json.RawMessage
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return nil, err
+		}
+		rawParams = b
+	}
+
+	type sessionMsg struct {
+		ID        int             `json:"id"`
+		Method    string          `json:"method"`
+		Params    json.RawMessage `json:"params,omitempty"`
+		SessionID string          `json:"sessionId"`
+	}
+	msg, _ := json.Marshal(sessionMsg{ID: id, Method: method, Params: rawParams, SessionID: sessionID})
+
+	ch := make(chan json.RawMessage, 1)
+	c.pendingMu.Lock()
+	c.pending[id] = ch
+	c.pendingMu.Unlock()
+
+	c.mu.Lock()
+	err := c.ws.Write(ctx, websocket.MessageText, msg)
+	c.mu.Unlock()
+	if err != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
+		return nil, err
+	}
+
+	select {
+	case result := <-ch:
+		return result, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func (c *cdpClient) onEvent(method string, handler func(json.RawMessage)) {
+	c.handlersMu.Lock()
+	c.handlers[method] = handler
+	c.handlersMu.Unlock()
+}
+
+func (c *cdpClient) close() {
+	c.ws.Close(websocket.StatusNormalClosure, "")
+}
+
+// viewer tracks a connected browser viewer.
+type viewer struct {
+	ws  *websocket.Conn
+	mu  sync.Mutex
+	log *slog.Logger
+}
+
+func (v *viewer) sendBinary(ctx context.Context, data []byte) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.ws.Write(ctx, websocket.MessageBinary, data)
+}
+
+// server orchestrates CDP connection and viewer connections.
+type server struct {
+	cdpPort    string
+	listenAddr string
+	quality    int
+	width      int
+	height     int
+	log        *slog.Logger
+
+	ctx       context.Context
+	viewers   sync.Map
+	cdp       *cdpClient
+	sessionID string
+	targetID  string
+	cdpMu     sync.Mutex
+
+	// sessions tracks targetID -> sessionID for attached targets
+	sessions   map[string]string
+	sessionsMu sync.Mutex
+}
+
+func (s *server) discoverBrowserWSURL(ctx context.Context) (string, error) {
+	url := fmt.Sprintf("http://127.0.0.1:%s/json/version", s.cdpPort)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	var info struct {
+		WebSocketDebuggerUrl string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return "", fmt.Errorf("decode /json/version: %w", err)
+	}
+	return info.WebSocketDebuggerUrl, nil
+}
+
+func (s *server) connectCDP(ctx context.Context) error {
+	s.cdpMu.Lock()
+	defer s.cdpMu.Unlock()
+
+	if s.cdp != nil {
+		return nil
+	}
+
+	wsURL, err := s.discoverBrowserWSURL(ctx)
+	if err != nil {
+		return fmt.Errorf("discover browser WS URL: %w", err)
+	}
+
+	s.log.Info("connecting to CDP", "url", wsURL)
+	cdp, err := newCDPClient(s.ctx, wsURL, s.log)
+	if err != nil {
+		return err
+	}
+	s.cdp = cdp
+
+	// Handle target attachment responses
+	cdp.onEvent("Target.attachedToTarget", func(params json.RawMessage) {
+		var ev struct {
+			SessionID  string `json:"sessionId"`
+			TargetInfo struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+			} `json:"targetInfo"`
+		}
+		json.Unmarshal(params, &ev)
+		if ev.TargetInfo.Type == "page" {
+			s.sessionsMu.Lock()
+			s.sessions[ev.TargetInfo.TargetID] = ev.SessionID
+			s.sessionsMu.Unlock()
+			s.log.Info("target attached", "targetId", ev.TargetInfo.TargetID, "sessionId", ev.SessionID)
+		}
+	})
+
+	// Register screencast frame handler
+	cdp.onEvent("Page.screencastFrame", func(params json.RawMessage) {
+		s.handleScreencastFrame(s.ctx, params)
+	})
+
+	// When a new page target is created, auto-switch to it
+	cdp.onEvent("Target.targetCreated", func(params json.RawMessage) {
+		var ev struct {
+			TargetInfo struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+				URL      string `json:"url"`
+			} `json:"targetInfo"`
+		}
+		json.Unmarshal(params, &ev)
+		if ev.TargetInfo.Type == "page" {
+			s.log.Info("new page target created", "targetId", ev.TargetInfo.TargetID, "url", ev.TargetInfo.URL)
+			go s.switchToTarget(s.ctx, ev.TargetInfo.TargetID)
+		}
+	})
+
+	// When a page navigates to a real URL, switch to it
+	cdp.onEvent("Target.targetInfoChanged", func(params json.RawMessage) {
+		var ev struct {
+			TargetInfo struct {
+				TargetID string `json:"targetId"`
+				Type     string `json:"type"`
+				URL      string `json:"url"`
+			} `json:"targetInfo"`
+		}
+		json.Unmarshal(params, &ev)
+		if ev.TargetInfo.Type == "page" && ev.TargetInfo.URL != "" &&
+			ev.TargetInfo.URL != "about:blank" && ev.TargetInfo.URL != "chrome://newtab/" {
+			if ev.TargetInfo.TargetID != s.targetID {
+				s.log.Info("page navigated, switching", "targetId", ev.TargetInfo.TargetID, "url", ev.TargetInfo.URL)
+				go s.switchToTarget(s.ctx, ev.TargetInfo.TargetID)
+			}
+		}
+	})
+
+	// Enable target discovery
+	_, err = cdp.call(s.ctx, "Target.setDiscoverTargets", map[string]bool{"discover": true})
+	if err != nil {
+		cdp.close()
+		s.cdp = nil
+		return fmt.Errorf("set discover targets: %w", err)
+	}
+
+	// Find an initial page to attach to
+	result, err := cdp.call(s.ctx, "Target.getTargets", nil)
+	if err != nil {
+		cdp.close()
+		s.cdp = nil
+		return fmt.Errorf("get targets: %w", err)
+	}
+
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+			URL      string `json:"url"`
+		} `json:"targetInfos"`
+	}
+	json.Unmarshal(result, &targets)
+
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			s.log.Info("attaching to initial page", "targetId", t.TargetID, "url", t.URL)
+			if err := s.switchToTarget(s.ctx, t.TargetID); err != nil {
+				s.log.Error("failed to attach to initial page", "error", err)
+			}
+			break
+		}
+	}
+
+	return nil
+}
+
+func (s *server) switchToTarget(ctx context.Context, targetID string) error {
+	s.sessionsMu.Lock()
+	existingSession, alreadyAttached := s.sessions[targetID]
+	s.sessionsMu.Unlock()
+
+	var sessionID string
+
+	if alreadyAttached {
+		sessionID = existingSession
+	} else {
+		// Attach to the target
+		_, err := s.cdp.call(ctx, "Target.attachToTarget", map[string]any{
+			"targetId": targetID,
+			"flatten":  true,
+		})
+		if err != nil {
+			return fmt.Errorf("attach to target %s: %w", targetID, err)
+		}
+
+		// Wait for the session to appear
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			s.sessionsMu.Lock()
+			sid, ok := s.sessions[targetID]
+			s.sessionsMu.Unlock()
+			if ok {
+				sessionID = sid
+				break
+			}
+		}
+		if sessionID == "" {
+			return fmt.Errorf("timed out waiting for session for target %s", targetID)
+		}
+	}
+
+	// Stop old screencast if running
+	if s.sessionID != "" && s.sessionID != sessionID {
+		s.cdp.callSession(ctx, s.sessionID, "Page.stopScreencast", nil)
+	}
+
+	s.sessionID = sessionID
+	s.targetID = targetID
+
+	// Enable Page domain
+	s.cdp.callSession(ctx, sessionID, "Page.enable", nil)
+
+	// Start screencast (maxWidth/maxHeight control frame resolution without modifying the page viewport)
+	_, err := s.cdp.callSession(ctx, sessionID, "Page.startScreencast", map[string]any{
+		"format":        "jpeg",
+		"quality":       s.quality,
+		"maxWidth":      s.width,
+		"maxHeight":     s.height,
+		"everyNthFrame": 1,
+	})
+	if err != nil {
+		return fmt.Errorf("start screencast on %s: %w", targetID, err)
+	}
+
+	s.log.Info("screencast switched", "targetId", targetID, "sessionId", sessionID)
+	return nil
+}
+
+func (s *server) handleScreencastFrame(ctx context.Context, params json.RawMessage) {
+	var frame struct {
+		Data     string `json:"data"`
+		Metadata struct {
+			OffsetTop       float64 `json:"offsetTop"`
+			PageScaleFactor float64 `json:"pageScaleFactor"`
+			DeviceWidth     float64 `json:"deviceWidth"`
+			DeviceHeight    float64 `json:"deviceHeight"`
+			ScrollOffsetX   float64 `json:"scrollOffsetX"`
+			ScrollOffsetY   float64 `json:"scrollOffsetY"`
+		} `json:"metadata"`
+		SessionID int `json:"sessionId"`
+	}
+	if err := json.Unmarshal(params, &frame); err != nil {
+		return
+	}
+
+	// Ack the frame to get the next one
+	go func() {
+		s.cdp.callSession(ctx, s.sessionID, "Page.screencastFrameAck", map[string]int{
+			"sessionId": frame.SessionID,
+		})
+	}()
+
+	jpegData, err := base64.StdEncoding.DecodeString(frame.Data)
+	if err != nil {
+		return
+	}
+
+	meta := map[string]any{
+		"type":         "frame_meta",
+		"deviceWidth":  frame.Metadata.DeviceWidth,
+		"deviceHeight": frame.Metadata.DeviceHeight,
+		"offsetTop":    frame.Metadata.OffsetTop,
+		"scrollX":      frame.Metadata.ScrollOffsetX,
+		"scrollY":      frame.Metadata.ScrollOffsetY,
+	}
+	metaJSON, _ := json.Marshal(meta)
+
+	s.viewers.Range(func(key, value any) bool {
+		v := value.(*viewer)
+		writeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+		defer cancel()
+		v.ws.Write(writeCtx, websocket.MessageText, metaJSON)
+		v.sendBinary(writeCtx, jpegData)
+		return true
+	})
+}
+
+type inputEvent struct {
+	Type string `json:"type"`
+
+	MouseType  string  `json:"mouseType,omitempty"`
+	X          float64 `json:"x"`
+	Y          float64 `json:"y"`
+	Button     string  `json:"button,omitempty"`
+	ClickCount int     `json:"clickCount,omitempty"`
+	DeltaX     float64 `json:"deltaX,omitempty"`
+	DeltaY     float64 `json:"deltaY,omitempty"`
+	Modifiers  int     `json:"modifiers,omitempty"`
+
+	KeyType string `json:"keyType,omitempty"`
+	Key     string `json:"key,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Text    string `json:"text,omitempty"`
+	KeyCode int    `json:"keyCode,omitempty"`
+}
+
+func (s *server) handleInput(ctx context.Context, ev inputEvent) {
+	if s.cdp == nil || s.sessionID == "" {
+		return
+	}
+
+	switch ev.Type {
+	case "mouse":
+		params := map[string]any{
+			"type":      ev.MouseType,
+			"x":         ev.X,
+			"y":         ev.Y,
+			"modifiers": ev.Modifiers,
+		}
+		if ev.MouseType == "mousePressed" || ev.MouseType == "mouseReleased" {
+			params["button"] = ev.Button
+			params["clickCount"] = ev.ClickCount
+			if ev.ClickCount == 0 {
+				params["clickCount"] = 1
+			}
+		}
+		if ev.MouseType == "mouseWheel" {
+			params["type"] = "mouseWheel"
+			params["deltaX"] = ev.DeltaX
+			params["deltaY"] = ev.DeltaY
+		}
+		s.cdp.callSession(ctx, s.sessionID, "Input.dispatchMouseEvent", params)
+
+	case "key":
+		params := map[string]any{
+			"type":                   ev.KeyType,
+			"modifiers":             ev.Modifiers,
+			"key":                   ev.Key,
+			"code":                  ev.Code,
+			"windowsVirtualKeyCode": ev.KeyCode,
+			"nativeVirtualKeyCode":  ev.KeyCode,
+		}
+		if ev.Text != "" {
+			params["text"] = ev.Text
+		}
+		s.cdp.callSession(ctx, s.sessionID, "Input.dispatchKeyEvent", params)
+	}
+}
+
+func (s *server) handleViewer(w http.ResponseWriter, r *http.Request) {
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		s.log.Error("accept viewer ws", "error", err)
+		return
+	}
+	ws.SetReadLimit(64 * 1024)
+
+	v := &viewer{ws: ws, log: s.log}
+	viewerID := fmt.Sprintf("%p", v)
+	s.viewers.Store(viewerID, v)
+	s.log.Info("viewer connected", "id", viewerID)
+
+	defer func() {
+		s.viewers.Delete(viewerID)
+		ws.Close(websocket.StatusNormalClosure, "")
+		s.log.Info("viewer disconnected", "id", viewerID)
+	}()
+
+	if err := s.connectCDP(s.ctx); err != nil {
+		s.log.Error("connect CDP for viewer", "error", err)
+		return
+	}
+
+	for {
+		_, data, err := ws.Read(s.ctx)
+		if err != nil {
+			return
+		}
+		var ev inputEvent
+		if err := json.Unmarshal(data, &ev); err != nil {
+			continue
+		}
+		s.handleInput(s.ctx, ev)
+	}
+}
+
+func (s *server) serveViewer(w http.ResponseWriter, r *http.Request) {
+	data, err := viewerFS.ReadFile("viewer.html")
+	if err != nil {
+		http.Error(w, "viewer not found", 500)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(data)
+}
+
+func (s *server) healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	io.WriteString(w, "ok")
+}
+
+func envInt(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n := def
+	fmt.Sscanf(v, "%d", &n)
+	return n
+}
+
+func main() {
+	cdpPort := flag.String("cdp-port", "", "CDP port (default: INTERNAL_PORT env or 9223)")
+	listen := flag.String("listen", ":8080", "HTTP listen address")
+	quality := flag.Int("quality", 80, "JPEG quality (1-100)")
+	flag.Parse()
+
+	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	port := *cdpPort
+	if port == "" {
+		port = os.Getenv("INTERNAL_PORT")
+	}
+	if port == "" {
+		port = "9223"
+	}
+
+	s := &server{
+		cdpPort:    port,
+		listenAddr: *listen,
+		quality:    *quality,
+		width:      envInt("WIDTH", 1920),
+		height:     envInt("HEIGHT", 1080),
+		ctx:        context.Background(),
+		sessions:   make(map[string]string),
+		log:        log,
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.serveViewer)
+	mux.HandleFunc("/ws", s.handleViewer)
+	mux.HandleFunc("/health", s.healthHandler)
+
+	log.Info("starting cdp-live-view", "listen", s.listenAddr, "cdpPort", s.cdpPort)
+	if err := http.ListenAndServe(s.listenAddr, mux); err != nil {
+		log.Error("server error", "error", err)
+		os.Exit(1)
+	}
+}

@@ -216,6 +216,7 @@ cleanup () {
   echo "[wrapper] Cleaning up..."
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
+  supervisorctl -c /etc/supervisor/supervisord.conf stop cdp-live-view || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromedriver || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop xvfb || true
@@ -273,6 +274,12 @@ wait_for_tcp_port 127.0.0.1 "${API_PORT}" "kernel-images API"
 echo "[wrapper] Starting ChromeDriver via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
 wait_for_tcp_port 127.0.0.1 9225 "ChromeDriver" 50 0.2 "10s" || true
+
+if [[ "${ENABLE_LIVE_VIEW:-}" == "true" ]]; then
+  echo "[wrapper] Starting CDP live view via supervisord"
+  supervisorctl -c /etc/supervisor/supervisord.conf start cdp-live-view
+  wait_for_tcp_port 127.0.0.1 8080 "cdp-live-view" 50 0.2 "10s" || true
+fi
 
 echo "[wrapper] startup complete!"
 # Re-enable scale-to-zero once startup has completed (when not under Docker)

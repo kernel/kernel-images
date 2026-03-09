@@ -25,4 +25,8 @@ deploy_args=(
   -n "$NAME"
 )
 
+if [[ "${ENABLE_LIVE_VIEW:-}" == "true" ]]; then
+  deploy_args+=( -e ENABLE_LIVE_VIEW=true -p 443:8080/http+tls )
+fi
+
 kraft cloud inst create "${deploy_args[@]}" "$IMAGE"
