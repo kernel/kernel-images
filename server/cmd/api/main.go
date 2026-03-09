@@ -280,7 +280,13 @@ func chromeJSONProxyHandler(upstreamMgr *devtoolsproxy.UpstreamManager, slogger 
 		}
 
 		chromeURL := fmt.Sprintf("http://%s%s", parsed.Host, chromePath)
-		resp, err := http.Get(chromeURL)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, chromeURL, nil)
+		if err != nil {
+			slogger.Error("failed to build Chrome request", "err", err, "url", chromeURL)
+			http.Error(w, "failed to build browser request", http.StatusInternalServerError)
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			slogger.Error("failed to fetch from Chrome", "err", err, "url", chromeURL)
 			http.Error(w, "failed to fetch from browser", http.StatusBadGateway)
