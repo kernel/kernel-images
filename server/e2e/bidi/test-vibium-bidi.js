@@ -1,6 +1,6 @@
 /**
- * Vibium BiDi e2e test: connects to a remote ChromeDriver BiDi WebSocket endpoint
- * and verifies navigation + title. Requires --endpoint (fail-fast if missing).
+ * Vibium BiDi e2e test: connects directly to a remote BiDi WebSocket endpoint
+ * and verifies the current remote-browser ergonomics.
  *
  * Usage: node test-vibium-bidi.js --endpoint ws://host:port/session
  */
@@ -21,7 +21,7 @@ function getArg(name) {
 }
 
 function main() {
-  const bro = browser.connect(endpoint);
+  const bro = browser.start(endpoint);
   const page = bro.page();
 
   page.go('https://example.com');
@@ -37,7 +37,7 @@ function main() {
   }
   console.log('h1 text:', h1Text);
 
-  bro.close();
+  bro.stop();
   console.log('All tests passed!');
 }
 
