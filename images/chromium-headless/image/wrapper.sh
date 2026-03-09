@@ -79,6 +79,10 @@ export HOSTNAME="${HOSTNAME:-kernel-vm}"
 # NOTE: --disable-background-networking was intentionally removed because it prevents
 # Chrome from fetching extensions via ExtensionInstallForcelist enterprise policy.
 # Enterprise extensions require Chrome to make HTTP requests to fetch update.xml and .crx files.
+#
+# Chromium renders to Xvfb (DISPLAY=:1) so that screenshots, recordings, xdotool
+# input, and live view all work. Flags like --ozone-platform=headless and
+# --disable-software-rasterizer are intentionally absent.
 if [ -z "${CHROMIUM_FLAGS:-}" ]; then
   CHROMIUM_FLAGS="--accept-lang=en-US,en \
     --allow-pre-commit-input \
@@ -106,24 +110,23 @@ if [ -z "${CHROMIUM_FLAGS:-}" ]; then
     --disable-prompt-on-repost \
     --disable-renderer-backgrounding \
     --disable-search-engine-choice-screen \
-    --disable-software-rasterizer \
     --enable-use-zoom-for-dsf=false \
     --export-tagged-pdf \
     --force-color-profile=srgb \
     --hide-crash-restore-bubble \
-    --hide-scrollbars \
     --metrics-recording-only \
     --mute-audio \
     --no-default-browser-check \
     --no-first-run \
     --no-sandbox \
     --no-service-autorun \
-    --ozone-platform=headless \
     --password-store=basic \
     --unsafely-disable-devtools-self-xss-warnings \
     --use-angle=swiftshader \
     --use-gl=angle \
-    --use-mock-keychain"
+    --use-mock-keychain \
+    --window-size=${WIDTH:-1920},${HEIGHT:-1080} \
+    --window-position=0,0"
 fi
 export CHROMIUM_FLAGS
 
@@ -216,6 +219,8 @@ cleanup () {
   echo "[wrapper] Cleaning up..."
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
+  supervisorctl -c /etc/supervisor/supervisord.conf stop novnc || true
+  supervisorctl -c /etc/supervisor/supervisord.conf stop x11vnc || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromedriver || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop xvfb || true
@@ -273,6 +278,16 @@ wait_for_tcp_port 127.0.0.1 "${API_PORT}" "kernel-images API"
 echo "[wrapper] Starting ChromeDriver via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
 wait_for_tcp_port 127.0.0.1 9225 "ChromeDriver" 50 0.2 "10s" || true
+
+if [[ "${ENABLE_LIVE_VIEW:-}" == "true" ]]; then
+  echo "[wrapper] Starting x11vnc via supervisord"
+  supervisorctl -c /etc/supervisor/supervisord.conf start x11vnc
+  wait_for_tcp_port 127.0.0.1 5900 "x11vnc" 50 0.2 "10s" || true
+
+  echo "[wrapper] Starting noVNC via supervisord"
+  supervisorctl -c /etc/supervisor/supervisord.conf start novnc
+  wait_for_tcp_port 127.0.0.1 8080 "noVNC" 50 0.2 "10s" || true
+fi
 
 echo "[wrapper] startup complete!"
 # Re-enable scale-to-zero once startup has completed (when not under Docker)

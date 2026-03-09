@@ -102,6 +102,8 @@ ARG TARGETARCH
 ARG TARGETOS
 ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-ubuntu2204
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
     --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
     set -xe; \
@@ -143,7 +145,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     fonts-noto-color-emoji \
     fonts-nanum \
     software-properties-common \
-    supervisor; \
+    supervisor \
+    x11vnc \
+    novnc \
+    websockify; \
     fc-cache -f
 
 # install chromium and sqlite3 for debugging the cookies file
@@ -223,6 +228,7 @@ COPY images/chromium-headless/image/wrapper.sh /usr/bin/wrapper.sh
 # Supervisord configuration
 COPY images/chromium-headless/image/supervisord.conf /etc/supervisor/supervisord.conf
 COPY images/chromium-headless/image/supervisor/services/ /etc/supervisor/conf.d/services/
+COPY images/chromium-headless/image/novnc-view.html /usr/share/novnc/index.html
 COPY shared/envoy/supervisor-envoy.conf /etc/supervisor/conf.d/services/envoy.conf
 
 # Install Envoy proxy

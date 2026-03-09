@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live View</title>
+    <meta charset="utf-8">
+    <style>
+        html, body { margin: 0; padding: 0; overflow: hidden; width: 100%; height: 100%; background: #000; }
+    </style>
+    <script src="vendor/promise.js"></script>
+    <script type="module">
+        window._noVNC_has_module_support = true;
+    </script>
+    <script>
+        window.addEventListener("load", function() {
+            if (window._noVNC_has_module_support) return;
+            var loader = document.createElement("script");
+            loader.src = "vendor/browser-es-module-loader/dist/browser-es-module-loader.js";
+            document.head.appendChild(loader);
+        });
+    </script>
+    <script type="module" crossorigin="anonymous">
+        import * as WebUtil from './app/webutil.js';
+        import RFB from './core/rfb.js';
+
+        WebUtil.init_logging(WebUtil.getConfigVar('logging', 'warn'));
+
+        var host = WebUtil.getConfigVar('host', window.location.hostname);
+        var port = WebUtil.getConfigVar('port', window.location.port);
+        if (!port) {
+            port = (window.location.protocol === 'https:') ? 443 : 80;
+        }
+        var path = WebUtil.getConfigVar('path', 'websockify');
+        var scheme = (window.location.protocol === 'https:') ? 'wss' : 'ws';
+        var url = scheme + '://' + host + ':' + port + '/' + path;
+
+        var rfb = new RFB(document.body, url, {
+            shared: true,
+            credentials: { password: WebUtil.getConfigVar('password', '') }
+        });
+        rfb.scaleViewport = true;
+        rfb.focusOnClick = true;
+        rfb.addEventListener("disconnect", function(e) {
+            if (!e.detail.clean) document.title = "Disconnected";
+        });
+    </script>
+</head>
+<body></body>
+</html>
