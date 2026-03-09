@@ -1428,14 +1428,23 @@ components:
           default: 0
         steps_per_segment:
           type: integer
-          description: Number of relative move steps per segment in the path. Minimum 1.
+          description: Number of relative move steps per segment in the path. Ignored when smooth=true. Minimum 1.
           minimum: 1
           default: 10
         step_delay_ms:
           type: integer
-          description: Delay in milliseconds between relative steps while dragging (not the initial delay).
+          description: Delay in milliseconds between relative steps while dragging. Ignored when smooth=true.
           minimum: 0
           default: 50
+        smooth:
+          type: boolean
+          description: Use human-like Bezier curves between path waypoints instead of linear interpolation. When true, steps_per_segment and step_delay_ms are ignored.
+          default: true
+        duration_ms:
+          type: integer
+          description: Target total duration in milliseconds for the entire drag movement when smooth=true. Omit for automatic timing based on total path length.
+          minimum: 50
+          maximum: 10000
         hold_keys:
           type: array
           description: Modifier keys to hold during the drag
