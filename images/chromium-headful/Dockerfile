@@ -204,13 +204,42 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     wget \
     xdg-utils \
     libvulkan1 \
-    fonts-liberation \
-    fonts-noto-cjk \
-    fonts-noto-color-emoji \
-    fonts-nanum \
     fontconfig \
     unzip && \
-    fc-cache -f
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install fonts to match a realistic Ubuntu 22.04 desktop fingerprint.
+# A minimal container has only 3 fonts, which is a strong fingerprinting signal
+# used by reCAPTCHA Enterprise and other bot detection vendors.
+RUN apt-get update && \
+    apt-get --no-install-recommends -y install \
+    fonts-liberation \
+    fonts-liberation2 \
+    fonts-noto-cjk \
+    fonts-noto-color-emoji \
+    fonts-noto-core \
+    fonts-nanum \
+    fonts-dejavu-core \
+    fonts-dejavu-extra \
+    fonts-freefont-ttf \
+    fonts-ubuntu \
+    fonts-opensymbol \
+    fonts-roboto \
+    fonts-croscore \
+    fonts-smc-chilanka \
+    fonts-hosny-amiri \
+    fonts-indic \
+    fonts-kacst \
+    fonts-khmeros-core \
+    fonts-lao \
+    fonts-lklug-sinhala \
+    fonts-sil-abyssinica \
+    fonts-sil-padauk \
+    fonts-thai-tlwg \
+    fonts-tibetan-machine \
+    fonts-droid-fallback && \
+    fc-cache -f && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # install ffmpeg manually since the version available in apt is from the 4.x branch due to #drama.
 COPY --from=ffmpeg-downloader /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
@@ -261,6 +290,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt -y install chromium && \
     apt --no-install-recommends -y install sqlite3;
 
+# Install ChromeDriver matching the installed Chromium version
+RUN set -eux; \
+    CHROMIUM_VERSION=$(chromium --version | awk '{print $2}'); \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMIUM_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
+    unzip /tmp/cd.zip -d /tmp; \
+    mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
+    chmod +x /usr/local/bin/chromedriver; \
+    rm -rf /tmp/cd.zip /tmp/chromedriver-linux64
+
 # Copy Chromium policy configuration
 RUN mkdir -p /etc/chromium/policies/managed
 COPY shared/chromium-policies/managed/policy.json /etc/chromium/policies/managed/policy.json
@@ -278,6 +316,22 @@ RUN set -eux; \
 
 # Install TypeScript, Playwright, Patchright, esbuild globally
 RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g typescript playwright-core patchright esbuild
+
+# Pre-install openssh-server and websocat for faster SSH setup via kernel CLI.
+# Only installed, NOT configured: no host keys, no custom config, service not enabled.
+RUN apt-get update && \
+    apt-get --no-install-recommends -y install openssh-server && \
+    rm -rf /var/lib/apt/lists/* && \
+    rm -f /etc/ssh/ssh_host_* && \
+    ARCH=$(dpkg --print-architecture) && \
+    case "$ARCH" in \
+        amd64) WEBSOCAT_ARCH="x86_64" ;; \
+        arm64) WEBSOCAT_ARCH="aarch64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/vi/websocat/releases/download/v1.14.1/websocat.${WEBSOCAT_ARCH}-unknown-linux-musl" \
+        -o /usr/local/bin/websocat && \
+    chmod +x /usr/local/bin/websocat
 
 # setup desktop env & app
 ENV DISPLAY_NUM=1

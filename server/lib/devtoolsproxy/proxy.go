@@ -18,6 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/onkernel/kernel-images/server/lib/wsproxy"
 )
 
 var devtoolsListeningRegexp = regexp.MustCompile(`DevTools listening on (ws://\S+)`)
@@ -198,7 +199,6 @@ func (u *UpstreamManager) runTailOnce(ctx context.Context) {
 // If logCDPMessages is true, all CDP messages will be logged with their direction.
 func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-
 		upstreamCurrent := mgr.Current()
 		if upstreamCurrent == "" {
 			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
@@ -209,47 +209,30 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			http.Error(w, "invalid upstream", http.StatusInternalServerError)
 			return
 		}
-		// Always use the full upstream path and query, ignoring the client's request path/query
 		upstreamURL := (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path, RawQuery: parsed.RawQuery}).String()
-		acceptOptions := &websocket.AcceptOptions{
+
+		var transform wsproxy.MessageTransform
+		if logCDPMessages {
+			transform = func(direction string, mt websocket.MessageType, msg []byte) []byte {
+				logCDPMessage(logger, direction, mt, msg)
+				return msg
+			}
+		}
+
+		acceptOpts := &websocket.AcceptOptions{
 			OriginPatterns:  []string{"*"},
 			CompressionMode: websocket.CompressionContextTakeover,
 		}
-		logger.Info("accept options", slog.Any("options", acceptOptions))
-		clientConn, err := websocket.Accept(w, r, acceptOptions)
-		if err != nil {
-			logger.Error("websocket accept failed", slog.String("err", err.Error()))
-			return
-		}
-		clientConn.SetReadLimit(100 * 1024 * 1024) // 100 MB. Effectively no maximum size of message from client
-		dialOptions := &websocket.DialOptions{
+		dialOpts := &websocket.DialOptions{
 			CompressionMode: websocket.CompressionContextTakeover,
 		}
-		logger.Info("dial options", slog.Any("options", dialOptions))
-		upstreamConn, _, err := websocket.Dial(r.Context(), upstreamURL, dialOptions)
-		if err != nil {
-			logger.Error("dial upstream failed", slog.String("err", err.Error()), slog.String("url", upstreamURL))
-			_ = clientConn.Close(websocket.StatusInternalError, "failed to connect to upstream")
-			return
-		}
-		upstreamConn.SetReadLimit(100 * 1024 * 1024) // 100 MB. Effectively no maximum size of message from upstream
-		logger.Debug("proxying devtools websocket", slog.String("url", upstreamURL))
-
-		var once sync.Once
-		cleanup := func() {
-			once.Do(func() {
-				_ = upstreamConn.Close(websocket.StatusNormalClosure, "")
-				_ = clientConn.Close(websocket.StatusNormalClosure, "")
-			})
-		}
-		proxyWebSocket(r.Context(), clientConn, upstreamConn, cleanup, logger, logCDPMessages)
+		wsproxy.Proxy(w, r, upstreamURL, wsproxy.ProxyOptions{
+			AcceptOptions: acceptOpts,
+			DialOptions:   dialOpts,
+			Logger:        logger,
+			Transform:     transform,
+		})
 	})
-}
-
-type wsConn interface {
-	Read(ctx context.Context) (websocket.MessageType, []byte, error)
-	Write(ctx context.Context, typ websocket.MessageType, p []byte) error
-	Close(statusCode websocket.StatusCode, reason string) error
 }
 
 // logCDPMessage logs a CDP message with its direction if logging is enabled
@@ -328,57 +311,4 @@ func logCDPMessage(logger *slog.Logger, direction string, mt websocket.MessageTy
 	}
 
 	logger.Info("cdp", args...)
-}
-
-func proxyWebSocket(ctx context.Context, clientConn, upstreamConn wsConn, onClose func(), logger *slog.Logger, logCDPMessages bool) {
-	errChan := make(chan error, 2)
-
-	go func() {
-		for {
-			mt, msg, err := clientConn.Read(ctx)
-			if err != nil {
-				logger.Error("client read error", slog.String("err", err.Error()))
-				errChan <- err
-				break
-			}
-
-			// Log CDP messages if enabled
-			if logCDPMessages {
-				logCDPMessage(logger, "->", mt, msg)
-			}
-
-			if err := upstreamConn.Write(ctx, mt, msg); err != nil {
-				logger.Error("upstream write error", slog.String("err", err.Error()))
-				errChan <- err
-				break
-			}
-		}
-	}()
-	go func() {
-		for {
-			mt, msg, err := upstreamConn.Read(ctx)
-			if err != nil {
-				logger.Error("upstream read error", slog.String("err", err.Error()))
-				errChan <- err
-				break
-			}
-
-			// Log CDP messages if enabled
-			if logCDPMessages {
-				logCDPMessage(logger, "<-", mt, msg)
-			}
-
-			if err := clientConn.Write(ctx, mt, msg); err != nil {
-				logger.Error("client write error", slog.String("err", err.Error()))
-				errChan <- err
-				break
-			}
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-	case <-errChan:
-	}
-	onClose()
 }

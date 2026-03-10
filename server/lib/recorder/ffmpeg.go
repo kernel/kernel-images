@@ -141,6 +141,38 @@ func (fr *FFmpegRecorder) ID() string {
 	return fr.id
 }
 
+// Params returns a deep copy of the merged recording parameters.
+func (fr *FFmpegRecorder) Params() FFmpegRecordingParams {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+	return fr.params.clone()
+}
+
+func (p FFmpegRecordingParams) clone() FFmpegRecordingParams {
+	c := p
+	if p.FrameRate != nil {
+		v := *p.FrameRate
+		c.FrameRate = &v
+	}
+	if p.DisplayNum != nil {
+		v := *p.DisplayNum
+		c.DisplayNum = &v
+	}
+	if p.MaxSizeInMB != nil {
+		v := *p.MaxSizeInMB
+		c.MaxSizeInMB = &v
+	}
+	if p.MaxDurationInSeconds != nil {
+		v := *p.MaxDurationInSeconds
+		c.MaxDurationInSeconds = &v
+	}
+	if p.OutputDir != nil {
+		v := *p.OutputDir
+		c.OutputDir = &v
+	}
+	return c
+}
+
 // Start begins the recording process by launching ffmpeg with the configured parameters.
 func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	log := logger.FromContext(ctx)

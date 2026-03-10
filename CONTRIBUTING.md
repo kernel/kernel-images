@@ -4,7 +4,7 @@ First off, thank you for considering contributing to Kernel! It's people like yo
 
 ## Code of Conduct
 
-By participating in this project, you are expected to uphold our [Code of Conduct](./CODE_OF_CONDUCT.md). Please report unacceptable behavior to <oss@onkernel.com>.
+By participating in this project, you are expected to uphold our [Code of Conduct](./CODE_OF_CONDUCT.md). Please report unacceptable behavior to <oss@kernel.sh>.
 
 ## Getting Started
 
@@ -78,7 +78,7 @@ By participating in this project, you are expected to uphold our [Code of Conduc
 ## Licensing
 
 - By contributing to Kernel, you agree that your contributions will be licensed under the project's license
-- For questions about licensing, please contact the project maintainers or <oss@onkernel.com>
+- For questions about licensing, please contact the project maintainers or <oss@kernel.sh>
 
 ## Communication
 

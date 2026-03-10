@@ -497,7 +497,37 @@ paths:
               $ref: "#/components/schemas/BatchComputerActionRequest"
       responses:
         "200":
-          description: All actions executed successfully
+          description: Batch executed successfully
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /computer/clipboard/read:
+    post:
+      summary: Read text from the system clipboard
+      operationId: readClipboard
+      responses:
+        "200":
+          description: Clipboard content read successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClipboardContent"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /computer/clipboard/write:
+    post:
+      summary: Write text to the system clipboard
+      operationId: writeClipboard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WriteClipboardRequest"
+      responses:
+        "200":
+          description: Text written to clipboard successfully
         "400":
           $ref: "#/components/responses/BadRequestError"
         "500":
@@ -1269,6 +1299,15 @@ components:
           description: Modifier keys to hold during the move
           items:
             type: string
+        smooth:
+          type: boolean
+          description: Use human-like Bezier curve path instead of instant mouse movement.
+          default: true
+        duration_ms:
+          type: integer
+          description: Target total duration in milliseconds for the mouse movement when smooth=true. Omit for automatic timing based on distance.
+          minimum: 50
+          maximum: 5000
       additionalProperties: false
     ScreenshotRegion:
       type: object
@@ -1331,6 +1370,24 @@ components:
           description: Delay in milliseconds between keystrokes
           minimum: 0
           default: 0
+      additionalProperties: false
+    ClipboardContent:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Current clipboard text content
+      additionalProperties: false
+    WriteClipboardRequest:
+      type: object
+      required:
+        - text
+      properties:
+        text:
+          type: string
+          description: Text to write to the system clipboard
       additionalProperties: false
     PressKeyRequest:
       type: object
@@ -1408,14 +1465,23 @@ components:
           default: 0
         steps_per_segment:
           type: integer
-          description: Number of relative move steps per segment in the path. Minimum 1.
+          description: Number of relative move steps per segment in the path. Ignored when smooth=true. Minimum 1.
           minimum: 1
           default: 10
         step_delay_ms:
           type: integer
-          description: Delay in milliseconds between relative steps while dragging (not the initial delay).
+          description: Delay in milliseconds between relative steps while dragging. Ignored when smooth=true.
           minimum: 0
           default: 50
+        smooth:
+          type: boolean
+          description: Use human-like Bezier curves between path waypoints instead of linear interpolation. When true, steps_per_segment and step_delay_ms are ignored.
+          default: true
+        duration_ms:
+          type: integer
+          description: Target total duration in milliseconds for the entire drag movement when smooth=true. Omit for automatic timing based on total path length.
+          minimum: 50
+          maximum: 10000
         hold_keys:
           type: array
           description: Modifier keys to hold during the drag

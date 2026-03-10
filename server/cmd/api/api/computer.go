@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
+	"math/rand"
 	"os"
 	"os/exec"
 	"strconv"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/onkernel/kernel-images/server/lib/logger"
+	"github.com/onkernel/kernel-images/server/lib/mousetrajectory"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 )
 
@@ -51,34 +54,32 @@ func (s *ApiService) doMoveMouse(ctx context.Context, body oapi.MoveMouseRequest
 		return &validationError{msg: fmt.Sprintf("coordinates exceed screen bounds (max: %dx%d)", screenWidth-1, screenHeight-1)}
 	}
 
-	// Build xdotool arguments
-	args := []string{}
+	useSmooth := body.Smooth == nil || *body.Smooth // default true when omitted
+	if useSmooth {
+		return s.doMoveMouseSmooth(ctx, log, body, screenWidth, screenHeight)
+	}
+	return s.doMoveMouseInstant(ctx, log, body)
+}
 
-	// Hold modifier keys (keydown)
+func (s *ApiService) doMoveMouseInstant(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest) error {
+	args := []string{}
 	if body.HoldKeys != nil {
 		for _, key := range *body.HoldKeys {
 			args = append(args, "keydown", key)
 		}
 	}
-
-	// Move the cursor to the desired coordinates
 	args = append(args, "mousemove", strconv.Itoa(body.X), strconv.Itoa(body.Y))
-
-	// Release modifier keys (keyup)
 	if body.HoldKeys != nil {
 		for _, key := range *body.HoldKeys {
 			args = append(args, "keyup", key)
 		}
 	}
-
 	log.Info("executing xdotool", "args", args)
-
 	output, err := defaultXdoTool.Run(ctx, args...)
 	if err != nil {
 		log.Error("xdotool command failed", "err", err, "output", string(output))
 		return &executionError{msg: "failed to move mouse"}
 	}
-
 	return nil
 }
 
@@ -98,6 +99,119 @@ func (s *ApiService) MoveMouse(ctx context.Context, request oapi.MoveMouseReques
 		return oapi.MoveMouse500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
 	}
 	return oapi.MoveMouse200Response{}, nil
+}
+
+func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, body oapi.MoveMouseRequest, screenWidth, screenHeight int) error {
+	fromX, fromY, err := s.getMouseLocation(ctx)
+	if err != nil {
+		log.Error("failed to get mouse location for smooth move", "error", err)
+		return &executionError{msg: "failed to get current mouse position: " + err.Error()}
+	}
+
+	if body.DurationMs != nil && (*body.DurationMs < 50 || *body.DurationMs > 5000) {
+		return &validationError{msg: "duration_ms must be between 50 and 5000"}
+	}
+
+	// When duration_ms is specified, compute the number of trajectory points
+	// to achieve that duration at a ~10ms step delay (human-like event frequency).
+	// Otherwise let the library auto-compute from path length.
+	const defaultStepDelayMs = 10
+	var opts *mousetrajectory.Options
+	if body.DurationMs != nil {
+		targetPoints := *body.DurationMs / defaultStepDelayMs
+		if targetPoints < mousetrajectory.MinPoints {
+			targetPoints = mousetrajectory.MinPoints
+		}
+		if targetPoints > mousetrajectory.MaxPoints {
+			targetPoints = mousetrajectory.MaxPoints
+		}
+		opts = &mousetrajectory.Options{MaxPoints: targetPoints}
+	}
+
+	traj := mousetrajectory.NewHumanizeMouseTrajectoryWithOptions(
+		float64(fromX), float64(fromY), float64(body.X), float64(body.Y), opts)
+	points := traj.GetPointsInt()
+	if len(points) < 2 {
+		return s.doMoveMouseInstant(ctx, log, body)
+	}
+
+	// Clamp trajectory points to screen bounds. The Bezier control-point
+	// padding (boundsPadding=80) can place intermediate curve points outside
+	// the screen when the start/end is near an edge. Because we use
+	// mousemove_relative, X11 clamping at screen boundaries would silently
+	// eat deltas, causing the cursor to land at the wrong final position.
+	clampPoints(points, screenWidth, screenHeight)
+
+	// Compute per-step delay to achieve the target duration.
+	numSteps := len(points) - 1
+	stepDelayMs := defaultStepDelayMs
+	if body.DurationMs != nil && numSteps > 0 {
+		stepDelayMs = *body.DurationMs / numSteps
+		if stepDelayMs < 3 {
+			stepDelayMs = 3
+		}
+	}
+
+	// Hold modifiers
+	if body.HoldKeys != nil {
+		args := []string{}
+		for _, key := range *body.HoldKeys {
+			args = append(args, "keydown", key)
+		}
+		if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+			log.Error("xdotool keydown failed", "err", err, "output", string(output))
+			return &executionError{msg: "failed to hold modifier keys"}
+		}
+		defer func() {
+			args := []string{}
+			for _, key := range *body.HoldKeys {
+				args = append(args, "keyup", key)
+			}
+			// Use background context for cleanup so keys are released even on cancellation.
+			_, _ = defaultXdoTool.Run(context.Background(), args...)
+		}()
+	}
+
+	// Move along Bezier path: mousemove_relative for each step with delay
+	for i := 1; i < len(points); i++ {
+		select {
+		case <-ctx.Done():
+			return &executionError{msg: "mouse movement cancelled"}
+		default:
+		}
+
+		dx := points[i][0] - points[i-1][0]
+		dy := points[i][1] - points[i-1][1]
+		if dx != 0 || dy != 0 {
+			args := []string{"mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy)}
+			if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+				log.Error("xdotool mousemove_relative failed", "err", err, "output", string(output), "step", i)
+				return &executionError{msg: "failed during smooth mouse movement"}
+			}
+		}
+		jitter := stepDelayMs
+		if stepDelayMs > 3 {
+			jitter = stepDelayMs + rand.Intn(5) - 2
+			if jitter < 3 {
+				jitter = 3
+			}
+		}
+		if err := sleepWithContext(ctx, time.Duration(jitter)*time.Millisecond); err != nil {
+			return &executionError{msg: "mouse movement cancelled"}
+		}
+	}
+
+	log.Info("executed smooth mouse movement", "points", len(points))
+	return nil
+}
+
+// getMouseLocation returns the current cursor position via xdotool getmouselocation --shell.
+func (s *ApiService) getMouseLocation(ctx context.Context) (x, y int, err error) {
+	output, err := defaultXdoTool.Run(ctx, "getmouselocation", "--shell")
+	if err != nil {
+		return 0, 0, fmt.Errorf("xdotool getmouselocation failed: %w (output: %s)", err, string(output))
+	}
+	return parseMousePosition(string(output))
 }
 
 func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseRequest) error {
@@ -792,64 +906,22 @@ func (s *ApiService) doDragMouse(ctx context.Context, body oapi.DragMouseRequest
 		}
 	}
 
-	// Phase 2: move along path (excluding first point) using fixed-count relative steps
-	// Insert a small delay between each relative move to smooth the drag
-	args2 := []string{}
-	// Determine per-segment steps and per-step delay from request (with defaults)
-	stepsPerSegment := 10
-	if body.StepsPerSegment != nil && *body.StepsPerSegment >= 1 {
-		stepsPerSegment = *body.StepsPerSegment
-	}
-	stepDelayMs := 50
-	if body.StepDelayMs != nil && *body.StepDelayMs >= 0 {
-		stepDelayMs = *body.StepDelayMs
-	}
-	stepDelaySeconds := fmt.Sprintf("%.3f", float64(stepDelayMs)/1000.0)
-
-	// Precompute total number of relative steps so we can avoid a trailing sleep
-	totalSteps := 0
-	prev := start
-	for _, pt := range body.Path[1:] {
-		x0, y0 := prev[0], prev[1]
-		x1, y1 := pt[0], pt[1]
-		totalSteps += len(generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment))
-		prev = pt
-	}
-
-	prev = start
-	stepIndex := 0
-	for _, pt := range body.Path[1:] {
-		x0, y0 := prev[0], prev[1]
-		x1, y1 := pt[0], pt[1]
-		for _, step := range generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment) {
-			xStr := strconv.Itoa(step[0])
-			yStr := strconv.Itoa(step[1])
-			if step[0] < 0 || step[1] < 0 {
-				args2 = append(args2, "mousemove_relative", "--", xStr, yStr)
-			} else {
-				args2 = append(args2, "mousemove_relative", xStr, yStr)
-			}
-			// add a tiny delay between moves, but not after the last step
-			if stepIndex < totalSteps-1 && stepDelayMs > 0 {
-				args2 = append(args2, "sleep", stepDelaySeconds)
-			}
-			stepIndex++
-		}
-		prev = pt
-	}
-	if len(args2) > 0 {
-		log.Info("executing xdotool (drag move)", "args", args2)
-		if output, err := defaultXdoTool.Run(ctx, args2...); err != nil {
-			log.Error("xdotool drag move failed", "err", err, "output", string(output))
-			// Try to release button and modifiers
+	// Phase 2: move along path
+	useSmooth := body.Smooth == nil || *body.Smooth
+	if useSmooth {
+		if err := s.doDragMouseSmooth(ctx, log, body, btn, screenWidth, screenHeight); err != nil {
 			argsCleanup := []string{"mouseup", btn}
 			if body.HoldKeys != nil {
 				for _, key := range *body.HoldKeys {
 					argsCleanup = append(argsCleanup, "keyup", key)
 				}
 			}
-			_, _ = defaultXdoTool.Run(ctx, argsCleanup...)
-			return &executionError{msg: fmt.Sprintf("failed during drag movement: %s", string(output))}
+			_, _ = defaultXdoTool.Run(context.Background(), argsCleanup...)
+			return err
+		}
+	} else {
+		if err := s.doDragMouseLinear(ctx, log, body, btn); err != nil {
+			return err
 		}
 	}
 
@@ -867,6 +939,134 @@ func (s *ApiService) doDragMouse(ctx context.Context, body oapi.DragMouseRequest
 	}
 
 	return nil
+}
+
+func (s *ApiService) doDragMouseLinear(ctx context.Context, log *slog.Logger, body oapi.DragMouseRequest, btn string) error {
+	start := body.Path[0]
+	stepsPerSegment := 10
+	if body.StepsPerSegment != nil && *body.StepsPerSegment >= 1 {
+		stepsPerSegment = *body.StepsPerSegment
+	}
+	stepDelayMs := 50
+	if body.StepDelayMs != nil && *body.StepDelayMs >= 0 {
+		stepDelayMs = *body.StepDelayMs
+	}
+	stepDelaySeconds := fmt.Sprintf("%.3f", float64(stepDelayMs)/1000.0)
+
+	totalSteps := 0
+	prev := start
+	for _, pt := range body.Path[1:] {
+		x0, y0 := prev[0], prev[1]
+		x1, y1 := pt[0], pt[1]
+		totalSteps += len(generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment))
+		prev = pt
+	}
+
+	args2 := []string{}
+	prev = start
+	stepIndex := 0
+	for _, pt := range body.Path[1:] {
+		x0, y0 := prev[0], prev[1]
+		x1, y1 := pt[0], pt[1]
+		for _, step := range generateRelativeSteps(x1-x0, y1-y0, stepsPerSegment) {
+			xStr := strconv.Itoa(step[0])
+			yStr := strconv.Itoa(step[1])
+			if step[0] < 0 || step[1] < 0 {
+				args2 = append(args2, "mousemove_relative", "--", xStr, yStr)
+			} else {
+				args2 = append(args2, "mousemove_relative", xStr, yStr)
+			}
+			if stepIndex < totalSteps-1 && stepDelayMs > 0 {
+				args2 = append(args2, "sleep", stepDelaySeconds)
+			}
+			stepIndex++
+		}
+		prev = pt
+	}
+	if len(args2) > 0 {
+		log.Info("executing xdotool (drag move)", "args", args2)
+		if output, err := defaultXdoTool.Run(ctx, args2...); err != nil {
+			log.Error("xdotool drag move failed", "err", err, "output", string(output))
+			argsCleanup := []string{"mouseup", btn}
+			if body.HoldKeys != nil {
+				for _, key := range *body.HoldKeys {
+					argsCleanup = append(argsCleanup, "keyup", key)
+				}
+			}
+			_, _ = defaultXdoTool.Run(ctx, argsCleanup...)
+			return &executionError{msg: fmt.Sprintf("failed during drag movement: %s", string(output))}
+		}
+	}
+	return nil
+}
+
+func (s *ApiService) doDragMouseSmooth(ctx context.Context, log *slog.Logger, body oapi.DragMouseRequest, btn string, screenWidth, screenHeight int) error {
+	if body.DurationMs != nil && (*body.DurationMs < 50 || *body.DurationMs > 10000) {
+		return &validationError{msg: "duration_ms must be between 50 and 10000"}
+	}
+
+	waypoints := make([][2]int, len(body.Path))
+	for i, pt := range body.Path {
+		waypoints[i] = [2]int{pt[0], pt[1]}
+	}
+
+	result := mousetrajectory.GenerateMultiSegmentTrajectory(waypoints, screenWidth, screenHeight, body.DurationMs)
+	points := result.Points
+	baseDelayMs := result.StepDelayMs
+
+	if len(points) < 2 {
+		return nil
+	}
+
+	numSteps := len(points) - 1
+
+	// Build a single xdotool arg slice with inline sleep directives.
+	// Use smoothstep easing: slow at start (pickup) and end (placement),
+	// fast in the middle, matching natural human drag behavior.
+	args := []string{}
+	for i := 1; i <= numSteps; i++ {
+		dx := points[i][0] - points[i-1][0]
+		dy := points[i][1] - points[i-1][1]
+		if dx == 0 && dy == 0 {
+			continue
+		}
+		args = append(args, "mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy))
+
+		if i < numSteps {
+			delay := smoothStepDelay(i, numSteps, baseDelayMs*2, baseDelayMs/2)
+			jitter := delay + rand.Intn(5) - 2
+			if jitter < 3 {
+				jitter = 3
+			}
+			args = append(args, "sleep", fmt.Sprintf("%.3f", float64(jitter)/1000.0))
+		}
+	}
+
+	if len(args) > 0 {
+		log.Info("executing xdotool (smooth drag move)", "steps", numSteps, "segments", len(body.Path)-1)
+		if output, err := defaultXdoTool.Run(ctx, args...); err != nil {
+			log.Error("xdotool smooth drag move failed", "err", err, "output", string(output))
+			return &executionError{msg: "failed during smooth drag movement"}
+		}
+	}
+
+	log.Info("executed smooth drag movement", "points", len(points), "segments", len(body.Path)-1)
+	return nil
+}
+
+// smoothStepDelay maps position i/n through a smoothstep curve to produce
+// a delay in [fastMs, slowMs]. Slow at start and end, fast in the middle.
+// smoothstep(t) = 3t² - 2t³
+func smoothStepDelay(i, n, slowMs, fastMs int) int {
+	if n <= 1 {
+		return slowMs
+	}
+	t := float64(i) / float64(n)
+	// Remap t so that 0 and 1 map to 1 (slow) and 0.5 maps to 0 (fast).
+	// Use distance from center: d = |2t - 1|, then smoothstep on d.
+	d := math.Abs(2*t - 1)
+	s := d * d * (3 - 2*d) // smoothstep
+	return fastMs + int(float64(slowMs-fastMs)*s)
 }
 
 func (s *ApiService) DragMouse(ctx context.Context, request oapi.DragMouseRequestObject) (oapi.DragMouseResponseObject, error) {
@@ -1002,6 +1202,72 @@ func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.Batch
 	}
 
 	return oapi.BatchComputerAction200Response{}, nil
+}
+
+// clampPoints constrains each trajectory point to [0, screenWidth-1] x [0, screenHeight-1].
+func clampPoints(points [][2]int, screenWidth, screenHeight int) {
+	maxX := screenWidth - 1
+	maxY := screenHeight - 1
+	for i := range points {
+		if points[i][0] < 0 {
+			points[i][0] = 0
+		} else if points[i][0] > maxX {
+			points[i][0] = maxX
+		}
+		if points[i][1] < 0 {
+			points[i][1] = 0
+		} else if points[i][1] > maxY {
+			points[i][1] = maxY
+		}
+	}
+}
+
+func (s *ApiService) ReadClipboard(ctx context.Context, request oapi.ReadClipboardRequestObject) (oapi.ReadClipboardResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+
+	display := s.resolveDisplayFromEnv()
+	cmd := exec.CommandContext(ctx, "xclip", "-selection", "clipboard", "-o")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=%s", display))
+	output, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return oapi.ReadClipboard200JSONResponse{Text: ""}, nil
+		}
+		log.Error("xclip read failed", "err", err)
+		return oapi.ReadClipboard500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+			Message: fmt.Sprintf("failed to read clipboard: %v", err)},
+		}, nil
+	}
+	return oapi.ReadClipboard200JSONResponse{Text: string(output)}, nil
+}
+
+func (s *ApiService) WriteClipboard(ctx context.Context, request oapi.WriteClipboardRequestObject) (oapi.WriteClipboardResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	s.inputMu.Lock()
+	defer s.inputMu.Unlock()
+
+	if request.Body == nil {
+		return oapi.WriteClipboard400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
+			Message: "request body is required"},
+		}, nil
+	}
+
+	display := s.resolveDisplayFromEnv()
+	cmd := exec.CommandContext(ctx, "xclip", "-selection", "clipboard")
+	cmd.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=%s", display))
+	cmd.Stdin = strings.NewReader(request.Body.Text)
+	if err := cmd.Run(); err != nil {
+		log.Error("xclip write failed", "err", err)
+		return oapi.WriteClipboard500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+			Message: fmt.Sprintf("failed to write to clipboard: %v", err)},
+		}, nil
+	}
+	return oapi.WriteClipboard200Response{}, nil
 }
 
 // generateRelativeSteps produces a sequence of relative steps that approximate a

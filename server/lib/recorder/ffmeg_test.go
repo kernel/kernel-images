@@ -50,6 +50,24 @@ func TestFFmpegRecorder_StartAndStop(t *testing.T) {
 	require.False(t, rec.IsRecording(t.Context()))
 }
 
+func TestFFmpegRecorder_Params(t *testing.T) {
+	tempDir := t.TempDir()
+	params := defaultParams(tempDir)
+	rec := &FFmpegRecorder{
+		id:         "params-test",
+		binaryPath: mockBin,
+		params:     params,
+		outputPath: filepath.Join(tempDir, "params-test.mp4"),
+		stz:        scaletozero.NewOncer(scaletozero.NewNoopController()),
+	}
+
+	got := rec.Params()
+	assert.Equal(t, *params.FrameRate, *got.FrameRate)
+	assert.Equal(t, *params.DisplayNum, *got.DisplayNum)
+	assert.Equal(t, *params.MaxSizeInMB, *got.MaxSizeInMB)
+	assert.Equal(t, *params.OutputDir, *got.OutputDir)
+}
+
 func TestFFmpegRecorder_ForceStop(t *testing.T) {
 	tempDir := t.TempDir()
 	rec := &FFmpegRecorder{

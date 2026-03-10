@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="static/images/Kernel-Wordmark_Accent.svg" alt="Kernel Logo" width="55%">
+  <img src="static/images/logo-kernel-light.svg" alt="Kernel Logo" width="55%">
 </p>
 
 <p align="center">
@@ -11,9 +11,9 @@
 
 ## What's Kernel?
 
-Kernel provides sandboxed, ready-to-use Chrome browsers for browser automations and web agents. This repo powers our [hosted services](https://onkernel.com/docs/introduction).
+Kernel provides sandboxed, ready-to-use Chrome browsers for browser automations and web agents. This repo powers our [hosted services](https://kernel.sh/docs/introduction).
 
-Sign up [here](https://www.onkernel.com/)!
+Sign up [here](https://www.kernel.sh/)!
 
 ## Key Features
 
@@ -171,7 +171,7 @@ Note: the recording file is encoded into a H.264/MPEG-4 AVC video file. [QuickTi
 
 ## Documentation
 
-This repo powers our managed [browser infrastructure](https://onkernel.com/docs).
+This repo powers our managed [browser infrastructure](https://kernel.sh/docs).
 
 ## Contributing
 
@@ -191,4 +191,4 @@ For issues, questions, or feedback, please [open an issue](https://github.com/on
 - Thank you to [xonkernel](https://github.com/xonkernel) for leading the development of our WebRTC live view.
 - Thank you to the [Unikraft Cloud](https://unikraft.cloud/) team for your help with unikernels.
 
-Made with ❤️ by the [Kernel team](https://www.onkernel.com).
+Made with ❤️ by the [Kernel team](https://www.kernel.sh).

@@ -4,14 +4,18 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	"github.com/onkernel/kernel-images/server/lib/recorder"
 )
 
 // PatchDisplay updates the display configuration. When require_idle
@@ -77,6 +81,26 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				},
 			}, nil
 		}
+	}
+
+	// Gracefully stop active recordings so the resize can proceed.
+	// Recordings are always restarted (via defer) regardless of whether the
+	// resize succeeds — losing recording data is worse than a brief gap. If
+	// the resize fails the display is still at the old resolution, so
+	// restarting at the "old" resolution is correct.
+	stopped, stopErr := s.stopActiveRecordings(ctx)
+	if stopErr != nil {
+		log.Error("failed to stop recordings for resize", "error", stopErr)
+		return oapi.PatchDisplay500JSONResponse{
+			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+				Message: fmt.Sprintf("failed to stop recordings for resize: %s", stopErr),
+			},
+		}, nil
+	}
+	if len(stopped) > 0 {
+		defer func() {
+			go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
+		}()
 	}
 
 	// Detect display mode (xorg or xvfb)
@@ -359,6 +383,129 @@ func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, e
 	}
 
 	return width, height, refreshRate, nil
+}
+
+// stoppedRecordingInfo holds state captured from a recording that was stopped
+// so it can be restarted after a display resize.
+type stoppedRecordingInfo struct {
+	id       string
+	params   recorder.FFmpegRecordingParams
+	metadata *recorder.RecordingMetadata
+}
+
+// stopActiveRecordings gracefully stops every recording that is currently in
+// progress. The old recorders remain registered in the manager so their
+// finalized files stay discoverable and downloadable. It returns info needed
+// to start a new recording segment for each stopped recorder.
+func (s *ApiService) stopActiveRecordings(ctx context.Context) ([]stoppedRecordingInfo, error) {
+	log := logger.FromContext(ctx)
+	var stopped []stoppedRecordingInfo
+
+	for _, rec := range s.recordManager.ListActiveRecorders(ctx) {
+		if !rec.IsRecording(ctx) {
+			continue
+		}
+
+		id := rec.ID()
+
+		ffmpegRec, ok := rec.(*recorder.FFmpegRecorder)
+		if !ok {
+			log.Warn("cannot capture params from non-FFmpeg recorder, skipping", "id", id)
+			continue
+		}
+
+		params := ffmpegRec.Params()
+
+		log.Info("stopping recording for resize", "id", id)
+		if err := rec.Stop(ctx); err != nil {
+			// Stop() returns finalization errors even when the process was
+			// successfully terminated. Only treat it as a hard failure if
+			// the process is still running.
+			if rec.IsRecording(ctx) {
+				log.Error("failed to stop recording for resize", "id", id, "error", err)
+				return stopped, fmt.Errorf("failed to stop recording %s: %w", id, err)
+			}
+			log.Warn("recording stopped with finalization warning", "id", id, "error", err)
+		}
+
+		stopped = append(stopped, stoppedRecordingInfo{
+			id:       id,
+			params:   params,
+			metadata: rec.Metadata(),
+		})
+		log.Info("recording stopped for resize, old segment preserved", "id", id)
+	}
+
+	return stopped, nil
+}
+
+// adjustParamsForRemainingBudget reduces MaxDurationInSeconds and MaxSizeInMB
+// in the cloned params to reflect what the previous segment already consumed.
+// This keeps cumulative duration and disk usage within the originally requested limits.
+func adjustParamsForRemainingBudget(log *slog.Logger, info stoppedRecordingInfo) recorder.FFmpegRecordingParams {
+	params := info.params
+
+	if params.MaxDurationInSeconds != nil && info.metadata != nil && !info.metadata.EndTime.IsZero() {
+		elapsed := int(info.metadata.EndTime.Sub(info.metadata.StartTime).Seconds())
+		remaining := *params.MaxDurationInSeconds - elapsed
+		if remaining < 1 {
+			remaining = 1
+		}
+		params.MaxDurationInSeconds = &remaining
+		log.Info("adjusted max duration for new segment", "id", info.id, "elapsed_s", elapsed, "remaining_s", remaining)
+	}
+
+	if params.MaxSizeInMB != nil && params.OutputDir != nil {
+		segmentPath := filepath.Join(*params.OutputDir, info.id+".mp4")
+		if fi, err := os.Stat(segmentPath); err == nil {
+			consumedMB := int((fi.Size() + 1024*1024 - 1) / (1024 * 1024))
+			remaining := *params.MaxSizeInMB - consumedMB
+			if remaining < 1 {
+				remaining = 1
+			}
+			params.MaxSizeInMB = &remaining
+			log.Info("adjusted max size for new segment", "id", info.id, "consumed_mb", consumedMB, "remaining_mb", remaining)
+		}
+	}
+
+	return params
+}
+
+// startNewRecordingSegments creates and starts a new recording segment for
+// each previously-stopped recorder. Each new segment gets a unique suffixed
+// ID so the old (stopped) recorder and its finalized file remain accessible
+// in the manager.
+//
+// Duration and size limits are adjusted to account for what the previous
+// segment already consumed, so the cumulative totals stay within the
+// originally requested bounds.
+func (s *ApiService) startNewRecordingSegments(ctx context.Context, stopped []stoppedRecordingInfo) {
+	log := logger.FromContext(ctx)
+
+	for _, info := range stopped {
+		newID := fmt.Sprintf("%s-%d", info.id, time.Now().UnixMilli())
+
+		params := adjustParamsForRemainingBudget(log, info)
+
+		rec, err := s.factory(newID, params)
+		if err != nil {
+			log.Error("failed to create recorder for new segment", "old_id", info.id, "new_id", newID, "error", err)
+			continue
+		}
+
+		if err := s.recordManager.RegisterRecorder(ctx, rec); err != nil {
+			log.Error("failed to register new segment recorder", "old_id", info.id, "new_id", newID, "error", err)
+			continue
+		}
+
+		if err := rec.Start(ctx); err != nil {
+			log.Error("failed to start new segment recording", "old_id", info.id, "new_id", newID, "error", err)
+			_ = s.recordManager.DeregisterRecorder(ctx, rec)
+			continue
+		}
+
+		log.Info("new recording segment started after resize", "old_id", info.id, "new_id", newID)
+	}
 }
 
 // isNekoEnabled checks if Neko service is enabled

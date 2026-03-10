@@ -18,7 +18,7 @@ require (
 	github.com/klauspost/compress v1.18.3
 	github.com/m1k1o/neko/server v0.0.0-20251008185748-46e2fc7d3866
 	github.com/nrednav/cuid2 v1.1.0
-	github.com/oapi-codegen/runtime v1.1.2
+	github.com/oapi-codegen/runtime v1.2.0
 	github.com/samber/lo v1.52.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0

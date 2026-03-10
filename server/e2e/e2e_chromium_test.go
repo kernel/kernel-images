@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 var (
 	headfulImage  = defaultHeadfulImage
 	headlessImage = defaultHeadlessImage
+
+	playwrightDepsOnce sync.Once
+	playwrightDepsErr  error
 )
 
 func init() {
@@ -65,15 +69,20 @@ func getPlaywrightPath() string {
 // ensurePlaywrightDeps ensures playwright dependencies are installed
 func ensurePlaywrightDeps(t *testing.T) {
 	t.Helper()
-	nodeModulesPath := getPlaywrightPath() + "/node_modules"
-	if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
-		t.Log("Installing playwright dependencies...")
-		cmd := exec.Command("pnpm", "install")
-		cmd.Dir = getPlaywrightPath()
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to install playwright dependencies: %v\nOutput: %s", err, string(output))
-		t.Log("Playwright dependencies installed successfully")
-	}
+
+	playwrightDepsOnce.Do(func() {
+		nodeModulesPath := getPlaywrightPath() + "/node_modules"
+		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
+			cmd := exec.Command("pnpm", "install")
+			cmd.Dir = getPlaywrightPath()
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				playwrightDepsErr = fmt.Errorf("failed to install playwright dependencies: %w\noutput: %s", err, string(output))
+			}
+		}
+	})
+
+	require.NoError(t, playwrightDepsErr, "playwright dependency setup failed")
 }
 
 func TestDisplayResolutionChange(t *testing.T) {
@@ -167,6 +176,43 @@ func TestDisplayResolutionChange(t *testing.T) {
 	require.Equal(t, height2, newHeight2, "expected Xvfb resolution %dx%d, got %dx%d", width2, height2, newWidth2, newHeight2)
 
 	t.Log("all resolution changes verified successfully")
+}
+
+func TestClipboardHeadless(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
+
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	specResp, err := http.Get(c.APIBaseURL() + "/spec.yaml")
+	require.NoError(t, err)
+	specBody, _ := io.ReadAll(specResp.Body)
+	specResp.Body.Close()
+	require.True(t, strings.Contains(string(specBody), "/computer/clipboard/write"),
+		"API spec does not include clipboard routes - rebuild the image with: cd kernel-images/images/chromium-headless && docker build --no-cache -f image/Dockerfile -t %s ../..", headlessImage)
+
+	client, err := c.APIClient()
+	require.NoError(t, err, "failed to create API client")
+
+	writeResp, err := client.WriteClipboardWithResponse(ctx, instanceoapi.WriteClipboardRequest{Text: "e2e-clipboard-test"})
+	require.NoError(t, err, "WriteClipboard request failed")
+	require.Equal(t, http.StatusOK, writeResp.StatusCode(), "unexpected write status: %s body=%s", writeResp.Status(), string(writeResp.Body))
+
+	readResp, err := client.ReadClipboardWithResponse(ctx)
+	require.NoError(t, err, "ReadClipboard request failed")
+	require.Equal(t, http.StatusOK, readResp.StatusCode(), "unexpected read status: %s body=%s", readResp.Status(), string(readResp.Body))
+	require.NotNil(t, readResp.JSON200, "expected JSON200 response")
+	require.Equal(t, "e2e-clipboard-test", readResp.JSON200.Text, "clipboard content mismatch")
 }
 
 func TestExtensionUploadAndActivation(t *testing.T) {

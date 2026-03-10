@@ -27,6 +27,38 @@ scale_to_zero_write() {
 disable_scale_to_zero() { scale_to_zero_write "+"; }
 enable_scale_to_zero()  { scale_to_zero_write "-"; }
 
+wait_for_tcp_port() {
+  local host="$1"
+  local port="$2"
+  local name="$3"
+  local attempts="${4:-0}"
+  local sleep_secs="${5:-0.5}"
+  local timeout_label="${6:-}"
+  local attempt=0
+
+  echo "[wrapper] Waiting for ${name} on ${host}:${port}..."
+  while true; do
+    if (echo >/dev/tcp/"${host}"/"${port}") >/dev/null 2>&1; then
+      echo "[wrapper] ${name} is ready on ${host}:${port}"
+      return 0
+    fi
+
+    if (( attempts > 0 )); then
+      attempt=$((attempt + 1))
+      if (( attempt >= attempts )); then
+        if [[ -n "${timeout_label}" ]]; then
+          echo "[wrapper] WARNING: ${name} not ready on ${host}:${port} after ${timeout_label}" >&2
+        else
+          echo "[wrapper] WARNING: ${name} not ready on ${host}:${port} after ${attempts} attempts" >&2
+        fi
+        return 1
+      fi
+    fi
+
+    sleep "${sleep_secs}"
+  done
+}
+
 # Disable scale-to-zero for the duration of the script when not running under Docker
 if [[ -z "${WITHDOCKER:-}" ]]; then
   echo "[wrapper] Disabling scale-to-zero"
@@ -143,6 +175,7 @@ cleanup () {
   echo "[wrapper] Cleaning up..."
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
+  supervisorctl -c /etc/supervisor/supervisord.conf stop chromedriver || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop kernel-images-api || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop dbus || true
@@ -210,13 +243,7 @@ export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/dbus/system_bus_socket"
 # Start Chromium with display :1 and remote debugging, loading our recorder extension.
 echo "[wrapper] Starting Chromium via supervisord on internal port $INTERNAL_PORT"
 supervisorctl -c /etc/supervisor/supervisord.conf start chromium
-echo "[wrapper] Waiting for Chromium remote debugging on 127.0.0.1:$INTERNAL_PORT..."
-for i in {1..100}; do
-  if nc -z 127.0.0.1 "$INTERNAL_PORT" 2>/dev/null; then
-    break
-  fi
-  sleep 0.2
-done
+wait_for_tcp_port 127.0.0.1 "$INTERNAL_PORT" "Chromium remote debugging" 100 0.2 "20s" || true
 
 if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
   # use webrtc
@@ -224,11 +251,7 @@ if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
   supervisorctl -c /etc/supervisor/supervisord.conf start neko
 
   # Wait for neko to be ready.
-  echo "[wrapper] Waiting for neko port 0.0.0.0:8080..."
-  while ! nc -z 127.0.0.1 8080 2>/dev/null; do
-    sleep 0.5
-  done
-  echo "[wrapper] Port 8080 is open"
+  wait_for_tcp_port 127.0.0.1 8080 "neko"
 fi
 
 echo "[wrapper] ✨ Starting kernel-images API."
@@ -241,6 +264,11 @@ API_OUTPUT_DIR="${KERNEL_IMAGES_API_OUTPUT_DIR:-/recordings}"
 
 # Start via supervisord (env overrides are read by the service's command)
 supervisorctl -c /etc/supervisor/supervisord.conf start kernel-images-api
+wait_for_tcp_port 127.0.0.1 "${API_PORT}" "kernel-images API"
+
+echo "[wrapper] Starting ChromeDriver via supervisord"
+supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
+wait_for_tcp_port 127.0.0.1 9225 "ChromeDriver" 50 0.2 "10s" || true
 
 echo "[wrapper] Starting PulseAudio daemon via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start pulseaudio
@@ -256,13 +284,6 @@ if [[ "${RUN_AS_ROOT:-}" == "true" ]]; then
     if (( OFFSET_X < 0 )); then
       OFFSET_X=0
     fi
-
-    # Wait for kernel-images API port to be ready.
-    echo "[wrapper] Waiting for kernel-images API port 127.0.0.1:${API_PORT}..."
-    while ! nc -z 127.0.0.1 "${API_PORT}" 2>/dev/null; do
-      sleep 0.5
-    done
-    echo "[wrapper] Port ${API_PORT} is open"
 
     # Wait for Chromium window to open before dismissing the --no-sandbox warning.
     target='New Tab - Chromium'
