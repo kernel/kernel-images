@@ -331,7 +331,8 @@ func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int
 	}
 
 	if xvfbErr := s.resizeXvfb(ctx, width, height); xvfbErr != nil {
-		log.Warn("background Xvfb resize failed (non-fatal)", "error", xvfbErr)
+		log.Warn("background Xvfb resize failed (non-fatal), keeping viewport override", "error", xvfbErr)
+		return
 	}
 
 	s.viewportMu.Lock()
