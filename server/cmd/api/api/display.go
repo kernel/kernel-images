@@ -135,9 +135,11 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		log.Info("recordings were active, using synchronous Xvfb restart for resolution change")
 		s.xvfbResizeMu.Lock()
 		err = s.resizeXvfb(ctx, width, height)
-		s.xvfbResizeMu.Unlock()
 		if err == nil {
 			s.clearViewportOverride()
+		}
+		s.xvfbResizeMu.Unlock()
+		if err == nil {
 			if cdpErr := s.setViewportViaCDP(ctx, width, height); cdpErr != nil {
 				log.Warn("CDP viewport resize failed after Xvfb restart (non-fatal)", "error", cdpErr)
 			}
