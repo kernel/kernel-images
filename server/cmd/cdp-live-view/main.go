@@ -45,7 +45,8 @@ type cdpClient struct {
 	handlers   map[string]func(json.RawMessage)
 	handlersMu sync.RWMutex
 
-	log *slog.Logger
+	onDisconnect func()
+	log          *slog.Logger
 }
 
 func newCDPClient(ctx context.Context, url string, log *slog.Logger) (*cdpClient, error) {
@@ -67,6 +68,11 @@ func newCDPClient(ctx context.Context, url string, log *slog.Logger) (*cdpClient
 }
 
 func (c *cdpClient) readLoop(ctx context.Context) {
+	defer func() {
+		if c.onDisconnect != nil {
+			c.onDisconnect()
+		}
+	}()
 	for {
 		_, data, err := c.ws.Read(ctx)
 		if err != nil {
@@ -301,6 +307,16 @@ func (s *server) connectCDP(ctx context.Context) error {
 	cdp, err := newCDPClient(s.ctx, wsURL, s.log)
 	if err != nil {
 		return err
+	}
+	cdp.onDisconnect = func() {
+		s.cdpMu.Lock()
+		defer s.cdpMu.Unlock()
+		s.log.Warn("CDP connection lost, will reconnect on next viewer action")
+		s.cdp = nil
+		s.setTargetState("", "")
+		s.sessionsMu.Lock()
+		s.sessions = make(map[string]string)
+		s.sessionsMu.Unlock()
 	}
 	s.cdp = cdp
 

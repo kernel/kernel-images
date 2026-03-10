@@ -60,11 +60,12 @@ class CDPBench {
       const msg = { id: this.msgId, method };
       if (params) msg.params = params;
       if (sessionId) msg.sessionId = sessionId;
-      this.pending.set(this.msgId, resolve);
+      const id = this.msgId;
+      this.pending.set(id, resolve);
       this.ws.send(JSON.stringify(msg));
       setTimeout(() => {
-        if (this.pending.has(this.msgId)) {
-          this.pending.delete(this.msgId);
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
           reject(new Error(`Timeout: ${method}`));
         }
       }, 30000);
