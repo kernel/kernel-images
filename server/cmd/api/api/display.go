@@ -127,12 +127,12 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				log.Error("failed to restart chromium after resolution change", "error", restartErr)
 			}
 		}
-	} else if s.anyRecordingActive(ctx) {
-		// Recording is active: resize Xvfb synchronously so ffmpeg captures at
-		// the new resolution, then also send the CDP viewport command.
-		// Acquire xvfbResizeMu to wait for any in-flight background resize to
-		// finish before we touch the Xvfb config and restart.
-		log.Info("recording active, using Xvfb restart for resolution change")
+	} else if len(stopped) > 0 {
+		// Recordings were active when this request arrived (now temporarily
+		// stopped). Resize Xvfb synchronously so the deferred
+		// startNewRecordingSegments captures at the correct resolution.
+		// Acquire xvfbResizeMu to wait for any in-flight background resize.
+		log.Info("recordings were active, using synchronous Xvfb restart for resolution change")
 		s.xvfbResizeMu.Lock()
 		err = s.resizeXvfb(ctx, width, height)
 		s.xvfbResizeMu.Unlock()
