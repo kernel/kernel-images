@@ -222,9 +222,49 @@ type server struct {
 	targetID  string
 	cdpMu     sync.Mutex
 
+	currentURL string
+	pageTitle  string
+	stateMu    sync.RWMutex // protects sessionID, targetID, currentURL, pageTitle
+
 	// sessions tracks targetID -> sessionID for attached targets
 	sessions   map[string]string
 	sessionsMu sync.Mutex
+}
+
+func (s *server) getSessionID() string {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.sessionID
+}
+
+func (s *server) getTargetID() string {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.targetID
+}
+
+func (s *server) setTargetState(targetID, sessionID string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	s.sessionID = sessionID
+	s.targetID = targetID
+}
+
+func (s *server) setPageInfo(url, title string) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if url != "" {
+		s.currentURL = url
+	}
+	if title != "" {
+		s.pageTitle = title
+	}
+}
+
+func (s *server) getPageInfo() (string, string) {
+	s.stateMu.RLock()
+	defer s.stateMu.RUnlock()
+	return s.currentURL, s.pageTitle
 }
 
 func (s *server) discoverBrowserWSURL(ctx context.Context) (string, error) {
@@ -287,6 +327,27 @@ func (s *server) connectCDP(ctx context.Context) error {
 		s.handleScreencastFrame(s.ctx, params)
 	})
 
+	// Track URL changes via frame navigation
+	cdp.onEvent("Page.frameNavigated", func(params json.RawMessage) {
+		var ev struct {
+			Frame struct {
+				URL            string `json:"url"`
+				ParentID       string `json:"parentId"`
+				SecurityOrigin string `json:"securityOrigin"`
+			} `json:"frame"`
+		}
+		json.Unmarshal(params, &ev)
+		if ev.Frame.ParentID == "" {
+			s.setPageInfo(ev.Frame.URL, "")
+			s.broadcastURLUpdate()
+		}
+	})
+
+	// Track page title changes
+	cdp.onEvent("Page.domContentEventFired", func(params json.RawMessage) {
+		go s.fetchAndBroadcastTitle()
+	})
+
 	// When a new page target is created, auto-switch to it
 	cdp.onEvent("Target.targetCreated", func(params json.RawMessage) {
 		var ev struct {
@@ -303,21 +364,27 @@ func (s *server) connectCDP(ctx context.Context) error {
 		}
 	})
 
-	// When a page navigates to a real URL, switch to it
+	// When a page navigates to a real URL, switch to it or update URL
 	cdp.onEvent("Target.targetInfoChanged", func(params json.RawMessage) {
 		var ev struct {
 			TargetInfo struct {
 				TargetID string `json:"targetId"`
 				Type     string `json:"type"`
 				URL      string `json:"url"`
+				Title    string `json:"title"`
 			} `json:"targetInfo"`
 		}
 		json.Unmarshal(params, &ev)
 		if ev.TargetInfo.Type == "page" && ev.TargetInfo.URL != "" &&
 			ev.TargetInfo.URL != "about:blank" && ev.TargetInfo.URL != "chrome://newtab/" {
-			if ev.TargetInfo.TargetID != s.targetID {
+			currentTarget := s.getTargetID()
+			if ev.TargetInfo.TargetID != currentTarget {
 				s.log.Info("page navigated, switching", "targetId", ev.TargetInfo.TargetID, "url", ev.TargetInfo.URL)
 				go s.switchToTarget(s.ctx, ev.TargetInfo.TargetID)
+			}
+			if ev.TargetInfo.TargetID == currentTarget {
+				s.setPageInfo(ev.TargetInfo.URL, ev.TargetInfo.Title)
+				s.broadcastURLUpdate()
 			}
 		}
 	})
@@ -396,17 +463,25 @@ func (s *server) switchToTarget(ctx context.Context, targetID string) error {
 	}
 
 	// Stop old screencast if running
-	if s.sessionID != "" && s.sessionID != sessionID {
-		s.cdp.callSession(ctx, s.sessionID, "Page.stopScreencast", nil)
+	oldSession := s.getSessionID()
+	if oldSession != "" && oldSession != sessionID {
+		s.cdp.callSession(ctx, oldSession, "Page.stopScreencast", nil)
 	}
 
-	s.sessionID = sessionID
-	s.targetID = targetID
+	s.setTargetState(targetID, sessionID)
 
 	// Enable Page domain
 	s.cdp.callSession(ctx, sessionID, "Page.enable", nil)
 
-	// Start screencast (maxWidth/maxHeight control frame resolution without modifying the page viewport)
+	// Set viewport to match screencast dimensions so headless Chrome renders at full resolution
+	s.cdp.callSession(ctx, sessionID, "Emulation.setDeviceMetricsOverride", map[string]any{
+		"width":             s.width,
+		"height":            s.height,
+		"deviceScaleFactor": 1,
+		"mobile":            false,
+	})
+
+	// Start screencast
 	_, err := s.cdp.callSession(ctx, sessionID, "Page.startScreencast", map[string]any{
 		"format":        "jpeg",
 		"quality":       s.quality,
@@ -419,7 +494,93 @@ func (s *server) switchToTarget(ctx context.Context, targetID string) error {
 	}
 
 	s.log.Info("screencast switched", "targetId", targetID, "sessionId", sessionID)
+
+	// Fetch current URL from the navigation history
+	go func() {
+		result, err := s.cdp.callSession(ctx, sessionID, "Page.getNavigationHistory", nil)
+		if err != nil {
+			return
+		}
+		var nav struct {
+			CurrentIndex int `json:"currentIndex"`
+			Entries      []struct {
+				URL   string `json:"url"`
+				Title string `json:"title"`
+			} `json:"entries"`
+		}
+		json.Unmarshal(result, &nav)
+		if nav.CurrentIndex >= 0 && nav.CurrentIndex < len(nav.Entries) {
+			s.setPageInfo(nav.Entries[nav.CurrentIndex].URL, nav.Entries[nav.CurrentIndex].Title)
+			s.broadcastURLUpdate()
+		}
+	}()
+
 	return nil
+}
+
+func (s *server) broadcastURLUpdate() {
+	url, title := s.getPageInfo()
+	msg, _ := json.Marshal(map[string]any{
+		"type":  "url_update",
+		"url":   url,
+		"title": title,
+	})
+	s.viewers.Range(func(key, value any) bool {
+		v := value.(*viewer)
+		writeCtx, cancel := context.WithTimeout(s.ctx, 500*time.Millisecond)
+		defer cancel()
+		v.ws.Write(writeCtx, websocket.MessageText, msg)
+		return true
+	})
+}
+
+func (s *server) fetchAndBroadcastTitle() {
+	sid := s.getSessionID()
+	if s.cdp == nil || sid == "" {
+		return
+	}
+	result, err := s.cdp.callSession(s.ctx, sid, "Runtime.evaluate", map[string]any{
+		"expression": "document.title",
+	})
+	if err != nil {
+		return
+	}
+	var evalResult struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	json.Unmarshal(result, &evalResult)
+	if evalResult.Result.Value != "" {
+		s.setPageInfo("", evalResult.Result.Value)
+		s.broadcastURLUpdate()
+	}
+}
+
+func (s *server) handleNavigation(ctx context.Context, ev inputEvent) {
+	sid := s.getSessionID()
+	if s.cdp == nil || sid == "" {
+		return
+	}
+	switch ev.Action {
+	case "back":
+		s.cdp.callSession(ctx, sid, "Runtime.evaluate", map[string]any{
+			"expression": "history.back()",
+		})
+	case "forward":
+		s.cdp.callSession(ctx, sid, "Runtime.evaluate", map[string]any{
+			"expression": "history.forward()",
+		})
+	case "reload":
+		s.cdp.callSession(ctx, sid, "Page.reload", nil)
+	case "navigate":
+		url := ev.URL
+		if url != "" {
+			s.cdp.callSession(ctx, sid, "Page.navigate", map[string]string{
+				"url": url,
+			})
+		}
+	}
 }
 
 func (s *server) handleScreencastFrame(ctx context.Context, params json.RawMessage) {
@@ -439,9 +600,10 @@ func (s *server) handleScreencastFrame(ctx context.Context, params json.RawMessa
 		return
 	}
 
-	// Ack the frame to get the next one
+	// Ack the frame — capture sessionID now to avoid racing with switchToTarget
+	sid := s.getSessionID()
 	go func() {
-		s.cdp.callSession(ctx, s.sessionID, "Page.screencastFrameAck", map[string]int{
+		s.cdp.callSession(ctx, sid, "Page.screencastFrameAck", map[string]int{
 			"sessionId": frame.SessionID,
 		})
 	}()
@@ -488,10 +650,14 @@ type inputEvent struct {
 	Code    string `json:"code,omitempty"`
 	Text    string `json:"text,omitempty"`
 	KeyCode int    `json:"keyCode,omitempty"`
+
+	Action string `json:"action,omitempty"`
+	URL    string `json:"url,omitempty"`
 }
 
 func (s *server) handleInput(ctx context.Context, ev inputEvent) {
-	if s.cdp == nil || s.sessionID == "" {
+	sid := s.getSessionID()
+	if s.cdp == nil || sid == "" {
 		return
 	}
 
@@ -515,7 +681,7 @@ func (s *server) handleInput(ctx context.Context, ev inputEvent) {
 			params["deltaX"] = ev.DeltaX
 			params["deltaY"] = ev.DeltaY
 		}
-		s.cdp.callSession(ctx, s.sessionID, "Input.dispatchMouseEvent", params)
+		s.cdp.callSession(ctx, sid, "Input.dispatchMouseEvent", params)
 
 	case "key":
 		params := map[string]any{
@@ -529,7 +695,10 @@ func (s *server) handleInput(ctx context.Context, ev inputEvent) {
 		if ev.Text != "" {
 			params["text"] = ev.Text
 		}
-		s.cdp.callSession(ctx, s.sessionID, "Input.dispatchKeyEvent", params)
+		s.cdp.callSession(ctx, sid, "Input.dispatchKeyEvent", params)
+
+	case "navigate":
+		s.handleNavigation(ctx, ev)
 	}
 }
 
@@ -557,6 +726,19 @@ func (s *server) handleViewer(w http.ResponseWriter, r *http.Request) {
 	if err := s.connectCDP(s.ctx); err != nil {
 		s.log.Error("connect CDP for viewer", "error", err)
 		return
+	}
+
+	// Send current URL to newly connected viewer
+	currentURL, pageTitle := s.getPageInfo()
+	if currentURL != "" {
+		msg, _ := json.Marshal(map[string]any{
+			"type":  "url_update",
+			"url":   currentURL,
+			"title": pageTitle,
+		})
+		writeCtx, cancel := context.WithTimeout(s.ctx, 500*time.Millisecond)
+		ws.Write(writeCtx, websocket.MessageText, msg)
+		cancel()
 	}
 
 	for {

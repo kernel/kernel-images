@@ -3,66 +3,263 @@
 <head>
     <title>Live View</title>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; overflow: hidden; background: #111; }
-        #container {
+        html, body { width: 100%; height: 100%; background: #202124; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; overflow: hidden; }
+
+        #chrome-frame {
+            display: flex; flex-direction: column;
             width: 100%; height: 100%;
+        }
+
+        /* Tab bar */
+        #tab-bar {
+            height: 36px; background: #202124;
+            display: flex; align-items: flex-end;
+            padding: 0 8px 0 80px;
+            user-select: none;
+            -webkit-app-region: drag;
+        }
+        .tab {
+            display: flex; align-items: center; gap: 8px;
+            height: 30px; padding: 0 16px 0 12px;
+            background: #35363a; color: #e8eaed;
+            border-radius: 8px 8px 0 0;
+            font-size: 12px; max-width: 240px;
+            cursor: default;
+            position: relative;
+        }
+        .tab.active { background: #35363a; }
+        .tab-favicon {
+            width: 16px; height: 16px; border-radius: 2px;
+            background: #5f6368; flex-shrink: 0;
             display: flex; align-items: center; justify-content: center;
+            font-size: 10px; color: #9aa0a6;
+        }
+        .tab-title {
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+            flex: 1; font-size: 12px;
+        }
+        .tab-close {
+            width: 16px; height: 16px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px; color: #9aa0a6; cursor: pointer; flex-shrink: 0;
+        }
+        .tab-close:hover { background: #53545a; }
+
+        /* Window dots (macOS style) */
+        #window-controls {
+            position: fixed; top: 10px; left: 12px; z-index: 10;
+            display: flex; gap: 8px;
+        }
+        .win-dot {
+            width: 12px; height: 12px; border-radius: 50%;
+        }
+        .win-dot.close { background: #ff5f57; }
+        .win-dot.minimize { background: #febc2e; }
+        .win-dot.maximize { background: #28c840; }
+
+        /* Navigation bar */
+        #nav-bar {
+            height: 38px; background: #35363a;
+            display: flex; align-items: center;
+            padding: 0 8px; gap: 4px;
+            user-select: none;
+        }
+        .nav-btn {
+            width: 28px; height: 28px; border-radius: 50%;
+            border: none; background: transparent;
+            color: #9aa0a6; font-size: 16px;
+            cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            transition: background 0.15s;
+            flex-shrink: 0;
+        }
+        .nav-btn:hover { background: #4a4b50; }
+        .nav-btn:active { background: #5a5b60; }
+        .nav-btn.disabled { color: #5f6368; cursor: default; }
+        .nav-btn.disabled:hover { background: transparent; }
+
+        #url-bar {
+            flex: 1; height: 28px;
+            background: #202124; border: none; border-radius: 14px;
+            color: #e8eaed; font-size: 13px;
+            padding: 0 14px;
+            outline: none;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+        }
+        #url-bar:focus {
+            background: #292a2d;
+            outline: 1px solid #8ab4f8;
+        }
+        #url-bar::placeholder { color: #5f6368; }
+        #url-bar::selection { background: #394457; }
+
+        /* Bookmark bar placeholder */
+        #bookmark-bar {
+            height: 24px; background: #35363a;
+            border-bottom: 1px solid #2d2e31;
+            display: flex; align-items: center;
+            padding: 0 16px; gap: 8px;
+            font-size: 11px; color: #9aa0a6;
+            user-select: none;
+        }
+
+        /* Content area */
+        #container {
+            flex: 1; overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+            background: #1a1a1a;
         }
         canvas {
             image-rendering: -webkit-optimize-contrast;
             image-rendering: crisp-edges;
             cursor: default;
+            display: block;
         }
-        #status {
-            position: fixed; top: 8px; right: 8px;
-            font: 12px/1 monospace; color: #888;
-            background: rgba(0,0,0,0.6); padding: 4px 8px; border-radius: 4px;
-            pointer-events: none; z-index: 10;
+
+        /* Connection status badge */
+        #status-badge {
+            position: fixed; bottom: 8px; right: 8px;
+            padding: 4px 10px; border-radius: 4px;
+            font-size: 11px; font-family: monospace;
+            background: rgba(0,0,0,0.6); color: #9aa0a6;
+            z-index: 100;
             transition: opacity 0.3s;
         }
-        #status.connected { color: #4a4; }
-        #status.error { color: #a44; }
+        #status-badge.connected { color: #4ade80; }
+        #status-badge.error { color: #f87171; }
+
+        /* Loading spinner for page loads */
+        .nav-btn.loading .spinner {
+            width: 14px; height: 14px;
+            border: 2px solid transparent;
+            border-top-color: #8ab4f8;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* SVG icons */
+        .nav-btn svg { width: 18px; height: 18px; fill: currentColor; }
     </style>
 </head>
 <body>
-<div id="container">
-    <canvas id="screen" tabindex="0"></canvas>
+<div id="chrome-frame">
+    <!-- Window control dots -->
+    <div id="window-controls">
+        <div class="win-dot close"></div>
+        <div class="win-dot minimize"></div>
+        <div class="win-dot maximize"></div>
+    </div>
+
+    <!-- Tab bar -->
+    <div id="tab-bar">
+        <div class="tab active">
+            <div class="tab-favicon" id="tab-favicon">&#9679;</div>
+            <span class="tab-title" id="tab-title">New Tab</span>
+            <div class="tab-close">&times;</div>
+        </div>
+    </div>
+
+    <!-- Navigation bar -->
+    <div id="nav-bar">
+        <button class="nav-btn disabled" id="btn-back" title="Back">
+            <svg viewBox="0 0 24 24"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+        </button>
+        <button class="nav-btn disabled" id="btn-forward" title="Forward">
+            <svg viewBox="0 0 24 24"><path d="M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z"/></svg>
+        </button>
+        <button class="nav-btn" id="btn-reload" title="Reload">
+            <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+        </button>
+        <input id="url-bar" type="text" placeholder="Search or enter URL" spellcheck="false" autocomplete="off">
+        <button class="nav-btn" id="btn-more" title="Viewport" style="font-size:11px;font-family:monospace;width:auto;padding:0 8px;border-radius:4px;color:#5f6368;">
+            <span id="viewport-info"></span>
+        </button>
+    </div>
+
+    <!-- Content area -->
+    <div id="container">
+        <canvas id="screen" tabindex="0"></canvas>
+    </div>
 </div>
-<div id="status">connecting...</div>
+
+<div id="status-badge">connecting...</div>
+
 <script>
 (function() {
     const canvas = document.getElementById('screen');
-    const ctx = canvas.getContext('2d');
-    const status = document.getElementById('status');
+    const ctx2d = canvas.getContext('2d');
     const container = document.getElementById('container');
+    const urlBar = document.getElementById('url-bar');
+    const tabTitle = document.getElementById('tab-title');
+    const statusBadge = document.getElementById('status-badge');
+    const vpInfo = document.getElementById('viewport-info');
+    const btnBack = document.getElementById('btn-back');
+    const btnForward = document.getElementById('btn-forward');
+    const btnReload = document.getElementById('btn-reload');
 
     let ws = null;
-    let deviceWidth = 1920;
-    let deviceHeight = 1080;
+    let deviceWidth = 0;
+    let deviceHeight = 0;
     let scaleX = 1;
     let scaleY = 1;
     let reconnectDelay = 500;
+    let currentURL = '';
+    let statusHideTimer = null;
 
     function updateCanvasSize() {
+        if (deviceWidth <= 0 || deviceHeight <= 0) return;
         const cw = container.clientWidth;
         const ch = container.clientHeight;
         const aspect = deviceWidth / deviceHeight;
-        let w, h;
+
+        let displayW, displayH;
         if (cw / ch > aspect) {
-            h = ch;
-            w = h * aspect;
+            displayH = ch;
+            displayW = Math.round(displayH * aspect);
         } else {
-            w = cw;
-            h = w / aspect;
+            displayW = cw;
+            displayH = Math.round(displayW / aspect);
         }
-        canvas.style.width = w + 'px';
-        canvas.style.height = h + 'px';
+
+        canvas.style.width = displayW + 'px';
+        canvas.style.height = displayH + 'px';
         canvas.width = deviceWidth;
         canvas.height = deviceHeight;
-        scaleX = deviceWidth / w;
-        scaleY = deviceHeight / h;
+        scaleX = deviceWidth / displayW;
+        scaleY = deviceHeight / displayH;
+        vpInfo.textContent = deviceWidth + '\u00d7' + deviceHeight;
+    }
+
+    function showStatus(text, cls) {
+        statusBadge.textContent = text;
+        statusBadge.className = cls || '';
+        statusBadge.style.opacity = '1';
+        clearTimeout(statusHideTimer);
+        if (cls === 'connected') {
+            statusHideTimer = setTimeout(function() {
+                statusBadge.style.opacity = '0';
+            }, 2000);
+        }
+    }
+
+    function displayURL(url) {
+        if (!url) return;
+        currentURL = url;
+        if (document.activeElement !== urlBar) {
+            try {
+                const u = new URL(url);
+                urlBar.value = u.host + u.pathname + u.search + u.hash;
+                if (urlBar.value.endsWith('/') && u.pathname === '/') {
+                    urlBar.value = u.host;
+                }
+            } catch(e) {
+                urlBar.value = url;
+            }
+        }
     }
 
     function connect() {
@@ -71,16 +268,12 @@
         ws.binaryType = 'arraybuffer';
 
         ws.onopen = function() {
-            status.textContent = 'connected';
-            status.className = 'connected';
+            showStatus('connected', 'connected');
             reconnectDelay = 500;
-            setTimeout(function() { status.style.opacity = '0'; }, 2000);
         };
 
         ws.onclose = function() {
-            status.textContent = 'disconnected';
-            status.className = 'error';
-            status.style.opacity = '1';
+            showStatus('reconnecting...', 'error');
             setTimeout(connect, reconnectDelay);
             reconnectDelay = Math.min(reconnectDelay * 1.5, 5000);
         };
@@ -98,44 +291,26 @@
                             updateCanvasSize();
                         }
                     }
+                } else if (msg.type === 'url_update') {
+                    displayURL(msg.url);
+                    if (msg.title) {
+                        tabTitle.textContent = msg.title;
+                        document.title = msg.title + ' - Live View';
+                    }
+                    btnBack.classList.remove('disabled');
+                    btnForward.classList.remove('disabled');
                 }
             } else {
                 const blob = new Blob([e.data], { type: 'image/jpeg' });
                 const url = URL.createObjectURL(blob);
                 const img = new Image();
                 img.onload = function() {
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    ctx2d.drawImage(img, 0, 0, canvas.width, canvas.height);
                     URL.revokeObjectURL(url);
                 };
                 img.src = url;
             }
         };
-    }
-
-    function canvasCoords(e) {
-        const rect = canvas.getBoundingClientRect();
-        return {
-            x: (e.clientX - rect.left) * scaleX,
-            y: (e.clientY - rect.top) * scaleY
-        };
-    }
-
-    function modifiers(e) {
-        let m = 0;
-        if (e.altKey) m |= 1;
-        if (e.ctrlKey) m |= 2;
-        if (e.metaKey) m |= 4;
-        if (e.shiftKey) m |= 8;
-        return m;
-    }
-
-    function buttonName(b) {
-        switch (b) {
-            case 0: return 'left';
-            case 1: return 'middle';
-            case 2: return 'right';
-            default: return 'none';
-        }
     }
 
     function send(obj) {
@@ -144,93 +319,105 @@
         }
     }
 
+    // Navigation toolbar handlers
+    btnBack.addEventListener('click', function(e) {
+        e.stopPropagation();
+        send({ type: 'navigate', action: 'back' });
+    });
+    btnForward.addEventListener('click', function(e) {
+        e.stopPropagation();
+        send({ type: 'navigate', action: 'forward' });
+    });
+    btnReload.addEventListener('click', function(e) {
+        e.stopPropagation();
+        send({ type: 'navigate', action: 'reload' });
+    });
+
+    urlBar.addEventListener('focus', function() {
+        urlBar.value = currentURL;
+        urlBar.select();
+    });
+    urlBar.addEventListener('blur', function() {
+        displayURL(currentURL);
+    });
+    urlBar.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            let url = urlBar.value.trim();
+            if (!url) return;
+            if (!/^https?:\/\//i.test(url) && !url.startsWith('chrome://') && !url.startsWith('about:')) {
+                if (url.includes('.') && !url.includes(' ')) {
+                    url = 'https://' + url;
+                } else {
+                    url = 'https://www.google.com/search?q=' + encodeURIComponent(url);
+                }
+            }
+            send({ type: 'navigate', action: 'navigate', url: url });
+            canvas.focus();
+        }
+        if (e.key === 'Escape') {
+            displayURL(currentURL);
+            canvas.focus();
+        }
+        e.stopPropagation();
+    });
+    urlBar.addEventListener('keyup', function(e) { e.stopPropagation(); });
+
+    // Canvas input handlers
+    function canvasCoords(e) {
+        const rect = canvas.getBoundingClientRect();
+        return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+    }
+    function modifiers(e) {
+        let m = 0;
+        if (e.altKey) m |= 1;
+        if (e.ctrlKey) m |= 2;
+        if (e.metaKey) m |= 4;
+        if (e.shiftKey) m |= 8;
+        return m;
+    }
+    function buttonName(b) {
+        return b === 0 ? 'left' : b === 1 ? 'middle' : b === 2 ? 'right' : 'none';
+    }
+
     canvas.addEventListener('mousemove', function(e) {
         const c = canvasCoords(e);
         send({ type: 'mouse', mouseType: 'mouseMoved', x: c.x, y: c.y, modifiers: modifiers(e) });
     });
-
     canvas.addEventListener('mousedown', function(e) {
-        e.preventDefault();
-        canvas.focus();
+        e.preventDefault(); canvas.focus();
         const c = canvasCoords(e);
-        send({
-            type: 'mouse', mouseType: 'mousePressed',
-            x: c.x, y: c.y,
-            button: buttonName(e.button), clickCount: 1,
-            modifiers: modifiers(e)
-        });
+        send({ type: 'mouse', mouseType: 'mousePressed', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 1, modifiers: modifiers(e) });
     });
-
     canvas.addEventListener('mouseup', function(e) {
         e.preventDefault();
         const c = canvasCoords(e);
-        send({
-            type: 'mouse', mouseType: 'mouseReleased',
-            x: c.x, y: c.y,
-            button: buttonName(e.button), clickCount: 1,
-            modifiers: modifiers(e)
-        });
+        send({ type: 'mouse', mouseType: 'mouseReleased', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 1, modifiers: modifiers(e) });
     });
-
     canvas.addEventListener('dblclick', function(e) {
         e.preventDefault();
         const c = canvasCoords(e);
-        send({
-            type: 'mouse', mouseType: 'mousePressed',
-            x: c.x, y: c.y,
-            button: buttonName(e.button), clickCount: 2,
-            modifiers: modifiers(e)
-        });
-        send({
-            type: 'mouse', mouseType: 'mouseReleased',
-            x: c.x, y: c.y,
-            button: buttonName(e.button), clickCount: 2,
-            modifiers: modifiers(e)
-        });
+        send({ type: 'mouse', mouseType: 'mousePressed', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 2, modifiers: modifiers(e) });
+        send({ type: 'mouse', mouseType: 'mouseReleased', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 2, modifiers: modifiers(e) });
     });
-
     canvas.addEventListener('wheel', function(e) {
         e.preventDefault();
         const c = canvasCoords(e);
-        send({
-            type: 'mouse', mouseType: 'mouseWheel',
-            x: c.x, y: c.y,
-            deltaX: e.deltaX, deltaY: e.deltaY,
-            modifiers: modifiers(e)
-        });
+        send({ type: 'mouse', mouseType: 'mouseWheel', x: c.x, y: c.y, deltaX: e.deltaX, deltaY: e.deltaY, modifiers: modifiers(e) });
     }, { passive: false });
-
     canvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 
     canvas.addEventListener('keydown', function(e) {
         e.preventDefault();
         const isPrintable = e.key.length === 1;
-        send({
-            type: 'key', keyType: isPrintable ? 'keyDown' : 'rawKeyDown',
-            key: e.key, code: e.code,
-            text: isPrintable ? e.key : '',
-            keyCode: e.keyCode,
-            modifiers: modifiers(e)
-        });
+        send({ type: 'key', keyType: 'rawKeyDown', key: e.key, code: e.code, text: '', keyCode: e.keyCode, modifiers: modifiers(e) });
         if (isPrintable) {
-            send({
-                type: 'key', keyType: 'char',
-                key: e.key, code: e.code,
-                text: e.key,
-                keyCode: e.keyCode,
-                modifiers: modifiers(e)
-            });
+            send({ type: 'key', keyType: 'char', key: e.key, code: e.code, text: e.key, keyCode: e.keyCode, modifiers: modifiers(e) });
         }
     });
-
     canvas.addEventListener('keyup', function(e) {
         e.preventDefault();
-        send({
-            type: 'key', keyType: 'keyUp',
-            key: e.key, code: e.code,
-            keyCode: e.keyCode,
-            modifiers: modifiers(e)
-        });
+        send({ type: 'key', keyType: 'keyUp', key: e.key, code: e.code, keyCode: e.keyCode, modifiers: modifiers(e) });
     });
 
     window.addEventListener('resize', updateCanvasSize);
