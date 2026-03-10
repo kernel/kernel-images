@@ -308,16 +308,24 @@ func (s *ApiService) resizeXvfb(ctx context.Context, width, height int) error {
 	return nil
 }
 
-// backgroundResizeXvfb serializes background Xvfb restarts. If multiple
-// CDP fast-path resizes happen in quick succession, only the last caller's
-// dimensions end up being applied. The viewport override is NOT cleared
-// here — it stays set so subsequent calls use the cached value. Only the
-// synchronous recording path clears it.
+// backgroundResizeXvfb serializes background Xvfb restarts. After acquiring
+// the lock, it checks whether the current viewport override still matches the
+// requested dimensions. If a newer resize has superseded this one, the resize
+// is skipped so Xvfb always converges to the latest requested size.
 func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int) {
 	s.xvfbResizeMu.Lock()
 	defer s.xvfbResizeMu.Unlock()
 
 	log := logger.FromContext(ctx)
+
+	s.viewportMu.RLock()
+	override := s.viewportOverride
+	s.viewportMu.RUnlock()
+	if override != nil && (override[0] != width || override[1] != height) {
+		log.Info("skipping stale background Xvfb resize", "requested", fmt.Sprintf("%dx%d", width, height), "current", fmt.Sprintf("%dx%d", override[0], override[1]))
+		return
+	}
+
 	if xvfbErr := s.resizeXvfb(ctx, width, height); xvfbErr != nil {
 		log.Warn("background Xvfb resize failed (non-fatal)", "error", xvfbErr)
 	}
