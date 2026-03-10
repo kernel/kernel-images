@@ -332,6 +332,9 @@ func (s *server) connectCDP(ctx context.Context) error {
 	cdp.onDisconnect = func() {
 		s.cdpMu.Lock()
 		defer s.cdpMu.Unlock()
+		if s.cdp != cdp {
+			return
+		}
 		s.log.Warn("CDP connection lost, will reconnect on next viewer action")
 		s.cdp = nil
 		s.setTargetState("", "")

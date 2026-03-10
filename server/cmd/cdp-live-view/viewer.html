@@ -387,19 +387,14 @@
     canvas.addEventListener('mousedown', function(e) {
         e.preventDefault(); canvas.focus();
         const c = canvasCoords(e);
-        send({ type: 'mouse', mouseType: 'mousePressed', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 1, modifiers: modifiers(e) });
+        send({ type: 'mouse', mouseType: 'mousePressed', x: c.x, y: c.y, button: buttonName(e.button), clickCount: e.detail, modifiers: modifiers(e) });
     });
     canvas.addEventListener('mouseup', function(e) {
         e.preventDefault();
         const c = canvasCoords(e);
-        send({ type: 'mouse', mouseType: 'mouseReleased', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 1, modifiers: modifiers(e) });
+        send({ type: 'mouse', mouseType: 'mouseReleased', x: c.x, y: c.y, button: buttonName(e.button), clickCount: e.detail, modifiers: modifiers(e) });
     });
-    canvas.addEventListener('dblclick', function(e) {
-        e.preventDefault();
-        const c = canvasCoords(e);
-        send({ type: 'mouse', mouseType: 'mousePressed', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 2, modifiers: modifiers(e) });
-        send({ type: 'mouse', mouseType: 'mouseReleased', x: c.x, y: c.y, button: buttonName(e.button), clickCount: 2, modifiers: modifiers(e) });
-    });
+    canvas.addEventListener('dblclick', function(e) { e.preventDefault(); });
     canvas.addEventListener('wheel', function(e) {
         e.preventDefault();
         const c = canvasCoords(e);
