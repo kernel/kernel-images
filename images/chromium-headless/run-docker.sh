@@ -19,7 +19,7 @@ RUN_ARGS=(
   -p 444:10001
   -p 8080:8080
   -v "$HOST_RECORDINGS_DIR:/recordings"
-  -e ENABLE_LIVE_VIEW="${ENABLE_LIVE_VIEW:-true}"
+  -e ENABLE_LIVE_VIEW="${ENABLE_LIVE_VIEW:-false}"
 )
 
 if [[ -n "${PLAYWRIGHT_ENGINE:-}" ]]; then

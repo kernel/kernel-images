@@ -10,7 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -611,12 +613,26 @@ func (s *server) handleNavigation(ctx context.Context, ev inputEvent) {
 	case "reload":
 		s.cdp.callSession(ctx, sid, "Page.reload", nil)
 	case "navigate":
-		url := ev.URL
-		if url != "" {
-			s.cdp.callSession(ctx, sid, "Page.navigate", map[string]string{
-				"url": url,
-			})
+		navURL := ev.URL
+		if navURL == "" {
+			return
 		}
+		parsed, err := url.Parse(navURL)
+		if err != nil {
+			return
+		}
+		scheme := strings.ToLower(parsed.Scheme)
+		switch scheme {
+		case "http", "https", "":
+		default:
+			return
+		}
+		if scheme == "" {
+			navURL = "https://" + navURL
+		}
+		s.cdp.callSession(ctx, sid, "Page.navigate", map[string]string{
+			"url": navURL,
+		})
 	}
 }
 
