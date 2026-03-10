@@ -162,6 +162,9 @@ func (c *cdpClient) call(ctx context.Context, method string, params any) (json.R
 	case res := <-ch:
 		return res.Data, res.Err
 	case <-ctx.Done():
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
 		return nil, ctx.Err()
 	}
 }
@@ -204,6 +207,9 @@ func (c *cdpClient) callSession(ctx context.Context, sessionID, method string, p
 	case res := <-ch:
 		return res.Data, res.Err
 	case <-ctx.Done():
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
 		return nil, ctx.Err()
 	}
 }
@@ -568,7 +574,9 @@ func (s *server) broadcastURLUpdate() {
 		v := value.(*viewer)
 		writeCtx, cancel := context.WithTimeout(s.ctx, 500*time.Millisecond)
 		defer cancel()
+		v.mu.Lock()
 		v.ws.Write(writeCtx, websocket.MessageText, msg)
+		v.mu.Unlock()
 		return true
 	})
 }
@@ -670,8 +678,10 @@ func (s *server) handleScreencastFrame(ctx context.Context, params json.RawMessa
 		v := value.(*viewer)
 		writeCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		defer cancel()
+		v.mu.Lock()
 		v.ws.Write(writeCtx, websocket.MessageText, metaJSON)
-		v.sendBinary(writeCtx, jpegData)
+		v.ws.Write(writeCtx, websocket.MessageBinary, jpegData)
+		v.mu.Unlock()
 		return true
 	})
 }
