@@ -130,8 +130,12 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	} else if s.anyRecordingActive(ctx) {
 		// Recording is active: resize Xvfb synchronously so ffmpeg captures at
 		// the new resolution, then also send the CDP viewport command.
+		// Acquire xvfbResizeMu to wait for any in-flight background resize to
+		// finish before we touch the Xvfb config and restart.
 		log.Info("recording active, using Xvfb restart for resolution change")
+		s.xvfbResizeMu.Lock()
 		err = s.resizeXvfb(ctx, width, height)
+		s.xvfbResizeMu.Unlock()
 		if err == nil {
 			s.clearViewportOverride()
 			if cdpErr := s.setViewportViaCDP(ctx, width, height); cdpErr != nil {
