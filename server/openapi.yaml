@@ -1244,6 +1244,15 @@ components:
           type: integer
           description: Number of times to repeat the click
           default: 1
+        smooth:
+          type: boolean
+          description: Move the cursor to the target using a human-like Bezier curve path before clicking. When false, the cursor jumps instantly.
+          default: true
+        duration_ms:
+          type: integer
+          description: Target total duration in milliseconds for the smooth mouse movement before clicking. Omit for automatic timing based on distance. Only applies when smooth=true.
+          minimum: 50
+          maximum: 5000
       additionalProperties: false
     MoveMouseRequest:
       type: object

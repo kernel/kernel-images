@@ -129,11 +129,17 @@ type ClickMouseRequest struct {
 	// ClickType Type of click action
 	ClickType *ClickMouseRequestClickType `json:"click_type,omitempty"`
 
+	// DurationMs Target total duration in milliseconds for the smooth mouse movement before clicking. Omit for automatic timing based on distance. Only applies when smooth=true.
+	DurationMs *int `json:"duration_ms,omitempty"`
+
 	// HoldKeys Modifier keys to hold during the click
 	HoldKeys *[]string `json:"hold_keys,omitempty"`
 
 	// NumClicks Number of times to repeat the click
 	NumClicks *int `json:"num_clicks,omitempty"`
+
+	// Smooth Move the cursor to the target using a human-like Bezier curve path before clicking. When false, the cursor jumps instantly.
+	Smooth *bool `json:"smooth,omitempty"`
 
 	// X X coordinate of the click position
 	X int `json:"x"`

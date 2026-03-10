@@ -255,6 +255,20 @@ func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseReque
 		numClicks = *body.NumClicks
 	}
 
+	// Move the cursor to the target position (smooth Bezier by default)
+	useSmooth := body.Smooth == nil || *body.Smooth
+	if useSmooth {
+		moveBody := oapi.MoveMouseRequest{
+			X:          body.X,
+			Y:          body.Y,
+			Smooth:     body.Smooth,
+			DurationMs: body.DurationMs,
+		}
+		if err := s.doMoveMouseSmooth(ctx, log, moveBody, screenWidth, screenHeight); err != nil {
+			return err
+		}
+	}
+
 	// Build xdotool arguments
 	args := []string{}
 
@@ -265,8 +279,10 @@ func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseReque
 		}
 	}
 
-	// Move the cursor
-	args = append(args, "mousemove", strconv.Itoa(body.X), strconv.Itoa(body.Y))
+	// Move the cursor (instant) when smooth movement is disabled
+	if !useSmooth {
+		args = append(args, "mousemove", strconv.Itoa(body.X), strconv.Itoa(body.Y))
+	}
 
 	// click type defaults to click
 	clickType := oapi.Click
