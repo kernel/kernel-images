@@ -231,12 +231,6 @@ type viewer struct {
 	log *slog.Logger
 }
 
-func (v *viewer) sendBinary(ctx context.Context, data []byte) error {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.ws.Write(ctx, websocket.MessageBinary, data)
-}
-
 // server orchestrates CDP connection and viewer connections.
 type server struct {
 	cdpPort    string
@@ -482,8 +476,7 @@ func (s *server) switchToTarget(ctx context.Context, targetID string) error {
 	if alreadyAttached {
 		sessionID = existingSession
 	} else {
-		// Attach to the target
-		_, err := s.cdp.call(ctx, "Target.attachToTarget", map[string]any{
+		res, err := s.cdp.call(ctx, "Target.attachToTarget", map[string]any{
 			"targetId": targetID,
 			"flatten":  true,
 		})
@@ -491,20 +484,17 @@ func (s *server) switchToTarget(ctx context.Context, targetID string) error {
 			return fmt.Errorf("attach to target %s: %w", targetID, err)
 		}
 
-		// Wait for the session to appear
-		for i := 0; i < 50; i++ {
-			time.Sleep(100 * time.Millisecond)
-			s.sessionsMu.Lock()
-			sid, ok := s.sessions[targetID]
-			s.sessionsMu.Unlock()
-			if ok {
-				sessionID = sid
-				break
-			}
+		var attach struct {
+			SessionID string `json:"sessionId"`
 		}
-		if sessionID == "" {
-			return fmt.Errorf("timed out waiting for session for target %s", targetID)
+		if err := json.Unmarshal(res, &attach); err != nil || attach.SessionID == "" {
+			return fmt.Errorf("no sessionId in attachToTarget response for %s", targetID)
 		}
+		sessionID = attach.SessionID
+
+		s.sessionsMu.Lock()
+		s.sessions[targetID] = sessionID
+		s.sessionsMu.Unlock()
 	}
 
 	// Stop old screencast if running
