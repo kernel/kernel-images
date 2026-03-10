@@ -333,6 +333,12 @@ func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int
 	if xvfbErr := s.resizeXvfb(ctx, width, height); xvfbErr != nil {
 		log.Warn("background Xvfb resize failed (non-fatal)", "error", xvfbErr)
 	}
+
+	s.viewportMu.Lock()
+	if s.viewportOverride != nil && s.viewportOverride[0] == width && s.viewportOverride[1] == height {
+		s.viewportOverride = nil
+	}
+	s.viewportMu.Unlock()
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
