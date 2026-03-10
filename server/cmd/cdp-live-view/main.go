@@ -34,12 +34,23 @@ type cdpError struct {
 	Message string `json:"message"`
 }
 
+func (e *cdpError) Error() string {
+	return fmt.Sprintf("CDP error %d: %s", e.Code, e.Message)
+}
+
+type cdpResult struct {
+	Data json.RawMessage
+	Err  error
+}
+
+var errCDPDisconnected = fmt.Errorf("CDP connection closed")
+
 type cdpClient struct {
 	ws     *websocket.Conn
 	nextID atomic.Int64
 	mu     sync.Mutex
 
-	pending   map[int]chan json.RawMessage
+	pending   map[int]chan cdpResult
 	pendingMu sync.Mutex
 
 	handlers   map[string]func(json.RawMessage)
@@ -58,7 +69,7 @@ func newCDPClient(ctx context.Context, url string, log *slog.Logger) (*cdpClient
 
 	c := &cdpClient{
 		ws:       ws,
-		pending:  make(map[int]chan json.RawMessage),
+		pending:  make(map[int]chan cdpResult),
 		handlers: make(map[string]func(json.RawMessage)),
 		log:      log,
 	}
@@ -69,6 +80,14 @@ func newCDPClient(ctx context.Context, url string, log *slog.Logger) (*cdpClient
 
 func (c *cdpClient) readLoop(ctx context.Context) {
 	defer func() {
+		// Drain all pending calls so blocked goroutines don't leak
+		c.pendingMu.Lock()
+		for id, ch := range c.pending {
+			ch <- cdpResult{Err: errCDPDisconnected}
+			delete(c.pending, id)
+		}
+		c.pendingMu.Unlock()
+
 		if c.onDisconnect != nil {
 			c.onDisconnect()
 		}
@@ -102,9 +121,9 @@ func (c *cdpClient) readLoop(ctx context.Context) {
 			c.pendingMu.Unlock()
 			if ok {
 				if msg.Error != nil {
-					ch <- nil
+					ch <- cdpResult{Err: msg.Error}
 				} else {
-					ch <- msg.Result
+					ch <- cdpResult{Data: msg.Result}
 				}
 			}
 		}
@@ -124,7 +143,7 @@ func (c *cdpClient) call(ctx context.Context, method string, params any) (json.R
 
 	msg, _ := json.Marshal(cdpMessage{ID: id, Method: method, Params: rawParams})
 
-	ch := make(chan json.RawMessage, 1)
+	ch := make(chan cdpResult, 1)
 	c.pendingMu.Lock()
 	c.pending[id] = ch
 	c.pendingMu.Unlock()
@@ -140,8 +159,8 @@ func (c *cdpClient) call(ctx context.Context, method string, params any) (json.R
 	}
 
 	select {
-	case result := <-ch:
-		return result, nil
+	case res := <-ch:
+		return res.Data, res.Err
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -166,7 +185,7 @@ func (c *cdpClient) callSession(ctx context.Context, sessionID, method string, p
 	}
 	msg, _ := json.Marshal(sessionMsg{ID: id, Method: method, Params: rawParams, SessionID: sessionID})
 
-	ch := make(chan json.RawMessage, 1)
+	ch := make(chan cdpResult, 1)
 	c.pendingMu.Lock()
 	c.pending[id] = ch
 	c.pendingMu.Unlock()
@@ -182,8 +201,8 @@ func (c *cdpClient) callSession(ctx context.Context, sessionID, method string, p
 	}
 
 	select {
-	case result := <-ch:
-		return result, nil
+	case res := <-ch:
+		return res.Data, res.Err
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
@@ -444,6 +463,10 @@ func (s *server) connectCDP(ctx context.Context) error {
 }
 
 func (s *server) switchToTarget(ctx context.Context, targetID string) error {
+	if s.cdp == nil {
+		return fmt.Errorf("CDP not connected")
+	}
+
 	s.sessionsMu.Lock()
 	existingSession, alreadyAttached := s.sessions[targetID]
 	s.sessionsMu.Unlock()
@@ -616,10 +639,14 @@ func (s *server) handleScreencastFrame(ctx context.Context, params json.RawMessa
 		return
 	}
 
-	// Ack the frame — capture sessionID now to avoid racing with switchToTarget
+	// Ack the frame — capture sessionID and cdp ref now to avoid racing with switchToTarget/disconnect
 	sid := s.getSessionID()
+	cdp := s.cdp
 	go func() {
-		s.cdp.callSession(ctx, sid, "Page.screencastFrameAck", map[string]int{
+		if cdp == nil || sid == "" {
+			return
+		}
+		cdp.callSession(ctx, sid, "Page.screencastFrameAck", map[string]int{
 			"sessionId": frame.SessionID,
 		})
 	}()
