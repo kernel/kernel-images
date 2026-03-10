@@ -321,7 +321,11 @@ func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int
 	s.viewportMu.RLock()
 	override := s.viewportOverride
 	s.viewportMu.RUnlock()
-	if override != nil && (override[0] != width || override[1] != height) {
+	if override == nil {
+		log.Info("skipping background Xvfb resize: override cleared (synchronous path handled it)", "requested", fmt.Sprintf("%dx%d", width, height))
+		return
+	}
+	if override[0] != width || override[1] != height {
 		log.Info("skipping stale background Xvfb resize", "requested", fmt.Sprintf("%dx%d", width, height), "current", fmt.Sprintf("%dx%d", override[0], override[1]))
 		return
 	}
