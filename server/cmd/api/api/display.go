@@ -142,7 +142,7 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				log.Warn("CDP viewport resize failed after Xvfb restart (non-fatal)", "error", cdpErr)
 			}
 		}
-		if restartChrome {
+		if err == nil && restartChrome {
 			if restartErr := s.restartChromiumAndWait(ctx, "resolution change"); restartErr != nil {
 				log.Error("failed to restart chromium after resolution change", "error", restartErr)
 			}
