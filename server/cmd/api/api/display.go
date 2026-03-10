@@ -13,6 +13,7 @@ import (
 	"time"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
+	"github.com/onkernel/kernel-images/server/lib/cdpclient"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/onkernel/kernel-images/server/lib/recorder"
@@ -107,7 +108,7 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	displayMode := s.detectDisplayMode(ctx)
 
 	// Parse restartChromium flag (default depends on mode)
-	restartChrome := (displayMode == "xvfb") // default true for xvfb, false for xorg
+	restartChrome := false // default false for both modes
 	if req.Body.RestartChromium != nil {
 		restartChrome = *req.Body.RestartChromium
 	}
@@ -126,9 +127,31 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				log.Error("failed to restart chromium after resolution change", "error", restartErr)
 			}
 		}
+	} else if s.anyRecordingActive(ctx) {
+		// Recording is active: resize Xvfb synchronously so ffmpeg captures at
+		// the new resolution, then also send the CDP viewport command.
+		log.Info("recording active, using Xvfb restart for resolution change")
+		err = s.resizeXvfb(ctx, width, height)
+		if err == nil {
+			s.clearViewportOverride()
+			if cdpErr := s.setViewportViaCDP(ctx, width, height); cdpErr != nil {
+				log.Warn("CDP viewport resize failed after Xvfb restart (non-fatal)", "error", cdpErr)
+			}
+		}
+		if restartChrome {
+			if restartErr := s.restartChromiumAndWait(ctx, "resolution change"); restartErr != nil {
+				log.Error("failed to restart chromium after resolution change", "error", restartErr)
+			}
+		}
 	} else {
-		log.Info("using Xvfb restart for resolution change")
-		err = s.setResolutionXvfb(ctx, width, height, restartChrome)
+		// Fast path: no recording active. Resize the browser viewport via CDP
+		// (instant) and update Xvfb in the background for future recordings.
+		log.Info("using CDP fast path for headless viewport resize")
+		err = s.setViewportViaCDP(ctx, width, height)
+		if err == nil {
+			s.setViewportOverride(width, height, refreshRate)
+			go s.backgroundResizeXvfb(context.WithoutCancel(ctx), width, height)
+		}
 	}
 
 	if err != nil {
@@ -148,23 +171,24 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	}, nil
 }
 
-// detectDisplayMode detects whether we're running Xorg (headful) or Xvfb (headless)
+// detectDisplayMode detects whether we're running Xorg (headful) or Xvfb
+// (headless). The result is cached because the display server type does not
+// change during the container's lifetime, and querying supervisorctl during
+// a background Xvfb restart can produce false negatives.
 func (s *ApiService) detectDisplayMode(ctx context.Context) string {
-	log := logger.FromContext(ctx)
-	checkCmd := []string{"-lc", "supervisorctl status xvfb >/dev/null 2>&1 && echo 'xvfb' || echo 'xorg'"}
-	checkReq := oapi.ProcessExecRequest{Command: "bash", Args: &checkCmd}
-	checkResp, _ := s.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: &checkReq})
+	s.displayModeOnce.Do(func() {
+		s.displayModeVal = s.probeDisplayMode(ctx)
+	})
+	return s.displayModeVal
+}
 
-	if execResp, ok := checkResp.(oapi.ProcessExec200JSONResponse); ok {
-		if execResp.StdoutB64 != nil {
-			if output, err := base64.StdEncoding.DecodeString(*execResp.StdoutB64); err == nil {
-				outputStr := strings.TrimSpace(string(output))
-				if outputStr == "xvfb" {
-					log.Info("detected Xvfb display (headless mode)")
-					return "xvfb"
-				}
-			}
-		}
+var xvfbSupervisorConf = "/etc/supervisor/conf.d/services/xvfb.conf"
+
+func (s *ApiService) probeDisplayMode(ctx context.Context) string {
+	log := logger.FromContext(ctx)
+	if _, err := os.Stat(xvfbSupervisorConf); err == nil {
+		log.Info("detected Xvfb display (headless mode)", "marker", xvfbSupervisorConf)
+		return "xvfb"
 	}
 	log.Info("detected Xorg display (headful mode)")
 	return "xorg"
@@ -218,8 +242,9 @@ func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, heig
 	}
 }
 
-// setResolutionXvfb changes resolution for Xvfb by updating config and restarting services
-func (s *ApiService) setResolutionXvfb(ctx context.Context, width, height int, restartChrome bool) error {
+// resizeXvfb updates the Xvfb supervisor config and restarts the Xvfb process
+// at the new resolution. It does NOT restart Chromium.
+func (s *ApiService) resizeXvfb(ctx context.Context, width, height int) error {
 	log := logger.FromContext(ctx)
 	log.Info("updating Xvfb resolution requires restart", "width", width, "height", height)
 
@@ -275,13 +300,50 @@ func (s *ApiService) setResolutionXvfb(ctx context.Context, width, height int, r
 	waitReq := oapi.ProcessExecRequest{Command: "bash", Args: &waitCmd}
 	s.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: &waitReq})
 
-	if restartChrome {
-		if restartErr := s.restartChromiumAndWait(ctx, "xvfb resolution change"); restartErr != nil {
-			log.Error("failed to restart chromium after xvfb resolution change", "error", restartErr)
-		}
+	log.Info("Xvfb resolution updated", "width", width, "height", height)
+	return nil
+}
+
+// backgroundResizeXvfb serializes background Xvfb restarts. If multiple
+// CDP fast-path resizes happen in quick succession, only the last caller's
+// dimensions end up being applied. The viewport override is NOT cleared
+// here — it stays set so subsequent calls use the cached value. Only the
+// synchronous recording path clears it.
+func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int) {
+	s.xvfbResizeMu.Lock()
+	defer s.xvfbResizeMu.Unlock()
+
+	log := logger.FromContext(ctx)
+	if xvfbErr := s.resizeXvfb(ctx, width, height); xvfbErr != nil {
+		log.Warn("background Xvfb resize failed (non-fatal)", "error", xvfbErr)
+	}
+}
+
+// setViewportViaCDP resizes the browser viewport using the CDP
+// Emulation.setDeviceMetricsOverride command. This is near-instant and does
+// not require restarting Chromium or Xvfb.
+func (s *ApiService) setViewportViaCDP(ctx context.Context, width, height int) error {
+	log := logger.FromContext(ctx)
+
+	upstreamURL := s.upstreamMgr.Current()
+	if upstreamURL == "" {
+		return fmt.Errorf("devtools upstream not available")
 	}
 
-	log.Info("Xvfb resolution updated", "width", width, "height", height)
+	cdpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to devtools: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.SetDeviceMetricsOverride(cdpCtx, width, height); err != nil {
+		return fmt.Errorf("CDP setDeviceMetricsOverride: %w", err)
+	}
+
+	log.Info("viewport resized via CDP", "width", width, "height", height)
 	return nil
 }
 
@@ -335,8 +397,39 @@ func (s *ApiService) resolveDisplayFromEnv() string {
 	return ":1"
 }
 
-// getCurrentResolution returns the current display resolution and refresh rate by querying xrandr
+// setViewportOverride stores the last-known viewport dimensions so
+// getCurrentResolution can return them even while Xvfb is restarting.
+func (s *ApiService) setViewportOverride(width, height, refreshRate int) {
+	s.viewportMu.Lock()
+	s.viewportOverride = &[3]int{width, height, refreshRate}
+	s.viewportMu.Unlock()
+}
+
+// clearViewportOverride removes the viewport override (e.g. after Xvfb
+// finishes restarting and xrandr is reliable again).
+func (s *ApiService) clearViewportOverride() {
+	s.viewportMu.Lock()
+	s.viewportOverride = nil
+	s.viewportMu.Unlock()
+}
+
+// getCurrentResolution returns the current display resolution and refresh
+// rate. If a viewport override is set (from a recent CDP resize while Xvfb
+// restarts in the background), it returns the override instead of querying
+// xrandr, which may fail during Xvfb restarts.
 func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, error) {
+	s.viewportMu.RLock()
+	override := s.viewportOverride
+	s.viewportMu.RUnlock()
+	if override != nil {
+		return override[0], override[1], override[2], nil
+	}
+
+	return s.getCurrentResolutionFromXrandr(ctx)
+}
+
+// getCurrentResolutionFromXrandr queries xrandr for the current display resolution.
+func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, int, int, error) {
 	log := logger.FromContext(ctx)
 	display := s.resolveDisplayFromEnv()
 

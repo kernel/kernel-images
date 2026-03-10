@@ -2,12 +2,14 @@ package api
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/recorder"
 	"github.com/onkernel/kernel-images/server/lib/scaletozero"
 	"github.com/stretchr/testify/assert"
@@ -248,6 +250,64 @@ func TestStopAndStartNewSegment_RoundTrip(t *testing.T) {
 	assert.True(t, newRec.IsRecording(ctx))
 
 	_ = newRec.Stop(ctx)
+}
+
+func TestProbeDisplayMode(t *testing.T) {
+	t.Run("detects xvfb when config exists", func(t *testing.T) {
+		svc := &ApiService{}
+		dir := t.TempDir()
+		confPath := filepath.Join(dir, "xvfb.conf")
+		require.NoError(t, os.WriteFile(confPath, []byte("[program:xvfb]\n"), 0644))
+
+		origPath := xvfbSupervisorConf
+		xvfbSupervisorConf = confPath
+		t.Cleanup(func() { xvfbSupervisorConf = origPath })
+
+		result := svc.probeDisplayMode(context.Background())
+		assert.Equal(t, "xvfb", result)
+	})
+
+	t.Run("detects xorg when config missing", func(t *testing.T) {
+		svc := &ApiService{}
+		origPath := xvfbSupervisorConf
+		xvfbSupervisorConf = "/nonexistent/path/xvfb.conf"
+		t.Cleanup(func() { xvfbSupervisorConf = origPath })
+
+		result := svc.probeDisplayMode(context.Background())
+		assert.Equal(t, "xorg", result)
+	})
+}
+
+func BenchmarkProbeDisplayMode(b *testing.B) {
+	svc := &ApiService{}
+	ctx := logger.AddToContext(context.Background(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	b.Run("file_exists", func(b *testing.B) {
+		dir := b.TempDir()
+		confPath := filepath.Join(dir, "xvfb.conf")
+		if err := os.WriteFile(confPath, []byte("[program:xvfb]\n"), 0644); err != nil {
+			b.Fatal(err)
+		}
+		origPath := xvfbSupervisorConf
+		xvfbSupervisorConf = confPath
+		b.Cleanup(func() { xvfbSupervisorConf = origPath })
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			svc.probeDisplayMode(ctx)
+		}
+	})
+
+	b.Run("file_missing", func(b *testing.B) {
+		origPath := xvfbSupervisorConf
+		xvfbSupervisorConf = "/nonexistent/path/xvfb.conf"
+		b.Cleanup(func() { xvfbSupervisorConf = origPath })
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			svc.probeDisplayMode(ctx)
+		}
+	})
 }
 
 func TestAdjustParamsForRemainingBudget(t *testing.T) {
