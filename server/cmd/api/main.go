@@ -29,6 +29,7 @@ import (
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/onkernel/kernel-images/server/lib/recorder"
 	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/onkernel/kernel-images/server/lib/webrtcscreen"
 )
 
 func main() {
@@ -135,6 +136,22 @@ func main() {
 		fs := http.StripPrefix("/extensions/", http.FileServer(http.Dir(extensionsDir)))
 		fs.ServeHTTP(w, r)
 	})
+
+	// WebRTC relay: connects to Neko as a headless viewer and re-serves
+	// the VP8 video stream to external WebRTC clients via a single
+	// WebSocket signaling endpoint. The Neko connection is lazy —
+	// it only starts when the first client connects.
+	relay, err := webrtcscreen.NewRelay(ctx, webrtcscreen.RelayConfig{
+		NekoBaseURL: "http://127.0.0.1:8080",
+		NekoUser:    "admin",
+		NekoPass:    adminPassword,
+		Logger:      slogger,
+	})
+	if err != nil {
+		slogger.Error("failed to create webrtc relay", "err", err)
+		os.Exit(1)
+	}
+	r.Get("/display/webrtc", relay.HandleWebSocket)
 
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.Port),
