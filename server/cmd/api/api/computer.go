@@ -232,6 +232,12 @@ func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseReque
 		return &validationError{msg: fmt.Sprintf("coordinates exceed screen bounds (max: %dx%d)", screenWidth-1, screenHeight-1)}
 	}
 
+	// Smoothly move to click coordinates (matching moveMouse default behavior).
+	// HoldKeys are intentionally not passed — they apply to the click, not the move.
+	if err := s.doMoveMouse(ctx, oapi.MoveMouseRequest{X: body.X, Y: body.Y}); err != nil {
+		return err
+	}
+
 	// Map button enum to xdotool button code. Default to left button.
 	btn := "1"
 	if body.Button != nil {
@@ -265,7 +271,7 @@ func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseReque
 		}
 	}
 
-	// Move the cursor
+	// Snap to exact coordinates before clicking (smooth move may be off by ±1px due to rounding)
 	args = append(args, "mousemove", strconv.Itoa(body.X), strconv.Itoa(body.Y))
 
 	// click type defaults to click
