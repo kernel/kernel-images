@@ -1,0 +1,36 @@
+time=2026-03-10T20:03:44.660-04:00 level=INFO msg="connecting to CDP" base=https://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222 sessionMode=true
+time=2026-03-10T20:03:44.699-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a rewritten=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:03:44.713-04:00 level=INFO msg="connected to browser WS" url=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:03:44.715-04:00 level=INFO msg="found page target" id=AB2B998CE2961B7E043C3EE879CF667F
+time=2026-03-10T20:03:44.720-04:00 level=INFO msg="attached to page session" sessionId=216B6837E8741A8CAF7E7DA24309D3CD
+time=2026-03-10T20:03:44.720-04:00 level=INFO msg=connected sites=5 iterations=2
+time=2026-03-10T20:03:44.720-04:00 level=INFO msg=warmup iterations=1
+time=2026-03-10T20:03:44.728-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T20:03:47.718-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T20:03:51.000-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T20:03:56.537-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T20:04:12.415-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T20:04:30.135-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a rewritten=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:04:30.152-04:00 level=INFO msg="connected to browser WS" url=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:04:30.153-04:00 level=INFO msg="found page target" id=AB2B998CE2961B7E043C3EE879CF667F
+time=2026-03-10T20:04:30.155-04:00 level=INFO msg="attached to page session" sessionId=99AD74DA317D99FA2662A4752132A42D
+time=2026-03-10T20:04:30.155-04:00 level=INFO msg="starting sequential benchmark" iterations=2 label=approach2
+time=2026-03-10T20:04:30.161-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T20:04:32.864-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T20:04:36.314-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T20:04:41.530-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T20:04:55.912-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T20:05:12.228-04:00 level=INFO msg=iteration i=2 of=2 url=https://news.ycombinator.com
+time=2026-03-10T20:05:16.954-04:00 level=INFO msg="starting concurrent benchmark" workers=3 duration=20s
+time=2026-03-10T20:05:16.957-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a rewritten=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:05:16.958-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a rewritten=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:05:16.959-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a rewritten=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:05:16.969-04:00 level=INFO msg="connected to browser WS" url=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:05:16.972-04:00 level=INFO msg="found page target" id=AB2B998CE2961B7E043C3EE879CF667F
+time=2026-03-10T20:05:16.975-04:00 level=INFO msg="attached to page session" sessionId=372CF5C4DD4455A4F1FAC181E3682D53
+time=2026-03-10T20:05:16.981-04:00 level=INFO msg="connected to browser WS" url=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:05:16.982-04:00 level=INFO msg="connected to browser WS" url=wss://late-wind-f8l13mdp.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/abd88b91-35f6-4739-98be-8661a231979a
+time=2026-03-10T20:05:16.984-04:00 level=INFO msg="found page target" id=AB2B998CE2961B7E043C3EE879CF667F
+time=2026-03-10T20:05:16.984-04:00 level=INFO msg="found page target" id=AB2B998CE2961B7E043C3EE879CF667F
+time=2026-03-10T20:05:16.987-04:00 level=INFO msg="attached to page session" sessionId=1C2B08844C3CA19EEC4887945C00666D
+time=2026-03-10T20:05:16.989-04:00 level=INFO msg="attached to page session" sessionId=515C1D76C762E633D17F35945499D36A

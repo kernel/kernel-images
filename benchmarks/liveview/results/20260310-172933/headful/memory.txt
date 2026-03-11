@@ -1,0 +1,6 @@
+config_memory: 8192m
+config_cpus: 8
+image_type: headful
+idle: 389.9MiB / 8GiB
+after-workload: 862MiB / 8GiB
+image_size: 2.66GB

@@ -1,0 +1,36 @@
+time=2026-03-10T20:07:42.285-04:00 level=INFO msg="connecting to CDP" base=https://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222 sessionMode=true
+time=2026-03-10T20:07:42.403-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192 rewritten=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:07:42.422-04:00 level=INFO msg="connected to browser WS" url=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:07:42.437-04:00 level=INFO msg="found page target" id=D3897A61B8EE645BEFE4B1822228C417
+time=2026-03-10T20:07:42.442-04:00 level=INFO msg="attached to page session" sessionId=D58DB44A858314014540149653028E2E
+time=2026-03-10T20:07:42.442-04:00 level=INFO msg=connected sites=5 iterations=2
+time=2026-03-10T20:07:42.442-04:00 level=INFO msg=warmup iterations=1
+time=2026-03-10T20:07:42.468-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T20:07:45.719-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T20:07:49.368-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T20:07:55.338-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T20:08:13.083-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T20:08:35.026-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192 rewritten=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:08:35.048-04:00 level=INFO msg="connected to browser WS" url=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:08:35.050-04:00 level=INFO msg="found page target" id=D3897A61B8EE645BEFE4B1822228C417
+time=2026-03-10T20:08:35.051-04:00 level=INFO msg="attached to page session" sessionId=2BA4C5D34B35643A0C6E39566A6F6EEC
+time=2026-03-10T20:08:35.051-04:00 level=INFO msg="starting sequential benchmark" iterations=2 label=approach1
+time=2026-03-10T20:08:35.057-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T20:08:38.100-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T20:08:41.615-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T20:08:47.582-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T20:09:03.047-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T20:09:25.813-04:00 level=INFO msg=iteration i=2 of=2 url=https://news.ycombinator.com
+time=2026-03-10T20:09:30.784-04:00 level=INFO msg="starting concurrent benchmark" workers=3 duration=20s
+time=2026-03-10T20:09:30.786-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192 rewritten=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:09:30.787-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192 rewritten=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:09:30.789-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192 rewritten=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:09:30.806-04:00 level=INFO msg="connected to browser WS" url=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:09:30.807-04:00 level=INFO msg="connected to browser WS" url=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:09:30.807-04:00 level=INFO msg="connected to browser WS" url=wss://bitter-sky-ggqe08al.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/dcf23eac-7b03-45de-9e13-d2a089f32192
+time=2026-03-10T20:09:30.809-04:00 level=INFO msg="found page target" id=D3897A61B8EE645BEFE4B1822228C417
+time=2026-03-10T20:09:30.809-04:00 level=INFO msg="found page target" id=D3897A61B8EE645BEFE4B1822228C417
+time=2026-03-10T20:09:30.810-04:00 level=INFO msg="found page target" id=D3897A61B8EE645BEFE4B1822228C417
+time=2026-03-10T20:09:30.811-04:00 level=INFO msg="attached to page session" sessionId=6C18EB90CAA915FDBDFC8588DA7AA865
+time=2026-03-10T20:09:30.812-04:00 level=INFO msg="attached to page session" sessionId=FD6C43C4E0937D1111AE54D0B6CE005E
+time=2026-03-10T20:09:30.813-04:00 level=INFO msg="attached to page session" sessionId=BCF9F3F91C1447649F4E7B6CAF4AB294

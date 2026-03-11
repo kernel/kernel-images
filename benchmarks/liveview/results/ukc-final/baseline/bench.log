@@ -1,0 +1,36 @@
+time=2026-03-10T19:55:37.404-04:00 level=INFO msg="connecting to CDP" base=https://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222 sessionMode=true
+time=2026-03-10T19:55:37.524-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61 rewritten=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:55:37.546-04:00 level=INFO msg="connected to browser WS" url=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:55:37.558-04:00 level=INFO msg="found page target" id=30ACB6802833BDC9AEC31F75F1E01386
+time=2026-03-10T19:55:37.569-04:00 level=INFO msg="attached to page session" sessionId=6D5A833C0EA1C1FCCCAC8BFF2F99A7CF
+time=2026-03-10T19:55:37.569-04:00 level=INFO msg=connected sites=5 iterations=2
+time=2026-03-10T19:55:37.569-04:00 level=INFO msg=warmup iterations=1
+time=2026-03-10T19:55:37.620-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T19:55:40.576-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T19:55:44.116-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T19:55:49.292-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T19:56:05.359-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T19:56:28.313-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61 rewritten=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:56:28.329-04:00 level=INFO msg="connected to browser WS" url=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:56:28.331-04:00 level=INFO msg="found page target" id=30ACB6802833BDC9AEC31F75F1E01386
+time=2026-03-10T19:56:28.333-04:00 level=INFO msg="attached to page session" sessionId=2585686104656CBE3CB2A61589C36FF9
+time=2026-03-10T19:56:28.333-04:00 level=INFO msg="starting sequential benchmark" iterations=2 label=baseline
+time=2026-03-10T19:56:28.339-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T19:56:31.207-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T19:56:34.474-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T19:56:39.907-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T19:56:55.140-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T19:57:12.761-04:00 level=INFO msg=iteration i=2 of=2 url=https://news.ycombinator.com
+time=2026-03-10T19:57:17.174-04:00 level=INFO msg="starting concurrent benchmark" workers=3 duration=20s
+time=2026-03-10T19:57:17.176-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61 rewritten=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:57:17.177-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61 rewritten=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:57:17.178-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61 rewritten=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:57:17.193-04:00 level=INFO msg="connected to browser WS" url=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:57:17.194-04:00 level=INFO msg="connected to browser WS" url=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:57:17.194-04:00 level=INFO msg="connected to browser WS" url=wss://misty-mountain-03xhzqi6.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/e7e657c5-9708-487a-b5e9-df7f8a99bc61
+time=2026-03-10T19:57:17.196-04:00 level=INFO msg="found page target" id=30ACB6802833BDC9AEC31F75F1E01386
+time=2026-03-10T19:57:17.197-04:00 level=INFO msg="found page target" id=30ACB6802833BDC9AEC31F75F1E01386
+time=2026-03-10T19:57:17.197-04:00 level=INFO msg="found page target" id=30ACB6802833BDC9AEC31F75F1E01386
+time=2026-03-10T19:57:17.198-04:00 level=INFO msg="attached to page session" sessionId=833990F6808E85DE21AEFACC5D0CBB9C
+time=2026-03-10T19:57:17.200-04:00 level=INFO msg="attached to page session" sessionId=AC7D849E746F34F1510C26196E8F9715
+time=2026-03-10T19:57:17.200-04:00 level=INFO msg="attached to page session" sessionId=E242DCA034BB6C97E8511AA403193259

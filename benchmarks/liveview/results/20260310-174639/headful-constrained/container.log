@@ -1,0 +1,131 @@
+[wrapper] Starting dynamic log aggregator for /var/log/supervisord
+[wrapper] Starting supervisord
+[wrapper] Waiting for supervisord socket...
+[envoy-init] Required environment variables not set. Skipping Envoy initialization.
+[wrapper] Starting Xorg via supervisord
+[xorg] 
+[xorg] X.Org X Server 1.21.1.4
+[xorg] X Protocol Version 11, Revision 0
+[xorg] Current Operating System: Linux c40502fefd99 6.1.0-39-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.148-1 (2025-08-26) x86_64
+[xorg] Kernel command line: BOOT_IMAGE=/boot/vmlinuz-6.1.0-39-amd64 root=UUID=5f07ede4-b79f-4c1a-a1a6-04a7f27b6295 ro quiet
+[xorg] xorg-server 2:21.1.4-2ubuntu1.7~22.04.16 (For technical support please see http://www.ubuntu.com/support) 
+[xorg] Current version of pixman: 0.40.0
+[xorg] 	Before reporting problems, check http://wiki.x.org
+[xorg] 	to make sure that you have the latest version.
+[xorg] Markers: (--) probed, (**) from config file, (==) default setting,
+[xorg] 	(++) from command line, (!!) notice, (II) informational,
+[xorg] 	(WW) warning, (EE) error, (NI) not implemented, (??) unknown.
+[xorg] (==) Log file: "/var/log/Xorg.1.log", Time: Tue Mar 10 21:46:41 2026
+[xorg] (++) Using config file: "/etc/neko/xorg.conf"
+[xorg] (==) Using system config directory "/usr/share/X11/xorg.conf.d"
+xorg: started
+[wrapper] Waiting for Xorg to open display :1...
+[wrapper] Starting Mutter via supervisord
+[mutter] libmutter-Message: 21:46:43.447: Running Mutter (using mutter 42.9) as a X11 window and compositing manager
+[mutter] Xlib:  extension "DPMS" missing on display ":1".
+[mutter] 
+[mutter] (mutter:57): libmutter-WARNING **: 21:46:43.589: Impossible to set scaling on crtc 62 to 1.000000, error id 2
+[mutter] Window manager warning: Scalig CRTC 62 at 1.000000 failed
+[mutter] 
+[mutter] Xlib:  extension "DPMS" missing on display ":1".
+[mutter] 
+[mutter] (mutter:57): libmutter-WARNING **: 21:46:43.645: No cursor theme available, please install a cursor theme
+[mutter] Xlib:  extension "DPMS" missing on display ":1".
+mutter: started
+[wrapper] Waiting for Mutter to be ready...
+[wrapper] Starting system D-Bus daemon via supervisord
+dbus: started
+[wrapper] Waiting for D-Bus system bus socket...
+[wrapper] Starting Chromium via supervisord on internal port 9223
+chromium: started
+[chromium] BASE_FLAGS: 
+[chromium] RUNTIME_FLAGS: 
+[chromium] FINAL_FLAGS: 
+[wrapper] Waiting for Chromium remote debugging on 127.0.0.1:9223...
+[wrapper] Chromium remote debugging is ready on 127.0.0.1:9223
+[wrapper] ✨ Starting neko (webrtc server) via supervisord.
+[dbus] dbus-daemon[157]: [system] Activating service name='org.freedesktop.UPower' requested by ':1.0' (uid=1000 pid=197 comm="/usr/lib/chromium/chromium --show-component-extens") (using servicehelper)
+[dbus] dbus-daemon[157]: [system] Activating service name='org.freedesktop.login1' requested by ':1.4' (uid=0 pid=391 comm="/usr/libexec/upowerd ") (using servicehelper)
+[dbus] dbus-daemon[157]: [system] Activated service 'org.freedesktop.login1' failed: Launch helper exited with unknown return code 1
+[dbus] 
+[dbus] (upowerd:391): GLib-GIO-CRITICAL **: 21:46:48.568: g_dbus_proxy_get_connection: assertion 'G_IS_DBUS_PROXY (proxy)' failed
+[dbus] 
+[dbus] (upowerd:391): GLib-GIO-CRITICAL **: 21:46:48.568: g_dbus_connection_signal_subscribe: assertion 'G_IS_DBUS_CONNECTION (connection)' failed
+[dbus] 
+[dbus] (upowerd:391): GLib-GIO-CRITICAL **: 21:46:48.568: g_dbus_proxy_call_sync_internal: assertion 'G_IS_DBUS_PROXY (proxy)' failed
+[dbus] 
+[dbus] (upowerd:391): UPower-Linux-WARNING **: 21:46:48.568: Could not acquire inhibitor lock: Unknown reason
+[dbus] dbus-daemon[157]: [system] Successfully activated service 'org.freedesktop.UPower'
+[chromium] 
+[chromium] DevTools listening on ws://127.0.0.1:9223/devtools/browser/f68eb28e-6021-43ea-b897-708ab0fa1ea8
+[mutter] Xlib:  extension "DPMS" missing on display ":1".
+[mutter] Xlib:  extension "DPMS" missing on display ":1".
+[mutter] Xlib:  extension "DPMS" missing on display ":1".
+[mutter] Xlib:  extension "DPMS" missing on display ":1".
+[mutter] 
+[mutter] (mutter:57): Clutter-WARNING **: 21:46:49.133: Can't update stage views actor <unnamed>[<MetaStage>:0x56410ad62d10] is on because it needs an allocation.
+[mutter] 
+[mutter] (mutter:57): Clutter-WARNING **: 21:46:49.133: Can't update stage views actor <unnamed>[<MetaWindowGroup>:0x56410b1ae330] is on because it needs an allocation.
+[mutter] 
+[mutter] (mutter:57): Clutter-WARNING **: 21:46:49.133: Can't update stage views actor <unnamed>[<MetaWindowActorX11>:0x56410b1b6730] is on because it needs an allocation.
+[mutter] 
+[mutter] (mutter:57): Clutter-WARNING **: 21:46:49.133: Can't update stage views actor <unnamed>[<MetaSurfaceActorX11>:0x56410b1b86c0] is on because it needs an allocation.
+[neko] [34m
+[neko]     _   __     __
+[neko]    / | / /__  / /______   \    /\
+[neko]   /  |/ / _ \/ //_/ __ \   )  ( ')
+[neko]  / /|  /  __/ ,< / /_/ /  (  /  )
+[neko] /_/ |_/\___/_/|_|\____/    \(__)|
+[neko] [1m[37m  nurdism/m1k1o [33mserver dev@dev[0m
+[neko] {"level":"info","time":"2026-03-10T21:46:49Z","message":"legacy configuration is enabled"}
+[neko] [90m9:46PM[0m [32mINF[0m [1mpreflight complete with config file[0m [36mconfig=[0m/etc/neko/neko.yaml [36mlog-dir=[0m [36mlog-json=[0mfalse [36mlog-level=[0minfo [36mlog-time=[0mUNIX
+[neko] [90m9:46PM[0m [33mWRN[0m [1mno video pipelines specified, using default[0m
+[neko] [90m9:46PM[0m [33mWRN[0m [1mno TCP, UDP mux or epr specified, using default epr range[0m [36mmax=[0m59100 [36mmin=[0m59000
+[neko] [90m9:46PM[0m [32mINF[0m [1mstarting neko server[0m [36mservice=[0mneko
+[neko] [90m9:46PM[0m [32mINF[0m [1msetting initial screen size[0m [36mmodule=[0mdesktop [36mscreen_size=[0m1920x1080@25
+[neko] [90m9:46PM[0m [32mINF[0m [1msyntax check for video stream pipeline passed[0m [36mmodule=[0mcapture [36mpipeline=[0m"ximagesrc display-name=:1 show-pointer=false use-damage=false ! capsfilter caps=video/x-raw,framerate=2500/100 name=framerate ! videoconvert ! queue   ! vp8enc name=encoder target-bitrate=1996800 end-usage=cbr undershoot=95 buffer-size=12288 keyframe-max-dist=25 max-quantizer=20 cpu-used=4 threads=4 deadline=1 buffer-initial-size=6144 buffer-optimal-size=9216 min-quantizer=4  ! appsink name=appsink" [36mvideo_id=[0mmain
+[neko] [90m9:46PM[0m [32mINF[0m [1msyntax check for video stream pipeline passed[0m [36mmodule=[0mcapture [36mpipeline=[0m"ximagesrc display-name=:1 show-pointer=true use-damage=false ! capsfilter caps=video/x-raw,framerate=2500/100 name=framerate ! videoconvert ! queue   ! vp8enc name=encoder max-quantizer=20 cpu-used=4 threads=4 deadline=1 buffer-initial-size=6144 buffer-optimal-size=9216 min-quantizer=4 target-bitrate=1996800 end-usage=cbr undershoot=95 buffer-size=12288 keyframe-max-dist=25  ! appsink name=appsink" [36mvideo_id=[0mlegacy
+[neko] [90m9:46PM[0m [32mINF[0m [1mstarting[0m [36mmodule=[0mwebrtc [36msubmodule=[0mcursor-image
+[neko] [90m9:46PM[0m [32mINF[0m [1mwebrtc starting[0m [36mepr=[0m59000-59100 [36micelite=[0mfalse [36miceservers-backend=[0m[{"urls":["stun:stun.l.google.com:19302"]}] [36miceservers-frontend=[0m[{"urls":["stun:stun.l.google.com:19302"]}] [36micetrickle=[0mtrue [36mmodule=[0mwebrtc [36mnat1to1=[0m216.246.84.226 [36mtcpmux=[0m0 [36mudpmux=[0m0
+[neko] [90m9:46PM[0m [32mINF[0m [1mwebsocket starting[0m [36mmodule=[0mwebsocket
+[neko] [90m9:46PM[0m [32mINF[0m [1mplugin started[0m [36mmodule=[0mplugins [36mplugin=[0mfiletransfer
+[neko] [90m9:46PM[0m [32mINF[0m [1mplugin started[0m [36mmodule=[0mplugins [36mplugin=[0mchat
+[neko] [90m9:46PM[0m [32mINF[0m [1mplugin enabled[0m [36mmodule=[0mscaletozero
+[neko] [90m9:46PM[0m [32mINF[0m [1mno operation needed; skipping toggle[0m [36mcurrently_connected_sessions=[0m0 [36mcurrently_disabled=[0mfalse [36mmodule=[0mscaletozero [36mpreviously_disabled=[0mfalse
+[neko] [90m9:46PM[0m [32mINF[0m [1mplugin started[0m [36mmodule=[0mplugins [36mplugin=[0mscaletozero
+[neko] [90m9:46PM[0m [32mINF[0m [1mhttp listening on 0.0.0.0:8080[0m [36mmodule=[0mhttp
+[neko] [90m9:46PM[0m [32mINF[0m [1mneko ready[0m [36mservice=[0mneko
+neko: started
+[wrapper] Waiting for neko on 127.0.0.1:8080...
+[wrapper] neko is ready on 127.0.0.1:8080
+[wrapper] ✨ Starting kernel-images API.
+[kernel-images-api] time=2026-03-10T21:46:51.320Z level=INFO msg="server configuration" config="&{Port:10001 FrameRate:10 DisplayNum:1 MaxSizeInMB:500 OutputDir:/recordings PathToFFmpeg:ffmpeg DevToolsProxyPort:9222 LogCDPMessages:false ChromeDriverProxyPort:9224 ChromeDriverUpstreamAddr:127.0.0.1:9225 DevToolsProxyAddr:127.0.0.1:9222}"
+[kernel-images-api] time=2026-03-10T21:46:51.337Z level=INFO msg="devtools upstream updated" url=ws://127.0.0.1:9223/devtools/browser/f68eb28e-6021-43ea-b897-708ab0fa1ea8
+[kernel-images-api] time=2026-03-10T21:46:51.437Z level=INFO msg="chromedriver proxy starting" addr=0.0.0.0:9224
+[kernel-images-api] time=2026-03-10T21:46:51.437Z level=INFO msg="http server starting" addr=:10001
+[kernel-images-api] time=2026-03-10T21:46:51.437Z level=INFO msg="devtools websocket proxy starting" addr=0.0.0.0:9222
+[chromium] [197:231:0310/214652.252730:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+kernel-images-api: started
+[wrapper] Waiting for kernel-images API on 127.0.0.1:10001...
+[wrapper] kernel-images API is ready on 127.0.0.1:10001
+[wrapper] Starting ChromeDriver via supervisord
+[chromedriver] Starting ChromeDriver 145.0.7632.116 (7d28075c6a9ba147e6df449209001258bb82a122-refs/branch-heads/7632@{#3100}) on port 9225
+[chromedriver] Remote connections are allowed by an allowlist (127.0.0.1).
+[chromedriver] Please see https://chromedriver.chromium.org/security-considerations for suggestions on keeping ChromeDriver safe.
+[chromedriver] ChromeDriver was started successfully on port 9225.
+chromedriver: started
+[wrapper] Waiting for ChromeDriver on 127.0.0.1:9225...
+[wrapper] ChromeDriver is ready on 127.0.0.1:9225
+[wrapper] Starting PulseAudio daemon via supervisord
+pulseaudio: started
+[chromium] [197:231:0310/214717.336466:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[chromium] [244:244:0310/214729.430295:ERROR:gpu/command_buffer/service/context_group.cc:130] ContextResult::kFatalFailure: WebGL1 blocklisted
+[chromium] [244:244:0310/214804.561981:ERROR:gpu/command_buffer/service/context_group.cc:130] ContextResult::kFatalFailure: WebGL1 blocklisted
+[chromium] [197:231:0310/214809.679508:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[chromium] [244:244:0310/214900.500946:ERROR:gpu/command_buffer/service/context_group.cc:130] ContextResult::kFatalFailure: WebGL1 blocklisted
+[chromium] [244:244:0310/214931.014533:ERROR:gpu/command_buffer/service/context_group.cc:130] ContextResult::kFatalFailure: WebGL1 blocklisted
+[chromium] Warning: vkCreateInstance: Found no drivers!
+[chromium] Warning: vkCreateInstance failed with VK_ERROR_INCOMPATIBLE_DRIVER
+[chromium]     at CheckVkSuccessImpl (../../third_party/dawn/src/dawn/native/vulkan/VulkanError.cpp:106)
+[chromium] 
+[chromium] [197:231:0310/214951.460855:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT

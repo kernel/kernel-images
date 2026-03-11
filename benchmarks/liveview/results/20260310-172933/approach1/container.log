@@ -1,0 +1,157 @@
+[wrapper] Starting dynamic log aggregator for /var/log/supervisord
+[wrapper] Starting supervisord
+[wrapper] Waiting for supervisord socket...
+[envoy-init] Required environment variables not set. Skipping Envoy initialization.
+[wrapper] Starting system D-Bus daemon via supervisord
+dbus: started
+[wrapper] Starting Xvfb via supervisord
+[xvfb] Starting Xvfb on :1 with 1920x1080x24, DPI 96
+xvfb: started
+[wrapper] Starting Chromium via supervisord on internal port 9223
+chromium: started
+[wrapper] Waiting for Chromium remote debugging on 127.0.0.1:9223...
+[chromium] BASE_FLAGS: --accept-lang=en-US,en     --allow-pre-commit-input     --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4     --crash-dumps-dir=/tmp/chromium-dumps     --disable-back-forward-cache     --disable-background-timer-throttling     --disable-backgrounding-occluded-windows     --disable-blink-features=AutomationControlled     --disable-breakpad     --disable-client-side-phishing-detection     --disable-component-extensions-with-background-pages     --disable-crash-reporter     --disable-crashpad     --disable-dev-shm-usage     --disable-features=AcceptCHFrame,AutoExpandDetailsElement,AvoidUnnecessaryBeforeUnloadCheckSync,CertificateTransparencyComponentUpdater,DeferRendererTasksAfterInput,DestroyProfileOnBrowserClose,DialMediaRouteProvider,ExtensionManifestV2Disabled,GlobalMediaControls,HttpsUpgrades,ImprovedCookieControls,LazyFrameLoading,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,Translate     --disable-field-trial-config     --disable-gcm-registration     --disable-gpu     --disable-gpu-compositing     --disable-hang-monitor     --disable-ipc-flooding-protection     --disable-notifications     --disable-popup-blocking     --disable-prompt-on-repost     --disable-renderer-backgrounding     --disable-search-engine-choice-screen     --enable-use-zoom-for-dsf=false     --export-tagged-pdf     --force-color-profile=srgb     --hide-crash-restore-bubble     --metrics-recording-only     --mute-audio     --no-default-browser-check     --no-first-run     --no-sandbox     --no-service-autorun     --password-store=basic     --unsafely-disable-devtools-self-xss-warnings     --use-angle=swiftshader     --use-gl=angle     --use-mock-keychain     --window-size=1920,1080     --window-position=0,0
+[chromium] RUNTIME_FLAGS: 
+[chromium] FINAL_FLAGS: --accept-lang=en-US,en --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --crash-dumps-dir=/tmp/chromium-dumps --disable-back-forward-cache --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-blink-features=AutomationControlled --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-crash-reporter --disable-crashpad --disable-dev-shm-usage --disable-features=AcceptCHFrame,AutoExpandDetailsElement,AvoidUnnecessaryBeforeUnloadCheckSync,CertificateTransparencyComponentUpdater,DeferRendererTasksAfterInput,DestroyProfileOnBrowserClose,DialMediaRouteProvider,ExtensionManifestV2Disabled,GlobalMediaControls,HttpsUpgrades,ImprovedCookieControls,LazyFrameLoading,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,Translate --disable-field-trial-config --disable-gcm-registration --disable-gpu --disable-gpu-compositing --disable-hang-monitor --disable-ipc-flooding-protection --disable-notifications --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-search-engine-choice-screen --enable-use-zoom-for-dsf=false --export-tagged-pdf --force-color-profile=srgb --hide-crash-restore-bubble --metrics-recording-only --mute-audio --no-default-browser-check --no-first-run --no-sandbox --no-service-autorun --password-store=basic --unsafely-disable-devtools-self-xss-warnings --use-angle=swiftshader --use-gl=angle --use-mock-keychain --window-size=1920,1080 --window-position=0,0
+[wrapper] Chromium remote debugging is ready on 127.0.0.1:9223
+[wrapper] ✨ Starting kernel-images API via supervisord.
+[chromium] 
+[chromium] DevTools listening on ws://127.0.0.1:9223/devtools/browser/edb11c3f-3e35-4f99-b6c0-7bbad2600bab
+[chromium] [93:93:0310/213234.067898:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.UPower was not provided by any .service files
+[kernel-images-api] time=2026-03-10T21:32:34.125Z level=INFO msg="server configuration" config="&{Port:10001 FrameRate:10 DisplayNum:1 MaxSizeInMB:500 OutputDir:/recordings PathToFFmpeg:ffmpeg DevToolsProxyPort:9222 LogCDPMessages:false ChromeDriverProxyPort:9224 ChromeDriverUpstreamAddr:127.0.0.1:9225 DevToolsProxyAddr:127.0.0.1:9222}"
+[kernel-images-api] time=2026-03-10T21:32:34.140Z level=INFO msg="devtools upstream updated" url=ws://127.0.0.1:9223/devtools/browser/edb11c3f-3e35-4f99-b6c0-7bbad2600bab
+[kernel-images-api] time=2026-03-10T21:32:34.239Z level=INFO msg="chromedriver proxy starting" addr=0.0.0.0:9224
+[kernel-images-api] time=2026-03-10T21:32:34.239Z level=INFO msg="http server starting" addr=:10001
+[kernel-images-api] time=2026-03-10T21:32:34.239Z level=INFO msg="devtools websocket proxy starting" addr=0.0.0.0:9222
+kernel-images-api: started
+[wrapper] Waiting for kernel-images API on 127.0.0.1:10001...
+[wrapper] kernel-images API is ready on 127.0.0.1:10001
+[wrapper] Starting ChromeDriver via supervisord
+[chromedriver] Starting ChromeDriver 145.0.7632.159 (838c69b2e5b8cd00a916e35097249bc20eb25a0a-refs/branch-heads/7632@{#3673}) on port 9225
+[chromedriver] Remote connections are allowed by an allowlist (127.0.0.1).
+[chromedriver] Please see https://chromedriver.chromium.org/security-considerations for suggestions on keeping ChromeDriver safe.
+[chromedriver] ChromeDriver was started successfully on port 9225.
+[chromium] [93:125:0310/213237.521829:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+chromedriver: started
+[wrapper] Waiting for ChromeDriver on 127.0.0.1:9225...
+[wrapper] ChromeDriver is ready on 127.0.0.1:9225
+[wrapper] Starting x11vnc via supervisord
+[x11vnc] 10/03/2026 21:32:38 passing arg to libvncserver: -rfbport
+[x11vnc] 10/03/2026 21:32:38 passing arg to libvncserver: 5900
+[x11vnc] 10/03/2026 21:32:38 x11vnc version: 0.9.16 lastmod: 2019-01-05  pid: 296
+[x11vnc] 10/03/2026 21:32:38 Using X display :1
+[x11vnc] 10/03/2026 21:32:38 rootwin: 0x50d reswin: 0xe00001 dpy: 0x9497e090
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 ------------------ USEFUL INFORMATION ------------------
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 Wireframing: -wireframe mode is in effect for window moves.
+[x11vnc] 10/03/2026 21:32:38   If this yields undesired behavior (poor response, painting
+[x11vnc] 10/03/2026 21:32:38   errors, etc) it may be disabled:
+[x11vnc] 10/03/2026 21:32:38    - use '-nowf' to disable wireframing completely.
+[x11vnc] 10/03/2026 21:32:38    - use '-nowcr' to disable the Copy Rectangle after the
+[x11vnc] 10/03/2026 21:32:38      moved window is released in the new position.
+[x11vnc] 10/03/2026 21:32:38   Also see the -help entry for tuning parameters.
+[x11vnc] 10/03/2026 21:32:38   You can press 3 Alt_L's (Left "Alt" key) in a row to 
+[x11vnc] 10/03/2026 21:32:38   repaint the screen, also see the -fixscreen option for
+[x11vnc] 10/03/2026 21:32:38   periodic repaints.
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 XFIXES available on display, resetting cursor mode
+[x11vnc] 10/03/2026 21:32:38   to: '-cursor most'.
+[x11vnc] 10/03/2026 21:32:38   to disable this behavior use: '-cursor arrow'
+[x11vnc] 10/03/2026 21:32:38   or '-noxfixes'.
+[x11vnc] 10/03/2026 21:32:38 using XFIXES for cursor drawing.
+[x11vnc] 10/03/2026 21:32:38 GrabServer control via XTEST.
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 Scroll Detection: -scrollcopyrect mode is in effect to
+[x11vnc] 10/03/2026 21:32:38   use RECORD extension to try to detect scrolling windows
+[x11vnc] 10/03/2026 21:32:38   (induced by either user keystroke or mouse input).
+[x11vnc] 10/03/2026 21:32:38   If this yields undesired behavior (poor response, painting
+[x11vnc] 10/03/2026 21:32:38   errors, etc) it may be disabled via: '-noscr'
+[x11vnc] 10/03/2026 21:32:38   Also see the -help entry for tuning parameters.
+[x11vnc] 10/03/2026 21:32:38   You can press 3 Alt_L's (Left "Alt" key) in a row to 
+[x11vnc] 10/03/2026 21:32:38   repaint the screen, also see the -fixscreen option for
+[x11vnc] 10/03/2026 21:32:38   periodic repaints.
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 XKEYBOARD: number of keysyms per keycode 7 is greater
+[x11vnc] 10/03/2026 21:32:38   than 4 and 51 keysyms are mapped above 4.
+[x11vnc] 10/03/2026 21:32:38   Automatically switching to -xkb mode.
+[x11vnc] 10/03/2026 21:32:38   If this makes the key mapping worse you can
+[x11vnc] 10/03/2026 21:32:38   disable it with the "-noxkb" option.
+[x11vnc] 10/03/2026 21:32:38   Also, remember "-remap DEAD" for accenting characters.
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 X FBPM extension not supported.
+[x11vnc] Xlib:  extension "DPMS" missing on display ":1".
+[x11vnc] 10/03/2026 21:32:38 X display is not capable of DPMS.
+[x11vnc] 10/03/2026 21:32:38 --------------------------------------------------------
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 Default visual ID: 0x21
+[x11vnc] 10/03/2026 21:32:38 Read initial data from X display into framebuffer.
+[x11vnc] 10/03/2026 21:32:38 initialize_screen: fb_depth/fb_bpp/fb_Bpl 24/32/7680
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 X display :1 is 32bpp depth=24 true color
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 Listening for VNC connections on TCP port 5900
+[x11vnc] 10/03/2026 21:32:38 Listening for VNC connections on TCP6 port 5900
+[x11vnc] 10/03/2026 21:32:38 listen6: bind: Address already in use
+[x11vnc] 10/03/2026 21:32:38 Not listening on IPv6 interface.
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 Xinerama is present and active (e.g. multi-head).
+[x11vnc] 10/03/2026 21:32:38 Xinerama: number of sub-screens: 1
+[x11vnc] 10/03/2026 21:32:38 Xinerama: no blackouts needed (only one sub-screen)
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 10/03/2026 21:32:38 fb read rate: 1105 MB/sec
+[x11vnc] 10/03/2026 21:32:38 fast read: reset -wait  ms to: 10
+[x11vnc] 10/03/2026 21:32:38 fast read: reset -defer ms to: 10
+[x11vnc] 10/03/2026 21:32:38 The X server says there are 10 mouse buttons.
+[x11vnc] 10/03/2026 21:32:38 screen setup finished.
+[x11vnc] 10/03/2026 21:32:38 
+[x11vnc] 
+[x11vnc] The VNC desktop is:      add4ce841067:0
+[x11vnc] PORT=5900
+[x11vnc] 
+[x11vnc] ******************************************************************************
+[x11vnc] Have you tried the x11vnc '-ncache' VNC client-side pixel caching feature yet?
+[x11vnc] 
+[x11vnc] The scheme stores pixel data offscreen on the VNC viewer side for faster
+[x11vnc] retrieval.  It should work with any VNC viewer.  Try it by running:
+[x11vnc] 
+[x11vnc]     x11vnc -ncache 10 ...
+[x11vnc] 
+[x11vnc] One can also add -ncache_cr for smooth 'copyrect' window motion.
+[x11vnc] More info: http://www.karlrunge.com/x11vnc/faq.html#faq-client-caching
+[x11vnc] 
+x11vnc: started
+[wrapper] Waiting for x11vnc on 127.0.0.1:5900...
+[wrapper] x11vnc is ready on 127.0.0.1:5900
+[wrapper] Starting noVNC via supervisord
+[x11vnc] 10/03/2026 21:32:40 Got connection from client 127.0.0.1
+[x11vnc] 10/03/2026 21:32:40   0 other clients
+[x11vnc] 10/03/2026 21:32:40 webSocketsHandshake: invalid client header
+[x11vnc] 10/03/2026 21:32:40 Client 127.0.0.1 gone
+[x11vnc] 10/03/2026 21:32:40 Statistics             events    Transmit/ RawEquiv ( saved)
+[x11vnc] 10/03/2026 21:32:40  TOTALS              :      0 |         0/        0 (  0.0%)
+[x11vnc] 10/03/2026 21:32:40 Statistics             events    Received/ RawEquiv ( saved)
+[x11vnc] 10/03/2026 21:32:40  TOTALS              :      0 |         0/        0 (  0.0%)
+[novnc] WebSocket server settings:
+[novnc]   - Listen on :8080
+[novnc]   - Web server. Web root: /usr/share/novnc
+[novnc]   - No SSL/TLS support (no cert file)
+[novnc]   - proxying from :8080 to localhost:5900
+novnc: started
+[wrapper] Waiting for noVNC on 127.0.0.1:8080...
+[wrapper] noVNC is ready on 127.0.0.1:8080
+[wrapper] startup complete!
+[chromium] [93:125:0310/213248.124427:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: INTERNAL_SERVER_ERROR
+[chromium] [93:93:0310/213249.953991:ERROR:mojo/public/cpp/bindings/lib/interface_endpoint_client.cc:748] Message 0 rejected by interface blink.mojom.WidgetHost
+[chromium] [93:125:0310/213258.498436:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[chromium] [137:137:0310/213309.737513:ERROR:gpu/command_buffer/service/gles2_cmd_decoder_passthrough.cc:1082] [GroupMarkerNotSet(crbug.com/242999)!:A0A01D00DC3A0000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.
+[chromium] [93:93:0310/213320.965564:ERROR:mojo/public/cpp/bindings/lib/interface_endpoint_client.cc:748] Message 0 rejected by interface blink.mojom.WidgetHost
+[chromium] [137:137:0310/213337.891207:ERROR:gpu/command_buffer/service/gles2_cmd_decoder_passthrough.cc:1082] [GroupMarkerNotSet(crbug.com/242999)!:A0A01D00DC3A0000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.
+[chromium] [93:125:0310/213341.317108:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[chromium] [93:93:0310/213344.319015:ERROR:mojo/public/cpp/bindings/lib/interface_endpoint_client.cc:748] Message 0 rejected by interface blink.mojom.WidgetHost
+[chromium] [137:164:0310/213359.923967:ERROR:components/viz/service/display/display.cc:275] Frame latency is negative: -0.292 ms
+[chromium] [137:164:0310/213403.668893:ERROR:components/viz/service/display/display.cc:275] Frame latency is negative: -0.591 ms
+[chromium] [137:137:0310/213429.372628:ERROR:gpu/command_buffer/service/gles2_cmd_decoder_passthrough.cc:1082] [GroupMarkerNotSet(crbug.com/242999)!:A0D01D00DC3A0000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.
+[chromium] [137:137:0310/213457.222914:ERROR:gpu/command_buffer/service/gles2_cmd_decoder_passthrough.cc:1082] [GroupMarkerNotSet(crbug.com/242999)!:A0D01D00DC3A0000]Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader (about:flags#enable-unsafe-swiftshader) flag to opt in to lower security guarantees for trusted content.
+[chromium] [93:93:0310/213503.536031:ERROR:mojo/public/cpp/bindings/lib/interface_endpoint_client.cc:748] Message 0 rejected by interface blink.mojom.WidgetHost
+[chromium] [93:125:0310/213504.277128:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT

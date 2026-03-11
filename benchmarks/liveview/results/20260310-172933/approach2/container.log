@@ -1,0 +1,49 @@
+[wrapper] Starting dynamic log aggregator for /var/log/supervisord
+[wrapper] Starting supervisord
+[wrapper] Waiting for supervisord socket...
+[envoy-init] Required environment variables not set. Skipping Envoy initialization.
+[wrapper] Starting system D-Bus daemon via supervisord
+dbus: started
+[wrapper] Starting Xvfb via supervisord
+[xvfb] Starting Xvfb on :1 with 1920x1080x24, DPI 96
+xvfb: started
+[wrapper] Starting Chromium via supervisord on internal port 9223
+chromium: started
+[wrapper] Waiting for Chromium remote debugging on 127.0.0.1:9223...
+[chromium] BASE_FLAGS: --accept-lang=en-US,en     --allow-pre-commit-input     --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4     --crash-dumps-dir=/tmp/chromium-dumps     --disable-back-forward-cache     --disable-background-timer-throttling     --disable-backgrounding-occluded-windows     --disable-blink-features=AutomationControlled     --disable-breakpad     --disable-client-side-phishing-detection     --disable-component-extensions-with-background-pages     --disable-crash-reporter     --disable-crashpad     --disable-dev-shm-usage     --disable-features=AcceptCHFrame,AutoExpandDetailsElement,AvoidUnnecessaryBeforeUnloadCheckSync,CertificateTransparencyComponentUpdater,DeferRendererTasksAfterInput,DestroyProfileOnBrowserClose,DialMediaRouteProvider,ExtensionManifestV2Disabled,GlobalMediaControls,HttpsUpgrades,ImprovedCookieControls,LazyFrameLoading,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,Translate     --disable-field-trial-config     --disable-gcm-registration     --disable-gpu     --disable-gpu-compositing     --disable-hang-monitor     --disable-ipc-flooding-protection     --disable-notifications     --disable-popup-blocking     --disable-prompt-on-repost     --disable-renderer-backgrounding     --disable-search-engine-choice-screen     --disable-software-rasterizer     --enable-use-zoom-for-dsf=false     --export-tagged-pdf     --force-color-profile=srgb     --hide-crash-restore-bubble     --hide-scrollbars     --metrics-recording-only     --mute-audio     --no-default-browser-check     --no-first-run     --no-sandbox     --no-service-autorun     --ozone-platform=headless     --password-store=basic     --unsafely-disable-devtools-self-xss-warnings     --use-angle=swiftshader     --use-gl=angle     --use-mock-keychain
+[chromium] RUNTIME_FLAGS: 
+[chromium] FINAL_FLAGS: --accept-lang=en-US,en --allow-pre-commit-input --blink-settings=primaryHoverType=2,availableHoverTypes=2,primaryPointerType=4,availablePointerTypes=4 --crash-dumps-dir=/tmp/chromium-dumps --disable-back-forward-cache --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-blink-features=AutomationControlled --disable-breakpad --disable-client-side-phishing-detection --disable-component-extensions-with-background-pages --disable-crash-reporter --disable-crashpad --disable-dev-shm-usage --disable-features=AcceptCHFrame,AutoExpandDetailsElement,AvoidUnnecessaryBeforeUnloadCheckSync,CertificateTransparencyComponentUpdater,DeferRendererTasksAfterInput,DestroyProfileOnBrowserClose,DialMediaRouteProvider,ExtensionManifestV2Disabled,GlobalMediaControls,HttpsUpgrades,ImprovedCookieControls,LazyFrameLoading,LensOverlay,MediaRouter,PaintHolding,ThirdPartyStoragePartitioning,Translate --disable-field-trial-config --disable-gcm-registration --disable-gpu --disable-gpu-compositing --disable-hang-monitor --disable-ipc-flooding-protection --disable-notifications --disable-popup-blocking --disable-prompt-on-repost --disable-renderer-backgrounding --disable-search-engine-choice-screen --disable-software-rasterizer --enable-use-zoom-for-dsf=false --export-tagged-pdf --force-color-profile=srgb --hide-crash-restore-bubble --hide-scrollbars --metrics-recording-only --mute-audio --no-default-browser-check --no-first-run --no-sandbox --no-service-autorun --ozone-platform=headless --password-store=basic --unsafely-disable-devtools-self-xss-warnings --use-angle=swiftshader --use-gl=angle --use-mock-keychain
+[chromium] 
+[chromium] DevTools listening on ws://127.0.0.1:9223/devtools/browser/fb046c2c-35c3-4bb6-828b-f9c54be58335
+[wrapper] Chromium remote debugging is ready on 127.0.0.1:9223
+[wrapper] ✨ Starting kernel-images API via supervisord.
+[chromium] [95:95:0310/213540.436479:ERROR:dbus/object_proxy.cc:572] Failed to call method: org.freedesktop.DBus.Properties.GetAll: object_path= /org/freedesktop/UPower/devices/DisplayDevice: org.freedesktop.DBus.Error.ServiceUnknown: The name org.freedesktop.UPower was not provided by any .service files
+[kernel-images-api] time=2026-03-10T21:35:40.585Z level=INFO msg="server configuration" config="&{Port:10001 FrameRate:10 DisplayNum:1 MaxSizeInMB:500 OutputDir:/recordings PathToFFmpeg:ffmpeg DevToolsProxyPort:9222 LogCDPMessages:false ChromeDriverProxyPort:9224 ChromeDriverUpstreamAddr:127.0.0.1:9225 DevToolsProxyAddr:127.0.0.1:9222}"
+[kernel-images-api] time=2026-03-10T21:35:40.599Z level=INFO msg="devtools upstream updated" url=ws://127.0.0.1:9223/devtools/browser/fb046c2c-35c3-4bb6-828b-f9c54be58335
+[kernel-images-api] time=2026-03-10T21:35:40.698Z level=INFO msg="chromedriver proxy starting" addr=0.0.0.0:9224
+[kernel-images-api] time=2026-03-10T21:35:40.698Z level=INFO msg="http server starting" addr=:10001
+[kernel-images-api] time=2026-03-10T21:35:40.698Z level=INFO msg="devtools websocket proxy starting" addr=0.0.0.0:9222
+kernel-images-api: started
+[wrapper] Waiting for kernel-images API on 127.0.0.1:10001...
+[wrapper] kernel-images API is ready on 127.0.0.1:10001
+[wrapper] Starting ChromeDriver via supervisord
+[chromedriver] Starting ChromeDriver 145.0.7632.159 (838c69b2e5b8cd00a916e35097249bc20eb25a0a-refs/branch-heads/7632@{#3673}) on port 9225
+[chromedriver] Remote connections are allowed by an allowlist (127.0.0.1).
+[chromedriver] Please see https://chromedriver.chromium.org/security-considerations for suggestions on keeping ChromeDriver safe.
+[chromedriver] ChromeDriver was started successfully on port 9225.
+[chromium] [95:125:0310/213543.883444:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+chromedriver: started
+[wrapper] Waiting for ChromeDriver on 127.0.0.1:9225...
+[wrapper] ChromeDriver is ready on 127.0.0.1:9225
+[wrapper] Starting CDP live view via supervisord
+[cdp-live-view] time=2026-03-10T21:35:45.050Z level=INFO msg="starting cdp-live-view" listen=:8080 cdpPort=9223
+cdp-live-view: started
+[wrapper] Waiting for cdp-live-view on 127.0.0.1:8080...
+[wrapper] cdp-live-view is ready on 127.0.0.1:8080
+[wrapper] startup complete!
+[chromium] [95:125:0310/213610.479449:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[chromium] [95:125:0310/213707.222258:ERROR:google_apis/gcm/engine/registration_request.cc:290] Registration response error message: DEPRECATED_ENDPOINT
+[chromium] [136:143:0310/213756.806807:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:385] SharedImageManager::ProduceMemory: Trying to Produce a Memory representation from a non-existent mailbox.
+[chromium] [136:143:0310/213756.806973:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:385] SharedImageManager::ProduceMemory: Trying to Produce a Memory representation from a non-existent mailbox.
+[chromium] [136:143:0310/213756.807027:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:385] SharedImageManager::ProduceMemory: Trying to Produce a Memory representation from a non-existent mailbox.
+[chromium] [136:143:0310/213756.807076:ERROR:gpu/command_buffer/service/shared_image/shared_image_manager.cc:385] SharedImageManager::ProduceMemory: Trying to Produce a Memory representation from a non-existent mailbox.

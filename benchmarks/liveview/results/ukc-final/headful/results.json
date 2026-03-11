@@ -1,0 +1,445 @@
+{
+  "label": "headful",
+  "results": [
+    {
+      "category": "Navigation",
+      "operation": "Navigate[static]",
+      "n": 1,
+      "min_ms": 54.058,
+      "median_ms": 54.058,
+      "mean_ms": 54.058,
+      "p95_ms": 54.058,
+      "max_ms": 54.058
+    },
+    {
+      "category": "Screenshot",
+      "operation": "Screenshot.JPEG.q80",
+      "n": 6,
+      "min_ms": 48.013,
+      "median_ms": 134.907,
+      "mean_ms": 138.691,
+      "p95_ms": 261.182,
+      "max_ms": 261.182
+    },
+    {
+      "category": "Screenshot",
+      "operation": "Screenshot.PNG",
+      "n": 6,
+      "min_ms": 82.978,
+      "median_ms": 146.576,
+      "mean_ms": 224.406,
+      "p95_ms": 684.647,
+      "max_ms": 684.647
+    },
+    {
+      "category": "Screenshot",
+      "operation": "Screenshot.FullPage",
+      "n": 6,
+      "min_ms": 112.009,
+      "median_ms": 548.865,
+      "mean_ms": 420.982,
+      "p95_ms": 818.055,
+      "max_ms": 818.055
+    },
+    {
+      "category": "Screenshot",
+      "operation": "Screenshot.ClipRegion",
+      "n": 6,
+      "min_ms": 58.334,
+      "median_ms": 77.044,
+      "mean_ms": 92.403,
+      "p95_ms": 185.673,
+      "max_ms": 185.673
+    },
+    {
+      "category": "JS Evaluation",
+      "operation": "Eval.Trivial",
+      "n": 6,
+      "min_ms": 1.623,
+      "median_ms": 1.749,
+      "mean_ms": 15.152,
+      "p95_ms": 81.405,
+      "max_ms": 81.405
+    },
+    {
+      "category": "JS Evaluation",
+      "operation": "Eval.QuerySelectorAll",
+      "n": 6,
+      "min_ms": 1.528,
+      "median_ms": 1.597,
+      "mean_ms": 12.555,
+      "p95_ms": 67.463,
+      "max_ms": 67.463
+    },
+    {
+      "category": "JS Evaluation",
+      "operation": "Eval.InnerText",
+      "n": 6,
+      "min_ms": 1.634,
+      "median_ms": 2.162,
+      "mean_ms": 2.25,
+      "p95_ms": 3.443,
+      "max_ms": 3.443
+    },
+    {
+      "category": "JS Evaluation",
+      "operation": "Eval.GetComputedStyle",
+      "n": 6,
+      "min_ms": 6.125,
+      "median_ms": 6.482,
+      "mean_ms": 8.441,
+      "p95_ms": 13.939,
+      "max_ms": 13.939
+    },
+    {
+      "category": "JS Evaluation",
+      "operation": "Eval.ScrollToBottom",
+      "n": 6,
+      "min_ms": 1.481,
+      "median_ms": 1.64,
+      "mean_ms": 2.883,
+      "p95_ms": 7.314,
+      "max_ms": 7.314
+    },
+    {
+      "category": "JS Evaluation",
+      "operation": "Eval.DOMManipulation",
+      "n": 6,
+      "min_ms": 1.637,
+      "median_ms": 2.034,
+      "mean_ms": 3.317,
+      "p95_ms": 8.985,
+      "max_ms": 8.985
+    },
+    {
+      "category": "JS Evaluation",
+      "operation": "Eval.BoundingRects",
+      "n": 6,
+      "min_ms": 1.718,
+      "median_ms": 2.038,
+      "mean_ms": 6.463,
+      "p95_ms": 27.735,
+      "max_ms": 27.735
+    },
+    {
+      "category": "DOM",
+      "operation": "DOM.GetDocument.Shallow",
+      "n": 6,
+      "min_ms": 1.417,
+      "median_ms": 1.593,
+      "mean_ms": 2.013,
+      "p95_ms": 3.905,
+      "max_ms": 3.905
+    },
+    {
+      "category": "DOM",
+      "operation": "DOM.GetDocument.Deep",
+      "n": 6,
+      "min_ms": 1.463,
+      "median_ms": 4.871,
+      "mean_ms": 5.852,
+      "p95_ms": 19.685,
+      "max_ms": 19.685
+    },
+    {
+      "category": "DOM",
+      "operation": "DOM.GetDocument.Full",
+      "n": 6,
+      "min_ms": 1.554,
+      "median_ms": 40.384,
+      "mean_ms": 31.481,
+      "p95_ms": 69.176,
+      "max_ms": 69.176
+    },
+    {
+      "category": "DOM",
+      "operation": "DOM.QuerySelector",
+      "n": 6,
+      "min_ms": 1.406,
+      "median_ms": 1.753,
+      "mean_ms": 1.707,
+      "p95_ms": 1.952,
+      "max_ms": 1.952
+    },
+    {
+      "category": "DOM",
+      "operation": "DOM.GetOuterHTML",
+      "n": 6,
+      "min_ms": 1.404,
+      "median_ms": 33.695,
+      "mean_ms": 19.26,
+      "p95_ms": 37.19,
+      "max_ms": 37.19
+    },
+    {
+      "category": "Input",
+      "operation": "Input.MouseMove",
+      "n": 6,
+      "min_ms": 2.719,
+      "median_ms": 34.306,
+      "mean_ms": 24.165,
+      "p95_ms": 41.288,
+      "max_ms": 41.288
+    },
+    {
+      "category": "Input",
+      "operation": "Input.Click",
+      "n": 6,
+      "min_ms": 3.837,
+      "median_ms": 5.444,
+      "mean_ms": 7.952,
+      "p95_ms": 21.921,
+      "max_ms": 21.921
+    },
+    {
+      "category": "Input",
+      "operation": "Input.TypeText",
+      "n": 6,
+      "min_ms": 58.419,
+      "median_ms": 61.595,
+      "mean_ms": 265.103,
+      "p95_ms": 1195.825,
+      "max_ms": 1195.825
+    },
+    {
+      "category": "Input",
+      "operation": "Input.Scroll",
+      "n": 6,
+      "min_ms": 174.033,
+      "median_ms": 195.482,
+      "mean_ms": 271.174,
+      "p95_ms": 589.728,
+      "max_ms": 589.728
+    },
+    {
+      "category": "Network",
+      "operation": "Network.GetCookies",
+      "n": 6,
+      "min_ms": 1.43,
+      "median_ms": 1.724,
+      "mean_ms": 2.937,
+      "p95_ms": 9.55,
+      "max_ms": 9.55
+    },
+    {
+      "category": "Network",
+      "operation": "Network.GetResponseBody",
+      "n": 6,
+      "min_ms": 5.307,
+      "median_ms": 32.679,
+      "mean_ms": 56.587,
+      "p95_ms": 204.415,
+      "max_ms": 204.415
+    },
+    {
+      "category": "Page",
+      "operation": "Page.Reload",
+      "n": 6,
+      "min_ms": 38.503,
+      "median_ms": 105.676,
+      "mean_ms": 246.619,
+      "p95_ms": 737.662,
+      "max_ms": 737.662
+    },
+    {
+      "category": "Page",
+      "operation": "Page.GetNavigationHistory",
+      "n": 6,
+      "min_ms": 1.651,
+      "median_ms": 1.814,
+      "mean_ms": 1.949,
+      "p95_ms": 2.694,
+      "max_ms": 2.694
+    },
+    {
+      "category": "Page",
+      "operation": "Page.GetLayoutMetrics",
+      "n": 6,
+      "min_ms": 1.42,
+      "median_ms": 9.414,
+      "mean_ms": 8.207,
+      "p95_ms": 16.384,
+      "max_ms": 16.384
+    },
+    {
+      "category": "Page",
+      "operation": "Page.PrintToPDF",
+      "n": 6,
+      "min_ms": 72.288,
+      "median_ms": 332.117,
+      "mean_ms": 455.09,
+      "p95_ms": 1549.396,
+      "max_ms": 1549.396
+    },
+    {
+      "category": "Emulation",
+      "operation": "Emulation.SetViewport",
+      "n": 6,
+      "min_ms": 1.509,
+      "median_ms": 2.005,
+      "mean_ms": 2.202,
+      "p95_ms": 3.009,
+      "max_ms": 3.009
+    },
+    {
+      "category": "Emulation",
+      "operation": "Emulation.SetMobile",
+      "n": 6,
+      "min_ms": 4.798,
+      "median_ms": 78.934,
+      "mean_ms": 93.611,
+      "p95_ms": 296.795,
+      "max_ms": 296.795
+    },
+    {
+      "category": "Emulation",
+      "operation": "Emulation.SetGeolocation",
+      "n": 6,
+      "min_ms": 1.278,
+      "median_ms": 1.554,
+      "mean_ms": 2.538,
+      "p95_ms": 7.98,
+      "max_ms": 7.98
+    },
+    {
+      "category": "Target",
+      "operation": "Target.GetTargets",
+      "n": 6,
+      "min_ms": 1.297,
+      "median_ms": 1.412,
+      "mean_ms": 1.385,
+      "p95_ms": 1.499,
+      "max_ms": 1.499
+    },
+    {
+      "category": "Target",
+      "operation": "Target.CreateAndClose",
+      "n": 6,
+      "min_ms": 21.593,
+      "median_ms": 35.398,
+      "mean_ms": 182.31,
+      "p95_ms": 942.273,
+      "max_ms": 942.273
+    },
+    {
+      "category": "Composite",
+      "operation": "Composite.NavAndScreenshot",
+      "n": 6,
+      "min_ms": 190.869,
+      "median_ms": 289.392,
+      "mean_ms": 271.608,
+      "p95_ms": 329.042,
+      "max_ms": 329.042
+    },
+    {
+      "category": "Composite",
+      "operation": "Composite.ScrapeLinks",
+      "n": 6,
+      "min_ms": 2.205,
+      "median_ms": 2.944,
+      "mean_ms": 3.573,
+      "p95_ms": 7.37,
+      "max_ms": 7.37
+    },
+    {
+      "category": "Composite",
+      "operation": "Composite.FillForm",
+      "n": 6,
+      "min_ms": 11.14,
+      "median_ms": 13.839,
+      "mean_ms": 13.643,
+      "p95_ms": 18.575,
+      "max_ms": 18.575
+    },
+    {
+      "category": "Composite",
+      "operation": "Composite.ClickAndWait",
+      "n": 6,
+      "min_ms": 23.496,
+      "median_ms": 37.395,
+      "mean_ms": 34.549,
+      "p95_ms": 44.597,
+      "max_ms": 44.597
+    },
+    {
+      "category": "Composite",
+      "operation": "Composite.RapidScreenshots",
+      "n": 6,
+      "min_ms": 1040.536,
+      "median_ms": 1070.79,
+      "mean_ms": 1088.127,
+      "p95_ms": 1183.215,
+      "max_ms": 1183.215
+    },
+    {
+      "category": "Composite",
+      "operation": "Composite.ScrollAndCapture",
+      "n": 6,
+      "min_ms": 598.873,
+      "median_ms": 642.67,
+      "mean_ms": 635.214,
+      "p95_ms": 681.236,
+      "max_ms": 681.236
+    },
+    {
+      "category": "Navigation",
+      "operation": "Navigate[content]",
+      "n": 3,
+      "min_ms": 119.185,
+      "median_ms": 130.479,
+      "mean_ms": 160.657,
+      "p95_ms": 232.306,
+      "max_ms": 232.306
+    },
+    {
+      "category": "Navigation",
+      "operation": "Navigate[spa]",
+      "n": 1,
+      "min_ms": 1507.232,
+      "median_ms": 1507.232,
+      "mean_ms": 1507.232,
+      "p95_ms": 1507.232,
+      "max_ms": 1507.232
+    },
+    {
+      "category": "Navigation",
+      "operation": "Navigate[media]",
+      "n": 1,
+      "min_ms": 797.864,
+      "median_ms": 797.864,
+      "mean_ms": 797.864,
+      "p95_ms": 797.864,
+      "max_ms": 797.864
+    },
+    {
+      "category": "Concurrent",
+      "operation": "Concurrent.DOM",
+      "n": 349,
+      "min_ms": 1.327,
+      "median_ms": 1.781,
+      "mean_ms": 2.502,
+      "p95_ms": 5.602,
+      "max_ms": 32.619
+    },
+    {
+      "category": "Concurrent",
+      "operation": "Concurrent.Evaluate",
+      "n": 349,
+      "min_ms": 1.389,
+      "median_ms": 10.008,
+      "mean_ms": 14.214,
+      "p95_ms": 33.006,
+      "max_ms": 134.569
+    },
+    {
+      "category": "Concurrent",
+      "operation": "Concurrent.Screenshot",
+      "n": 349,
+      "min_ms": 119.995,
+      "median_ms": 151.386,
+      "mean_ms": 155.488,
+      "p95_ms": 199.006,
+      "max_ms": 266.609
+    }
+  ]
+}

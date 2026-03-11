@@ -1,0 +1,36 @@
+time=2026-03-10T20:14:57.118-04:00 level=INFO msg="connecting to CDP" base=https://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222 sessionMode=true
+time=2026-03-10T20:14:57.159-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74 rewritten=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:14:57.171-04:00 level=INFO msg="connected to browser WS" url=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:14:57.172-04:00 level=INFO msg="found page target" id=D71EB211E322A42ABBD17315B0C44B46
+time=2026-03-10T20:14:57.180-04:00 level=INFO msg="attached to page session" sessionId=FCB19B278EEC04A079F58E15B1733AC6
+time=2026-03-10T20:14:57.180-04:00 level=INFO msg=connected sites=5 iterations=2
+time=2026-03-10T20:14:57.180-04:00 level=INFO msg=warmup iterations=1
+time=2026-03-10T20:14:57.186-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T20:15:00.650-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T20:15:04.409-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T20:15:09.089-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T20:15:19.687-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T20:15:27.892-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74 rewritten=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:15:27.913-04:00 level=INFO msg="connected to browser WS" url=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:15:27.915-04:00 level=INFO msg="found page target" id=D71EB211E322A42ABBD17315B0C44B46
+time=2026-03-10T20:15:27.916-04:00 level=INFO msg="attached to page session" sessionId=F0ADBC5A061627F69FC46D20AB99143E
+time=2026-03-10T20:15:27.916-04:00 level=INFO msg="starting sequential benchmark" iterations=2 label=headful
+time=2026-03-10T20:15:27.922-04:00 level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T20:15:31.247-04:00 level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T20:15:35.047-04:00 level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T20:15:39.968-04:00 level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T20:15:48.729-04:00 level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T20:15:57.727-04:00 level=INFO msg=iteration i=2 of=2 url=https://news.ycombinator.com
+time=2026-03-10T20:16:02.752-04:00 level=INFO msg="starting concurrent benchmark" workers=3 duration=20s
+time=2026-03-10T20:16:02.754-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74 rewritten=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:16:02.756-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74 rewritten=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:16:02.757-04:00 level=INFO msg="rewrote WS URL for remote access" original=ws://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74 rewritten=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:16:02.772-04:00 level=INFO msg="connected to browser WS" url=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:16:02.773-04:00 level=INFO msg="found page target" id=D71EB211E322A42ABBD17315B0C44B46
+time=2026-03-10T20:16:02.773-04:00 level=INFO msg="connected to browser WS" url=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:16:02.775-04:00 level=INFO msg="attached to page session" sessionId=3BF8664EBAF43CFA7F47713436E465E6
+time=2026-03-10T20:16:02.775-04:00 level=INFO msg="connected to browser WS" url=wss://icy-dawn-37nqidmr.dev-iad-unikraft-3.onkernel.app:9222/devtools/browser/b45aa8f6-42f2-4891-9121-ef45d1200c74
+time=2026-03-10T20:16:02.775-04:00 level=INFO msg="found page target" id=D71EB211E322A42ABBD17315B0C44B46
+time=2026-03-10T20:16:02.776-04:00 level=INFO msg="found page target" id=D71EB211E322A42ABBD17315B0C44B46
+time=2026-03-10T20:16:02.777-04:00 level=INFO msg="attached to page session" sessionId=0DAB827851EBF1D12DFE7EACD063C87C
+time=2026-03-10T20:16:02.778-04:00 level=INFO msg="attached to page session" sessionId=96FBE3E4F9EB4C80B7ABD96BD4DB41FB

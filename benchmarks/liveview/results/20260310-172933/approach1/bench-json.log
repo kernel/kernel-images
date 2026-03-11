@@ -1,0 +1,21 @@
+time=2026-03-10T21:34:07.320Z level=INFO msg="connecting to CDP" base=http://127.0.0.1:9223
+time=2026-03-10T21:34:07.321Z level=INFO msg="discovered page target" ws=ws://127.0.0.1:9223/devtools/page/5793A066CDEF4BB6E16CF453D2E794FD
+time=2026-03-10T21:34:07.322Z level=INFO msg=connected sites=5 iterations=2
+time=2026-03-10T21:34:07.322Z level=INFO msg=warmup iterations=1
+time=2026-03-10T21:34:07.328Z level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T21:34:09.594Z level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T21:34:12.493Z level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T21:34:16.292Z level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T21:34:27.854Z level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T21:34:35.410Z level=INFO msg="discovered page target" ws=ws://127.0.0.1:9223/devtools/page/5793A066CDEF4BB6E16CF453D2E794FD
+time=2026-03-10T21:34:35.411Z level=INFO msg="starting sequential benchmark" iterations=2 label=approach1
+time=2026-03-10T21:34:35.412Z level=INFO msg="navigating to test site" url=https://example.com category=static
+time=2026-03-10T21:34:38.036Z level=INFO msg="navigating to test site" url=https://news.ycombinator.com category=content
+time=2026-03-10T21:34:40.928Z level=INFO msg="navigating to test site" url=https://en.wikipedia.org/wiki/Web_browser category=content
+time=2026-03-10T21:34:44.880Z level=INFO msg="navigating to test site" url=https://github.com/nicknisi/dotfiles category=spa
+time=2026-03-10T21:34:55.750Z level=INFO msg="navigating to test site" url=https://www.bbc.com/news category=media
+time=2026-03-10T21:35:02.358Z level=INFO msg=iteration i=2 of=2 url=https://news.ycombinator.com
+time=2026-03-10T21:35:06.388Z level=INFO msg="starting concurrent benchmark" workers=3 duration=20s
+time=2026-03-10T21:35:06.388Z level=INFO msg="discovered page target" ws=ws://127.0.0.1:9223/devtools/page/5793A066CDEF4BB6E16CF453D2E794FD
+time=2026-03-10T21:35:06.389Z level=INFO msg="discovered page target" ws=ws://127.0.0.1:9223/devtools/page/5793A066CDEF4BB6E16CF453D2E794FD
+time=2026-03-10T21:35:06.389Z level=INFO msg="discovered page target" ws=ws://127.0.0.1:9223/devtools/page/5793A066CDEF4BB6E16CF453D2E794FD
