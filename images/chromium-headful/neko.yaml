@@ -1,6 +1,35 @@
 # For detailed configuration options, please refer to the Neko documentation:
 # https://neko.m1k1o.net/docs/v3/configuration#file
 
+# VP9 configuration optimized for quality and Safari compatibility
+# Note: VP9 profile is set at WebRTC SDP level (profile-id=0), not as a GStreamer parameter
+capture:
+  video:
+    codec: "vp9"
+    ids:
+      - "main"
+      - "legacy"
+    pipelines:
+      main:
+        fps: "25"
+        gst_encoder: "vp9enc"
+        gst_prefix: "! videoconvert ! video/x-raw,format=I420"  # Force I420 input → VP9 Profile 0 (Safari WebCodecs only supports Profile 0)
+        gst_params:
+          cpu-used: "5"               # Balanced encoding for Safari
+          threads: "4"
+          deadline: "1"               # Realtime mode
+          keyframe-max-dist: "25"     # Keyframe every ~1s at 25fps (helps Safari WebCodecs fallback find first keyframe faster)
+      legacy:
+        fps: "25"
+        gst_encoder: "vp9enc"
+        gst_prefix: "! videoconvert ! video/x-raw,format=I420"  # Force I420 input → VP9 Profile 0
+        gst_params:
+          cpu-used: "5"
+          threads: "4"
+          deadline: "1"
+          keyframe-max-dist: "25"     # Keyframe every ~1s at 25fps
+        show_pointer: true
+
 desktop:
   screen: "1920x1080@25"
 
