@@ -754,6 +754,10 @@ func TestWebBotAuthInstallation(t *testing.T) {
 		err = json.Unmarshal([]byte(policyContent), &policy)
 		require.NoError(t, err, "failed to parse policy.json")
 
+		maxConnectionsPerProxy, ok := policy["MaxConnectionsPerProxy"].(float64)
+		require.True(t, ok, "MaxConnectionsPerProxy not found in policy.json")
+		require.Equal(t, float64(16), maxConnectionsPerProxy, "unexpected MaxConnectionsPerProxy value")
+
 		// Check ExtensionInstallForcelist exists
 		extensionInstallForcelist, ok := policy["ExtensionInstallForcelist"].([]interface{})
 		require.True(t, ok, "ExtensionInstallForcelist not found in policy.json")

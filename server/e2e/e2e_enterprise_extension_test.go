@@ -253,6 +253,10 @@ func verifyEnterprisePolicy(t *testing.T, ctx context.Context, c *TestContainer)
 	err = json.Unmarshal([]byte(policyContent), &policy)
 	require.NoError(t, err, "failed to parse policy.json")
 
+	maxConnectionsPerProxy, ok := policy["MaxConnectionsPerProxy"].(float64)
+	require.True(t, ok, "MaxConnectionsPerProxy not found in policy.json")
+	require.Equal(t, float64(16), maxConnectionsPerProxy, "unexpected MaxConnectionsPerProxy value")
+
 	// Check ExtensionInstallForcelist exists and contains our extension
 	extensionInstallForcelist, ok := policy["ExtensionInstallForcelist"].([]interface{})
 	require.True(t, ok, "ExtensionInstallForcelist not found in policy.json")

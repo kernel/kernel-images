@@ -9,6 +9,7 @@
   "DefaultSearchProviderName": "DuckDuckGo",
   "DefaultSearchProviderSearchURL": "https://duckduckgo.com/?q={searchTerms}",
   "DefaultSearchProviderSuggestURL": "https://duckduckgo.com/ac/?q={searchTerms}",
+  "MaxConnectionsPerProxy": 16,
   "NewTabPageLocation": "https://start.duckduckgo.com/",
   "ExtensionSettings": {
     "*": {
