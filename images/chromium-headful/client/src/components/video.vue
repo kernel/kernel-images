@@ -719,11 +719,22 @@
     }
 
     private sendScrollTick() {
+      const PIXELS_PER_TICK = 120
       const JITTER_THRESHOLD = 3
-      const x = Math.abs(this.pendingScrollX) >= JITTER_THRESHOLD ? Math.sign(this.pendingScrollX) as number : 0
-      const y = Math.abs(this.pendingScrollY) >= JITTER_THRESHOLD ? Math.sign(this.pendingScrollY) as number : 0
+      const rawX = this.pendingScrollX
+      const rawY = this.pendingScrollY
       this.pendingScrollX = 0
       this.pendingScrollY = 0
+
+      const scaleAxis = (delta: number): number => {
+        if (Math.abs(delta) < JITTER_THRESHOLD) return 0
+        const ticks = delta / PIXELS_PER_TICK
+        const clamped = Math.min(Math.max(Math.round(ticks), -this.scroll), this.scroll)
+        return clamped !== 0 ? clamped : Math.sign(delta)
+      }
+
+      const x = scaleAxis(rawX)
+      const y = scaleAxis(rawY)
       if (x !== 0 || y !== 0) {
         this.$client.sendData('wheel', { x, y })
       }
