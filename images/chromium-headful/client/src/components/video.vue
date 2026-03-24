@@ -766,7 +766,9 @@
       if (this.scrollTimerId === null) {
         this.sendScrollTick()
         this.scrollTimerId = window.setInterval(() => {
-          if (this.pendingScrollX === 0 && this.pendingScrollY === 0) {
+          if (!this.hosting || this.locked || (this.pendingScrollX === 0 && this.pendingScrollY === 0)) {
+            this.pendingScrollX = 0
+            this.pendingScrollY = 0
             window.clearInterval(this.scrollTimerId!)
             this.scrollTimerId = null
             return
