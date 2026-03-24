@@ -547,10 +547,6 @@
     }
 
     beforeDestroy() {
-      if (this.scrollTimerId !== null) {
-        window.clearInterval(this.scrollTimerId)
-        this.scrollTimerId = null
-      }
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -707,39 +703,7 @@
       })
     }
 
-    scrollTimerId: number | null = null
-    pendingScrollX = 0
-    pendingScrollY = 0
-
-    private get scrollIntervalMs(): number {
-      const SLOWEST = 200
-      const FASTEST = 33
-      const t = Math.min(Math.max((this.scroll - 1) / 99, 0), 1)
-      return Math.round(SLOWEST - t * (SLOWEST - FASTEST))
-    }
-
-    private sendScrollTick() {
-      const PIXELS_PER_TICK = 120
-      const JITTER_THRESHOLD = 3
-      const rawX = this.pendingScrollX
-      const rawY = this.pendingScrollY
-      this.pendingScrollX = 0
-      this.pendingScrollY = 0
-
-      const scaleAxis = (delta: number): number => {
-        if (Math.abs(delta) < JITTER_THRESHOLD) return 0
-        const ticks = delta / PIXELS_PER_TICK
-        const clamped = Math.min(Math.max(Math.round(ticks), -this.scroll), this.scroll)
-        return clamped !== 0 ? clamped : Math.sign(delta)
-      }
-
-      const x = scaleAxis(rawX)
-      const y = scaleAxis(rawY)
-      if (x !== 0 || y !== 0) {
-        this.$client.sendData('wheel', { x, y })
-      }
-    }
-
+    wheelThrottle = false
     onWheel(e: WheelEvent) {
       if (!this.hosting || this.locked) {
         return
@@ -758,23 +722,19 @@
         y = y * -1
       }
 
-      this.pendingScrollX += x
-      this.pendingScrollY += y
+      const PIXELS_PER_TICK = 120
+      x = x === 0 ? 0 : Math.min(Math.max(Math.round(x / PIXELS_PER_TICK) || Math.sign(x), -this.scroll), this.scroll)
+      y = y === 0 ? 0 : Math.min(Math.max(Math.round(y / PIXELS_PER_TICK) || Math.sign(y), -this.scroll), this.scroll)
 
       this.sendMousePos(e)
 
-      if (this.scrollTimerId === null) {
-        this.sendScrollTick()
-        this.scrollTimerId = window.setInterval(() => {
-          if (!this.hosting || this.locked || (this.pendingScrollX === 0 && this.pendingScrollY === 0)) {
-            this.pendingScrollX = 0
-            this.pendingScrollY = 0
-            window.clearInterval(this.scrollTimerId!)
-            this.scrollTimerId = null
-            return
-          }
-          this.sendScrollTick()
-        }, this.scrollIntervalMs) as unknown as number
+      if (!this.wheelThrottle) {
+        this.wheelThrottle = true
+        this.$client.sendData('wheel', { x, y })
+
+        window.setTimeout(() => {
+          this.wheelThrottle = false
+        }, 100)
       }
     }
 
