@@ -547,6 +547,10 @@
     }
 
     beforeDestroy() {
+      if (this.scrollTimerId !== null) {
+        window.clearInterval(this.scrollTimerId)
+        this.scrollTimerId = null
+      }
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
