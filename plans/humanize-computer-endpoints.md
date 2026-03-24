@@ -105,23 +105,32 @@ xdotool mousemove 500 300 mousedown 1 sleep 0.085 mousemove_relative -- 1 0 mous
 
 ## 2. Type Text -- Chunked Type with Inter-Word Pauses
 
-**Cost:** 1 xdotool call (same as current). Pre-computation: O(words) random samples.
+**Cost:** O(words) xdotool calls with Go-side sleeps. Pre-computation: O(words) random samples.
 
-**Algorithm:** Instead of per-character keysym mapping (which is complex and fragile for Unicode), split text by whitespace/punctuation into chunks and chain `xdotool type --delay <intra> "chunk" sleep <inter>` commands.
+**Algorithm:** Split text into word chunks (keeping trailing whitespace/punctuation with each chunk), then issue one `xdotool type --delay <intra> -- "<chunk>"` call per chunk with Go-side `sleepWithContext` pauses between them. This follows the same pattern as `doMoveMouseSmooth` (O(n) calls with Go-side sleeps).
 
+- **Chunking**: Split at word boundaries, keeping trailing delimiters (spaces, punctuation) attached to the preceding chunk. `"Hello world. How are you?"` becomes `["Hello ", "world. ", "How ", "are ", "you?"]`. This ensures pauses happen *after* typing the delimiter, matching natural rhythm.
 - **Intra-word delay**: Per-chunk, pick `rand.Intn(70) + 50` -> [50, 120]ms. Varies per chunk to simulate burst-pause rhythm.
-- **Inter-word pause**: Between chunks, insert `sleep` with `UniformJitter(rng, 140, 60, 60)` -> [80, 200]ms. Longer pauses at sentence boundaries (after `.!?`): multiply by 1.5x.
+- **Inter-word pause**: Between chunks, Go-side sleep with `UniformJitter(rng, 140, 60, 60)` -> [80, 200]ms. Longer pauses at sentence boundaries (chunk ends with `.!?`): multiply by 1.5x.
 - **No bigram tables**: The per-word delay variation is sufficient for convincing humanization. Bigram-level precision adds complexity with diminishing returns for bot detection evasion.
 
-**Single xdotool call example:**
+**Execution sequence example (`"Hello world. How are you?"`):**
 
 ```
-xdotool type --delay 80 -- "Hello" sleep 0.150 type --delay 65 -- " world" sleep 0.300 type --delay 95 -- ". How" sleep 0.120 type --delay 70 -- " are" sleep 0.140 type --delay 85 -- " you?"
+xdotool type --delay 80 -- "Hello "        # fork+exec 1
+  [Go sleep 150ms]
+xdotool type --delay 65 -- "world. "       # fork+exec 2
+  [Go sleep 300ms]                         # sentence boundary: 1.5x pause
+xdotool type --delay 95 -- "How "          # fork+exec 3
+  [Go sleep 120ms]
+xdotool type --delay 70 -- "are "          # fork+exec 4
+  [Go sleep 140ms]
+xdotool type --delay 85 -- "you?"          # fork+exec 5
 ```
 
 **API change:** Add `smooth: boolean` (default `false`) to `TypeTextRequest`. When `smooth=true`, the existing `delay` field is ignored.
 
-**Why this is fast:** We never leave the `xdotool type` mechanism (which handles Unicode, XKB keymaps, etc. internally). We just break it into chunks with sleeps between them. One fork+exec total.
+**Why O(words) calls, not 1?** `xdotool type` consumes the rest of argv as text to type, so it cannot be chained with `sleep` or other commands in a single invocation. O(words) fork+execs (typically 5-15 for a sentence) is acceptable -- the inter-word pauses (80-300ms) dwarf the ~1-2ms fork+exec overhead.
 
 ---
 
@@ -150,14 +159,15 @@ xdotool keydown ctrl sleep 0.030 keydown c sleep 0.095 keyup c sleep 0.025 keyup
 
 **Algorithm:** Replace `click --repeat N --delay 0 <btn>` with N individual `click <btn>` commands separated by pre-computed `sleep` values following a **smoothstep easing curve**.
 
-- **Easing**: `SmoothStepDelay(i, N, slowMs=80, fastMs=15)` for each tick i. The smoothstep `3t^2 - 2t^3` creates natural momentum: slow start, fast middle, slow end.
-- **Jitter**: Add `rand.Intn(10) - 5` ms to each delay. Trivially cheap.
-- **Small scrolls (1-3 ticks)**: Skip easing, use uniform delay of `rand.Intn(40) + 30` ms.
+- **Bounded total duration**: Target a fixed total scroll time regardless of tick count. Default `totalMs = 200` (capped so large scrolls don't block input). Per-tick delay = `totalMs / N`, then shaped by the easing curve.
+- **Easing**: `SmoothStepDelay(i, N, slowMs, fastMs)` where `slowMs` and `fastMs` are derived from `totalMs / N`. The smoothstep `3t^2 - 2t^3` creates natural momentum: slow start, fast middle, slow end. Edge delays are ~2x the center delay.
+- **Jitter**: Add `rand.Intn(6) - 3` ms to each delay. Trivially cheap.
+- **Small scrolls (1-3 ticks)**: Skip easing, use uniform delay of `rand.Intn(20) + 10` ms.
 
-**Single xdotool call example (5 ticks down):**
+**Single xdotool call example (5 ticks down, totalMs=200, avg 40ms/tick):**
 
 ```
-xdotool mousemove 500 300 click 5 sleep 0.075 click 5 sleep 0.035 click 5 sleep 0.018 click 5 sleep 0.040 click 5
+xdotool mousemove 500 300 click 5 sleep 0.055 click 5 sleep 0.030 click 5 sleep 0.025 click 5 sleep 0.032 click 5
 ```
 
 **API change:** Add `smooth: boolean` (default `false`) to `ScrollRequest`.
@@ -189,7 +199,7 @@ xdotool mousemove 500 300 click 5 sleep 0.075 click 5 sleep 0.035 click 5 sleep 
 | ------------- | ---------------- | --------------------------------- | ------------------------------------ |
 | `move_mouse`  | O(points) (done) | O(points) Bezier + Box-Muller     | Bezier curve + easeOutQuad + jitter  |
 | `click_mouse` | 1 (same)         | 1-2x `rand.Intn`                  | Uniform random dwell                 |
-| `type_text`   | 1 (same)         | O(words) `rand.Intn`              | Chunked type + inter-word sleep      |
+| `type_text`   | O(words)         | O(words) `rand.Intn`              | Per-word type + Go-side sleep        |
 | `press_key`   | 1 (same)         | 1x `rand.Intn`                    | Inline keydown/sleep/keyup           |
 | `scroll`      | 1 (same)         | O(ticks) smoothstep (3 muls each) | Eased inter-tick sleep               |
 | `drag_mouse`  | 1-3 (same)       | O(points) Bezier (existing)       | Bezier path + smoothstep step delays |
