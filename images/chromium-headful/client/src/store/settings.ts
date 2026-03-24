@@ -11,7 +11,7 @@ interface KeyboardLayouts {
 
 export const state = () => {
   return {
-    scroll: get<number>('scroll', 10),
+    scroll: get<number>('scroll', 3),
     scroll_invert: get<boolean>('scroll_invert', true),
     autoplay: get<boolean>('autoplay', true),
     ignore_emotes: get<boolean>('ignore_emotes', false),

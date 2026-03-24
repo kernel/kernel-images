@@ -703,7 +703,21 @@
       })
     }
 
-    wheelThrottle = false
+    scrollTimerId: number | null = null
+    pendingScrollX = 0
+    pendingScrollY = 0
+
+    private sendScrollTick() {
+      const JITTER_THRESHOLD = 3
+      const x = Math.abs(this.pendingScrollX) >= JITTER_THRESHOLD ? Math.sign(this.pendingScrollX) as number : 0
+      const y = Math.abs(this.pendingScrollY) >= JITTER_THRESHOLD ? Math.sign(this.pendingScrollY) as number : 0
+      this.pendingScrollX = 0
+      this.pendingScrollY = 0
+      if (x !== 0 || y !== 0) {
+        this.$client.sendData('wheel', { x, y })
+      }
+    }
+
     onWheel(e: WheelEvent) {
       if (!this.hosting || this.locked) {
         return
@@ -712,11 +726,6 @@
       let x = e.deltaX
       let y = e.deltaY
 
-      // Pixel units unless it's non-zero.
-      // Note that if deltamode is line or page won't matter since we aren't
-      // sending the mouse wheel delta to the server anyway.
-      // The difference between pixel and line can be important however since
-      // we have a threshold that can be smaller than the line height.
       if (e.deltaMode !== 0) {
         x *= WHEEL_LINE_HEIGHT
         y *= WHEEL_LINE_HEIGHT
@@ -727,18 +736,21 @@
         y = y * -1
       }
 
-      x = Math.min(Math.max(x, -this.scroll), this.scroll)
-      y = Math.min(Math.max(y, -this.scroll), this.scroll)
+      this.pendingScrollX += x
+      this.pendingScrollY += y
 
       this.sendMousePos(e)
 
-      if (!this.wheelThrottle) {
-        this.wheelThrottle = true
-        this.$client.sendData('wheel', { x, y })
-
-        window.setTimeout(() => {
-          this.wheelThrottle = false
-        }, 100)
+      if (this.scrollTimerId === null) {
+        this.sendScrollTick()
+        this.scrollTimerId = window.setInterval(() => {
+          if (this.pendingScrollX === 0 && this.pendingScrollY === 0) {
+            window.clearInterval(this.scrollTimerId!)
+            this.scrollTimerId = null
+            return
+          }
+          this.sendScrollTick()
+        }, 100) as unknown as number
       }
     }
 
