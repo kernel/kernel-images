@@ -534,6 +534,17 @@
         }
 
         this.$client.sendData('keydown', { key: this.keyMap(key) })
+
+        // Allow Ctrl/Cmd+V through so the browser fires a paste event,
+        // which triggers onPaste -> syncClipboard (required for Safari
+        // clipboard access since it only permits reads in user-initiated events)
+        const isV = key === 0x0076
+        const isCtrl = this.keyboard.modifiers?.ctrl
+        const isMeta = this.keyboard.modifiers?.meta
+        if (isV && (isCtrl || isMeta)) {
+          return true
+        }
+
         return false
       }
       this.keyboard.onkeyup = (key: number) => {
