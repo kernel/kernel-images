@@ -707,6 +707,13 @@
     pendingScrollX = 0
     pendingScrollY = 0
 
+    private get scrollIntervalMs(): number {
+      const SLOWEST = 200
+      const FASTEST = 33
+      const t = Math.min(Math.max((this.scroll - 1) / 99, 0), 1)
+      return Math.round(SLOWEST - t * (SLOWEST - FASTEST))
+    }
+
     private sendScrollTick() {
       const JITTER_THRESHOLD = 3
       const x = Math.abs(this.pendingScrollX) >= JITTER_THRESHOLD ? Math.sign(this.pendingScrollX) as number : 0
@@ -750,7 +757,7 @@
             return
           }
           this.sendScrollTick()
-        }, 100) as unknown as number
+        }, this.scrollIntervalMs) as unknown as number
       }
     }
 
