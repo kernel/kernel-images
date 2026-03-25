@@ -540,8 +540,6 @@
         // clipboard access since it only permits reads in user-initiated events)
         const { ctrl, meta } = this.keyboard.modifiers
         return key === 0x0076 && !!(ctrl || meta)
-
-        return false
       }
       this.keyboard.onkeyup = (key: number) => {
         if (!this.hosting || this.locked) {
