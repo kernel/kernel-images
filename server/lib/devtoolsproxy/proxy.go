@@ -204,12 +204,6 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
 			return
 		}
-		parsed, err := url.Parse(upstreamCurrent)
-		if err != nil {
-			http.Error(w, "invalid upstream", http.StatusInternalServerError)
-			return
-		}
-		upstreamURL := (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path, RawQuery: parsed.RawQuery}).String()
 
 		var transform wsproxy.MessageTransform
 		if logCDPMessages {
@@ -226,13 +220,88 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		dialOpts := &websocket.DialOptions{
 			CompressionMode: websocket.CompressionContextTakeover,
 		}
-		wsproxy.Proxy(w, r, upstreamURL, wsproxy.ProxyOptions{
-			AcceptOptions: acceptOpts,
-			DialOptions:   dialOpts,
-			Logger:        logger,
-			Transform:     transform,
-		})
+
+		// Subscribe to upstream URL changes so we can tear down stale sessions
+		// when Chromium restarts and retry if the current URL is already dead.
+		urlCh, unsub := mgr.Subscribe()
+		defer unsub()
+
+		upstreamURL := normalizeUpstreamURL(upstreamCurrent)
+
+		// Accept the client WebSocket connection.
+		clientConn, err := websocket.Accept(w, r, acceptOpts)
+		if err != nil {
+			logger.Error("websocket accept failed", slog.String("err", err.Error()))
+			return
+		}
+		clientConn.SetReadLimit(100 * 1024 * 1024)
+
+		// Dial upstream. If the URL is stale (Chromium just restarted), wait
+		// briefly for a fresh URL from Subscribe and retry once.
+		upstreamConn, _, err := websocket.Dial(r.Context(), upstreamURL, dialOpts)
+		if err != nil {
+			logger.Warn("dial upstream failed, waiting for new URL",
+				slog.String("err", err.Error()), slog.String("url", upstreamURL))
+			select {
+			case newURL, ok := <-urlCh:
+				if !ok {
+					clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
+					return
+				}
+				upstreamURL = normalizeUpstreamURL(newURL)
+				upstreamConn, _, err = websocket.Dial(r.Context(), upstreamURL, dialOpts)
+				if err != nil {
+					logger.Error("dial upstream failed after retry",
+						slog.String("err", err.Error()), slog.String("url", upstreamURL))
+					clientConn.Close(websocket.StatusInternalError, "failed to connect to upstream")
+					return
+				}
+			case <-time.After(5 * time.Second):
+				logger.Error("timed out waiting for new upstream URL")
+				clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
+				return
+			case <-r.Context().Done():
+				clientConn.Close(websocket.StatusGoingAway, "request cancelled")
+				return
+			}
+		}
+		upstreamConn.SetReadLimit(100 * 1024 * 1024)
+
+		logger.Debug("proxying websocket", slog.String("url", upstreamURL))
+
+		// Cancel the pump when the upstream URL changes (Chromium restarted),
+		// forcing the client to reconnect with the new upstream.
+		pumpCtx, pumpCancel := context.WithCancel(r.Context())
+
+		go func() {
+			select {
+			case <-urlCh:
+				logger.Info("upstream URL changed, closing stale proxy session")
+				pumpCancel()
+			case <-pumpCtx.Done():
+			}
+		}()
+
+		var once sync.Once
+		cleanup := func() {
+			once.Do(func() {
+				pumpCancel()
+				upstreamConn.Close(websocket.StatusNormalClosure, "")
+				clientConn.Close(websocket.StatusNormalClosure, "")
+			})
+		}
+
+		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform)
 	})
+}
+
+// normalizeUpstreamURL parses a raw DevTools URL and returns a clean form.
+func normalizeUpstreamURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return raw
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path, RawQuery: parsed.RawQuery}).String()
 }
 
 // logCDPMessage logs a CDP message with its direction if logging is enabled
