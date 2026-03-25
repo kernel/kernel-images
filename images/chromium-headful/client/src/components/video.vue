@@ -719,11 +719,8 @@
       let x = e.deltaX
       let y = e.deltaY
 
-      // Pixel units unless it's non-zero.
-      // Note that if deltamode is line or page won't matter since we aren't
-      // sending the mouse wheel delta to the server anyway.
-      // The difference between pixel and line can be important however since
-      // we have a threshold that can be smaller than the line height.
+      // Normalize to pixel units. deltaMode 1 = lines, 2 = pages; convert
+      // both to approximate pixel values so the divisor below works uniformly.
       if (e.deltaMode !== 0) {
         x *= WHEEL_LINE_HEIGHT
         y *= WHEEL_LINE_HEIGHT
@@ -734,8 +731,15 @@
         y = y * -1
       }
 
-      x = Math.min(Math.max(x, -this.scroll), this.scroll)
-      y = Math.min(Math.max(y, -this.scroll), this.scroll)
+      // The server sends one XTestFakeButtonEvent per unit we pass here,
+      // and each event scrolls Chromium by ~120 px. Raw pixel deltas from
+      // trackpads are already in pixels (~120 per notch), so dividing by
+      // PIXELS_PER_TICK converts them to discrete scroll "ticks". The
+      // result is clamped to [-scroll, scroll] (the user-facing sensitivity
+      // setting) so fast swipes don't over-scroll.
+      const PIXELS_PER_TICK = 120
+      x = x === 0 ? 0 : Math.min(Math.max(Math.round(x / PIXELS_PER_TICK) || Math.sign(x), -this.scroll), this.scroll)
+      y = y === 0 ? 0 : Math.min(Math.max(Math.round(y / PIXELS_PER_TICK) || Math.sign(y), -this.scroll), this.scroll)
 
       this.sendMousePos(e)
 
