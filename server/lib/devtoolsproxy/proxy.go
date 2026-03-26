@@ -194,17 +194,53 @@ func (u *UpstreamManager) runTailOnce(ctx context.Context) {
 	}
 }
 
+func dialUpstreamWithRetry(ctx context.Context, mgr *UpstreamManager, urlCh <-chan string, initialUpstreamURL string, dialOpts *websocket.DialOptions, logger *slog.Logger) (*websocket.Conn, string, error) {
+	upstreamURL := normalizeUpstreamURL(initialUpstreamURL)
+	if upstreamURL == "" {
+		return nil, "", fmt.Errorf("upstream not ready")
+	}
+
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+
+	for {
+		upstreamConn, _, err := websocket.Dial(ctx, upstreamURL, dialOpts)
+		if err == nil {
+			return upstreamConn, upstreamURL, nil
+		}
+
+		logger.Warn("dial upstream failed, checking for newer URL",
+			slog.String("err", err.Error()), slog.String("url", upstreamURL))
+
+		latestURL := normalizeUpstreamURL(mgr.Current())
+		if latestURL != "" && latestURL != upstreamURL {
+			upstreamURL = latestURL
+			continue
+		}
+
+		select {
+		case newURL, ok := <-urlCh:
+			if !ok {
+				return nil, "", fmt.Errorf("upstream unavailable")
+			}
+			newURL = normalizeUpstreamURL(newURL)
+			if newURL == "" || newURL == upstreamURL {
+				continue
+			}
+			upstreamURL = newURL
+		case <-deadline.C:
+			return nil, "", fmt.Errorf("timed out waiting for new upstream URL")
+		case <-ctx.Done():
+			return nil, "", ctx.Err()
+		}
+	}
+}
+
 // WebSocketProxyHandler returns an http.Handler that upgrades incoming connections and
 // proxies them to the current upstream websocket URL. It expects only websocket requests.
 // If logCDPMessages is true, all CDP messages will be logged with their direction.
 func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamCurrent := mgr.Current()
-		if upstreamCurrent == "" {
-			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
-			return
-		}
-
 		var transform wsproxy.MessageTransform
 		if logCDPMessages {
 			transform = func(direction string, mt websocket.MessageType, msg []byte) []byte {
@@ -226,7 +262,11 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		urlCh, unsub := mgr.Subscribe()
 		defer unsub()
 
-		upstreamURL := normalizeUpstreamURL(upstreamCurrent)
+		upstreamCurrent := mgr.Current()
+		if upstreamCurrent == "" {
+			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
+			return
+		}
 
 		// Accept the client WebSocket connection.
 		clientConn, err := websocket.Accept(w, r, acceptOpts)
@@ -236,34 +276,19 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		}
 		clientConn.SetReadLimit(100 * 1024 * 1024)
 
-		// Dial upstream. If the URL is stale (Chromium just restarted), wait
-		// briefly for a fresh URL from Subscribe and retry once.
-		upstreamConn, _, err := websocket.Dial(r.Context(), upstreamURL, dialOpts)
+		// Dial upstream. If the URL is stale (Chromium just restarted), first
+		// re-check the manager's latest URL in case we missed the notification,
+		// then wait briefly for the next update from Subscribe.
+		upstreamConn, upstreamURL, err := dialUpstreamWithRetry(r.Context(), mgr, urlCh, upstreamCurrent, dialOpts, logger)
 		if err != nil {
-			logger.Warn("dial upstream failed, waiting for new URL",
-				slog.String("err", err.Error()), slog.String("url", upstreamURL))
-			select {
-			case newURL, ok := <-urlCh:
-				if !ok {
-					clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
-					return
-				}
-				upstreamURL = normalizeUpstreamURL(newURL)
-				upstreamConn, _, err = websocket.Dial(r.Context(), upstreamURL, dialOpts)
-				if err != nil {
-					logger.Error("dial upstream failed after retry",
-						slog.String("err", err.Error()), slog.String("url", upstreamURL))
-					clientConn.Close(websocket.StatusInternalError, "failed to connect to upstream")
-					return
-				}
-			case <-time.After(5 * time.Second):
-				logger.Error("timed out waiting for new upstream URL")
-				clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
-				return
-			case <-r.Context().Done():
+			switch {
+			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(r.Context().Err(), context.Canceled), errors.Is(r.Context().Err(), context.DeadlineExceeded):
 				clientConn.Close(websocket.StatusGoingAway, "request cancelled")
-				return
+			default:
+				logger.Error("failed to connect to upstream", slog.String("err", err.Error()))
+				clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
 			}
+			return
 		}
 		upstreamConn.SetReadLimit(100 * 1024 * 1024)
 
