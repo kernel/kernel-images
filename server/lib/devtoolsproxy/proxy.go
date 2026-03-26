@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -236,6 +237,65 @@ func dialUpstreamWithRetry(ctx context.Context, mgr *UpstreamManager, urlCh <-ch
 	}
 }
 
+func maybePauseAfterCurrentRead(ctx context.Context, logger *slog.Logger, r *http.Request) {
+	if r.URL.Query().Get("devtoolsProxyTestHook") != "1" {
+		return
+	}
+
+	// Test-only hook used by e2e to widen the window between reading Current
+	// and dialing/subscribing so reconnect races can be reproduced reliably.
+	rawDelayMs := os.Getenv("DEVTOOLS_PROXY_TEST_POST_CURRENT_DELAY_MS")
+	if rawDelayMs != "" {
+		delayMs, err := strconv.Atoi(rawDelayMs)
+		if err != nil || delayMs <= 0 {
+			logger.Warn("ignoring invalid devtools proxy test delay", slog.String("value", rawDelayMs))
+		} else {
+			timer := time.NewTimer(time.Duration(delayMs) * time.Millisecond)
+			defer timer.Stop()
+
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+
+	blockPath := os.Getenv("DEVTOOLS_PROXY_TEST_POST_CURRENT_BLOCK_FILE")
+	if blockPath == "" {
+		return
+	}
+
+	readyPath := blockPath + ".ready"
+	releasePath := blockPath + ".release"
+	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o644); err != nil {
+		logger.Warn("failed to write devtools proxy test ready marker",
+			slog.String("path", readyPath),
+			slog.String("err", err.Error()))
+		return
+	}
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if _, err := os.Stat(releasePath); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			logger.Warn("failed to read devtools proxy test release marker",
+				slog.String("path", releasePath),
+				slog.String("err", err.Error()))
+			return
+		}
+
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // WebSocketProxyHandler returns an http.Handler that upgrades incoming connections and
 // proxies them to the current upstream websocket URL. It expects only websocket requests.
 // If logCDPMessages is true, all CDP messages will be logged with their direction.
@@ -267,6 +327,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
 			return
 		}
+		maybePauseAfterCurrentRead(r.Context(), logger, r)
 
 		// Accept the client WebSocket connection.
 		clientConn, err := websocket.Accept(w, r, acceptOpts)
@@ -298,14 +359,27 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		// forcing the client to reconnect with the new upstream.
 		pumpCtx, pumpCancel := context.WithCancel(r.Context())
 
-		go func() {
-			select {
-			case <-urlCh:
-				logger.Info("upstream URL changed, closing stale proxy session")
-				pumpCancel()
-			case <-pumpCtx.Done():
+		go func(currentUpstreamURL string) {
+			for {
+				select {
+				case newURL, ok := <-urlCh:
+					if !ok {
+						return
+					}
+					newURL = normalizeUpstreamURL(newURL)
+					if newURL == "" || newURL == currentUpstreamURL {
+						continue
+					}
+					logger.Info("upstream URL changed, closing stale proxy session",
+						slog.String("old_url", currentUpstreamURL),
+						slog.String("new_url", newURL))
+					pumpCancel()
+					return
+				case <-pumpCtx.Done():
+					return
+				}
 			}
-		}()
+		}(upstreamURL)
 
 		var once sync.Once
 		cleanup := func() {
