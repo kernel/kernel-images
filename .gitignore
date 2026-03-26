@@ -190,3 +190,5 @@ infra/tests/*
 .mise.toml
 
 recordings/
+.refs/
+server/api

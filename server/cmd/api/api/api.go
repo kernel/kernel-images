@@ -53,6 +53,21 @@ type ApiService struct {
 
 	// policy management
 	policy *policy.Policy
+
+	// viewportOverride stores the last viewport dimensions set via CDP so
+	// that getCurrentResolution can return consistent values even while
+	// Xvfb is restarting in the background.
+	viewportMu       sync.RWMutex
+	viewportOverride *[3]int // [width, height, refreshRate] or nil
+
+	// cachedDisplayMode caches the result of detectDisplayMode since the
+	// display server type (xorg vs xvfb) does not change at runtime.
+	displayModeOnce sync.Once
+	displayModeVal  string
+
+	// xvfbResizeMu serializes background Xvfb restarts to prevent races
+	// when multiple CDP fast-path resizes fire in quick succession.
+	xvfbResizeMu sync.Mutex
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)

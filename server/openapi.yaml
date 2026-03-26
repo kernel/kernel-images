@@ -1105,6 +1105,43 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /chromium/policies:
+    patch:
+      summary: Update Chromium enterprise policies and restart
+      description: |
+        Merge user-provided Chromium enterprise policy overrides into the base policy.json,
+        restart Chromium via supervisord, and wait until the Chromium DevTools "listening"
+        log line is observed before returning success.
+        Certain policies managed by kernel infrastructure (e.g. ExtensionSettings,
+        proxy-related policies, and policies required for CDP/automation) are blocked
+        from override.
+      operationId: patchChromiumPolicies
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: |
+                Chromium enterprise policy overrides. Keys are policy names
+                (e.g. "DefaultCookiesSetting") and values are the policy values.
+                See https://chromeenterprise.google/policies/ for available policies.
+              additionalProperties: true
+              example:
+                DefaultCookiesSetting: 1
+                BasicAuthOverHttpEnabled: true
+                HttpsUpgradesEnabled: false
+                MaxConnectionsPerProxy: 32
+                PopupsAllowedForUrls:
+                  - "https://example.com"
+      responses:
+        "200":
+          description: Policies updated and Chromium restarted successfully
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /chromium/flags:
     patch:
       summary: Update Chromium launch flags and restart
@@ -1428,14 +1465,23 @@ components:
           default: 0
         steps_per_segment:
           type: integer
-          description: Number of relative move steps per segment in the path. Minimum 1.
+          description: Number of relative move steps per segment in the path. Ignored when smooth=true. Minimum 1.
           minimum: 1
           default: 10
         step_delay_ms:
           type: integer
-          description: Delay in milliseconds between relative steps while dragging (not the initial delay).
+          description: Delay in milliseconds between relative steps while dragging. Ignored when smooth=true.
           minimum: 0
           default: 50
+        smooth:
+          type: boolean
+          description: Use human-like Bezier curves between path waypoints instead of linear interpolation. When true, steps_per_segment and step_delay_ms are ignored.
+          default: true
+        duration_ms:
+          type: integer
+          description: Target total duration in milliseconds for the entire drag movement when smooth=true. Omit for automatic timing based on total path length.
+          minimum: 50
+          maximum: 10000
         hold_keys:
           type: array
           description: Modifier keys to hold during the drag

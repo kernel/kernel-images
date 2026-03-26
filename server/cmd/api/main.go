@@ -22,6 +22,7 @@ import (
 	serverpkg "github.com/onkernel/kernel-images/server"
 	"github.com/onkernel/kernel-images/server/cmd/api/api"
 	"github.com/onkernel/kernel-images/server/cmd/config"
+	"github.com/onkernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/nekoclient"
@@ -158,96 +159,50 @@ func main() {
 		},
 		scaletozero.Middleware(stz),
 	)
-	// Expose /json/version endpoint so clients that attempt to resolve a browser
-	// websocket URL via HTTP can succeed. We map the upstream path onto this
-	// proxy's host:port so clients connect back to us.
-	// Note: Playwright's connectOverCDP requests /json/version/ with trailing slash,
-	// so we register both variants to avoid 426 errors from the WebSocket handler.
-	jsonVersionHandler := func(w http.ResponseWriter, r *http.Request) {
-		current := upstreamMgr.Current()
-		if current == "" {
-			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
-			return
-		}
-		proxyWSURL := (&url.URL{Scheme: "ws", Host: r.Host}).String()
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"webSocketDebuggerUrl": proxyWSURL,
-		})
-	}
+	// Proxy /json/version and /json/list to upstream Chrome with URL rewriting.
+	// Playwright's connectOverCDP requests these with trailing slashes,
+	// so we register both variants.
+	jsonVersionHandler := chromeJSONProxyHandler(upstreamMgr, slogger, "/json/version")
 	rDevtools.Get("/json/version", jsonVersionHandler)
 	rDevtools.Get("/json/version/", jsonVersionHandler)
 
-	// Handler for /json and /json/list - proxies to Chrome and rewrites URLs.
-	// This is needed for Playwright's connectOverCDP which fetches /json for target discovery.
-	jsonTargetHandler := func(w http.ResponseWriter, r *http.Request) {
-		current := upstreamMgr.Current()
-		if current == "" {
-			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
-			return
-		}
-
-		// Parse upstream URL to get Chrome's host (e.g., ws://127.0.0.1:9223/...)
-		parsed, err := url.Parse(current)
-		if err != nil {
-			http.Error(w, "invalid upstream URL", http.StatusInternalServerError)
-			return
-		}
-
-		// Fetch /json from Chrome
-		chromeJSONURL := fmt.Sprintf("http://%s/json", parsed.Host)
-		resp, err := http.Get(chromeJSONURL)
-		if err != nil {
-			slogger.Error("failed to fetch /json from Chrome", "err", err, "url", chromeJSONURL)
-			http.Error(w, "failed to fetch target list from browser", http.StatusBadGateway)
-			return
-		}
-		defer resp.Body.Close()
-
-		// Verify Chrome returned a successful response
-		if resp.StatusCode != http.StatusOK {
-			slogger.Error("Chrome /json returned non-200 status", "status", resp.StatusCode, "url", chromeJSONURL)
-			http.Error(w, fmt.Sprintf("browser returned status %d", resp.StatusCode), http.StatusBadGateway)
-			return
-		}
-
-		// Read and parse the JSON response
-		var targets []map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&targets); err != nil {
-			slogger.Error("failed to decode /json response", "err", err)
-			http.Error(w, "failed to parse target list", http.StatusBadGateway)
-			return
-		}
-
-		// Rewrite URLs to use this proxy's host instead of Chrome's
-		proxyHost := r.Host
-		chromeHost := parsed.Host
-		for i := range targets {
-			// Rewrite webSocketDebuggerUrl
-			if wsURL, ok := targets[i]["webSocketDebuggerUrl"].(string); ok {
-				targets[i]["webSocketDebuggerUrl"] = rewriteWSURL(wsURL, chromeHost, proxyHost)
-			}
-			// Rewrite devtoolsFrontendUrl if present
-			if frontendURL, ok := targets[i]["devtoolsFrontendUrl"].(string); ok {
-				targets[i]["devtoolsFrontendUrl"] = rewriteWSURL(frontendURL, chromeHost, proxyHost)
-			}
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(targets)
-	}
+	jsonTargetHandler := chromeJSONProxyHandler(upstreamMgr, slogger, "/json")
 	rDevtools.Get("/json", jsonTargetHandler)
 	rDevtools.Get("/json/", jsonTargetHandler)
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
-
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
-		Addr:    "0.0.0.0:9222",
+		Addr:    fmt.Sprintf("0.0.0.0:%d", config.DevToolsProxyPort),
 		Handler: rDevtools,
+	}
+
+	// ChromeDriver proxy: intercepts POST /session to inject the DevTools proxy
+	// address as goog:chromeOptions.debuggerAddress,
+	// proxies WebSocket (BiDi) and all other HTTP to the internal ChromeDriver.
+	rChromeDriver := chi.NewRouter()
+	rChromeDriver.Use(
+		chiMiddleware.Logger,
+		chiMiddleware.Recoverer,
+		func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ctxWithLogger := logger.AddToContext(r.Context(), slogger)
+				next.ServeHTTP(w, r.WithContext(ctxWithLogger))
+			})
+		},
+		scaletozero.Middleware(stz),
+	)
+	rChromeDriver.Handle("/*", chromedriverproxy.Handler(slogger, &chromedriverproxy.Options{
+		ChromeDriverUpstream: config.ChromeDriverUpstreamAddr,
+		DevToolsProxyAddr:    config.DevToolsProxyAddr,
+	}))
+
+	srvChromeDriver := &http.Server{
+		Addr:    fmt.Sprintf("0.0.0.0:%d", config.ChromeDriverProxyPort),
+		Handler: rChromeDriver,
 	}
 
 	go func() {
@@ -262,6 +217,14 @@ func main() {
 		slogger.Info("devtools websocket proxy starting", "addr", srvDevtools.Addr)
 		if err := srvDevtools.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slogger.Error("devtools websocket proxy failed", "err", err)
+			stop()
+		}
+	}()
+
+	go func() {
+		slogger.Info("chromedriver proxy starting", "addr", srvChromeDriver.Addr)
+		if err := srvChromeDriver.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slogger.Error("chromedriver proxy failed", "err", err)
 			stop()
 		}
 	}()
@@ -284,6 +247,9 @@ func main() {
 		upstreamMgr.Stop()
 		return srvDevtools.Shutdown(shutdownCtx)
 	})
+	g.Go(func() error {
+		return srvChromeDriver.Shutdown(shutdownCtx)
+	})
 
 	if err := g.Wait(); err != nil {
 		slogger.Error("server failed to shutdown", "err", err)
@@ -297,10 +263,81 @@ func mustFFmpeg() {
 	}
 }
 
+// chromeJSONProxyHandler returns a handler that proxies a JSON endpoint from
+// Chrome's DevTools API and rewrites WebSocket/DevTools URLs to point to this proxy.
+func chromeJSONProxyHandler(upstreamMgr *devtoolsproxy.UpstreamManager, slogger *slog.Logger, chromePath string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		current := upstreamMgr.Current()
+		if current == "" {
+			http.Error(w, "upstream not ready", http.StatusServiceUnavailable)
+			return
+		}
+
+		parsed, err := url.Parse(current)
+		if err != nil {
+			http.Error(w, "invalid upstream URL", http.StatusInternalServerError)
+			return
+		}
+
+		chromeURL := fmt.Sprintf("http://%s%s", parsed.Host, chromePath)
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, chromeURL, nil)
+		if err != nil {
+			slogger.Error("failed to build Chrome request", "err", err, "url", chromeURL)
+			http.Error(w, "failed to build browser request", http.StatusInternalServerError)
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			slogger.Error("failed to fetch from Chrome", "err", err, "url", chromeURL)
+			http.Error(w, "failed to fetch from browser", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			slogger.Error("Chrome returned non-200 status", "status", resp.StatusCode, "url", chromeURL)
+			http.Error(w, fmt.Sprintf("browser returned status %d", resp.StatusCode), http.StatusBadGateway)
+			return
+		}
+
+		var raw interface{}
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			slogger.Error("failed to decode Chrome JSON response", "err", err, "path", chromePath)
+			http.Error(w, "failed to parse browser response", http.StatusBadGateway)
+			return
+		}
+
+		rewriteChromeURLs(raw, parsed.Host, r.Host)
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(raw)
+	}
+}
+
+var chromeURLFields = []string{"webSocketDebuggerUrl", "devtoolsFrontendUrl"}
+
+func rewriteChromeURLs(v interface{}, chromeHost, proxyHost string) {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for _, field := range chromeURLFields {
+			if s, ok := val[field].(string); ok {
+				val[field] = rewriteWSURL(s, chromeHost, proxyHost)
+			}
+		}
+		for _, nested := range val {
+			rewriteChromeURLs(nested, chromeHost, proxyHost)
+		}
+	case []interface{}:
+		for _, item := range val {
+			rewriteChromeURLs(item, chromeHost, proxyHost)
+		}
+	}
+}
+
 // rewriteWSURL replaces the Chrome host with the proxy host in WebSocket URLs.
 // It handles two cases:
-// 1. Direct WebSocket URLs: "ws://127.0.0.1:9223/devtools/page/..." -> "ws://127.0.0.1:9222/devtools/page/..."
-// 2. DevTools frontend URLs with ws= query param: "https://...?ws=127.0.0.1:9223/..." -> "https://...?ws=127.0.0.1:9222/..."
+// 1. Direct WebSocket URLs: ws://chrome-host/devtools/... -> ws://proxy-host/devtools/...
+// 2. DevTools frontend URLs with ws= query param: ...?ws=chrome-host/devtools/... -> ...?ws=proxy-host/devtools/...
 func rewriteWSURL(urlStr, chromeHost, proxyHost string) string {
 	parsed, err := url.Parse(urlStr)
 	if err != nil {

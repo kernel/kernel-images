@@ -686,9 +686,17 @@ func (s *ApiService) UploadFiles(ctx context.Context, request oapi.UploadFilesRe
 			}
 			return idx, field, true
 		}
-		// forms like files.0.file
+		// forms like files.0.file OR files.file (no index → index 0)
 		if strings.HasPrefix(name, "files.") {
 			parts := strings.Split(name, ".")
+			if len(parts) == 2 {
+				// comma/no-index format: files.dest_path or files.file
+				field := parts[1]
+				if field == "file" || field == "dest_path" {
+					return 0, field, true
+				}
+				return 0, "", false
+			}
 			if len(parts) != 3 {
 				return 0, "", false
 			}

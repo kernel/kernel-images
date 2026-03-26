@@ -370,6 +370,40 @@ func (s *ApiService) restartChromiumAndWait(ctx context.Context, operation strin
 	}
 }
 
+// PatchChromiumPolicies applies user-provided Chromium enterprise policy overrides
+// to policy.json, restarts Chromium, and waits for DevTools to be ready.
+func (s *ApiService) PatchChromiumPolicies(ctx context.Context, request oapi.PatchChromiumPoliciesRequestObject) (oapi.PatchChromiumPoliciesResponseObject, error) {
+	log := logger.FromContext(ctx)
+	start := time.Now()
+	log.Info("patch chromium policies: begin")
+
+	if request.Body == nil || len(*request.Body) == 0 {
+		return oapi.PatchChromiumPolicies400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body required with at least one policy"}}, nil
+	}
+
+	overrides, err := policy.NewChromiumPolicyOverrides(map[string]interface{}(*request.Body))
+	if err != nil {
+		return oapi.PatchChromiumPolicies400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+	}
+
+	if err := s.policy.ApplyOverrides(overrides); err != nil {
+		if strings.Contains(err.Error(), "invalid chromium policy overrides") || strings.Contains(err.Error(), "cannot be overridden") {
+			return oapi.PatchChromiumPolicies400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+		}
+		log.Error("failed to apply policy overrides", "error", err)
+		return oapi.PatchChromiumPolicies500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
+	}
+
+	log.Info("policy overrides applied, restarting chromium")
+
+	if err := s.restartChromiumAndWait(ctx, "policy update"); err != nil {
+		return oapi.PatchChromiumPolicies500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
+	}
+
+	log.Info("devtools ready after policy update", "elapsed", time.Since(start).String())
+	return oapi.PatchChromiumPolicies200Response{}, nil
+}
+
 // PatchChromiumFlags handles updating Chromium launch flags at runtime.
 // It merges the provided flags with existing flags in /chromium/flags, writes the updated
 // flags file, restarts Chromium via supervisord, and waits until DevTools is ready.

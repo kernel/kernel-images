@@ -17,11 +17,12 @@ import (
 // TestContainer wraps testcontainers-go to manage a Docker container for e2e tests.
 // This enables parallel test execution by giving each test its own dynamically allocated ports.
 type TestContainer struct {
-	Name    string
-	Image   string
-	APIPort int // dynamically allocated host port -> container 10001
-	CDPPort int // dynamically allocated host port -> container 9222
-	ctr     testcontainers.Container
+	Name             string
+	Image            string
+	APIPort          int // dynamically allocated host port -> container 10001
+	CDPPort          int // dynamically allocated host port -> container 9222
+	ChromeDriverPort int // dynamically allocated host port -> container 9224
+	ctr              testcontainers.Container
 }
 
 // ContainerConfig holds optional configuration for container startup.
@@ -59,7 +60,7 @@ func (c *TestContainer) Start(ctx context.Context, cfg ContainerConfig) error {
 	// Build container request options
 	opts := []testcontainers.ContainerCustomizer{
 		testcontainers.WithImage(c.Image),
-		testcontainers.WithExposedPorts("10001/tcp", "9222/tcp"),
+		testcontainers.WithExposedPorts("10001/tcp", "9222/tcp", "9224/tcp"),
 		testcontainers.WithEnv(env),
 		testcontainers.WithTmpfs(map[string]string{"/dev/shm": "size=2g,mode=1777"}),
 		// Set privileged mode for Chrome
@@ -106,6 +107,12 @@ func (c *TestContainer) Start(ctx context.Context, cfg ContainerConfig) error {
 		return fmt.Errorf("failed to get CDP port: %w", err)
 	}
 	c.CDPPort = cdpPort.Int()
+
+	chromeDriverPort, err := ctr.MappedPort(ctx, "9224/tcp")
+	if err != nil {
+		return fmt.Errorf("failed to get ChromeDriver port: %w", err)
+	}
+	c.ChromeDriverPort = chromeDriverPort.Int()
 
 	return nil
 }
@@ -188,6 +195,35 @@ func (c *TestContainer) APIClientNoKeepAlive() (*instanceoapi.ClientWithResponse
 // CDPAddr returns the TCP address for the container's DevTools proxy.
 func (c *TestContainer) CDPAddr() string {
 	return fmt.Sprintf("127.0.0.1:%d", c.CDPPort)
+}
+
+// ChromeDriverURL returns the base HTTP URL for the container's ChromeDriver proxy.
+func (c *TestContainer) ChromeDriverURL() string {
+	return fmt.Sprintf("http://127.0.0.1:%d", c.ChromeDriverPort)
+}
+
+// WaitChromeDriver waits for the ChromeDriver proxy (and upstream ChromeDriver)
+// to be ready by polling the /status endpoint.
+func (c *TestContainer) WaitChromeDriver(ctx context.Context) error {
+	statusURL := c.ChromeDriverURL() + "/status"
+	client := &http.Client{Timeout: 2 * time.Second}
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			resp, err := client.Get(statusURL)
+			if err == nil {
+				resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return nil
+				}
+			}
+		}
+	}
 }
 
 // Exec executes a command inside the container and returns the combined output.

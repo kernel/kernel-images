@@ -15,6 +15,7 @@ RUN_ARGS=(
   --privileged
   --tmpfs /dev/shm:size=2g
   -p 9222:9222
+  -p 9224:9224
   -p 444:10001
   -v "$HOST_RECORDINGS_DIR:/recordings"
 )

@@ -69,6 +69,7 @@ deploy_args=(
   --vcpus ${VCPUS:-4}
   -M 4096
   -p 9222:9222/tls
+  -p 9224:9224/tls
   -p 444:10001/tls
   -e DISPLAY_NUM=1
   -e HEIGHT=1080

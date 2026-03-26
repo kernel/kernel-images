@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
+	"github.com/onkernel/kernel-images/server/lib/cdpclient"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	"github.com/onkernel/kernel-images/server/lib/recorder"
 )
 
 // PatchDisplay updates the display configuration. When require_idle
@@ -79,11 +84,31 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		}
 	}
 
+	// Gracefully stop active recordings so the resize can proceed.
+	// Recordings are always restarted (via defer) regardless of whether the
+	// resize succeeds — losing recording data is worse than a brief gap. If
+	// the resize fails the display is still at the old resolution, so
+	// restarting at the "old" resolution is correct.
+	stopped, stopErr := s.stopActiveRecordings(ctx)
+	if stopErr != nil {
+		log.Error("failed to stop recordings for resize", "error", stopErr)
+		return oapi.PatchDisplay500JSONResponse{
+			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+				Message: fmt.Sprintf("failed to stop recordings for resize: %s", stopErr),
+			},
+		}, nil
+	}
+	if len(stopped) > 0 {
+		defer func() {
+			go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
+		}()
+	}
+
 	// Detect display mode (xorg or xvfb)
 	displayMode := s.detectDisplayMode(ctx)
 
 	// Parse restartChromium flag (default depends on mode)
-	restartChrome := (displayMode == "xvfb") // default true for xvfb, false for xorg
+	restartChrome := false // default false for both modes
 	if req.Body.RestartChromium != nil {
 		restartChrome = *req.Body.RestartChromium
 	}
@@ -102,9 +127,37 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 				log.Error("failed to restart chromium after resolution change", "error", restartErr)
 			}
 		}
+	} else if len(stopped) > 0 {
+		// Recordings were active when this request arrived (now temporarily
+		// stopped). Resize Xvfb synchronously so the deferred
+		// startNewRecordingSegments captures at the correct resolution.
+		// Acquire xvfbResizeMu to wait for any in-flight background resize.
+		log.Info("recordings were active, using synchronous Xvfb restart for resolution change")
+		s.xvfbResizeMu.Lock()
+		err = s.resizeXvfb(ctx, width, height)
+		if err == nil {
+			s.clearViewportOverride()
+		}
+		s.xvfbResizeMu.Unlock()
+		if err == nil {
+			if cdpErr := s.setViewportViaCDP(ctx, width, height); cdpErr != nil {
+				log.Warn("CDP viewport resize failed after Xvfb restart (non-fatal)", "error", cdpErr)
+			}
+		}
+		if err == nil && restartChrome {
+			if restartErr := s.restartChromiumAndWait(ctx, "resolution change"); restartErr != nil {
+				log.Error("failed to restart chromium after resolution change", "error", restartErr)
+			}
+		}
 	} else {
-		log.Info("using Xvfb restart for resolution change")
-		err = s.setResolutionXvfb(ctx, width, height, restartChrome)
+		// Fast path: no recording active. Resize the browser viewport via CDP
+		// (instant) and update Xvfb in the background for future recordings.
+		log.Info("using CDP fast path for headless viewport resize")
+		err = s.setViewportViaCDP(ctx, width, height)
+		if err == nil {
+			s.setViewportOverride(width, height, refreshRate)
+			go s.backgroundResizeXvfb(context.WithoutCancel(ctx), width, height)
+		}
 	}
 
 	if err != nil {
@@ -124,23 +177,24 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	}, nil
 }
 
-// detectDisplayMode detects whether we're running Xorg (headful) or Xvfb (headless)
+// detectDisplayMode detects whether we're running Xorg (headful) or Xvfb
+// (headless). The result is cached because the display server type does not
+// change during the container's lifetime, and querying supervisorctl during
+// a background Xvfb restart can produce false negatives.
 func (s *ApiService) detectDisplayMode(ctx context.Context) string {
-	log := logger.FromContext(ctx)
-	checkCmd := []string{"-lc", "supervisorctl status xvfb >/dev/null 2>&1 && echo 'xvfb' || echo 'xorg'"}
-	checkReq := oapi.ProcessExecRequest{Command: "bash", Args: &checkCmd}
-	checkResp, _ := s.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: &checkReq})
+	s.displayModeOnce.Do(func() {
+		s.displayModeVal = s.probeDisplayMode(ctx)
+	})
+	return s.displayModeVal
+}
 
-	if execResp, ok := checkResp.(oapi.ProcessExec200JSONResponse); ok {
-		if execResp.StdoutB64 != nil {
-			if output, err := base64.StdEncoding.DecodeString(*execResp.StdoutB64); err == nil {
-				outputStr := strings.TrimSpace(string(output))
-				if outputStr == "xvfb" {
-					log.Info("detected Xvfb display (headless mode)")
-					return "xvfb"
-				}
-			}
-		}
+var xvfbSupervisorConf = "/etc/supervisor/conf.d/services/xvfb.conf"
+
+func (s *ApiService) probeDisplayMode(ctx context.Context) string {
+	log := logger.FromContext(ctx)
+	if _, err := os.Stat(xvfbSupervisorConf); err == nil {
+		log.Info("detected Xvfb display (headless mode)", "marker", xvfbSupervisorConf)
+		return "xvfb"
 	}
 	log.Info("detected Xorg display (headful mode)")
 	return "xorg"
@@ -194,8 +248,9 @@ func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, heig
 	}
 }
 
-// setResolutionXvfb changes resolution for Xvfb by updating config and restarting services
-func (s *ApiService) setResolutionXvfb(ctx context.Context, width, height int, restartChrome bool) error {
+// resizeXvfb updates the Xvfb supervisor config and restarts the Xvfb process
+// at the new resolution. It does NOT restart Chromium.
+func (s *ApiService) resizeXvfb(ctx context.Context, width, height int) error {
 	log := logger.FromContext(ctx)
 	log.Info("updating Xvfb resolution requires restart", "width", width, "height", height)
 
@@ -251,13 +306,69 @@ func (s *ApiService) setResolutionXvfb(ctx context.Context, width, height int, r
 	waitReq := oapi.ProcessExecRequest{Command: "bash", Args: &waitCmd}
 	s.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: &waitReq})
 
-	if restartChrome {
-		if restartErr := s.restartChromiumAndWait(ctx, "xvfb resolution change"); restartErr != nil {
-			log.Error("failed to restart chromium after xvfb resolution change", "error", restartErr)
-		}
+	log.Info("Xvfb resolution updated", "width", width, "height", height)
+	return nil
+}
+
+// backgroundResizeXvfb serializes background Xvfb restarts. After acquiring
+// the lock, it checks whether the current viewport override still matches the
+// requested dimensions. If a newer resize has superseded this one, the resize
+// is skipped so Xvfb always converges to the latest requested size.
+func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int) {
+	s.xvfbResizeMu.Lock()
+	defer s.xvfbResizeMu.Unlock()
+
+	log := logger.FromContext(ctx)
+
+	s.viewportMu.RLock()
+	override := s.viewportOverride
+	s.viewportMu.RUnlock()
+	if override == nil {
+		log.Info("skipping background Xvfb resize: override cleared (synchronous path handled it)", "requested", fmt.Sprintf("%dx%d", width, height))
+		return
+	}
+	if override[0] != width || override[1] != height {
+		log.Info("skipping stale background Xvfb resize", "requested", fmt.Sprintf("%dx%d", width, height), "current", fmt.Sprintf("%dx%d", override[0], override[1]))
+		return
 	}
 
-	log.Info("Xvfb resolution updated", "width", width, "height", height)
+	if xvfbErr := s.resizeXvfb(ctx, width, height); xvfbErr != nil {
+		log.Warn("background Xvfb resize failed (non-fatal), keeping viewport override", "error", xvfbErr)
+		return
+	}
+
+	s.viewportMu.Lock()
+	if s.viewportOverride != nil && s.viewportOverride[0] == width && s.viewportOverride[1] == height {
+		s.viewportOverride = nil
+	}
+	s.viewportMu.Unlock()
+}
+
+// setViewportViaCDP resizes the browser viewport using the CDP
+// Emulation.setDeviceMetricsOverride command. This is near-instant and does
+// not require restarting Chromium or Xvfb.
+func (s *ApiService) setViewportViaCDP(ctx context.Context, width, height int) error {
+	log := logger.FromContext(ctx)
+
+	upstreamURL := s.upstreamMgr.Current()
+	if upstreamURL == "" {
+		return fmt.Errorf("devtools upstream not available")
+	}
+
+	cdpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to devtools: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.SetDeviceMetricsOverride(cdpCtx, width, height); err != nil {
+		return fmt.Errorf("CDP setDeviceMetricsOverride: %w", err)
+	}
+
+	log.Info("viewport resized via CDP", "width", width, "height", height)
 	return nil
 }
 
@@ -311,8 +422,39 @@ func (s *ApiService) resolveDisplayFromEnv() string {
 	return ":1"
 }
 
-// getCurrentResolution returns the current display resolution and refresh rate by querying xrandr
+// setViewportOverride stores the last-known viewport dimensions so
+// getCurrentResolution can return them even while Xvfb is restarting.
+func (s *ApiService) setViewportOverride(width, height, refreshRate int) {
+	s.viewportMu.Lock()
+	s.viewportOverride = &[3]int{width, height, refreshRate}
+	s.viewportMu.Unlock()
+}
+
+// clearViewportOverride removes the viewport override (e.g. after Xvfb
+// finishes restarting and xrandr is reliable again).
+func (s *ApiService) clearViewportOverride() {
+	s.viewportMu.Lock()
+	s.viewportOverride = nil
+	s.viewportMu.Unlock()
+}
+
+// getCurrentResolution returns the current display resolution and refresh
+// rate. If a viewport override is set (from a recent CDP resize while Xvfb
+// restarts in the background), it returns the override instead of querying
+// xrandr, which may fail during Xvfb restarts.
 func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, error) {
+	s.viewportMu.RLock()
+	override := s.viewportOverride
+	s.viewportMu.RUnlock()
+	if override != nil {
+		return override[0], override[1], override[2], nil
+	}
+
+	return s.getCurrentResolutionFromXrandr(ctx)
+}
+
+// getCurrentResolutionFromXrandr queries xrandr for the current display resolution.
+func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, int, int, error) {
 	log := logger.FromContext(ctx)
 	display := s.resolveDisplayFromEnv()
 
@@ -359,6 +501,129 @@ func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, e
 	}
 
 	return width, height, refreshRate, nil
+}
+
+// stoppedRecordingInfo holds state captured from a recording that was stopped
+// so it can be restarted after a display resize.
+type stoppedRecordingInfo struct {
+	id       string
+	params   recorder.FFmpegRecordingParams
+	metadata *recorder.RecordingMetadata
+}
+
+// stopActiveRecordings gracefully stops every recording that is currently in
+// progress. The old recorders remain registered in the manager so their
+// finalized files stay discoverable and downloadable. It returns info needed
+// to start a new recording segment for each stopped recorder.
+func (s *ApiService) stopActiveRecordings(ctx context.Context) ([]stoppedRecordingInfo, error) {
+	log := logger.FromContext(ctx)
+	var stopped []stoppedRecordingInfo
+
+	for _, rec := range s.recordManager.ListActiveRecorders(ctx) {
+		if !rec.IsRecording(ctx) {
+			continue
+		}
+
+		id := rec.ID()
+
+		ffmpegRec, ok := rec.(*recorder.FFmpegRecorder)
+		if !ok {
+			log.Warn("cannot capture params from non-FFmpeg recorder, skipping", "id", id)
+			continue
+		}
+
+		params := ffmpegRec.Params()
+
+		log.Info("stopping recording for resize", "id", id)
+		if err := rec.Stop(ctx); err != nil {
+			// Stop() returns finalization errors even when the process was
+			// successfully terminated. Only treat it as a hard failure if
+			// the process is still running.
+			if rec.IsRecording(ctx) {
+				log.Error("failed to stop recording for resize", "id", id, "error", err)
+				return stopped, fmt.Errorf("failed to stop recording %s: %w", id, err)
+			}
+			log.Warn("recording stopped with finalization warning", "id", id, "error", err)
+		}
+
+		stopped = append(stopped, stoppedRecordingInfo{
+			id:       id,
+			params:   params,
+			metadata: rec.Metadata(),
+		})
+		log.Info("recording stopped for resize, old segment preserved", "id", id)
+	}
+
+	return stopped, nil
+}
+
+// adjustParamsForRemainingBudget reduces MaxDurationInSeconds and MaxSizeInMB
+// in the cloned params to reflect what the previous segment already consumed.
+// This keeps cumulative duration and disk usage within the originally requested limits.
+func adjustParamsForRemainingBudget(log *slog.Logger, info stoppedRecordingInfo) recorder.FFmpegRecordingParams {
+	params := info.params
+
+	if params.MaxDurationInSeconds != nil && info.metadata != nil && !info.metadata.EndTime.IsZero() {
+		elapsed := int(info.metadata.EndTime.Sub(info.metadata.StartTime).Seconds())
+		remaining := *params.MaxDurationInSeconds - elapsed
+		if remaining < 1 {
+			remaining = 1
+		}
+		params.MaxDurationInSeconds = &remaining
+		log.Info("adjusted max duration for new segment", "id", info.id, "elapsed_s", elapsed, "remaining_s", remaining)
+	}
+
+	if params.MaxSizeInMB != nil && params.OutputDir != nil {
+		segmentPath := filepath.Join(*params.OutputDir, info.id+".mp4")
+		if fi, err := os.Stat(segmentPath); err == nil {
+			consumedMB := int((fi.Size() + 1024*1024 - 1) / (1024 * 1024))
+			remaining := *params.MaxSizeInMB - consumedMB
+			if remaining < 1 {
+				remaining = 1
+			}
+			params.MaxSizeInMB = &remaining
+			log.Info("adjusted max size for new segment", "id", info.id, "consumed_mb", consumedMB, "remaining_mb", remaining)
+		}
+	}
+
+	return params
+}
+
+// startNewRecordingSegments creates and starts a new recording segment for
+// each previously-stopped recorder. Each new segment gets a unique suffixed
+// ID so the old (stopped) recorder and its finalized file remain accessible
+// in the manager.
+//
+// Duration and size limits are adjusted to account for what the previous
+// segment already consumed, so the cumulative totals stay within the
+// originally requested bounds.
+func (s *ApiService) startNewRecordingSegments(ctx context.Context, stopped []stoppedRecordingInfo) {
+	log := logger.FromContext(ctx)
+
+	for _, info := range stopped {
+		newID := fmt.Sprintf("%s-%d", info.id, time.Now().UnixMilli())
+
+		params := adjustParamsForRemainingBudget(log, info)
+
+		rec, err := s.factory(newID, params)
+		if err != nil {
+			log.Error("failed to create recorder for new segment", "old_id", info.id, "new_id", newID, "error", err)
+			continue
+		}
+
+		if err := s.recordManager.RegisterRecorder(ctx, rec); err != nil {
+			log.Error("failed to register new segment recorder", "old_id", info.id, "new_id", newID, "error", err)
+			continue
+		}
+
+		if err := rec.Start(ctx); err != nil {
+			log.Error("failed to start new segment recording", "old_id", info.id, "new_id", newID, "error", err)
+			_ = s.recordManager.DeregisterRecorder(ctx, rec)
+			continue
+		}
+
+		log.Info("new recording segment started after resize", "old_id", info.id, "new_id", newID)
+	}
 }
 
 // isNekoEnabled checks if Neko service is enabled

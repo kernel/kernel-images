@@ -20,6 +20,7 @@ deploy_args=(
   -e RUN_AS_ROOT="$RUN_AS_ROOT"
   -e LOG_CDP_MESSAGES=true
   -p 9222:9222/tls
+  -p 9224:9224/tls
   -p 444:10001/tls
   -n "$NAME"
 )

@@ -57,6 +57,7 @@ RUN_ARGS=(
   -v "$HOST_RECORDINGS_DIR:/recordings"
   --memory 8192m
   -p 9222:9222
+  -p 9224:9224
   -p 444:10001
   -e DISPLAY_NUM=1
   -e HEIGHT=1080

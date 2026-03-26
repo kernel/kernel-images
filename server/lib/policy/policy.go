@@ -121,14 +121,11 @@ type ExtensionSetting struct {
 	RuntimeAllowedHosts []string `json:"runtime_allowed_hosts,omitempty"`
 }
 
-// readPolicyUnlocked reads the current enterprise policy from disk without locking
-// This is an internal helper for use within already-locked operations
-func (p *Policy) readPolicyUnlocked() (*Policy, error) {
+// readFromDisk reads the current enterprise policy from disk.
+func readFromDisk() (*Policy, error) {
 	data, err := os.ReadFile(PolicyPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Return minimal policy if file doesn't exist.
-			// In practice, policy.json ships with the container image.
 			return &Policy{
 				ExtensionInstallForcelist: []string{},
 				ExtensionSettings:         make(map[string]ExtensionSetting),
@@ -142,12 +139,9 @@ func (p *Policy) readPolicyUnlocked() (*Policy, error) {
 		return nil, fmt.Errorf("failed to parse policy file: %w", err)
 	}
 
-	// Initialize ExtensionSettings map if it's nil to prevent panic on write
 	if policy.ExtensionSettings == nil {
 		policy.ExtensionSettings = make(map[string]ExtensionSetting)
 	}
-
-	// Initialize ExtensionInstallForcelist if it's nil
 	if policy.ExtensionInstallForcelist == nil {
 		policy.ExtensionInstallForcelist = []string{}
 	}
@@ -155,17 +149,8 @@ func (p *Policy) readPolicyUnlocked() (*Policy, error) {
 	return &policy, nil
 }
 
-// ReadPolicy reads the current enterprise policy from disk
-func (p *Policy) ReadPolicy() (*Policy, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	return p.readPolicyUnlocked()
-}
-
-// writePolicyUnlocked writes the policy to disk without locking
-// This is an internal helper for use within already-locked operations
-func (p *Policy) writePolicyUnlocked(policy *Policy) error {
+// writeToDisk writes the policy to disk.
+func writeToDisk(policy *Policy) error {
 	data, err := json.MarshalIndent(policy, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal policy: %w", err)
@@ -178,77 +163,75 @@ func (p *Policy) writePolicyUnlocked(policy *Policy) error {
 	return nil
 }
 
-// WritePolicy writes the policy to disk
-func (p *Policy) WritePolicy(policy *Policy) error {
+// Modify is the single entry point for all policy mutations. It acquires the
+// lock, reads the current policy from disk, passes it to fn for modification,
+// and writes the result back. All callers that need to change policy.json
+// should go through this method.
+func (p *Policy) Modify(fn func(current *Policy) error) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	return p.writePolicyUnlocked(policy)
-}
-
-// AddExtension adds or updates an extension in the policy
-// extensionName is the user-provided name used for the directory and URL paths
-// chromeExtensionID is the actual Chrome extension ID (from update.xml appid) used in policy entries
-// extensionPath is the full path to the unpacked extension directory
-func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath string, requiresEnterprisePolicy bool) error {
-	// Lock for the entire read-modify-write cycle to prevent race conditions
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	policy, err := p.readPolicyUnlocked()
+	current, err := readFromDisk()
 	if err != nil {
 		return err
 	}
 
-	// Ensure the wildcard policy exists
-	if _, exists := policy.ExtensionSettings["*"]; !exists {
-		policy.ExtensionSettings["*"] = ExtensionSetting{
-			AllowedTypes:   []string{"extension"},
-			InstallSources: []string{"*"},
-		}
+	if err := fn(current); err != nil {
+		return err
 	}
 
-	// Add the specific extension
-	// Use extension name for the URL path (where files are served)
-	// Use Chrome extension ID for the policy key (what Chrome expects)
-	setting := ExtensionSetting{
-		UpdateUrl: fmt.Sprintf("http://127.0.0.1:10001/extensions/%s/update.xml", extensionName),
-	}
+	return writeToDisk(current)
+}
 
-	// If the extension requires enterprise policy (like webRequestBlocking),
-	// we need special handling for unpacked extensions loaded via --load-extension
-	// https://github.com/cloudflare/web-bot-auth/blob/main/examples/browser-extension/policy/policy.json.templ
-	if requiresEnterprisePolicy {
-		// For unpacked extensions with webRequestBlocking:
-		// Chrome requires the extension to be in ExtensionInstallForcelist
-		// Format: "extension_id;update_url" per https://chromeenterprise.google/intl/en_ca/policies/#ExtensionInstallForcelist
-		setting.InstallationMode = "force_installed"
+// ReadPolicy reads the current enterprise policy from disk.
+func (p *Policy) ReadPolicy() (*Policy, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-		// Add to ExtensionInstallForcelist using the Chrome extension ID and update URL
-		forcelistEntry := fmt.Sprintf("%s;%s", chromeExtensionID, setting.UpdateUrl)
+	return readFromDisk()
+}
 
-		// Remove any existing entries with the same extension ID (different URLs)
-		if policy.ExtensionInstallForcelist == nil {
-			policy.ExtensionInstallForcelist = []string{}
+// AddExtension adds or updates an extension in the policy.
+// extensionName is the user-provided name used for the directory and URL paths.
+// chromeExtensionID is the actual Chrome extension ID (from update.xml appid) used in policy entries.
+// extensionPath is the full path to the unpacked extension directory.
+func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath string, requiresEnterprisePolicy bool) error {
+	return p.Modify(func(current *Policy) error {
+		if _, exists := current.ExtensionSettings["*"]; !exists {
+			current.ExtensionSettings["*"] = ExtensionSetting{
+				AllowedTypes:   []string{"extension"},
+				InstallSources: []string{"*"},
+			}
 		}
 
-		// Filter out entries that start with the same extension ID
-		extensionIDPrefix := chromeExtensionID + ";"
-		policy.ExtensionInstallForcelist = slices.DeleteFunc(policy.ExtensionInstallForcelist, func(entry string) bool {
-			return strings.HasPrefix(entry, extensionIDPrefix)
-		})
+		setting := ExtensionSetting{
+			UpdateUrl: fmt.Sprintf("http://127.0.0.1:10001/extensions/%s/update.xml", extensionName),
+		}
 
-		// Add the new entry
-		policy.ExtensionInstallForcelist = append(policy.ExtensionInstallForcelist, forcelistEntry)
+		if requiresEnterprisePolicy {
+			// Chrome requires the extension to be in ExtensionInstallForcelist.
+			// Format: "extension_id;update_url" per https://chromeenterprise.google/intl/en_ca/policies/#ExtensionInstallForcelist
+			setting.InstallationMode = "force_installed"
 
-		// Use Chrome extension ID as the key in ExtensionSettings
-		policy.ExtensionSettings[chromeExtensionID] = setting
-	} else {
-		// For normal extensions, use the extension name as the key
-		policy.ExtensionSettings[extensionName] = setting
-	}
+			forcelistEntry := fmt.Sprintf("%s;%s", chromeExtensionID, setting.UpdateUrl)
 
-	return p.writePolicyUnlocked(policy)
+			if current.ExtensionInstallForcelist == nil {
+				current.ExtensionInstallForcelist = []string{}
+			}
+
+			extensionIDPrefix := chromeExtensionID + ";"
+			current.ExtensionInstallForcelist = slices.DeleteFunc(current.ExtensionInstallForcelist, func(entry string) bool {
+				return strings.HasPrefix(entry, extensionIDPrefix)
+			})
+			current.ExtensionInstallForcelist = append(current.ExtensionInstallForcelist, forcelistEntry)
+
+			current.ExtensionSettings[chromeExtensionID] = setting
+		} else {
+			current.ExtensionSettings[extensionName] = setting
+		}
+
+		return nil
+	})
 }
 
 // GenerateExtensionID returns a stable identifier for the extension policy.

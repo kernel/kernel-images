@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 var (
 	headfulImage  = defaultHeadfulImage
 	headlessImage = defaultHeadlessImage
+
+	playwrightDepsOnce sync.Once
+	playwrightDepsErr  error
 )
 
 func init() {
@@ -65,15 +69,20 @@ func getPlaywrightPath() string {
 // ensurePlaywrightDeps ensures playwright dependencies are installed
 func ensurePlaywrightDeps(t *testing.T) {
 	t.Helper()
-	nodeModulesPath := getPlaywrightPath() + "/node_modules"
-	if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
-		t.Log("Installing playwright dependencies...")
-		cmd := exec.Command("pnpm", "install")
-		cmd.Dir = getPlaywrightPath()
-		output, err := cmd.CombinedOutput()
-		require.NoError(t, err, "Failed to install playwright dependencies: %v\nOutput: %s", err, string(output))
-		t.Log("Playwright dependencies installed successfully")
-	}
+
+	playwrightDepsOnce.Do(func() {
+		nodeModulesPath := getPlaywrightPath() + "/node_modules"
+		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
+			cmd := exec.Command("pnpm", "install")
+			cmd.Dir = getPlaywrightPath()
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				playwrightDepsErr = fmt.Errorf("failed to install playwright dependencies: %w\noutput: %s", err, string(output))
+			}
+		}
+	})
+
+	require.NoError(t, playwrightDepsErr, "playwright dependency setup failed")
 }
 
 func TestDisplayResolutionChange(t *testing.T) {
@@ -125,17 +134,9 @@ func TestDisplayResolutionChange(t *testing.T) {
 	require.NotNil(t, rsp1.JSON200.Height, "expected height in response")
 	require.Equal(t, height1, *rsp1.JSON200.Height, "expected height %d in response", height1)
 
-	// Wait a bit for Xvfb to fully restart
-	t.Log("waiting for Xvfb to stabilize")
-	time.Sleep(3 * time.Second)
-
-	// Verify new resolution via ps aux
-	t.Log("verifying new Xvfb resolution")
-	newWidth1, newHeight1, err := getXvfbResolution(ctx, c)
-	require.NoError(t, err, "failed to get new Xvfb resolution")
-	t.Logf("new_resolution: %dx%d", newWidth1, newHeight1)
-	require.Equal(t, width1, newWidth1, "expected Xvfb resolution %dx%d, got %dx%d", width1, height1, newWidth1, newHeight1)
-	require.Equal(t, height1, newHeight1, "expected Xvfb resolution %dx%d, got %dx%d", width1, height1, newWidth1, newHeight1)
+	// Wait for Xvfb to reach the new resolution (background restart)
+	t.Log("waiting for Xvfb to reach 1920x1080")
+	waitForXvfbResolution(t, ctx, c, width1, height1, 15*time.Second)
 
 	// Test second resolution change: 1280x720
 	t.Log("changing resolution to 1280x720")
@@ -154,17 +155,9 @@ func TestDisplayResolutionChange(t *testing.T) {
 	require.NotNil(t, rsp2.JSON200.Height, "expected height in response")
 	require.Equal(t, height2, *rsp2.JSON200.Height, "expected height %d in response", height2)
 
-	// Wait a bit for Xvfb to fully restart
-	t.Log("waiting for Xvfb to stabilize")
-	time.Sleep(3 * time.Second)
-
-	// Verify second resolution change via ps aux
-	t.Log("verifying second Xvfb resolution")
-	newWidth2, newHeight2, err := getXvfbResolution(ctx, c)
-	require.NoError(t, err, "failed to get second Xvfb resolution")
-	t.Logf("final_resolution: %dx%d", newWidth2, newHeight2)
-	require.Equal(t, width2, newWidth2, "expected Xvfb resolution %dx%d, got %dx%d", width2, height2, newWidth2, newHeight2)
-	require.Equal(t, height2, newHeight2, "expected Xvfb resolution %dx%d, got %dx%d", width2, height2, newWidth2, newHeight2)
+	// Wait for Xvfb to reach the new resolution (serialized behind first resize)
+	t.Log("waiting for Xvfb to reach 1280x720")
+	waitForXvfbResolution(t, ctx, c, width2, height2, 15*time.Second)
 
 	t.Log("all resolution changes verified successfully")
 }
@@ -584,6 +577,30 @@ func getXvfbResolution(ctx context.Context, c *TestContainer) (width, height int
 	return 0, 0, fmt.Errorf("Xvfb process not found in ps aux output")
 }
 
+// waitForXvfbResolution polls getXvfbResolution until it reports the expected
+// dimensions or the timeout expires. This accounts for background Xvfb
+// restarts that happen asynchronously after a CDP fast-path viewport resize.
+func waitForXvfbResolution(t *testing.T, ctx context.Context, c *TestContainer, wantW, wantH int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		w, h, err := getXvfbResolution(ctx, c)
+		if err == nil && w == wantW && h == wantH {
+			t.Logf("xvfb_resolution: %dx%d (matches)", w, h)
+			return
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				require.NoError(t, err, "timed out waiting for Xvfb resolution %dx%d", wantW, wantH)
+			}
+			require.Equal(t, wantW, w, "timed out: expected Xvfb width %d, got %d", wantW, w)
+			require.Equal(t, wantH, h, "timed out: expected Xvfb height %d, got %d", wantH, h)
+			return
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
 // TestCDPTargetCreation tests that headless browsers can create new targets via CDP.
 func TestCDPTargetCreation(t *testing.T) {
 	t.Parallel()
@@ -736,6 +753,10 @@ func TestWebBotAuthInstallation(t *testing.T) {
 		var policy map[string]interface{}
 		err = json.Unmarshal([]byte(policyContent), &policy)
 		require.NoError(t, err, "failed to parse policy.json")
+
+		maxConnectionsPerProxy, ok := policy["MaxConnectionsPerProxy"].(float64)
+		require.True(t, ok, "MaxConnectionsPerProxy not found in policy.json")
+		require.Equal(t, float64(16), maxConnectionsPerProxy, "unexpected MaxConnectionsPerProxy value")
 
 		// Check ExtensionInstallForcelist exists
 		extensionInstallForcelist, ok := policy["ExtensionInstallForcelist"].([]interface{})

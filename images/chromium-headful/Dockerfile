@@ -290,6 +290,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt -y install chromium && \
     apt --no-install-recommends -y install sqlite3;
 
+# Chromedriver and Chromium are not necessarily the same version.
+ARG CHROMEDRIVER_VERSION=146.0.7680.165
+RUN set -eux; \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
+    unzip /tmp/cd.zip -d /tmp; \
+    mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
+    chmod +x /usr/local/bin/chromedriver; \
+    rm -rf /tmp/cd.zip /tmp/chromedriver-linux64
+
 # Copy Chromium policy configuration
 RUN mkdir -p /etc/chromium/policies/managed
 COPY shared/chromium-policies/managed/policy.json /etc/chromium/policies/managed/policy.json

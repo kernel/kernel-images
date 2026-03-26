@@ -1,6 +1,7 @@
 package mousetrajectory
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -105,4 +106,71 @@ func TestHumanizeMouseTrajectory_CurvedPath(t *testing.T) {
 		}
 	}
 	assert.False(t, allOnLine, "path should be curved, not a straight line")
+}
+
+func TestGenerateMultiSegmentTrajectory_ThreeWaypoints(t *testing.T) {
+	waypoints := [][2]int{{100, 100}, {500, 300}, {900, 100}}
+	result := GenerateMultiSegmentTrajectory(waypoints, 1920, 1080, nil)
+
+	require.GreaterOrEqual(t, len(result.Points), MinPoints*2, "multi-segment should produce enough points")
+	assert.Equal(t, 100, result.Points[0][0], "first point X should match first waypoint")
+	assert.Equal(t, 100, result.Points[0][1], "first point Y should match first waypoint")
+	assert.Equal(t, 900, result.Points[len(result.Points)-1][0], "last point X should match last waypoint")
+	assert.Equal(t, 100, result.Points[len(result.Points)-1][1], "last point Y should match last waypoint")
+}
+
+func TestGenerateMultiSegmentTrajectory_TwoWaypoints(t *testing.T) {
+	waypoints := [][2]int{{0, 0}, {200, 200}}
+	result := GenerateMultiSegmentTrajectory(waypoints, 1920, 1080, nil)
+
+	require.GreaterOrEqual(t, len(result.Points), MinPoints)
+	assert.Equal(t, 0, result.Points[0][0])
+	assert.Equal(t, 0, result.Points[0][1])
+	assert.Equal(t, 200, result.Points[len(result.Points)-1][0])
+	assert.Equal(t, 200, result.Points[len(result.Points)-1][1])
+}
+
+func TestGenerateMultiSegmentTrajectory_WithDurationMs(t *testing.T) {
+	waypoints := [][2]int{{100, 100}, {500, 300}, {900, 100}}
+	dur := 2000
+	result := GenerateMultiSegmentTrajectory(waypoints, 1920, 1080, &dur)
+
+	require.GreaterOrEqual(t, len(result.Points), MinPoints)
+	assert.Greater(t, result.StepDelayMs, 0)
+
+	totalMs := result.StepDelayMs * (len(result.Points) - 1)
+	assert.InDelta(t, 2000, totalMs, 500, "total duration should be approximately 2000ms")
+}
+
+func TestGenerateMultiSegmentTrajectory_PointsClampedToScreen(t *testing.T) {
+	waypoints := [][2]int{{5, 5}, {50, 50}, {95, 95}}
+	result := GenerateMultiSegmentTrajectory(waypoints, 100, 100, nil)
+
+	for i, p := range result.Points {
+		assert.GreaterOrEqual(t, p[0], 0, "point %d X should be >= 0", i)
+		assert.GreaterOrEqual(t, p[1], 0, "point %d Y should be >= 0", i)
+		assert.LessOrEqual(t, p[0], 99, "point %d X should be <= screenW-1", i)
+		assert.LessOrEqual(t, p[1], 99, "point %d Y should be <= screenH-1", i)
+	}
+}
+
+func TestGenerateMultiSegmentTrajectory_SinglePoint(t *testing.T) {
+	waypoints := [][2]int{{100, 100}}
+	result := GenerateMultiSegmentTrajectory(waypoints, 1920, 1080, nil)
+
+	assert.Len(t, result.Points, 1)
+	assert.Equal(t, 100, result.Points[0][0])
+	assert.Equal(t, 100, result.Points[0][1])
+}
+
+func TestGenerateMultiSegmentTrajectory_ContinuousPath(t *testing.T) {
+	waypoints := [][2]int{{100, 100}, {500, 500}, {900, 100}, {1300, 500}}
+	result := GenerateMultiSegmentTrajectory(waypoints, 1920, 1080, nil)
+
+	for i := 1; i < len(result.Points); i++ {
+		dx := result.Points[i][0] - result.Points[i-1][0]
+		dy := result.Points[i][1] - result.Points[i-1][1]
+		dist := math.Sqrt(float64(dx*dx + dy*dy))
+		assert.Less(t, dist, 200.0, "consecutive points %d-%d should not jump too far (dist=%.1f)", i-1, i, dist)
+	}
 }
