@@ -156,10 +156,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get -y install chromium && \
     apt-get --no-install-recommends -y install sqlite3 unzip;
 
-# Install ChromeDriver matching the installed Chromium version
+# Install ChromeDriver matching the latest published Chrome-for-Testing patch
+# for the installed Chromium build line.
 RUN set -eux; \
     CHROMIUM_VERSION=$(chromium --version | awk '{print $2}'); \
-    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMIUM_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
+    CHROMIUM_BUILD=${CHROMIUM_VERSION%.*}; \
+    CHROMEDRIVER_VERSION=$(python3 -c "import json, sys, urllib.request; build=sys.argv[1]; version=sys.argv[2]; data=json.load(urllib.request.urlopen('https://googlechromelabs.github.io/chrome-for-testing/latest-patch-versions-per-build-with-downloads.json')); resolved=data['builds'].get(build, {}).get('version'); print(resolved) if resolved else (_ for _ in ()).throw(SystemExit(f'No ChromeDriver version published for Chromium {version}'))" "$CHROMIUM_BUILD" "$CHROMIUM_VERSION"); \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
     unzip /tmp/cd.zip -d /tmp; \
     mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
     chmod +x /usr/local/bin/chromedriver; \
