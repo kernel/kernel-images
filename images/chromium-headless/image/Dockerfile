@@ -156,8 +156,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get -y install chromium && \
     apt-get --no-install-recommends -y install sqlite3 unzip;
 
-# Headful and headless keep separate ChromeDriver pins so either image can be
-# bumped independently when the Chromium package and Chrome for Testing drift.
+# Chromedriver and chromium are not necessarily the same versions, so
+# headful and headless keep separate Chromedriver pins.
 ARG CHROMEDRIVER_VERSION=146.0.7680.165
 RUN set -eux; \
     curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
