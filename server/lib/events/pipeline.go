@@ -1,6 +1,7 @@
 package events
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -10,6 +11,7 @@ import (
 // applies truncation, durably appends it to the per-category log file, and
 // then makes it available to ring buffer readers.
 type Pipeline struct {
+	mu               sync.Mutex
 	ring             *RingBuffer
 	files            *FileWriter
 	seq              atomic.Uint64
@@ -35,13 +37,18 @@ func (p *Pipeline) Start(captureSessionID string) {
 //
 // Ordering:
 //  1. Stamp CaptureSessionID, Seq, Ts (Ts only if caller left it zero)
-//  2. Apply truncateIfNeeded (SCHEMA-04) — must happen before both sinks
+//  2. Apply truncateIfNeeded — must happen before both sinks
 //  3. Write to FileWriter (durable before in-memory)
 //  4. Publish to RingBuffer (in-memory fan-out)
 //
+// The mutex serialises concurrent callers so that seq assignment and sink
+// delivery are atomic — readers always see events in seq order.
 // Errors from FileWriter.Write are silently dropped; the ring buffer always
 // receives the event even if the file write fails.
 func (p *Pipeline) Publish(ev BrowserEvent) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	ev.CaptureSessionID = *p.captureSessionID.Load()
 	ev.Seq = p.seq.Add(1) // starts at 1
 	if ev.Ts == 0 {

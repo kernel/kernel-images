@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestBrowserEventSerialization: round-trip marshal/unmarshal verifying all SCHEMA-01
+// TestBrowserEventSerialization: round-trip marshal/unmarshal verifying all
 // envelope fields serialize with correct JSON keys and values, including provenance.
 func TestBrowserEventSerialization(t *testing.T) {
 	ev := BrowserEvent{
@@ -392,6 +392,40 @@ func TestPipeline(t *testing.T) {
 		t.Cleanup(func() { p.Close() })
 		return p, dir
 	}
+
+	t.Run("concurrent_publish_seq_order", func(t *testing.T) {
+		const goroutines = 8
+		const eventsEach = 50
+		const total = goroutines * eventsEach
+
+		// Ring must hold all events so no drop sentinels are emitted.
+		rb := NewRingBuffer(total)
+		fw := NewFileWriter(t.TempDir())
+		p := NewPipeline(rb, fw)
+		t.Cleanup(func() { p.Close() })
+		reader := p.NewReader()
+
+		var wg sync.WaitGroup
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < eventsEach; j++ {
+					p.Publish(BrowserEvent{Type: "console.log", Category: CategoryConsole, SourceKind: SourceCDP, Ts: 1})
+				}
+			}()
+		}
+		wg.Wait()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		for want := uint64(1); want <= total; want++ {
+			ev, err := reader.Read(ctx)
+			require.NoError(t, err)
+			assert.Equal(t, want, ev.Seq, "events must arrive in seq order")
+		}
+	})
 
 	t.Run("publish_increments_seq", func(t *testing.T) {
 		p, _ := newPipeline(t)
