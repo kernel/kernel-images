@@ -15,7 +15,6 @@ type RingBuffer struct {
 	mu      sync.RWMutex
 	buf     []BrowserEvent
 	head    int    // next write position (mod cap)
-	count   int    // items currently stored (0..cap)
 	written uint64 // total ever published (monotonic)
 	notify  chan struct{}
 }
@@ -35,9 +34,6 @@ func (rb *RingBuffer) Publish(ev BrowserEvent) {
 	rb.mu.Lock()
 	rb.buf[rb.head] = ev
 	rb.head = (rb.head + 1) % len(rb.buf)
-	if rb.count < len(rb.buf) {
-		rb.count++
-	}
 	rb.written++
 	old := rb.notify
 	rb.notify = make(chan struct{})
@@ -54,7 +50,7 @@ func (rb *RingBuffer) oldestSeq() uint64 {
 	return rb.written - uint64(len(rb.buf))
 }
 
-// NewReader returns a Reader positioned at seq 0.
+// NewReader returns a Reader positioned at publish index 0 (the very beginning of the ring).
 // If the ring has already published events, the reader will receive an
 // events_dropped BrowserEvent on the first Read call if it has fallen behind
 // the oldest retained event.
@@ -63,9 +59,13 @@ func (rb *RingBuffer) NewReader() *Reader {
 }
 
 // Reader tracks an independent read position in a RingBuffer.
+// A Reader must not be used concurrently from multiple goroutines.
+//
+// nextSeq is a monotonic count of publishes consumed by this reader — it is
+// an index into the ring, not the BrowserEvent.Seq field.
 type Reader struct {
 	rb      *RingBuffer
-	nextSeq uint64
+	nextSeq uint64 // publish index, not BrowserEvent.Seq
 }
 
 // Read blocks until the next event is available or ctx is cancelled.
@@ -85,7 +85,7 @@ func (r *Reader) Read(ctx context.Context) (BrowserEvent, error) {
 			r.nextSeq = oldest
 			r.rb.mu.RUnlock()
 			data := json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, dropped))
-			return BrowserEvent{Type: "events_dropped", Data: data}, nil
+			return BrowserEvent{Type: "events.dropped", Category: CategorySystem, SourceKind: SourceKernelAPI, Data: data}, nil
 		}
 
 		// Event is available — read it.

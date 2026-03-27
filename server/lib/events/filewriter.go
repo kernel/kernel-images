@@ -1,7 +1,6 @@
 package events
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,8 +9,8 @@ import (
 )
 
 // FileWriter is a per-category JSONL appender. It opens each log file lazily on
-// first write (O_APPEND|O_CREATE|O_WRONLY) and serialises concurrent writes
-// within a category with a single mutex.
+// first write (O_APPEND|O_CREATE|O_WRONLY) and serialises all concurrent writes
+// with a single mutex.
 type FileWriter struct {
 	mu    sync.Mutex
 	files map[EventCategory]*os.File
@@ -25,16 +24,17 @@ func NewFileWriter(dir string) *FileWriter {
 }
 
 // Write serialises ev to JSON and appends it as a single JSONL line to the
-// per-category log file. The mutex is held for the entire open+marshal+write
-// sequence to prevent TOCTOU races and to guarantee whole-line atomicity for
-// events larger than PIPE_BUF.
+// per-category log file. The mutex guarantees whole-line atomicity across
+// concurrent callers.
 func (fw *FileWriter) Write(ev BrowserEvent) error {
-	cat := CategoryFor(ev.Type)
+	cat := ev.Category
+	if cat == "" {
+		return fmt.Errorf("filewriter: event %q has empty category", ev.Type)
+	}
 
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	// Lazy open.
 	f, ok := fw.files[cat]
 	if !ok {
 		path := filepath.Join(fw.dir, string(cat)+".log")
@@ -51,11 +51,7 @@ func (fw *FileWriter) Write(ev BrowserEvent) error {
 		return fmt.Errorf("filewriter: marshal: %w", err)
 	}
 
-	var buf bytes.Buffer
-	buf.Write(data)
-	buf.WriteByte('\n')
-
-	if _, err := f.Write(buf.Bytes()); err != nil {
+	if _, err := f.Write(append(data, '\n')); err != nil {
 		return fmt.Errorf("filewriter: write: %w", err)
 	}
 
