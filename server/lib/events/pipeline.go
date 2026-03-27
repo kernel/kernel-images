@@ -13,13 +13,14 @@ type Pipeline struct {
 	ring             *RingBuffer
 	files            *FileWriter
 	seq              atomic.Uint64
-	captureSessionID atomic.Value // stores string
+	captureSessionID atomic.Pointer[string]
 }
 
 // NewPipeline returns a Pipeline backed by the supplied ring and file writer.
 func NewPipeline(ring *RingBuffer, files *FileWriter) *Pipeline {
 	p := &Pipeline{ring: ring, files: files}
-	p.captureSessionID.Store("")
+	empty := ""
+	p.captureSessionID.Store(&empty)
 	return p
 }
 
@@ -27,7 +28,7 @@ func NewPipeline(ring *RingBuffer, files *FileWriter) *Pipeline {
 // published event. It may be called at any time; the change is immediately
 // visible to concurrent Publish calls.
 func (p *Pipeline) Start(captureSessionID string) {
-	p.captureSessionID.Store(captureSessionID)
+	p.captureSessionID.Store(&captureSessionID)
 }
 
 // Publish stamps, truncates, files, and broadcasts a single event.
@@ -41,17 +42,17 @@ func (p *Pipeline) Start(captureSessionID string) {
 // Errors from FileWriter.Write are silently dropped; the ring buffer always
 // receives the event even if the file write fails.
 func (p *Pipeline) Publish(ev BrowserEvent) {
-	ev.CaptureSessionID = p.captureSessionID.Load().(string)
+	ev.CaptureSessionID = *p.captureSessionID.Load()
 	ev.Seq = p.seq.Add(1) // starts at 1
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMilli()
 	}
+	if ev.DetailLevel == "" {
+		ev.DetailLevel = DetailDefault
+	}
 	ev = truncateIfNeeded(ev)
 
-	// File write first — durable before in-memory.
 	_ = p.files.Write(ev)
-
-	// Ring buffer last — readers see the event after the file is written.
 	p.ring.Publish(ev)
 }
 
