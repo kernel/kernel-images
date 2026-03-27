@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 )
 
-// maxS2RecordBytes is the S2 event pipeline maximum record size (1 MB).
-// Events exceeding this limit have their Data field replaced with null and
-// Truncated set to true before being written to the file and ring sinks.
+// maxS2RecordBytes is the maximum record size for the S2 event pipeline (1 MB).
 const maxS2RecordBytes = 1_000_000
 
 // EventCategory is a first-class envelope field that determines log file routing.
