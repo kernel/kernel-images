@@ -159,3 +159,66 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 
 	return nil
 }
+
+// DispatchMouseWheelEvent sends a mouseWheel event to the first page target
+// via CDP Input.dispatchMouseEvent. deltaX/deltaY are in CSS pixels, allowing
+// sub-notch precision that X11 button events cannot express.
+func (c *Client) DispatchMouseWheelEvent(ctx context.Context, x, y int, deltaX, deltaY float64) error {
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return fmt.Errorf("Target.getTargets: %w", err)
+	}
+
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return fmt.Errorf("unmarshal targets: %w", err)
+	}
+
+	var pageTargetID string
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			pageTargetID = t.TargetID
+			break
+		}
+	}
+	if pageTargetID == "" {
+		return fmt.Errorf("no page target found")
+	}
+
+	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": pageTargetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Target.attachToTarget: %w", err)
+	}
+
+	var attach struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(attachResult, &attach); err != nil {
+		return fmt.Errorf("unmarshal attach: %w", err)
+	}
+
+	_, err = c.send(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":   "mouseWheel",
+		"x":      x,
+		"y":      y,
+		"deltaX": deltaX,
+		"deltaY": deltaY,
+	}, attach.SessionID)
+	if err != nil {
+		return fmt.Errorf("Input.dispatchMouseEvent mouseWheel: %w", err)
+	}
+
+	_, _ = c.send(ctx, "Target.detachFromTarget", map[string]any{
+		"sessionId": attach.SessionID,
+	}, "")
+
+	return nil
+}

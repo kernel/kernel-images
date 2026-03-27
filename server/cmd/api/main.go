@@ -56,6 +56,18 @@ func main() {
 		chiMiddleware.Recoverer,
 		func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+				if r.Method == http.MethodOptions {
+					w.WriteHeader(http.StatusNoContent)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		},
+		func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ctxWithLogger := logger.AddToContext(r.Context(), slogger)
 				next.ServeHTTP(w, r.WithContext(ctxWithLogger))
 			})
@@ -120,6 +132,9 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
 	})
+	// Pixel-precise scroll for the live view client (bypasses X11 via CDP)
+	r.Post("/live-view/scroll", apiService.HandlePixelScroll)
+
 	// PTY attach endpoint (WebSocket) - not part of OpenAPI spec
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {

@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
 	"math/rand"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -16,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/onkernel/kernel-images/server/lib/cdpclient"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/mousetrajectory"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
@@ -748,6 +751,8 @@ func (s *ApiService) PressKey(ctx context.Context, request oapi.PressKeyRequestO
 	return oapi.PressKey200Response{}, nil
 }
 
+const pixelsPerScrollTick = 120
+
 func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) error {
 	log := logger.FromContext(ctx)
 
@@ -769,48 +774,102 @@ func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) erro
 		return &validationError{msg: fmt.Sprintf("coordinates exceed screen bounds (max: %dx%d)", screenWidth-1, screenHeight-1)}
 	}
 
-	args := []string{}
-	if body.HoldKeys != nil {
+	// Hold keys via xdotool (CDP doesn't have a direct modifier-hold mechanism
+	// that persists across separate commands).
+	if body.HoldKeys != nil && len(*body.HoldKeys) > 0 {
+		var keydownArgs []string
 		for _, key := range *body.HoldKeys {
-			args = append(args, "keydown", key)
+			keydownArgs = append(keydownArgs, "keydown", key)
 		}
-	}
-	args = append(args, "mousemove", strconv.Itoa(body.X), strconv.Itoa(body.Y))
-
-	// Apply vertical ticks first (sequential as specified)
-	if body.DeltaY != nil && *body.DeltaY != 0 {
-		count := *body.DeltaY
-		btn := "5" // down
-		if count < 0 {
-			btn = "4" // up
-			count = -count
+		if _, err := defaultXdoTool.Run(ctx, keydownArgs...); err != nil {
+			log.Error("xdotool keydown failed", "err", err)
 		}
-		args = append(args, "click", "--repeat", strconv.Itoa(count), "--delay", "0", btn)
-	}
-	// Then horizontal ticks
-	if body.DeltaX != nil && *body.DeltaX != 0 {
-		count := *body.DeltaX
-		btn := "7" // right
-		if count < 0 {
-			btn = "6" // left
-			count = -count
-		}
-		args = append(args, "click", "--repeat", strconv.Itoa(count), "--delay", "0", btn)
+		defer func() {
+			var keyupArgs []string
+			for _, key := range *body.HoldKeys {
+				keyupArgs = append(keyupArgs, "keyup", key)
+			}
+			if _, err := defaultXdoTool.Run(ctx, keyupArgs...); err != nil {
+				log.Error("xdotool keyup failed", "err", err)
+			}
+		}()
 	}
 
-	if body.HoldKeys != nil {
-		for _, key := range *body.HoldKeys {
-			args = append(args, "keyup", key)
-		}
+	// Convert tick counts to CSS pixel deltas for CDP. The API contract
+	// specifies delta_x/delta_y as discrete scroll ticks (matching the old
+	// xdotool button-click model). Each tick ≈ 120 CSS pixels.
+	var deltaXPx, deltaYPx float64
+	if body.DeltaX != nil {
+		deltaXPx = float64(*body.DeltaX) * pixelsPerScrollTick
+	}
+	if body.DeltaY != nil {
+		deltaYPx = float64(*body.DeltaY) * pixelsPerScrollTick
 	}
 
-	log.Info("executing xdotool", "args", args)
-	output, err := defaultXdoTool.Run(ctx, args...)
+	upstreamURL := s.upstreamMgr.Current()
+	if upstreamURL == "" {
+		return &executionError{msg: "devtools upstream not available"}
+	}
+
+	cdpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
 	if err != nil {
-		log.Error("xdotool scroll failed", "err", err, "output", string(output))
-		return &executionError{msg: fmt.Sprintf("failed to perform scroll: %s", string(output))}
+		return &executionError{msg: fmt.Sprintf("failed to connect to devtools for scroll: %s", err)}
 	}
+	defer client.Close()
+
+	log.Info("dispatching CDP mouseWheel", "x", body.X, "y", body.Y, "deltaX", deltaXPx, "deltaY", deltaYPx)
+	if err := client.DispatchMouseWheelEvent(cdpCtx, body.X, body.Y, deltaXPx, deltaYPx); err != nil {
+		return &executionError{msg: fmt.Sprintf("CDP mouseWheel failed: %s", err)}
+	}
+
 	return nil
+}
+
+// HandlePixelScroll handles POST /live-view/scroll — a lightweight endpoint
+// for the live view client that accepts pixel-precise deltas and forwards
+// them directly to Chromium via CDP, bypassing X11 entirely.
+func (s *ApiService) HandlePixelScroll(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		X      int     `json:"x"`
+		Y      int     `json:"y"`
+		DeltaX float64 `json:"delta_x"`
+		DeltaY float64 `json:"delta_y"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+
+	if body.DeltaX == 0 && body.DeltaY == 0 {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	upstreamURL := s.upstreamMgr.Current()
+	if upstreamURL == "" {
+		http.Error(w, "devtools not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	cdpCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
+	if err != nil {
+		http.Error(w, "cdp dial failed", http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	if err := client.DispatchMouseWheelEvent(cdpCtx, body.X, body.Y, body.DeltaX, body.DeltaY); err != nil {
+		http.Error(w, "cdp scroll failed", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *ApiService) Scroll(ctx context.Context, request oapi.ScrollRequestObject) (oapi.ScrollResponseObject, error) {

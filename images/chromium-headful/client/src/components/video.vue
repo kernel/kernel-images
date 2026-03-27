@@ -708,7 +708,19 @@
       })
     }
 
-    wheelThrottle = false
+    _scrollAccX = 0
+    _scrollAccY = 0
+    _scrollLastSendTime = 0
+    _scrollApiUrl: string | null = null
+
+    _getScrollApiUrl(): string {
+      if (this._scrollApiUrl) return this._scrollApiUrl
+      // The kernel-images API is exposed on port 444 (maps to 10001 inside the
+      // container) in both Docker and unikernel deployments.
+      this._scrollApiUrl = `${location.protocol}//${location.hostname}:444/live-view/scroll`
+      return this._scrollApiUrl
+    }
+
     onWheel(e: WheelEvent) {
       if (!this.hosting || this.locked) {
         return
@@ -717,8 +729,6 @@
       let x = e.deltaX
       let y = e.deltaY
 
-      // Normalize to pixel units. deltaMode 1 = lines, 2 = pages; convert
-      // both to approximate pixel values so the divisor below works uniformly.
       if (e.deltaMode !== 0) {
         x *= WHEEL_LINE_HEIGHT
         y *= WHEEL_LINE_HEIGHT
@@ -729,26 +739,36 @@
         y = y * -1
       }
 
-      // The server sends one XTestFakeButtonEvent per unit we pass here,
-      // and each event scrolls Chromium by ~120 px. Raw pixel deltas from
-      // trackpads are already in pixels (~120 per notch), so dividing by
-      // PIXELS_PER_TICK converts them to discrete scroll "ticks". The
-      // result is clamped to [-scroll, scroll] (the user-facing sensitivity
-      // setting) so fast swipes don't over-scroll.
-      const PIXELS_PER_TICK = 120
-      x = x === 0 ? 0 : Math.min(Math.max(Math.round(x / PIXELS_PER_TICK) || Math.sign(x), -this.scroll), this.scroll)
-      y = y === 0 ? 0 : Math.min(Math.max(Math.round(y / PIXELS_PER_TICK) || Math.sign(y), -this.scroll), this.scroll)
+      this._scrollAccX += x
+      this._scrollAccY += y
 
-      this.sendMousePos(e)
-
-      if (!this.wheelThrottle) {
-        this.wheelThrottle = true
-        this.$client.sendData('wheel', { x, y })
-
-        window.setTimeout(() => {
-          this.wheelThrottle = false
-        }, 100)
+      if (this._scrollAccX === 0 && this._scrollAccY === 0) {
+        return
       }
+
+      const now = Date.now()
+      if (now - this._scrollLastSendTime < 50) {
+        return
+      }
+      this._scrollLastSendTime = now
+
+      const { w, h } = this.$accessor.video.resolution
+      const rect = this._overlay.getBoundingClientRect()
+      const sx = Math.round((w / rect.width) * (e.clientX - rect.left))
+      const sy = Math.round((h / rect.height) * (e.clientY - rect.top))
+
+      const dx = this._scrollAccX
+      const dy = this._scrollAccY
+      this._scrollAccX = 0
+      this._scrollAccY = 0
+
+      const url = this._getScrollApiUrl()
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x: sx, y: sy, delta_x: -dx, delta_y: -dy }),
+        keepalive: true,
+      }).catch(() => {})
     }
 
     onTouchHandler(e: TouchEvent) {
