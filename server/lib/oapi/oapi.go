@@ -11072,8 +11072,28 @@ func (response StreamFsEvents200TexteventStreamResponse) VisitStreamFsEventsResp
 	if closer, ok := response.Body.(io.ReadCloser); ok {
 		defer closer.Close()
 	}
-	_, err := io.Copy(w, response.Body)
-	return err
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 type StreamFsEvents400JSONResponse struct{ BadRequestErrorJSONResponse }
@@ -11219,8 +11239,28 @@ func (response LogsStream200TexteventStreamResponse) VisitLogsStreamResponse(w h
 	if closer, ok := response.Body.(io.ReadCloser); ok {
 		defer closer.Close()
 	}
-	_, err := io.Copy(w, response.Body)
-	return err
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 type ExecutePlaywrightCodeRequestObject struct {
@@ -11536,8 +11576,28 @@ func (response ProcessStdoutStream200TexteventStreamResponse) VisitProcessStdout
 	if closer, ok := response.Body.(io.ReadCloser); ok {
 		defer closer.Close()
 	}
-	_, err := io.Copy(w, response.Body)
-	return err
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
 }
 
 type ProcessStdoutStream400JSONResponse struct{ BadRequestErrorJSONResponse }
