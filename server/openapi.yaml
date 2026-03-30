@@ -1169,6 +1169,35 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /live-view/scroll:
+    post:
+      summary: Pixel-precise scroll for the live view client
+      description: |
+        Accepts pixel-precise scroll deltas and forwards them directly to
+        Chromium via CDP Input.dispatchMouseEvent (type mouseWheel), bypassing
+        X11 entirely. Unlike /computer/scroll which accepts discrete tick
+        counts, this endpoint accepts floating-point CSS pixel deltas for
+        smooth trackpad scrolling in the live view.
+      operationId: liveViewScroll
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LiveViewScrollRequest"
+      responses:
+        "200":
+          description: Scroll dispatched
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          description: DevTools upstream not available
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
@@ -1438,6 +1467,29 @@ components:
           description: Modifier keys to hold during the scroll
           items:
             type: string
+      additionalProperties: false
+    LiveViewScrollRequest:
+      type: object
+      required:
+        - x
+        - y
+      properties:
+        x:
+          type: integer
+          description: X coordinate (CSS pixels) at which to dispatch the scroll
+        y:
+          type: integer
+          description: Y coordinate (CSS pixels) at which to dispatch the scroll
+        delta_x:
+          type: number
+          format: double
+          description: Horizontal scroll delta in CSS pixels. Positive scrolls right, negative scrolls left.
+          default: 0
+        delta_y:
+          type: number
+          format: double
+          description: Vertical scroll delta in CSS pixels. Positive scrolls down, negative scrolls up.
+          default: 0
       additionalProperties: false
     DragMouseRequest:
       type: object

@@ -132,9 +132,6 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
 	})
-	// Pixel-precise scroll for the live view client (bypasses X11 via CDP)
-	r.Post("/live-view/scroll", apiService.HandlePixelScroll)
-
 	// PTY attach endpoint (WebSocket) - not part of OpenAPI spec
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {

@@ -3,14 +3,12 @@ package api
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"math"
 	"math/rand"
-	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -828,48 +826,42 @@ func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) erro
 	return nil
 }
 
-// HandlePixelScroll handles POST /live-view/scroll — a lightweight endpoint
-// for the live view client that accepts pixel-precise deltas and forwards
-// them directly to Chromium via CDP, bypassing X11 entirely.
-func (s *ApiService) HandlePixelScroll(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		X      int     `json:"x"`
-		Y      int     `json:"y"`
-		DeltaX float64 `json:"delta_x"`
-		DeltaY float64 `json:"delta_y"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
+func (s *ApiService) LiveViewScroll(ctx context.Context, request oapi.LiveViewScrollRequestObject) (oapi.LiveViewScrollResponseObject, error) {
+	if request.Body == nil {
+		return oapi.LiveViewScroll400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "missing request body"}}, nil
 	}
 
-	if body.DeltaX == 0 && body.DeltaY == 0 {
-		w.WriteHeader(http.StatusOK)
-		return
+	var deltaX, deltaY float64
+	if request.Body.DeltaX != nil {
+		deltaX = *request.Body.DeltaX
+	}
+	if request.Body.DeltaY != nil {
+		deltaY = *request.Body.DeltaY
+	}
+
+	if deltaX == 0 && deltaY == 0 {
+		return oapi.LiveViewScroll200Response{}, nil
 	}
 
 	upstreamURL := s.upstreamMgr.Current()
 	if upstreamURL == "" {
-		http.Error(w, "devtools not available", http.StatusServiceUnavailable)
-		return
+		return oapi.LiveViewScroll503JSONResponse{Message: "devtools upstream not available"}, nil
 	}
 
-	cdpCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	cdpCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
 	if err != nil {
-		http.Error(w, "cdp dial failed", http.StatusInternalServerError)
-		return
+		return oapi.LiveViewScroll500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: fmt.Sprintf("cdp dial failed: %s", err)}}, nil
 	}
 	defer client.Close()
 
-	if err := client.DispatchMouseWheelEvent(cdpCtx, body.X, body.Y, body.DeltaX, body.DeltaY); err != nil {
-		http.Error(w, "cdp scroll failed", http.StatusInternalServerError)
-		return
+	if err := client.DispatchMouseWheelEvent(cdpCtx, request.Body.X, request.Body.Y, deltaX, deltaY); err != nil {
+		return oapi.LiveViewScroll500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: fmt.Sprintf("cdp scroll failed: %s", err)}}, nil
 	}
 
-	w.WriteHeader(http.StatusOK)
+	return oapi.LiveViewScroll200Response{}, nil
 }
 
 func (s *ApiService) Scroll(ctx context.Context, request oapi.ScrollRequestObject) (oapi.ScrollResponseObject, error) {
