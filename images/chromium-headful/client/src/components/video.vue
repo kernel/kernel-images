@@ -552,6 +552,10 @@
     }
 
     beforeDestroy() {
+      if (this._scrollFlushTimeout != null) {
+        clearTimeout(this._scrollFlushTimeout)
+        this._scrollFlushTimeout = null
+      }
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -711,6 +715,9 @@
     _scrollAccX = 0
     _scrollAccY = 0
     _scrollLastSendTime = 0
+    _scrollFlushTimeout: ReturnType<typeof setTimeout> | null = null
+    _scrollLastClientX = 0
+    _scrollLastClientY = 0
     _scrollApiUrl: string | null = null
 
     _getScrollApiUrl(): string {
@@ -719,6 +726,37 @@
       // container) in both Docker and unikernel deployments.
       this._scrollApiUrl = `${location.protocol}//${location.hostname}:444/live-view/scroll`
       return this._scrollApiUrl
+    }
+
+    _clearScrollFlushTimeout() {
+      if (this._scrollFlushTimeout != null) {
+        clearTimeout(this._scrollFlushTimeout)
+        this._scrollFlushTimeout = null
+      }
+    }
+
+    _sendScrollAccumulated(clientX: number, clientY: number) {
+      if (this._scrollAccX === 0 && this._scrollAccY === 0) {
+        return
+      }
+      const { w, h } = this.$accessor.video.resolution
+      const rect = this._overlay.getBoundingClientRect()
+      const sx = Math.round((w / rect.width) * (clientX - rect.left))
+      const sy = Math.round((h / rect.height) * (clientY - rect.top))
+
+      const dx = this._scrollAccX
+      const dy = this._scrollAccY
+      this._scrollAccX = 0
+      this._scrollAccY = 0
+      this._scrollLastSendTime = Date.now()
+
+      const url = this._getScrollApiUrl()
+      fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x: sx, y: sy, delta_x: -dx, delta_y: -dy }),
+        keepalive: true,
+      }).catch(() => {})
     }
 
     onWheel(e: WheelEvent) {
@@ -746,29 +784,22 @@
         return
       }
 
+      this._scrollLastClientX = e.clientX
+      this._scrollLastClientY = e.clientY
+
       const now = Date.now()
       if (now - this._scrollLastSendTime < 50) {
+        if (this._scrollFlushTimeout == null) {
+          this._scrollFlushTimeout = setTimeout(() => {
+            this._scrollFlushTimeout = null
+            this._sendScrollAccumulated(this._scrollLastClientX, this._scrollLastClientY)
+          }, 50)
+        }
         return
       }
-      this._scrollLastSendTime = now
 
-      const { w, h } = this.$accessor.video.resolution
-      const rect = this._overlay.getBoundingClientRect()
-      const sx = Math.round((w / rect.width) * (e.clientX - rect.left))
-      const sy = Math.round((h / rect.height) * (e.clientY - rect.top))
-
-      const dx = this._scrollAccX
-      const dy = this._scrollAccY
-      this._scrollAccX = 0
-      this._scrollAccY = 0
-
-      const url = this._getScrollApiUrl()
-      fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ x: sx, y: sy, delta_x: -dx, delta_y: -dy }),
-        keepalive: true,
-      }).catch(() => {})
+      this._clearScrollFlushTimeout()
+      this._sendScrollAccumulated(e.clientX, e.clientY)
     }
 
     onTouchHandler(e: TouchEvent) {

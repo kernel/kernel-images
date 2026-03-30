@@ -163,7 +163,8 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 // DispatchMouseWheelEvent sends a mouseWheel event to the first page target
 // via CDP Input.dispatchMouseEvent. deltaX/deltaY are in CSS pixels, allowing
 // sub-notch precision that X11 button events cannot express.
-func (c *Client) DispatchMouseWheelEvent(ctx context.Context, x, y int, deltaX, deltaY float64) error {
+// modifiers is a CDP bitmask: Alt=1, Ctrl=2, Meta=4, Shift=8.
+func (c *Client) DispatchMouseWheelEvent(ctx context.Context, x, y int, deltaX, deltaY float64, modifiers int) error {
 	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
 		return fmt.Errorf("Target.getTargets: %w", err)
@@ -206,11 +207,12 @@ func (c *Client) DispatchMouseWheelEvent(ctx context.Context, x, y int, deltaX, 
 	}
 
 	_, err = c.send(ctx, "Input.dispatchMouseEvent", map[string]any{
-		"type":   "mouseWheel",
-		"x":      x,
-		"y":      y,
-		"deltaX": deltaX,
-		"deltaY": deltaY,
+		"type":      "mouseWheel",
+		"x":         x,
+		"y":         y,
+		"deltaX":    deltaX,
+		"deltaY":    deltaY,
+		"modifiers": modifiers,
 	}, attach.SessionID)
 	if err != nil {
 		return fmt.Errorf("Input.dispatchMouseEvent mouseWheel: %w", err)

@@ -751,6 +751,46 @@ func (s *ApiService) PressKey(ctx context.Context, request oapi.PressKeyRequestO
 
 const pixelsPerScrollTick = 120
 
+// CDP Input.dispatchMouseEvent modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
+const (
+	cdpModAlt   = 1
+	cdpModCtrl  = 2
+	cdpModMeta  = 4
+	cdpModShift = 8
+)
+
+// holdKeysToCDPModifiers maps xdotool-style hold key names to CDP mouse event modifiers.
+func holdKeysToCDPModifiers(keys []string) int {
+	var m int
+	for _, raw := range keys {
+		k := strings.ToLower(strings.TrimSpace(raw))
+		if k == "" {
+			continue
+		}
+		switch k {
+		case "ctrl", "control", "control_l", "control_r":
+			m |= cdpModCtrl
+		case "shift", "shift_l", "shift_r":
+			m |= cdpModShift
+		case "alt", "alt_l", "alt_r":
+			m |= cdpModAlt
+		case "meta", "super", "super_l", "super_r", "command", "command_l", "command_r":
+			m |= cdpModMeta
+		default:
+			if strings.HasPrefix(k, "control") {
+				m |= cdpModCtrl
+			} else if strings.HasPrefix(k, "shift") {
+				m |= cdpModShift
+			} else if strings.HasPrefix(k, "alt") {
+				m |= cdpModAlt
+			} else if strings.HasPrefix(k, "super") || strings.HasPrefix(k, "meta") {
+				m |= cdpModMeta
+			}
+		}
+	}
+	return m
+}
+
 func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) error {
 	log := logger.FromContext(ctx)
 
@@ -787,7 +827,7 @@ func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) erro
 			for _, key := range *body.HoldKeys {
 				keyupArgs = append(keyupArgs, "keyup", key)
 			}
-			if _, err := defaultXdoTool.Run(ctx, keyupArgs...); err != nil {
+			if _, err := defaultXdoTool.Run(context.Background(), keyupArgs...); err != nil {
 				log.Error("xdotool keyup failed", "err", err)
 			}
 		}()
@@ -804,6 +844,11 @@ func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) erro
 		deltaYPx = float64(*body.DeltaY) * pixelsPerScrollTick
 	}
 
+	modifiers := 0
+	if body.HoldKeys != nil {
+		modifiers = holdKeysToCDPModifiers(*body.HoldKeys)
+	}
+
 	upstreamURL := s.upstreamMgr.Current()
 	if upstreamURL == "" {
 		return &executionError{msg: "devtools upstream not available"}
@@ -818,8 +863,8 @@ func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) erro
 	}
 	defer client.Close()
 
-	log.Info("dispatching CDP mouseWheel", "x", body.X, "y", body.Y, "deltaX", deltaXPx, "deltaY", deltaYPx)
-	if err := client.DispatchMouseWheelEvent(cdpCtx, body.X, body.Y, deltaXPx, deltaYPx); err != nil {
+	log.Info("dispatching CDP mouseWheel", "x", body.X, "y", body.Y, "deltaX", deltaXPx, "deltaY", deltaYPx, "modifiers", modifiers)
+	if err := client.DispatchMouseWheelEvent(cdpCtx, body.X, body.Y, deltaXPx, deltaYPx, modifiers); err != nil {
 		return &executionError{msg: fmt.Sprintf("CDP mouseWheel failed: %s", err)}
 	}
 
@@ -857,7 +902,7 @@ func (s *ApiService) LiveViewScroll(ctx context.Context, request oapi.LiveViewSc
 	}
 	defer client.Close()
 
-	if err := client.DispatchMouseWheelEvent(cdpCtx, request.Body.X, request.Body.Y, deltaX, deltaY); err != nil {
+	if err := client.DispatchMouseWheelEvent(cdpCtx, request.Body.X, request.Body.Y, deltaX, deltaY, 0); err != nil {
 		return oapi.LiveViewScroll500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: fmt.Sprintf("cdp scroll failed: %s", err)}}, nil
 	}
 
