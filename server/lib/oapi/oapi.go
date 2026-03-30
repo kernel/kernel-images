@@ -11074,22 +11074,24 @@ func (response StreamFsEvents200TexteventStreamResponse) VisitStreamFsEventsResp
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		// If w doesn't support flushing, might as well use io.Copy
 		_, err := io.Copy(w, response.Body)
 		return err
 	}
 
-	buf := make([]byte, 4096)
+	// Use a buffer for efficient copying and flushing
+	buf := make([]byte, 4096) // text/event-stream are usually very small messages
 	for {
 		n, err := response.Body.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return werr
 			}
-			flusher.Flush()
+			flusher.Flush() // Flush after each write
 		}
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				return nil // End of file, no error
 			}
 			return err
 		}
@@ -11241,22 +11243,24 @@ func (response LogsStream200TexteventStreamResponse) VisitLogsStreamResponse(w h
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		// If w doesn't support flushing, might as well use io.Copy
 		_, err := io.Copy(w, response.Body)
 		return err
 	}
 
-	buf := make([]byte, 4096)
+	// Use a buffer for efficient copying and flushing
+	buf := make([]byte, 4096) // text/event-stream are usually very small messages
 	for {
 		n, err := response.Body.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return werr
 			}
-			flusher.Flush()
+			flusher.Flush() // Flush after each write
 		}
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				return nil // End of file, no error
 			}
 			return err
 		}
@@ -11578,22 +11582,24 @@ func (response ProcessStdoutStream200TexteventStreamResponse) VisitProcessStdout
 	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
+		// If w doesn't support flushing, might as well use io.Copy
 		_, err := io.Copy(w, response.Body)
 		return err
 	}
 
-	buf := make([]byte, 4096)
+	// Use a buffer for efficient copying and flushing
+	buf := make([]byte, 4096) // text/event-stream are usually very small messages
 	for {
 		n, err := response.Body.Read(buf)
 		if n > 0 {
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return werr
 			}
-			flusher.Flush()
+			flusher.Flush() // Flush after each write
 		}
 		if err != nil {
 			if err == io.EOF {
-				return nil
+				return nil // End of file, no error
 			}
 			return err
 		}
