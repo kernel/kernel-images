@@ -749,48 +749,6 @@ func (s *ApiService) PressKey(ctx context.Context, request oapi.PressKeyRequestO
 	return oapi.PressKey200Response{}, nil
 }
 
-const pixelsPerScrollTick = 120
-
-// CDP Input.dispatchMouseEvent modifier bitmask (Alt=1, Ctrl=2, Meta=4, Shift=8).
-const (
-	cdpModAlt   = 1
-	cdpModCtrl  = 2
-	cdpModMeta  = 4
-	cdpModShift = 8
-)
-
-// holdKeysToCDPModifiers maps xdotool-style hold key names to CDP mouse event modifiers.
-func holdKeysToCDPModifiers(keys []string) int {
-	var m int
-	for _, raw := range keys {
-		k := strings.ToLower(strings.TrimSpace(raw))
-		if k == "" {
-			continue
-		}
-		switch k {
-		case "ctrl", "control", "control_l", "control_r":
-			m |= cdpModCtrl
-		case "shift", "shift_l", "shift_r":
-			m |= cdpModShift
-		case "alt", "alt_l", "alt_r":
-			m |= cdpModAlt
-		case "meta", "super", "super_l", "super_r", "command", "command_l", "command_r":
-			m |= cdpModMeta
-		default:
-			if strings.HasPrefix(k, "control") {
-				m |= cdpModCtrl
-			} else if strings.HasPrefix(k, "shift") {
-				m |= cdpModShift
-			} else if strings.HasPrefix(k, "alt") {
-				m |= cdpModAlt
-			} else if strings.HasPrefix(k, "super") || strings.HasPrefix(k, "meta") {
-				m |= cdpModMeta
-			}
-		}
-	}
-	return m
-}
-
 func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) error {
 	log := logger.FromContext(ctx)
 
@@ -812,62 +770,47 @@ func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) erro
 		return &validationError{msg: fmt.Sprintf("coordinates exceed screen bounds (max: %dx%d)", screenWidth-1, screenHeight-1)}
 	}
 
-	// Hold keys via xdotool (CDP doesn't have a direct modifier-hold mechanism
-	// that persists across separate commands).
-	if body.HoldKeys != nil && len(*body.HoldKeys) > 0 {
-		var keydownArgs []string
-		for _, key := range *body.HoldKeys {
-			keydownArgs = append(keydownArgs, "keydown", key)
-		}
-		if _, err := defaultXdoTool.Run(ctx, keydownArgs...); err != nil {
-			log.Error("xdotool keydown failed", "err", err)
-		}
-		defer func() {
-			var keyupArgs []string
-			for _, key := range *body.HoldKeys {
-				keyupArgs = append(keyupArgs, "keyup", key)
-			}
-			if _, err := defaultXdoTool.Run(context.Background(), keyupArgs...); err != nil {
-				log.Error("xdotool keyup failed", "err", err)
-			}
-		}()
-	}
-
-	// Convert tick counts to CSS pixel deltas for CDP. The API contract
-	// specifies delta_x/delta_y as discrete scroll ticks (matching the old
-	// xdotool button-click model). Each tick ≈ 120 CSS pixels.
-	var deltaXPx, deltaYPx float64
-	if body.DeltaX != nil {
-		deltaXPx = float64(*body.DeltaX) * pixelsPerScrollTick
-	}
-	if body.DeltaY != nil {
-		deltaYPx = float64(*body.DeltaY) * pixelsPerScrollTick
-	}
-
-	modifiers := 0
+	args := []string{}
 	if body.HoldKeys != nil {
-		modifiers = holdKeysToCDPModifiers(*body.HoldKeys)
+		for _, key := range *body.HoldKeys {
+			args = append(args, "keydown", key)
+		}
+	}
+	args = append(args, "mousemove", strconv.Itoa(body.X), strconv.Itoa(body.Y))
+
+	// Apply vertical ticks first (sequential as specified)
+	if body.DeltaY != nil && *body.DeltaY != 0 {
+		count := *body.DeltaY
+		btn := "5" // down
+		if count < 0 {
+			btn = "4" // up
+			count = -count
+		}
+		args = append(args, "click", "--repeat", strconv.Itoa(count), "--delay", "0", btn)
+	}
+	// Then horizontal ticks
+	if body.DeltaX != nil && *body.DeltaX != 0 {
+		count := *body.DeltaX
+		btn := "7" // right
+		if count < 0 {
+			btn = "6" // left
+			count = -count
+		}
+		args = append(args, "click", "--repeat", strconv.Itoa(count), "--delay", "0", btn)
 	}
 
-	upstreamURL := s.upstreamMgr.Current()
-	if upstreamURL == "" {
-		return &executionError{msg: "devtools upstream not available"}
+	if body.HoldKeys != nil {
+		for _, key := range *body.HoldKeys {
+			args = append(args, "keyup", key)
+		}
 	}
 
-	cdpCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
+	log.Info("executing xdotool", "args", args)
+	output, err := defaultXdoTool.Run(ctx, args...)
 	if err != nil {
-		return &executionError{msg: fmt.Sprintf("failed to connect to devtools for scroll: %s", err)}
+		log.Error("xdotool scroll failed", "err", err, "output", string(output))
+		return &executionError{msg: fmt.Sprintf("failed to perform scroll: %s", string(output))}
 	}
-	defer client.Close()
-
-	log.Info("dispatching CDP mouseWheel", "x", body.X, "y", body.Y, "deltaX", deltaXPx, "deltaY", deltaYPx, "modifiers", modifiers)
-	if err := client.DispatchMouseWheelEvent(cdpCtx, body.X, body.Y, deltaXPx, deltaYPx, modifiers); err != nil {
-		return &executionError{msg: fmt.Sprintf("CDP mouseWheel failed: %s", err)}
-	}
-
 	return nil
 }
 
@@ -902,7 +845,7 @@ func (s *ApiService) LiveViewScroll(ctx context.Context, request oapi.LiveViewSc
 	}
 	defer client.Close()
 
-	if err := client.DispatchMouseWheelEvent(cdpCtx, request.Body.X, request.Body.Y, deltaX, deltaY, 0); err != nil {
+	if err := client.DispatchMouseWheelEvent(cdpCtx, request.Body.X, request.Body.Y, deltaX, deltaY); err != nil {
 		return oapi.LiveViewScroll500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: fmt.Sprintf("cdp scroll failed: %s", err)}}, nil
 	}
 
