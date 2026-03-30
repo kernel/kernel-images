@@ -1483,12 +1483,12 @@ components:
         delta_x:
           type: number
           format: double
-          description: Horizontal scroll delta in CSS pixels. Positive scrolls right, negative scrolls left.
+          description: Horizontal scroll delta in CSS pixels, forwarded directly to CDP. Positive scrolls left, negative scrolls right.
           default: 0
         delta_y:
           type: number
           format: double
-          description: Vertical scroll delta in CSS pixels. Positive scrolls down, negative scrolls up.
+          description: Vertical scroll delta in CSS pixels, forwarded directly to CDP. Positive scrolls up, negative scrolls down.
           default: 0
       additionalProperties: false
     DragMouseRequest:
