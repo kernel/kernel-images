@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/onkernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/onkernel/kernel-images/server/lib/events"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
@@ -68,11 +70,24 @@ type ApiService struct {
 	// xvfbResizeMu serializes background Xvfb restarts to prevent races
 	// when multiple CDP fast-path resizes fire in quick succession.
 	xvfbResizeMu sync.Mutex
+
+	// CDP event pipeline and monitor.
+	pipeline  *events.Pipeline
+	monitor   *cdpmonitor.Monitor
+	monitorMu sync.Mutex
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
 
-func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFactory, upstreamMgr *devtoolsproxy.UpstreamManager, stz scaletozero.Controller, nekoAuthClient *nekoclient.AuthClient) (*ApiService, error) {
+func New(
+	recordManager recorder.RecordManager,
+	factory recorder.FFmpegRecorderFactory,
+	upstreamMgr *devtoolsproxy.UpstreamManager,
+	stz scaletozero.Controller,
+	nekoAuthClient *nekoclient.AuthClient,
+	pipeline *events.Pipeline,
+	displayNum int,
+) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
 		return nil, fmt.Errorf("recordManager cannot be nil")
@@ -82,7 +97,11 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		return nil, fmt.Errorf("upstreamMgr cannot be nil")
 	case nekoAuthClient == nil:
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
+	case pipeline == nil:
+		return nil, fmt.Errorf("pipeline cannot be nil")
 	}
+
+	mon := cdpmonitor.New(upstreamMgr, pipeline.Publish, displayNum)
 
 	return &ApiService{
 		recordManager:     recordManager,
@@ -94,6 +113,8 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
+		pipeline:          pipeline,
+		monitor:           mon,
 	}, nil
 }
 
@@ -313,5 +334,7 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	s.monitor.Stop()
+	_ = s.pipeline.Close()
 	return s.recordManager.StopAll(ctx)
 }

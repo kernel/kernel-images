@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 // maxS2RecordBytes is the maximum record size for the S2 event pipeline (1 MB).
@@ -55,6 +56,27 @@ type BrowserEvent struct {
 	URL              string          `json:"url,omitempty"`
 	Data             json.RawMessage `json:"data,omitempty"`
 	Truncated        bool            `json:"truncated,omitempty"`
+}
+
+// CategoryFor derives an EventCategory from a BrowserEvent type string.
+// It splits on the first underscore and maps the prefix to a category.
+// Unknown prefixes fall back to CategorySystem.
+func CategoryFor(eventType string) EventCategory {
+	prefix, _, _ := strings.Cut(eventType, "_")
+	switch prefix {
+	case "console":
+		return CategoryConsole
+	case "network":
+		return CategoryNetwork
+	case "page", "navigation", "dom", "target":
+		return CategoryPage
+	case "interaction", "layout", "scroll":
+		return CategoryInteraction
+	case "screenshot", "monitor":
+		return CategorySystem
+	default:
+		return CategorySystem
+	}
 }
 
 // truncateIfNeeded marshals ev and returns the (possibly truncated) event together
