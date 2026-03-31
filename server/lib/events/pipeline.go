@@ -58,8 +58,8 @@ func (p *Pipeline) Publish(ev Event) {
 }
 
 // NewReader returns a Reader positioned at the start of the ring buffer.
-func (p *Pipeline) NewReader() *Reader {
-	return p.ring.NewReader()
+func (p *Pipeline) NewReader(afterSeq uint64) *Reader {
+	return p.ring.NewReader(afterSeq)
 }
 
 // Close flushes and releases all open file descriptors.

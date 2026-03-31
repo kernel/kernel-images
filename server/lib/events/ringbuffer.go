@@ -10,42 +10,47 @@ import (
 // RingBuffer is a fixed-capacity circular buffer with closed-channel broadcast fan-out.
 // Writers never block regardless of reader count or speed.
 type RingBuffer struct {
-	mu      sync.RWMutex
-	buf     []Envelope
-	head    int    // next write position (mod cap)
-	written uint64 // total ever published (monotonic)
-	notify  chan struct{}
+	mu        sync.RWMutex
+	buf       []Envelope
+	cap       uint64
+	latestSeq uint64         // highest envelope.Seq published
+	readerWake chan struct{} // closed-and-replaced on each Publish to wake blocked readers
 }
 
 func NewRingBuffer(capacity int) *RingBuffer {
 	return &RingBuffer{
-		buf:    make([]Envelope, capacity),
-		notify: make(chan struct{}),
+		buf:        make([]Envelope, capacity),
+		cap:        uint64(capacity),
+		readerWake: make(chan struct{}),
 	}
 }
 
 // Publish adds an envelope to the ring, evicting the oldest on overflow.
 func (rb *RingBuffer) Publish(env Envelope) {
 	rb.mu.Lock()
-	rb.buf[rb.head] = env
-	rb.head = (rb.head + 1) % len(rb.buf)
-	rb.written++
-	old := rb.notify
-	rb.notify = make(chan struct{})
+	rb.buf[env.Seq%rb.cap] = env
+	rb.latestSeq = env.Seq
+	old := rb.readerWake
+	rb.readerWake = make(chan struct{})
 	rb.mu.Unlock()
 	close(old)
 }
 
 func (rb *RingBuffer) oldestSeq() uint64 {
-	if rb.written <= uint64(len(rb.buf)) {
-		return 0
+	if rb.latestSeq <= rb.cap {
+		return 1
 	}
-	return rb.written - uint64(len(rb.buf))
+	return rb.latestSeq - rb.cap + 1
 }
 
-// NewReader returns a Reader positioned at publish index 0.
-func (rb *RingBuffer) NewReader() *Reader {
-	return &Reader{rb: rb, nextSeq: 0}
+// NewReader returns a Reader. afterSeq == 0 starts from the oldest available
+// envelope; afterSeq > 0 resumes after that seq.
+func (rb *RingBuffer) NewReader(afterSeq uint64) *Reader {
+	nextSeq := afterSeq + 1
+	if afterSeq == 0 {
+		nextSeq = 1
+	}
+	return &Reader{rb: rb, nextSeq: nextSeq}
 }
 
 // Reader tracks an independent read position in a RingBuffer.
@@ -59,9 +64,19 @@ type Reader struct {
 func (r *Reader) Read(ctx context.Context) (Envelope, error) {
 	for {
 		r.rb.mu.RLock()
-		notify := r.rb.notify
+		wake := r.rb.readerWake
+		latest := r.rb.latestSeq
 		oldest := r.rb.oldestSeq()
-		written := r.rb.written
+
+		if latest == 0 {
+			r.rb.mu.RUnlock()
+			select {
+			case <-ctx.Done():
+				return Envelope{}, ctx.Err()
+			case <-wake:
+				continue
+			}
+		}
 
 		if r.nextSeq < oldest {
 			dropped := oldest - r.nextSeq
@@ -73,9 +88,8 @@ func (r *Reader) Read(ctx context.Context) (Envelope, error) {
 			}, nil
 		}
 
-		if r.nextSeq < written {
-			idx := int(r.nextSeq % uint64(len(r.rb.buf)))
-			env := r.rb.buf[idx]
+		if r.nextSeq <= latest {
+			env := r.rb.buf[r.nextSeq%r.rb.cap]
 			r.nextSeq++
 			r.rb.mu.RUnlock()
 			return env, nil
@@ -86,7 +100,7 @@ func (r *Reader) Read(ctx context.Context) (Envelope, error) {
 		select {
 		case <-ctx.Done():
 			return Envelope{}, ctx.Err()
-		case <-notify:
+		case <-wake:
 		}
 	}
 }

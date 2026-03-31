@@ -126,7 +126,7 @@ func cdpEvent(typ string, cat EventCategory) Event {
 // TestRingBuffer: publish 3 envelopes; reader reads all 3 in order
 func TestRingBuffer(t *testing.T) {
 	rb := NewRingBuffer(10)
-	reader := rb.NewReader()
+	reader := rb.NewReader(0)
 
 	envelopes := []Envelope{
 		mkEnv(1, cdpEvent("console.log", CategoryConsole)),
@@ -167,7 +167,7 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 		t.Fatal("Publish blocked with no readers")
 	}
 
-	reader := rb.NewReader()
+	reader := rb.NewReader(0)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -180,7 +180,7 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 
 func TestRingBufferOverflowExistingReader(t *testing.T) {
 	rb := NewRingBuffer(2)
-	reader := rb.NewReader()
+	reader := rb.NewReader(0)
 
 	rb.Publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
 	rb.Publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
@@ -214,7 +214,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	reader := rb.NewReader()
+	reader := rb.NewReader(0)
 
 	var wg sync.WaitGroup
 
@@ -248,7 +248,7 @@ func TestConcurrentReaders(t *testing.T) {
 
 	readers := make([]*Reader, numReaders)
 	for i := range readers {
-		readers[i] = rb.NewReader()
+		readers[i] = rb.NewReader(0)
 	}
 
 	for i := 0; i < numEvents; i++ {
@@ -421,7 +421,7 @@ func TestPipeline(t *testing.T) {
 		fw := NewFileWriter(t.TempDir())
 		p := NewPipeline(rb, fw)
 		t.Cleanup(func() { p.Close() })
-		reader := p.NewReader()
+		reader := p.NewReader(0)
 
 		var wg sync.WaitGroup
 		for i := 0; i < goroutines; i++ {
@@ -447,7 +447,7 @@ func TestPipeline(t *testing.T) {
 
 	t.Run("publish_increments_seq", func(t *testing.T) {
 		p, _ := newPipeline(t)
-		reader := p.NewReader()
+		reader := p.NewReader(0)
 
 		for i := 0; i < 3; i++ {
 			p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
@@ -465,7 +465,7 @@ func TestPipeline(t *testing.T) {
 
 	t.Run("publish_sets_ts", func(t *testing.T) {
 		p, _ := newPipeline(t)
-		reader := p.NewReader()
+		reader := p.NewReader(0)
 
 		before := time.Now().UnixMilli()
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}})
@@ -497,7 +497,7 @@ func TestPipeline(t *testing.T) {
 	t.Run("publish_writes_ring", func(t *testing.T) {
 		p, _ := newPipeline(t)
 
-		reader := p.NewReader()
+		reader := p.NewReader(0)
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -513,7 +513,7 @@ func TestPipeline(t *testing.T) {
 		p, _ := newPipeline(t)
 		p.Start("test-uuid")
 
-		reader := p.NewReader()
+		reader := p.NewReader(0)
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -526,7 +526,7 @@ func TestPipeline(t *testing.T) {
 
 	t.Run("truncation_applied", func(t *testing.T) {
 		p, dir := newPipeline(t)
-		reader := p.NewReader()
+		reader := p.NewReader(0)
 
 		largeData := strings.Repeat("x", 1_100_000)
 		rawData, err := json.Marshal(map[string]string{"payload": largeData})
@@ -561,7 +561,7 @@ func TestPipeline(t *testing.T) {
 
 	t.Run("defaults_detail_level", func(t *testing.T) {
 		p, _ := newPipeline(t)
-		reader := p.NewReader()
+		reader := p.NewReader(0)
 
 		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
 
