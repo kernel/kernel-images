@@ -210,6 +210,47 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 	assert.Equal(t, uint64(3), third.Seq)
 }
 
+func TestNewReaderResume(t *testing.T) {
+	rb := NewRingBuffer(10)
+	for i := uint64(1); i <= 5; i++ {
+		rb.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	t.Run("resume_mid_stream", func(t *testing.T) {
+		reader := rb.NewReader(3)
+		env := readEnvelope(t, reader, ctx)
+		assert.Equal(t, uint64(4), env.Seq)
+	})
+
+	t.Run("resume_at_latest", func(t *testing.T) {
+		reader := rb.NewReader(5)
+		// Nothing to read — should block until ctx cancels
+		shortCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		defer cancel()
+		_, err := reader.Read(shortCtx)
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("resume_before_oldest_triggers_drop", func(t *testing.T) {
+		small := NewRingBuffer(3)
+		for i := uint64(1); i <= 5; i++ {
+			small.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+		}
+		// oldest in ring is seq 3, requesting resume after seq 1
+		reader := small.NewReader(1)
+		res, err := reader.Read(ctx)
+		require.NoError(t, err)
+		assert.Nil(t, res.Envelope)
+		assert.Equal(t, uint64(1), res.Dropped)
+
+		env := readEnvelope(t, reader, ctx)
+		assert.Equal(t, uint64(3), env.Seq)
+	})
+}
+
 func TestConcurrentPublishRead(t *testing.T) {
 	const numEvents = 20
 	rb := NewRingBuffer(32)
