@@ -75,7 +75,7 @@ func (r *Reader) Read(ctx context.Context) (Event, error) {
 			r.nextSeq = oldest
 			r.rb.mu.RUnlock()
 			data := json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, dropped))
-			return Event{Type: "events.dropped", Category: CategorySystem, Source: SourceKernelAPI, Data: data}, nil
+			return Event{Type: "events.dropped", Category: CategorySystem, Source: Source{Kind: KindKernelAPI}, Data: data}, nil
 		}
 
 		if r.nextSeq < written {

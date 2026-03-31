@@ -20,14 +20,22 @@ const (
 	CategorySystem      EventCategory = "system"
 )
 
-type Source string
+type SourceKind string
 
 const (
-	SourceCDP          Source = "cdp"
-	SourceKernelAPI    Source = "kernel_api"
-	SourceExtension    Source = "extension"
-	SourceLocalProcess Source = "local_process"
+	KindCDP          SourceKind = "cdp"
+	KindKernelAPI    SourceKind = "kernel_api"
+	KindExtension    SourceKind = "extension"
+	KindLocalProcess SourceKind = "local_process"
 )
+
+// Source captures provenance: which producer emitted the event and any
+// producer-specific context (e.g. CDP target/session/frame IDs).
+type Source struct {
+	Kind     SourceKind        `json:"kind"`
+	Event    string            `json:"event,omitempty"`
+	Metadata map[string]string `json:"metadata,omitempty"`
+}
 
 type DetailLevel string
 
@@ -46,12 +54,7 @@ type Event struct {
 	Type             string          `json:"type"`
 	Category         EventCategory   `json:"category"`
 	Source           Source          `json:"source"`
-	SourceEvent      string          `json:"source_event,omitempty"`
 	DetailLevel      DetailLevel     `json:"detail_level"`
-	TargetID         string          `json:"target_id,omitempty"`
-	CDPSessionID     string          `json:"cdp_session_id,omitempty"`
-	FrameID          string          `json:"frame_id,omitempty"`
-	ParentFrameID    string          `json:"parent_frame_id,omitempty"`
 	URL              string          `json:"url,omitempty"`
 	Data             json.RawMessage `json:"data,omitempty"`
 	Truncated        bool            `json:"truncated,omitempty"`

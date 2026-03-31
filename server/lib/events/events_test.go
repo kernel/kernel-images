@@ -22,15 +22,19 @@ func TestEventSerialization(t *testing.T) {
 		Ts:               1234567890000,
 		Type:             "console.log",
 		Category:         CategoryConsole,
-		Source:       SourceCDP,
-		SourceEvent:      "Runtime.consoleAPICalled",
-		DetailLevel:      DetailStandard,
-		TargetID:         "target-1",
-		CDPSessionID:     "cdp-session-1",
-		FrameID:          "frame-1",
-		ParentFrameID:    "parent-frame-1",
-		URL:              "https://example.com",
-		Data:             json.RawMessage(`{"message":"hello"}`),
+		Source: Source{
+			Kind:  KindCDP,
+			Event: "Runtime.consoleAPICalled",
+			Metadata: map[string]string{
+				"target_id":       "target-1",
+				"cdp_session_id":  "cdp-session-1",
+				"frame_id":        "frame-1",
+				"parent_frame_id": "parent-frame-1",
+			},
+		},
+		DetailLevel: DetailStandard,
+		URL:         "https://example.com",
+		Data:        json.RawMessage(`{"message":"hello"}`),
 	}
 
 	b, err := json.Marshal(ev)
@@ -41,16 +45,19 @@ func TestEventSerialization(t *testing.T) {
 
 	assert.Equal(t, "console.log", decoded["type"])
 	assert.Equal(t, "console", decoded["category"])
-	assert.Equal(t, "cdp", decoded["source"])
-	assert.Equal(t, "Runtime.consoleAPICalled", decoded["source_event"])
 	assert.Equal(t, "standard", decoded["detail_level"])
 	assert.Equal(t, "test-session-id", decoded["capture_session_id"])
 	assert.Equal(t, float64(1), decoded["seq"])
-	assert.Equal(t, "target-1", decoded["target_id"])
-	assert.Equal(t, "cdp-session-1", decoded["cdp_session_id"])
-	assert.Equal(t, "frame-1", decoded["frame_id"])
-	assert.Equal(t, "parent-frame-1", decoded["parent_frame_id"])
 	assert.Equal(t, "https://example.com", decoded["url"])
+
+	src, ok := decoded["source"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "cdp", src["kind"])
+	assert.Equal(t, "Runtime.consoleAPICalled", src["event"])
+	meta, ok := src["metadata"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "target-1", meta["target_id"])
+	assert.Equal(t, "cdp-session-1", meta["cdp_session_id"])
 }
 
 func TestEventData(t *testing.T) {
@@ -61,8 +68,8 @@ func TestEventData(t *testing.T) {
 		Ts:               1000,
 		Type:             "page.navigation",
 		Category:         CategoryPage,
-		Source:       SourceCDP,
-		Data:             rawData,
+		Source:   Source{Kind: KindCDP},
+		Data:     rawData,
 	}
 
 	b, err := json.Marshal(ev)
@@ -80,14 +87,14 @@ func TestEventOmitEmpty(t *testing.T) {
 		Ts:               1000,
 		Type:             "console.log",
 		Category:         CategoryConsole,
-		Source:       SourceCDP,
+		Source:   Source{Kind: KindCDP},
 	}
 
 	b, err := json.Marshal(ev)
 	require.NoError(t, err)
 
 	s := string(b)
-	assert.NotContains(t, s, `"source_event"`)
+	assert.NotContains(t, s, `"event"`)
 	assert.Contains(t, s, `"detail_level"`)
 }
 
@@ -97,9 +104,9 @@ func TestRingBuffer(t *testing.T) {
 	reader := rb.NewReader()
 
 	events := []Event{
-		{Seq: 1, Type: "console.log", Category: CategoryConsole, Source: SourceCDP},
-		{Seq: 2, Type: "network.request", Category: CategoryNetwork, Source: SourceCDP},
-		{Seq: 3, Type: "page.navigation", Category: CategoryPage, Source: SourceCDP},
+		{Seq: 1, Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}},
+		{Seq: 2, Type: "network.request", Category: CategoryNetwork, Source: Source{Kind: KindCDP}},
+		{Seq: 3, Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}},
 	}
 
 	for _, ev := range events {
@@ -123,9 +130,9 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		rb.Publish(Event{Seq: 1, Type: "console.log", Category: CategoryConsole, Source: SourceCDP})
-		rb.Publish(Event{Seq: 2, Type: "console.log", Category: CategoryConsole, Source: SourceCDP})
-		rb.Publish(Event{Seq: 3, Type: "console.log", Category: CategoryConsole, Source: SourceCDP})
+		rb.Publish(Event{Seq: 1, Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}})
+		rb.Publish(Event{Seq: 2, Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}})
+		rb.Publish(Event{Seq: 3, Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}})
 		close(done)
 	}()
 
@@ -143,16 +150,16 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "events.dropped", first.Type)
 	assert.Equal(t, CategorySystem, first.Category)
-	assert.Equal(t, SourceKernelAPI, first.Source)
+	assert.Equal(t, KindKernelAPI, first.Source.Kind)
 }
 
 func TestRingBufferOverflowExistingReader(t *testing.T) {
 	rb := NewRingBuffer(2)
 	reader := rb.NewReader()
 
-	rb.Publish(Event{Seq: 1, Type: "console.log", Category: CategoryConsole, Source: SourceCDP})
-	rb.Publish(Event{Seq: 2, Type: "console.log", Category: CategoryConsole, Source: SourceCDP})
-	rb.Publish(Event{Seq: 3, Type: "console.log", Category: CategoryConsole, Source: SourceCDP})
+	rb.Publish(Event{Seq: 1, Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}})
+	rb.Publish(Event{Seq: 2, Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}})
+	rb.Publish(Event{Seq: 3, Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -206,7 +213,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 				Seq:        uint64(i),
 				Type:       "console.log",
 				Category:   CategoryConsole,
-				Source: SourceCDP,
+				Source: Source{Kind: KindCDP},
 			})
 		}
 	}()
@@ -226,7 +233,7 @@ func TestConcurrentReaders(t *testing.T) {
 	}
 
 	for i := 0; i < numEvents; i++ {
-		rb.Publish(Event{Seq: uint64(i + 1), Type: "console.log", Category: CategoryConsole, Source: SourceCDP})
+		rb.Publish(Event{Seq: uint64(i + 1), Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}})
 	}
 
 	var wg sync.WaitGroup
@@ -273,13 +280,13 @@ func TestFileWriter(t *testing.T) {
 			file     string
 			category string
 		}{
-			{Event{Type: "console.log", Category: CategoryConsole, Source: SourceCDP, Seq: 1, Ts: 1}, "console.log", "console"},
-			{Event{Type: "network.request", Category: CategoryNetwork, Source: SourceCDP, Seq: 1, Ts: 1}, "network.log", "network"},
-			{Event{Type: "liveview.click", Category: CategoryLiveview, Source: SourceKernelAPI, Seq: 1, Ts: 1}, "liveview.log", "liveview"},
-			{Event{Type: "captcha.solve", Category: CategoryCaptcha, Source: SourceExtension, Seq: 1, Ts: 1}, "captcha.log", "captcha"},
-			{Event{Type: "page.navigation", Category: CategoryPage, Source: SourceCDP, Seq: 1, Ts: 1}, "page.log", "page"},
-			{Event{Type: "input.click", Category: CategoryInteraction, Source: SourceCDP, Seq: 1, Ts: 1}, "interaction.log", "interaction"},
-			{Event{Type: "monitor.connected", Category: CategorySystem, Source: SourceKernelAPI, Seq: 1, Ts: 1}, "system.log", "system"},
+			{Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Seq: 1, Ts: 1}, "console.log", "console"},
+			{Event{Type: "network.request", Category: CategoryNetwork, Source: Source{Kind: KindCDP}, Seq: 1, Ts: 1}, "network.log", "network"},
+			{Event{Type: "liveview.click", Category: CategoryLiveview, Source: Source{Kind: KindKernelAPI}, Seq: 1, Ts: 1}, "liveview.log", "liveview"},
+			{Event{Type: "captcha.solve", Category: CategoryCaptcha, Source: Source{Kind: KindExtension}, Seq: 1, Ts: 1}, "captcha.log", "captcha"},
+			{Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Seq: 1, Ts: 1}, "page.log", "page"},
+			{Event{Type: "input.click", Category: CategoryInteraction, Source: Source{Kind: KindCDP}, Seq: 1, Ts: 1}, "interaction.log", "interaction"},
+			{Event{Type: "monitor.connected", Category: CategorySystem, Source: Source{Kind: KindKernelAPI}, Seq: 1, Ts: 1}, "system.log", "system"},
 		}
 
 		for _, e := range eventsToFile {
@@ -298,7 +305,9 @@ func TestFileWriter(t *testing.T) {
 			var decoded map[string]any
 			require.NoError(t, json.Unmarshal(line, &decoded))
 			assert.Equal(t, e.category, decoded["category"], "wrong category in %s", e.file)
-			assert.Equal(t, string(e.ev.Source), decoded["source"], "wrong source in %s", e.file)
+			srcMap, ok := decoded["source"].(map[string]any)
+			require.True(t, ok, "source should be an object in %s", e.file)
+			assert.Equal(t, string(e.ev.Source.Kind), srcMap["kind"], "wrong source kind in %s", e.file)
 		}
 	})
 
@@ -307,7 +316,7 @@ func TestFileWriter(t *testing.T) {
 		fw := NewFileWriter(dir)
 		defer fw.Close()
 
-		ev := Event{Type: "mystery", Category: "", Source: SourceCDP, Seq: 1, Ts: 1}
+		ev := Event{Type: "mystery", Category: "", Source: Source{Kind: KindCDP}, Seq: 1, Ts: 1}
 		data, _ := json.Marshal(ev)
 		err := fw.Write(ev, data)
 		require.Error(t, err)
@@ -332,7 +341,7 @@ func TestFileWriter(t *testing.T) {
 						Seq:        uint64(i*eventsPerGoroutine + j),
 						Type:       "console.log",
 						Category:   CategoryConsole,
-						Source: SourceCDP,
+						Source: Source{Kind: KindCDP},
 						Ts:         1,
 					}
 					evData, err := json.Marshal(ev)
@@ -362,7 +371,7 @@ func TestFileWriter(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, entries, "files opened before first Write")
 
-		lazyEv := Event{Type: "console.log", Category: CategoryConsole, Source: SourceCDP, Seq: 1, Ts: 1}
+		lazyEv := Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Seq: 1, Ts: 1}
 		lazyData, err := json.Marshal(lazyEv)
 		require.NoError(t, err)
 		require.NoError(t, fw.Write(lazyEv, lazyData))
@@ -403,7 +412,7 @@ func TestPipeline(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for j := 0; j < eventsEach; j++ {
-					p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: SourceCDP, Ts: 1})
+					p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
 				}
 			}()
 		}
@@ -424,7 +433,7 @@ func TestPipeline(t *testing.T) {
 		reader := p.NewReader()
 
 		for i := 0; i < 3; i++ {
-			p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: SourceCDP, Ts: 1})
+			p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -442,7 +451,7 @@ func TestPipeline(t *testing.T) {
 		reader := p.NewReader()
 
 		before := time.Now().UnixMilli()
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: SourceCDP}) // Ts == 0
+		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}}) // Ts == 0
 		after := time.Now().UnixMilli()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -457,7 +466,7 @@ func TestPipeline(t *testing.T) {
 	t.Run("publish_writes_file", func(t *testing.T) {
 		p, dir := newPipeline(t)
 
-		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: SourceCDP, Ts: 1})
+		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
 
 		data, err := os.ReadFile(filepath.Join(dir, "console.log"))
 		require.NoError(t, err)
@@ -472,7 +481,7 @@ func TestPipeline(t *testing.T) {
 		p, _ := newPipeline(t)
 
 		reader := p.NewReader()
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: SourceCDP, Ts: 1})
+		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -488,7 +497,7 @@ func TestPipeline(t *testing.T) {
 		p.Start("test-uuid")
 
 		reader := p.NewReader()
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: SourceCDP, Ts: 1})
+		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -509,7 +518,7 @@ func TestPipeline(t *testing.T) {
 		p.Publish(Event{
 			Type:       "page.navigation",
 			Category:   CategoryPage,
-			Source: SourceCDP,
+			Source: Source{Kind: KindCDP},
 			Ts:         1,
 			Data:       json.RawMessage(rawData),
 		})
@@ -537,7 +546,7 @@ func TestPipeline(t *testing.T) {
 		p, _ := newPipeline(t)
 		reader := p.NewReader()
 
-		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: SourceCDP, Ts: 1})
+		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -546,7 +555,7 @@ func TestPipeline(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, DetailStandard, ev.DetailLevel)
 
-		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: SourceCDP, Ts: 1, DetailLevel: DetailVerbose})
+		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1, DetailLevel: DetailVerbose})
 		ev2, err := reader.Read(ctx)
 		require.NoError(t, err)
 		assert.Equal(t, DetailVerbose, ev2.DetailLevel)
