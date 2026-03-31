@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-// Pipeline glues a RingBuffer and a FileWriter into a single write path
+// Pipeline is a single-use write path that wraps events in envelopes and fans
+// them out to a FileWriter (durable) and RingBuffer (in-memory). Call Start
+// once with a capture session ID, then Publish concurrently. Close flushes the
+// FileWriter; there is no restart or terminal event.
 type Pipeline struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
@@ -23,46 +26,43 @@ func NewPipeline(ring *RingBuffer, files *FileWriter) *Pipeline {
 	return p
 }
 
-// Start sets the capture session ID that will be stamped on every subsequent
-// published event
+// Start sets the capture session ID stamped on every subsequent envelope.
 func (p *Pipeline) Start(captureSessionID string) {
 	p.captureSessionID.Store(&captureSessionID)
 }
 
-// Publish stamps, truncates, files, and broadcasts a single event.
-//
-// Ordering:
-//  1. Stamp CaptureSessionID, Seq, Ts (Ts only if caller left it zero)
-//  2. Apply truncateIfNeeded — must happen before both sinks
-//  3. Write to FileWriter (durable before in-memory)
-//  4. Publish to RingBuffer (in-memory fan-out)
+// Publish wraps ev in an Envelope, truncates if needed, then writes to
+// FileWriter (durable) before RingBuffer (in-memory fan-out).
 func (p *Pipeline) Publish(ev Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	ev.CaptureSessionID = *p.captureSessionID.Load()
-	ev.Seq = p.seq.Add(1)
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMilli()
 	}
 	if ev.DetailLevel == "" {
 		ev.DetailLevel = DetailStandard
 	}
-	ev, data := truncateIfNeeded(ev)
 
-	if err := p.files.Write(ev, data); err != nil {
-		slog.Error("pipeline: file write failed", "seq", ev.Seq, "category", ev.Category, "err", err)
+	env := Envelope{
+		CaptureSessionID: *p.captureSessionID.Load(),
+		Seq:              p.seq.Add(1),
+		Event:            ev,
 	}
-	p.ring.Publish(ev)
+	env, data := truncateIfNeeded(env)
+
+	if err := p.files.Write(env, data); err != nil {
+		slog.Error("pipeline: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
+	}
+	p.ring.Publish(env)
 }
 
-// NewReader returns a Reader positioned at the start of the ring buffer
+// NewReader returns a Reader positioned at the start of the ring buffer.
 func (p *Pipeline) NewReader() *Reader {
 	return p.ring.NewReader()
 }
 
-// Close closes the underlying FileWriter, flushing and releasing all open
-// file descriptors
+// Close flushes and releases all open file descriptors.
 func (p *Pipeline) Close() error {
 	return p.files.Close()
 }
