@@ -9,11 +9,9 @@ import (
 
 // RingBuffer is a fixed-capacity circular buffer with closed-channel broadcast fan-out.
 // Writers never block regardless of reader count or speed.
-// Readers track their position by seq value (not ring index) and receive an
-// events_dropped synthetic Event when they fall behind the oldest retained event.
 type RingBuffer struct {
 	mu      sync.RWMutex
-	buf     []Event
+	buf     []Envelope
 	head    int    // next write position (mod cap)
 	written uint64 // total ever published (monotonic)
 	notify  chan struct{}
@@ -21,26 +19,23 @@ type RingBuffer struct {
 
 func NewRingBuffer(capacity int) *RingBuffer {
 	return &RingBuffer{
-		buf:    make([]Event, capacity),
+		buf:    make([]Envelope, capacity),
 		notify: make(chan struct{}),
 	}
 }
 
-// Publish adds an event to the ring buffer, evicting the oldest entry on overflow.
-// Closes the current notify channel (waking all waiting readers) and replaces it
-// with a new one, outside the lock to avoid blocking under contention
-func (rb *RingBuffer) Publish(ev Event) {
+// Publish adds an envelope to the ring, evicting the oldest on overflow.
+func (rb *RingBuffer) Publish(env Envelope) {
 	rb.mu.Lock()
-	rb.buf[rb.head] = ev
+	rb.buf[rb.head] = env
 	rb.head = (rb.head + 1) % len(rb.buf)
 	rb.written++
 	old := rb.notify
 	rb.notify = make(chan struct{})
 	rb.mu.Unlock()
-	close(old) // outside lock to avoid blocking under contention
+	close(old)
 }
 
-// oldestSeq returns the seq of the oldest event still in the ring
 func (rb *RingBuffer) oldestSeq() uint64 {
 	if rb.written <= uint64(len(rb.buf)) {
 		return 0
@@ -48,10 +43,7 @@ func (rb *RingBuffer) oldestSeq() uint64 {
 	return rb.written - uint64(len(rb.buf))
 }
 
-// NewReader returns a Reader positioned at publish index 0
-// If the ring has already published events, the reader will receive an
-// events_dropped Event on the first Read call if it has fallen behind
-// the oldest retained event
+// NewReader returns a Reader positioned at publish index 0.
 func (rb *RingBuffer) NewReader() *Reader {
 	return &Reader{rb: rb, nextSeq: 0}
 }
@@ -59,11 +51,12 @@ func (rb *RingBuffer) NewReader() *Reader {
 // Reader tracks an independent read position in a RingBuffer.
 type Reader struct {
 	rb      *RingBuffer
-	nextSeq uint64 // publish index, not Event.Seq
+	nextSeq uint64
 }
 
-// Read blocks until the next event is available or ctx is cancelled
-func (r *Reader) Read(ctx context.Context) (Event, error) {
+// Read blocks until the next envelope is available or ctx is cancelled.
+// When the reader has fallen behind, a synthetic drop event is returned.
+func (r *Reader) Read(ctx context.Context) (Envelope, error) {
 	for {
 		r.rb.mu.RLock()
 		notify := r.rb.notify
@@ -75,24 +68,25 @@ func (r *Reader) Read(ctx context.Context) (Event, error) {
 			r.nextSeq = oldest
 			r.rb.mu.RUnlock()
 			data := json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, dropped))
-			return Event{Type: "events.dropped", Category: CategorySystem, Source: Source{Kind: KindKernelAPI}, Data: data}, nil
+			return Envelope{
+				Event: Event{Type: "events.dropped", Category: CategorySystem, Source: Source{Kind: KindKernelAPI}, Data: data},
+			}, nil
 		}
 
 		if r.nextSeq < written {
 			idx := int(r.nextSeq % uint64(len(r.rb.buf)))
-			ev := r.rb.buf[idx]
+			env := r.rb.buf[idx]
 			r.nextSeq++
 			r.rb.mu.RUnlock()
-			return ev, nil
+			return env, nil
 		}
 
 		r.rb.mu.RUnlock()
 
 		select {
 		case <-ctx.Done():
-			return Event{}, ctx.Err()
+			return Envelope{}, ctx.Err()
 		case <-notify:
-			// new event available; loop to read it
 		}
 	}
 }

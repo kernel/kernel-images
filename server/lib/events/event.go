@@ -46,34 +46,40 @@ const (
 	DetailRaw     DetailLevel = "raw"
 )
 
-// Event is the canonical event structure for the capture pipeline.
+// Event is the portable event schema. It contains only producer-emitted content;
+// pipeline metadata (seq, capture session) lives on the Envelope.
 type Event struct {
-	CaptureSessionID string          `json:"capture_session_id"`
-	Seq              uint64          `json:"seq"`
-	Ts               int64           `json:"ts"`
-	Type             string          `json:"type"`
-	Category         EventCategory   `json:"category"`
-	Source           Source          `json:"source"`
-	DetailLevel      DetailLevel     `json:"detail_level"`
-	URL              string          `json:"url,omitempty"`
-	Data             json.RawMessage `json:"data,omitempty"`
-	Truncated        bool            `json:"truncated,omitempty"`
+	Ts          int64           `json:"ts"`
+	Type        string          `json:"type"`
+	Category    EventCategory   `json:"category"`
+	Source      Source          `json:"source"`
+	DetailLevel DetailLevel     `json:"detail_level"`
+	URL         string          `json:"url,omitempty"`
+	Data        json.RawMessage `json:"data,omitempty"`
+	Truncated   bool            `json:"truncated,omitempty"`
 }
 
-// truncateIfNeeded marshals ev and returns the (possibly truncated) event together
-func truncateIfNeeded(ev Event) (Event, []byte) {
-	data, err := json.Marshal(ev)
+// Envelope wraps an Event with pipeline-assigned metadata.
+type Envelope struct {
+	CaptureSessionID string `json:"capture_session_id"`
+	Seq              uint64 `json:"seq"`
+	Event            Event  `json:"event"`
+}
+
+// truncateIfNeeded marshals env and returns the (possibly truncated) envelope
+func truncateIfNeeded(env Envelope) (Envelope, []byte) {
+	data, err := json.Marshal(env)
 	if err != nil {
-		return ev, data
+		return env, data
 	}
 	if len(data) <= maxS2RecordBytes {
-		return ev, data
+		return env, data
 	}
-	ev.Data = json.RawMessage("null")
-	ev.Truncated = true
-	data, err = json.Marshal(ev)
+	env.Event.Data = json.RawMessage("null")
+	env.Event.Truncated = true
+	data, err = json.Marshal(env)
 	if err != nil {
-		return ev, nil
+		return env, nil
 	}
-	return ev, data
+	return env, data
 }

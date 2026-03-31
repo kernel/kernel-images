@@ -21,11 +21,11 @@ func NewFileWriter(dir string) *FileWriter {
 	return &FileWriter{dir: dir, files: make(map[EventCategory]*os.File)}
 }
 
-// Write appends data as a single JSONL line to the per-category log file for ev
-func (fw *FileWriter) Write(ev Event, data []byte) error {
-	cat := ev.Category
+// Write appends data as a single JSONL line to the per-category log file.
+func (fw *FileWriter) Write(env Envelope, data []byte) error {
+	cat := env.Event.Category
 	if cat == "" {
-		return fmt.Errorf("filewriter: event %q has empty category", ev.Type)
+		return fmt.Errorf("filewriter: event %q has empty category", env.Event.Type)
 	}
 
 	fw.mu.Lock()
