@@ -33,13 +33,13 @@ type DetailLevel string
 
 const (
 	DetailMinimal DetailLevel = "minimal"
-	DetailDefault DetailLevel = "default"
+	DetailStandard DetailLevel = "standard"
 	DetailVerbose DetailLevel = "verbose"
 	DetailRaw     DetailLevel = "raw"
 )
 
-// BrowserEvent is the canonical event structure for the browser capture pipeline.
-type BrowserEvent struct {
+// Event is the canonical event structure for the capture pipeline.
+type Event struct {
 	CaptureSessionID string          `json:"capture_session_id"`
 	Seq              uint64          `json:"seq"`
 	Ts               int64           `json:"ts"`
@@ -58,7 +58,7 @@ type BrowserEvent struct {
 }
 
 // truncateIfNeeded marshals ev and returns the (possibly truncated) event together
-func truncateIfNeeded(ev BrowserEvent) (BrowserEvent, []byte) {
+func truncateIfNeeded(ev Event) (Event, []byte) {
 	data, err := json.Marshal(ev)
 	if err != nil {
 		return ev, data
