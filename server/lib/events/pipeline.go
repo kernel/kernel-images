@@ -36,7 +36,7 @@ func (p *Pipeline) Start(captureSessionID string) {
 //  2. Apply truncateIfNeeded — must happen before both sinks
 //  3. Write to FileWriter (durable before in-memory)
 //  4. Publish to RingBuffer (in-memory fan-out)
-func (p *Pipeline) Publish(ev BrowserEvent) {
+func (p *Pipeline) Publish(ev Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -46,7 +46,7 @@ func (p *Pipeline) Publish(ev BrowserEvent) {
 		ev.Ts = time.Now().UnixMilli()
 	}
 	if ev.DetailLevel == "" {
-		ev.DetailLevel = DetailDefault
+		ev.DetailLevel = DetailStandard
 	}
 	ev, data := truncateIfNeeded(ev)
 
