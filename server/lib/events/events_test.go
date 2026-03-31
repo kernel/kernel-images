@@ -15,6 +15,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// readEnvelope is a test helper that calls Read and asserts a non-drop result.
+func readEnvelope(t *testing.T, r *Reader, ctx context.Context) Envelope {
+	t.Helper()
+	res, err := r.Read(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, res.Envelope, "expected envelope, got drop")
+	return *res.Envelope
+}
+
 func TestEventSerialization(t *testing.T) {
 	ev := Event{
 		Ts:       1234567890000,
@@ -142,10 +151,9 @@ func TestRingBuffer(t *testing.T) {
 	defer cancel()
 
 	for i, expected := range envelopes {
-		got, err := reader.Read(ctx)
-		require.NoError(t, err, "reading event %d", i)
-		assert.Equal(t, expected.Event.Type, got.Event.Type)
-		assert.Equal(t, expected.Event.Category, got.Event.Category)
+		got := readEnvelope(t, reader, ctx)
+		assert.Equal(t, expected.Event.Type, got.Event.Type, "event %d", i)
+		assert.Equal(t, expected.Event.Category, got.Event.Category, "event %d", i)
 	}
 }
 
@@ -171,11 +179,10 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	first, err := reader.Read(ctx)
+	res, err := reader.Read(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "events.dropped", first.Event.Type)
-	assert.Equal(t, CategorySystem, first.Event.Category)
-	assert.Equal(t, KindKernelAPI, first.Event.Source.Kind)
+	assert.Nil(t, res.Envelope, "expected drop, not envelope")
+	assert.True(t, res.Dropped > 0)
 }
 
 func TestRingBufferOverflowExistingReader(t *testing.T) {
@@ -189,21 +196,17 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	first, err := reader.Read(ctx)
+	// First read should be a drop notification
+	res, err := reader.Read(ctx)
 	require.NoError(t, err)
-	assert.Equal(t, "events.dropped", first.Event.Type)
-	assert.Equal(t, CategorySystem, first.Event.Category)
+	assert.Nil(t, res.Envelope)
+	assert.Equal(t, uint64(1), res.Dropped)
 
-	require.NotNil(t, first.Event.Data)
-	assert.True(t, json.Valid(first.Event.Data))
-	assert.JSONEq(t, `{"dropped":1}`, string(first.Event.Data))
-
-	second, err := reader.Read(ctx)
-	require.NoError(t, err)
+	// After the drop the reader continues with the surviving envelopes
+	second := readEnvelope(t, reader, ctx)
 	assert.Equal(t, uint64(2), second.Seq)
 
-	third, err := reader.Read(ctx)
-	require.NoError(t, err)
+	third := readEnvelope(t, reader, ctx)
 	assert.Equal(t, uint64(3), third.Seq)
 }
 
@@ -267,10 +270,7 @@ func TestConcurrentReaders(t *testing.T) {
 
 			var envs []Envelope
 			for j := 0; j < numEvents; j++ {
-				env, err := reader.Read(ctx)
-				if !assert.NoError(t, err) {
-					break
-				}
+				env := readEnvelope(t, reader, ctx)
 				envs = append(envs, env)
 			}
 			results[idx] = envs
@@ -439,8 +439,7 @@ func TestPipeline(t *testing.T) {
 		defer cancel()
 
 		for want := uint64(1); want <= total; want++ {
-			env, err := reader.Read(ctx)
-			require.NoError(t, err)
+			env := readEnvelope(t, reader, ctx)
 			assert.Equal(t, want, env.Seq, "events must arrive in seq order")
 		}
 	})
@@ -457,8 +456,7 @@ func TestPipeline(t *testing.T) {
 		defer cancel()
 
 		for want := uint64(1); want <= 3; want++ {
-			env, err := reader.Read(ctx)
-			require.NoError(t, err)
+			env := readEnvelope(t, reader, ctx)
 			assert.Equal(t, want, env.Seq, "expected seq %d got %d", want, env.Seq)
 		}
 	})
@@ -474,8 +472,7 @@ func TestPipeline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		env, err := reader.Read(ctx)
-		require.NoError(t, err)
+		env := readEnvelope(t, reader, ctx)
 		assert.GreaterOrEqual(t, env.Event.Ts, before)
 		assert.LessOrEqual(t, env.Event.Ts, after)
 	})
@@ -503,8 +500,7 @@ func TestPipeline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		env, err := reader.Read(ctx)
-		require.NoError(t, err)
+		env := readEnvelope(t, reader, ctx)
 		assert.Equal(t, "page.navigation", env.Event.Type)
 		assert.Equal(t, CategoryPage, env.Event.Category)
 	})
@@ -519,8 +515,7 @@ func TestPipeline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		env, err := reader.Read(ctx)
-		require.NoError(t, err)
+		env := readEnvelope(t, reader, ctx)
 		assert.Equal(t, "test-uuid", env.CaptureSessionID)
 	})
 
@@ -543,8 +538,7 @@ func TestPipeline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		env, err := reader.Read(ctx)
-		require.NoError(t, err)
+		env := readEnvelope(t, reader, ctx)
 		assert.True(t, env.Event.Truncated)
 		assert.True(t, json.Valid(env.Event.Data))
 
@@ -568,13 +562,11 @@ func TestPipeline(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		env, err := reader.Read(ctx)
-		require.NoError(t, err)
+		env := readEnvelope(t, reader, ctx)
 		assert.Equal(t, DetailStandard, env.Event.DetailLevel)
 
 		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1, DetailLevel: DetailVerbose})
-		env2, err := reader.Read(ctx)
-		require.NoError(t, err)
+		env2 := readEnvelope(t, reader, ctx)
 		assert.Equal(t, DetailVerbose, env2.Event.DetailLevel)
 	})
 }

@@ -2,19 +2,17 @@ package events
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"sync"
 )
 
 // RingBuffer is a fixed-capacity circular buffer with closed-channel broadcast fan-out.
 // Writers never block regardless of reader count or speed.
 type RingBuffer struct {
-	mu        sync.RWMutex
-	buf       []Envelope
-	cap       uint64
-	latestSeq uint64         // highest envelope.Seq published
-	readerWake chan struct{} // closed-and-replaced on each Publish to wake blocked readers
+	mu         sync.RWMutex
+	buf        []Envelope
+	cap        uint64
+	latestSeq  uint64         // highest envelope.Seq published
+	readerWake chan struct{}   // closed-and-replaced on each Publish to wake blocked readers
 }
 
 func NewRingBuffer(capacity int) *RingBuffer {
@@ -53,6 +51,14 @@ func (rb *RingBuffer) NewReader(afterSeq uint64) *Reader {
 	return &Reader{rb: rb, nextSeq: nextSeq}
 }
 
+// ReadResult is returned by Reader.Read. Exactly one of Envelope or Dropped is
+// set: Envelope is non-nil for a normal read, Dropped is non-zero when the
+// reader fell behind and events were lost.
+type ReadResult struct {
+	Envelope *Envelope
+	Dropped  uint64
+}
+
 // Reader tracks an independent read position in a RingBuffer.
 type Reader struct {
 	rb      *RingBuffer
@@ -60,8 +66,7 @@ type Reader struct {
 }
 
 // Read blocks until the next envelope is available or ctx is cancelled.
-// When the reader has fallen behind, a synthetic drop event is returned.
-func (r *Reader) Read(ctx context.Context) (Envelope, error) {
+func (r *Reader) Read(ctx context.Context) (ReadResult, error) {
 	for {
 		r.rb.mu.RLock()
 		wake := r.rb.readerWake
@@ -72,7 +77,7 @@ func (r *Reader) Read(ctx context.Context) (Envelope, error) {
 			r.rb.mu.RUnlock()
 			select {
 			case <-ctx.Done():
-				return Envelope{}, ctx.Err()
+				return ReadResult{}, ctx.Err()
 			case <-wake:
 				continue
 			}
@@ -82,24 +87,21 @@ func (r *Reader) Read(ctx context.Context) (Envelope, error) {
 			dropped := oldest - r.nextSeq
 			r.nextSeq = oldest
 			r.rb.mu.RUnlock()
-			data := json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, dropped))
-			return Envelope{
-				Event: Event{Type: "events.dropped", Category: CategorySystem, Source: Source{Kind: KindKernelAPI}, Data: data},
-			}, nil
+			return ReadResult{Dropped: dropped}, nil
 		}
 
 		if r.nextSeq <= latest {
 			env := r.rb.buf[r.nextSeq%r.rb.cap]
 			r.nextSeq++
 			r.rb.mu.RUnlock()
-			return env, nil
+			return ReadResult{Envelope: &env}, nil
 		}
 
 		r.rb.mu.RUnlock()
 
 		select {
 		case <-ctx.Done():
-			return Envelope{}, ctx.Err()
+			return ReadResult{}, ctx.Err()
 		case <-wake:
 		}
 	}
