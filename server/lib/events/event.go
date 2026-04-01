@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"log/slog"
 )
 
 // maxS2RecordBytes is the maximum record size for the S2 event pipeline (1 MB).
@@ -66,11 +67,13 @@ type Envelope struct {
 	Event            Event  `json:"event"`
 }
 
-// truncateIfNeeded marshals env and returns the (possibly truncated) envelope
+// truncateIfNeeded marshals env and returns the (possibly truncated) envelope.
+// If the envelope still exceeds maxS2RecordBytes after nulling data (e.g. huge
+// url or source.metadata), it is returned as-is — callers must handle nil data.
 func truncateIfNeeded(env Envelope) (Envelope, []byte) {
 	data, err := json.Marshal(env)
 	if err != nil {
-		return env, data
+		return env, nil
 	}
 	if len(data) <= maxS2RecordBytes {
 		return env, data
@@ -80,6 +83,9 @@ func truncateIfNeeded(env Envelope) (Envelope, []byte) {
 	data, err = json.Marshal(env)
 	if err != nil {
 		return env, nil
+	}
+	if len(data) > maxS2RecordBytes {
+		slog.Warn("truncateIfNeeded: envelope exceeds limit even without data", "seq", env.Seq, "size", len(data))
 	}
 	return env, data
 }
