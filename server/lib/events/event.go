@@ -40,10 +40,10 @@ type Source struct {
 type DetailLevel string
 
 const (
-	DetailMinimal DetailLevel = "minimal"
+	DetailMinimal  DetailLevel = "minimal"
 	DetailStandard DetailLevel = "standard"
-	DetailVerbose DetailLevel = "verbose"
-	DetailRaw     DetailLevel = "raw"
+	DetailVerbose  DetailLevel = "verbose"
+	DetailRaw      DetailLevel = "raw"
 )
 
 // Event is the portable event schema. It contains only producer-emitted content;
