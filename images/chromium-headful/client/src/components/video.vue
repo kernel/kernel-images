@@ -564,6 +564,10 @@
         this._overlay.removeEventListener('wheel', this._wheelHandler)
         this._wheelHandler = null
       }
+      if (this._scrollRaf !== null) {
+        cancelAnimationFrame(this._scrollRaf)
+        this._scrollRaf = null
+      }
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -726,6 +730,8 @@
     private _scrollRaf: number | null = null
 
     onWheel(e: WheelEvent) {
+      this.sendMousePos(e)
+
       let x = e.deltaX
       let y = e.deltaY
 
