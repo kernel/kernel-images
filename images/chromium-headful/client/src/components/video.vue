@@ -749,7 +749,7 @@
       const sensitivity = this.scroll / 10
       this._scrollAccX += x * sensitivity
       this._scrollAccY += y * sensitivity
-      if (e.ctrlKey || e.metaKey) this._scrollCtrl = true
+      this._scrollCtrl = e.ctrlKey || e.metaKey
 
       if (this._scrollRaf === null) {
         this._scrollRaf = requestAnimationFrame(() => {
@@ -757,8 +757,8 @@
           const dx = Math.max(-32767, Math.min(32767, Math.round(this._scrollAccX)))
           const dy = Math.max(-32767, Math.min(32767, Math.round(this._scrollAccY)))
           const ctrl = this._scrollCtrl
-          this._scrollAccX = 0
-          this._scrollAccY = 0
+          this._scrollAccX -= dx
+          this._scrollAccY -= dy
           this._scrollCtrl = false
           if (dx !== 0 || dy !== 0) {
             this.$client.sendData('wheel', { x: dx, y: dy, controlKey: ctrl })
