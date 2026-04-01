@@ -66,8 +66,12 @@ func (h *processHandle) setExited(code int) {
 
 func isUserCmdError(err error) bool {
 	return errors.Is(err, exec.ErrNotFound) ||
+		errors.Is(err, exec.ErrDot) ||
 		errors.Is(err, os.ErrNotExist) ||
-		errors.Is(err, os.ErrPermission)
+		errors.Is(err, os.ErrPermission) ||
+		errors.Is(err, syscall.EISDIR) ||
+		errors.Is(err, syscall.ENOEXEC) ||
+		errors.Is(err, syscall.ENOTDIR)
 }
 
 func buildCmd(body *oapi.ProcessExecRequest) (*exec.Cmd, error) {
