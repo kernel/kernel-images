@@ -745,7 +745,7 @@
         y *= -1
       }
 
-      const sensitivity = this.scroll / 50
+      const sensitivity = this.scroll / 10
       this._scrollAccX += x * sensitivity
       this._scrollAccY += y * sensitivity
       if (e.ctrlKey || e.metaKey) this._scrollCtrl = true
