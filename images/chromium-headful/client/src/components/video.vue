@@ -17,7 +17,6 @@
           :style="{ pointerEvents: hosting ? 'auto' : 'none' }"
           @click.stop.prevent
           @contextmenu.stop.prevent
-          @wheel.stop.prevent="onWheel"
           @mousemove.stop.prevent="onMouseMove"
           @mousedown.stop.prevent="onMouseDown"
           @mouseup.stop.prevent="onMouseUp"
@@ -527,6 +526,12 @@
         this.$nextTick(() => { this.isVideoSyncing = false })
       })
 
+      document.addEventListener('wheel', (e: WheelEvent) => {
+        if (!this.hosting || this.locked) return
+        e.preventDefault()
+        this.onWheel(e)
+      }, { passive: false, capture: true })
+
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
         if (!this.hosting || this.locked) {
@@ -708,46 +713,42 @@
       })
     }
 
-    wheelThrottle = false
-    onWheel(e: WheelEvent) {
-      if (!this.hosting || this.locked) {
-        return
-      }
+    private _scrollAccX = 0
+    private _scrollAccY = 0
+    private _scrollCtrl = false
+    private _scrollRaf: number | null = null
 
+    onWheel(e: WheelEvent) {
       let x = e.deltaX
       let y = e.deltaY
 
-      // Normalize to pixel units. deltaMode 1 = lines, 2 = pages; convert
-      // both to approximate pixel values so the divisor below works uniformly.
       if (e.deltaMode !== 0) {
         x *= WHEEL_LINE_HEIGHT
         y *= WHEEL_LINE_HEIGHT
       }
 
       if (this.scroll_invert) {
-        x = x * -1
-        y = y * -1
+        x *= -1
+        y *= -1
       }
 
-      // The server sends one XTestFakeButtonEvent per unit we pass here,
-      // and each event scrolls Chromium by ~120 px. Raw pixel deltas from
-      // trackpads are already in pixels (~120 per notch), so dividing by
-      // PIXELS_PER_TICK converts them to discrete scroll "ticks". The
-      // result is clamped to [-scroll, scroll] (the user-facing sensitivity
-      // setting) so fast swipes don't over-scroll.
-      const PIXELS_PER_TICK = 120
-      x = x === 0 ? 0 : Math.min(Math.max(Math.round(x / PIXELS_PER_TICK) || Math.sign(x), -this.scroll), this.scroll)
-      y = y === 0 ? 0 : Math.min(Math.max(Math.round(y / PIXELS_PER_TICK) || Math.sign(y), -this.scroll), this.scroll)
+      this._scrollAccX += x
+      this._scrollAccY += y
+      if (e.ctrlKey || e.metaKey) this._scrollCtrl = true
 
-      this.sendMousePos(e)
-
-      if (!this.wheelThrottle) {
-        this.wheelThrottle = true
-        this.$client.sendData('wheel', { x, y })
-
-        window.setTimeout(() => {
-          this.wheelThrottle = false
-        }, 100)
+      if (this._scrollRaf === null) {
+        this._scrollRaf = requestAnimationFrame(() => {
+          this._scrollRaf = null
+          const dx = Math.max(-32767, Math.min(32767, Math.round(this._scrollAccX)))
+          const dy = Math.max(-32767, Math.min(32767, Math.round(this._scrollAccY)))
+          const ctrl = this._scrollCtrl
+          this._scrollAccX = 0
+          this._scrollAccY = 0
+          this._scrollCtrl = false
+          if (dx !== 0 || dy !== 0) {
+            this.$client.sendData('wheel', { x: dx, y: dy, controlKey: ctrl })
+          }
+        })
       }
     }
 

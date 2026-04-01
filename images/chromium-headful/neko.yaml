@@ -3,6 +3,9 @@
 
 desktop:
   screen: "1920x1080@25"
+  input:
+    enabled: true
+    socket: "/tmp/xf86-input-neko.sock"
 
 member:
   provider: multiuser
