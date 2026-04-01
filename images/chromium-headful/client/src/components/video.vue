@@ -247,6 +247,8 @@
     @Ref('player') readonly _player!: HTMLElement
     @Ref('video') readonly _video!: HTMLVideoElement
     @Ref('resolution') readonly _resolution!: Resolution
+
+    private _wheelHandler: ((e: WheelEvent) => void) | null = null
     @Ref('clipboard') readonly _clipboard!: Clipboard
 
     // all controls are hidden (e.g. for cast mode)
@@ -526,11 +528,12 @@
         this.$nextTick(() => { this.isVideoSyncing = false })
       })
 
-      document.addEventListener('wheel', (e: WheelEvent) => {
+      this._wheelHandler = (e: WheelEvent) => {
         if (!this.hosting || this.locked) return
         e.preventDefault()
         this.onWheel(e)
-      }, { passive: false, capture: true })
+      }
+      this._overlay.addEventListener('wheel', this._wheelHandler, { passive: false })
 
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
@@ -557,6 +560,10 @@
     }
 
     beforeDestroy() {
+      if (this._wheelHandler) {
+        this._overlay.removeEventListener('wheel', this._wheelHandler)
+        this._wheelHandler = null
+      }
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -732,8 +739,9 @@
         y *= -1
       }
 
-      this._scrollAccX += x
-      this._scrollAccY += y
+      const sensitivity = this.scroll / 50
+      this._scrollAccX += x * sensitivity
+      this._scrollAccY += y * sensitivity
       if (e.ctrlKey || e.metaKey) this._scrollCtrl = true
 
       if (this._scrollRaf === null) {

@@ -82,9 +82,6 @@ struct neko_priv
     int pmax;
     ValuatorMask *valuators;
     uint16_t slots;
-    /* scroll state (absolute, accumulated) */
-    double scroll_x;
-    double scroll_y;
     /* socket */
     struct sockaddr_un addr;
     int listen_socket;
@@ -454,8 +451,6 @@ PreInit(__attribute__ ((unused)) InputDriverPtr drv,
     priv->width = 0xffff;
     priv->height = 0xffff;
     priv->pmax = 255;
-    priv->scroll_x = 0.0;
-    priv->scroll_y = 0.0;
     priv->thread = 0;
 
     /* Return the configured device */

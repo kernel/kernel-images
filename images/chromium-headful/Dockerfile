@@ -146,8 +146,8 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
-FROM ghcr.io/kernel/neko/base:xi2-scroll AS neko
-# ^--- XI2 smooth scroll via xf86-input-neko scroll valuators
+FROM ghcr.io/kernel/neko/base:3.0.8-v1.4.0 AS neko
+# TODO: update to xi2-scroll tag once kernel/neko#12 is merged and tagged
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/ubuntu:22.04
 
