@@ -50,7 +50,7 @@ const (
 // Event is the portable event schema. It contains only producer-emitted content;
 // pipeline metadata (seq, capture session) lives on the Envelope.
 type Event struct {
-	Ts          int64           `json:"ts"`
+	Ts          int64           `json:"ts"` // Unix microseconds (µs since epoch)
 	Type        string          `json:"type"`
 	Category    EventCategory   `json:"category"`
 	Source      Source          `json:"source"`
