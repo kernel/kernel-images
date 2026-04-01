@@ -529,8 +529,9 @@
       })
 
       this._wheelHandler = (e: WheelEvent) => {
-        if (!this.hosting || this.locked) return
+        if (!this.hosting) return
         e.preventDefault()
+        if (this.locked) return
         this.onWheel(e)
       }
       this._overlay.addEventListener('wheel', this._wheelHandler, { passive: false })
