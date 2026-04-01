@@ -1,3 +1,5 @@
+ARG CHROME_VERSION=145.0.7632.75
+
 FROM docker.io/golang:1.25.0 AS server-builder
 WORKDIR /workspace/server
 
@@ -152,6 +154,7 @@ FROM node:22-bullseye-slim AS node-22
 FROM docker.io/ubuntu:22.04
 
 # Allow cross-compilation when building with BuildKit platforms
+ARG CHROME_VERSION
 ARG TARGETARCH
 ARG TARGETOS
 ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-ubuntu2204
@@ -287,13 +290,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
     --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
     apt update -y && \
-    apt -y install chromium && \
+    CHROMIUM_PKG_VERSION="$(apt-cache madison chromium | awk -v v="$CHROME_VERSION" '$3 ~ ("^" v) { print $3; exit }')" && \
+    test -n "$CHROMIUM_PKG_VERSION" && \
+    apt -y install "chromium=$CHROMIUM_PKG_VERSION" && \
     apt --no-install-recommends -y install sqlite3;
 
 # Install ChromeDriver matching the installed Chromium version
 RUN set -eux; \
-    CHROMIUM_VERSION=$(chromium --version | awk '{print $2}'); \
-    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMIUM_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
     unzip /tmp/cd.zip -d /tmp; \
     mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
     chmod +x /usr/local/bin/chromedriver; \
