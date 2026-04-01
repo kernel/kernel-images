@@ -51,7 +51,9 @@ func (p *Pipeline) Publish(ev Event) {
 	}
 	env, data := truncateIfNeeded(env)
 
-	if err := p.files.Write(env, data); err != nil {
+	if data == nil {
+		slog.Error("pipeline: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
+	} else if err := p.files.Write(env, data); err != nil {
 		slog.Error("pipeline: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
 	}
 	p.ring.Publish(env)
