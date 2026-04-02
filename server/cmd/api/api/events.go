@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -17,7 +18,7 @@ func (s *ApiService) StartCapture(w http.ResponseWriter, r *http.Request) {
 
 	s.captureSession.Start(uuid.New().String())
 
-	if err := s.cdpMonitor.Start(r.Context()); err != nil {
+	if err := s.cdpMonitor.Start(context.Background()); err != nil {
 		logger.FromContext(r.Context()).Error("failed to start CDP monitor", "err", err)
 		http.Error(w, "failed to start capture", http.StatusInternalServerError)
 		return
