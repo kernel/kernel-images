@@ -347,6 +347,33 @@ func TestUploadFilesMultipleAndOutOfOrder(t *testing.T) {
 	}
 }
 
+func TestUploadFilesCommaFormat(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := &ApiService{}
+
+	tmp := t.TempDir()
+	dest := filepath.Join(tmp, "comma.txt")
+
+	// SDK "comma" array format: files.dest_path, files.file (no index)
+	reader := buildUploadMultipart(t,
+		map[string]string{"files.dest_path": dest},
+		map[string]string{"files.file": "hello comma"},
+	)
+
+	resp, err := svc.UploadFiles(ctx, oapi.UploadFilesRequestObject{Body: reader})
+	if err != nil {
+		t.Fatalf("UploadFiles error: %v", err)
+	}
+	if _, ok := resp.(oapi.UploadFiles201Response); !ok {
+		t.Fatalf("unexpected response type: %T", resp)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil || string(data) != "hello comma" {
+		t.Fatalf("uploaded file mismatch: %v %q", err, string(data))
+	}
+}
+
 func TestUploadZipSuccess(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
