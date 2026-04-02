@@ -61,7 +61,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 		ev.Data = json.RawMessage(data)
 	}
 
-	env := s.eventStream.Publish(events.Envelope{Event: ev})
+	env := s.captureSession.Publish(ev)
 	return publishEventOKResponse{env}, nil
 }
 
@@ -70,14 +70,14 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 // Supports reconnection via the Last-Event-ID header. Emits a keepalive comment
 // frame every 15 s when no event arrives.
 func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequestObject) (oapi.StreamEventsResponseObject, error) {
-	afterSeq := s.eventStream.Seq()
+	afterSeq := s.captureSession.Seq()
 	if id := req.Params.LastEventID; id != nil && *id != "" {
 		if n, err := strconv.ParseUint(*id, 10, 64); err == nil && n > 0 {
 			afterSeq = n
 		}
 	}
 
-	reader := s.eventStream.NewReader(afterSeq)
+	reader := s.captureSession.NewReader(afterSeq)
 
 	pr, pw := io.Pipe()
 	go func() {
@@ -152,7 +152,7 @@ func (s *ApiService) StartCapture(w http.ResponseWriter, r *http.Request) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	s.eventsPipeline.Start(uuid.New().String())
+	s.captureSession.Start(uuid.New().String(), events.CaptureConfig{})
 
 	if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
 		logger.FromContext(r.Context()).Error("failed to start CDP monitor", "err", err)
