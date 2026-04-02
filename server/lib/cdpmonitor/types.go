@@ -39,7 +39,6 @@ type networkReqState struct {
 	headers      json.RawMessage
 	postData     string
 	resourceType string
-	initiator    json.RawMessage
 	status       int
 	statusText   string
 	resHeaders   json.RawMessage

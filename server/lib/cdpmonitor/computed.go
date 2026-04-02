@@ -7,6 +7,11 @@ import (
 
 	"github.com/onkernel/kernel-images/server/lib/events"
 )
+const (
+	networkIdleDebounce  = 500 * time.Millisecond
+	layoutSettledDebounce = 1 * time.Second
+)
+
 // computedState holds the mutable state for all computed meta-events.
 type computedState struct {
 	mu      sync.Mutex
@@ -91,7 +96,7 @@ func (s *computedState) onLoadingFinished() {
 	}
 	// All requests done and not yet fired — start 500 ms debounce timer.
 	stopTimer(s.netTimer)
-	s.netTimer = time.AfterFunc(500*time.Millisecond, func() {
+	s.netTimer = time.AfterFunc(networkIdleDebounce, func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.netFired || s.netPending > 0 {
@@ -121,7 +126,7 @@ func (s *computedState) onPageLoad() {
 	}
 	// Start the 1 s layout_settled timer.
 	stopTimer(s.layoutTimer)
-	s.layoutTimer = time.AfterFunc(1*time.Second, s.emitLayoutSettled)
+	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
 }
 
 // onLayoutShift is called when a layout_shift sentinel arrives from injected JS.
@@ -133,7 +138,7 @@ func (s *computedState) onLayoutShift() {
 	}
 	// Reset the timer to 1 s from now.
 	stopTimer(s.layoutTimer)
-	s.layoutTimer = time.AfterFunc(1*time.Second, s.emitLayoutSettled)
+	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
 }
 
 // emitLayoutSettled is called from the layout timer's AfterFunc goroutine
