@@ -15,7 +15,7 @@ func (s *ApiService) StartCapture(w http.ResponseWriter, r *http.Request) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	s.eventsPipeline.Start(uuid.New().String())
+	s.captureSession.Start(uuid.New().String())
 
 	if err := s.cdpMonitor.Start(r.Context()); err != nil {
 		logger.FromContext(r.Context()).Error("failed to start CDP monitor", "err", err)

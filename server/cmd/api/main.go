@@ -94,7 +94,7 @@ func main() {
 	// Construct events pipeline
 	eventsRing := events.NewRingBuffer(1024)
 	eventsFileWriter := events.NewFileWriter("/var/log")
-	eventsPipeline := events.NewPipeline(eventsRing, eventsFileWriter)
+	captureSession := events.NewCaptureSession(eventsRing, eventsFileWriter)
 
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
@@ -102,7 +102,7 @@ func main() {
 		upstreamMgr,
 		stz,
 		nekoAuthClient,
-		eventsPipeline,
+		captureSession,
 		config.DisplayNum,
 	)
 	if err != nil {

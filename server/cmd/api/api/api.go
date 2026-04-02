@@ -72,7 +72,7 @@ type ApiService struct {
 	xvfbResizeMu sync.Mutex
 
 	// CDP event pipeline and cdpMonitor.
-	eventsPipeline *events.Pipeline
+	captureSession *events.CaptureSession
 	cdpMonitor     *cdpmonitor.Monitor
 	monitorMu      sync.Mutex
 }
@@ -85,7 +85,7 @@ func New(
 	upstreamMgr *devtoolsproxy.UpstreamManager,
 	stz scaletozero.Controller,
 	nekoAuthClient *nekoclient.AuthClient,
-	eventsPipeline *events.Pipeline,
+	captureSession *events.CaptureSession,
 	displayNum int,
 ) (*ApiService, error) {
 	switch {
@@ -97,11 +97,11 @@ func New(
 		return nil, fmt.Errorf("upstreamMgr cannot be nil")
 	case nekoAuthClient == nil:
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
-	case eventsPipeline == nil:
-		return nil, fmt.Errorf("eventsPipeline cannot be nil")
+	case captureSession == nil:
+		return nil, fmt.Errorf("captureSession cannot be nil")
 	}
 
-	mon := cdpmonitor.New(upstreamMgr, eventsPipeline.Publish, displayNum)
+	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum)
 
 	return &ApiService{
 		recordManager:     recordManager,
@@ -113,7 +113,7 @@ func New(
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
-		eventsPipeline:    eventsPipeline,
+		captureSession:    captureSession,
 		cdpMonitor:        mon,
 	}, nil
 }
@@ -336,7 +336,7 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Lock()
 	s.cdpMonitor.Stop()
-	_ = s.eventsPipeline.Close()
+	_ = s.captureSession.Close()
 	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)
 }

@@ -3,22 +3,32 @@ package events
 import (
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 // CaptureSession is a single-use write path that wraps events in envelopes and
-// fans them out to a FileWriter (durable) and RingBuffer (in-memory). Publish
-// concurrently; Close flushes the FileWriter.
+// fans them out to a FileWriter (durable) and RingBuffer (in-memory). Call Start
+// once with a capture session ID, then Publish concurrently. Close flushes the
+// FileWriter; there is no restart or terminal event.
 type CaptureSession struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
 	files            *FileWriter
-	seq              uint64
-	captureSessionID string
+	seq              atomic.Uint64
+	captureSessionID atomic.Pointer[string]
 }
 
-func NewCaptureSession(captureSessionID string, ring *RingBuffer, files *FileWriter) *CaptureSession {
-	return &CaptureSession{ring: ring, files: files, captureSessionID: captureSessionID}
+func NewCaptureSession(ring *RingBuffer, files *FileWriter) *CaptureSession {
+	s := &CaptureSession{ring: ring, files: files}
+	empty := ""
+	s.captureSessionID.Store(&empty)
+	return s
+}
+
+// Start sets the capture session ID stamped on every subsequent envelope.
+func (s *CaptureSession) Start(captureSessionID string) {
+	s.captureSessionID.Store(&captureSessionID)
 }
 
 // Publish wraps ev in an Envelope, truncates if needed, then writes to
@@ -28,16 +38,15 @@ func (s *CaptureSession) Publish(ev Event) {
 	defer s.mu.Unlock()
 
 	if ev.Ts == 0 {
-		ev.Ts = time.Now().UnixMicro()
+		ev.Ts = time.Now().UnixMilli()
 	}
 	if ev.DetailLevel == "" {
 		ev.DetailLevel = DetailStandard
 	}
 
-	s.seq++
 	env := Envelope{
-		CaptureSessionID: s.captureSessionID,
-		Seq:              s.seq,
+		CaptureSessionID: *s.captureSessionID.Load(),
+		Seq:              s.seq.Add(1),
 		Event:            ev,
 	}
 	env, data := truncateIfNeeded(env)

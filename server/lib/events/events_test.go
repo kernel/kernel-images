@@ -442,13 +442,13 @@ func TestFileWriter(t *testing.T) {
 	})
 }
 
-func TestPipeline(t *testing.T) {
-	newPipeline := func(t *testing.T) (*Pipeline, string) {
+func TestCaptureSession(t *testing.T) {
+	newCaptureSession := func(t *testing.T) (*CaptureSession, string) {
 		t.Helper()
 		dir := t.TempDir()
 		rb := NewRingBuffer(100)
 		fw := NewFileWriter(dir)
-		p := NewPipeline(rb, fw)
+		p := NewCaptureSession(rb, fw)
 		t.Cleanup(func() { p.Close() })
 		return p, dir
 	}
@@ -460,7 +460,7 @@ func TestPipeline(t *testing.T) {
 
 		rb := NewRingBuffer(total)
 		fw := NewFileWriter(t.TempDir())
-		p := NewPipeline(rb, fw)
+		p := NewCaptureSession(rb, fw)
 		t.Cleanup(func() { p.Close() })
 		reader := p.NewReader(0)
 
@@ -486,7 +486,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("publish_increments_seq", func(t *testing.T) {
-		p, _ := newPipeline(t)
+		p, _ := newCaptureSession(t)
 		reader := p.NewReader(0)
 
 		for i := 0; i < 3; i++ {
@@ -503,7 +503,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("publish_sets_ts", func(t *testing.T) {
-		p, _ := newPipeline(t)
+		p, _ := newCaptureSession(t)
 		reader := p.NewReader(0)
 
 		before := time.Now().UnixMilli()
@@ -519,7 +519,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("publish_writes_file", func(t *testing.T) {
-		p, dir := newPipeline(t)
+		p, dir := newCaptureSession(t)
 
 		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
 
@@ -533,7 +533,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("publish_writes_ring", func(t *testing.T) {
-		p, _ := newPipeline(t)
+		p, _ := newCaptureSession(t)
 
 		reader := p.NewReader(0)
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
@@ -547,7 +547,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("start_sets_capture_session_id", func(t *testing.T) {
-		p, _ := newPipeline(t)
+		p, _ := newCaptureSession(t)
 		p.Start("test-uuid")
 
 		reader := p.NewReader(0)
@@ -561,7 +561,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("truncation_applied", func(t *testing.T) {
-		p, dir := newPipeline(t)
+		p, dir := newCaptureSession(t)
 		reader := p.NewReader(0)
 
 		largeData := strings.Repeat("x", 1_100_000)
@@ -595,7 +595,7 @@ func TestPipeline(t *testing.T) {
 	})
 
 	t.Run("defaults_detail_level", func(t *testing.T) {
-		p, _ := newPipeline(t)
+		p, _ := newCaptureSession(t)
 		reader := p.NewReader(0)
 
 		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
