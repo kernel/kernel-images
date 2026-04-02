@@ -24,6 +24,7 @@ import (
 	"github.com/onkernel/kernel-images/server/cmd/config"
 	"github.com/onkernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/onkernel/kernel-images/server/lib/events"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
@@ -90,12 +91,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Construct events pipeline
+	eventsRing := events.NewRingBuffer(1024)
+	eventsFileWriter := events.NewFileWriter("/var/log")
+	eventsPipeline := events.NewPipeline(eventsRing, eventsFileWriter)
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
 		upstreamMgr,
 		stz,
 		nekoAuthClient,
+		eventsPipeline,
+		config.DisplayNum,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)
@@ -120,6 +128,10 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
 	})
+	// capture events
+	r.Post("/events/start", apiService.StartCapture)
+	r.Post("/events/stop", apiService.StopCapture)
+
 	// PTY attach endpoint (WebSocket) - not part of OpenAPI spec
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {

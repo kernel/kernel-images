@@ -442,13 +442,13 @@ func TestFileWriter(t *testing.T) {
 	})
 }
 
-func TestCaptureSession(t *testing.T) {
-	newSession := func(t *testing.T) (*CaptureSession, string) {
+func TestPipeline(t *testing.T) {
+	newPipeline := func(t *testing.T) (*Pipeline, string) {
 		t.Helper()
 		dir := t.TempDir()
 		rb := NewRingBuffer(100)
 		fw := NewFileWriter(dir)
-		p := NewCaptureSession("", rb, fw)
+		p := NewPipeline(rb, fw)
 		t.Cleanup(func() { p.Close() })
 		return p, dir
 	}
@@ -460,7 +460,7 @@ func TestCaptureSession(t *testing.T) {
 
 		rb := NewRingBuffer(total)
 		fw := NewFileWriter(t.TempDir())
-		p := NewCaptureSession("", rb, fw)
+		p := NewPipeline(rb, fw)
 		t.Cleanup(func() { p.Close() })
 		reader := p.NewReader(0)
 
@@ -486,7 +486,7 @@ func TestCaptureSession(t *testing.T) {
 	})
 
 	t.Run("publish_increments_seq", func(t *testing.T) {
-		p, _ := newSession(t)
+		p, _ := newPipeline(t)
 		reader := p.NewReader(0)
 
 		for i := 0; i < 3; i++ {
@@ -503,12 +503,12 @@ func TestCaptureSession(t *testing.T) {
 	})
 
 	t.Run("publish_sets_ts", func(t *testing.T) {
-		p, _ := newSession(t)
+		p, _ := newPipeline(t)
 		reader := p.NewReader(0)
 
-		before := time.Now().UnixMicro()
+		before := time.Now().UnixMilli()
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}})
-		after := time.Now().UnixMicro()
+		after := time.Now().UnixMilli()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -519,7 +519,7 @@ func TestCaptureSession(t *testing.T) {
 	})
 
 	t.Run("publish_writes_file", func(t *testing.T) {
-		p, dir := newSession(t)
+		p, dir := newPipeline(t)
 
 		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
 
@@ -533,7 +533,7 @@ func TestCaptureSession(t *testing.T) {
 	})
 
 	t.Run("publish_writes_ring", func(t *testing.T) {
-		p, _ := newSession(t)
+		p, _ := newPipeline(t)
 
 		reader := p.NewReader(0)
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
@@ -546,10 +546,9 @@ func TestCaptureSession(t *testing.T) {
 		assert.Equal(t, CategoryPage, env.Event.Category)
 	})
 
-	t.Run("constructor_sets_capture_session_id", func(t *testing.T) {
-		dir := t.TempDir()
-		p := NewCaptureSession("test-uuid", NewRingBuffer(100), NewFileWriter(dir))
-		t.Cleanup(func() { p.Close() })
+	t.Run("start_sets_capture_session_id", func(t *testing.T) {
+		p, _ := newPipeline(t)
+		p.Start("test-uuid")
 
 		reader := p.NewReader(0)
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
@@ -562,7 +561,7 @@ func TestCaptureSession(t *testing.T) {
 	})
 
 	t.Run("truncation_applied", func(t *testing.T) {
-		p, dir := newSession(t)
+		p, dir := newPipeline(t)
 		reader := p.NewReader(0)
 
 		largeData := strings.Repeat("x", 1_100_000)
@@ -596,7 +595,7 @@ func TestCaptureSession(t *testing.T) {
 	})
 
 	t.Run("defaults_detail_level", func(t *testing.T) {
-		p, _ := newSession(t)
+		p, _ := newPipeline(t)
 		reader := p.NewReader(0)
 
 		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
