@@ -89,9 +89,9 @@ type Envelope struct {
 }
 
 // CategoryFor derives an EventCategory from an event type string.
-// It splits on the first underscore and maps the prefix to a category.
+// It splits on the first dot and maps the prefix to a category.
 func CategoryFor(eventType string) EventCategory {
-	prefix, _, _ := strings.Cut(eventType, "_")
+	prefix, _, _ := strings.Cut(eventType, ".")
 	switch prefix {
 	case "console":
 		return CategoryConsole
@@ -101,6 +101,10 @@ func CategoryFor(eventType string) EventCategory {
 		return CategoryPage
 	case "interaction", "layout", "scroll":
 		return CategoryInteraction
+	case "liveview":
+		return CategoryLiveview
+	case "captcha":
+		return CategoryCaptcha
 	case "screenshot", "monitor":
 		return CategorySystem
 	default:

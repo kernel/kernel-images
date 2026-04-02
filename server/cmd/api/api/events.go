@@ -154,7 +154,7 @@ func (s *ApiService) StartCapture(w http.ResponseWriter, r *http.Request) {
 
 	s.captureSession.Start(uuid.New().String(), events.CaptureConfig{})
 
-	if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
+	if err := s.cdpMonitor.Start(context.Background()); err != nil {
 		logger.FromContext(r.Context()).Error("failed to start CDP monitor", "err", err)
 		http.Error(w, "failed to start capture", http.StatusInternalServerError)
 		return
