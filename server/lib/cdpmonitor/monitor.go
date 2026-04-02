@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,44 +25,66 @@ type PublishFunc func(ev events.Event)
 const wsReadLimit = 8 * 1024 * 1024
 
 // Monitor manages a CDP WebSocket connection with auto-attach session fan-out.
-// Reusable: Stop followed by Start reconnects cleanly. All exported methods are
-// safe to call concurrently. Stop blocks until the read goroutine exits.
+//
+// Lock ordering (outer → inner):
+//
+//	lifeMu → restartMu → pendReqMu → computed.mu → pendMu → sessionsMu
+//
+// Never acquire a lock that appears later in this order while holding an
+// earlier one, to prevent deadlock.
+//
+// WebSocket concurrency: coder/websocket guarantees that one concurrent Read
+// and one concurrent Write are safe. The readLoop holds the sole Read; all
+// writes go through sendMsg, which serialises them with conn.Write's internal
+// lock. No external write mutex is needed.
 type Monitor struct {
 	upstreamMgr UpstreamProvider
 	publish     PublishFunc
 	displayNum  int
+	log         *slog.Logger
 
+	// lifeMu serializes Start, Stop, and restartReadLoop to prevent races on
+	// conn, lifecycleCtx, cancel, and done.
+	lifeMu sync.Mutex
 	conn   *websocket.Conn
-	connMu sync.Mutex
 
-	nextID   atomic.Int64
-	pendMu   sync.Mutex
-	pending  map[int64]chan cdpMessage
+	nextID  atomic.Int64
+	pendMu  sync.Mutex
+	pending map[int64]chan cdpMessage
 
-	sessionsMu sync.RWMutex
-	sessions   map[string]targetInfo // sessionID → targetInfo
+	sessionsMu    sync.RWMutex
+	sessions      map[string]targetInfo // sessionID → targetInfo
+	mainSessionID atomic.Value          // string; set on first top-level frameNavigated, cleared on reconnect
 
 	pendReqMu       sync.Mutex
 	pendingRequests map[string]networkReqState // requestId → networkReqState
 
 	computed *computedState
 
-	lastScreenshotAt atomic.Int64 // unix millis of last capture
-	screenshotFn     func(ctx context.Context, displayNum int) ([]byte, error) // nil → real ffmpeg
+	lastScreenshotAt    atomic.Int64 // unix millis of last capture
+	screenshotInFlight  atomic.Bool  // true while a captureScreenshot goroutine is running
+	screenshotFn        func(ctx context.Context, displayNum int) ([]byte, error) // nil → real ffmpeg
+
+	// asyncWg tracks short-lived goroutines only (fetchResponseBody, enableDomains,
+	// initSession). readLoop and subscribeToUpstream are not tracked; they exit via context.
+	asyncWg   sync.WaitGroup
+	restartMu sync.Mutex // serializes handleUpstreamRestart to prevent overlapping reconnects
 
 	lifecycleCtx context.Context    // cancelled on Stop()
 	cancel       context.CancelFunc
 	done         chan struct{}
+	readReady    chan struct{} // closed when readLoop has started reading
 
 	running atomic.Bool
 }
 
 // New creates a Monitor. displayNum is the X display for ffmpeg screenshots.
-func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int) *Monitor {
+func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log *slog.Logger) *Monitor {
 	m := &Monitor{
 		upstreamMgr:     upstreamMgr,
 		publish:         publish,
 		displayNum:      displayNum,
+		log:             log,
 		sessions:        make(map[string]targetInfo),
 		pending:         make(map[int64]chan cdpMessage),
 		pendingRequests: make(map[string]networkReqState),
@@ -76,11 +99,18 @@ func (m *Monitor) IsRunning() bool {
 	return m.running.Load()
 }
 
+// getLifecycleCtx returns the current lifecycle context under lifeMu.
+func (m *Monitor) getLifecycleCtx() context.Context {
+	m.lifeMu.Lock()
+	ctx := m.lifecycleCtx
+	m.lifeMu.Unlock()
+	return ctx
+}
+
 // Start begins CDP capture. Restarts if already running.
+// Not concurrency-safe; callers must serialize Start calls.
 func (m *Monitor) Start(parentCtx context.Context) error {
-	if m.running.Load() {
-		m.Stop()
-	}
+	m.Stop() // no-op if not running
 
 	devtoolsURL := m.upstreamMgr.Current()
 	if devtoolsURL == "" {
@@ -97,19 +127,19 @@ func (m *Monitor) Start(parentCtx context.Context) error {
 	}
 	conn.SetReadLimit(wsReadLimit)
 
-	m.connMu.Lock()
+	m.lifeMu.Lock()
 	m.conn = conn
-	m.connMu.Unlock()
-
 	m.lifecycleCtx = ctx
 	m.cancel = cancel
 	m.done = make(chan struct{})
+	m.readReady = make(chan struct{})
+	m.lifeMu.Unlock()
 
 	m.running.Store(true)
 
 	go m.readLoop(ctx)
 	go m.subscribeToUpstream(ctx)
-	go m.initSession(ctx) // must run after readLoop starts
+	m.asyncWg.Go(func() { m.initSession(ctx) })
 
 	return nil
 }
@@ -119,60 +149,111 @@ func (m *Monitor) Stop() {
 	if !m.running.Swap(false) {
 		return
 	}
+
+	m.lifeMu.Lock()
 	if m.cancel != nil {
 		m.cancel()
 	}
-	if m.done != nil {
-		<-m.done
+	done := m.done
+	m.lifeMu.Unlock()
+
+	if done != nil {
+		<-done
 	}
-	m.connMu.Lock()
+
+	// Wait for all in-flight async goroutines (fetchResponseBody, enableDomains,
+	// screenshots) to finish before closing the connection they may be writing to.
+	m.asyncWg.Wait()
+
+	m.lifeMu.Lock()
 	if m.conn != nil {
 		_ = m.conn.Close(websocket.StatusNormalClosure, "stopped")
 		m.conn = nil
 	}
-	m.connMu.Unlock()
+	m.lifeMu.Unlock()
 
+	m.clearState()
+}
+
+// clearState resets sessions, pending requests, and computed state.
+// It also fails all in-flight send() calls so their goroutines are unblocked.
+func (m *Monitor) clearState() {
 	m.sessionsMu.Lock()
 	m.sessions = make(map[string]targetInfo)
 	m.sessionsMu.Unlock()
+	m.mainSessionID.Store("")
 
 	m.pendReqMu.Lock()
 	m.pendingRequests = make(map[string]networkReqState)
 	m.pendReqMu.Unlock()
 
-	m.computed.resetOnNavigation()
+	m.failPendingCommands()
+
+	// pendingRequests is already empty above, so inflight=0 is correct.
+	m.computed.resetOnNavigation(0)
+}
+
+// failPendingCommands unblocks all in-flight send() calls by delivering an
+// error response. This prevents goroutine leaks when the connection is torn
+// down during reconnect.
+func (m *Monitor) failPendingCommands() {
+	m.pendMu.Lock()
+	old := m.pending
+	m.pending = make(map[int64]chan cdpMessage)
+	m.pendMu.Unlock()
+
+	disconnectErr := &cdpError{Code: -1, Message: "connection closed"}
+	for _, ch := range old {
+		select {
+		case ch <- cdpMessage{Error: disconnectErr}:
+		default:
+		}
+	}
 }
 
 // readLoop reads CDP messages, routing responses to pending callers and dispatching events.
+// On read error (WS drop) this goroutine returns. Reconnection is driven by
+// subscribeToUpstream: the UpstreamProvider always pushes a fresh devtools URL
+// when the browser process restarts, so same-URL redial is not needed here.
 func (m *Monitor) readLoop(ctx context.Context) {
-	defer close(m.done)
-
-	m.connMu.Lock()
+	m.lifeMu.Lock()
+	done := m.done
 	conn := m.conn
-	m.connMu.Unlock()
+	readReady := m.readReady
+	m.lifeMu.Unlock()
+	defer close(done)
+
 	if conn == nil {
 		return
 	}
 
+	// Signal that readLoop is ready to receive responses.
+	close(readReady)
+
 	for {
 		_, b, err := conn.Read(ctx)
 		if err != nil {
+			if ctx.Err() == nil {
+				m.log.Warn("cdpmonitor: read loop exiting on unexpected error", "err", err)
+			}
 			return
 		}
 
 		var msg cdpMessage
 		if err := json.Unmarshal(b, &msg); err != nil {
+			m.log.Warn("cdpmonitor: dropping malformed CDP message", "err", err)
 			continue
 		}
 
-		if msg.ID != 0 {
+		if msg.ID != nil {
 			m.pendMu.Lock()
-			ch, ok := m.pending[msg.ID]
+			ch, ok := m.pending[*msg.ID]
 			m.pendMu.Unlock()
 			if ok {
 				select {
 				case ch <- msg:
 				default:
+					// send() already timed out and deregistered; discard.
 				}
 			}
 			continue
@@ -195,7 +276,7 @@ func (m *Monitor) send(ctx context.Context, method string, params any, sessionID
 		rawParams = b
 	}
 
-	req := cdpMessage{ID: id, Method: method, Params: rawParams, SessionID: sessionID}
+	req := cdpMessage{ID: &id, Method: method, Params: rawParams, SessionID: sessionID}
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -211,13 +292,14 @@ func (m *Monitor) send(ctx context.Context, method string, params any, sessionID
 		m.pendMu.Unlock()
 	}()
 
-	m.connMu.Lock()
+	m.lifeMu.Lock()
 	conn := m.conn
-	m.connMu.Unlock()
+	m.lifeMu.Unlock()
 	if conn == nil {
 		return nil, fmt.Errorf("cdpmonitor: connection not open")
 	}
 
+	// coder/websocket allows concurrent Read + Write on the same Conn.
 	if err := conn.Write(ctx, websocket.MessageText, reqBytes); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
@@ -235,7 +317,16 @@ func (m *Monitor) send(ctx context.Context, method string, params any, sessionID
 
 // initSession enables CDP domains, injects the interaction-tracking script,
 // and manually attaches to any targets already open when the monitor started.
+// It waits for readLoop to be ready before sending any commands.
 func (m *Monitor) initSession(ctx context.Context) {
+	m.lifeMu.Lock()
+	readReady := m.readReady
+	m.lifeMu.Unlock()
+	select {
+	case <-readReady:
+	case <-ctx.Done():
+		return
+	}
 	_, _ = m.send(ctx, "Target.setAutoAttach", map[string]any{
 		"autoAttach":             true,
 		"waitForDebuggerOnStart": false,
@@ -275,7 +366,8 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 		if alreadyAttached {
 			continue
 		}
-		go func(targetID string) {
+		targetID := ti.TargetID
+		m.asyncWg.Go(func() {
 			res, err := m.send(ctx, "Target.attachToTarget", map[string]any{
 				"targetId": targetID,
 				"flatten":  true,
@@ -290,28 +382,37 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 				m.enableDomains(ctx, attached.SessionID)
 				_ = m.injectScript(ctx, attached.SessionID)
 			}
-		}(ti.TargetID)
+		})
 	}
 }
 
 // restartReadLoop waits for the current readLoop to exit, then starts a new one.
-func (m *Monitor) restartReadLoop(ctx context.Context) {
-	<-m.done
+// Returns false if the context was cancelled before the restart completed.
+func (m *Monitor) restartReadLoop(ctx context.Context) bool {
+	m.lifeMu.Lock()
+	done := m.done
+	m.lifeMu.Unlock()
+
+	// Wait for old readLoop, but bail if context is cancelled (e.g. Stop called).
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return false
+	}
+
+	m.lifeMu.Lock()
 	m.done = make(chan struct{})
+	m.readReady = make(chan struct{})
+	m.lifeMu.Unlock()
+
 	go m.readLoop(ctx)
+	return true
 }
 
 // subscribeToUpstream reconnects with backoff on Chrome restarts, publishing disconnect/reconnect events.
 func (m *Monitor) subscribeToUpstream(ctx context.Context) {
 	ch, cancel := m.upstreamMgr.Subscribe()
 	defer cancel()
-
-	backoffs := []time.Duration{
-		250 * time.Millisecond,
-		500 * time.Millisecond,
-		1 * time.Second,
-		2 * time.Second,
-	}
 
 	for {
 		select {
@@ -321,70 +422,110 @@ func (m *Monitor) subscribeToUpstream(ctx context.Context) {
 			if !ok {
 				return
 			}
-			m.publish(events.Event{
-				Ts:          time.Now().UnixMilli(),
-				Type:        "monitor_disconnected",
-				Category:    events.CategorySystem,
-				Source:      events.Source{Kind: events.KindLocalProcess},
-				DetailLevel: events.DetailMinimal,
-				Data:        json.RawMessage(`{"reason":"chrome_restarted"}`),
-			})
-
-			startReconnect := time.Now()
-
-			m.connMu.Lock()
-			if m.conn != nil {
-				_ = m.conn.Close(websocket.StatusNormalClosure, "reconnecting")
-				m.conn = nil
-			}
-			m.connMu.Unlock()
-
-			var reconnErr error
-			for attempt := range 10 {
-				if ctx.Err() != nil {
-					return
-				}
-
-				idx := min(attempt, len(backoffs)-1)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoffs[idx]):
-				}
-
-				conn, _, err := websocket.Dial(ctx, newURL, nil)
-				if err != nil {
-					reconnErr = err
-					continue
-				}
-				conn.SetReadLimit(wsReadLimit)
-
-				m.connMu.Lock()
-				m.conn = conn
-				m.connMu.Unlock()
-
-				reconnErr = nil
-				break
-			}
-
-			if reconnErr != nil {
-				return
-			}
-
-			m.restartReadLoop(ctx)
-			go m.initSession(ctx)
-
-			m.publish(events.Event{
-				Ts:          time.Now().UnixMilli(),
-				Type:        "monitor_reconnected",
-				Category:    events.CategorySystem,
-				Source:      events.Source{Kind: events.KindLocalProcess},
-				DetailLevel: events.DetailMinimal,
-				Data: json.RawMessage(fmt.Sprintf(
-					`{"reconnect_duration_ms":%d}`,
-					time.Since(startReconnect).Milliseconds(),
-				)),
-			})
+			m.handleUpstreamRestart(ctx, newURL)
 		}
 	}
+}
+
+// handleUpstreamRestart tears down the old connection, reconnects with backoff,
+// and re-initializes the CDP session. Serialized by restartMu to prevent
+// overlapping reconnects from rapid successive Chrome restarts.
+func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
+	m.restartMu.Lock()
+	defer m.restartMu.Unlock()
+
+	if ctx.Err() != nil {
+		return
+	}
+	m.publish(events.Event{
+		Ts:          time.Now().UnixMilli(),
+		Type:        EventMonitorDisconnected,
+		Category:    events.CategorySystem,
+		Source:      events.Source{Kind: events.KindLocalProcess},
+		Data: json.RawMessage(`{"reason":"chrome_restarted"}`),
+	})
+
+	startReconnect := time.Now()
+
+	m.lifeMu.Lock()
+	if m.conn != nil {
+		_ = m.conn.Close(websocket.StatusNormalClosure, "reconnecting")
+		m.conn = nil
+	}
+	m.lifeMu.Unlock()
+
+	if !m.reconnectWithBackoff(ctx, newURL) {
+		// Context cancelled means Stop() was called, not a failure.
+		if ctx.Err() == nil {
+			m.running.Store(false)
+			m.publish(events.Event{
+				Ts:       time.Now().UnixMilli(),
+				Type:     EventMonitorReconnectFailed,
+				Category: events.CategorySystem,
+				Source:   events.Source{Kind: events.KindLocalProcess},
+				Data:     json.RawMessage(`{"reason":"reconnect_exhausted"}`),
+			})
+		}
+		return
+	}
+
+	// restartReadLoop waits for the old readLoop to exit before returning,
+	// so clearState runs only after the old loop has stopped touching shared state.
+	if !m.restartReadLoop(ctx) {
+		return
+	}
+	m.clearState()
+
+	m.asyncWg.Go(func() { m.initSession(ctx) })
+
+	m.publish(events.Event{
+		Ts:          time.Now().UnixMilli(),
+		Type:        EventMonitorReconnected,
+		Category:    events.CategorySystem,
+		Source:      events.Source{Kind: events.KindLocalProcess},
+		Data: json.RawMessage(fmt.Sprintf(
+			`{"reconnect_duration_ms":%d}`,
+			time.Since(startReconnect).Milliseconds(),
+		)),
+	})
+}
+
+const maxReconnectAttempts = 10
+
+var reconnectBackoffs = []time.Duration{
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+	2 * time.Second,
+}
+
+// reconnectWithBackoff attempts to dial newURL up to maxReconnectAttempts times with exponential backoff.
+func (m *Monitor) reconnectWithBackoff(ctx context.Context, newURL string) bool {
+	for attempt := range maxReconnectAttempts {
+		if ctx.Err() != nil {
+			return false
+		}
+
+		if attempt > 0 {
+			idx := min(attempt-1, len(reconnectBackoffs)-1)
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(reconnectBackoffs[idx]):
+			}
+		}
+
+		conn, _, err := websocket.Dial(ctx, newURL, nil)
+		if err != nil {
+			m.log.Warn("cdpmonitor: reconnect attempt failed", "attempt", attempt+1, "max_attempts", maxReconnectAttempts, "url", newURL, "err", err)
+			continue
+		}
+		conn.SetReadLimit(wsReadLimit)
+
+		m.lifeMu.Lock()
+		m.conn = conn
+		m.lifeMu.Unlock()
+		return true
+	}
+	return false
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sync"
@@ -103,7 +104,7 @@ func New(
 		return nil, fmt.Errorf("captureSession cannot be nil")
 	}
 
-	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum)
+	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{

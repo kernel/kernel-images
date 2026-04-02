@@ -6,16 +6,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
 
 	"github.com/onkernel/kernel-images/server/lib/events"
 )
 
-// maybeScreenshot triggers a screenshot if the rate-limit window has elapsed.
-// It uses an atomic CAS on lastScreenshotAt to ensure only one screenshot runs
-// at a time.
-func (m *Monitor) maybeScreenshot(ctx context.Context) {
+// tryScreenshot fires a screenshot if the 2s rate-limit window has elapsed.
+// lastScreenshotAt CAS enforces the window; screenshotInFlight CAS prevents
+// overlapping captures when captureScreenshot outlasts the 2s window (timeout is 10s).
+func (m *Monitor) tryScreenshot(ctx context.Context) {
 	now := time.Now().UnixMilli()
 	last := m.lastScreenshotAt.Load()
 	if now-last < 2000 {
@@ -24,12 +25,22 @@ func (m *Monitor) maybeScreenshot(ctx context.Context) {
 	if !m.lastScreenshotAt.CompareAndSwap(last, now) {
 		return
 	}
-	go m.captureScreenshot(ctx)
+	if !m.screenshotInFlight.CompareAndSwap(false, true) {
+		return
+	}
+	m.asyncWg.Go(func() {
+		defer m.screenshotInFlight.Store(false)
+		m.captureScreenshot(ctx)
+	})
 }
+
+const screenshotTimeout = 10 * time.Second
 
 // captureScreenshot takes a screenshot via ffmpeg x11grab (or the screenshotFn
 // seam in tests), optionally downscales it, and publishes a screenshot event.
-func (m *Monitor) captureScreenshot(ctx context.Context) {
+func (m *Monitor) captureScreenshot(parentCtx context.Context) {
+	ctx, cancel := context.WithTimeout(parentCtx, screenshotTimeout)
+	defer cancel()
 	var pngBytes []byte
 	var err error
 
@@ -39,6 +50,7 @@ func (m *Monitor) captureScreenshot(ctx context.Context) {
 		pngBytes, err = captureViaFFmpeg(ctx, m.displayNum, 1)
 	}
 	if err != nil {
+		m.log.Warn("cdpmonitor: screenshot capture failed", "err", err)
 		return
 	}
 
@@ -47,19 +59,19 @@ func (m *Monitor) captureScreenshot(ctx context.Context) {
 	for scale := 2; len(pngBytes) > rawThreshold && scale <= 16 && m.screenshotFn == nil; scale *= 2 {
 		pngBytes, err = captureViaFFmpeg(ctx, m.displayNum, scale)
 		if err != nil {
+			m.log.Warn("cdpmonitor: screenshot downscale failed", "scale", scale, "err", err)
 			return
 		}
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(pngBytes)
-	data := json.RawMessage(fmt.Sprintf(`{"png":%q}`, encoded))
+	data, _ := json.Marshal(map[string]string{"png": encoded})
 
 	m.publish(events.Event{
 		Ts:          time.Now().UnixMilli(),
 		Type:        "screenshot",
 		Category:    events.CategorySystem,
 		Source:      events.Source{Kind: events.KindLocalProcess},
-		DetailLevel: events.DetailStandard,
 		Data:        data,
 	})
 }
@@ -80,6 +92,7 @@ func captureViaFFmpeg(ctx context.Context, displayNum, divisor int) ([]byte, err
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}

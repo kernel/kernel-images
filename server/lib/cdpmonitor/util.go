@@ -1,61 +1,72 @@
 package cdpmonitor
 
 import (
-	"slices"
+	"encoding/json"
 	"strings"
 	"unicode/utf8"
 )
+
+// consoleArgString extracts a display string from a CDP console argument.
+// For strings it unquotes the JSON value; for other types it returns the raw JSON.
+func consoleArgString(a cdpConsoleArg) string {
+	if len(a.Value) == 0 {
+		return a.Type // e.g. "undefined", "null"
+	}
+	if a.Type == "string" {
+		var s string
+		if json.Unmarshal(a.Value, &s) == nil {
+			return s
+		}
+	}
+	return string(a.Value)
+}
 
 // isTextualResource reports whether the resource warrants body capture.
 // resourceType is checked first; mimeType is a fallback for resources with no type (e.g. in-flight at attach time).
 func isTextualResource(resourceType, mimeType string) bool {
 	switch resourceType {
-	case "Font", "Image", "Media":
+	case "Font", "Image", "Media", "Stylesheet", "Script":
 		return false
 	}
 	return isCapturedMIME(mimeType)
 }
 
 // isCapturedMIME returns true for MIME types whose bodies are worth capturing.
-// Binary formats (vendor types, binary encodings, raw streams) are excluded.
+// Uses an allow-list of known textual types; everything else is excluded.
 func isCapturedMIME(mime string) bool {
 	if mime == "" {
-		return true // unknown, capture conservatively
-	}
-	for _, prefix := range []string{"image/", "font/", "audio/", "video/"} {
-		if strings.HasPrefix(mime, prefix) {
-			return false
-		}
-	}
-	if slices.Contains([]string{
-		"application/octet-stream",
-		"application/wasm",
-		"application/pdf",
-		"application/zip",
-		"application/gzip",
-		"application/x-protobuf",
-		"application/x-msgpack",
-		"application/x-thrift",
-	}, mime) {
 		return false
 	}
-	// Skip vendor binary formats; allow vnd types with text-based suffixes (+json, +xml, +csv).
+	// Allow plain text subtypes.
+	if strings.HasPrefix(mime, "text/plain") ||
+		strings.HasPrefix(mime, "text/html") ||
+		strings.HasPrefix(mime, "text/xml") ||
+		strings.HasPrefix(mime, "text/csv") {
+		return true
+	}
+	// Allow structured application types.
+	if strings.HasPrefix(mime, "application/json") ||
+		strings.HasPrefix(mime, "application/xml") ||
+		strings.HasPrefix(mime, "application/x-www-form-urlencoded") ||
+		strings.HasPrefix(mime, "application/graphql") {
+		return true
+	}
+	// Allow vendor types with text-based suffixes.
 	if sub, ok := strings.CutPrefix(mime, "application/vnd."); ok {
 		for _, textSuffix := range []string{"+json", "+xml", "+csv"} {
 			if strings.HasSuffix(sub, textSuffix) {
 				return true
 			}
 		}
-		return false
 	}
-	return true
+	return false
 }
 
 // bodyCapFor returns the max body capture size for a MIME type.
-// Structured data (JSON, XML, form data) gets 900 KB; everything else gets 10 KB.
+// Structured data (JSON, XML, form data) gets 8 KB; everything else gets 4 KB.
 func bodyCapFor(mime string) int {
-	const fullCap = 900 * 1024
-	const contextCap = 10 * 1024
+	const fullCap = 8 * 1024
+	const contextCap = 4 * 1024
 	structuredPrefixes := []string{
 		"application/json",
 		"application/xml",
@@ -78,15 +89,31 @@ func bodyCapFor(mime string) int {
 	return contextCap
 }
 
+const truncatedSuffix = "...[truncated]"
+
 // truncateBody caps body at the given limit on a valid UTF-8 boundary.
+// The result never splits a multi-byte rune. A truncation suffix is appended
+// when the body is cut so callers can distinguish truncated from full content.
 func truncateBody(body string, maxBody int) string {
 	if len(body) <= maxBody {
 		return body
 	}
-	// Walk back at most UTFMax bytes to find a clean rune boundary.
-	i := maxBody
-	for i > maxBody-utf8.UTFMax && !utf8.RuneStart(body[i]) {
-		i--
+	if maxBody <= 0 {
+		return ""
 	}
-	return body[:i]
+	// Reserve room for the truncation suffix within the limit.
+	cutAt := maxBody - len(truncatedSuffix)
+	if cutAt <= 0 {
+		return truncatedSuffix[:maxBody]
+	}
+	// Walk forward through complete runes, stopping before we exceed cutAt.
+	end := 0
+	for end < cutAt {
+		_, size := utf8.DecodeRuneInString(body[end:])
+		if end+size > cutAt {
+			break
+		}
+		end += size
+	}
+	return body[:end] + truncatedSuffix
 }

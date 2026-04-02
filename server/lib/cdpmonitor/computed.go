@@ -8,6 +8,8 @@ import (
 	"github.com/onkernel/kernel-images/server/lib/events"
 )
 const (
+	// networkIdleDebounce matches Playwright's networkidle heuristic: fire after
+	// 500 ms with no in-flight network requests.
 	networkIdleDebounce  = 500 * time.Millisecond
 	layoutSettledDebounce = 1 * time.Second
 )
@@ -16,6 +18,11 @@ const (
 type computedState struct {
 	mu      sync.Mutex
 	publish PublishFunc
+
+	// navSeq is incremented on every resetOnNavigation. AfterFunc callbacks
+	// capture their navSeq at creation and bail if it has changed, preventing
+	// stale timers from publishing events for a previous navigation.
+	navSeq int
 
 	// network_idle: 500 ms debounce after all pending requests finish.
 	netPending int
@@ -52,14 +59,21 @@ func stopTimer(t *time.Timer) {
 	}
 }
 
-// resetOnNavigation resets all state machines. Called on Page.frameNavigated
-func (s *computedState) resetOnNavigation() {
+// resetOnNavigation resets all state machines. Called on Page.frameNavigated.
+// Increments navSeq so any AfterFunc callbacks already running will discard their results.
+// inflight is the number of in-flight requests from other sessions
+// (e.g. subframes) that were not cleared by the navigation; netPending is set
+// to this value instead of zero so that their eventual loadingFinished events
+// decrement correctly.
+func (s *computedState) resetOnNavigation(inflight int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	s.navSeq++
+
 	stopTimer(s.netTimer)
 	s.netTimer = nil
-	s.netPending = 0
+	s.netPending = inflight
 	s.netFired = false
 
 	stopTimer(s.layoutTimer)
@@ -94,25 +108,29 @@ func (s *computedState) onLoadingFinished() {
 	if s.netPending > 0 || s.netFired {
 		return
 	}
-	// All requests done and not yet fired — start 500 ms debounce timer.
+	// All requests done and not yet fired: start 500ms debounce timer.
 	stopTimer(s.netTimer)
+	navSeq := s.navSeq
 	s.netTimer = time.AfterFunc(networkIdleDebounce, func() {
 		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.netFired || s.netPending > 0 {
+		if s.navSeq != navSeq || s.netFired || s.netPending > 0 {
+			s.mu.Unlock()
 			return
 		}
 		s.netFired = true
 		s.navNetIdle = true
-		s.publish(events.Event{
-			Ts:          time.Now().UnixMilli(),
-			Type:        "network_idle",
-			Category:    events.CategoryNetwork,
-			Source:      events.Source{Kind: events.KindCDP},
-			DetailLevel: events.DetailStandard,
-			Data:        json.RawMessage(`{}`),
-		})
-		s.checkNavigationSettled()
+		evs := []events.Event{{
+			Ts:       time.Now().UnixMilli(),
+			Type:     EventNetworkIdle,
+			Category: events.CategoryNetwork,
+			Source:   events.Source{Kind: events.KindCDP},
+			Data:     json.RawMessage(`{}`),
+		}}
+		evs = append(evs, s.pendingNavigationSettled()...)
+		s.mu.Unlock()
+		for _, ev := range evs {
+			s.publish(ev)
+		}
 	})
 }
 
@@ -124,9 +142,10 @@ func (s *computedState) onPageLoad() {
 	if s.layoutFired {
 		return
 	}
-	// Start the 1 s layout_settled timer.
+	// Start the 1s layout_settled timer.
 	stopTimer(s.layoutTimer)
-	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
+	navSeq := s.navSeq
+	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, func() { s.emitLayoutSettled(navSeq) })
 }
 
 // onLayoutShift is called when a layout_shift sentinel arrives from injected JS.
@@ -136,50 +155,58 @@ func (s *computedState) onLayoutShift() {
 	if s.layoutFired || !s.pageLoadSeen {
 		return
 	}
-	// Reset the timer to 1 s from now.
+	// Reset the timer to 1s from now.
 	stopTimer(s.layoutTimer)
-	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
+	navSeq := s.navSeq
+	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, func() { s.emitLayoutSettled(navSeq) })
 }
 
-// emitLayoutSettled is called from the layout timer's AfterFunc goroutine
-func (s *computedState) emitLayoutSettled() {
+// emitLayoutSettled is called from the layout timer's AfterFunc goroutine.
+func (s *computedState) emitLayoutSettled(navSeq int) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.layoutFired || !s.pageLoadSeen {
+	if s.navSeq != navSeq || s.layoutFired || !s.pageLoadSeen {
+		s.mu.Unlock()
 		return
 	}
 	s.layoutFired = true
 	s.navLayoutSettled = true
-	s.publish(events.Event{
-		Ts:          time.Now().UnixMilli(),
-		Type:        "layout_settled",
-		Category:    events.CategoryPage,
-		Source:      events.Source{Kind: events.KindCDP},
-		DetailLevel: events.DetailStandard,
-		Data:        json.RawMessage(`{}`),
-	})
-	s.checkNavigationSettled()
+	evs := []events.Event{{
+		Ts:       time.Now().UnixMilli(),
+		Type:     EventLayoutSettled,
+		Category: events.CategoryPage,
+		Source:   events.Source{Kind: events.KindCDP},
+		Data:     json.RawMessage(`{}`),
+	}}
+	evs = append(evs, s.pendingNavigationSettled()...)
+	s.mu.Unlock()
+	for _, ev := range evs {
+		s.publish(ev)
+	}
 }
 
 // onDOMContentLoaded is called on Page.domContentEventFired.
 func (s *computedState) onDOMContentLoaded() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.navDOMLoaded = true
-	s.checkNavigationSettled()
+	evs := s.pendingNavigationSettled()
+	s.mu.Unlock()
+	for _, ev := range evs {
+		s.publish(ev)
+	}
 }
 
-// checkNavigationSettled emits navigation_settled if all three flags are set
-func (s *computedState) checkNavigationSettled() {
+// pendingNavigationSettled returns a navigation_settled event if all three
+// conditions are met. Must be called with s.mu held.
+func (s *computedState) pendingNavigationSettled() []events.Event {
 	if s.navDOMLoaded && s.navNetIdle && s.navLayoutSettled && !s.navFired {
 		s.navFired = true
-		s.publish(events.Event{
-			Ts:          time.Now().UnixMilli(),
-			Type:        "navigation_settled",
-			Category:    events.CategoryPage,
-			Source:      events.Source{Kind: events.KindCDP},
-			DetailLevel: events.DetailStandard,
-			Data:        json.RawMessage(`{}`),
-		})
+		return []events.Event{{
+			Ts:       time.Now().UnixMilli(),
+			Type:     EventNavigationSettled,
+			Category: events.CategoryPage,
+			Source:   events.Source{Kind: events.KindCDP},
+			Data:     json.RawMessage(`{}`),
+		}}
 	}
+	return nil
 }
