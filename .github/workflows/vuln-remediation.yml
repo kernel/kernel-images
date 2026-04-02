@@ -41,16 +41,20 @@ jobs:
         with:
           go-version-file: 'server/go.mod'
 
-      - name: Fetch Dependabot alerts
+      - name: Install Socket CLI
+        run: npm install -g @socketsecurity/cli
+
+      - name: Run Socket scan
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_API_TOKEN }}
         run: |
-          gh api "/repos/${{ github.repository }}/dependabot/alerts?state=open&per_page=100" > dependabot-alerts.json 2>/dev/null || echo "[]" > dependabot-alerts.json
+          socket scan create --repo="${{ github.event.repository.name }}" --branch=main --default-branch --report --json > socket-report.json 2>/dev/null || echo '{"healthy":true,"alerts":{}}' > socket-report.json
 
       - name: Remediate vulnerabilities
         env:
           CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOCKET_SECURITY_API_KEY: ${{ secrets.SOCKET_API_TOKEN }}
         run: |
           export DATE="$(date -u +%Y-%m-%d)"
           envsubst '${GITHUB_REPOSITORY} ${DATE}' < .github/workflows/vuln-remediation-prompt.md | agent -p --model ${{ secrets.CURSOR_PREFERRED_MODEL }} --trust --force --output-format=text
