@@ -3,12 +3,11 @@ package cdpmonitor
 import (
 	"encoding/json"
 	"time"
-	"unicode/utf8"
 
 	"github.com/onkernel/kernel-images/server/lib/events"
 )
 
-// publishEvent stamps common fields and publishes an Event.
+// publishEvent stamps common fields and publishes an event.
 func (m *Monitor) publishEvent(eventType string, source events.Source, sourceEvent string, data json.RawMessage, sessionID string) {
 	src := source
 	src.Event = sourceEvent
@@ -103,7 +102,7 @@ func (m *Monitor) handleExceptionThrown(params json.RawMessage, sessionID string
 	go m.maybeScreenshot(m.lifecycleCtx)
 }
 
-// handleBindingCalled processes __kernelEvent binding calls.
+// handleBindingCalled processes __kernelEvent binding calls from the page.
 func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) {
 	var p struct {
 		Name    string `json:"name"`
@@ -128,7 +127,7 @@ func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) 
 	}
 }
 
-// handleTimelineEvent processes layout-shift events from PerformanceTimeline.
+// handleTimelineEvent processes PerformanceTimeline layout-shift events.
 func (m *Monitor) handleTimelineEvent(params json.RawMessage, sessionID string) {
 	var p struct {
 		Event struct {
@@ -148,6 +147,15 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 	if err := json.Unmarshal(params, &p); err != nil {
 		return
 	}
+	// Extract only the initiator type; the stack trace is too verbose and dominates event size.
+	var initiatorType string
+	var raw struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(p.Initiator, &raw) == nil {
+		initiatorType = raw.Type
+	}
+
 	m.pendReqMu.Lock()
 	m.pendingRequests[p.RequestID] = networkReqState{
 		method:       p.Request.Method,
@@ -155,16 +163,15 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 		headers:      p.Request.Headers,
 		postData:     p.Request.PostData,
 		resourceType: p.ResourceType,
-		initiator:    p.Initiator,
 	}
 	m.pendReqMu.Unlock()
 	data, _ := json.Marshal(map[string]any{
-		"method":        p.Request.Method,
-		"url":           p.Request.URL,
-		"headers":       p.Request.Headers,
-		"post_data":     p.Request.PostData,
-		"resource_type": p.ResourceType,
-		"initiator":     p.Initiator,
+		"method":           p.Request.Method,
+		"url":              p.Request.URL,
+		"headers":          p.Request.Headers,
+		"post_data":        p.Request.PostData,
+		"resource_type":    p.ResourceType,
+		"initiator_type":   initiatorType,
 	})
 	m.publishEvent("network_request", events.Source{Kind: events.KindCDP}, "Network.requestWillBeSent", data, sessionID)
 	m.computed.onRequest()
@@ -202,30 +209,33 @@ func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string
 	if !ok {
 		return
 	}
-	// Fetch response body async to avoid blocking readLoop.
+	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	go func() {
 		ctx := m.lifecycleCtx
 		body := ""
-		result, err := m.send(ctx, "Network.getResponseBody", map[string]any{
-			"requestId": p.RequestID,
-		}, sessionID)
-		if err == nil {
-			var resp struct {
-				Body         string `json:"body"`
-				Base64Encoded bool   `json:"base64Encoded"`
-			}
-			if json.Unmarshal(result, &resp) == nil {
-				body = truncateBody(resp.Body)
+		if isTextualResource(state.resourceType, state.mimeType) {
+			result, err := m.send(ctx, "Network.getResponseBody", map[string]any{
+				"requestId": p.RequestID,
+			}, sessionID)
+			if err == nil {
+				var resp struct {
+					Body          string `json:"body"`
+					Base64Encoded bool   `json:"base64Encoded"`
+				}
+				if json.Unmarshal(result, &resp) == nil {
+					body = truncateBody(resp.Body, bodyCapFor(state.mimeType))
+				}
 			}
 		}
 		data, _ := json.Marshal(map[string]any{
-			"method":      state.method,
-			"url":         state.url,
-			"status":      state.status,
-			"status_text": state.statusText,
-			"headers":     state.resHeaders,
-			"mime_type":   state.mimeType,
-			"body":        body,
+			"method":        state.method,
+			"url":           state.url,
+			"status":        state.status,
+			"status_text":   state.statusText,
+			"headers":       state.resHeaders,
+			"mime_type":     state.mimeType,
+			"resource_type": state.resourceType,
+			"body":          body,
 		})
 		m.publishEvent("network_response", events.Source{Kind: events.KindCDP}, "Network.loadingFinished", data, sessionID)
 		m.computed.onLoadingFinished()
@@ -260,19 +270,6 @@ func (m *Monitor) handleLoadingFailed(params json.RawMessage, sessionID string) 
 	m.computed.onLoadingFinished()
 }
 
-// truncateBody caps body at ~900KB on a valid UTF-8 boundary.
-func truncateBody(body string) string {
-	const maxBody = 900 * 1024
-	if len(body) <= maxBody {
-		return body
-	}
-	// Back up to a valid rune boundary.
-	truncated := body[:maxBody]
-	for !utf8.ValidString(truncated) {
-		truncated = truncated[:len(truncated)-1]
-	}
-	return truncated
-}
 
 func (m *Monitor) handleFrameNavigated(params json.RawMessage, sessionID string) {
 	var p struct {
@@ -314,7 +311,7 @@ func (m *Monitor) handleDOMUpdated(params json.RawMessage, sessionID string) {
 	m.publishEvent("dom_updated", events.Source{Kind: events.KindCDP}, "DOM.documentUpdated", params, sessionID)
 }
 
-// handleAttachedToTarget stores the session and enables domains + injects script.
+// handleAttachedToTarget stores the new session then enables domains and injects script.
 func (m *Monitor) handleAttachedToTarget(msg cdpMessage) {
 	var params cdpAttachedToTargetParams
 	if err := json.Unmarshal(msg.Params, &params); err != nil {
@@ -328,7 +325,7 @@ func (m *Monitor) handleAttachedToTarget(msg cdpMessage) {
 	}
 	m.sessionsMu.Unlock()
 
-	// Async to avoid blocking readLoop.
+	// Async to avoid blocking the readLoop.
 	go func() {
 		m.enableDomains(m.lifecycleCtx, params.SessionID)
 		_ = m.injectScript(m.lifecycleCtx, params.SessionID)
