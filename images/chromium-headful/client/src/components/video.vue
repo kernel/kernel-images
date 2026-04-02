@@ -230,6 +230,8 @@
   import GuacamoleKeyboard from '~/utils/guacamole-keyboard.ts'
 
   const WHEEL_LINE_HEIGHT = 19
+  const SCROLL_SENSITIVITY_BASE = 10
+  const INT16_MAX = 32767
 
   @Component({
     name: 'neko-video',
@@ -534,7 +536,7 @@
         if (this.locked) return
         this.onWheel(e)
       }
-      this._overlay.addEventListener('wheel', this._wheelHandler, { passive: false })
+      document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
 
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
@@ -562,12 +564,8 @@
 
     beforeDestroy() {
       if (this._wheelHandler) {
-        this._overlay.removeEventListener('wheel', this._wheelHandler)
+        document.removeEventListener('wheel', this._wheelHandler, { capture: true })
         this._wheelHandler = null
-      }
-      if (this._scrollRaf !== null) {
-        cancelAnimationFrame(this._scrollRaf)
-        this._scrollRaf = null
       }
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
@@ -725,11 +723,6 @@
       })
     }
 
-    private _scrollAccX = 0
-    private _scrollAccY = 0
-    private _scrollCtrl = false
-    private _scrollRaf: number | null = null
-
     onWheel(e: WheelEvent) {
       this.sendMousePos(e)
 
@@ -746,24 +739,12 @@
         y *= -1
       }
 
-      const sensitivity = this.scroll / 10
-      this._scrollAccX += x * sensitivity
-      this._scrollAccY += y * sensitivity
-      this._scrollCtrl = e.ctrlKey || e.metaKey
+      const sensitivity = this.scroll / SCROLL_SENSITIVITY_BASE
+      const dx = Math.max(-INT16_MAX, Math.min(INT16_MAX, Math.round(x * sensitivity)))
+      const dy = Math.max(-INT16_MAX, Math.min(INT16_MAX, Math.round(y * sensitivity)))
 
-      if (this._scrollRaf === null) {
-        this._scrollRaf = requestAnimationFrame(() => {
-          this._scrollRaf = null
-          const dx = Math.max(-32767, Math.min(32767, Math.round(this._scrollAccX)))
-          const dy = Math.max(-32767, Math.min(32767, Math.round(this._scrollAccY)))
-          const ctrl = this._scrollCtrl
-          this._scrollAccX -= dx
-          this._scrollAccY -= dy
-          this._scrollCtrl = false
-          if (dx !== 0 || dy !== 0) {
-            this.$client.sendData('wheel', { x: dx, y: dy, controlKey: ctrl })
-          }
-        })
+      if (dx !== 0 || dy !== 0) {
+        this.$client.sendData('wheel', { x: dx, y: dy, controlKey: e.ctrlKey || e.metaKey })
       }
     }
 

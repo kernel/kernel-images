@@ -12,7 +12,7 @@ interface KeyboardLayouts {
 export const state = () => {
   return {
     scroll: get<number>('scroll', 10),
-    scroll_invert: get<boolean>('scroll_invert', true),
+    scroll_invert: get<boolean>('scroll_invert', false),
     autoplay: get<boolean>('autoplay', true),
     ignore_emotes: get<boolean>('ignore_emotes', false),
     chat_sound: get<boolean>('chat_sound', true),
