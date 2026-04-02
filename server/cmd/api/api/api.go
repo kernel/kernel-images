@@ -82,6 +82,7 @@ type ApiService struct {
 	xvfbResizeMu sync.Mutex
 
 	// CDP event pipeline and cdpMonitor.
+	eventsPipeline  *events.Pipeline
 	eventStream     *events.EventStream
 	captureSession  *capturesession.CaptureSession
 	cdpMonitor      cdpMonitorController
@@ -98,8 +99,7 @@ func New(
 	upstreamMgr *devtoolsproxy.UpstreamManager,
 	stz scaletozero.Controller,
 	nekoAuthClient *nekoclient.AuthClient,
-	captureSession *capturesession.CaptureSession,
-	eventStream    *events.EventStream,
+	eventsPipeline *events.Pipeline,
 	displayNum int,
 ) (*ApiService, error) {
 	switch {
@@ -111,18 +111,21 @@ func New(
 		return nil, fmt.Errorf("upstreamMgr cannot be nil")
 	case nekoAuthClient == nil:
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
-	case captureSession == nil:
-		return nil, fmt.Errorf("captureSession cannot be nil")
-	case eventStream == nil:
-		return nil, fmt.Errorf("eventStream cannot be nil")
+	case eventsPipeline == nil:
+		return nil, fmt.Errorf("eventsPipeline cannot be nil")
 	}
 
-	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum, slog.Default())
+	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 1024})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create event stream: %w", err)
+	}
+	cs := capturesession.NewCaptureSession(es)
+	mon := cdpmonitor.New(upstreamMgr, eventsPipeline.Publish, displayNum, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{
-		recordManager:   recordManager,
-		factory:         factory,
+		recordManager:     recordManager,
+		factory:           factory,
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
@@ -130,8 +133,9 @@ func New(
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
-		eventStream:       eventStream,
-		captureSession:    captureSession,
+		eventsPipeline:    eventsPipeline,
+		eventStream:       es,
+		captureSession:    cs,
 		cdpMonitor:        mon,
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
@@ -357,7 +361,7 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()
-	s.captureSession.Stop()
+	_ = s.eventsPipeline.Close()
 	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)
 }

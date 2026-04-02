@@ -22,7 +22,6 @@ import (
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
-	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -51,7 +50,7 @@ func main() {
 	// ensure ffmpeg is available
 	mustFFmpeg()
 
-	stz := scaletozero.NewDebouncedControllerWithCooldown(scaletozero.NewUnikraftCloudController(), config.ScaleToZeroCooldown)
+	stz := scaletozero.NewDebouncedController(scaletozero.NewUnikraftCloudController())
 	r := chi.NewRouter()
 	r.Use(
 		chiMiddleware.Logger,
@@ -93,14 +92,9 @@ func main() {
 	}
 
 	// Construct events pipeline
-	eventStream, err := events.NewEventStream(events.EventStreamConfig{
-		RingCapacity: 1024,
-	})
-	if err != nil {
-		slogger.Error("failed to create event stream", "err", err)
-		os.Exit(1)
-	}
-	captureSession := capturesession.NewCaptureSession(eventStream)
+	eventsRing := events.NewRingBuffer(1024)
+	eventsFileWriter := events.NewFileWriter("/var/log")
+	eventsPipeline := events.NewPipeline(eventsRing, eventsFileWriter)
 
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
@@ -108,8 +102,7 @@ func main() {
 		upstreamMgr,
 		stz,
 		nekoAuthClient,
-		captureSession,
-		eventStream,
+		eventsPipeline,
 		config.DisplayNum,
 	)
 	if err != nil {
@@ -135,6 +128,10 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
 	})
+	// capture events
+	r.Post("/events/start", apiService.StartCapture)
+	r.Post("/events/stop", apiService.StopCapture)
+
 	// PTY attach endpoint (WebSocket) - not part of OpenAPI spec
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {

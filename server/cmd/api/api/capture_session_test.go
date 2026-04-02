@@ -246,8 +246,7 @@ func (m *mockRecordManager) StopAll(_ context.Context) error                    
 // newTestService builds an ApiService with minimal dependencies for capture session tests.
 func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
-	cs, es := newCaptureSession(t)
-	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), cs, es, 0)
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), newEventsPipeline(), 0)
 	require.NoError(t, err)
 	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc

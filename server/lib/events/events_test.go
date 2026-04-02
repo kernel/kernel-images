@@ -1,8 +1,12 @@
 package events
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,7 +39,9 @@ func TestEventSerialization(t *testing.T) {
 				"parent_frame_id": "parent-frame-1",
 			},
 		},
-		Data: json.RawMessage(`{"message":"hello"}`),
+		DetailLevel: DetailStandard,
+		URL:         "https://example.com",
+		Data:        json.RawMessage(`{"message":"hello"}`),
 	}
 
 	b, err := json.Marshal(ev)
@@ -46,6 +52,8 @@ func TestEventSerialization(t *testing.T) {
 
 	assert.Equal(t, "console.log", decoded["type"])
 	assert.Equal(t, "console", decoded["category"])
+	assert.Equal(t, "standard", decoded["detail_level"])
+	assert.Equal(t, "https://example.com", decoded["url"])
 
 	src, ok := decoded["source"].(map[string]any)
 	require.True(t, ok)
@@ -59,7 +67,8 @@ func TestEventSerialization(t *testing.T) {
 
 func TestEnvelopeSerialization(t *testing.T) {
 	env := Envelope{
-		Seq: 1,
+		CaptureSessionID: "test-session-id",
+		Seq:              1,
 		Event: Event{
 			Ts:       1000,
 			Type:     "console.log",
@@ -74,8 +83,8 @@ func TestEnvelopeSerialization(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(b, &decoded))
 
+	assert.Equal(t, "test-session-id", decoded["capture_session_id"])
 	assert.Equal(t, float64(1), decoded["seq"])
-	assert.NotContains(t, decoded, "capture_session_id")
 	inner, ok := decoded["event"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "console.log", inner["type"])
@@ -112,6 +121,7 @@ func TestEventOmitEmpty(t *testing.T) {
 
 	s := string(b)
 	assert.NotContains(t, s, `"event"`)
+	assert.Contains(t, s, `"detail_level"`)
 }
 
 func mkEnv(seq uint64, ev Event) Envelope {
@@ -122,17 +132,10 @@ func cdpEvent(typ string, cat EventCategory) Event {
 	return Event{Type: typ, Category: cat, Source: Source{Kind: KindCDP}}
 }
 
-func newTestRingBuffer(t *testing.T, capacity int) *ringBuffer {
-	t.Helper()
-	rb, err := newRingBuffer(capacity)
-	require.NoError(t, err)
-	return rb
-}
-
 // TestRingBuffer: publish 3 envelopes; reader reads all 3 in order
 func TestRingBuffer(t *testing.T) {
-	rb := newTestRingBuffer(t,10)
-	reader := rb.newReader(0)
+	rb := NewRingBuffer(10)
+	reader := rb.NewReader(0)
 
 	envelopes := []Envelope{
 		mkEnv(1, cdpEvent("console.log", CategoryConsole)),
@@ -141,7 +144,7 @@ func TestRingBuffer(t *testing.T) {
 	}
 
 	for _, env := range envelopes {
-		rb.publish(env)
+		rb.Publish(env)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -156,13 +159,13 @@ func TestRingBuffer(t *testing.T) {
 
 // TestRingBufferOverflowNoBlock: writer never blocks even with no readers
 func TestRingBufferOverflowNoBlock(t *testing.T) {
-	rb := newTestRingBuffer(t,2)
+	rb := NewRingBuffer(2)
 
 	done := make(chan struct{})
 	go func() {
-		rb.publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
-		rb.publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
-		rb.publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
+		rb.Publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
+		rb.Publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
+		rb.Publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
 		close(done)
 	}()
 
@@ -172,7 +175,7 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 		t.Fatal("Publish blocked with no readers")
 	}
 
-	reader := rb.newReader(0)
+	reader := rb.NewReader(0)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -183,12 +186,12 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 }
 
 func TestRingBufferOverflowExistingReader(t *testing.T) {
-	rb := newTestRingBuffer(t,2)
-	reader := rb.newReader(0)
+	rb := NewRingBuffer(2)
+	reader := rb.NewReader(0)
 
-	rb.publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
-	rb.publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
-	rb.publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
+	rb.Publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
+	rb.Publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
+	rb.Publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -208,22 +211,22 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 }
 
 func TestNewReaderResume(t *testing.T) {
-	rb := newTestRingBuffer(t,10)
+	rb := NewRingBuffer(10)
 	for i := uint64(1); i <= 5; i++ {
-		rb.publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+		rb.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	t.Run("resume_mid_stream", func(t *testing.T) {
-		reader := rb.newReader(3)
+		reader := rb.NewReader(3)
 		env := readEnvelope(t, reader, ctx)
 		assert.Equal(t, uint64(4), env.Seq)
 	})
 
 	t.Run("resume_at_latest", func(t *testing.T) {
-		reader := rb.newReader(5)
+		reader := rb.NewReader(5)
 		// Nothing to read — should block until ctx cancels
 		shortCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 		defer cancel()
@@ -232,12 +235,12 @@ func TestNewReaderResume(t *testing.T) {
 	})
 
 	t.Run("resume_before_oldest_triggers_drop", func(t *testing.T) {
-		small := newTestRingBuffer(t, 3)
+		small := NewRingBuffer(3)
 		for i := uint64(1); i <= 5; i++ {
-			small.publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+			small.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
 		}
 		// oldest in ring is seq 3, requesting resume after seq 1
-		reader := small.newReader(1)
+		reader := small.NewReader(1)
 		res, err := reader.Read(ctx)
 		require.NoError(t, err)
 		assert.Nil(t, res.Envelope)
@@ -250,12 +253,12 @@ func TestNewReaderResume(t *testing.T) {
 
 func TestConcurrentPublishRead(t *testing.T) {
 	const numEvents = 20
-	rb := newTestRingBuffer(t,32)
+	rb := NewRingBuffer(32)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	reader := rb.newReader(0)
+	reader := rb.NewReader(0)
 
 	var wg sync.WaitGroup
 
@@ -274,7 +277,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 1; i <= numEvents; i++ {
-			rb.publish(mkEnv(uint64(i), cdpEvent("console.log", CategoryConsole)))
+			rb.Publish(mkEnv(uint64(i), cdpEvent("console.log", CategoryConsole)))
 		}
 	}()
 
@@ -282,18 +285,18 @@ func TestConcurrentPublishRead(t *testing.T) {
 }
 
 func TestConcurrentReaders(t *testing.T) {
-	rb := newTestRingBuffer(t,20)
+	rb := NewRingBuffer(20)
 
 	numReaders := 3
 	numEvents := 5
 
 	readers := make([]*Reader, numReaders)
 	for i := range readers {
-		readers[i] = rb.newReader(0)
+		readers[i] = rb.NewReader(0)
 	}
 
 	for i := 0; i < numEvents; i++ {
-		rb.publish(mkEnv(uint64(i+1), cdpEvent("console.log", CategoryConsole)))
+		rb.Publish(mkEnv(uint64(i+1), cdpEvent("console.log", CategoryConsole)))
 	}
 
 	var wg sync.WaitGroup
@@ -325,43 +328,286 @@ func TestConcurrentReaders(t *testing.T) {
 	}
 }
 
+// TestFileWriter: per-category JSONL appender tests.
+func TestFileWriter(t *testing.T) {
+	t.Run("category_routing", func(t *testing.T) {
+		dir := t.TempDir()
+		fw := NewFileWriter(dir)
+		defer fw.Close()
 
-func TestRingBufferResetWithActiveReader(t *testing.T) {
-	rb := newTestRingBuffer(t,10)
-	reader := rb.newReader(0)
+		envsToFile := []struct {
+			env      Envelope
+			file     string
+			category string
+		}{
+			{Envelope{Seq: 1, Event: Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1}}, "console.log", "console"},
+			{Envelope{Seq: 2, Event: Event{Type: "network.request", Category: CategoryNetwork, Source: Source{Kind: KindCDP}, Ts: 1}}, "network.log", "network"},
+			{Envelope{Seq: 3, Event: Event{Type: "liveview.click", Category: CategoryLiveview, Source: Source{Kind: KindKernelAPI}, Ts: 1}}, "liveview.log", "liveview"},
+			{Envelope{Seq: 4, Event: Event{Type: "captcha.solve", Category: CategoryCaptcha, Source: Source{Kind: KindExtension}, Ts: 1}}, "captcha.log", "captcha"},
+			{Envelope{Seq: 5, Event: Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1}}, "page.log", "page"},
+			{Envelope{Seq: 6, Event: Event{Type: "input.click", Category: CategoryInteraction, Source: Source{Kind: KindCDP}, Ts: 1}}, "interaction.log", "interaction"},
+			{Envelope{Seq: 7, Event: Event{Type: "monitor.connected", Category: CategorySystem, Source: Source{Kind: KindKernelAPI}, Ts: 1}}, "system.log", "system"},
+		}
 
-	// Publish some events so the reader advances.
-	for i := uint64(1); i <= 5; i++ {
-		rb.publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	for i := 0; i < 5; i++ {
-		readEnvelope(t, reader, ctx)
-	}
-	// reader.nextSeq is now 6.
+		for _, e := range envsToFile {
+			data, err := json.Marshal(e.env)
+			require.NoError(t, err)
+			require.NoError(t, fw.Write(e.env, data))
+		}
 
-	// Reset — reader should wake up and block until new publishes arrive.
-	rb.reset()
+		for _, e := range envsToFile {
+			data, err := os.ReadFile(filepath.Join(dir, e.file))
+			require.NoError(t, err, "missing file %s for type %s", e.file, e.env.Event.Type)
 
-	shortCtx, shortCancel := context.WithTimeout(ctx, 50*time.Millisecond)
-	defer shortCancel()
-	_, err := reader.Read(shortCtx)
-	assert.ErrorIs(t, err, context.DeadlineExceeded, "reader should block after reset")
+			line := bytes.TrimRight(data, "\n")
+			require.True(t, json.Valid(line), "invalid JSON in %s", e.file)
 
-	// Publish new events; reader should resume from seq 1.
-	rb.publish(mkEnv(1, cdpEvent("page.navigation", CategoryPage)))
-	env := readEnvelope(t, reader, ctx)
-	assert.Equal(t, uint64(1), env.Seq)
-	assert.Equal(t, "page.navigation", env.Event.Type)
-}
+			var decoded map[string]any
+			require.NoError(t, json.Unmarshal(line, &decoded))
+			inner, ok := decoded["event"].(map[string]any)
+			require.True(t, ok)
+			assert.Equal(t, e.category, inner["category"], "wrong category in %s", e.file)
+			srcMap, ok := inner["source"].(map[string]any)
+			require.True(t, ok, "source should be an object in %s", e.file)
+			assert.Equal(t, string(e.env.Event.Source.Kind), srcMap["kind"], "wrong source kind in %s", e.file)
+		}
+	})
 
-func TestNewRingBufferRejectsNonPositiveCapacity(t *testing.T) {
-	for _, cap := range []int{0, -1} {
-		rb, err := newRingBuffer(cap)
-		assert.Nil(t, rb)
+	t.Run("empty_category_rejected", func(t *testing.T) {
+		dir := t.TempDir()
+		fw := NewFileWriter(dir)
+		defer fw.Close()
+
+		env := Envelope{Seq: 1, Event: Event{Type: "mystery", Category: "", Source: Source{Kind: KindCDP}, Ts: 1}}
+		data, _ := json.Marshal(env)
+		err := fw.Write(env, data)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "capacity must be > 0")
-	}
+		assert.Contains(t, err.Error(), "empty category")
+	})
+
+	t.Run("concurrent_writes", func(t *testing.T) {
+		dir := t.TempDir()
+		fw := NewFileWriter(dir)
+		defer fw.Close()
+
+		const goroutines = 10
+		const eventsPerGoroutine = 100
+
+		var wg sync.WaitGroup
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				for j := 0; j < eventsPerGoroutine; j++ {
+					env := Envelope{
+						Seq:   uint64(i*eventsPerGoroutine + j),
+						Event: Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1},
+					}
+					envData, err := json.Marshal(env)
+					require.NoError(t, err)
+					require.NoError(t, fw.Write(env, envData))
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		data, err := os.ReadFile(filepath.Join(dir, "console.log"))
+		require.NoError(t, err)
+
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		assert.Len(t, lines, goroutines*eventsPerGoroutine)
+		for _, line := range lines {
+			assert.True(t, json.Valid([]byte(line)), "invalid JSON line: %s", line)
+		}
+	})
+
+	t.Run("lazy_open", func(t *testing.T) {
+		dir := t.TempDir()
+		fw := NewFileWriter(dir)
+		defer fw.Close()
+
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Empty(t, entries, "files opened before first Write")
+
+		env := Envelope{Seq: 1, Event: Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1}}
+		envData, err := json.Marshal(env)
+		require.NoError(t, err)
+		require.NoError(t, fw.Write(env, envData))
+
+		entries, err = os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Len(t, entries, 1, "expected exactly one file after first Write")
+		assert.Equal(t, "console.log", entries[0].Name())
+	})
 }
 
+func TestPipeline(t *testing.T) {
+	newPipeline := func(t *testing.T) (*Pipeline, string) {
+		t.Helper()
+		dir := t.TempDir()
+		rb := NewRingBuffer(100)
+		fw := NewFileWriter(dir)
+		p := NewPipeline(rb, fw)
+		t.Cleanup(func() { p.Close() })
+		return p, dir
+	}
+
+	t.Run("concurrent_publish_seq_order", func(t *testing.T) {
+		const goroutines = 8
+		const eventsEach = 50
+		const total = goroutines * eventsEach
+
+		rb := NewRingBuffer(total)
+		fw := NewFileWriter(t.TempDir())
+		p := NewPipeline(rb, fw)
+		t.Cleanup(func() { p.Close() })
+		reader := p.NewReader(0)
+
+		var wg sync.WaitGroup
+		for i := 0; i < goroutines; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < eventsEach; j++ {
+					p.Publish(cdpEvent("console.log", CategoryConsole))
+				}
+			}()
+		}
+		wg.Wait()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		for want := uint64(1); want <= total; want++ {
+			env := readEnvelope(t, reader, ctx)
+			assert.Equal(t, want, env.Seq, "events must arrive in seq order")
+		}
+	})
+
+	t.Run("publish_increments_seq", func(t *testing.T) {
+		p, _ := newPipeline(t)
+		reader := p.NewReader(0)
+
+		for i := 0; i < 3; i++ {
+			p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		for want := uint64(1); want <= 3; want++ {
+			env := readEnvelope(t, reader, ctx)
+			assert.Equal(t, want, env.Seq, "expected seq %d got %d", want, env.Seq)
+		}
+	})
+
+	t.Run("publish_sets_ts", func(t *testing.T) {
+		p, _ := newPipeline(t)
+		reader := p.NewReader(0)
+
+		before := time.Now().UnixMilli()
+		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}})
+		after := time.Now().UnixMilli()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		assert.GreaterOrEqual(t, env.Event.Ts, before)
+		assert.LessOrEqual(t, env.Event.Ts, after)
+	})
+
+	t.Run("publish_writes_file", func(t *testing.T) {
+		p, dir := newPipeline(t)
+
+		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
+
+		data, err := os.ReadFile(filepath.Join(dir, "console.log"))
+		require.NoError(t, err)
+
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		require.Len(t, lines, 1)
+		assert.True(t, json.Valid([]byte(lines[0])))
+		assert.Contains(t, lines[0], `"console.log"`)
+	})
+
+	t.Run("publish_writes_ring", func(t *testing.T) {
+		p, _ := newPipeline(t)
+
+		reader := p.NewReader(0)
+		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		assert.Equal(t, "page.navigation", env.Event.Type)
+		assert.Equal(t, CategoryPage, env.Event.Category)
+	})
+
+	t.Run("start_sets_capture_session_id", func(t *testing.T) {
+		p, _ := newPipeline(t)
+		p.Start("test-uuid")
+
+		reader := p.NewReader(0)
+		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		assert.Equal(t, "test-uuid", env.CaptureSessionID)
+	})
+
+	t.Run("truncation_applied", func(t *testing.T) {
+		p, dir := newPipeline(t)
+		reader := p.NewReader(0)
+
+		largeData := strings.Repeat("x", 1_100_000)
+		rawData, err := json.Marshal(map[string]string{"payload": largeData})
+		require.NoError(t, err)
+
+		p.Publish(Event{
+			Type:     "page.navigation",
+			Category: CategoryPage,
+			Source:   Source{Kind: KindCDP},
+			Ts:       1,
+			Data:     json.RawMessage(rawData),
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		assert.True(t, env.Event.Truncated)
+		assert.True(t, json.Valid(env.Event.Data))
+
+		marshaled, err := json.Marshal(env)
+		require.NoError(t, err)
+		assert.LessOrEqual(t, len(marshaled), maxS2RecordBytes)
+
+		data, err := os.ReadFile(filepath.Join(dir, "page.log"))
+		require.NoError(t, err)
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		require.Len(t, lines, 1)
+		assert.Contains(t, lines[0], `"truncated":true`)
+	})
+
+	t.Run("defaults_detail_level", func(t *testing.T) {
+		p, _ := newPipeline(t)
+		reader := p.NewReader(0)
+
+		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		assert.Equal(t, DetailStandard, env.Event.DetailLevel)
+
+		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1, DetailLevel: DetailVerbose})
+		env2 := readEnvelope(t, reader, ctx)
+		assert.Equal(t, DetailVerbose, env2.Event.DetailLevel)
+	})
+}

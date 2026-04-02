@@ -11,7 +11,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
@@ -52,7 +54,6 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	}
 
 	if body.Data != nil {
-		// re-marshal body.Data to normalize it into a canonical RawMessage byte slice.
 		data, err := json.Marshal(body.Data)
 		if err != nil {
 			return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid data"}}, nil
@@ -69,8 +70,6 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 // Supports reconnection via the Last-Event-ID header. Emits a keepalive comment
 // frame every 15 s when no event arrives.
 func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequestObject) (oapi.StreamEventsResponseObject, error) {
-	// Default to the current seq so fresh connections only see new events.
-	// Seqs are process-monotonic; a Last-Event-ID from any prior session resumes correctly.
 	afterSeq := s.eventStream.Seq()
 	if id := req.Params.LastEventID; id != nil && *id != "" {
 		if n, err := strconv.ParseUint(*id, 10, 64); err == nil && n > 0 {
@@ -93,7 +92,6 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 					case <-ctx.Done():
 						return
 					default:
-						// No event in 15 s and client still connected, send keepalive.
 						if _, err := pw.Write([]byte(":\n\n")); err != nil {
 							return
 						}
@@ -144,4 +142,30 @@ func writeEnvelopeFrame(w io.Writer, seq *uint64, env events.Envelope) error {
 	buf.WriteString("\n\n")
 	_, err = w.Write(buf.Bytes())
 	return err
+}
+
+// StartCapture handles POST /events/start.
+// Generates a new capture session ID, seeds the pipeline, then starts the
+// CDP monitor. If already running, the monitor is stopped and
+// restarted with a fresh session ID.
+func (s *ApiService) StartCapture(w http.ResponseWriter, r *http.Request) {
+	s.monitorMu.Lock()
+	defer s.monitorMu.Unlock()
+
+	s.eventsPipeline.Start(uuid.New().String())
+
+	if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
+		logger.FromContext(r.Context()).Error("failed to start CDP monitor", "err", err)
+		http.Error(w, "failed to start capture", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// StopCapture handles POST /events/stop.
+func (s *ApiService) StopCapture(w http.ResponseWriter, r *http.Request) {
+	s.monitorMu.Lock()
+	defer s.monitorMu.Unlock()
+	s.cdpMonitor.Stop()
+	w.WriteHeader(http.StatusOK)
 }
