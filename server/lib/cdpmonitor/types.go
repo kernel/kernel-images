@@ -34,6 +34,7 @@ type cdpMessage struct {
 
 // networkReqState holds request + response metadata until loadingFinished.
 type networkReqState struct {
+	sessionID    string
 	method       string
 	url          string
 	headers      json.RawMessage
@@ -46,9 +47,10 @@ type networkReqState struct {
 }
 
 // cdpConsoleArg is a single Runtime.consoleAPICalled argument.
+// Value is json.RawMessage because CDP sends strings, numbers, objects, etc.
 type cdpConsoleArg struct {
-	Type  string `json:"type"`
-	Value string `json:"value"`
+	Type  string          `json:"type"`
+	Value json.RawMessage `json:"value,omitempty"`
 }
 
 // cdpConsoleParams is the shape of Runtime.consoleAPICalled params.

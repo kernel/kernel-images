@@ -24,25 +24,27 @@ type PublishFunc func(ev events.Event)
 const wsReadLimit = 8 * 1024 * 1024
 
 // Monitor manages a CDP WebSocket connection with auto-attach session fan-out.
-// Reusable: Stop followed by Start reconnects cleanly. All exported methods are
-// safe to call concurrently. Stop blocks until the read goroutine exits.
 type Monitor struct {
 	upstreamMgr UpstreamProvider
 	publish     PublishFunc
 	displayNum  int
 
+	// lifeMu serializes Start, Stop, and restartReadLoop to prevent races on
+	// conn, lifecycleCtx, cancel, and done.
+	lifeMu sync.Mutex
 	conn   *websocket.Conn
-	connMu sync.Mutex
 
-	nextID   atomic.Int64
-	pendMu   sync.Mutex
-	pending  map[int64]chan cdpMessage
+	nextID  atomic.Int64
+	pendMu  sync.Mutex
+	pending map[int64]chan cdpMessage
 
 	sessionsMu sync.RWMutex
 	sessions   map[string]targetInfo // sessionID → targetInfo
 
 	pendReqMu       sync.Mutex
 	pendingRequests map[string]networkReqState // requestId → networkReqState
+
+	currentURL atomic.Value // last URL from Page.frameNavigated
 
 	computed *computedState
 
@@ -76,6 +78,14 @@ func (m *Monitor) IsRunning() bool {
 	return m.running.Load()
 }
 
+// getLifecycleCtx returns the current lifecycle context under lifeMu.
+func (m *Monitor) getLifecycleCtx() context.Context {
+	m.lifeMu.Lock()
+	ctx := m.lifecycleCtx
+	m.lifeMu.Unlock()
+	return ctx
+}
+
 // Start begins CDP capture. Restarts if already running.
 func (m *Monitor) Start(parentCtx context.Context) error {
 	if m.running.Load() {
@@ -97,13 +107,12 @@ func (m *Monitor) Start(parentCtx context.Context) error {
 	}
 	conn.SetReadLimit(wsReadLimit)
 
-	m.connMu.Lock()
+	m.lifeMu.Lock()
 	m.conn = conn
-	m.connMu.Unlock()
-
 	m.lifecycleCtx = ctx
 	m.cancel = cancel
 	m.done = make(chan struct{})
+	m.lifeMu.Unlock()
 
 	m.running.Store(true)
 
@@ -119,18 +128,31 @@ func (m *Monitor) Stop() {
 	if !m.running.Swap(false) {
 		return
 	}
+
+	m.lifeMu.Lock()
 	if m.cancel != nil {
 		m.cancel()
 	}
-	if m.done != nil {
-		<-m.done
+	done := m.done
+	m.lifeMu.Unlock()
+
+	if done != nil {
+		<-done
 	}
-	m.connMu.Lock()
+
+	m.lifeMu.Lock()
 	if m.conn != nil {
 		_ = m.conn.Close(websocket.StatusNormalClosure, "stopped")
 		m.conn = nil
 	}
-	m.connMu.Unlock()
+	m.lifeMu.Unlock()
+
+	m.clearState()
+}
+
+// clearState resets sessions, pending requests, and computed state.
+func (m *Monitor) clearState() {
+	m.currentURL.Store("")
 
 	m.sessionsMu.Lock()
 	m.sessions = make(map[string]targetInfo)
@@ -145,11 +167,12 @@ func (m *Monitor) Stop() {
 
 // readLoop reads CDP messages, routing responses to pending callers and dispatching events.
 func (m *Monitor) readLoop(ctx context.Context) {
-	defer close(m.done)
-
-	m.connMu.Lock()
+	m.lifeMu.Lock()
+	done := m.done
 	conn := m.conn
-	m.connMu.Unlock()
+	m.lifeMu.Unlock()
+	defer close(done)
+
 	if conn == nil {
 		return
 	}
@@ -211,13 +234,14 @@ func (m *Monitor) send(ctx context.Context, method string, params any, sessionID
 		m.pendMu.Unlock()
 	}()
 
-	m.connMu.Lock()
+	m.lifeMu.Lock()
 	conn := m.conn
-	m.connMu.Unlock()
+	m.lifeMu.Unlock()
 	if conn == nil {
 		return nil, fmt.Errorf("cdpmonitor: connection not open")
 	}
 
+	// coder/websocket allows concurrent Read + Write on the same Conn.
 	if err := conn.Write(ctx, websocket.MessageText, reqBytes); err != nil {
 		return nil, fmt.Errorf("write: %w", err)
 	}
@@ -296,8 +320,16 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 
 // restartReadLoop waits for the current readLoop to exit, then starts a new one.
 func (m *Monitor) restartReadLoop(ctx context.Context) {
-	<-m.done
+	m.lifeMu.Lock()
+	done := m.done
+	m.lifeMu.Unlock()
+
+	<-done
+
+	m.lifeMu.Lock()
 	m.done = make(chan struct{})
+	m.lifeMu.Unlock()
+
 	go m.readLoop(ctx)
 }
 
@@ -332,12 +364,15 @@ func (m *Monitor) subscribeToUpstream(ctx context.Context) {
 
 			startReconnect := time.Now()
 
-			m.connMu.Lock()
+			m.lifeMu.Lock()
 			if m.conn != nil {
 				_ = m.conn.Close(websocket.StatusNormalClosure, "reconnecting")
 				m.conn = nil
 			}
-			m.connMu.Unlock()
+			m.lifeMu.Unlock()
+
+			// Clear stale state from the previous Chrome instance.
+			m.clearState()
 
 			var reconnErr error
 			for attempt := range 10 {
@@ -359,9 +394,9 @@ func (m *Monitor) subscribeToUpstream(ctx context.Context) {
 				}
 				conn.SetReadLimit(wsReadLimit)
 
-				m.connMu.Lock()
+				m.lifeMu.Lock()
 				m.conn = conn
-				m.connMu.Unlock()
+				m.lifeMu.Unlock()
 
 				reconnErr = nil
 				break

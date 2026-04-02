@@ -1,10 +1,26 @@
 package cdpmonitor
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"unicode/utf8"
 )
+
+// consoleArgString extracts a display string from a CDP console argument.
+// For strings it unquotes the JSON value; for other types it returns the raw JSON.
+func consoleArgString(a cdpConsoleArg) string {
+	if len(a.Value) == 0 {
+		return a.Type // e.g. "undefined", "null"
+	}
+	if a.Type == "string" {
+		var s string
+		if json.Unmarshal(a.Value, &s) == nil {
+			return s
+		}
+	}
+	return string(a.Value)
+}
 
 // isTextualResource reports whether the resource warrants body capture.
 // resourceType is checked first; mimeType is a fallback for resources with no type (e.g. in-flight at attach time).
@@ -20,7 +36,7 @@ func isTextualResource(resourceType, mimeType string) bool {
 // Binary formats (vendor types, binary encodings, raw streams) are excluded.
 func isCapturedMIME(mime string) bool {
 	if mime == "" {
-		return true // unknown, capture conservatively
+		return false // unknown
 	}
 	for _, prefix := range []string{"image/", "font/", "audio/", "video/"} {
 		if strings.HasPrefix(mime, prefix) {
@@ -82,6 +98,9 @@ func bodyCapFor(mime string) int {
 func truncateBody(body string, maxBody int) string {
 	if len(body) <= maxBody {
 		return body
+	}
+	if maxBody <= utf8.UTFMax {
+		return body[:maxBody]
 	}
 	// Walk back at most UTFMax bytes to find a clean rune boundary.
 	i := maxBody

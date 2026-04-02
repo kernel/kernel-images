@@ -30,8 +30,10 @@ func (m *Monitor) enableDomains(ctx context.Context, sessionID string) {
 // injectedJS tracks clicks, keys, and scrolls via the __kernelEvent binding.
 // Layout shifts are handled natively by PerformanceTimeline.enable.
 const injectedJS = `(function() {
+  if (window.__kernelEventInjected) return;
   var send = window.__kernelEvent;
   if (!send) return;
+  window.__kernelEventInjected = true;
 
   function sel(el) {
     return el.id ? '#' + el.id : (el.className ? '.' + String(el.className).split(' ')[0] : '');

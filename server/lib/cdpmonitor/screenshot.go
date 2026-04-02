@@ -52,7 +52,7 @@ func (m *Monitor) captureScreenshot(ctx context.Context) {
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(pngBytes)
-	data := json.RawMessage(fmt.Sprintf(`{"png":%q}`, encoded))
+	data, _ := json.Marshal(map[string]string{"png": encoded})
 
 	m.publish(events.Event{
 		Ts:          time.Now().UnixMilli(),
