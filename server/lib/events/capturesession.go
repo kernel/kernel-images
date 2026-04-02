@@ -3,7 +3,6 @@ package events
 import (
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -14,7 +13,7 @@ type CaptureSession struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
 	files            *FileWriter
-	seq              atomic.Uint64
+	seq              uint64
 	captureSessionID string
 }
 
@@ -35,9 +34,10 @@ func (s *CaptureSession) Publish(ev Event) {
 		ev.DetailLevel = DetailStandard
 	}
 
+	s.seq++
 	env := Envelope{
 		CaptureSessionID: s.captureSessionID,
-		Seq:              s.seq.Add(1),
+		Seq:              s.seq,
 		Event:            ev,
 	}
 	env, data := truncateIfNeeded(env)
