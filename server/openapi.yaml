@@ -1367,8 +1367,25 @@ components:
           description: Text to type on the host computer
         delay:
           type: integer
-          description: Delay in milliseconds between keystrokes
+          description: Delay in milliseconds between keystrokes. Ignored when smooth is true.
           minimum: 0
+          default: 0
+        smooth:
+          type: boolean
+          description: |
+            Use human-like variable keystroke timing instead of a fixed delay.
+            When enabled, text is typed in word-sized chunks with variable
+            intra-word delays and natural inter-word pauses. The delay field
+            is ignored when smooth is true.
+          default: false
+        typo_chance:
+          type: number
+          description: |
+            Probability (0.0-0.10) of a typo per character, which is then
+            corrected with backspace. Requires smooth to be true. Set to 0
+            to disable. Typical human range is 0.02-0.05.
+          minimum: 0
+          maximum: 0.10
           default: 0
       additionalProperties: false
     ClipboardContent:
