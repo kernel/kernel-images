@@ -64,6 +64,16 @@ func (h *processHandle) setExited(code int) {
 	h.mu.Unlock()
 }
 
+func isUserCmdError(err error) bool {
+	return errors.Is(err, exec.ErrNotFound) ||
+		errors.Is(err, exec.ErrDot) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, os.ErrPermission) ||
+		errors.Is(err, syscall.EISDIR) ||
+		errors.Is(err, syscall.ENOEXEC) ||
+		errors.Is(err, syscall.ENOTDIR)
+}
+
 func buildCmd(body *oapi.ProcessExecRequest) (*exec.Cmd, error) {
 	if body == nil || body.Command == "" {
 		return nil, errors.New("command required")
@@ -177,6 +187,9 @@ func (s *ApiService) ProcessExec(ctx context.Context, request oapi.ProcessExecRe
 		defer cancel()
 	}
 	if err := cmd.Start(); err != nil {
+		if isUserCmdError(err) {
+			return oapi.ProcessExec400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+		}
 		log.Error("failed to start process", "err", err)
 		return oapi.ProcessExec500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start process"}}, nil
 	}
@@ -263,6 +276,9 @@ func (s *ApiService) ProcessSpawn(ctx context.Context, request oapi.ProcessSpawn
 		var errStart error
 		ptyFile, errStart = pty.Start(cmd)
 		if errStart != nil {
+			if isUserCmdError(errStart) {
+				return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: errStart.Error()}}, nil
+			}
 			log.Error("failed to start PTY process", "err", errStart)
 			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start process"}}, nil
 		}
@@ -294,6 +310,9 @@ func (s *ApiService) ProcessSpawn(ctx context.Context, request oapi.ProcessSpawn
 			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to open stdin"}}, nil
 		}
 		if err := cmd.Start(); err != nil {
+			if isUserCmdError(err) {
+				return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+			}
 			log.Error("failed to start process", "err", err)
 			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start process"}}, nil
 		}

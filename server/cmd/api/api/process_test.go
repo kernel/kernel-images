@@ -203,6 +203,30 @@ func TestProcessNotFoundRoutes(t *testing.T) {
 	}
 }
 
+func TestProcessExec_CommandNotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := &ApiService{procs: make(map[string]*processHandle)}
+
+	body := &oapi.ProcessExecRequest{Command: "nonexistent_binary_that_does_not_exist"}
+	resp, err := svc.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: body})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.ProcessExec400JSONResponse)
+	require.True(t, ok, "expected 400 for nonexistent command, got %T", resp)
+}
+
+func TestProcessSpawn_CommandNotFound(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := &ApiService{procs: make(map[string]*processHandle), stz: scaletozero.NewNoopController()}
+
+	body := &oapi.ProcessSpawnRequest{Command: "nonexistent_binary_that_does_not_exist"}
+	resp, err := svc.ProcessSpawn(ctx, oapi.ProcessSpawnRequestObject{Body: body})
+	require.NoError(t, err)
+	_, ok := resp.(oapi.ProcessSpawn400JSONResponse)
+	require.True(t, ok, "expected 400 for nonexistent command, got %T", resp)
+}
+
 func TestBuildCmd_AsRootSetsCredential(t *testing.T) {
 	t.Parallel()
 	asRoot := true
