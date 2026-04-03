@@ -132,6 +132,69 @@ xdotool type --delay 85 -- "you?"          # fork+exec 5
 
 **Why O(words) calls, not 1?** `xdotool type` consumes the rest of argv as text to type, so it cannot be chained with `sleep` or other commands in a single invocation. O(words) fork+execs (typically 5-15 for a sentence) is acceptable -- the inter-word pauses (80-300ms) dwarf the ~1-2ms fork+exec overhead.
 
+### 2a. Typo Injection (Optional)
+
+Optionally introduce realistic typos that are immediately corrected with backspace, simulating natural human typing errors.
+
+**Research basis:** The [136 million keystrokes study (Aalto/CHI 2018)](https://userinterfaces.aalto.fi/136Mkeystrokes/) and [Logan (1999)](https://www.unm.edu/~quadl/empiricaldata/Typographical-Errors-by-E.P.) show average typists produce errors at ~2-5% of keystrokes. The dominant error type (~40%) is adjacent-key substitution on the QWERTY layout.
+
+**API change:** Add `typo_chance: number` (0.0-0.10, default 0) to `TypeTextRequest`. Requires `smooth=true`. Typical human range is 0.02-0.05.
+
+**Typo position selection -- geometric gap, O(typos) not O(chars):**
+
+Instead of per-character Bernoulli trials (expensive), compute gaps between typo positions directly. For a 3% rate the average gap is ~33 characters. One `rng.Intn` per typo:
+
+```go
+avgGap := int(1.0 / typoRate) // e.g., 33 for 3%
+pos := avgGap/2 + rng.Intn(avgGap)  // first typo position
+for pos < len(runes) {
+    typoPositions = append(typoPositions, pos)
+    pos += avgGap/2 + rng.Intn(avgGap) // next gap: [avgGap/2, avgGap*3/2)
+}
+```
+
+For a 200-char text at 3%: ~6 typos = ~6 `rng.Intn` calls for positions + ~6 for type selection = **12 total random calls** vs 200 with per-character Bernoulli. No `math.Log` or transcendental functions.
+
+**Typo type selection (one `rng.Intn(100)` per typo):**
+
+| Roll | Type | Weight | Mechanism |
+|---|---|---|---|
+| 0-59 | Adjacent key | 60% | Look up QWERTY neighbor from static `[26][]byte` array, O(1) |
+| 60-79 | Doubling | 20% | Type the character twice |
+| 80-94 | Transposition | 15% | Swap current and next character |
+| 95-99 | Extra character | 5% | Insert a random adjacent key before the correct one |
+
+**Correction sequence:** At a typo position, the chunk is split and the correction is injected:
+
+```
+xdotool type --delay 80 -- "hel"      # type up to typo point
+xdotool type --delay 80 -- "p"        # type wrong char (adjacent to 'l')
+  [Go sleep 350ms]                    # "oh no" realization pause
+xdotool key BackSpace                 # delete wrong char
+  [Go sleep 80ms]                     # brief recovery
+xdotool type --delay 80 -- "lo "      # continue with correct text
+```
+
+**Correction timing:**
+- Realization pause before backspace: `UniformJitter(rng, 350, 150, 150)` -> [200, 500]ms
+- Backspace is rapid: no extra delay
+- Recovery pause after correction: `UniformJitter(rng, 80, 30, 40)` -> [50, 110]ms
+
+**QWERTY adjacency data:** Static array, ~26 entries, initialized at package level. No maps, no heap allocation:
+
+```go
+var qwertyAdj = [26][]byte{
+    {'q', 'w', 's', 'z'},       // a
+    {'v', 'g', 'h', 'n'},       // b
+    {'x', 'd', 'f', 'v'},       // c
+    // ... etc
+}
+```
+
+**Extra xdotool calls per typo:** ~3-4 (type wrong, backspace, type correct). At 3% rate on a 50-char sentence, that's ~1-2 typos adding ~4-8 extra calls. The realization pauses (200-500ms) dominate, so fork+exec overhead is negligible.
+
+**Cost summary:** O(typos) random calls + O(typos) extra xdotool calls. No per-character work. For typical text, typos add 0-3 extra correction sequences.
+
 ---
 
 ## 3. Press Key -- Dwell via Inline Sleep
@@ -199,7 +262,7 @@ xdotool mousemove 500 300 click 5 sleep 0.055 click 5 sleep 0.030 click 5 sleep 
 | ------------- | ---------------- | --------------------------------- | ------------------------------------ |
 | `move_mouse`  | O(points) (done) | O(points) Bezier + Box-Muller     | Bezier curve + easeOutQuad + jitter  |
 | `click_mouse` | 1 (same)         | 1-2x `rand.Intn`                  | Uniform random dwell                 |
-| `type_text`   | O(words)         | O(words) `rand.Intn`              | Per-word type + Go-side sleep        |
+| `type_text`   | O(words+typos)   | O(words+typos) `rand.Intn`        | Per-word type + Go-side sleep + optional typo injection |
 | `press_key`   | 1 (same)         | 1x `rand.Intn`                    | Inline keydown/sleep/keyup           |
 | `scroll`      | 1 (same)         | O(ticks) smoothstep (3 muls each) | Eased inter-tick sleep               |
 | `drag_mouse`  | 1-3 (same)       | O(points) Bezier (existing)       | Bezier path + smoothstep step delays |
