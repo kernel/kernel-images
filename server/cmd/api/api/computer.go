@@ -18,7 +18,6 @@ import (
 
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/mousetrajectory"
-	"github.com/onkernel/kernel-images/server/lib/typinghumanizer"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 )
 
@@ -451,197 +450,25 @@ func (s *ApiService) TakeScreenshot(ctx context.Context, request oapi.TakeScreen
 }
 
 func (s *ApiService) doTypeText(ctx context.Context, body oapi.TypeTextRequest) error {
-	if body.Smooth != nil && *body.Smooth {
-		return s.doTypeTextSmooth(ctx, body)
-	}
-
 	log := logger.FromContext(ctx)
 
+	// Validate delay if provided
 	if body.Delay != nil && *body.Delay < 0 {
 		return &validationError{msg: "delay must be >= 0 milliseconds"}
 	}
 
+	// Build xdotool arguments
 	args := []string{"type"}
 	if body.Delay != nil {
 		args = append(args, "--delay", strconv.Itoa(*body.Delay))
 	}
+	// Use "--" to terminate options and pass raw text
 	args = append(args, "--", body.Text)
 
 	output, err := defaultXdoTool.Run(ctx, args...)
 	if err != nil {
 		log.Error("xdotool command failed", "err", err, "output", string(output))
 		return &executionError{msg: "failed to type text"}
-	}
-
-	return nil
-}
-
-func (s *ApiService) doTypeTextSmooth(ctx context.Context, body oapi.TypeTextRequest) error {
-	log := logger.FromContext(ctx)
-
-	if body.TypoChance != nil && (*body.TypoChance < 0 || *body.TypoChance > 0.10) {
-		return &validationError{msg: "typo_chance must be between 0.0 and 0.10"}
-	}
-
-	rng := rand.New(rand.NewSource(rand.Int63()))
-	runes := []rune(body.Text)
-
-	var typoRate float64
-	if body.TypoChance != nil {
-		typoRate = float64(*body.TypoChance)
-	}
-	typos := typinghumanizer.GenerateTypoPositions(rng, len(runes), typoRate)
-
-	// Build a typo lookup set for O(1) access during chunk iteration
-	typoByPos := map[int]typinghumanizer.Typo{}
-	for _, typo := range typos {
-		typoByPos[typo.Pos] = typo
-	}
-
-	chunks := typinghumanizer.SplitWordChunks(body.Text)
-	if len(chunks) == 0 {
-		return nil
-	}
-
-	globalPos := 0
-	for chunkIdx, chunk := range chunks {
-		select {
-		case <-ctx.Done():
-			return &executionError{msg: "typing cancelled"}
-		default:
-		}
-
-		chunkRunes := []rune(chunk)
-		chunkStart := globalPos
-		chunkEnd := chunkStart + len(chunkRunes)
-
-		// Find typos within this chunk
-		var chunkTypo *typinghumanizer.Typo
-		for pos := chunkStart; pos < chunkEnd; pos++ {
-			if t, ok := typoByPos[pos]; ok {
-				chunkTypo = &t
-				break
-			}
-		}
-
-		intraDelayMs := rng.Intn(70) + 50
-
-		if chunkTypo == nil {
-			if err := s.xdotoolTypeChunk(ctx, chunk, intraDelayMs); err != nil {
-				log.Error("xdotool type chunk failed", "err", err, "chunk", chunkIdx)
-				return &executionError{msg: "failed during smooth typing"}
-			}
-		} else {
-			localPos := chunkTypo.Pos - chunkStart
-			if err := s.typeChunkWithTypo(ctx, log, rng, chunkRunes, localPos, *chunkTypo, intraDelayMs); err != nil {
-				return err
-			}
-		}
-
-		globalPos = chunkEnd
-
-		if chunkIdx < len(chunks)-1 {
-			pause := typinghumanizer.UniformJitter(rng, 140, 60, 60)
-			if typinghumanizer.IsSentenceEnd(chunk) {
-				pause = pause * 3 / 2
-			}
-			if err := sleepWithContext(ctx, pause); err != nil {
-				return &executionError{msg: "typing cancelled"}
-			}
-		}
-	}
-
-	log.Info("executed smooth typing", "chunks", len(chunks), "typos", len(typos), "textLen", len(body.Text))
-	return nil
-}
-
-func (s *ApiService) xdotoolTypeChunk(ctx context.Context, text string, delayMs int) error {
-	args := []string{"type", "--delay", strconv.Itoa(delayMs), "--", text}
-	output, err := defaultXdoTool.Run(ctx, args...)
-	if err != nil {
-		return fmt.Errorf("xdotool type failed: %s (output: %s)", err, string(output))
-	}
-	return nil
-}
-
-func (s *ApiService) typeChunkWithTypo(
-	ctx context.Context,
-	log *slog.Logger,
-	rng *rand.Rand,
-	chunkRunes []rune,
-	typoLocalPos int,
-	typo typinghumanizer.Typo,
-	delayMs int,
-) error {
-	// Type text before the typo
-	if typoLocalPos > 0 {
-		before := string(chunkRunes[:typoLocalPos])
-		if err := s.xdotoolTypeChunk(ctx, before, delayMs); err != nil {
-			return &executionError{msg: "failed during smooth typing"}
-		}
-	}
-
-	correctChar := chunkRunes[typoLocalPos]
-	var wrongText string
-	var backspaces int
-
-	switch typo.Kind {
-	case typinghumanizer.TypoAdjacentKey:
-		wrongText = string(typinghumanizer.AdjacentKey(rng, correctChar))
-		backspaces = 1
-	case typinghumanizer.TypoDoubling:
-		wrongText = string([]rune{correctChar, correctChar})
-		backspaces = 2
-	case typinghumanizer.TypoTranspose:
-		if typoLocalPos+1 < len(chunkRunes) {
-			wrongText = string([]rune{chunkRunes[typoLocalPos+1], correctChar})
-			backspaces = 2
-		} else {
-			wrongText = string(typinghumanizer.AdjacentKey(rng, correctChar))
-			backspaces = 1
-		}
-	case typinghumanizer.TypoExtraChar:
-		wrongText = string([]rune{typinghumanizer.AdjacentKey(rng, correctChar), correctChar})
-		backspaces = 2
-	}
-
-	// Type the wrong text
-	if err := s.xdotoolTypeChunk(ctx, wrongText, delayMs); err != nil {
-		return &executionError{msg: "failed during smooth typing"}
-	}
-
-	// "Oh no" realization pause
-	realizationPause := typinghumanizer.UniformJitter(rng, 350, 150, 150)
-	if err := sleepWithContext(ctx, realizationPause); err != nil {
-		return &executionError{msg: "typing cancelled"}
-	}
-
-	// Backspace to correct
-	bsArgs := make([]string, 0, backspaces*2)
-	for i := 0; i < backspaces; i++ {
-		bsArgs = append(bsArgs, "key", "BackSpace")
-	}
-	if output, err := defaultXdoTool.Run(ctx, bsArgs...); err != nil {
-		log.Error("xdotool backspace failed", "err", err, "output", string(output))
-		return &executionError{msg: "failed during typo correction"}
-	}
-
-	// Brief recovery pause
-	recoveryPause := typinghumanizer.UniformJitter(rng, 80, 30, 40)
-	if err := sleepWithContext(ctx, recoveryPause); err != nil {
-		return &executionError{msg: "typing cancelled"}
-	}
-
-	// Type the correct remainder of the chunk from the typo position onward
-	var correctText string
-	if typo.Kind == typinghumanizer.TypoTranspose && typoLocalPos+1 < len(chunkRunes) {
-		correctText = string(chunkRunes[typoLocalPos:])
-	} else {
-		correctText = string(chunkRunes[typoLocalPos:])
-	}
-
-	if err := s.xdotoolTypeChunk(ctx, correctText, delayMs); err != nil {
-		return &executionError{msg: "failed during smooth typing"}
 	}
 
 	return nil
