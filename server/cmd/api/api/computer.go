@@ -633,14 +633,7 @@ func (s *ApiService) typeChunkWithTypo(
 	}
 
 	// Type the correct remainder of the chunk from the typo position onward
-	var correctText string
-	if typo.Kind == typinghumanizer.TypoTranspose && typoLocalPos+1 < len(chunkRunes) {
-		correctText = string(chunkRunes[typoLocalPos:])
-	} else {
-		correctText = string(chunkRunes[typoLocalPos:])
-	}
-
-	if err := s.xdotoolTypeChunk(ctx, correctText, delayMs); err != nil {
+	if err := s.xdotoolTypeChunk(ctx, string(chunkRunes[typoLocalPos:]), delayMs); err != nil {
 		return &executionError{msg: "failed during smooth typing"}
 	}
 
