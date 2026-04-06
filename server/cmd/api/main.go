@@ -24,8 +24,8 @@ import (
 	"github.com/onkernel/kernel-images/server/cmd/config"
 	"github.com/onkernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/onkernel/kernel-images/server/lib/events"
 	"github.com/onkernel/kernel-images/server/lib/logger"
+	"github.com/onkernel/kernel-images/server/lib/events"
 	"github.com/onkernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 	"github.com/onkernel/kernel-images/server/lib/recorder"
@@ -128,16 +128,18 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
 	})
-	// capture events
-	r.Post("/events/start", apiService.StartCapture)
-	r.Post("/events/stop", apiService.StopCapture)
-
 	// PTY attach endpoint (WebSocket) - not part of OpenAPI spec
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "process_id")
 		apiService.HandleProcessAttachWS(w, r, id)
 	})
+
+	// Events capture lifecycle (not part of OpenAPI spec — simple internal control endpoints)
+	r.Post("/events/start", apiService.StartCapture)
+	r.Post("/events/stop", apiService.StopCapture)
+	r.Post("/events/publish", apiService.PublishEvent)
+	r.Get("/events/stream", apiService.StreamEvents)
 
 	// Serve extension files for Chrome policy-installed extensions
 	// This allows Chrome to download .crx and update.xml files via HTTP

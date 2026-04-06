@@ -41,6 +41,11 @@ type ApiService struct {
 	upstreamMgr *devtoolsproxy.UpstreamManager
 	stz         scaletozero.Controller
 
+	// CDP event pipeline and cdpMonitor.
+	captureSession *events.CaptureSession
+	cdpMonitor     *cdpmonitor.Monitor
+	monitorMu      sync.Mutex
+
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
 
@@ -70,11 +75,6 @@ type ApiService struct {
 	// xvfbResizeMu serializes background Xvfb restarts to prevent races
 	// when multiple CDP fast-path resizes fire in quick succession.
 	xvfbResizeMu sync.Mutex
-
-	// CDP event pipeline and cdpMonitor.
-	captureSession *events.CaptureSession
-	cdpMonitor     *cdpmonitor.Monitor
-	monitorMu      sync.Mutex
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -101,8 +101,6 @@ func New(
 		return nil, fmt.Errorf("captureSession cannot be nil")
 	}
 
-	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum)
-
 	return &ApiService{
 		recordManager:     recordManager,
 		factory:           factory,
@@ -114,7 +112,7 @@ func New(
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
 		captureSession:    captureSession,
-		cdpMonitor:        mon,
+		cdpMonitor:        cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum),
 	}, nil
 }
 
@@ -334,9 +332,11 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
-	s.monitorMu.Lock()
-	s.cdpMonitor.Stop()
-	_ = s.captureSession.Close()
-	s.monitorMu.Unlock()
+	if s.cdpMonitor != nil {
+		s.cdpMonitor.Stop()
+	}
+	if s.captureSession != nil {
+		_ = s.captureSession.Close()
+	}
 	return s.recordManager.StopAll(ctx)
 }
