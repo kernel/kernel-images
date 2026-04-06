@@ -151,6 +151,7 @@ func (m *Monitor) Stop() {
 }
 
 // clearState resets sessions, pending requests, and computed state.
+// It also fails all in-flight send() calls so their goroutines are unblocked.
 func (m *Monitor) clearState() {
 	m.currentURL.Store("")
 
@@ -162,7 +163,27 @@ func (m *Monitor) clearState() {
 	m.pendingRequests = make(map[string]networkReqState)
 	m.pendReqMu.Unlock()
 
+	m.failPendingCommands()
+
 	m.computed.resetOnNavigation()
+}
+
+// failPendingCommands unblocks all in-flight send() calls by delivering an
+// error response. This prevents goroutine leaks when the connection is torn
+// down during reconnect.
+func (m *Monitor) failPendingCommands() {
+	m.pendMu.Lock()
+	old := m.pending
+	m.pending = make(map[int64]chan cdpMessage)
+	m.pendMu.Unlock()
+
+	disconnectErr := &cdpError{Code: -1, Message: "connection closed"}
+	for _, ch := range old {
+		select {
+		case ch <- cdpMessage{Error: disconnectErr}:
+		default:
+		}
+	}
 }
 
 // readLoop reads CDP messages, routing responses to pending callers and dispatching events.
