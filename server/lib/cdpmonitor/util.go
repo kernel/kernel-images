@@ -26,7 +26,7 @@ func consoleArgString(a cdpConsoleArg) string {
 // resourceType is checked first; mimeType is a fallback for resources with no type (e.g. in-flight at attach time).
 func isTextualResource(resourceType, mimeType string) bool {
 	switch resourceType {
-	case "Font", "Image", "Media":
+	case "Font", "Image", "Media", "Stylesheet", "Script":
 		return false
 	}
 	return isCapturedMIME(mimeType)
@@ -52,6 +52,10 @@ func isCapturedMIME(mime string) bool {
 		"application/x-protobuf",
 		"application/x-msgpack",
 		"application/x-thrift",
+		"application/javascript",
+		"application/x-javascript",
+		"text/javascript",
+		"text/css",
 	}, mime) {
 		return false
 	}
@@ -68,10 +72,10 @@ func isCapturedMIME(mime string) bool {
 }
 
 // bodyCapFor returns the max body capture size for a MIME type.
-// Structured data (JSON, XML, form data) gets 900 KB; everything else gets 10 KB.
+// Structured data (JSON, XML, form data) gets 8 KB; everything else gets 4 KB.
 func bodyCapFor(mime string) int {
-	const fullCap = 900 * 1024
-	const contextCap = 10 * 1024
+	const fullCap = 8 * 1024
+	const contextCap = 4 * 1024
 	structuredPrefixes := []string{
 		"application/json",
 		"application/xml",

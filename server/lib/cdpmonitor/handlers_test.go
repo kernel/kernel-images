@@ -197,7 +197,7 @@ func TestNetworkEvents(t *testing.T) {
 		ev := ec.waitForNew(t, "network_response", 3*time.Second)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
-		assert.Equal(t, "", data["body"], "binary resource should have empty body")
+		assert.Nil(t, data["body"], "binary resource should not have body field")
 		assert.False(t, getBodyCalled.Load(), "should not call getResponseBody for images")
 	})
 }

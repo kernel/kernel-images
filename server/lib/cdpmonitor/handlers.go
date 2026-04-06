@@ -166,14 +166,19 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 		resourceType: p.ResourceType,
 	}
 	m.pendReqMu.Unlock()
-	data, _ := json.Marshal(map[string]any{
-		"method":           p.Request.Method,
-		"url":              p.Request.URL,
-		"headers":          p.Request.Headers,
-		"post_data":        p.Request.PostData,
-		"resource_type":    p.ResourceType,
-		"initiator_type":   initiatorType,
-	})
+	ev := map[string]any{
+		"method":         p.Request.Method,
+		"url":            p.Request.URL,
+		"headers":        p.Request.Headers,
+		"initiator_type": initiatorType,
+	}
+	if p.Request.PostData != "" {
+		ev["post_data"] = p.Request.PostData
+	}
+	if p.ResourceType != "" {
+		ev["resource_type"] = p.ResourceType
+	}
+	data, _ := json.Marshal(ev)
 	m.publishEvent(EventNetworkRequest, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Network.requestWillBeSent", data, sessionID)
 	m.computed.onRequest()
 }
@@ -214,16 +219,25 @@ func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	go func() {
 		body := m.fetchResponseBody(p.RequestID, sessionID, state)
-		data, _ := json.Marshal(map[string]any{
-			"method":        state.method,
-			"url":           state.url,
-			"status":        state.status,
-			"status_text":   state.statusText,
-			"headers":       state.resHeaders,
-			"mime_type":     state.mimeType,
-			"resource_type": state.resourceType,
-			"body":          body,
-		})
+		ev := map[string]any{
+			"method":  state.method,
+			"url":     state.url,
+			"status":  state.status,
+			"headers": state.resHeaders,
+		}
+		if state.statusText != "" {
+			ev["status_text"] = state.statusText
+		}
+		if state.mimeType != "" {
+			ev["mime_type"] = state.mimeType
+		}
+		if state.resourceType != "" {
+			ev["resource_type"] = state.resourceType
+		}
+		if body != "" {
+			ev["body"] = body
+		}
+		data, _ := json.Marshal(ev)
 		detail := events.DetailStandard
 		if body != "" {
 			detail = events.DetailVerbose
