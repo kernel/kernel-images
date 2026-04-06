@@ -210,8 +210,6 @@ func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string
 	if !ok {
 		return
 	}
-	// Decrement netPending immediately so network_idle tracking reflects true
-	// network completion, not body fetch completion
 	m.computed.onLoadingFinished()
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	go func() {
@@ -280,7 +278,9 @@ func (m *Monitor) handleLoadingFailed(params json.RawMessage, sessionID string) 
 	}
 	data, _ := json.Marshal(ev)
 	m.publishEvent(EventNetworkLoadingFailed, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Network.loadingFailed", data, sessionID)
-	m.computed.onLoadingFinished()
+	if ok {
+		m.computed.onLoadingFinished()
+	}
 }
 
 
@@ -306,15 +306,19 @@ func (m *Monitor) handleFrameNavigated(params json.RawMessage, sessionID string)
 	}
 	m.publishEvent(EventNavigation, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Page.frameNavigated", data, sessionID)
 
-	m.pendReqMu.Lock()
-	for id, req := range m.pendingRequests {
-		if req.sessionID == sessionID {
-			delete(m.pendingRequests, id)
+	// Only reset state for top-level navigations; subframe (iframe) navigations
+	// should not disrupt main-page tracking.
+	if p.Frame.ParentID == "" {
+		m.pendReqMu.Lock()
+		for id, req := range m.pendingRequests {
+			if req.sessionID == sessionID {
+				delete(m.pendingRequests, id)
+			}
 		}
-	}
-	m.pendReqMu.Unlock()
+		m.pendReqMu.Unlock()
 
-	m.computed.resetOnNavigation()
+		m.computed.resetOnNavigation()
+	}
 }
 
 func (m *Monitor) handleDOMContentLoaded(params json.RawMessage, sessionID string) {
