@@ -43,7 +43,7 @@ func TestPublishEvent(t *testing.T) {
 		svc, cs := newPublishTestService(t, logDir)
 
 		b, _ := json.Marshal(events.Event{
-			Type:     "liveview.click",
+			Type:     "liveview_click",
 			Category: events.CategoryLiveview,
 			Source:   events.Source{Kind: events.KindKernelAPI},
 			Data:     json.RawMessage(`{"x":100}`),
@@ -61,7 +61,7 @@ func TestPublishEvent(t *testing.T) {
 		res, err := reader.Read(ctx)
 		require.NoError(t, err)
 		require.NotNil(t, res.Envelope)
-		assert.Equal(t, "liveview.click", res.Envelope.Event.Type)
+		assert.Equal(t, "liveview_click", res.Envelope.Event.Type)
 		assert.Equal(t, events.CategoryLiveview, res.Envelope.Event.Category)
 	})
 
@@ -77,12 +77,28 @@ func TestPublishEvent(t *testing.T) {
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 	})
 
+	t.Run("empty_type_rejected", func(t *testing.T) {
+		logDir := t.TempDir()
+		svc, _ := newPublishTestService(t, logDir)
+
+		b, _ := json.Marshal(events.Event{
+			Category: events.CategoryConsole,
+			Data:     json.RawMessage(`{"x":1}`),
+		})
+		req := httptest.NewRequest(http.MethodPost, "/events/publish", bytes.NewReader(b))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		svc.PublishEvent(w, req)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	})
+
 	t.Run("liveview_routes_correctly", func(t *testing.T) {
 		logDir := t.TempDir()
 		svc, _ := newPublishTestService(t, logDir)
 
 		b, _ := json.Marshal(events.Event{
-			Type:     "liveview.click",
+			Type:     "liveview_click",
 			Category: events.CategoryLiveview,
 			Source:   events.Source{Kind: events.KindKernelAPI},
 			Data:     json.RawMessage(`{"x":100}`),
@@ -111,7 +127,7 @@ func TestPublishEvent(t *testing.T) {
 		svc, _ := newPublishTestService(t, logDir)
 
 		b, _ := json.Marshal(events.Event{
-			Type:     "captcha.solve",
+			Type:     "captcha_solve",
 			Category: events.CategoryCaptcha,
 			Source:   events.Source{Kind: events.KindKernelAPI},
 			Data:     json.RawMessage(`{"token":"abc"}`),

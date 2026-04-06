@@ -50,6 +50,11 @@ func (s *ApiService) PublishEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ev.Type == "" {
+		http.Error(w, "type is required", http.StatusBadRequest)
+		return
+	}
+
 	// Derive category if caller omitted it — FileWriter returns error for empty category.
 	if ev.Category == "" {
 		ev.Category = events.CategoryFor(ev.Type)

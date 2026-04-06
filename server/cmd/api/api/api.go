@@ -336,7 +336,9 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 		s.cdpMonitor.Stop()
 	}
 	if s.captureSession != nil {
-		_ = s.captureSession.Close()
+		if err := s.captureSession.Close(); err != nil {
+			logger.FromContext(ctx).Error("failed to close capture session", "err", err)
+		}
 	}
 	return s.recordManager.StopAll(ctx)
 }

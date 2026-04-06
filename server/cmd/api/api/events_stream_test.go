@@ -19,12 +19,12 @@ func TestStreamEvents(t *testing.T) {
 
 		// Publish 2 events before streaming
 		cs.Publish(events.Event{
-			Type:     "console.log",
+			Type:     "console_log",
 			Category: events.CategoryConsole,
 			Source:   events.Source{Kind: events.KindCDP},
 		})
 		cs.Publish(events.Event{
-			Type:     "console.log",
+			Type:     "console_log",
 			Category: events.CategoryConsole,
 			Source:   events.Source{Kind: events.KindCDP},
 		})
@@ -50,9 +50,9 @@ func TestStreamEvents(t *testing.T) {
 		svc, cs := newPublishTestService(t, logDir)
 
 		// Publish 3 events
-		cs.Publish(events.Event{Type: "console.log", Category: events.CategoryConsole, Source: events.Source{Kind: events.KindCDP}})
-		cs.Publish(events.Event{Type: "console.log", Category: events.CategoryConsole, Source: events.Source{Kind: events.KindCDP}})
-		cs.Publish(events.Event{Type: "console.log", Category: events.CategoryConsole, Source: events.Source{Kind: events.KindCDP}})
+		cs.Publish(events.Event{Type: "console_log", Category: events.CategoryConsole, Source: events.Source{Kind: events.KindCDP}})
+		cs.Publish(events.Event{Type: "console_log", Category: events.CategoryConsole, Source: events.Source{Kind: events.KindCDP}})
+		cs.Publish(events.Event{Type: "console_log", Category: events.CategoryConsole, Source: events.Source{Kind: events.KindCDP}})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 		defer cancel()
