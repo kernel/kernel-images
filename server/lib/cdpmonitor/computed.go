@@ -94,7 +94,7 @@ func (s *computedState) onLoadingFinished() {
 	if s.netPending > 0 || s.netFired {
 		return
 	}
-	// All requests done and not yet fired — start 500 ms debounce timer.
+	// All requests done and not yet fired: start 500ms debounce timer.
 	stopTimer(s.netTimer)
 	s.netTimer = time.AfterFunc(networkIdleDebounce, func() {
 		s.mu.Lock()
@@ -124,7 +124,7 @@ func (s *computedState) onPageLoad() {
 	if s.layoutFired {
 		return
 	}
-	// Start the 1 s layout_settled timer.
+	// Start the 1s layout_settled timer.
 	stopTimer(s.layoutTimer)
 	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
 }
@@ -136,7 +136,7 @@ func (s *computedState) onLayoutShift() {
 	if s.layoutFired || !s.pageLoadSeen {
 		return
 	}
-	// Reset the timer to 1 s from now.
+	// Reset the timer to 1s from now.
 	stopTimer(s.layoutTimer)
 	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
 }

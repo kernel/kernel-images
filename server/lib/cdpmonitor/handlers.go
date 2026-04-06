@@ -52,8 +52,6 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		m.handleDOMContentLoaded(msg.Params, msg.SessionID)
 	case "Page.loadEventFired":
 		m.handleLoadEventFired(msg.Params, msg.SessionID)
-	case "DOM.documentUpdated":
-		m.handleDOMUpdated(msg.Params, msg.SessionID)
 	case "PerformanceTimeline.timelineEventAdded":
 		m.handleTimelineEvent(msg.Params, msg.SessionID)
 	case "Target.attachedToTarget":
@@ -101,7 +99,7 @@ func (m *Monitor) handleExceptionThrown(params json.RawMessage, sessionID string
 		"stack_trace": p.ExceptionDetails.StackTrace,
 	})
 	m.publishEvent("console_error", events.DetailStandard, events.Source{Kind: events.KindCDP}, "Runtime.exceptionThrown", data, sessionID)
-	go m.maybeScreenshot(m.getLifecycleCtx())
+	go m.tryScreenshot(m.getLifecycleCtx())
 }
 
 // handleBindingCalled processes __kernelEvent binding calls from the page.
@@ -214,22 +212,7 @@ func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string
 	}
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	go func() {
-		ctx := m.getLifecycleCtx()
-		body := ""
-		if isTextualResource(state.resourceType, state.mimeType) {
-			result, err := m.send(ctx, "Network.getResponseBody", map[string]any{
-				"requestId": p.RequestID,
-			}, sessionID)
-			if err == nil {
-				var resp struct {
-					Body          string `json:"body"`
-					Base64Encoded bool   `json:"base64Encoded"`
-				}
-				if json.Unmarshal(result, &resp) == nil {
-					body = truncateBody(resp.Body, bodyCapFor(state.mimeType))
-				}
-			}
-		}
+		body := m.fetchResponseBody(p.RequestID, sessionID, state)
 		data, _ := json.Marshal(map[string]any{
 			"method":        state.method,
 			"url":           state.url,
@@ -247,6 +230,27 @@ func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string
 		m.publishEvent("network_response", detail, events.Source{Kind: events.KindCDP}, "Network.loadingFinished", data, sessionID)
 		m.computed.onLoadingFinished()
 	}()
+}
+
+// fetchResponseBody retrieves and truncates the response body for textual resources.
+func (m *Monitor) fetchResponseBody(requestID, sessionID string, state networkReqState) string {
+	if !isTextualResource(state.resourceType, state.mimeType) {
+		return ""
+	}
+	result, err := m.send(m.getLifecycleCtx(), "Network.getResponseBody", map[string]any{
+		"requestId": requestID,
+	}, sessionID)
+	if err != nil {
+		return ""
+	}
+	var resp struct {
+		Body          string `json:"body"`
+		Base64Encoded bool   `json:"base64Encoded"`
+	}
+	if json.Unmarshal(result, &resp) != nil {
+		return ""
+	}
+	return truncateBody(resp.Body, bodyCapFor(state.mimeType))
 }
 
 func (m *Monitor) handleLoadingFailed(params json.RawMessage, sessionID string) {
@@ -319,11 +323,7 @@ func (m *Monitor) handleDOMContentLoaded(params json.RawMessage, sessionID strin
 func (m *Monitor) handleLoadEventFired(params json.RawMessage, sessionID string) {
 	m.publishEvent("page_load", events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", params, sessionID)
 	m.computed.onPageLoad()
-	go m.maybeScreenshot(m.getLifecycleCtx())
-}
-
-func (m *Monitor) handleDOMUpdated(params json.RawMessage, sessionID string) {
-	m.publishEvent("dom_updated", events.DetailMinimal, events.Source{Kind: events.KindCDP}, "DOM.documentUpdated", params, sessionID)
+	go m.tryScreenshot(m.getLifecycleCtx())
 }
 
 // handleAttachedToTarget stores the new session then enables domains and injects script.

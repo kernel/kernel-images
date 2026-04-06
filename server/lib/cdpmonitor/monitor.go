@@ -338,13 +338,6 @@ func (m *Monitor) subscribeToUpstream(ctx context.Context) {
 	ch, cancel := m.upstreamMgr.Subscribe()
 	defer cancel()
 
-	backoffs := []time.Duration{
-		250 * time.Millisecond,
-		500 * time.Millisecond,
-		1 * time.Second,
-		2 * time.Second,
-	}
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -353,73 +346,85 @@ func (m *Monitor) subscribeToUpstream(ctx context.Context) {
 			if !ok {
 				return
 			}
-			m.publish(events.Event{
-				Ts:          time.Now().UnixMilli(),
-				Type:        "monitor_disconnected",
-				Category:    events.CategorySystem,
-				Source:      events.Source{Kind: events.KindLocalProcess},
-				DetailLevel: events.DetailMinimal,
-				Data:        json.RawMessage(`{"reason":"chrome_restarted"}`),
-			})
-
-			startReconnect := time.Now()
-
-			m.lifeMu.Lock()
-			if m.conn != nil {
-				_ = m.conn.Close(websocket.StatusNormalClosure, "reconnecting")
-				m.conn = nil
-			}
-			m.lifeMu.Unlock()
-
-			// Clear stale state from the previous Chrome instance.
-			m.clearState()
-
-			var reconnErr error
-			for attempt := range 10 {
-				if ctx.Err() != nil {
-					return
-				}
-
-				idx := min(attempt, len(backoffs)-1)
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(backoffs[idx]):
-				}
-
-				conn, _, err := websocket.Dial(ctx, newURL, nil)
-				if err != nil {
-					reconnErr = err
-					continue
-				}
-				conn.SetReadLimit(wsReadLimit)
-
-				m.lifeMu.Lock()
-				m.conn = conn
-				m.lifeMu.Unlock()
-
-				reconnErr = nil
-				break
-			}
-
-			if reconnErr != nil {
-				return
-			}
-
-			m.restartReadLoop(ctx)
-			go m.initSession(ctx)
-
-			m.publish(events.Event{
-				Ts:          time.Now().UnixMilli(),
-				Type:        "monitor_reconnected",
-				Category:    events.CategorySystem,
-				Source:      events.Source{Kind: events.KindLocalProcess},
-				DetailLevel: events.DetailMinimal,
-				Data: json.RawMessage(fmt.Sprintf(
-					`{"reconnect_duration_ms":%d}`,
-					time.Since(startReconnect).Milliseconds(),
-				)),
-			})
+			m.handleUpstreamRestart(ctx, newURL)
 		}
 	}
+}
+
+// handleUpstreamRestart tears down the old connection, reconnects with backoff,
+// and re-initializes the CDP session.
+func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
+	m.publish(events.Event{
+		Ts:          time.Now().UnixMilli(),
+		Type:        "monitor_disconnected",
+		Category:    events.CategorySystem,
+		Source:      events.Source{Kind: events.KindLocalProcess},
+		DetailLevel: events.DetailMinimal,
+		Data:        json.RawMessage(`{"reason":"chrome_restarted"}`),
+	})
+
+	startReconnect := time.Now()
+
+	m.lifeMu.Lock()
+	if m.conn != nil {
+		_ = m.conn.Close(websocket.StatusNormalClosure, "reconnecting")
+		m.conn = nil
+	}
+	m.lifeMu.Unlock()
+
+	m.clearState()
+
+	if !m.reconnectWithBackoff(ctx, newURL) {
+		return
+	}
+
+	m.restartReadLoop(ctx)
+	go m.initSession(ctx)
+
+	m.publish(events.Event{
+		Ts:          time.Now().UnixMilli(),
+		Type:        "monitor_reconnected",
+		Category:    events.CategorySystem,
+		Source:      events.Source{Kind: events.KindLocalProcess},
+		DetailLevel: events.DetailMinimal,
+		Data: json.RawMessage(fmt.Sprintf(
+			`{"reconnect_duration_ms":%d}`,
+			time.Since(startReconnect).Milliseconds(),
+		)),
+	})
+}
+
+var reconnectBackoffs = []time.Duration{
+	250 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+	2 * time.Second,
+}
+
+// reconnectWithBackoff attempts to dial newURL up to 10 times with exponential backoff.
+func (m *Monitor) reconnectWithBackoff(ctx context.Context, newURL string) bool {
+	for attempt := range 10 {
+		if ctx.Err() != nil {
+			return false
+		}
+
+		idx := min(attempt, len(reconnectBackoffs)-1)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(reconnectBackoffs[idx]):
+		}
+
+		conn, _, err := websocket.Dial(ctx, newURL, nil)
+		if err != nil {
+			continue
+		}
+		conn.SetReadLimit(wsReadLimit)
+
+		m.lifeMu.Lock()
+		m.conn = conn
+		m.lifeMu.Unlock()
+		return true
+	}
+	return false
 }

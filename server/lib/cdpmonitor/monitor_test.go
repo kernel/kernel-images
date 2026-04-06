@@ -1,8 +1,12 @@
 package cdpmonitor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,9 +22,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---------------------------------------------------------------------------
-// Test infrastructure
-// ---------------------------------------------------------------------------
+// minimalPNG is a valid 1x1 PNG used as a test fixture for screenshot tests.
+var minimalPNG = func() []byte {
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	img.Set(0, 0, color.RGBA{R: 255, G: 0, B: 0, A: 255})
+	var buf bytes.Buffer
+	_ = png.Encode(&buf, img)
+	return buf.Bytes()
+}()
 
 // fakeCDPServer is a minimal WebSocket server that accepts connections and
 // lets the test drive scripted message sequences.
@@ -241,7 +250,6 @@ func (c *eventCollector) assertNone(t *testing.T, eventType string, d time.Durat
 	}
 }
 
-
 // ResponderFunc is called for each CDP command the Monitor sends.
 // Return nil to use the default empty result.
 type ResponderFunc func(msg cdpMessage) any
@@ -297,7 +305,7 @@ func startMonitor(t *testing.T, srv *fakeCDPServer, fn ResponderFunc) (*Monitor,
 	// Wait for the init sequence (setAutoAttach + domain enables + script injection
 	// + getTargets) to complete. The responder goroutine handles all responses;
 	// we just need to wait for the burst to finish.
-	waitForInitDone(t, srv)
+	waitForInitDone(t)
 
 	cleanup := func() {
 		close(stopResponder)
@@ -309,7 +317,7 @@ func startMonitor(t *testing.T, srv *fakeCDPServer, fn ResponderFunc) (*Monitor,
 // waitForInitDone waits for the Monitor's init sequence to complete by
 // detecting a 100ms gap in activity on the message channel. The responder
 // goroutine handles responses; this just waits for the burst to end.
-func waitForInitDone(t *testing.T, _ *fakeCDPServer) {
+func waitForInitDone(t *testing.T) {
 	t.Helper()
 	// The init sequence sends ~8 commands. Wait until the responder has
 	// processed them all by checking for a quiet period.
@@ -341,10 +349,6 @@ func navigateMonitor(m *Monitor, url string) {
 	})
 	m.handleFrameNavigated(p, "s1")
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 func TestAutoAttach(t *testing.T) {
 	srv := newFakeCDPServer(t)
@@ -533,9 +537,11 @@ func TestNetworkEvents(t *testing.T) {
 	srv := newFakeCDPServer(t)
 	defer srv.close()
 
-	// Custom responder: return a body for Network.getResponseBody.
+	// Custom responder: return a body for Network.getResponseBody and track calls.
+	var getBodyCalled atomic.Bool
 	responder := func(msg cdpMessage) any {
 		if msg.Method == "Network.getResponseBody" {
+			getBodyCalled.Store(true)
 			return map[string]any{
 				"id":     msg.ID,
 				"result": map[string]any{"body": `{"ok":true}`, "base64Encoded": false},
@@ -619,7 +625,7 @@ func TestNetworkEvents(t *testing.T) {
 	})
 
 	t.Run("binary_resource_skips_body", func(t *testing.T) {
-		var getBodyCalled atomic.Bool
+		getBodyCalled.Store(false)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.requestWillBeSent",
 			"params": map[string]any{
@@ -683,14 +689,6 @@ func TestPageEvents(t *testing.T) {
 	ev3 := ec.waitFor(t, "page_load", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev3.Category)
 	assert.Equal(t, events.DetailMinimal, ev3.DetailLevel)
-
-	srv.sendToMonitor(t, map[string]any{
-		"method": "DOM.documentUpdated",
-		"params": map[string]any{},
-	})
-	ev4 := ec.waitFor(t, "dom_updated", 2*time.Second)
-	assert.Equal(t, events.CategoryPage, ev4.Category)
-	assert.Equal(t, events.DetailMinimal, ev4.DetailLevel)
 }
 
 func TestTargetEvents(t *testing.T) {
@@ -789,24 +787,13 @@ func TestScreenshot(t *testing.T) {
 	defer cleanup()
 
 	var captureCount atomic.Int32
-	minimalPNG := []byte{
-		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-		0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-		0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
-		0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41,
-		0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
-		0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc,
-		0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
-		0x44, 0xae, 0x42, 0x60, 0x82,
-	}
 	m.screenshotFn = func(ctx context.Context, displayNum int) ([]byte, error) {
 		captureCount.Add(1)
 		return minimalPNG, nil
 	}
 
 	t.Run("capture_and_publish", func(t *testing.T) {
-		m.maybeScreenshot(context.Background())
+		m.tryScreenshot(context.Background())
 		require.Eventually(t, func() bool { return captureCount.Load() == 1 }, 2*time.Second, 20*time.Millisecond)
 
 		ev := ec.waitFor(t, "screenshot", 2*time.Second)
@@ -819,7 +806,7 @@ func TestScreenshot(t *testing.T) {
 
 	t.Run("rate_limited", func(t *testing.T) {
 		before := captureCount.Load()
-		m.maybeScreenshot(context.Background())
+		m.tryScreenshot(context.Background())
 		time.Sleep(100 * time.Millisecond)
 		assert.Equal(t, before, captureCount.Load(), "should be rate-limited within 2s")
 	})
@@ -827,7 +814,7 @@ func TestScreenshot(t *testing.T) {
 	t.Run("captures_after_cooldown", func(t *testing.T) {
 		m.lastScreenshotAt.Store(time.Now().Add(-3 * time.Second).UnixMilli())
 		before := captureCount.Load()
-		m.maybeScreenshot(context.Background())
+		m.tryScreenshot(context.Background())
 		require.Eventually(t, func() bool { return captureCount.Load() > before }, 2*time.Second, 20*time.Millisecond)
 	})
 }
@@ -837,9 +824,6 @@ func TestAttachExistingTargets(t *testing.T) {
 	defer srv.close()
 
 	responder := func(msg cdpMessage) any {
-		srv.connMu.Lock()
-		c := srv.conn
-		srv.connMu.Unlock()
 		switch msg.Method {
 		case "Target.getTargets":
 			return map[string]any{
@@ -851,15 +835,13 @@ func TestAttachExistingTargets(t *testing.T) {
 				},
 			}
 		case "Target.attachToTarget":
-			if c != nil {
-				_ = wsjson.Write(context.Background(), c, map[string]any{
-					"method": "Target.attachedToTarget",
-					"params": map[string]any{
-						"sessionId":  "session-existing-1",
-						"targetInfo": map[string]any{"targetId": "existing-1", "type": "page", "url": "https://preexisting.example.com"},
-					},
-				})
-			}
+			srv.sendToMonitor(t, map[string]any{
+				"method": "Target.attachedToTarget",
+				"params": map[string]any{
+					"sessionId":  "session-existing-1",
+					"targetInfo": map[string]any{"targetId": "existing-1", "type": "page", "url": "https://preexisting.example.com"},
+				},
+			})
 			return map[string]any{"id": msg.ID, "result": map[string]any{"sessionId": "session-existing-1"}}
 		}
 		return nil
@@ -906,10 +888,6 @@ func TestURLPopulated(t *testing.T) {
 	ev := ec.waitFor(t, "console_log", 2*time.Second)
 	assert.Equal(t, "https://example.com/page", ev.URL)
 }
-
-// ---------------------------------------------------------------------------
-// Computed meta-event tests — use direct handler calls, no websocket needed.
-// ---------------------------------------------------------------------------
 
 // simulateRequest sends a Network.requestWillBeSent through the handler.
 func simulateRequest(m *Monitor, id string) {

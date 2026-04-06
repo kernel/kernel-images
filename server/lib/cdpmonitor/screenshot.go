@@ -6,16 +6,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os/exec"
 	"time"
 
 	"github.com/onkernel/kernel-images/server/lib/events"
 )
 
-// maybeScreenshot triggers a screenshot if the rate-limit window has elapsed.
+// tryScreenshot triggers a screenshot if the rate-limit window has elapsed.
 // It uses an atomic CAS on lastScreenshotAt to ensure only one screenshot runs
 // at a time.
-func (m *Monitor) maybeScreenshot(ctx context.Context) {
+func (m *Monitor) tryScreenshot(ctx context.Context) {
 	now := time.Now().UnixMilli()
 	last := m.lastScreenshotAt.Load()
 	if now-last < 2000 {
@@ -80,6 +81,7 @@ func captureViaFFmpeg(ctx context.Context, displayNum, divisor int) ([]byte, err
 	var out bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Stdout = &out
+	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
