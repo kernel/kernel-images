@@ -55,14 +55,6 @@ type ReadResult struct {
 	Dropped  uint64
 }
 
-// ReadResult is returned by Reader.Read. Exactly one of Envelope or Dropped is
-// set: Envelope is non-nil for a normal read, Dropped is non-zero when the
-// reader fell behind and events were lost.
-type ReadResult struct {
-	Envelope *Envelope
-	Dropped  uint64
-}
-
 // Reader tracks an independent read position in a RingBuffer.
 type Reader struct {
 	rb      *RingBuffer
