@@ -44,11 +44,7 @@ func (rb *RingBuffer) oldestSeq() uint64 {
 // NewReader returns a Reader. afterSeq == 0 starts from the oldest available
 // envelope; afterSeq > 0 resumes after that seq.
 func (rb *RingBuffer) NewReader(afterSeq uint64) *Reader {
-	nextSeq := afterSeq + 1
-	if afterSeq == 0 {
-		nextSeq = 1
-	}
-	return &Reader{rb: rb, nextSeq: nextSeq}
+	return &Reader{rb: rb, nextSeq: afterSeq + 1}
 }
 
 // ReadResult is returned by Reader.Read. Exactly one of Envelope or Dropped is
