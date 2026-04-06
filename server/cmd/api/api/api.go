@@ -332,6 +332,7 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	s.monitorMu.Lock()
 	if s.cdpMonitor != nil {
 		s.cdpMonitor.Stop()
 	}
@@ -340,5 +341,6 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 			logger.FromContext(ctx).Error("failed to close capture session", "err", err)
 		}
 	}
+	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)
 }
