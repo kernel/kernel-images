@@ -188,14 +188,15 @@ func (m *Monitor) readLoop(ctx context.Context) {
 			continue
 		}
 
-		if msg.ID != 0 {
+		if msg.ID != nil {
 			m.pendMu.Lock()
-			ch, ok := m.pending[msg.ID]
+			ch, ok := m.pending[*msg.ID]
 			m.pendMu.Unlock()
 			if ok {
 				select {
 				case ch <- msg:
 				default:
+					// send() already timed out and deregistered; discard.
 				}
 			}
 			continue
@@ -218,7 +219,7 @@ func (m *Monitor) send(ctx context.Context, method string, params any, sessionID
 		rawParams = b
 	}
 
-	req := cdpMessage{ID: id, Method: method, Params: rawParams, SessionID: sessionID}
+	req := cdpMessage{ID: &id, Method: method, Params: rawParams, SessionID: sessionID}
 	reqBytes, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
@@ -356,7 +357,7 @@ func (m *Monitor) subscribeToUpstream(ctx context.Context) {
 func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.publish(events.Event{
 		Ts:          time.Now().UnixMilli(),
-		Type:        "monitor_disconnected",
+		Type:        EventMonitorDisconnected,
 		Category:    events.CategorySystem,
 		Source:      events.Source{Kind: events.KindLocalProcess},
 		DetailLevel: events.DetailMinimal,
@@ -383,7 +384,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 
 	m.publish(events.Event{
 		Ts:          time.Now().UnixMilli(),
-		Type:        "monitor_reconnected",
+		Type:        EventMonitorReconnected,
 		Category:    events.CategorySystem,
 		Source:      events.Source{Kind: events.KindLocalProcess},
 		DetailLevel: events.DetailMinimal,

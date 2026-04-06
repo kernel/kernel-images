@@ -17,6 +17,11 @@ type computedState struct {
 	mu      sync.Mutex
 	publish PublishFunc
 
+	// navSeq is incremented on every resetOnNavigation. AfterFunc callbacks
+	// capture their navSeq at creation and bail if it has changed, preventing
+	// stale timers from publishing events for a previous navigation.
+	navSeq int
+
 	// network_idle: 500 ms debounce after all pending requests finish.
 	netPending int
 	netTimer   *time.Timer
@@ -52,10 +57,13 @@ func stopTimer(t *time.Timer) {
 	}
 }
 
-// resetOnNavigation resets all state machines. Called on Page.frameNavigated
+// resetOnNavigation resets all state machines. Called on Page.frameNavigated.
+// Increments navSeq so any AfterFunc callbacks already running will discard their results.
 func (s *computedState) resetOnNavigation() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	s.navSeq++
 
 	stopTimer(s.netTimer)
 	s.netTimer = nil
@@ -96,17 +104,18 @@ func (s *computedState) onLoadingFinished() {
 	}
 	// All requests done and not yet fired: start 500ms debounce timer.
 	stopTimer(s.netTimer)
+	navSeq := s.navSeq
 	s.netTimer = time.AfterFunc(networkIdleDebounce, func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		if s.netFired || s.netPending > 0 {
+		if s.navSeq != navSeq || s.netFired || s.netPending > 0 {
 			return
 		}
 		s.netFired = true
 		s.navNetIdle = true
 		s.publish(events.Event{
 			Ts:          time.Now().UnixMilli(),
-			Type:        "network_idle",
+			Type:        EventNetworkIdle,
 			Category:    events.CategoryNetwork,
 			Source:      events.Source{Kind: events.KindCDP},
 			DetailLevel: events.DetailStandard,
@@ -126,7 +135,8 @@ func (s *computedState) onPageLoad() {
 	}
 	// Start the 1s layout_settled timer.
 	stopTimer(s.layoutTimer)
-	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
+	navSeq := s.navSeq
+	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, func() { s.emitLayoutSettled(navSeq) })
 }
 
 // onLayoutShift is called when a layout_shift sentinel arrives from injected JS.
@@ -138,21 +148,22 @@ func (s *computedState) onLayoutShift() {
 	}
 	// Reset the timer to 1s from now.
 	stopTimer(s.layoutTimer)
-	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, s.emitLayoutSettled)
+	navSeq := s.navSeq
+	s.layoutTimer = time.AfterFunc(layoutSettledDebounce, func() { s.emitLayoutSettled(navSeq) })
 }
 
-// emitLayoutSettled is called from the layout timer's AfterFunc goroutine
-func (s *computedState) emitLayoutSettled() {
+// emitLayoutSettled is called from the layout timer's AfterFunc goroutine.
+func (s *computedState) emitLayoutSettled(navSeq int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.layoutFired || !s.pageLoadSeen {
+	if s.navSeq != navSeq || s.layoutFired || !s.pageLoadSeen {
 		return
 	}
 	s.layoutFired = true
 	s.navLayoutSettled = true
 	s.publish(events.Event{
 		Ts:          time.Now().UnixMilli(),
-		Type:        "layout_settled",
+		Type:        EventLayoutSettled,
 		Category:    events.CategoryPage,
 		Source:      events.Source{Kind: events.KindCDP},
 		DetailLevel: events.DetailStandard,
@@ -175,7 +186,7 @@ func (s *computedState) checkNavigationSettled() {
 		s.navFired = true
 		s.publish(events.Event{
 			Ts:          time.Now().UnixMilli(),
-			Type:        "navigation_settled",
+			Type:        EventNavigationSettled,
 			Category:    events.CategoryPage,
 			Source:      events.Source{Kind: events.KindCDP},
 			DetailLevel: events.DetailStandard,

@@ -5,6 +5,29 @@ import (
 	"fmt"
 )
 
+// Event type constants for all events published by the cdpmonitor.
+const (
+	EventConsoleLog          = "console_log"
+	EventConsoleError        = "console_error"
+	EventNetworkRequest      = "network_request"
+	EventNetworkResponse     = "network_response"
+	EventNetworkLoadingFailed = "network_loading_failed"
+	EventNetworkIdle         = "network_idle"
+	EventNavigation          = "navigation"
+	EventDOMContentLoaded    = "dom_content_loaded"
+	EventPageLoad            = "page_load"
+	EventLayoutShift         = "layout_shift"
+	EventLayoutSettled       = "layout_settled"
+	EventNavigationSettled   = "navigation_settled"
+	EventTargetCreated       = "target_created"
+	EventTargetDestroyed     = "target_destroyed"
+	EventInteractionClick    = "interaction_click"
+	EventInteractionKey      = "interaction_key"
+	EventScrollSettled       = "scroll_settled"
+	EventMonitorDisconnected = "monitor_disconnected"
+	EventMonitorReconnected  = "monitor_reconnected"
+)
+
 // targetInfo holds metadata about an attached CDP target/session.
 type targetInfo struct {
 	targetID   string
@@ -23,8 +46,10 @@ func (e *cdpError) Error() string {
 }
 
 // cdpMessage is the JSON-RPC message envelope used by Chrome's DevTools Protocol.
+// ID is a pointer so we can distinguish an absent id (event) from id=0 (which
+// Chrome never sends, but using a pointer is more correct than relying on that).
 type cdpMessage struct {
-	ID        int64           `json:"id,omitempty"`
+	ID        *int64          `json:"id,omitempty"`
 	Method    string          `json:"method,omitempty"`
 	Params    json.RawMessage `json:"params,omitempty"`
 	SessionID string          `json:"sessionId,omitempty"`

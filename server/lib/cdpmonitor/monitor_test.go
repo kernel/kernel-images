@@ -261,7 +261,7 @@ func listenAndRespond(srv *fakeCDPServer, stopCh <-chan struct{}, fn ResponderFu
 		select {
 		case b := <-srv.msgCh:
 			var msg cdpMessage
-			if json.Unmarshal(b, &msg) != nil || msg.ID == 0 {
+			if json.Unmarshal(b, &msg) != nil || msg.ID == nil {
 				continue
 			}
 			srv.connMu.Lock()

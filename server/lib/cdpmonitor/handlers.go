@@ -83,7 +83,7 @@ func (m *Monitor) handleConsole(params json.RawMessage, sessionID string) {
 		"args":        argValues,
 		"stack_trace": p.StackTrace,
 	})
-	m.publishEvent("console_log", events.DetailStandard, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
+	m.publishEvent(EventConsoleLog, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
 }
 
 func (m *Monitor) handleExceptionThrown(params json.RawMessage, sessionID string) {
@@ -98,7 +98,7 @@ func (m *Monitor) handleExceptionThrown(params json.RawMessage, sessionID string
 		"url":         p.ExceptionDetails.URL,
 		"stack_trace": p.ExceptionDetails.StackTrace,
 	})
-	m.publishEvent("console_error", events.DetailStandard, events.Source{Kind: events.KindCDP}, "Runtime.exceptionThrown", data, sessionID)
+	m.publishEvent(EventConsoleError, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Runtime.exceptionThrown", data, sessionID)
 	go m.tryScreenshot(m.getLifecycleCtx())
 }
 
@@ -122,7 +122,7 @@ func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) 
 		return
 	}
 	switch header.Type {
-	case "interaction_click", "interaction_key", "scroll_settled":
+	case EventInteractionClick, EventInteractionKey, EventScrollSettled:
 		m.publishEvent(header.Type, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", payload, sessionID)
 	}
 }
@@ -138,7 +138,7 @@ func (m *Monitor) handleTimelineEvent(params json.RawMessage, sessionID string) 
 	if err := json.Unmarshal(params, &p); err != nil || p.Event.Type != "layout-shift" {
 		return
 	}
-	m.publishEvent("layout_shift", events.DetailStandard, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", params, sessionID)
+	m.publishEvent(EventLayoutShift, events.DetailStandard, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", params, sessionID)
 	m.computed.onLayoutShift()
 }
 
@@ -174,7 +174,7 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 		"resource_type":    p.ResourceType,
 		"initiator_type":   initiatorType,
 	})
-	m.publishEvent("network_request", events.DetailStandard, events.Source{Kind: events.KindCDP}, "Network.requestWillBeSent", data, sessionID)
+	m.publishEvent(EventNetworkRequest, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Network.requestWillBeSent", data, sessionID)
 	m.computed.onRequest()
 }
 
@@ -210,6 +210,9 @@ func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string
 	if !ok {
 		return
 	}
+	// Decrement netPending immediately so network_idle tracking reflects true
+	// network completion, not body fetch completion
+	m.computed.onLoadingFinished()
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	go func() {
 		body := m.fetchResponseBody(p.RequestID, sessionID, state)
@@ -227,8 +230,7 @@ func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string
 		if body != "" {
 			detail = events.DetailVerbose
 		}
-		m.publishEvent("network_response", detail, events.Source{Kind: events.KindCDP}, "Network.loadingFinished", data, sessionID)
-		m.computed.onLoadingFinished()
+		m.publishEvent(EventNetworkResponse, detail, events.Source{Kind: events.KindCDP}, "Network.loadingFinished", data, sessionID)
 	}()
 }
 
@@ -277,7 +279,7 @@ func (m *Monitor) handleLoadingFailed(params json.RawMessage, sessionID string) 
 		ev["url"] = state.url
 	}
 	data, _ := json.Marshal(ev)
-	m.publishEvent("network_loading_failed", events.DetailStandard, events.Source{Kind: events.KindCDP}, "Network.loadingFailed", data, sessionID)
+	m.publishEvent(EventNetworkLoadingFailed, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Network.loadingFailed", data, sessionID)
 	m.computed.onLoadingFinished()
 }
 
@@ -302,7 +304,7 @@ func (m *Monitor) handleFrameNavigated(params json.RawMessage, sessionID string)
 	if p.Frame.ParentID == "" {
 		m.currentURL.Store(p.Frame.URL)
 	}
-	m.publishEvent("navigation", events.DetailStandard, events.Source{Kind: events.KindCDP}, "Page.frameNavigated", data, sessionID)
+	m.publishEvent(EventNavigation, events.DetailStandard, events.Source{Kind: events.KindCDP}, "Page.frameNavigated", data, sessionID)
 
 	m.pendReqMu.Lock()
 	for id, req := range m.pendingRequests {
@@ -316,12 +318,12 @@ func (m *Monitor) handleFrameNavigated(params json.RawMessage, sessionID string)
 }
 
 func (m *Monitor) handleDOMContentLoaded(params json.RawMessage, sessionID string) {
-	m.publishEvent("dom_content_loaded", events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Page.domContentEventFired", params, sessionID)
+	m.publishEvent(EventDOMContentLoaded, events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Page.domContentEventFired", params, sessionID)
 	m.computed.onDOMContentLoaded()
 }
 
 func (m *Monitor) handleLoadEventFired(params json.RawMessage, sessionID string) {
-	m.publishEvent("page_load", events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", params, sessionID)
+	m.publishEvent(EventPageLoad, events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", params, sessionID)
 	m.computed.onPageLoad()
 	go m.tryScreenshot(m.getLifecycleCtx())
 }
@@ -357,7 +359,7 @@ func (m *Monitor) handleTargetCreated(params json.RawMessage, sessionID string) 
 		"target_type": p.TargetInfo.Type,
 		"url":         p.TargetInfo.URL,
 	})
-	m.publishEvent("target_created", events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Target.targetCreated", data, sessionID)
+	m.publishEvent(EventTargetCreated, events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Target.targetCreated", data, sessionID)
 }
 
 func (m *Monitor) handleTargetDestroyed(params json.RawMessage, sessionID string) {
@@ -370,5 +372,5 @@ func (m *Monitor) handleTargetDestroyed(params json.RawMessage, sessionID string
 	data, _ := json.Marshal(map[string]any{
 		"target_id": p.TargetID,
 	})
-	m.publishEvent("target_destroyed", events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Target.targetDestroyed", data, sessionID)
+	m.publishEvent(EventTargetDestroyed, events.DetailMinimal, events.Source{Kind: events.KindCDP}, "Target.targetDestroyed", data, sessionID)
 }
