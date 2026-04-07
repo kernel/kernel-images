@@ -21,6 +21,29 @@ const (
 	CategorySystem      EventCategory = "system"
 )
 
+// allCategories is the canonical list; use AllCategories() to get a copy.
+var allCategories = []EventCategory{
+	CategoryConsole, CategoryNetwork, CategoryPage, CategoryInteraction,
+	CategoryLiveview, CategoryCaptcha, CategorySystem,
+}
+
+// AllCategories returns a fresh copy of all known event categories.
+func AllCategories() []EventCategory {
+	out := make([]EventCategory, len(allCategories))
+	copy(out, allCategories)
+	return out
+}
+
+// ValidCategory reports whether c is a known EventCategory.
+func ValidCategory(c EventCategory) bool {
+	for _, cat := range allCategories {
+		if cat == c {
+			return true
+		}
+	}
+	return false
+}
+
 type SourceKind string
 
 const (

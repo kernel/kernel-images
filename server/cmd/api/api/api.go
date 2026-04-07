@@ -72,9 +72,11 @@ type ApiService struct {
 	xvfbResizeMu sync.Mutex
 
 	// CDP event pipeline and cdpMonitor.
-	captureSession *events.CaptureSession
-	cdpMonitor     *cdpmonitor.Monitor
-	monitorMu      sync.Mutex
+	captureSession  *events.CaptureSession
+	cdpMonitor      *cdpmonitor.Monitor
+	monitorMu       sync.Mutex
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -102,10 +104,11 @@ func New(
 	}
 
 	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum)
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{
-		recordManager:     recordManager,
-		factory:           factory,
+		recordManager:   recordManager,
+		factory:         factory,
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
@@ -115,6 +118,8 @@ func New(
 		policy:            &policy.Policy{},
 		captureSession:    captureSession,
 		cdpMonitor:        mon,
+		lifecycleCtx:      ctx,
+		lifecycleCancel:   cancel,
 	}, nil
 }
 
@@ -334,6 +339,7 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	s.lifecycleCancel()
 	s.monitorMu.Lock()
 	s.cdpMonitor.Stop()
 	_ = s.captureSession.Close()

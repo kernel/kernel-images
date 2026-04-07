@@ -1211,6 +1211,8 @@ paths:
       responses:
         "200":
           description: Capture started
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
   /events/stop:

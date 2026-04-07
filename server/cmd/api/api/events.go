@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/onkernel/kernel-images/server/lib/events"
@@ -14,13 +15,19 @@ import (
 // CDP monitor. If already running, the monitor is stopped and
 // restarted with a fresh session ID.
 func (s *ApiService) StartCapture(ctx context.Context, req oapi.StartCaptureRequestObject) (oapi.StartCaptureResponseObject, error) {
+	cfg, err := captureConfigFrom(req.Body)
+	if err != nil {
+		return oapi.StartCapture400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+	}
+
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	cfg := captureConfigFrom(req.Body)
+	// Stop before reset: drain in-flight publishes before changing session state.
+	s.cdpMonitor.Stop()
 	s.captureSession.Start(uuid.New().String(), cfg)
 
-	if err := s.cdpMonitor.Start(context.Background()); err != nil {
+	if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
 		logger.FromContext(ctx).Error("failed to start CDP monitor", "err", err)
 		return oapi.StartCapture500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start capture"}}, nil
 	}
@@ -28,20 +35,25 @@ func (s *ApiService) StartCapture(ctx context.Context, req oapi.StartCaptureRequ
 }
 
 // captureConfigFrom converts the optional API request body into a CaptureConfig.
-func captureConfigFrom(body *oapi.StartCaptureRequest) events.CaptureConfig {
+// Returns an error if any category string is not a known EventCategory.
+func captureConfigFrom(body *oapi.StartCaptureRequest) (events.CaptureConfig, error) {
 	if body == nil {
-		return events.CaptureConfig{}
+		return events.CaptureConfig{}, nil
 	}
 	var cfg events.CaptureConfig
 	if body.Categories != nil {
 		for _, c := range *body.Categories {
-			cfg.Categories = append(cfg.Categories, events.EventCategory(c))
+			cat := events.EventCategory(c)
+			if !events.ValidCategory(cat) {
+				return events.CaptureConfig{}, fmt.Errorf("unknown category: %q", c)
+			}
+			cfg.Categories = append(cfg.Categories, cat)
 		}
 	}
 	if body.DetailLevel != nil {
 		cfg.DetailLevel = events.DetailLevel(*body.DetailLevel)
 	}
-	return cfg
+	return cfg, nil
 }
 
 // StopCapture handles POST /events/stop

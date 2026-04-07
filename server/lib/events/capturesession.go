@@ -30,8 +30,8 @@ type CaptureSession struct {
 	files            *FileWriter
 	seq              uint64
 	captureSessionID string
-	categories       map[EventCategory]struct{} // nil means all
-	detailLevel      DetailLevel                // "" means DetailStandard
+	categories       map[EventCategory]struct{}
+	detailLevel      DetailLevel                // defaults to DetailStandard
 }
 
 // CaptureSessionConfig holds the parameters for creating a CaptureSession.
@@ -48,25 +48,36 @@ func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture session: %w", err)
 	}
+	all := AllCategories()
+	cats := make(map[EventCategory]struct{}, len(all))
+	for _, c := range all {
+		cats[c] = struct{}{}
+	}
 	return &CaptureSession{
-		ring:  NewRingBuffer(cfg.RingCapacity),
-		files: fw,
+		ring:       NewRingBuffer(cfg.RingCapacity),
+		files:      fw,
+		categories: cats,
 	}, nil
 }
 
-// Start sets the capture session ID and applies the given config.
+// Start sets the capture session ID and applies the given config. It resets
+// the sequence counter so each session starts at seq 1.
+// The FileWriter is intentionally not rotated: events from different sessions
+// are interleaved in the same per-category JSONL files and distinguished by
+// their envelope's capture_session_id.
 func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.captureSessionID = captureSessionID
+	s.seq = 0
 	s.detailLevel = cfg.DetailLevel
-	if len(cfg.Categories) > 0 {
-		s.categories = make(map[EventCategory]struct{}, len(cfg.Categories))
-		for _, c := range cfg.Categories {
-			s.categories[c] = struct{}{}
-		}
-	} else {
-		s.categories = nil
+	cats := cfg.Categories
+	if len(cats) == 0 {
+		cats = AllCategories()
+	}
+	s.categories = make(map[EventCategory]struct{}, len(cats))
+	for _, c := range cats {
+		s.categories[c] = struct{}{}
 	}
 }
 
@@ -77,10 +88,8 @@ func (s *CaptureSession) Publish(ev Event) {
 	defer s.mu.Unlock()
 
 	// Drop events whose category is outside the configured set.
-	if s.categories != nil {
-		if _, ok := s.categories[ev.Category]; !ok {
-			return
-		}
+	if _, ok := s.categories[ev.Category]; !ok {
+		return
 	}
 
 	if ev.Ts == 0 {
