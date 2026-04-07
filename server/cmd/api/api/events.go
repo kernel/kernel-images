@@ -148,24 +148,41 @@ func writeEnvelopeFrame(w io.Writer, seq *uint64, env events.Envelope) error {
 // Generates a new capture session ID, seeds the pipeline, then starts the
 // CDP monitor. If already running, the monitor is stopped and
 // restarted with a fresh session ID.
-func (s *ApiService) StartCapture(w http.ResponseWriter, r *http.Request) {
+func (s *ApiService) StartCapture(ctx context.Context, req oapi.StartCaptureRequestObject) (oapi.StartCaptureResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	s.captureSession.Start(uuid.New().String(), events.CaptureConfig{})
+	cfg := startCaptureConfigFrom(req.Body)
+	s.captureSession.Start(uuid.New().String(), cfg)
 
 	if err := s.cdpMonitor.Start(context.Background()); err != nil {
-		logger.FromContext(r.Context()).Error("failed to start CDP monitor", "err", err)
-		http.Error(w, "failed to start capture", http.StatusInternalServerError)
-		return
+		logger.FromContext(ctx).Error("failed to start CDP monitor", "err", err)
+		return oapi.StartCapture500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start capture"}}, nil
 	}
-	w.WriteHeader(http.StatusOK)
+	return oapi.StartCapture200Response{}, nil
+}
+
+// startCaptureConfigFrom converts the optional /events/start request body into a CaptureConfig.
+func startCaptureConfigFrom(body *oapi.StartCaptureRequest) events.CaptureConfig {
+	if body == nil {
+		return events.CaptureConfig{}
+	}
+	var cfg events.CaptureConfig
+	if body.Categories != nil {
+		for _, c := range *body.Categories {
+			cfg.Categories = append(cfg.Categories, events.EventCategory(c))
+		}
+	}
+	if body.DetailLevel != nil {
+		cfg.DetailLevel = events.DetailLevel(*body.DetailLevel)
+	}
+	return cfg
 }
 
 // StopCapture handles POST /events/stop.
-func (s *ApiService) StopCapture(w http.ResponseWriter, r *http.Request) {
+func (s *ApiService) StopCapture(ctx context.Context, req oapi.StopCaptureRequestObject) (oapi.StopCaptureResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 	s.cdpMonitor.Stop()
-	w.WriteHeader(http.StatusOK)
+	return oapi.StopCapture200Response{}, nil
 }

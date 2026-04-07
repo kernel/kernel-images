@@ -167,12 +167,10 @@ func (s *CaptureSession) Publish(ev Event) Envelope {
 
 	env, data := truncateIfNeeded(env)
 
-	if sessionID != "" {
-		if data == nil {
-			slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
-		} else if err := s.files.Write(env, data); err != nil {
-			slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
-		}
+	if data == nil {
+		slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
+	} else if err := s.files.Write(env, data); err != nil {
+		slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
 	}
 	s.ring.Publish(env)
 	return env
