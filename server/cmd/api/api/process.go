@@ -342,8 +342,14 @@ func (s *ApiService) ProcessSpawn(ctx context.Context, request oapi.ProcessSpawn
 		doneCh:  make(chan struct{}),
 	}
 
-	// Store handle
+	// Store handle; reject if the server is shutting down.
 	s.procMu.Lock()
+	if s.shuttingDown {
+		s.procMu.Unlock()
+		// The process was already started; kill it immediately.
+		_ = cmd.Process.Kill()
+		return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "server is shutting down"}}, nil
+	}
 	if s.procs == nil {
 		s.procs = make(map[string]*processHandle)
 	}

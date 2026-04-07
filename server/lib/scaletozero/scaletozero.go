@@ -17,22 +17,56 @@ type Controller interface {
 	Disable(ctx context.Context) error
 	// Enable re-enables scale-to-zero after it has previously been disabled.
 	Enable(ctx context.Context) error
+	// Drain resets the active count to zero and re-enables scale-to-zero.
+	// After Drain is called the controller is frozen: subsequent Disable and
+	// Enable calls become no-ops. The frozen state is in-memory only and is
+	// cleared on process restart. This is intended for graceful shutdown /
+	// restart scenarios where we want to guarantee scale-to-zero stays enabled.
+	Drain(ctx context.Context) error
 }
 
 type unikraftCloudController struct {
-	path string
+	path    string
+	mu      sync.Mutex
+	drained bool
 }
 
 func NewUnikraftCloudController() Controller {
-	return &unikraftCloudController{path: unikraftScaleToZeroFile}
+	return &unikraftCloudController{path: unikraftScaleToZeroFile, drained: false}
 }
 
 func (c *unikraftCloudController) Disable(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.drained {
+		return nil
+	}
 	return c.write(ctx, "+")
 }
 
 func (c *unikraftCloudController) Enable(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.drained {
+		return nil
+	}
 	return c.write(ctx, "-")
+}
+
+func (c *unikraftCloudController) Drain(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.drained {
+		err := c.write(ctx, "=0")
+		if err != nil {
+			return err
+		}
+	}
+	c.drained = true
+	return nil
 }
 
 func (c *unikraftCloudController) write(ctx context.Context, char string) error {
@@ -65,32 +99,63 @@ func NewNoopController() *NoopController { return &NoopController{} }
 
 func (NoopController) Disable(context.Context) error { return nil }
 func (NoopController) Enable(context.Context) error  { return nil }
+func (NoopController) Drain(context.Context) error   { return nil }
 
 // Oncer wraps a Controller and ensures that Disable and Enable are called at most once.
+// After a successful Drain, Disable and Enable become no-ops per the Controller contract.
 type Oncer struct {
 	ctrl        Controller
+	mu          sync.Mutex
+	drained     bool
 	disableOnce sync.Once
 	enableOnce  sync.Once
+	drainedOnce sync.Once
 	disableErr  error
 	enableErr   error
+	drainedErr  error
 }
 
 func NewOncer(c Controller) *Oncer { return &Oncer{ctrl: c} }
 
 func (o *Oncer) Disable(ctx context.Context) error {
+	o.mu.Lock()
+	if o.drained {
+		o.mu.Unlock()
+		return nil
+	}
+	o.mu.Unlock()
 	o.disableOnce.Do(func() { o.disableErr = o.ctrl.Disable(ctx) })
 	return o.disableErr
 }
 
 func (o *Oncer) Enable(ctx context.Context) error {
+	o.mu.Lock()
+	if o.drained {
+		o.mu.Unlock()
+		return nil
+	}
+	o.mu.Unlock()
 	o.enableOnce.Do(func() { o.enableErr = o.ctrl.Enable(ctx) })
 	return o.enableErr
+}
+
+func (o *Oncer) Drain(ctx context.Context) error {
+	o.drainedOnce.Do(func() {
+		o.drainedErr = o.ctrl.Drain(ctx)
+		if o.drainedErr == nil {
+			o.mu.Lock()
+			o.drained = true
+			o.mu.Unlock()
+		}
+	})
+	return o.drainedErr
 }
 
 type DebouncedController struct {
 	ctrl        Controller
 	mu          sync.Mutex
 	disabled    bool
+	drained     bool
 	activeCount int
 }
 
@@ -101,6 +166,10 @@ func NewDebouncedController(ctrl Controller) Controller {
 func (c *DebouncedController) Disable(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.drained {
+		return nil
+	}
 
 	c.activeCount++
 	if c.disabled {
@@ -120,6 +189,10 @@ func (c *DebouncedController) Enable(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.drained {
+		return nil
+	}
+
 	if c.activeCount > 0 {
 		c.activeCount--
 	}
@@ -134,5 +207,21 @@ func (c *DebouncedController) Enable(ctx context.Context) error {
 	}
 
 	c.disabled = false
+	return nil
+}
+
+func (c *DebouncedController) Drain(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.disabled {
+		if err := c.ctrl.Drain(ctx); err != nil {
+			return err
+		}
+		c.disabled = false
+	}
+
+	c.drained = true
+	c.activeCount = 0
 	return nil
 }

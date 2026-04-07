@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/hashicorp/go-multierror"
 	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/nekoclient"
@@ -29,8 +31,9 @@ type ApiService struct {
 	watches map[string]*fsWatch
 
 	// Process management
-	procMu sync.RWMutex
-	procs  map[string]*processHandle
+	procMu       sync.RWMutex
+	procs        map[string]*processHandle
+	shuttingDown bool
 
 	// Neko authenticated client
 	nekoAuthClient *nekoclient.AuthClient
@@ -312,6 +315,55 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 	return oapi.ListRecorders200JSONResponse(infos), nil
 }
 
+// killAllProcesses sends SIGKILL to every tracked process that is still running.
+// It acquires the write lock and sets shuttingDown so that ProcessSpawn rejects
+// new processes once the kill pass begins.
+func (s *ApiService) killAllProcesses(ctx context.Context) error {
+	log := logger.FromContext(ctx)
+	s.procMu.Lock()
+	defer s.procMu.Unlock()
+	s.shuttingDown = true
+
+	var result *multierror.Error
+	for id, h := range s.procs {
+		if h.state() != "running" {
+			continue
+		}
+		if h.cmd.Process == nil {
+			continue
+		}
+		// supervisorctl handles the lifecycle of long running processes so we don't want to kill
+		// any active supervisorctl processes. For example it is used to restart kernel-images-api
+		// and killing that process would break the restart process.
+		if filepath.Base(h.cmd.Path) == "supervisorctl" {
+			continue
+		}
+		if err := h.cmd.Process.Kill(); err != nil {
+			// A process may already have exited between the state check and the
+			// kill call; treat that as a benign race rather than a fatal error.
+			if !errors.Is(err, os.ErrProcessDone) {
+				result = multierror.Append(result, fmt.Errorf("process %s: %w", id, err))
+				log.Error("failed to kill process", "process_id", id, "err", err)
+			}
+		}
+	}
+	return result.ErrorOrNil()
+}
+
 func (s *ApiService) Shutdown(ctx context.Context) error {
-	return s.recordManager.StopAll(ctx)
+	var wg sync.WaitGroup
+	var killErr, stopErr error
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		killErr = s.killAllProcesses(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		stopErr = s.recordManager.StopAll(ctx)
+	}()
+	wg.Wait()
+
+	return multierror.Append(killErr, stopErr).ErrorOrNil()
 }
