@@ -51,6 +51,9 @@ func captureConfigFrom(body *oapi.StartCaptureRequest) (events.CaptureConfig, er
 		}
 	}
 	if body.DetailLevel != nil {
+		if !body.DetailLevel.Valid() {
+			return events.CaptureConfig{}, fmt.Errorf("unknown detail level: %q", *body.DetailLevel)
+		}
 		cfg.DetailLevel = events.DetailLevel(*body.DetailLevel)
 	}
 	return cfg, nil
