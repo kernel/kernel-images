@@ -135,7 +135,7 @@ func main() {
 		apiService.HandleProcessAttachWS(w, r, id)
 	})
 
-	// Events capture lifecycle (not part of OpenAPI spec — simple internal control endpoints)
+	// Events capture lifecycle
 	r.Post("/events/start", apiService.StartCapture)
 	r.Post("/events/stop", apiService.StopCapture)
 	r.Post("/events/publish", apiService.PublishEvent)
