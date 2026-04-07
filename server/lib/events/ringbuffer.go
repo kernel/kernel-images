@@ -16,6 +16,9 @@ type RingBuffer struct {
 }
 
 func NewRingBuffer(capacity int) *RingBuffer {
+	if capacity <= 0 {
+		panic("events: ring buffer capacity must be > 0")
+	}
 	return &RingBuffer{
 		buf:        make([]Envelope, capacity),
 		cap:        uint64(capacity),
@@ -24,8 +27,8 @@ func NewRingBuffer(capacity int) *RingBuffer {
 }
 
 // Reset clears the buffer and wakes any blocked readers so they re-evaluate
-// against the new (empty) state. Readers whose nextSeq exceeds the new
-// latestSeq will block until fresh publishes catch up.
+// against the new (empty) state. Readers will reposition to seq 1 on the next
+// Read call and block until fresh publishes arrive.
 func (rb *RingBuffer) Reset() {
 	rb.mu.Lock()
 	for i := range rb.buf {
@@ -42,7 +45,9 @@ func (rb *RingBuffer) Reset() {
 func (rb *RingBuffer) Publish(env Envelope) {
 	rb.mu.Lock()
 	rb.buf[env.Seq%rb.cap] = env
-	rb.latestSeq = env.Seq
+	if env.Seq > rb.latestSeq {
+		rb.latestSeq = env.Seq
+	}
 	old := rb.readerWake
 	rb.readerWake = make(chan struct{})
 	rb.mu.Unlock()
@@ -85,6 +90,8 @@ func (r *Reader) Read(ctx context.Context) (ReadResult, error) {
 		oldest := r.rb.oldestSeq()
 
 		if latest == 0 {
+			// Buffer is empty (or was just reset). Reset reader position
+			// so it starts from the beginning when new data arrives.
 			r.nextSeq = 1
 			r.rb.mu.RUnlock()
 			select {

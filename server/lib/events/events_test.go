@@ -612,4 +612,41 @@ func TestCaptureSession(t *testing.T) {
 		env2 := readEnvelope(t, reader, ctx)
 		assert.Equal(t, DetailVerbose, env2.Event.DetailLevel)
 	})
+
 }
+
+func TestRingBufferResetWithActiveReader(t *testing.T) {
+	rb := NewRingBuffer(10)
+	reader := rb.NewReader(0)
+
+	// Publish some events so the reader advances.
+	for i := uint64(1); i <= 5; i++ {
+		rb.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for i := 0; i < 5; i++ {
+		readEnvelope(t, reader, ctx)
+	}
+	// reader.nextSeq is now 6.
+
+	// Reset — reader should wake up and block until new publishes arrive.
+	rb.Reset()
+
+	shortCtx, shortCancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer shortCancel()
+	_, err := reader.Read(shortCtx)
+	assert.ErrorIs(t, err, context.DeadlineExceeded, "reader should block after reset")
+
+	// Publish new events; reader should resume from seq 1.
+	rb.Publish(mkEnv(1, cdpEvent("page.navigation", CategoryPage)))
+	env := readEnvelope(t, reader, ctx)
+	assert.Equal(t, uint64(1), env.Seq)
+	assert.Equal(t, "page.navigation", env.Event.Type)
+}
+
+func TestNewRingBufferPanicsOnZeroCapacity(t *testing.T) {
+	assert.Panics(t, func() { NewRingBuffer(0) })
+	assert.Panics(t, func() { NewRingBuffer(-1) })
+}
+
