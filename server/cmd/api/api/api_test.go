@@ -305,9 +305,14 @@ func newMockNekoClient(t *testing.T) *nekoclient.AuthClient {
 }
 
 func newCaptureSession() *events.CaptureSession {
-	ring := events.NewRingBuffer(64)
-	fw := events.NewFileWriter(os.TempDir())
-	return events.NewCaptureSession(ring, fw)
+	cs, err := events.NewCaptureSession(events.CaptureSessionConfig{
+		LogDir:       os.TempDir(),
+		RingCapacity: 64,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return cs
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {

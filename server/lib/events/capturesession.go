@@ -1,11 +1,24 @@
 package events
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 )
+
+// CaptureConfig holds caller-supplied capture preferences. All fields are
+// optional; zero values mean "use server defaults" (all categories, standard
+// detail level).
+type CaptureConfig struct {
+	// Categories limits which event categories are captured. nil or empty
+	// means all categories.
+	Categories []EventCategory
+
+	// DetailLevel overrides the default detail level stamped on events that
+	// don't set their own. Empty means DetailStandard.
+	DetailLevel DetailLevel
+}
 
 // CaptureSession is a single-use write path that wraps events in envelopes and
 // fans them out to a FileWriter (durable) and RingBuffer (in-memory). Call Start
@@ -15,20 +28,46 @@ type CaptureSession struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
 	files            *FileWriter
-	seq              atomic.Uint64
-	captureSessionID atomic.Pointer[string]
+	seq              uint64
+	captureSessionID string
+	categories       map[EventCategory]struct{} // nil means all
+	detailLevel      DetailLevel                // "" means DetailStandard
 }
 
-func NewCaptureSession(ring *RingBuffer, files *FileWriter) *CaptureSession {
-	s := &CaptureSession{ring: ring, files: files}
-	empty := ""
-	s.captureSessionID.Store(&empty)
-	return s
+// CaptureSessionConfig holds the parameters for creating a CaptureSession.
+type CaptureSessionConfig struct {
+	// LogDir is the directory where per-category JSONL log files are written.
+	LogDir string
+
+	// RingCapacity is the number of envelopes the in-memory ring buffer holds.
+	RingCapacity int
 }
 
-// Start sets the capture session ID stamped on every subsequent envelope.
-func (s *CaptureSession) Start(captureSessionID string) {
-	s.captureSessionID.Store(&captureSessionID)
+func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
+	fw, err := NewFileWriter(cfg.LogDir)
+	if err != nil {
+		return nil, fmt.Errorf("capture session: %w", err)
+	}
+	return &CaptureSession{
+		ring:  NewRingBuffer(cfg.RingCapacity),
+		files: fw,
+	}, nil
+}
+
+// Start sets the capture session ID and applies the given config.
+func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.captureSessionID = captureSessionID
+	s.detailLevel = cfg.DetailLevel
+	if len(cfg.Categories) > 0 {
+		s.categories = make(map[EventCategory]struct{}, len(cfg.Categories))
+		for _, c := range cfg.Categories {
+			s.categories[c] = struct{}{}
+		}
+	} else {
+		s.categories = nil
+	}
 }
 
 // Publish wraps ev in an Envelope, truncates if needed, then writes to
@@ -37,16 +76,28 @@ func (s *CaptureSession) Publish(ev Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if ev.Ts == 0 {
-		ev.Ts = time.Now().UnixMilli()
-	}
-	if ev.DetailLevel == "" {
-		ev.DetailLevel = DetailStandard
+	// Drop events whose category is outside the configured set.
+	if s.categories != nil {
+		if _, ok := s.categories[ev.Category]; !ok {
+			return
+		}
 	}
 
+	if ev.Ts == 0 {
+		ev.Ts = time.Now().UnixMicro()
+	}
+	if ev.DetailLevel == "" {
+		if s.detailLevel != "" {
+			ev.DetailLevel = s.detailLevel
+		} else {
+			ev.DetailLevel = DetailStandard
+		}
+	}
+
+	s.seq++
 	env := Envelope{
-		CaptureSessionID: *s.captureSessionID.Load(),
-		Seq:              s.seq.Add(1),
+		CaptureSessionID: s.captureSessionID,
+		Seq:              s.seq,
 		Event:            ev,
 	}
 	env, data := truncateIfNeeded(env)
