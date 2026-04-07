@@ -78,3 +78,113 @@ func TestEventLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.IsType(t, oapi.StopCaptureSession200JSONResponse{}, stopResp)
 }
+
+func TestStartCaptureConfigFrom(t *testing.T) {
+	t.Run("nil body returns defaults", func(t *testing.T) {
+		cfg, err := startCaptureConfigFrom(nil)
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Categories)
+		assert.Empty(t, cfg.DetailLevel)
+	})
+
+	t.Run("valid categories", func(t *testing.T) {
+		cats := []oapi.StartCaptureRequestCategories{oapi.StartCaptureRequestCategoriesConsole, oapi.StartCaptureRequestCategoriesNetwork}
+		body := &oapi.StartCaptureRequest{Categories: &cats}
+		cfg, err := startCaptureConfigFrom(body)
+		require.NoError(t, err)
+		assert.Len(t, cfg.Categories, 2)
+	})
+
+	t.Run("invalid category returns error", func(t *testing.T) {
+		cats := []oapi.StartCaptureRequestCategories{"bogus"}
+		body := &oapi.StartCaptureRequest{Categories: &cats}
+		_, err := startCaptureConfigFrom(body)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown category")
+	})
+
+	t.Run("valid detail level", func(t *testing.T) {
+		dl := oapi.StartCaptureRequestDetailLevelVerbose
+		body := &oapi.StartCaptureRequest{DetailLevel: &dl}
+		cfg, err := startCaptureConfigFrom(body)
+		require.NoError(t, err)
+		assert.Equal(t, "verbose", string(cfg.DetailLevel))
+	})
+
+	t.Run("invalid detail level returns error", func(t *testing.T) {
+		dl := oapi.StartCaptureRequestDetailLevel("garbage")
+		body := &oapi.StartCaptureRequest{DetailLevel: &dl}
+		_, err := startCaptureConfigFrom(body)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "unknown detail level")
+	})
+
+	t.Run("nil categories and nil detail level", func(t *testing.T) {
+		body := &oapi.StartCaptureRequest{}
+		cfg, err := startCaptureConfigFrom(body)
+		require.NoError(t, err)
+		assert.Empty(t, cfg.Categories)
+		assert.Empty(t, cfg.DetailLevel)
+	})
+}
+
+func TestStartCapture(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("success with no body", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		resp, err := svc.StartCapture(ctx, oapi.StartCaptureRequestObject{})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.StartCapture200Response{}, resp)
+	})
+
+	t.Run("invalid category returns 400", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		cats := []oapi.StartCaptureRequestCategories{"badcat"}
+		resp, err := svc.StartCapture(ctx, oapi.StartCaptureRequestObject{
+			Body: &oapi.StartCaptureRequest{Categories: &cats},
+		})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.StartCapture400JSONResponse{}, resp)
+	})
+
+	t.Run("invalid detail level returns 400", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		dl := oapi.StartCaptureRequestDetailLevel("garbage")
+		resp, err := svc.StartCapture(ctx, oapi.StartCaptureRequestObject{
+			Body: &oapi.StartCaptureRequest{DetailLevel: &dl},
+		})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.StartCapture400JSONResponse{}, resp)
+	})
+
+	t.Run("restart succeeds", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.StartCapture(ctx, oapi.StartCaptureRequestObject{})
+		require.NoError(t, err)
+		resp, err := svc.StartCapture(ctx, oapi.StartCaptureRequestObject{})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.StartCapture200Response{}, resp)
+	})
+}
+
+func TestStopCapture(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("stop when nothing running", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		resp, err := svc.StopCapture(ctx, oapi.StopCaptureRequestObject{})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.StopCapture200Response{}, resp)
+	})
+
+	t.Run("stop after start", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.StartCapture(ctx, oapi.StartCaptureRequestObject{})
+		require.NoError(t, err)
+		resp, err := svc.StopCapture(ctx, oapi.StopCaptureRequestObject{})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.StopCapture200Response{}, resp)
+	})
+}
+
