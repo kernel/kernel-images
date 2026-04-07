@@ -23,6 +23,21 @@ func NewRingBuffer(capacity int) *RingBuffer {
 	}
 }
 
+// Reset clears the buffer and wakes any blocked readers so they re-evaluate
+// against the new (empty) state. Readers whose nextSeq exceeds the new
+// latestSeq will block until fresh publishes catch up.
+func (rb *RingBuffer) Reset() {
+	rb.mu.Lock()
+	for i := range rb.buf {
+		rb.buf[i] = Envelope{}
+	}
+	rb.latestSeq = 0
+	old := rb.readerWake
+	rb.readerWake = make(chan struct{})
+	rb.mu.Unlock()
+	close(old)
+}
+
 // Publish adds an envelope to the ring, evicting the oldest on overflow.
 func (rb *RingBuffer) Publish(env Envelope) {
 	rb.mu.Lock()
