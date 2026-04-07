@@ -75,6 +75,7 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.captureSessionID = captureSessionID
 	s.seq = 0
 	s.createdAt = time.Now()
+	s.ring.Reset()
 	s.detailLevel = cfg.DetailLevel
 	cats := cfg.Categories
 	if len(cats) == 0 {
