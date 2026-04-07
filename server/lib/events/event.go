@@ -34,14 +34,18 @@ func AllCategories() []EventCategory {
 	return out
 }
 
+var validCategories = func() map[EventCategory]struct{} {
+	m := make(map[EventCategory]struct{}, len(allCategories))
+	for _, c := range allCategories {
+		m[c] = struct{}{}
+	}
+	return m
+}()
+
 // ValidCategory reports whether c is a known EventCategory.
 func ValidCategory(c EventCategory) bool {
-	for _, cat := range allCategories {
-		if cat == c {
-			return true
-		}
-	}
-	return false
+	_, ok := validCategories[c]
+	return ok
 }
 
 type SourceKind string

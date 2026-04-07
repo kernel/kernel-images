@@ -20,10 +20,9 @@ type CaptureConfig struct {
 	DetailLevel DetailLevel
 }
 
-// CaptureSession is a single-use write path that wraps events in envelopes and
-// fans them out to a FileWriter (durable) and RingBuffer (in-memory). Call Start
-// once with a capture session ID, then Publish concurrently. Close flushes the
-// FileWriter; there is no restart or terminal event.
+// CaptureSession wraps events in envelopes and fans them out to a FileWriter
+// (durable) and RingBuffer (in-memory). Call Start to begin or restart a session,
+// then Publish concurrently. Close flushes the FileWriter.
 type CaptureSession struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
