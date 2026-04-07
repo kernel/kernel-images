@@ -93,7 +93,7 @@ func main() {
 
 	// Construct events pipeline
 	captureSession, err := events.NewCaptureSession(events.CaptureSessionConfig{
-		LogDir:       "/var/log",
+		LogDir:       "/var/log/kernel",
 		RingCapacity: 1024,
 	})
 	if err != nil {
@@ -133,10 +133,6 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(jsonData)
 	})
-	// capture events
-	r.Post("/events/start", apiService.StartCapture)
-	r.Post("/events/stop", apiService.StopCapture)
-
 	// PTY attach endpoint (WebSocket) - not part of OpenAPI spec
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {
