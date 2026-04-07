@@ -1194,8 +1194,69 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /events/start:
+    post:
+      summary: Start capturing CDP events
+      description: >
+        Generates a new capture session ID, seeds the pipeline, and starts the
+        CDP monitor. If already running, the monitor is stopped and restarted
+        with a fresh session ID.
+      operationId: startCapture
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartCaptureRequest"
+      responses:
+        "200":
+          description: Capture started
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /events/stop:
+    post:
+      summary: Stop capturing CDP events
+      description: Stops the CDP monitor and ends the current capture session.
+      operationId: stopCapture
+      responses:
+        "200":
+          description: Capture stopped
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   schemas:
+    StartCaptureRequest:
+      type: object
+      description: >
+        Optional capture configuration. All fields default to the
+        server-defined profile when omitted or when no body is sent.
+      properties:
+        categories:
+          type: array
+          description: >
+            Event categories to capture. When omitted or empty, all
+            categories are captured.
+          items:
+            type: string
+            enum:
+              - console
+              - network
+              - page
+              - interaction
+              - liveview
+              - captcha
+              - system
+        detailLevel:
+          type: string
+          description: >
+            Default detail level for captured events. Individual events
+            may override this based on their content.
+          enum:
+            - minimal
+            - standard
+            - verbose
+            - raw
+      additionalProperties: false
     StartRecordingRequest:
       type: object
       properties:
