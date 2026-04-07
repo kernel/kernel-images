@@ -3,7 +3,6 @@ package events
 import (
 	"encoding/json"
 	"log/slog"
-	"strings"
 )
 
 // maxS2RecordBytes is the maximum record size for the S2 event pipeline (1 MB).
@@ -71,7 +70,7 @@ const (
 // Event is the portable event schema. It contains only producer-emitted content;
 // pipeline metadata (seq, capture session) lives on the Envelope.
 type Event struct {
-	Ts          int64           `json:"ts"`
+	Ts          int64           `json:"ts"` // Unix microseconds (µs since epoch)
 	Type        string          `json:"type"`
 	Category    EventCategory   `json:"category"`
 	Source      Source          `json:"source"`
@@ -86,30 +85,6 @@ type Envelope struct {
 	CaptureSessionID string `json:"capture_session_id"`
 	Seq              uint64 `json:"seq"`
 	Event            Event  `json:"event"`
-}
-
-// CategoryFor derives an EventCategory from an event type string.
-// It splits on the first dot and maps the prefix to a category.
-func CategoryFor(eventType string) EventCategory {
-	prefix, _, _ := strings.Cut(eventType, ".")
-	switch prefix {
-	case "console":
-		return CategoryConsole
-	case "network":
-		return CategoryNetwork
-	case "page", "navigation", "dom", "target":
-		return CategoryPage
-	case "interaction", "layout", "scroll":
-		return CategoryInteraction
-	case "liveview":
-		return CategoryLiveview
-	case "captcha":
-		return CategoryCaptcha
-	case "screenshot", "monitor":
-		return CategorySystem
-	default:
-		return CategorySystem
-	}
 }
 
 // truncateIfNeeded marshals env and returns the (possibly truncated) envelope.
