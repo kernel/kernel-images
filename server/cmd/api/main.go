@@ -92,9 +92,14 @@ func main() {
 	}
 
 	// Construct events pipeline
-	eventsRing := events.NewRingBuffer(1024)
-	eventsFileWriter := events.NewFileWriter("/var/log")
-	captureSession := events.NewCaptureSession(eventsRing, eventsFileWriter)
+	captureSession, err := events.NewCaptureSession(events.CaptureSessionConfig{
+		LogDir:       "/var/log",
+		RingCapacity: 1024,
+	})
+	if err != nil {
+		slogger.Error("failed to create capture session", "err", err)
+		os.Exit(1)
+	}
 
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),

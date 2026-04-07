@@ -332,7 +332,8 @@ func TestConcurrentReaders(t *testing.T) {
 func TestFileWriter(t *testing.T) {
 	t.Run("category_routing", func(t *testing.T) {
 		dir := t.TempDir()
-		fw := NewFileWriter(dir)
+		fw, err := NewFileWriter(dir)
+		require.NoError(t, err)
 		defer fw.Close()
 
 		envsToFile := []struct {
@@ -375,19 +376,21 @@ func TestFileWriter(t *testing.T) {
 
 	t.Run("empty_category_rejected", func(t *testing.T) {
 		dir := t.TempDir()
-		fw := NewFileWriter(dir)
+		fw, err := NewFileWriter(dir)
+		require.NoError(t, err)
 		defer fw.Close()
 
 		env := Envelope{Seq: 1, Event: Event{Type: "mystery", Category: "", Source: Source{Kind: KindCDP}, Ts: 1}}
 		data, _ := json.Marshal(env)
-		err := fw.Write(env, data)
+		err = fw.Write(env, data)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "empty category")
 	})
 
 	t.Run("concurrent_writes", func(t *testing.T) {
 		dir := t.TempDir()
-		fw := NewFileWriter(dir)
+		fw, err := NewFileWriter(dir)
+		require.NoError(t, err)
 		defer fw.Close()
 
 		const goroutines = 10
@@ -423,7 +426,8 @@ func TestFileWriter(t *testing.T) {
 
 	t.Run("lazy_open", func(t *testing.T) {
 		dir := t.TempDir()
-		fw := NewFileWriter(dir)
+		fw, err := NewFileWriter(dir)
+		require.NoError(t, err)
 		defer fw.Close()
 
 		entries, err := os.ReadDir(dir)
@@ -446,9 +450,8 @@ func TestCaptureSession(t *testing.T) {
 	newCaptureSession := func(t *testing.T) (*CaptureSession, string) {
 		t.Helper()
 		dir := t.TempDir()
-		rb := NewRingBuffer(100)
-		fw := NewFileWriter(dir)
-		p := NewCaptureSession(rb, fw)
+		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: dir, RingCapacity: 100})
+		require.NoError(t, err)
 		t.Cleanup(func() { p.Close() })
 		return p, dir
 	}
@@ -458,9 +461,8 @@ func TestCaptureSession(t *testing.T) {
 		const eventsEach = 50
 		const total = goroutines * eventsEach
 
-		rb := NewRingBuffer(total)
-		fw := NewFileWriter(t.TempDir())
-		p := NewCaptureSession(rb, fw)
+		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: t.TempDir(), RingCapacity: total})
+		require.NoError(t, err)
 		t.Cleanup(func() { p.Close() })
 		reader := p.NewReader(0)
 
@@ -506,9 +508,9 @@ func TestCaptureSession(t *testing.T) {
 		p, _ := newCaptureSession(t)
 		reader := p.NewReader(0)
 
-		before := time.Now().UnixMilli()
+		before := time.Now().UnixMicro()
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}})
-		after := time.Now().UnixMilli()
+		after := time.Now().UnixMicro()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -548,7 +550,7 @@ func TestCaptureSession(t *testing.T) {
 
 	t.Run("start_sets_capture_session_id", func(t *testing.T) {
 		p, _ := newCaptureSession(t)
-		p.Start("test-uuid")
+		p.Start("test-uuid", CaptureConfig{})
 
 		reader := p.NewReader(0)
 		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})

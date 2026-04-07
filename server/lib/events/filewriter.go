@@ -16,9 +16,13 @@ type FileWriter struct {
 	dir   string
 }
 
-// NewFileWriter returns a FileWriter that writes to dir.
-func NewFileWriter(dir string) *FileWriter {
-	return &FileWriter{dir: dir, files: make(map[EventCategory]*os.File)}
+// NewFileWriter returns a FileWriter that writes to dir, creating it if needed.
+func NewFileWriter(dir string) (*FileWriter, error) {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, fmt.Errorf("filewriter: create dir %s: %w", dir, err)
+	}
+	return &FileWriter{dir: dir, files: make(map[EventCategory]*os.File)}, nil
+}
 }
 
 // Write appends data as a single JSONL line to the per-category log file.

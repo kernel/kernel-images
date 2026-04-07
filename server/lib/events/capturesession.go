@@ -1,16 +1,23 @@
 package events
 
 import (
+	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-// CaptureConfig holds caller-supplied capture preferences. All fields are optional;
-// zero values mean "use server defaults" (all categories).
+// CaptureConfig holds caller-supplied capture preferences. All fields are
+// optional; zero values mean "use server defaults" (all categories, standard
+// detail level).
 type CaptureConfig struct {
+	// Categories limits which event categories are captured. nil or empty
+	// means all categories.
 	Categories []EventCategory
+
+	// DetailLevel overrides the default detail level stamped on events that
+	// don't set their own. Empty means DetailStandard.
+	DetailLevel DetailLevel
 }
 
 // CaptureSession is the unified write path that fans events out to a FileWriter
@@ -21,19 +28,34 @@ type CaptureConfig struct {
 // Call Start to begin a session, Publish to forward events, Stop to end one.
 // Close releases file descriptors. All methods are safe for concurrent use.
 type CaptureSession struct {
-	mu    sync.Mutex
-	ring  *RingBuffer
-	files *FileWriter
-	seq   atomic.Uint64
-
-	// session state, guarded by mu
-	id         string
-	categories map[EventCategory]struct{}
-	createdAt  time.Time
+	mu               sync.Mutex
+	ring             *RingBuffer
+	files            *FileWriter
+	seq              uint64
+	captureSessionID string
+	categories       map[EventCategory]struct{} // nil means all
+	detailLevel      DetailLevel                // "" means DetailStandard
+	createdAt        time.Time
 }
 
-func NewCaptureSession(ring *RingBuffer, files *FileWriter) *CaptureSession {
-	return &CaptureSession{ring: ring, files: files}
+// CaptureSessionConfig holds the parameters for creating a CaptureSession.
+type CaptureSessionConfig struct {
+	// LogDir is the directory where per-category JSONL log files are written.
+	LogDir string
+
+	// RingCapacity is the number of envelopes the in-memory ring buffer holds.
+	RingCapacity int
+}
+
+func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
+	fw, err := NewFileWriter(cfg.LogDir)
+	if err != nil {
+		return nil, fmt.Errorf("capture session: %w", err)
+	}
+	return &CaptureSession{
+		ring:  NewRingBuffer(cfg.RingCapacity),
+		files: fw,
+	}, nil
 }
 
 // Start begins a new capture session. Subsequent Publish calls that match cfg's
@@ -41,15 +63,16 @@ func NewCaptureSession(ring *RingBuffer, files *FileWriter) *CaptureSession {
 func (s *CaptureSession) Start(id string, cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.id = id
+	s.captureSessionID = id
 	s.createdAt = time.Now()
-	cats := cfg.Categories
-	if len(cats) == 0 {
-		cats = AllCategories
-	}
-	s.categories = make(map[EventCategory]struct{}, len(cats))
-	for _, c := range cats {
-		s.categories[c] = struct{}{}
+	s.detailLevel = cfg.DetailLevel
+	if len(cfg.Categories) > 0 {
+		s.categories = make(map[EventCategory]struct{}, len(cfg.Categories))
+		for _, c := range cfg.Categories {
+			s.categories[c] = struct{}{}
+		}
+	} else {
+		s.categories = nil
 	}
 }
 
@@ -58,14 +81,14 @@ func (s *CaptureSession) Start(id string, cfg CaptureConfig) {
 func (s *CaptureSession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.id = ""
+	s.captureSessionID = ""
 }
 
 // ID returns the active capture session ID, or "" if no session is running.
 func (s *CaptureSession) ID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.id
+	return s.captureSessionID
 }
 
 // Config returns the current capture configuration.
@@ -76,20 +99,21 @@ func (s *CaptureSession) Config() CaptureConfig {
 	for c := range s.categories {
 		cats = append(cats, c)
 	}
-	return CaptureConfig{Categories: cats}
+	return CaptureConfig{Categories: cats, DetailLevel: s.detailLevel}
 }
 
-// UpdateConfig replaces the category filter for the running session.
+// UpdateConfig replaces the category filter and detail level for the running session.
 func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cats := cfg.Categories
-	if len(cats) == 0 {
-		cats = AllCategories
-	}
-	s.categories = make(map[EventCategory]struct{}, len(cats))
-	for _, c := range cats {
-		s.categories[c] = struct{}{}
+	s.detailLevel = cfg.DetailLevel
+	if len(cfg.Categories) > 0 {
+		s.categories = make(map[EventCategory]struct{}, len(cfg.Categories))
+		for _, c := range cfg.Categories {
+			s.categories[c] = struct{}{}
+		}
+	} else {
+		s.categories = nil
 	}
 }
 
@@ -102,35 +126,48 @@ func (s *CaptureSession) CreatedAt() time.Time {
 
 // Seq returns the sequence number of the last published event.
 func (s *CaptureSession) Seq() uint64 {
-	return s.seq.Load()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seq
 }
 
 // Publish assigns a monotonically increasing sequence number, writes to the
-// RingBuffer (always), and writes to the FileWriter if a session is active and
-// the event's category is included in the session filter.
+// RingBuffer (always), and writes to the FileWriter when a session is active
+// and the event's category is in the filter.
 // Returns the Envelope as stored in the ring.
 func (s *CaptureSession) Publish(ev Event) Envelope {
-	if ev.Ts == 0 {
-		ev.Ts = time.Now().UnixMilli()
-	}
-	if ev.DetailLevel == "" {
-		ev.DetailLevel = DetailStandard
+	s.mu.Lock()
+
+	if s.categories != nil {
+		if _, ok := s.categories[ev.Category]; !ok {
+			s.mu.Unlock()
+			return Envelope{}
+		}
 	}
 
-	s.mu.Lock()
-	sessionID := s.id
-	_, catOK := s.categories[ev.Category]
-	shouldWrite := sessionID != "" && catOK
+	if ev.Ts == 0 {
+		ev.Ts = time.Now().UnixMicro()
+	}
+	if ev.DetailLevel == "" {
+		if s.detailLevel != "" {
+			ev.DetailLevel = s.detailLevel
+		} else {
+			ev.DetailLevel = DetailStandard
+		}
+	}
+
+	sessionID := s.captureSessionID
+	s.seq++
 	env := Envelope{
 		CaptureSessionID: sessionID,
-		Seq:              s.seq.Add(1),
+		Seq:              s.seq,
 		Event:            ev,
 	}
 	s.mu.Unlock()
 
 	env, data := truncateIfNeeded(env)
 
-	if shouldWrite {
+	if sessionID != "" {
 		if data == nil {
 			slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
 		} else if err := s.files.Write(env, data); err != nil {
