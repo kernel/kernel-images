@@ -45,8 +45,11 @@ func (fw *FileWriter) Write(env Envelope, data []byte) error {
 		fw.files[cat] = f
 	}
 
-	if _, err := f.Write(append(data, '\n')); err != nil {
+	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("filewriter: write: %w", err)
+	}
+	if _, err := f.Write([]byte{'\n'}); err != nil {
+		return fmt.Errorf("filewriter: write newline: %w", err)
 	}
 
 	return nil

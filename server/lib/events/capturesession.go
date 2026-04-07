@@ -20,13 +20,9 @@ type CaptureConfig struct {
 	DetailLevel DetailLevel
 }
 
-// CaptureSession is the unified write path that fans events out to a FileWriter
-// (durable, session-scoped) and a RingBuffer (in-memory SSE fan-out). It also
-// tracks session identity, category filter, and timestamps so the API layer does
-// not need a separate session-management type.
-//
-// Call Start to begin a session, Publish to forward events, Stop to end one.
-// Close releases file descriptors. All methods are safe for concurrent use.
+// CaptureSession wraps events in envelopes and fans them out to a FileWriter
+// (durable) and RingBuffer (in-memory). Call Start to begin or restart a session,
+// then Publish concurrently. Close flushes the FileWriter.
 type CaptureSession struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
