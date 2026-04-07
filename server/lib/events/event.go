@@ -21,24 +21,27 @@ const (
 	CategorySystem      EventCategory = "system"
 )
 
-// AllCategories is the canonical list of all known event categories.
-var AllCategories = []EventCategory{
+// allCategories is the canonical list; use AllCategories() to get a copy.
+var allCategories = []EventCategory{
 	CategoryConsole, CategoryNetwork, CategoryPage, CategoryInteraction,
 	CategoryLiveview, CategoryCaptcha, CategorySystem,
 }
 
-var validCategories = func() map[EventCategory]struct{} {
-	m := make(map[EventCategory]struct{}, len(AllCategories))
-	for _, c := range AllCategories {
-		m[c] = struct{}{}
-	}
-	return m
-}()
+// AllCategories returns a fresh copy of all known event categories.
+func AllCategories() []EventCategory {
+	out := make([]EventCategory, len(allCategories))
+	copy(out, allCategories)
+	return out
+}
 
 // ValidCategory reports whether c is a known EventCategory.
 func ValidCategory(c EventCategory) bool {
-	_, ok := validCategories[c]
-	return ok
+	for _, cat := range allCategories {
+		if cat == c {
+			return true
+		}
+	}
+	return false
 }
 
 type SourceKind string

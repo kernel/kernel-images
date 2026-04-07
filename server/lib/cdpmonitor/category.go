@@ -1,6 +1,7 @@
 package cdpmonitor
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/onkernel/kernel-images/server/lib/events"
@@ -26,6 +27,7 @@ func categoryFor(eventType string) events.EventCategory {
 	case "screenshot", "monitor":
 		return events.CategorySystem
 	default:
+		slog.Debug("categoryFor: unknown CDP event prefix, defaulting to system", "prefix", prefix, "event_type", eventType)
 		return events.CategorySystem
 	}
 }

@@ -21,14 +21,6 @@ import (
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
-type cdpMonitorController interface {
-	Start(ctx context.Context) error
-	Stop()
-	IsRunning() bool
-}
-
-var _ cdpMonitorController = (*cdpmonitor.Monitor)(nil)
-
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
 	defaultRecorderID string
@@ -82,7 +74,7 @@ type ApiService struct {
 
 	// CDP event pipeline and cdpMonitor.
 	captureSession  *events.CaptureSession
-	cdpMonitor      cdpMonitorController
+	cdpMonitor      *cdpmonitor.Monitor
 	monitorMu       sync.Mutex
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
@@ -116,8 +108,8 @@ func New(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{
-		recordManager:     recordManager,
-		factory:           factory,
+		recordManager:   recordManager,
+		factory:         factory,
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
@@ -348,6 +340,7 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	s.lifecycleCancel()
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()

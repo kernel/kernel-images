@@ -5772,6 +5772,7 @@ func (r PublishEventResponse) StatusCode() int {
 type StartCaptureResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	JSON400      *BadRequestError
 	JSON500      *InternalError
 }
 
@@ -8083,6 +8084,13 @@ func ParseStartCaptureResponse(rsp *http.Response) (*StartCaptureResponse, error
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
@@ -11976,6 +11984,15 @@ type StartCapture200Response struct {
 func (response StartCapture200Response) VisitStartCaptureResponse(w http.ResponseWriter) error {
 	w.WriteHeader(200)
 	return nil
+}
+
+type StartCapture400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response StartCapture400JSONResponse) VisitStartCaptureResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
 }
 
 type StartCapture500JSONResponse struct{ InternalErrorJSONResponse }
