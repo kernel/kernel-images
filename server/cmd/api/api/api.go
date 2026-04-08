@@ -39,6 +39,9 @@ type ApiService struct {
 	upstreamMgr *devtoolsproxy.UpstreamManager
 	stz         scaletozero.Controller
 
+	// forwardProxyPort is the port Chromium's forward proxy listens on
+	forwardProxyPort int
+
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
 
@@ -72,7 +75,7 @@ type ApiService struct {
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
 
-func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFactory, upstreamMgr *devtoolsproxy.UpstreamManager, stz scaletozero.Controller, nekoAuthClient *nekoclient.AuthClient) (*ApiService, error) {
+func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFactory, upstreamMgr *devtoolsproxy.UpstreamManager, stz scaletozero.Controller, nekoAuthClient *nekoclient.AuthClient, forwardProxyPort int) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
 		return nil, fmt.Errorf("recordManager cannot be nil")
@@ -94,6 +97,7 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
+		forwardProxyPort:  forwardProxyPort,
 	}, nil
 }
 

@@ -1169,6 +1169,43 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /fetch:
+    post:
+      summary: Make an HTTP request through the browser's network stack
+      description: |
+        Proxy an HTTP request through Chromium's built-in forward proxy, inheriting
+        the browser's TLS fingerprint, cookies, proxy configuration, and default headers.
+        This is significantly faster than page.goto() for sites that serve fully-rendered HTML.
+      operationId: browserFetch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserFetchRequest"
+      responses:
+        "200":
+          description: Fetch completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserFetchResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "408":
+          description: Request timed out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "502":
+          description: Forward proxy unreachable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
@@ -1835,6 +1872,53 @@ components:
           type: boolean
           description: Indicates success.
           default: true
+      additionalProperties: false
+    BrowserFetchRequest:
+      type: object
+      description: Request to make an HTTP request through the browser's forward proxy.
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: Target URL (must use http or https scheme).
+        method:
+          type: string
+          description: HTTP method to use.
+          enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+          default: GET
+        headers:
+          type: object
+          description: Custom headers to include in the request. Merged with browser defaults.
+          additionalProperties:
+            type: string
+        body:
+          type: string
+          description: Request body (for POST, PUT, PATCH).
+        timeout_ms:
+          type: integer
+          description: Request timeout in milliseconds.
+          default: 30000
+          minimum: 1000
+          maximum: 60000
+      additionalProperties: false
+    BrowserFetchResult:
+      type: object
+      description: Result of an HTTP request through the browser's forward proxy.
+      properties:
+        status:
+          type: integer
+          description: HTTP status code from the target.
+        headers:
+          type: object
+          description: Response headers from the target.
+          additionalProperties:
+            type: string
+        body:
+          type: string
+          description: Response body.
+        duration_ms:
+          type: integer
+          description: Total request duration in milliseconds.
       additionalProperties: false
     ExecutePlaywrightRequest:
       type: object

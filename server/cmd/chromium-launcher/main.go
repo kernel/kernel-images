@@ -55,9 +55,17 @@ func main() {
 	fmt.Printf("RUNTIME_FLAGS: %s\n", strings.Join(runtimeTokens, " "))
 	fmt.Printf("FINAL_FLAGS: %s\n", strings.Join(final, " "))
 
+	// Forward proxy port for browser-backed HTTP requests (session.fetch).
+	// Chromium's built-in forward proxy inherits TLS fingerprint, cookies, and proxy config.
+	forwardProxyPort := strings.TrimSpace(os.Getenv("FORWARD_PROXY_PORT"))
+	if forwardProxyPort == "" {
+		forwardProxyPort = "8888"
+	}
+
 	// flags we send no matter what
 	chromiumArgs := []string{
 		fmt.Sprintf("--remote-debugging-port=%s", internalPort),
+		fmt.Sprintf("--forward-proxy-port=%s", forwardProxyPort),
 		"--remote-allow-origins=*",
 		"--user-data-dir=/home/kernel/user-data",
 		"--password-store=basic",

@@ -96,6 +96,7 @@ func main() {
 		upstreamMgr,
 		stz,
 		nekoAuthClient,
+		config.ForwardProxyPort,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)

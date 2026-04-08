@@ -24,6 +24,9 @@ type Config struct {
 	DevToolsProxyPort int  `envconfig:"DEVTOOLS_PROXY_PORT" default:"9222"`
 	LogCDPMessages    bool `envconfig:"LOG_CDP_MESSAGES" default:"false"`
 
+	// Forward proxy port: the port Chromium's built-in forward proxy listens on.
+	ForwardProxyPort int `envconfig:"FORWARD_PROXY_PORT" default:"8888"`
+
 	// ChromeDriver proxy: external port where the proxy listens.
 	ChromeDriverProxyPort int `envconfig:"CHROMEDRIVER_PROXY_PORT" default:"9224"`
 	// Internal ChromeDriver upstream used by the ChromeDriver proxy.
