@@ -1,4 +1,4 @@
-// patch_strict_optional_json fixes oapi-codegen strict handler regressions:
+// Patch strict-handler JSON decode and response tags after oapi-codegen:
 // 1) Allow empty request bodies (io.EOF) for optional-body JSON endpoints.
 // 2) Restore omitempty on pointer JSON tags that affect response shape.
 package main
