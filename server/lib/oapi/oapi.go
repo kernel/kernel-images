@@ -678,9 +678,8 @@ type TypeTextRequest struct {
 	// Text Text to type on the host computer
 	Text string `json:"text"`
 
-	// TypoChance Probability (0.0-0.10) of a typo per character, which is then
-	// corrected with backspace. Ignored when smooth is false. Set to 0
-	// to disable. Typical human range is 0.02-0.05.
+	// TypoChance Per-character typo injection rate, corrected with backspace.
+	// Default 0. Only applies when smooth is true (silently ignored when smooth is false).
 	TypoChance *float32 `json:"typo_chance,omitempty"`
 }
 
