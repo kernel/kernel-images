@@ -1374,15 +1374,16 @@ components:
           type: boolean
           description: |
             Use human-like variable keystroke timing instead of a fixed delay.
-            When enabled, text is typed in word-sized chunks with variable
-            intra-word delays and natural inter-word pauses. The delay field
-            is ignored when smooth is true.
-          default: false
+            Defaults to true (same as moveMouse/dragMouse). Set to false for
+            xdotool typing with an optional fixed delay between keys (delay=0 is instant).
+            When true, text is typed in word-sized chunks with variable intra-word delays
+            and natural inter-word pauses. The delay field is ignored when smooth is true.
+          default: true
         typo_chance:
           type: number
           description: |
             Probability (0.0-0.10) of a typo per character, which is then
-            corrected with backspace. Requires smooth to be true. Set to 0
+            corrected with backspace. Ignored when smooth is false. Set to 0
             to disable. Typical human range is 0.02-0.05.
           minimum: 0
           maximum: 0.10

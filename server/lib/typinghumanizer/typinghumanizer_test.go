@@ -187,6 +187,12 @@ func TestGenerateTypoPositions(t *testing.T) {
 		total := counts[TypoAdjacentKey] + counts[TypoDoubling] + counts[TypoTranspose] + counts[TypoExtraChar]
 		require.Greater(t, total, 0)
 		adjPct := float64(counts[TypoAdjacentKey]) / float64(total)
+		doubPct := float64(counts[TypoDoubling]) / float64(total)
+		transPct := float64(counts[TypoTranspose]) / float64(total)
+		extraPct := float64(counts[TypoExtraChar]) / float64(total)
 		assert.InDelta(t, 0.60, adjPct, 0.10, "adjacent key should be ~60%%")
+		assert.InDelta(t, 0.20, doubPct, 0.10, "doubling should be ~20%%")
+		assert.InDelta(t, 0.15, transPct, 0.10, "transpose should be ~15%%")
+		assert.InDelta(t, 0.05, extraPct, 0.06, "extra char should be ~5%%")
 	})
 }

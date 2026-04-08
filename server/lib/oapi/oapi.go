@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -409,19 +410,19 @@ type ProcessExecRequest struct {
 	AsRoot *bool `json:"as_root,omitempty"`
 
 	// AsUser Run the process as this user.
-	AsUser *string `json:"as_user"`
+	AsUser *string `json:"as_user,omitempty"`
 
 	// Command Executable or shell command to run.
 	Command string `json:"command"`
 
 	// Cwd Working directory (absolute path) to run the command in.
-	Cwd *string `json:"cwd"`
+	Cwd *string `json:"cwd,omitempty"`
 
 	// Env Environment variables to set for the process.
 	Env *map[string]string `json:"env,omitempty"`
 
 	// TimeoutSec Maximum execution time in seconds.
-	TimeoutSec *int `json:"timeout_sec"`
+	TimeoutSec *int `json:"timeout_sec,omitempty"`
 }
 
 // ProcessExecResult Result of a synchronous command execution.
@@ -469,7 +470,7 @@ type ProcessSpawnRequest struct {
 	AsRoot *bool `json:"as_root,omitempty"`
 
 	// AsUser Run the process as this user.
-	AsUser *string `json:"as_user"`
+	AsUser *string `json:"as_user,omitempty"`
 
 	// Cols Initial terminal columns when allocate_tty is true.
 	Cols *int `json:"cols,omitempty"`
@@ -478,7 +479,7 @@ type ProcessSpawnRequest struct {
 	Command string `json:"command"`
 
 	// Cwd Working directory (absolute path) to run the command in.
-	Cwd *string `json:"cwd"`
+	Cwd *string `json:"cwd,omitempty"`
 
 	// Env Environment variables to set for the process.
 	Env *map[string]string `json:"env,omitempty"`
@@ -487,7 +488,7 @@ type ProcessSpawnRequest struct {
 	Rows *int `json:"rows,omitempty"`
 
 	// TimeoutSec Maximum execution time in seconds.
-	TimeoutSec *int `json:"timeout_sec"`
+	TimeoutSec *int `json:"timeout_sec,omitempty"`
 }
 
 // ProcessSpawnResult Information about a spawned process.
@@ -508,7 +509,7 @@ type ProcessStatus struct {
 	CpuPct *float32 `json:"cpu_pct,omitempty"`
 
 	// ExitCode Exit code if the process has exited.
-	ExitCode *int `json:"exit_code"`
+	ExitCode *int `json:"exit_code,omitempty"`
 
 	// MemBytes Estimated resident memory usage in bytes.
 	MemBytes *int `json:"mem_bytes,omitempty"`
@@ -556,12 +557,12 @@ type ProcessStreamEventStream string
 // RecorderInfo defines model for RecorderInfo.
 type RecorderInfo struct {
 	// FinishedAt Timestamp when recording finished
-	FinishedAt  *time.Time `json:"finished_at"`
+	FinishedAt  *time.Time `json:"finished_at,omitempty"`
 	Id          string     `json:"id"`
 	IsRecording bool       `json:"isRecording"`
 
 	// StartedAt Timestamp when recording started
-	StartedAt *time.Time `json:"started_at"`
+	StartedAt *time.Time `json:"started_at,omitempty"`
 }
 
 // ScreenshotRegion defines model for ScreenshotRegion.
@@ -668,16 +669,17 @@ type TypeTextRequest struct {
 	Delay *int `json:"delay,omitempty"`
 
 	// Smooth Use human-like variable keystroke timing instead of a fixed delay.
-	// When enabled, text is typed in word-sized chunks with variable
-	// intra-word delays and natural inter-word pauses. The delay field
-	// is ignored when smooth is true.
+	// Defaults to true when omitted (same as moveMouse/dragMouse). Set false for
+	// xdotool typing with optional fixed delay (delay=0 is instant). When true,
+	// text is typed in word-sized chunks with variable intra-word delays and
+	// natural inter-word pauses. The delay field is ignored when smooth is true.
 	Smooth *bool `json:"smooth,omitempty"`
 
 	// Text Text to type on the host computer
 	Text string `json:"text"`
 
 	// TypoChance Probability (0.0-0.10) of a typo per character, which is then
-	// corrected with backspace. Requires smooth to be true. Set to 0
+	// corrected with backspace. Ignored when smooth is false. Set to 0
 	// to disable. Typical human range is 0.02-0.05.
 	TypoChance *float32 `json:"typo_chance,omitempty"`
 }
@@ -11989,10 +11991,13 @@ func (sh *strictHandler) TakeScreenshot(w http.ResponseWriter, r *http.Request) 
 
 	var body TakeScreenshotJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
 	}
-	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.TakeScreenshot(ctx, request.(TakeScreenshotRequestObject))
@@ -12872,10 +12877,13 @@ func (sh *strictHandler) DeleteRecording(w http.ResponseWriter, r *http.Request)
 
 	var body DeleteRecordingJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
 	}
-	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.DeleteRecording(ctx, request.(DeleteRecordingRequestObject))
@@ -12953,10 +12961,13 @@ func (sh *strictHandler) StartRecording(w http.ResponseWriter, r *http.Request) 
 
 	var body StartRecordingJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
 	}
-	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.StartRecording(ctx, request.(StartRecordingRequestObject))
@@ -12984,10 +12995,13 @@ func (sh *strictHandler) StopRecording(w http.ResponseWriter, r *http.Request) {
 
 	var body StopRecordingJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
 	}
-	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.StopRecording(ctx, request.(StopRecordingRequestObject))

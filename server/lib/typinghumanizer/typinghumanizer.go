@@ -69,10 +69,10 @@ func IsSentenceEnd(chunk string) bool {
 type TypoKind int
 
 const (
-	TypoAdjacentKey  TypoKind = iota // Hit a neighboring key
-	TypoDoubling                     // Type the character twice
-	TypoTranspose                    // Swap current and next character
-	TypoExtraChar                    // Insert a random adjacent key before the correct one
+	TypoAdjacentKey TypoKind = iota // Hit a neighboring key
+	TypoDoubling                    // Type the character twice
+	TypoTranspose                   // Swap current and next character
+	TypoExtraChar                   // Insert a random adjacent key before the correct one
 )
 
 // Typo describes a single typo at a position in the text.
@@ -130,8 +130,9 @@ func AdjacentKey(rng *rand.Rand, ch rune) rune {
 	return adj
 }
 
-// GenerateTypoPositions computes typo positions using geometric gap sampling.
-// O(typos) random calls, not O(chars). Returns a sorted slice of Typo structs.
+// GenerateTypoPositions computes typo positions using uniform gap sampling
+// (each gap is uniform on [halfGap, halfGap+avgGap)). O(typos) random calls,
+// not O(chars). Returns a sorted slice of Typo structs.
 func GenerateTypoPositions(rng *rand.Rand, textLen int, typoRate float64) []Typo {
 	if typoRate <= 0 || textLen <= 1 {
 		return nil

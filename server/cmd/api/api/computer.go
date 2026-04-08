@@ -18,8 +18,8 @@ import (
 
 	"github.com/onkernel/kernel-images/server/lib/logger"
 	"github.com/onkernel/kernel-images/server/lib/mousetrajectory"
-	"github.com/onkernel/kernel-images/server/lib/typinghumanizer"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	"github.com/onkernel/kernel-images/server/lib/typinghumanizer"
 )
 
 // validationError represents a client-side error (400).
@@ -451,7 +451,8 @@ func (s *ApiService) TakeScreenshot(ctx context.Context, request oapi.TakeScreen
 }
 
 func (s *ApiService) doTypeText(ctx context.Context, body oapi.TypeTextRequest) error {
-	if body.Smooth != nil && *body.Smooth {
+	useSmooth := body.Smooth == nil || *body.Smooth
+	if useSmooth {
 		return s.doTypeTextSmooth(ctx, body)
 	}
 
@@ -492,12 +493,6 @@ func (s *ApiService) doTypeTextSmooth(ctx context.Context, body oapi.TypeTextReq
 	}
 	typos := typinghumanizer.GenerateTypoPositions(rng, len(runes), typoRate)
 
-	// Build a typo lookup set for O(1) access during chunk iteration
-	typoByPos := map[int]typinghumanizer.Typo{}
-	for _, typo := range typos {
-		typoByPos[typo.Pos] = typo
-	}
-
 	chunks := typinghumanizer.SplitWordChunks(body.Text)
 	if len(chunks) == 0 {
 		return nil
@@ -515,25 +510,22 @@ func (s *ApiService) doTypeTextSmooth(ctx context.Context, body oapi.TypeTextReq
 		chunkStart := globalPos
 		chunkEnd := chunkStart + len(chunkRunes)
 
-		// Find typos within this chunk
-		var chunkTypo *typinghumanizer.Typo
-		for pos := chunkStart; pos < chunkEnd; pos++ {
-			if t, ok := typoByPos[pos]; ok {
-				chunkTypo = &t
-				break
+		var chunkTypos []typinghumanizer.Typo
+		for _, t := range typos {
+			if t.Pos >= chunkStart && t.Pos < chunkEnd {
+				chunkTypos = append(chunkTypos, t)
 			}
 		}
 
 		intraDelayMs := rng.Intn(70) + 50
 
-		if chunkTypo == nil {
+		if len(chunkTypos) == 0 {
 			if err := s.xdotoolTypeChunk(ctx, chunk, intraDelayMs); err != nil {
 				log.Error("xdotool type chunk failed", "err", err, "chunk", chunkIdx)
 				return &executionError{msg: "failed during smooth typing"}
 			}
 		} else {
-			localPos := chunkTypo.Pos - chunkStart
-			if err := s.typeChunkWithTypo(ctx, log, rng, chunkRunes, localPos, *chunkTypo, intraDelayMs); err != nil {
+			if err := s.smoothTypeChunkWithTypos(ctx, log, rng, chunkRunes, chunkStart, chunkTypos, intraDelayMs); err != nil {
 				return err
 			}
 		}
@@ -564,7 +556,61 @@ func (s *ApiService) xdotoolTypeChunk(ctx context.Context, text string, delayMs 
 	return nil
 }
 
-func (s *ApiService) typeChunkWithTypo(
+// smoothTypeChunkWithTypos types chunkRunes in order, applying every typo in chunkTypos
+// (sorted by global position). chunkStart is the global rune index of chunkRunes[0].
+func (s *ApiService) smoothTypeChunkWithTypos(
+	ctx context.Context,
+	log *slog.Logger,
+	rng *rand.Rand,
+	chunkRunes []rune,
+	chunkStart int,
+	chunkTypos []typinghumanizer.Typo,
+	delayMs int,
+) error {
+	cursor := 0
+	for _, t := range chunkTypos {
+		lp := t.Pos - chunkStart
+		if lp < cursor {
+			continue
+		}
+		if lp > cursor {
+			if err := s.xdotoolTypeChunk(ctx, string(chunkRunes[cursor:lp]), delayMs); err != nil {
+				return &executionError{msg: "failed during smooth typing"}
+			}
+		}
+		if err := s.executeTypoMistake(ctx, log, rng, chunkRunes, lp, t, delayMs); err != nil {
+			return err
+		}
+		switch t.Kind {
+		case typinghumanizer.TypoAdjacentKey, typinghumanizer.TypoDoubling, typinghumanizer.TypoExtraChar:
+			if err := s.xdotoolTypeChunk(ctx, string(chunkRunes[lp:lp+1]), delayMs); err != nil {
+				return &executionError{msg: "failed during smooth typing"}
+			}
+			cursor = lp + 1
+		case typinghumanizer.TypoTranspose:
+			if lp+1 < len(chunkRunes) {
+				if err := s.xdotoolTypeChunk(ctx, string(chunkRunes[lp:lp+2]), delayMs); err != nil {
+					return &executionError{msg: "failed during smooth typing"}
+				}
+				cursor = lp + 2
+			} else {
+				if err := s.xdotoolTypeChunk(ctx, string(chunkRunes[lp:lp+1]), delayMs); err != nil {
+					return &executionError{msg: "failed during smooth typing"}
+				}
+				cursor = lp + 1
+			}
+		}
+	}
+	if cursor < len(chunkRunes) {
+		if err := s.xdotoolTypeChunk(ctx, string(chunkRunes[cursor:]), delayMs); err != nil {
+			return &executionError{msg: "failed during smooth typing"}
+		}
+	}
+	return nil
+}
+
+// executeTypoMistake types the wrong substring, pauses, then backspaces — caller retypes the correct character(s).
+func (s *ApiService) executeTypoMistake(
 	ctx context.Context,
 	log *slog.Logger,
 	rng *rand.Rand,
@@ -573,14 +619,6 @@ func (s *ApiService) typeChunkWithTypo(
 	typo typinghumanizer.Typo,
 	delayMs int,
 ) error {
-	// Type text before the typo
-	if typoLocalPos > 0 {
-		before := string(chunkRunes[:typoLocalPos])
-		if err := s.xdotoolTypeChunk(ctx, before, delayMs); err != nil {
-			return &executionError{msg: "failed during smooth typing"}
-		}
-	}
-
 	correctChar := chunkRunes[typoLocalPos]
 	var wrongText string
 	var backspaces int
@@ -605,18 +643,15 @@ func (s *ApiService) typeChunkWithTypo(
 		backspaces = 2
 	}
 
-	// Type the wrong text
 	if err := s.xdotoolTypeChunk(ctx, wrongText, delayMs); err != nil {
 		return &executionError{msg: "failed during smooth typing"}
 	}
 
-	// "Oh no" realization pause
 	realizationPause := typinghumanizer.UniformJitter(rng, 350, 150, 150)
 	if err := sleepWithContext(ctx, realizationPause); err != nil {
 		return &executionError{msg: "typing cancelled"}
 	}
 
-	// Backspace to correct
 	bsArgs := make([]string, 0, backspaces*2)
 	for i := 0; i < backspaces; i++ {
 		bsArgs = append(bsArgs, "key", "BackSpace")
@@ -626,17 +661,10 @@ func (s *ApiService) typeChunkWithTypo(
 		return &executionError{msg: "failed during typo correction"}
 	}
 
-	// Brief recovery pause
 	recoveryPause := typinghumanizer.UniformJitter(rng, 80, 30, 40)
 	if err := sleepWithContext(ctx, recoveryPause); err != nil {
 		return &executionError{msg: "typing cancelled"}
 	}
-
-	// Type the correct remainder of the chunk from the typo position onward
-	if err := s.xdotoolTypeChunk(ctx, string(chunkRunes[typoLocalPos:]), delayMs); err != nil {
-		return &executionError{msg: "failed during smooth typing"}
-	}
-
 	return nil
 }
 
