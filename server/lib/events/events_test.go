@@ -452,6 +452,7 @@ func TestCaptureSession(t *testing.T) {
 		dir := t.TempDir()
 		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: dir, RingCapacity: 100})
 		require.NoError(t, err)
+		p.Start("test-session", CaptureConfig{})
 		t.Cleanup(func() { p.Close() })
 		return p, dir
 	}
@@ -463,6 +464,7 @@ func TestCaptureSession(t *testing.T) {
 
 		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: t.TempDir(), RingCapacity: total})
 		require.NoError(t, err)
+		p.Start("test-concurrent", CaptureConfig{})
 		t.Cleanup(func() { p.Close() })
 		reader := p.NewReader(0)
 

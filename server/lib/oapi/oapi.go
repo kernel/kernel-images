@@ -26,6 +26,81 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for CaptureConfigCategories.
+const (
+	Captcha     CaptureConfigCategories = "captcha"
+	Console     CaptureConfigCategories = "console"
+	Interaction CaptureConfigCategories = "interaction"
+	Liveview    CaptureConfigCategories = "liveview"
+	Network     CaptureConfigCategories = "network"
+	Page        CaptureConfigCategories = "page"
+	System      CaptureConfigCategories = "system"
+)
+
+// Valid indicates whether the value is a known member of the CaptureConfigCategories enum.
+func (e CaptureConfigCategories) Valid() bool {
+	switch e {
+	case Captcha:
+		return true
+	case Console:
+		return true
+	case Interaction:
+		return true
+	case Liveview:
+		return true
+	case Network:
+		return true
+	case Page:
+		return true
+	case System:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CaptureConfigDetailLevel.
+const (
+	Minimal  CaptureConfigDetailLevel = "minimal"
+	Raw      CaptureConfigDetailLevel = "raw"
+	Standard CaptureConfigDetailLevel = "standard"
+	Verbose  CaptureConfigDetailLevel = "verbose"
+)
+
+// Valid indicates whether the value is a known member of the CaptureConfigDetailLevel enum.
+func (e CaptureConfigDetailLevel) Valid() bool {
+	switch e {
+	case Minimal:
+		return true
+	case Raw:
+		return true
+	case Standard:
+		return true
+	case Verbose:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CaptureSessionStatus.
+const (
+	CaptureSessionStatusRunning CaptureSessionStatus = "running"
+	CaptureSessionStatusStopped CaptureSessionStatus = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the CaptureSessionStatus enum.
+func (e CaptureSessionStatus) Valid() bool {
+	switch e {
+	case CaptureSessionStatusRunning:
+		return true
+	case CaptureSessionStatusStopped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClickMouseRequestButton.
 const (
 	ClickMouseRequestButtonBack    ClickMouseRequestButton = "back"
@@ -205,16 +280,16 @@ func (e ProcessKillRequestSignal) Valid() bool {
 
 // Defines values for ProcessStatusState.
 const (
-	Exited  ProcessStatusState = "exited"
-	Running ProcessStatusState = "running"
+	ProcessStatusStateExited  ProcessStatusState = "exited"
+	ProcessStatusStateRunning ProcessStatusState = "running"
 )
 
 // Valid indicates whether the value is a known member of the ProcessStatusState enum.
 func (e ProcessStatusState) Valid() bool {
 	switch e {
-	case Exited:
+	case ProcessStatusStateExited:
 		return true
-	case Running:
+	case ProcessStatusStateRunning:
 		return true
 	default:
 		return false
@@ -248,63 +323,6 @@ func (e ProcessStreamEventStream) Valid() bool {
 	case Stderr:
 		return true
 	case Stdout:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for StartCaptureRequestCategories.
-const (
-	Captcha     StartCaptureRequestCategories = "captcha"
-	Console     StartCaptureRequestCategories = "console"
-	Interaction StartCaptureRequestCategories = "interaction"
-	Liveview    StartCaptureRequestCategories = "liveview"
-	Network     StartCaptureRequestCategories = "network"
-	Page        StartCaptureRequestCategories = "page"
-	System      StartCaptureRequestCategories = "system"
-)
-
-// Valid indicates whether the value is a known member of the StartCaptureRequestCategories enum.
-func (e StartCaptureRequestCategories) Valid() bool {
-	switch e {
-	case Captcha:
-		return true
-	case Console:
-		return true
-	case Interaction:
-		return true
-	case Liveview:
-		return true
-	case Network:
-		return true
-	case Page:
-		return true
-	case System:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for StartCaptureRequestDetailLevel.
-const (
-	Minimal  StartCaptureRequestDetailLevel = "minimal"
-	Raw      StartCaptureRequestDetailLevel = "raw"
-	Standard StartCaptureRequestDetailLevel = "standard"
-	Verbose  StartCaptureRequestDetailLevel = "verbose"
-)
-
-// Valid indicates whether the value is a known member of the StartCaptureRequestDetailLevel enum.
-func (e StartCaptureRequestDetailLevel) Valid() bool {
-	switch e {
-	case Minimal:
-		return true
-	case Raw:
-		return true
-	case Standard:
-		return true
-	case Verbose:
 		return true
 	default:
 		return false
@@ -358,6 +376,36 @@ type BatchComputerActionRequest struct {
 	// Actions Ordered list of actions to execute. Execution stops on the first error.
 	Actions []ComputerAction `json:"actions"`
 }
+
+// CaptureConfig Capture filtering and detail preferences.
+type CaptureConfig struct {
+	// Categories Event categories to capture. When omitted or empty, all categories are captured.
+	Categories *[]CaptureConfigCategories `json:"categories,omitempty"`
+
+	// DetailLevel Default detail level for captured events. Individual events may override this based on their content.
+	DetailLevel *CaptureConfigDetailLevel `json:"detail_level,omitempty"`
+}
+
+// CaptureConfigCategories defines model for CaptureConfig.Categories.
+type CaptureConfigCategories string
+
+// CaptureConfigDetailLevel Default detail level for captured events. Individual events may override this based on their content.
+type CaptureConfigDetailLevel string
+
+// CaptureSession A capture session resource.
+type CaptureSession struct {
+	// Config Capture filtering and detail preferences.
+	Config    CaptureConfig      `json:"config"`
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
+
+	// Seq Monotonically increasing sequence number (last published).
+	Seq    int64                `json:"seq"`
+	Status CaptureSessionStatus `json:"status"`
+}
+
+// CaptureSessionStatus defines model for CaptureSession.Status.
+type CaptureSessionStatus string
 
 // ClickMouseRequest defines model for ClickMouseRequest.
 type ClickMouseRequest struct {
@@ -413,6 +461,12 @@ type ComputerAction struct {
 
 // ComputerActionType The type of action to perform.
 type ComputerActionType string
+
+// CreateCaptureSessionRequest Optional capture configuration. All fields default to the server-defined profile when omitted or when no body is sent.
+type CreateCaptureSessionRequest struct {
+	// Config Capture filtering and detail preferences.
+	Config *CaptureConfig `json:"config,omitempty"`
+}
 
 // CreateDirectoryRequest defines model for CreateDirectoryRequest.
 type CreateDirectoryRequest struct {
@@ -867,21 +921,6 @@ type SleepAction struct {
 	DurationMs int `json:"duration_ms"`
 }
 
-// StartCaptureRequest Optional capture configuration. All fields default to the server-defined profile when omitted or when no body is sent.
-type StartCaptureRequest struct {
-	// Categories Event categories to capture. When omitted or empty, all categories are captured.
-	Categories *[]StartCaptureRequestCategories `json:"categories,omitempty"`
-
-	// DetailLevel Default detail level for captured events. Individual events may override this based on their content.
-	DetailLevel *StartCaptureRequestDetailLevel `json:"detailLevel,omitempty"`
-}
-
-// StartCaptureRequestCategories defines model for StartCaptureRequest.Categories.
-type StartCaptureRequestCategories string
-
-// StartCaptureRequestDetailLevel Default detail level for captured events. Individual events may override this based on their content.
-type StartCaptureRequestDetailLevel string
-
 // StartFsWatchRequest defines model for StartFsWatchRequest.
 type StartFsWatchRequest struct {
 	// Path Directory to watch.
@@ -922,6 +961,12 @@ type TypeTextRequest struct {
 
 	// Text Text to type on the host computer
 	Text string `json:"text"`
+}
+
+// UpdateCaptureSessionRequest Fields to update on the capture session.
+type UpdateCaptureSessionRequest struct {
+	// Config Capture filtering and detail preferences.
+	Config *CaptureConfig `json:"config,omitempty"`
 }
 
 // WriteClipboardRequest defines model for WriteClipboardRequest.
@@ -1103,8 +1148,11 @@ type TypeTextJSONRequestBody = TypeTextRequest
 // PatchDisplayJSONRequestBody defines body for PatchDisplay for application/json ContentType.
 type PatchDisplayJSONRequestBody = PatchDisplayRequest
 
-// StartCaptureJSONRequestBody defines body for StartCapture for application/json ContentType.
-type StartCaptureJSONRequestBody = StartCaptureRequest
+// CreateCaptureSessionJSONRequestBody defines body for CreateCaptureSession for application/json ContentType.
+type CreateCaptureSessionJSONRequestBody = CreateCaptureSessionRequest
+
+// UpdateCaptureSessionJSONRequestBody defines body for UpdateCaptureSession for application/json ContentType.
+type UpdateCaptureSessionJSONRequestBody = UpdateCaptureSessionRequest
 
 // CreateDirectoryJSONRequestBody defines body for CreateDirectory for application/json ContentType.
 type CreateDirectoryJSONRequestBody = CreateDirectoryRequest
@@ -1307,13 +1355,21 @@ type ClientInterface interface {
 
 	PatchDisplay(ctx context.Context, body PatchDisplayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// StartCaptureWithBody request with any body
-	StartCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateCaptureSessionWithBody request with any body
+	CreateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	StartCapture(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	CreateCaptureSession(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// StopCapture request
-	StopCapture(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// DeleteCaptureSession request
+	DeleteCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetCaptureSession request
+	GetCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// UpdateCaptureSessionWithBody request with any body
+	UpdateCaptureSessionWithBody(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	UpdateCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateDirectoryWithBody request with any body
 	CreateDirectoryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -1787,8 +1843,8 @@ func (c *Client) PatchDisplay(ctx context.Context, body PatchDisplayJSONRequestB
 	return c.Client.Do(req)
 }
 
-func (c *Client) StartCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureRequestWithBody(c.Server, contentType, body)
+func (c *Client) CreateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCaptureSessionRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1799,8 +1855,8 @@ func (c *Client) StartCaptureWithBody(ctx context.Context, contentType string, b
 	return c.Client.Do(req)
 }
 
-func (c *Client) StartCapture(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureRequest(c.Server, body)
+func (c *Client) CreateCaptureSession(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCaptureSessionRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1811,8 +1867,44 @@ func (c *Client) StartCapture(ctx context.Context, body StartCaptureJSONRequestB
 	return c.Client.Do(req)
 }
 
-func (c *Client) StopCapture(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStopCaptureRequest(c.Server)
+func (c *Client) DeleteCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteCaptureSessionRequest(c.Server, captureSessionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetCaptureSessionRequest(c.Server, captureSessionId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateCaptureSessionWithBody(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateCaptureSessionRequestWithBody(c.Server, captureSessionId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) UpdateCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateCaptureSessionRequest(c.Server, captureSessionId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2978,19 +3070,19 @@ func NewPatchDisplayRequestWithBody(server string, contentType string, body io.R
 	return req, nil
 }
 
-// NewStartCaptureRequest calls the generic StartCapture builder with application/json body
-func NewStartCaptureRequest(server string, body StartCaptureJSONRequestBody) (*http.Request, error) {
+// NewCreateCaptureSessionRequest calls the generic CreateCaptureSession builder with application/json body
+func NewCreateCaptureSessionRequest(server string, body CreateCaptureSessionJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewStartCaptureRequestWithBody(server, "application/json", bodyReader)
+	return NewCreateCaptureSessionRequestWithBody(server, "application/json", bodyReader)
 }
 
-// NewStartCaptureRequestWithBody generates requests for StartCapture with any type of body
-func NewStartCaptureRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+// NewCreateCaptureSessionRequestWithBody generates requests for CreateCaptureSession with any type of body
+func NewCreateCaptureSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -2998,7 +3090,7 @@ func NewStartCaptureRequestWithBody(server string, contentType string, body io.R
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/events/start")
+	operationPath := fmt.Sprintf("/events/capture_sessions")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3018,16 +3110,23 @@ func NewStartCaptureRequestWithBody(server string, contentType string, body io.R
 	return req, nil
 }
 
-// NewStopCaptureRequest generates requests for StopCapture
-func NewStopCaptureRequest(server string) (*http.Request, error) {
+// NewDeleteCaptureSessionRequest generates requests for DeleteCaptureSession
+func NewDeleteCaptureSessionRequest(server string, captureSessionId openapi_types.UUID) (*http.Request, error) {
 	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "capture_session_id", captureSessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
 
 	serverURL, err := url.Parse(server)
 	if err != nil {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/events/stop")
+	operationPath := fmt.Sprintf("/events/capture_sessions/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3037,10 +3136,91 @@ func NewStopCaptureRequest(server string) (*http.Request, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequest("POST", queryURL.String(), nil)
+	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
+
+	return req, nil
+}
+
+// NewGetCaptureSessionRequest generates requests for GetCaptureSession
+func NewGetCaptureSessionRequest(server string, captureSessionId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "capture_session_id", captureSessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/events/capture_sessions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewUpdateCaptureSessionRequest calls the generic UpdateCaptureSession builder with application/json body
+func NewUpdateCaptureSessionRequest(server string, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewUpdateCaptureSessionRequestWithBody(server, captureSessionId, "application/json", bodyReader)
+}
+
+// NewUpdateCaptureSessionRequestWithBody generates requests for UpdateCaptureSession with any type of body
+func NewUpdateCaptureSessionRequestWithBody(server string, captureSessionId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "capture_session_id", captureSessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/events/capture_sessions/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PATCH", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -4479,13 +4659,21 @@ type ClientWithResponsesInterface interface {
 
 	PatchDisplayWithResponse(ctx context.Context, body PatchDisplayJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchDisplayResponse, error)
 
-	// StartCaptureWithBodyWithResponse request with any body
-	StartCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error)
+	// CreateCaptureSessionWithBodyWithResponse request with any body
+	CreateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error)
 
-	StartCaptureWithResponse(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error)
+	CreateCaptureSessionWithResponse(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error)
 
-	// StopCaptureWithResponse request
-	StopCaptureWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureResponse, error)
+	// DeleteCaptureSessionWithResponse request
+	DeleteCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*DeleteCaptureSessionResponse, error)
+
+	// GetCaptureSessionWithResponse request
+	GetCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error)
+
+	// UpdateCaptureSessionWithBodyWithResponse request with any body
+	UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
+
+	UpdateCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
 
 	// CreateDirectoryWithBodyWithResponse request with any body
 	CreateDirectoryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateDirectoryResponse, error)
@@ -4982,15 +5170,17 @@ func (r PatchDisplayResponse) StatusCode() int {
 	return 0
 }
 
-type StartCaptureResponse struct {
+type CreateCaptureSessionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
+	JSON201      *CaptureSession
 	JSON400      *BadRequestError
+	JSON409      *ConflictError
 	JSON500      *InternalError
 }
 
 // Status returns HTTPResponse.Status
-func (r StartCaptureResponse) Status() string {
+func (r CreateCaptureSessionResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -4998,21 +5188,22 @@ func (r StartCaptureResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r StartCaptureResponse) StatusCode() int {
+func (r CreateCaptureSessionResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type StopCaptureResponse struct {
+type DeleteCaptureSessionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON500      *InternalError
+	JSON200      *CaptureSession
+	JSON404      *NotFoundError
 }
 
 // Status returns HTTPResponse.Status
-func (r StopCaptureResponse) Status() string {
+func (r DeleteCaptureSessionResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -5020,7 +5211,54 @@ func (r StopCaptureResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r StopCaptureResponse) StatusCode() int {
+func (r DeleteCaptureSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetCaptureSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *CaptureSession
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetCaptureSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetCaptureSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type UpdateCaptureSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *CaptureSession
+	JSON400      *BadRequestError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r UpdateCaptureSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r UpdateCaptureSessionResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6024,30 +6262,56 @@ func (c *ClientWithResponses) PatchDisplayWithResponse(ctx context.Context, body
 	return ParsePatchDisplayResponse(rsp)
 }
 
-// StartCaptureWithBodyWithResponse request with arbitrary body returning *StartCaptureResponse
-func (c *ClientWithResponses) StartCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error) {
-	rsp, err := c.StartCaptureWithBody(ctx, contentType, body, reqEditors...)
+// CreateCaptureSessionWithBodyWithResponse request with arbitrary body returning *CreateCaptureSessionResponse
+func (c *ClientWithResponses) CreateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error) {
+	rsp, err := c.CreateCaptureSessionWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseStartCaptureResponse(rsp)
+	return ParseCreateCaptureSessionResponse(rsp)
 }
 
-func (c *ClientWithResponses) StartCaptureWithResponse(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error) {
-	rsp, err := c.StartCapture(ctx, body, reqEditors...)
+func (c *ClientWithResponses) CreateCaptureSessionWithResponse(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error) {
+	rsp, err := c.CreateCaptureSession(ctx, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseStartCaptureResponse(rsp)
+	return ParseCreateCaptureSessionResponse(rsp)
 }
 
-// StopCaptureWithResponse request returning *StopCaptureResponse
-func (c *ClientWithResponses) StopCaptureWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureResponse, error) {
-	rsp, err := c.StopCapture(ctx, reqEditors...)
+// DeleteCaptureSessionWithResponse request returning *DeleteCaptureSessionResponse
+func (c *ClientWithResponses) DeleteCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*DeleteCaptureSessionResponse, error) {
+	rsp, err := c.DeleteCaptureSession(ctx, captureSessionId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseStopCaptureResponse(rsp)
+	return ParseDeleteCaptureSessionResponse(rsp)
+}
+
+// GetCaptureSessionWithResponse request returning *GetCaptureSessionResponse
+func (c *ClientWithResponses) GetCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error) {
+	rsp, err := c.GetCaptureSession(ctx, captureSessionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetCaptureSessionResponse(rsp)
+}
+
+// UpdateCaptureSessionWithBodyWithResponse request with arbitrary body returning *UpdateCaptureSessionResponse
+func (c *ClientWithResponses) UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
+	rsp, err := c.UpdateCaptureSessionWithBody(ctx, captureSessionId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateCaptureSessionResponse(rsp)
+}
+
+func (c *ClientWithResponses) UpdateCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
+	rsp, err := c.UpdateCaptureSession(ctx, captureSessionId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseUpdateCaptureSessionResponse(rsp)
 }
 
 // CreateDirectoryWithBodyWithResponse request with arbitrary body returning *CreateDirectoryResponse
@@ -6998,26 +7262,40 @@ func ParsePatchDisplayResponse(rsp *http.Response) (*PatchDisplayResponse, error
 	return response, nil
 }
 
-// ParseStartCaptureResponse parses an HTTP response from a StartCaptureWithResponse call
-func ParseStartCaptureResponse(rsp *http.Response) (*StartCaptureResponse, error) {
+// ParseCreateCaptureSessionResponse parses an HTTP response from a CreateCaptureSessionWithResponse call
+func ParseCreateCaptureSessionResponse(rsp *http.Response) (*CreateCaptureSessionResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &StartCaptureResponse{
+	response := &CreateCaptureSessionResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest CaptureSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
 		var dest BadRequestError
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
 		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
 		var dest InternalError
@@ -7031,26 +7309,106 @@ func ParseStartCaptureResponse(rsp *http.Response) (*StartCaptureResponse, error
 	return response, nil
 }
 
-// ParseStopCaptureResponse parses an HTTP response from a StopCaptureWithResponse call
-func ParseStopCaptureResponse(rsp *http.Response) (*StopCaptureResponse, error) {
+// ParseDeleteCaptureSessionResponse parses an HTTP response from a DeleteCaptureSessionWithResponse call
+func ParseDeleteCaptureSessionResponse(rsp *http.Response) (*DeleteCaptureSessionResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &StopCaptureResponse{
+	response := &DeleteCaptureSessionResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
 
 	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CaptureSession
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
-		response.JSON500 = &dest
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetCaptureSessionResponse parses an HTTP response from a GetCaptureSessionWithResponse call
+func ParseGetCaptureSessionResponse(rsp *http.Response) (*GetCaptureSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetCaptureSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CaptureSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseUpdateCaptureSessionResponse parses an HTTP response from a UpdateCaptureSessionWithResponse call
+func ParseUpdateCaptureSessionResponse(rsp *http.Response) (*UpdateCaptureSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &UpdateCaptureSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest CaptureSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
 
 	}
 
@@ -8361,12 +8719,18 @@ type ServerInterface interface {
 	// Update display configuration
 	// (PATCH /display)
 	PatchDisplay(w http.ResponseWriter, r *http.Request)
-	// Start capturing CDP events
-	// (POST /events/start)
-	StartCapture(w http.ResponseWriter, r *http.Request)
-	// Stop capturing CDP events
-	// (POST /events/stop)
-	StopCapture(w http.ResponseWriter, r *http.Request)
+	// Create a capture session
+	// (POST /events/capture_sessions)
+	CreateCaptureSession(w http.ResponseWriter, r *http.Request)
+	// Delete a capture session
+	// (DELETE /events/capture_sessions/{capture_session_id})
+	DeleteCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID)
+	// Get a capture session
+	// (GET /events/capture_sessions/{capture_session_id})
+	GetCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID)
+	// Update a capture session
+	// (PATCH /events/capture_sessions/{capture_session_id})
+	UpdateCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID)
 	// Create a new directory
 	// (PUT /fs/create_directory)
 	CreateDirectory(w http.ResponseWriter, r *http.Request)
@@ -8562,15 +8926,27 @@ func (_ Unimplemented) PatchDisplay(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Start capturing CDP events
-// (POST /events/start)
-func (_ Unimplemented) StartCapture(w http.ResponseWriter, r *http.Request) {
+// Create a capture session
+// (POST /events/capture_sessions)
+func (_ Unimplemented) CreateCaptureSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Stop capturing CDP events
-// (POST /events/stop)
-func (_ Unimplemented) StopCapture(w http.ResponseWriter, r *http.Request) {
+// Delete a capture session
+// (DELETE /events/capture_sessions/{capture_session_id})
+func (_ Unimplemented) DeleteCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get a capture session
+// (GET /events/capture_sessions/{capture_session_id})
+func (_ Unimplemented) GetCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update a capture session
+// (PATCH /events/capture_sessions/{capture_session_id})
+func (_ Unimplemented) UpdateCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -8993,11 +9369,11 @@ func (siw *ServerInterfaceWrapper) PatchDisplay(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
-// StartCapture operation middleware
-func (siw *ServerInterfaceWrapper) StartCapture(w http.ResponseWriter, r *http.Request) {
+// CreateCaptureSession operation middleware
+func (siw *ServerInterfaceWrapper) CreateCaptureSession(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StartCapture(w, r)
+		siw.Handler.CreateCaptureSession(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -9007,11 +9383,72 @@ func (siw *ServerInterfaceWrapper) StartCapture(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
-// StopCapture operation middleware
-func (siw *ServerInterfaceWrapper) StopCapture(w http.ResponseWriter, r *http.Request) {
+// DeleteCaptureSession operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCaptureSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "capture_session_id" -------------
+	var captureSessionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "capture_session_id", chi.URLParam(r, "capture_session_id"), &captureSessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capture_session_id", Err: err})
+		return
+	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StopCapture(w, r)
+		siw.Handler.DeleteCaptureSession(w, r, captureSessionId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCaptureSession operation middleware
+func (siw *ServerInterfaceWrapper) GetCaptureSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "capture_session_id" -------------
+	var captureSessionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "capture_session_id", chi.URLParam(r, "capture_session_id"), &captureSessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capture_session_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCaptureSession(w, r, captureSessionId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateCaptureSession operation middleware
+func (siw *ServerInterfaceWrapper) UpdateCaptureSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "capture_session_id" -------------
+	var captureSessionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "capture_session_id", chi.URLParam(r, "capture_session_id"), &captureSessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capture_session_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateCaptureSession(w, r, captureSessionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -9887,10 +10324,16 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Patch(options.BaseURL+"/display", wrapper.PatchDisplay)
 	})
 	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/events/start", wrapper.StartCapture)
+		r.Post(options.BaseURL+"/events/capture_sessions", wrapper.CreateCaptureSession)
 	})
 	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/events/stop", wrapper.StopCapture)
+		r.Delete(options.BaseURL+"/events/capture_sessions/{capture_session_id}", wrapper.DeleteCaptureSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/events/capture_sessions/{capture_session_id}", wrapper.GetCaptureSession)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/events/capture_sessions/{capture_session_id}", wrapper.UpdateCaptureSession)
 	})
 	r.Group(func(r chi.Router) {
 		r.Put(options.BaseURL+"/fs/create_directory", wrapper.CreateDirectory)
@@ -10545,60 +10988,134 @@ func (response PatchDisplay500JSONResponse) VisitPatchDisplayResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
-type StartCaptureRequestObject struct {
-	Body *StartCaptureJSONRequestBody
+type CreateCaptureSessionRequestObject struct {
+	Body *CreateCaptureSessionJSONRequestBody
 }
 
-type StartCaptureResponseObject interface {
-	VisitStartCaptureResponse(w http.ResponseWriter) error
+type CreateCaptureSessionResponseObject interface {
+	VisitCreateCaptureSessionResponse(w http.ResponseWriter) error
 }
 
-type StartCapture200Response struct {
+type CreateCaptureSession201JSONResponse CaptureSession
+
+func (response CreateCaptureSession201JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
 }
 
-func (response StartCapture200Response) VisitStartCaptureResponse(w http.ResponseWriter) error {
-	w.WriteHeader(200)
-	return nil
-}
+type CreateCaptureSession400JSONResponse struct{ BadRequestErrorJSONResponse }
 
-type StartCapture400JSONResponse struct{ BadRequestErrorJSONResponse }
-
-func (response StartCapture400JSONResponse) VisitStartCaptureResponse(w http.ResponseWriter) error {
+func (response CreateCaptureSession400JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type StartCapture500JSONResponse struct{ InternalErrorJSONResponse }
+type CreateCaptureSession409JSONResponse struct{ ConflictErrorJSONResponse }
 
-func (response StartCapture500JSONResponse) VisitStartCaptureResponse(w http.ResponseWriter) error {
+func (response CreateCaptureSession409JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateCaptureSession500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateCaptureSession500JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type StopCaptureRequestObject struct {
+type DeleteCaptureSessionRequestObject struct {
+	CaptureSessionId openapi_types.UUID `json:"capture_session_id"`
 }
 
-type StopCaptureResponseObject interface {
-	VisitStopCaptureResponse(w http.ResponseWriter) error
+type DeleteCaptureSessionResponseObject interface {
+	VisitDeleteCaptureSessionResponse(w http.ResponseWriter) error
 }
 
-type StopCapture200Response struct {
-}
+type DeleteCaptureSession200JSONResponse CaptureSession
 
-func (response StopCapture200Response) VisitStopCaptureResponse(w http.ResponseWriter) error {
-	w.WriteHeader(200)
-	return nil
-}
-
-type StopCapture500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response StopCapture500JSONResponse) VisitStopCaptureResponse(w http.ResponseWriter) error {
+func (response DeleteCaptureSession200JSONResponse) VisitDeleteCaptureSessionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response DeleteCaptureSession404JSONResponse) VisitDeleteCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetCaptureSessionRequestObject struct {
+	CaptureSessionId openapi_types.UUID `json:"capture_session_id"`
+}
+
+type GetCaptureSessionResponseObject interface {
+	VisitGetCaptureSessionResponse(w http.ResponseWriter) error
+}
+
+type GetCaptureSession200JSONResponse CaptureSession
+
+func (response GetCaptureSession200JSONResponse) VisitGetCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response GetCaptureSession404JSONResponse) VisitGetCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateCaptureSessionRequestObject struct {
+	CaptureSessionId openapi_types.UUID `json:"capture_session_id"`
+	Body             *UpdateCaptureSessionJSONRequestBody
+}
+
+type UpdateCaptureSessionResponseObject interface {
+	VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error
+}
+
+type UpdateCaptureSession200JSONResponse CaptureSession
+
+func (response UpdateCaptureSession200JSONResponse) VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateCaptureSession400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response UpdateCaptureSession400JSONResponse) VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type UpdateCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response UpdateCaptureSession404JSONResponse) VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -12105,12 +12622,18 @@ type StrictServerInterface interface {
 	// Update display configuration
 	// (PATCH /display)
 	PatchDisplay(ctx context.Context, request PatchDisplayRequestObject) (PatchDisplayResponseObject, error)
-	// Start capturing CDP events
-	// (POST /events/start)
-	StartCapture(ctx context.Context, request StartCaptureRequestObject) (StartCaptureResponseObject, error)
-	// Stop capturing CDP events
-	// (POST /events/stop)
-	StopCapture(ctx context.Context, request StopCaptureRequestObject) (StopCaptureResponseObject, error)
+	// Create a capture session
+	// (POST /events/capture_sessions)
+	CreateCaptureSession(ctx context.Context, request CreateCaptureSessionRequestObject) (CreateCaptureSessionResponseObject, error)
+	// Delete a capture session
+	// (DELETE /events/capture_sessions/{capture_session_id})
+	DeleteCaptureSession(ctx context.Context, request DeleteCaptureSessionRequestObject) (DeleteCaptureSessionResponseObject, error)
+	// Get a capture session
+	// (GET /events/capture_sessions/{capture_session_id})
+	GetCaptureSession(ctx context.Context, request GetCaptureSessionRequestObject) (GetCaptureSessionResponseObject, error)
+	// Update a capture session
+	// (PATCH /events/capture_sessions/{capture_session_id})
+	UpdateCaptureSession(ctx context.Context, request UpdateCaptureSessionRequestObject) (UpdateCaptureSessionResponseObject, error)
 	// Create a new directory
 	// (PUT /fs/create_directory)
 	CreateDirectory(ctx context.Context, request CreateDirectoryRequestObject) (CreateDirectoryResponseObject, error)
@@ -12720,11 +13243,11 @@ func (sh *strictHandler) PatchDisplay(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// StartCapture operation middleware
-func (sh *strictHandler) StartCapture(w http.ResponseWriter, r *http.Request) {
-	var request StartCaptureRequestObject
+// CreateCaptureSession operation middleware
+func (sh *strictHandler) CreateCaptureSession(w http.ResponseWriter, r *http.Request) {
+	var request CreateCaptureSessionRequestObject
 
-	var body StartCaptureJSONRequestBody
+	var body CreateCaptureSessionJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		if !errors.Is(err, io.EOF) {
 			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
@@ -12735,18 +13258,18 @@ func (sh *strictHandler) StartCapture(w http.ResponseWriter, r *http.Request) {
 	}
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StartCapture(ctx, request.(StartCaptureRequestObject))
+		return sh.ssi.CreateCaptureSession(ctx, request.(CreateCaptureSessionRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StartCapture")
+		handler = middleware(handler, "CreateCaptureSession")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StartCaptureResponseObject); ok {
-		if err := validResponse.VisitStartCaptureResponse(w); err != nil {
+	} else if validResponse, ok := response.(CreateCaptureSessionResponseObject); ok {
+		if err := validResponse.VisitCreateCaptureSessionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -12754,23 +13277,84 @@ func (sh *strictHandler) StartCapture(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// StopCapture operation middleware
-func (sh *strictHandler) StopCapture(w http.ResponseWriter, r *http.Request) {
-	var request StopCaptureRequestObject
+// DeleteCaptureSession operation middleware
+func (sh *strictHandler) DeleteCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
+	var request DeleteCaptureSessionRequestObject
+
+	request.CaptureSessionId = captureSessionId
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StopCapture(ctx, request.(StopCaptureRequestObject))
+		return sh.ssi.DeleteCaptureSession(ctx, request.(DeleteCaptureSessionRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StopCapture")
+		handler = middleware(handler, "DeleteCaptureSession")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StopCaptureResponseObject); ok {
-		if err := validResponse.VisitStopCaptureResponse(w); err != nil {
+	} else if validResponse, ok := response.(DeleteCaptureSessionResponseObject); ok {
+		if err := validResponse.VisitDeleteCaptureSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCaptureSession operation middleware
+func (sh *strictHandler) GetCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
+	var request GetCaptureSessionRequestObject
+
+	request.CaptureSessionId = captureSessionId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCaptureSession(ctx, request.(GetCaptureSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCaptureSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCaptureSessionResponseObject); ok {
+		if err := validResponse.VisitGetCaptureSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateCaptureSession operation middleware
+func (sh *strictHandler) UpdateCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
+	var request UpdateCaptureSessionRequestObject
+
+	request.CaptureSessionId = captureSessionId
+
+	var body UpdateCaptureSessionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateCaptureSession(ctx, request.(UpdateCaptureSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateCaptureSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateCaptureSessionResponseObject); ok {
+		if err := validResponse.VisitUpdateCaptureSessionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -13692,161 +14276,167 @@ func (sh *strictHandler) StopRecording(w http.ResponseWriter, r *http.Request) {
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"LSfXF0xwJvLm9YML+b8BAAD//+qgBzUGxQAA",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

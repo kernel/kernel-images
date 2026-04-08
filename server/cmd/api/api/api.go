@@ -342,6 +342,7 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()
+	s.captureSession.Stop()
 	_ = s.captureSession.Close()
 	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)

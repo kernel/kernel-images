@@ -1194,44 +1194,111 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
-  /events/start:
+  /events/capture_sessions:
     post:
-      summary: Start capturing CDP events
+      summary: Create a capture session
       description: >
-        Generates a new capture session ID, seeds the pipeline, and starts the
-        CDP monitor. If already running, the monitor is stopped and restarted
-        with a fresh session ID.
-      operationId: startCapture
+        Creates a new capture session. Only one session may exist at a
+        time; returns 409 if a session is already active. The caller must
+        DELETE the existing session before creating a new one.
+      operationId: createCaptureSession
       requestBody:
         required: false
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/StartCaptureRequest"
+              $ref: "#/components/schemas/CreateCaptureSessionRequest"
       responses:
-        "200":
-          description: Capture started
+        "201":
+          description: Session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
-  /events/stop:
-    post:
-      summary: Stop capturing CDP events
-      description: Stops the CDP monitor and ends the current capture session.
-      operationId: stopCapture
+  /events/capture_sessions/{capture_session_id}:
+    get:
+      summary: Get a capture session
+      description: Returns the current state of a capture session.
+      operationId: getCaptureSession
+      parameters:
+        - name: capture_session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
       responses:
         "200":
-          description: Capture stopped
-        "500":
-          $ref: "#/components/responses/InternalError"
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    patch:
+      summary: Update a capture session
+      description: >
+        Updates the configuration of an active capture session. The monitor
+        continues running; filtering is applied at publish time.
+      operationId: updateCaptureSession
+      parameters:
+        - name: capture_session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCaptureSessionRequest"
+      responses:
+        "200":
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      summary: Delete a capture session
+      description: >
+        Stops the capture session and its event producers. Returns the
+        final session state. A new session can be created after deletion.
+      operationId: deleteCaptureSession
+      parameters:
+        - name: capture_session_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Session deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 components:
   schemas:
-    StartCaptureRequest:
+    CaptureConfig:
       type: object
-      description: >
-        Optional capture configuration. All fields default to the
-        server-defined profile when omitted or when no body is sent.
+      description: Capture filtering and detail preferences.
       properties:
         categories:
           type: array
@@ -1248,7 +1315,7 @@ components:
               - liveview
               - captcha
               - system
-        detailLevel:
+        detail_level:
           type: string
           description: >
             Default detail level for captured events. Individual events
@@ -1258,6 +1325,51 @@ components:
             - standard
             - verbose
             - raw
+      additionalProperties: false
+    CaptureSession:
+      type: object
+      description: A capture session resource.
+      required:
+        - id
+        - status
+        - config
+        - seq
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum:
+            - running
+            - stopped
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+        seq:
+          type: integer
+          format: int64
+          description: Monotonically increasing sequence number (last published).
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    CreateCaptureSessionRequest:
+      type: object
+      description: >
+        Optional capture configuration. All fields default to the
+        server-defined profile when omitted or when no body is sent.
+      properties:
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+      additionalProperties: false
+    UpdateCaptureSessionRequest:
+      type: object
+      description: Fields to update on the capture session.
+      properties:
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
       additionalProperties: false
     StartRecordingRequest:
       type: object
