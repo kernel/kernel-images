@@ -29,8 +29,8 @@ type CaptureSession struct {
 }
 
 func NewCaptureSession(es *events.EventStream) *CaptureSession {
-	cats := make(map[events.EventCategory]struct{}, len(events.AllCategories))
-	for _, c := range events.AllCategories {
+	cats := make(map[events.EventCategory]struct{}, len(events.AllCategories()))
+	for _, c := range events.AllCategories() {
 		cats[c] = struct{}{}
 	}
 	return &CaptureSession{es: es, categories: cats}
@@ -47,7 +47,7 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.createdAt = time.Now()
 	cats := cfg.Categories
 	if len(cats) == 0 {
-		cats = events.AllCategories
+		cats = events.AllCategories()
 	}
 	s.categories = make(map[events.EventCategory]struct{}, len(cats))
 	for _, c := range cats {
@@ -130,7 +130,7 @@ func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
 	defer s.mu.Unlock()
 	cats := cfg.Categories
 	if len(cats) == 0 {
-		cats = events.AllCategories
+		cats = events.AllCategories()
 	}
 	s.categories = make(map[events.EventCategory]struct{}, len(cats))
 	for _, c := range cats {

@@ -23,6 +23,10 @@ type CaptureConfig struct {
 // CaptureSession wraps events in envelopes and fans them out to a FileWriter
 // (durable) and RingBuffer (in-memory). Call Start to begin or restart a session,
 // then Publish concurrently. Close flushes the FileWriter.
+//
+// Reusable: call Start with a new ID to begin a new session; call Stop to end
+// the current session without closing the underlying writers. Close tears down
+// file descriptors and should only be called during server shutdown.
 type CaptureSession struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
@@ -144,6 +148,13 @@ func (s *CaptureSession) Seq() uint64 {
 // Returns the Envelope as stored in the ring.
 func (s *CaptureSession) Publish(ev Event) Envelope {
 	s.mu.Lock()
+
+	// No active session — drop silently. This can happen when events
+	// arrive between Stop() and producers noticing, or before Start().
+	if s.captureSessionID == "" {
+		s.mu.Unlock()
+		return Envelope{}
+	}
 
 	// Drop events whose category is outside the configured set.
 	if _, ok := s.categories[ev.Category]; !ok {

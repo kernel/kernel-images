@@ -61,22 +61,22 @@ func (e CaptureConfigCategories) Valid() bool {
 
 // Defines values for CaptureConfigDetailLevel.
 const (
-	CaptureConfigDetailLevelMinimal  CaptureConfigDetailLevel = "minimal"
-	CaptureConfigDetailLevelRaw      CaptureConfigDetailLevel = "raw"
-	CaptureConfigDetailLevelStandard CaptureConfigDetailLevel = "standard"
-	CaptureConfigDetailLevelVerbose  CaptureConfigDetailLevel = "verbose"
+	Minimal  CaptureConfigDetailLevel = "minimal"
+	Raw      CaptureConfigDetailLevel = "raw"
+	Standard CaptureConfigDetailLevel = "standard"
+	Verbose  CaptureConfigDetailLevel = "verbose"
 )
 
 // Valid indicates whether the value is a known member of the CaptureConfigDetailLevel enum.
 func (e CaptureConfigDetailLevel) Valid() bool {
 	switch e {
-	case CaptureConfigDetailLevelMinimal:
+	case Minimal:
 		return true
-	case CaptureConfigDetailLevelRaw:
+	case Raw:
 		return true
-	case CaptureConfigDetailLevelStandard:
+	case Standard:
 		return true
-	case CaptureConfigDetailLevelVerbose:
+	case Verbose:
 		return true
 	default:
 		return false
@@ -388,88 +388,31 @@ func (e ProcessStreamEventStream) Valid() bool {
 
 // Defines values for PublishEventRequestCategory.
 const (
-	PublishEventRequestCategoryCaptcha     PublishEventRequestCategory = "captcha"
-	PublishEventRequestCategoryConsole     PublishEventRequestCategory = "console"
-	PublishEventRequestCategoryInteraction PublishEventRequestCategory = "interaction"
-	PublishEventRequestCategoryLiveview    PublishEventRequestCategory = "liveview"
-	PublishEventRequestCategoryNetwork     PublishEventRequestCategory = "network"
-	PublishEventRequestCategoryPage        PublishEventRequestCategory = "page"
-	PublishEventRequestCategorySystem      PublishEventRequestCategory = "system"
+	Captcha     PublishEventRequestCategory = "captcha"
+	Console     PublishEventRequestCategory = "console"
+	Interaction PublishEventRequestCategory = "interaction"
+	Liveview    PublishEventRequestCategory = "liveview"
+	Network     PublishEventRequestCategory = "network"
+	Page        PublishEventRequestCategory = "page"
+	System      PublishEventRequestCategory = "system"
 )
 
 // Valid indicates whether the value is a known member of the PublishEventRequestCategory enum.
 func (e PublishEventRequestCategory) Valid() bool {
 	switch e {
-	case PublishEventRequestCategoryCaptcha:
+	case Captcha:
 		return true
-	case PublishEventRequestCategoryConsole:
+	case Console:
 		return true
-	case PublishEventRequestCategoryInteraction:
+	case Interaction:
 		return true
-	case PublishEventRequestCategoryLiveview:
+	case Liveview:
 		return true
-	case PublishEventRequestCategoryNetwork:
+	case Network:
 		return true
-	case PublishEventRequestCategoryPage:
+	case Page:
 		return true
-	case PublishEventRequestCategorySystem:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for StartCaptureRequestCategories.
-const (
-	StartCaptureRequestCategoriesCaptcha     StartCaptureRequestCategories = "captcha"
-	StartCaptureRequestCategoriesConsole     StartCaptureRequestCategories = "console"
-	StartCaptureRequestCategoriesInteraction StartCaptureRequestCategories = "interaction"
-	StartCaptureRequestCategoriesLiveview    StartCaptureRequestCategories = "liveview"
-	StartCaptureRequestCategoriesNetwork     StartCaptureRequestCategories = "network"
-	StartCaptureRequestCategoriesPage        StartCaptureRequestCategories = "page"
-	StartCaptureRequestCategoriesSystem      StartCaptureRequestCategories = "system"
-)
-
-// Valid indicates whether the value is a known member of the StartCaptureRequestCategories enum.
-func (e StartCaptureRequestCategories) Valid() bool {
-	switch e {
-	case StartCaptureRequestCategoriesCaptcha:
-		return true
-	case StartCaptureRequestCategoriesConsole:
-		return true
-	case StartCaptureRequestCategoriesInteraction:
-		return true
-	case StartCaptureRequestCategoriesLiveview:
-		return true
-	case StartCaptureRequestCategoriesNetwork:
-		return true
-	case StartCaptureRequestCategoriesPage:
-		return true
-	case StartCaptureRequestCategoriesSystem:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for StartCaptureRequestDetailLevel.
-const (
-	StartCaptureRequestDetailLevelMinimal  StartCaptureRequestDetailLevel = "minimal"
-	StartCaptureRequestDetailLevelRaw      StartCaptureRequestDetailLevel = "raw"
-	StartCaptureRequestDetailLevelStandard StartCaptureRequestDetailLevel = "standard"
-	StartCaptureRequestDetailLevelVerbose  StartCaptureRequestDetailLevel = "verbose"
-)
-
-// Valid indicates whether the value is a known member of the StartCaptureRequestDetailLevel enum.
-func (e StartCaptureRequestDetailLevel) Valid() bool {
-	switch e {
-	case StartCaptureRequestDetailLevelMinimal:
-		return true
-	case StartCaptureRequestDetailLevelRaw:
-		return true
-	case StartCaptureRequestDetailLevelStandard:
-		return true
-	case StartCaptureRequestDetailLevelVerbose:
+	case System:
 		return true
 	default:
 		return false
@@ -524,13 +467,13 @@ type BatchComputerActionRequest struct {
 	Actions []ComputerAction `json:"actions"`
 }
 
-// CaptureConfig Capture filtering preferences.
+// CaptureConfig Capture filtering and detail preferences.
 type CaptureConfig struct {
 	// Categories Event categories to capture. When omitted or empty, all categories are captured.
 	Categories *[]CaptureConfigCategories `json:"categories,omitempty"`
 
 	// DetailLevel Default detail level for captured events. Individual events may override this based on their content.
-	DetailLevel *CaptureConfigDetailLevel `json:"detailLevel,omitempty"`
+	DetailLevel *CaptureConfigDetailLevel `json:"detail_level,omitempty"`
 }
 
 // CaptureConfigCategories defines model for CaptureConfig.Categories.
@@ -541,12 +484,12 @@ type CaptureConfigDetailLevel string
 
 // CaptureSession A capture session resource.
 type CaptureSession struct {
-	// Config Capture filtering preferences.
-	Config    CaptureConfig `json:"config"`
-	CreatedAt time.Time     `json:"created_at"`
-	Id        string        `json:"id"`
+	// Config Capture filtering and detail preferences.
+	Config    CaptureConfig      `json:"config"`
+	CreatedAt time.Time          `json:"created_at"`
+	Id        openapi_types.UUID `json:"id"`
 
-	// Seq Process-monotonic sequence number of the last published event. Does not reset between sessions.
+	// Seq Monotonically increasing sequence number (last published).
 	Seq    int64                `json:"seq"`
 	Status CaptureSessionStatus `json:"status"`
 }
@@ -608,6 +551,12 @@ type ComputerAction struct {
 
 // ComputerActionType The type of action to perform.
 type ComputerActionType string
+
+// CreateCaptureSessionRequest Optional capture configuration. All fields default to the server-defined profile when omitted or when no body is sent.
+type CreateCaptureSessionRequest struct {
+	// Config Capture filtering and detail preferences.
+	Config *CaptureConfig `json:"config,omitempty"`
+}
 
 // CreateDirectoryRequest defines model for CreateDirectoryRequest.
 type CreateDirectoryRequest struct {
@@ -1125,27 +1074,6 @@ type SleepAction struct {
 	DurationMs int `json:"duration_ms"`
 }
 
-// StartCaptureRequest Optional capture configuration. All fields default to the server-defined profile when omitted or when no body is sent.
-type StartCaptureRequest struct {
-	// Categories Event categories to capture. When omitted or empty, all categories are captured.
-	Categories *[]StartCaptureRequestCategories `json:"categories,omitempty"`
-
-	// DetailLevel Default detail level for captured events. Individual events may override this based on their content.
-	DetailLevel *StartCaptureRequestDetailLevel `json:"detailLevel,omitempty"`
-}
-
-// StartCaptureRequestCategories defines model for StartCaptureRequest.Categories.
-type StartCaptureRequestCategories string
-
-// StartCaptureRequestDetailLevel Default detail level for captured events. Individual events may override this based on their content.
-type StartCaptureRequestDetailLevel string
-
-// StartCaptureSessionRequest Optional capture configuration. All fields default to the server-defined profile when omitted or when no body is sent.
-type StartCaptureSessionRequest struct {
-	// Config Capture filtering preferences.
-	Config *CaptureConfig `json:"config,omitempty"`
-}
-
 // StartFsWatchRequest defines model for StartFsWatchRequest.
 type StartFsWatchRequest struct {
 	// Path Directory to watch.
@@ -1202,7 +1130,7 @@ type TypeTextRequest struct {
 
 // UpdateCaptureSessionRequest Fields to update on the capture session.
 type UpdateCaptureSessionRequest struct {
-	// Config Capture filtering preferences.
+	// Config Capture filtering and detail preferences.
 	Config *CaptureConfig `json:"config,omitempty"`
 }
 
@@ -1391,17 +1319,14 @@ type TypeTextJSONRequestBody = TypeTextRequest
 // PatchDisplayJSONRequestBody defines body for PatchDisplay for application/json ContentType.
 type PatchDisplayJSONRequestBody = PatchDisplayRequest
 
+// CreateCaptureSessionJSONRequestBody defines body for CreateCaptureSession for application/json ContentType.
+type CreateCaptureSessionJSONRequestBody = CreateCaptureSessionRequest
+
 // UpdateCaptureSessionJSONRequestBody defines body for UpdateCaptureSession for application/json ContentType.
 type UpdateCaptureSessionJSONRequestBody = UpdateCaptureSessionRequest
 
-// StartCaptureSessionJSONRequestBody defines body for StartCaptureSession for application/json ContentType.
-type StartCaptureSessionJSONRequestBody = StartCaptureSessionRequest
-
 // PublishEventJSONRequestBody defines body for PublishEvent for application/json ContentType.
 type PublishEventJSONRequestBody = PublishEventRequest
-
-// StartCaptureJSONRequestBody defines body for StartCapture for application/json ContentType.
-type StartCaptureJSONRequestBody = StartCaptureRequest
 
 // CreateDirectoryJSONRequestBody defines body for CreateDirectory for application/json ContentType.
 type CreateDirectoryJSONRequestBody = CreateDirectoryRequest
@@ -1604,34 +1529,26 @@ type ClientInterface interface {
 
 	PatchDisplay(ctx context.Context, body PatchDisplayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// StopCaptureSession request
-	StopCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// CreateCaptureSessionWithBody request with any body
+	CreateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	CreateCaptureSession(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteCaptureSession request
+	DeleteCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetCaptureSession request
-	GetCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	GetCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// UpdateCaptureSessionWithBody request with any body
-	UpdateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	UpdateCaptureSessionWithBody(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	UpdateCaptureSession(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// StartCaptureSessionWithBody request with any body
-	StartCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	StartCaptureSession(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	UpdateCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// PublishEventWithBody request with any body
 	PublishEventWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	PublishEvent(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// StartCaptureWithBody request with any body
-	StartCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	StartCapture(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// StopCapture request
-	StopCapture(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// StreamEvents request
 	StreamEvents(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -2108,8 +2025,8 @@ func (c *Client) PatchDisplay(ctx context.Context, body PatchDisplayJSONRequestB
 	return c.Client.Do(req)
 }
 
-func (c *Client) StopCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStopCaptureSessionRequest(c.Server)
+func (c *Client) CreateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCaptureSessionRequestWithBody(c.Server, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2120,8 +2037,8 @@ func (c *Client) StopCaptureSession(ctx context.Context, reqEditors ...RequestEd
 	return c.Client.Do(req)
 }
 
-func (c *Client) GetCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetCaptureSessionRequest(c.Server)
+func (c *Client) CreateCaptureSession(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateCaptureSessionRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2132,8 +2049,8 @@ func (c *Client) GetCaptureSession(ctx context.Context, reqEditors ...RequestEdi
 	return c.Client.Do(req)
 }
 
-func (c *Client) UpdateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewUpdateCaptureSessionRequestWithBody(c.Server, contentType, body)
+func (c *Client) DeleteCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteCaptureSessionRequest(c.Server, captureSessionId)
 	if err != nil {
 		return nil, err
 	}
@@ -2144,8 +2061,8 @@ func (c *Client) UpdateCaptureSessionWithBody(ctx context.Context, contentType s
 	return c.Client.Do(req)
 }
 
-func (c *Client) UpdateCaptureSession(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewUpdateCaptureSessionRequest(c.Server, body)
+func (c *Client) GetCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetCaptureSessionRequest(c.Server, captureSessionId)
 	if err != nil {
 		return nil, err
 	}
@@ -2156,8 +2073,8 @@ func (c *Client) UpdateCaptureSession(ctx context.Context, body UpdateCaptureSes
 	return c.Client.Do(req)
 }
 
-func (c *Client) StartCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureSessionRequestWithBody(c.Server, contentType, body)
+func (c *Client) UpdateCaptureSessionWithBody(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateCaptureSessionRequestWithBody(c.Server, captureSessionId, contentType, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2168,8 +2085,8 @@ func (c *Client) StartCaptureSessionWithBody(ctx context.Context, contentType st
 	return c.Client.Do(req)
 }
 
-func (c *Client) StartCaptureSession(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureSessionRequest(c.Server, body)
+func (c *Client) UpdateCaptureSession(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewUpdateCaptureSessionRequest(c.Server, captureSessionId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2194,42 +2111,6 @@ func (c *Client) PublishEventWithBody(ctx context.Context, contentType string, b
 
 func (c *Client) PublishEvent(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPublishEventRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) StartCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) StartCapture(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) StopCapture(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStopCaptureRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -3407,8 +3288,19 @@ func NewPatchDisplayRequestWithBody(server string, contentType string, body io.R
 	return req, nil
 }
 
-// NewStopCaptureSessionRequest generates requests for StopCaptureSession
-func NewStopCaptureSessionRequest(server string) (*http.Request, error) {
+// NewCreateCaptureSessionRequest calls the generic CreateCaptureSession builder with application/json body
+func NewCreateCaptureSessionRequest(server string, body CreateCaptureSessionJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateCaptureSessionRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateCaptureSessionRequestWithBody generates requests for CreateCaptureSession with any type of body
+func NewCreateCaptureSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -3416,7 +3308,43 @@ func NewStopCaptureSessionRequest(server string) (*http.Request, error) {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/events/capture_session")
+	operationPath := fmt.Sprintf("/events/capture_sessions")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteCaptureSessionRequest generates requests for DeleteCaptureSession
+func NewDeleteCaptureSessionRequest(server string, captureSessionId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "capture_session_id", captureSessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/events/capture_sessions/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3435,15 +3363,22 @@ func NewStopCaptureSessionRequest(server string) (*http.Request, error) {
 }
 
 // NewGetCaptureSessionRequest generates requests for GetCaptureSession
-func NewGetCaptureSessionRequest(server string) (*http.Request, error) {
+func NewGetCaptureSessionRequest(server string, captureSessionId openapi_types.UUID) (*http.Request, error) {
 	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "capture_session_id", captureSessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
 
 	serverURL, err := url.Parse(server)
 	if err != nil {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/events/capture_session")
+	operationPath := fmt.Sprintf("/events/capture_sessions/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3462,26 +3397,33 @@ func NewGetCaptureSessionRequest(server string) (*http.Request, error) {
 }
 
 // NewUpdateCaptureSessionRequest calls the generic UpdateCaptureSession builder with application/json body
-func NewUpdateCaptureSessionRequest(server string, body UpdateCaptureSessionJSONRequestBody) (*http.Request, error) {
+func NewUpdateCaptureSessionRequest(server string, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 	bodyReader = bytes.NewReader(buf)
-	return NewUpdateCaptureSessionRequestWithBody(server, "application/json", bodyReader)
+	return NewUpdateCaptureSessionRequestWithBody(server, captureSessionId, "application/json", bodyReader)
 }
 
 // NewUpdateCaptureSessionRequestWithBody generates requests for UpdateCaptureSession with any type of body
-func NewUpdateCaptureSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+func NewUpdateCaptureSessionRequestWithBody(server string, captureSessionId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "capture_session_id", captureSessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
 
 	serverURL, err := url.Parse(server)
 	if err != nil {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/events/capture_session")
+	operationPath := fmt.Sprintf("/events/capture_sessions/%s", pathParam0)
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -3492,46 +3434,6 @@ func NewUpdateCaptureSessionRequestWithBody(server string, contentType string, b
 	}
 
 	req, err := http.NewRequest("PATCH", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewStartCaptureSessionRequest calls the generic StartCaptureSession builder with application/json body
-func NewStartCaptureSessionRequest(server string, body StartCaptureSessionJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewStartCaptureSessionRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewStartCaptureSessionRequestWithBody generates requests for StartCaptureSession with any type of body
-func NewStartCaptureSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/capture_session")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
 	if err != nil {
 		return nil, err
 	}
@@ -3577,73 +3479,6 @@ func NewPublishEventRequestWithBody(server string, contentType string, body io.R
 	}
 
 	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewStartCaptureRequest calls the generic StartCapture builder with application/json body
-func NewStartCaptureRequest(server string, body StartCaptureJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewStartCaptureRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewStartCaptureRequestWithBody generates requests for StartCapture with any type of body
-func NewStartCaptureRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/start")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewStopCaptureRequest generates requests for StopCapture
-func NewStopCaptureRequest(server string) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/stop")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
 
 	return req, nil
 }
@@ -5124,34 +4959,26 @@ type ClientWithResponsesInterface interface {
 
 	PatchDisplayWithResponse(ctx context.Context, body PatchDisplayJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchDisplayResponse, error)
 
-	// StopCaptureSessionWithResponse request
-	StopCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureSessionResponse, error)
+	// CreateCaptureSessionWithBodyWithResponse request with any body
+	CreateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error)
+
+	CreateCaptureSessionWithResponse(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error)
+
+	// DeleteCaptureSessionWithResponse request
+	DeleteCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*DeleteCaptureSessionResponse, error)
 
 	// GetCaptureSessionWithResponse request
-	GetCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error)
+	GetCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error)
 
 	// UpdateCaptureSessionWithBodyWithResponse request with any body
-	UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
+	UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
 
-	UpdateCaptureSessionWithResponse(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
-
-	// StartCaptureSessionWithBodyWithResponse request with any body
-	StartCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error)
-
-	StartCaptureSessionWithResponse(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error)
+	UpdateCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
 
 	// PublishEventWithBodyWithResponse request with any body
 	PublishEventWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PublishEventResponse, error)
 
 	PublishEventWithResponse(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*PublishEventResponse, error)
-
-	// StartCaptureWithBodyWithResponse request with any body
-	StartCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error)
-
-	StartCaptureWithResponse(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error)
-
-	// StopCaptureWithResponse request
-	StopCaptureWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureResponse, error)
 
 	// StreamEventsWithResponse request
 	StreamEventsWithResponse(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*StreamEventsResponse, error)
@@ -5651,15 +5478,17 @@ func (r PatchDisplayResponse) StatusCode() int {
 	return 0
 }
 
-type StopCaptureSessionResponse struct {
+type CreateCaptureSessionResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
-	JSON200      *CaptureSession
-	JSON404      *NotFoundError
+	JSON201      *CaptureSession
+	JSON400      *BadRequestError
+	JSON409      *ConflictError
+	JSON500      *InternalError
 }
 
 // Status returns HTTPResponse.Status
-func (r StopCaptureSessionResponse) Status() string {
+func (r CreateCaptureSessionResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -5667,7 +5496,30 @@ func (r StopCaptureSessionResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r StopCaptureSessionResponse) StatusCode() int {
+func (r CreateCaptureSessionResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type DeleteCaptureSessionResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *CaptureSession
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteCaptureSessionResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteCaptureSessionResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -5721,31 +5573,6 @@ func (r UpdateCaptureSessionResponse) StatusCode() int {
 	return 0
 }
 
-type StartCaptureSessionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON201      *CaptureSession
-	JSON400      *BadRequestError
-	JSON409      *ConflictError
-	JSON500      *InternalError
-}
-
-// Status returns HTTPResponse.Status
-func (r StartCaptureSessionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r StartCaptureSessionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
 type PublishEventResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -5763,51 +5590,6 @@ func (r PublishEventResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PublishEventResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type StartCaptureResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON400      *BadRequestError
-	JSON500      *InternalError
-}
-
-// Status returns HTTPResponse.Status
-func (r StartCaptureResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r StartCaptureResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type StopCaptureResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON500      *InternalError
-}
-
-// Status returns HTTPResponse.Status
-func (r StopCaptureResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r StopCaptureResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6832,18 +6614,35 @@ func (c *ClientWithResponses) PatchDisplayWithResponse(ctx context.Context, body
 	return ParsePatchDisplayResponse(rsp)
 }
 
-// StopCaptureSessionWithResponse request returning *StopCaptureSessionResponse
-func (c *ClientWithResponses) StopCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureSessionResponse, error) {
-	rsp, err := c.StopCaptureSession(ctx, reqEditors...)
+// CreateCaptureSessionWithBodyWithResponse request with arbitrary body returning *CreateCaptureSessionResponse
+func (c *ClientWithResponses) CreateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error) {
+	rsp, err := c.CreateCaptureSessionWithBody(ctx, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseStopCaptureSessionResponse(rsp)
+	return ParseCreateCaptureSessionResponse(rsp)
+}
+
+func (c *ClientWithResponses) CreateCaptureSessionWithResponse(ctx context.Context, body CreateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateCaptureSessionResponse, error) {
+	rsp, err := c.CreateCaptureSession(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateCaptureSessionResponse(rsp)
+}
+
+// DeleteCaptureSessionWithResponse request returning *DeleteCaptureSessionResponse
+func (c *ClientWithResponses) DeleteCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*DeleteCaptureSessionResponse, error) {
+	rsp, err := c.DeleteCaptureSession(ctx, captureSessionId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteCaptureSessionResponse(rsp)
 }
 
 // GetCaptureSessionWithResponse request returning *GetCaptureSessionResponse
-func (c *ClientWithResponses) GetCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error) {
-	rsp, err := c.GetCaptureSession(ctx, reqEditors...)
+func (c *ClientWithResponses) GetCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error) {
+	rsp, err := c.GetCaptureSession(ctx, captureSessionId, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
@@ -6851,37 +6650,20 @@ func (c *ClientWithResponses) GetCaptureSessionWithResponse(ctx context.Context,
 }
 
 // UpdateCaptureSessionWithBodyWithResponse request with arbitrary body returning *UpdateCaptureSessionResponse
-func (c *ClientWithResponses) UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
-	rsp, err := c.UpdateCaptureSessionWithBody(ctx, contentType, body, reqEditors...)
+func (c *ClientWithResponses) UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
+	rsp, err := c.UpdateCaptureSessionWithBody(ctx, captureSessionId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseUpdateCaptureSessionResponse(rsp)
 }
 
-func (c *ClientWithResponses) UpdateCaptureSessionWithResponse(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
-	rsp, err := c.UpdateCaptureSession(ctx, body, reqEditors...)
+func (c *ClientWithResponses) UpdateCaptureSessionWithResponse(ctx context.Context, captureSessionId openapi_types.UUID, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
+	rsp, err := c.UpdateCaptureSession(ctx, captureSessionId, body, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
 	return ParseUpdateCaptureSessionResponse(rsp)
-}
-
-// StartCaptureSessionWithBodyWithResponse request with arbitrary body returning *StartCaptureSessionResponse
-func (c *ClientWithResponses) StartCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error) {
-	rsp, err := c.StartCaptureSessionWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStartCaptureSessionResponse(rsp)
-}
-
-func (c *ClientWithResponses) StartCaptureSessionWithResponse(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error) {
-	rsp, err := c.StartCaptureSession(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStartCaptureSessionResponse(rsp)
 }
 
 // PublishEventWithBodyWithResponse request with arbitrary body returning *PublishEventResponse
@@ -6899,32 +6681,6 @@ func (c *ClientWithResponses) PublishEventWithResponse(ctx context.Context, body
 		return nil, err
 	}
 	return ParsePublishEventResponse(rsp)
-}
-
-// StartCaptureWithBodyWithResponse request with arbitrary body returning *StartCaptureResponse
-func (c *ClientWithResponses) StartCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error) {
-	rsp, err := c.StartCaptureWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStartCaptureResponse(rsp)
-}
-
-func (c *ClientWithResponses) StartCaptureWithResponse(ctx context.Context, body StartCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureResponse, error) {
-	rsp, err := c.StartCapture(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStartCaptureResponse(rsp)
-}
-
-// StopCaptureWithResponse request returning *StopCaptureResponse
-func (c *ClientWithResponses) StopCaptureWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureResponse, error) {
-	rsp, err := c.StopCapture(ctx, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStopCaptureResponse(rsp)
 }
 
 // StreamEventsWithResponse request returning *StreamEventsResponse
@@ -7884,15 +7640,62 @@ func ParsePatchDisplayResponse(rsp *http.Response) (*PatchDisplayResponse, error
 	return response, nil
 }
 
-// ParseStopCaptureSessionResponse parses an HTTP response from a StopCaptureSessionWithResponse call
-func ParseStopCaptureSessionResponse(rsp *http.Response) (*StopCaptureSessionResponse, error) {
+// ParseCreateCaptureSessionResponse parses an HTTP response from a CreateCaptureSessionWithResponse call
+func ParseCreateCaptureSessionResponse(rsp *http.Response) (*CreateCaptureSessionResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &StopCaptureSessionResponse{
+	response := &CreateCaptureSessionResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest CaptureSession
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ConflictError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteCaptureSessionResponse parses an HTTP response from a DeleteCaptureSessionWithResponse call
+func ParseDeleteCaptureSessionResponse(rsp *http.Response) (*DeleteCaptureSessionResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteCaptureSessionResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -7990,53 +7793,6 @@ func ParseUpdateCaptureSessionResponse(rsp *http.Response) (*UpdateCaptureSessio
 	return response, nil
 }
 
-// ParseStartCaptureSessionResponse parses an HTTP response from a StartCaptureSessionWithResponse call
-func ParseStartCaptureSessionResponse(rsp *http.Response) (*StartCaptureSessionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &StartCaptureSessionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest CaptureSession
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON201 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequestError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ConflictError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON409 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
 // ParsePublishEventResponse parses an HTTP response from a PublishEventWithResponse call
 func ParsePublishEventResponse(rsp *http.Response) (*PublishEventResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -8064,65 +7820,6 @@ func ParsePublishEventResponse(rsp *http.Response) (*PublishEventResponse, error
 			return nil, err
 		}
 		response.JSON400 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseStartCaptureResponse parses an HTTP response from a StartCaptureWithResponse call
-func ParseStartCaptureResponse(rsp *http.Response) (*StartCaptureResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &StartCaptureResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequestError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseStopCaptureResponse parses an HTTP response from a StopCaptureWithResponse call
-func ParseStopCaptureResponse(rsp *http.Response) (*StopCaptureResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &StopCaptureResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
 
 	}
 
@@ -9449,27 +9146,21 @@ type ServerInterface interface {
 	// Update display configuration
 	// (PATCH /display)
 	PatchDisplay(w http.ResponseWriter, r *http.Request)
-	// Stop the capture session
-	// (DELETE /events/capture_session)
-	StopCaptureSession(w http.ResponseWriter, r *http.Request)
-	// Get the capture session
-	// (GET /events/capture_session)
-	GetCaptureSession(w http.ResponseWriter, r *http.Request)
-	// Update the capture session
-	// (PATCH /events/capture_session)
-	UpdateCaptureSession(w http.ResponseWriter, r *http.Request)
-	// Start the capture session
-	// (POST /events/capture_session)
-	StartCaptureSession(w http.ResponseWriter, r *http.Request)
+	// Create a capture session
+	// (POST /events/capture_sessions)
+	CreateCaptureSession(w http.ResponseWriter, r *http.Request)
+	// Delete a capture session
+	// (DELETE /events/capture_sessions/{capture_session_id})
+	DeleteCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID)
+	// Get a capture session
+	// (GET /events/capture_sessions/{capture_session_id})
+	GetCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID)
+	// Update a capture session
+	// (PATCH /events/capture_sessions/{capture_session_id})
+	UpdateCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID)
 	// Publish an event into the event bus
 	// (POST /events/publish)
 	PublishEvent(w http.ResponseWriter, r *http.Request)
-	// Start capturing CDP events
-	// (POST /events/start)
-	StartCapture(w http.ResponseWriter, r *http.Request)
-	// Stop capturing CDP events
-	// (POST /events/stop)
-	StopCapture(w http.ResponseWriter, r *http.Request)
 	// Stream events as Server-Sent Events
 	// (GET /events/stream)
 	StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams)
@@ -9668,45 +9359,33 @@ func (_ Unimplemented) PatchDisplay(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Stop the capture session
-// (DELETE /events/capture_session)
-func (_ Unimplemented) StopCaptureSession(w http.ResponseWriter, r *http.Request) {
+// Create a capture session
+// (POST /events/capture_sessions)
+func (_ Unimplemented) CreateCaptureSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Get the capture session
-// (GET /events/capture_session)
-func (_ Unimplemented) GetCaptureSession(w http.ResponseWriter, r *http.Request) {
+// Delete a capture session
+// (DELETE /events/capture_sessions/{capture_session_id})
+func (_ Unimplemented) DeleteCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Update the capture session
-// (PATCH /events/capture_session)
-func (_ Unimplemented) UpdateCaptureSession(w http.ResponseWriter, r *http.Request) {
+// Get a capture session
+// (GET /events/capture_sessions/{capture_session_id})
+func (_ Unimplemented) GetCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Start the capture session
-// (POST /events/capture_session)
-func (_ Unimplemented) StartCaptureSession(w http.ResponseWriter, r *http.Request) {
+// Update a capture session
+// (PATCH /events/capture_sessions/{capture_session_id})
+func (_ Unimplemented) UpdateCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // Publish an event into the event bus
 // (POST /events/publish)
 func (_ Unimplemented) PublishEvent(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Start capturing CDP events
-// (POST /events/start)
-func (_ Unimplemented) StartCapture(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Stop capturing CDP events
-// (POST /events/stop)
-func (_ Unimplemented) StopCapture(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -10135,11 +9814,36 @@ func (siw *ServerInterfaceWrapper) PatchDisplay(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
-// StopCaptureSession operation middleware
-func (siw *ServerInterfaceWrapper) StopCaptureSession(w http.ResponseWriter, r *http.Request) {
+// CreateCaptureSession operation middleware
+func (siw *ServerInterfaceWrapper) CreateCaptureSession(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StopCaptureSession(w, r)
+		siw.Handler.CreateCaptureSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteCaptureSession operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCaptureSession(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "capture_session_id" -------------
+	var captureSessionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "capture_session_id", chi.URLParam(r, "capture_session_id"), &captureSessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capture_session_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteCaptureSession(w, r, captureSessionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -10152,8 +9856,19 @@ func (siw *ServerInterfaceWrapper) StopCaptureSession(w http.ResponseWriter, r *
 // GetCaptureSession operation middleware
 func (siw *ServerInterfaceWrapper) GetCaptureSession(w http.ResponseWriter, r *http.Request) {
 
+	var err error
+
+	// ------------- Path parameter "capture_session_id" -------------
+	var captureSessionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "capture_session_id", chi.URLParam(r, "capture_session_id"), &captureSessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capture_session_id", Err: err})
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetCaptureSession(w, r)
+		siw.Handler.GetCaptureSession(w, r, captureSessionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -10166,22 +9881,19 @@ func (siw *ServerInterfaceWrapper) GetCaptureSession(w http.ResponseWriter, r *h
 // UpdateCaptureSession operation middleware
 func (siw *ServerInterfaceWrapper) UpdateCaptureSession(w http.ResponseWriter, r *http.Request) {
 
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateCaptureSession(w, r)
-	}))
+	var err error
 
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
+	// ------------- Path parameter "capture_session_id" -------------
+	var captureSessionId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "capture_session_id", chi.URLParam(r, "capture_session_id"), &captureSessionId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "capture_session_id", Err: err})
+		return
 	}
 
-	handler.ServeHTTP(w, r)
-}
-
-// StartCaptureSession operation middleware
-func (siw *ServerInterfaceWrapper) StartCaptureSession(w http.ResponseWriter, r *http.Request) {
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StartCaptureSession(w, r)
+		siw.Handler.UpdateCaptureSession(w, r, captureSessionId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -10196,34 +9908,6 @@ func (siw *ServerInterfaceWrapper) PublishEvent(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PublishEvent(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// StartCapture operation middleware
-func (siw *ServerInterfaceWrapper) StartCapture(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StartCapture(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// StopCapture operation middleware
-func (siw *ServerInterfaceWrapper) StopCapture(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StopCapture(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -11139,25 +10823,19 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Patch(options.BaseURL+"/display", wrapper.PatchDisplay)
 	})
 	r.Group(func(r chi.Router) {
-		r.Delete(options.BaseURL+"/events/capture_session", wrapper.StopCaptureSession)
+		r.Post(options.BaseURL+"/events/capture_sessions", wrapper.CreateCaptureSession)
 	})
 	r.Group(func(r chi.Router) {
-		r.Get(options.BaseURL+"/events/capture_session", wrapper.GetCaptureSession)
+		r.Delete(options.BaseURL+"/events/capture_sessions/{capture_session_id}", wrapper.DeleteCaptureSession)
 	})
 	r.Group(func(r chi.Router) {
-		r.Patch(options.BaseURL+"/events/capture_session", wrapper.UpdateCaptureSession)
+		r.Get(options.BaseURL+"/events/capture_sessions/{capture_session_id}", wrapper.GetCaptureSession)
 	})
 	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/events/capture_session", wrapper.StartCaptureSession)
+		r.Patch(options.BaseURL+"/events/capture_sessions/{capture_session_id}", wrapper.UpdateCaptureSession)
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/events/publish", wrapper.PublishEvent)
-	})
-	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/events/start", wrapper.StartCapture)
-	})
-	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/events/stop", wrapper.StopCapture)
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/events/stream", wrapper.StreamEvents)
@@ -11815,25 +11493,70 @@ func (response PatchDisplay500JSONResponse) VisitPatchDisplayResponse(w http.Res
 	return json.NewEncoder(w).Encode(response)
 }
 
-type StopCaptureSessionRequestObject struct {
+type CreateCaptureSessionRequestObject struct {
+	Body *CreateCaptureSessionJSONRequestBody
 }
 
-type StopCaptureSessionResponseObject interface {
-	VisitStopCaptureSessionResponse(w http.ResponseWriter) error
+type CreateCaptureSessionResponseObject interface {
+	VisitCreateCaptureSessionResponse(w http.ResponseWriter) error
 }
 
-type StopCaptureSession200JSONResponse CaptureSession
+type CreateCaptureSession201JSONResponse CaptureSession
 
-func (response StopCaptureSession200JSONResponse) VisitStopCaptureSessionResponse(w http.ResponseWriter) error {
+func (response CreateCaptureSession201JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateCaptureSession400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response CreateCaptureSession400JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateCaptureSession409JSONResponse struct{ ConflictErrorJSONResponse }
+
+func (response CreateCaptureSession409JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type CreateCaptureSession500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response CreateCaptureSession500JSONResponse) VisitCreateCaptureSessionResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteCaptureSessionRequestObject struct {
+	CaptureSessionId openapi_types.UUID `json:"capture_session_id"`
+}
+
+type DeleteCaptureSessionResponseObject interface {
+	VisitDeleteCaptureSessionResponse(w http.ResponseWriter) error
+}
+
+type DeleteCaptureSession200JSONResponse CaptureSession
+
+func (response DeleteCaptureSession200JSONResponse) VisitDeleteCaptureSessionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type StopCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
+type DeleteCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
 
-func (response StopCaptureSession404JSONResponse) VisitStopCaptureSessionResponse(w http.ResponseWriter) error {
+func (response DeleteCaptureSession404JSONResponse) VisitDeleteCaptureSessionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
 
@@ -11841,6 +11564,7 @@ func (response StopCaptureSession404JSONResponse) VisitStopCaptureSessionRespons
 }
 
 type GetCaptureSessionRequestObject struct {
+	CaptureSessionId openapi_types.UUID `json:"capture_session_id"`
 }
 
 type GetCaptureSessionResponseObject interface {
@@ -11866,7 +11590,8 @@ func (response GetCaptureSession404JSONResponse) VisitGetCaptureSessionResponse(
 }
 
 type UpdateCaptureSessionRequestObject struct {
-	Body *UpdateCaptureSessionJSONRequestBody
+	CaptureSessionId openapi_types.UUID `json:"capture_session_id"`
+	Body             *UpdateCaptureSessionJSONRequestBody
 }
 
 type UpdateCaptureSessionResponseObject interface {
@@ -11900,50 +11625,6 @@ func (response UpdateCaptureSession404JSONResponse) VisitUpdateCaptureSessionRes
 	return json.NewEncoder(w).Encode(response)
 }
 
-type StartCaptureSessionRequestObject struct {
-	Body *StartCaptureSessionJSONRequestBody
-}
-
-type StartCaptureSessionResponseObject interface {
-	VisitStartCaptureSessionResponse(w http.ResponseWriter) error
-}
-
-type StartCaptureSession201JSONResponse CaptureSession
-
-func (response StartCaptureSession201JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureSession400JSONResponse struct{ BadRequestErrorJSONResponse }
-
-func (response StartCaptureSession400JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureSession409JSONResponse struct{ ConflictErrorJSONResponse }
-
-func (response StartCaptureSession409JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureSession500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response StartCaptureSession500JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
 type PublishEventRequestObject struct {
 	Body *PublishEventJSONRequestBody
 }
@@ -11966,64 +11647,6 @@ type PublishEvent400JSONResponse struct{ BadRequestErrorJSONResponse }
 func (response PublishEvent400JSONResponse) VisitPublishEventResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureRequestObject struct {
-	Body *StartCaptureJSONRequestBody
-}
-
-type StartCaptureResponseObject interface {
-	VisitStartCaptureResponse(w http.ResponseWriter) error
-}
-
-type StartCapture200Response struct {
-}
-
-func (response StartCapture200Response) VisitStartCaptureResponse(w http.ResponseWriter) error {
-	w.WriteHeader(200)
-	return nil
-}
-
-type StartCapture400JSONResponse struct{ BadRequestErrorJSONResponse }
-
-func (response StartCapture400JSONResponse) VisitStartCaptureResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCapture500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response StartCapture500JSONResponse) VisitStartCaptureResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StopCaptureRequestObject struct {
-}
-
-type StopCaptureResponseObject interface {
-	VisitStopCaptureResponse(w http.ResponseWriter) error
-}
-
-type StopCapture200Response struct {
-}
-
-func (response StopCapture200Response) VisitStopCaptureResponse(w http.ResponseWriter) error {
-	w.WriteHeader(200)
-	return nil
-}
-
-type StopCapture500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response StopCapture500JSONResponse) VisitStopCaptureResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
@@ -13593,27 +13216,21 @@ type StrictServerInterface interface {
 	// Update display configuration
 	// (PATCH /display)
 	PatchDisplay(ctx context.Context, request PatchDisplayRequestObject) (PatchDisplayResponseObject, error)
-	// Stop the capture session
-	// (DELETE /events/capture_session)
-	StopCaptureSession(ctx context.Context, request StopCaptureSessionRequestObject) (StopCaptureSessionResponseObject, error)
-	// Get the capture session
-	// (GET /events/capture_session)
+	// Create a capture session
+	// (POST /events/capture_sessions)
+	CreateCaptureSession(ctx context.Context, request CreateCaptureSessionRequestObject) (CreateCaptureSessionResponseObject, error)
+	// Delete a capture session
+	// (DELETE /events/capture_sessions/{capture_session_id})
+	DeleteCaptureSession(ctx context.Context, request DeleteCaptureSessionRequestObject) (DeleteCaptureSessionResponseObject, error)
+	// Get a capture session
+	// (GET /events/capture_sessions/{capture_session_id})
 	GetCaptureSession(ctx context.Context, request GetCaptureSessionRequestObject) (GetCaptureSessionResponseObject, error)
-	// Update the capture session
-	// (PATCH /events/capture_session)
+	// Update a capture session
+	// (PATCH /events/capture_sessions/{capture_session_id})
 	UpdateCaptureSession(ctx context.Context, request UpdateCaptureSessionRequestObject) (UpdateCaptureSessionResponseObject, error)
-	// Start the capture session
-	// (POST /events/capture_session)
-	StartCaptureSession(ctx context.Context, request StartCaptureSessionRequestObject) (StartCaptureSessionResponseObject, error)
 	// Publish an event into the event bus
 	// (POST /events/publish)
 	PublishEvent(ctx context.Context, request PublishEventRequestObject) (PublishEventResponseObject, error)
-	// Start capturing CDP events
-	// (POST /events/start)
-	StartCapture(ctx context.Context, request StartCaptureRequestObject) (StartCaptureResponseObject, error)
-	// Stop capturing CDP events
-	// (POST /events/stop)
-	StopCapture(ctx context.Context, request StopCaptureRequestObject) (StopCaptureResponseObject, error)
 	// Stream events as Server-Sent Events
 	// (GET /events/stream)
 	StreamEvents(ctx context.Context, request StreamEventsRequestObject) (StreamEventsResponseObject, error)
@@ -14226,23 +13843,59 @@ func (sh *strictHandler) PatchDisplay(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// StopCaptureSession operation middleware
-func (sh *strictHandler) StopCaptureSession(w http.ResponseWriter, r *http.Request) {
-	var request StopCaptureSessionRequestObject
+// CreateCaptureSession operation middleware
+func (sh *strictHandler) CreateCaptureSession(w http.ResponseWriter, r *http.Request) {
+	var request CreateCaptureSessionRequestObject
+
+	var body CreateCaptureSessionJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StopCaptureSession(ctx, request.(StopCaptureSessionRequestObject))
+		return sh.ssi.CreateCaptureSession(ctx, request.(CreateCaptureSessionRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StopCaptureSession")
+		handler = middleware(handler, "CreateCaptureSession")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StopCaptureSessionResponseObject); ok {
-		if err := validResponse.VisitStopCaptureSessionResponse(w); err != nil {
+	} else if validResponse, ok := response.(CreateCaptureSessionResponseObject); ok {
+		if err := validResponse.VisitCreateCaptureSessionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteCaptureSession operation middleware
+func (sh *strictHandler) DeleteCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
+	var request DeleteCaptureSessionRequestObject
+
+	request.CaptureSessionId = captureSessionId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteCaptureSession(ctx, request.(DeleteCaptureSessionRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteCaptureSession")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteCaptureSessionResponseObject); ok {
+		if err := validResponse.VisitDeleteCaptureSessionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -14251,8 +13904,10 @@ func (sh *strictHandler) StopCaptureSession(w http.ResponseWriter, r *http.Reque
 }
 
 // GetCaptureSession operation middleware
-func (sh *strictHandler) GetCaptureSession(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) GetCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
 	var request GetCaptureSessionRequestObject
+
+	request.CaptureSessionId = captureSessionId
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
 		return sh.ssi.GetCaptureSession(ctx, request.(GetCaptureSessionRequestObject))
@@ -14275,8 +13930,10 @@ func (sh *strictHandler) GetCaptureSession(w http.ResponseWriter, r *http.Reques
 }
 
 // UpdateCaptureSession operation middleware
-func (sh *strictHandler) UpdateCaptureSession(w http.ResponseWriter, r *http.Request) {
+func (sh *strictHandler) UpdateCaptureSession(w http.ResponseWriter, r *http.Request, captureSessionId openapi_types.UUID) {
 	var request UpdateCaptureSessionRequestObject
+
+	request.CaptureSessionId = captureSessionId
 
 	var body UpdateCaptureSessionJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -14298,40 +13955,6 @@ func (sh *strictHandler) UpdateCaptureSession(w http.ResponseWriter, r *http.Req
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateCaptureSessionResponseObject); ok {
 		if err := validResponse.VisitUpdateCaptureSessionResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// StartCaptureSession operation middleware
-func (sh *strictHandler) StartCaptureSession(w http.ResponseWriter, r *http.Request) {
-	var request StartCaptureSessionRequestObject
-
-	var body StartCaptureSessionJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		if !errors.Is(err, io.EOF) {
-			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-			return
-		}
-	} else {
-		request.Body = &body
-	}
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StartCaptureSession(ctx, request.(StartCaptureSessionRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StartCaptureSession")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StartCaptureSessionResponseObject); ok {
-		if err := validResponse.VisitStartCaptureSessionResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -14363,64 +13986,6 @@ func (sh *strictHandler) PublishEvent(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PublishEventResponseObject); ok {
 		if err := validResponse.VisitPublishEventResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// StartCapture operation middleware
-func (sh *strictHandler) StartCapture(w http.ResponseWriter, r *http.Request) {
-	var request StartCaptureRequestObject
-
-	var body StartCaptureJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		if !errors.Is(err, io.EOF) {
-			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-			return
-		}
-	} else {
-		request.Body = &body
-	}
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StartCapture(ctx, request.(StartCaptureRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StartCapture")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StartCaptureResponseObject); ok {
-		if err := validResponse.VisitStartCaptureResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// StopCapture operation middleware
-func (sh *strictHandler) StopCapture(w http.ResponseWriter, r *http.Request) {
-	var request StopCaptureRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StopCapture(ctx, request.(StopCaptureRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StopCapture")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StopCaptureResponseObject); ok {
-		if err := validResponse.VisitStopCaptureResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -15368,188 +14933,186 @@ func (sh *strictHandler) StopRecording(w http.ResponseWriter, r *http.Request) {
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
