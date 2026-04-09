@@ -1208,7 +1208,7 @@ components:
           type: integer
           description: Recording framerate in fps (overrides server default)
           minimum: 1
-          maximum: 20
+          maximum: 60
         maxDurationInSeconds:
           type: integer
           description: Maximum recording duration in seconds (overrides server default)
