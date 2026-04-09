@@ -82,7 +82,9 @@ func (s *ApiService) StopCaptureSession(_ context.Context, _ oapi.StopCaptureSes
 	}
 
 	s.cdpMonitor.Stop()
-	// Snapshot the final state before clearing the session ID.
+	// Snapshot the final state before clearing the session ID so buildSessionResponse
+	// can still parse it. Force the status to Stopped because cdpMonitor.Stop may
+	// tear down asynchronously, leaving IsRunning briefly true.
 	resp := s.buildSessionResponse()
 	resp.Status = oapi.CaptureSessionStatusStopped
 	s.captureSession.Stop()
@@ -122,7 +124,7 @@ func (s *ApiService) buildSessionResponse() oapi.CaptureSession {
 // captureConfigFrom converts the optional StartCaptureSessionRequest body
 // into an events.CaptureConfig.
 func captureConfigFrom(body *oapi.StartCaptureSessionRequest) (events.CaptureConfig, error) {
-	if body == nil || body.Config == nil {
+	if body == nil {
 		return events.CaptureConfig{}, nil
 	}
 	return captureConfigFromOAPI(body.Config)
@@ -130,15 +132,18 @@ func captureConfigFrom(body *oapi.StartCaptureSessionRequest) (events.CaptureCon
 
 // captureConfigFromOAPI converts an oapi.CaptureConfig to events.CaptureConfig.
 func captureConfigFromOAPI(cfg *oapi.CaptureConfig) (events.CaptureConfig, error) {
-	var out events.CaptureConfig
-	if cfg.Categories != nil {
-		for _, c := range *cfg.Categories {
-			cat := events.EventCategory(c)
-			if !events.ValidCategory(cat) {
-				return events.CaptureConfig{}, fmt.Errorf("unknown category: %q", c)
-			}
-			out.Categories = append(out.Categories, cat)
+	if cfg == nil || cfg.Categories == nil {
+		return events.CaptureConfig{}, nil
+	}
+	out := events.CaptureConfig{
+		Categories: make([]events.EventCategory, 0, len(*cfg.Categories)),
+	}
+	for _, c := range *cfg.Categories {
+		cat := events.EventCategory(c)
+		if !events.ValidCategory(cat) {
+			return events.CaptureConfig{}, fmt.Errorf("unknown category: %q", c)
 		}
+		out.Categories = append(out.Categories, cat)
 	}
 	return out, nil
 }
