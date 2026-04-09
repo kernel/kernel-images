@@ -1262,9 +1262,8 @@ paths:
     delete:
       summary: Stop the capture session
       description: >
-        Stops the capture session and its event producers. Returns the
-        final session state. A new session can be started after stopping.
-        Returns 404 if no session is active.
+        Stops the capture session and its CDP monitor, returning the final
+        session state. Returns 404 if no session is active.
       operationId: stopCaptureSession
       responses:
         "200":
