@@ -353,7 +353,7 @@ func TestFileWriter(t *testing.T) {
 		for _, e := range envsToFile {
 			data, err := json.Marshal(e.env)
 			require.NoError(t, err)
-			require.NoError(t, fw.Write(e.env, data))
+			require.NoError(t, fw.Write(e.file, data))
 		}
 
 		for _, e := range envsToFile {
@@ -374,17 +374,15 @@ func TestFileWriter(t *testing.T) {
 		}
 	})
 
-	t.Run("empty_category_rejected", func(t *testing.T) {
+	t.Run("empty_filename_rejected", func(t *testing.T) {
 		dir := t.TempDir()
 		fw, err := newFileWriter(dir)
 		require.NoError(t, err)
 		defer fw.Close()
 
-		env := Envelope{Seq: 1, Event: Event{Type: "mystery", Category: "", Source: Source{Kind: KindCDP}, Ts: 1}}
-		data, _ := json.Marshal(env)
-		err = fw.Write(env, data)
+		err = fw.Write("", []byte(`{"seq":1}`))
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "empty category")
+		assert.Contains(t, err.Error(), "empty filename")
 	})
 
 	t.Run("concurrent_writes", func(t *testing.T) {
@@ -408,7 +406,7 @@ func TestFileWriter(t *testing.T) {
 					}
 					envData, err := json.Marshal(env)
 					require.NoError(t, err)
-					require.NoError(t, fw.Write(env, envData))
+					require.NoError(t, fw.Write("console.log", envData))
 				}
 			}(i)
 		}
@@ -437,7 +435,7 @@ func TestFileWriter(t *testing.T) {
 		env := Envelope{Seq: 1, Event: Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1}}
 		envData, err := json.Marshal(env)
 		require.NoError(t, err)
-		require.NoError(t, fw.Write(env, envData))
+		require.NoError(t, fw.Write("console.log", envData))
 
 		entries, err = os.ReadDir(dir)
 		require.NoError(t, err)
