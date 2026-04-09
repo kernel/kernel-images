@@ -19,10 +19,11 @@ type EventStreamConfig struct {
 }
 
 func NewEventStream(cfg EventStreamConfig) (*EventStream, error) {
-	if cfg.RingCapacity <= 0 {
-		return nil, fmt.Errorf("event stream: ring buffer capacity must be > 0, got %d", cfg.RingCapacity)
+	rb, err := NewRingBuffer(cfg.RingCapacity)
+	if err != nil {
+		return nil, fmt.Errorf("event stream: %w", err)
 	}
-	return &EventStream{ring: NewRingBuffer(cfg.RingCapacity)}, nil
+	return &EventStream{ring: rb}, nil
 }
 
 // Publish assigns a monotonically increasing seq to env, truncates oversized

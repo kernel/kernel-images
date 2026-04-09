@@ -65,26 +65,16 @@ type Source struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-type DetailLevel string
-
-const (
-	DetailMinimal  DetailLevel = "minimal"
-	DetailStandard DetailLevel = "standard"
-	DetailVerbose  DetailLevel = "verbose"
-	DetailRaw      DetailLevel = "raw"
-)
-
 // Event is the portable event schema. It contains only producer-emitted content;
 // pipeline metadata (seq, capture session) lives on the Envelope.
 type Event struct {
-	Ts          int64           `json:"ts"` // Unix microseconds (µs since epoch)
-	Type        string          `json:"type"`
-	Category    EventCategory   `json:"category"`
-	Source      Source          `json:"source"`
-	DetailLevel DetailLevel     `json:"detail_level"`
-	URL         string          `json:"url,omitempty"`
-	Data        json.RawMessage `json:"data,omitempty"`
-	Truncated   bool            `json:"truncated,omitempty"`
+	Ts        int64           `json:"ts"` // Unix microseconds (µs since epoch)
+	Type      string          `json:"type"`
+	Category  EventCategory   `json:"category"`
+	Source    Source          `json:"source"`
+	URL       string          `json:"url,omitempty"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	Truncated bool            `json:"truncated,omitempty"`
 }
 
 // Envelope wraps an Event with pipeline-assigned metadata.

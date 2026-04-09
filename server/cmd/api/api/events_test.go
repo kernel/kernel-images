@@ -20,10 +20,9 @@ func TestEventLifecycle(t *testing.T) {
 	svc := newTestService(t, newMockRecordManager())
 
 	// Start a capture session.
-	startResp, err := svc.CreateCaptureSession(ctx, oapi.CreateCaptureSessionRequestObject{})
+	startResp, err := svc.StartCaptureSession(ctx, oapi.StartCaptureSessionRequestObject{})
 	require.NoError(t, err)
-	require.IsType(t, oapi.CreateCaptureSession201JSONResponse{}, startResp)
-	sessionID := startResp.(oapi.CreateCaptureSession201JSONResponse).Id
+	require.IsType(t, oapi.StartCaptureSession201JSONResponse{}, startResp)
 
 	// Open an SSE stream (5s budget covers the three 2s selects below).
 	streamCtx, streamCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -75,8 +74,8 @@ func TestEventLifecycle(t *testing.T) {
 	}
 
 	// Stop the session.
-	stopResp, err := svc.DeleteCaptureSession(ctx, oapi.DeleteCaptureSessionRequestObject{CaptureSessionId: sessionID})
+	stopResp, err := svc.StopCaptureSession(ctx, oapi.StopCaptureSessionRequestObject{})
 	require.NoError(t, err)
-	assert.IsType(t, oapi.DeleteCaptureSession200JSONResponse{}, stopResp)
+	assert.IsType(t, oapi.StopCaptureSession200JSONResponse{}, stopResp)
 }
 
