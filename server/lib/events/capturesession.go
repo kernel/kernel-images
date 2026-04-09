@@ -125,8 +125,11 @@ func (s *CaptureSession) Publish(ev Event) {
 
 	if data == nil {
 		slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
-	} else if err := s.files.Write(env, data); err != nil {
-		slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
+	} else {
+		filename := string(env.Event.Category) + ".log"
+		if err := s.files.Write(filename, data); err != nil {
+			slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
+		}
 	}
 	s.ring.Publish(env)
 }
