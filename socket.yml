@@ -1,0 +1,4 @@
+version: 2
+projectIgnorePaths:
+  - "shared/cdp-test/"
+  - "images/chromium-headful/client/"
