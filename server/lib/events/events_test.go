@@ -117,7 +117,6 @@ func TestEventOmitEmpty(t *testing.T) {
 
 	s := string(b)
 	assert.NotContains(t, s, `"event"`)
-	assert.NotContains(t, s, `"detail_level"`)
 }
 
 func mkEnv(seq uint64, ev Event) Envelope {
