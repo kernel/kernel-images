@@ -6,9 +6,9 @@ import (
 	"sync"
 )
 
-// RingBuffer is a fixed-capacity circular buffer with closed-channel broadcast fan-out.
+// ringBuffer is a fixed-capacity circular buffer with closed-channel broadcast fan-out.
 // Writers never block regardless of reader count or speed.
-type RingBuffer struct {
+type ringBuffer struct {
 	mu         sync.RWMutex
 	buf        []Envelope
 	cap        uint64
@@ -16,21 +16,21 @@ type RingBuffer struct {
 	readerWake chan struct{} // closed-and-replaced on each Publish to wake blocked readers
 }
 
-func NewRingBuffer(capacity int) (*RingBuffer, error) {
+func newRingBuffer(capacity int) (*ringBuffer, error) {
 	if capacity <= 0 {
 		return nil, fmt.Errorf("events: ring buffer capacity must be > 0, got %d", capacity)
 	}
-	return &RingBuffer{
+	return &ringBuffer{
 		buf:        make([]Envelope, capacity),
 		cap:        uint64(capacity),
 		readerWake: make(chan struct{}),
 	}, nil
 }
 
-// Reset clears the buffer and wakes any blocked readers so they re-evaluate
+// reset clears the buffer and wakes any blocked readers so they re-evaluate
 // against the new (empty) state. Readers will reposition to seq 1 on the next
 // Read call and block until fresh publishes arrive.
-func (rb *RingBuffer) Reset() {
+func (rb *ringBuffer) reset() {
 	rb.mu.Lock()
 	for i := range rb.buf {
 		rb.buf[i] = Envelope{}
@@ -42,8 +42,8 @@ func (rb *RingBuffer) Reset() {
 	close(old)
 }
 
-// Publish adds an envelope to the ring, evicting the oldest on overflow.
-func (rb *RingBuffer) Publish(env Envelope) {
+// publish adds an envelope to the ring, evicting the oldest on overflow.
+func (rb *ringBuffer) publish(env Envelope) {
 	rb.mu.Lock()
 	rb.buf[env.Seq%rb.cap] = env
 	if env.Seq > rb.latestSeq {
@@ -55,16 +55,16 @@ func (rb *RingBuffer) Publish(env Envelope) {
 	close(old)
 }
 
-func (rb *RingBuffer) oldestSeq() uint64 {
+func (rb *ringBuffer) oldestSeq() uint64 {
 	if rb.latestSeq <= rb.cap {
 		return 1
 	}
 	return rb.latestSeq - rb.cap + 1
 }
 
-// NewReader returns a Reader. afterSeq == 0 starts from the oldest available
+// newReader returns a Reader. afterSeq == 0 starts from the oldest available
 // envelope; afterSeq > 0 resumes after that seq.
-func (rb *RingBuffer) NewReader(afterSeq uint64) *Reader {
+func (rb *ringBuffer) newReader(afterSeq uint64) *Reader {
 	return &Reader{rb: rb, nextSeq: afterSeq + 1}
 }
 
@@ -76,9 +76,9 @@ type ReadResult struct {
 	Dropped  uint64
 }
 
-// Reader tracks an independent read position in a RingBuffer.
+// Reader tracks an independent read position in a ringBuffer.
 type Reader struct {
-	rb      *RingBuffer
+	rb      *ringBuffer
 	nextSeq uint64
 }
 

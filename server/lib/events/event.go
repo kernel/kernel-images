@@ -21,17 +21,11 @@ const (
 	CategorySystem      EventCategory = "system"
 )
 
-// allCategories is the canonical list; use AllCategories() to get a copy.
+// allCategories is the canonical list of all known event categories.
+// Package-internal; treat as read-only.
 var allCategories = []EventCategory{
 	CategoryConsole, CategoryNetwork, CategoryPage, CategoryInteraction,
 	CategoryLiveview, CategoryCaptcha, CategorySystem,
-}
-
-// AllCategories returns a fresh copy of all known event categories.
-func AllCategories() []EventCategory {
-	out := make([]EventCategory, len(allCategories))
-	copy(out, allCategories)
-	return out
 }
 
 var validCategories = func() map[EventCategory]struct{} {
@@ -85,11 +79,7 @@ type Envelope struct {
 
 // truncateIfNeeded marshals env and returns the (possibly truncated) envelope.
 // If the envelope still exceeds maxS2RecordBytes after nulling data (e.g. huge
-<<<<<<< HEAD
 // source.metadata), it is returned as-is, callers must handle nil data.
-=======
-// source.metadata), it is returned as-is — callers must handle nil data.
->>>>>>> 3eaacb3 (review: remove url)
 func truncateIfNeeded(env Envelope) (Envelope, []byte) {
 	data, err := json.Marshal(env)
 	if err != nil {

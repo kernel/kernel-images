@@ -10,21 +10,18 @@ import (
 // CaptureConfig holds caller-supplied capture preferences. All fields are
 // optional; zero values mean "use server defaults" (all categories).
 type CaptureConfig struct {
-	// Categories limits which event categories are captured. nil or empty
-	// means all categories.
+	// Categories limits which event categories are captured
+	// nil represents all categories.
 	Categories []EventCategory
 }
 
 // CaptureSession wraps events in envelopes and fans them out to a fileWriter
-// (durable) and RingBuffer (in-memory). Call Start to begin or restart a session,
-// then Publish concurrently. Close flushes the fileWriter.
-//
 // Reusable: call Start with a new ID to begin a new session; call Stop to end
 // the current session without closing the underlying writers. Close tears down
 // file descriptors and should only be called during server shutdown.
 type CaptureSession struct {
 	mu               sync.Mutex
-	ring             *RingBuffer
+	ring             *ringBuffer
 	files            *fileWriter
 	seq              uint64
 	captureSessionID string
@@ -34,15 +31,13 @@ type CaptureSession struct {
 
 // CaptureSessionConfig holds the parameters for creating a CaptureSession.
 type CaptureSessionConfig struct {
-	// LogDir is the directory where per-category JSONL log files are written.
 	LogDir string
-
 	// RingCapacity is the number of envelopes the in-memory ring buffer holds.
 	RingCapacity int
 }
 
 func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
-	rb, err := NewRingBuffer(cfg.RingCapacity)
+	rb, err := newRingBuffer(cfg.RingCapacity)
 	if err != nil {
 		return nil, fmt.Errorf("capture session: %w", err)
 	}
@@ -50,9 +45,8 @@ func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("capture session: %w", err)
 	}
-	all := AllCategories()
-	cats := make(map[EventCategory]struct{}, len(all))
-	for _, c := range all {
+	cats := make(map[EventCategory]struct{}, len(allCategories))
+	for _, c := range allCategories {
 		cats[c] = struct{}{}
 	}
 	return &CaptureSession{
@@ -73,10 +67,10 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.captureSessionID = captureSessionID
 	s.seq = 0
 	s.createdAt = time.Now()
-	s.ring.Reset()
+	s.ring.reset()
 	cats := cfg.Categories
 	if len(cats) == 0 {
-		cats = AllCategories()
+		cats = allCategories
 	}
 	s.categories = make(map[EventCategory]struct{}, len(cats))
 	for _, c := range cats {
@@ -145,7 +139,7 @@ func (s *CaptureSession) Seq() uint64 {
 func (s *CaptureSession) Publish(ev Event) Envelope {
 	s.mu.Lock()
 
-	// No active session — drop silently. This can happen when events
+	// No active session, drop silently. This can happen when events
 	// arrive between Stop() and producers noticing, or before Start().
 	if s.captureSessionID == "" {
 		s.mu.Unlock()
@@ -181,14 +175,14 @@ func (s *CaptureSession) Publish(ev Event) Envelope {
 			slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
 		}
 	}
-	s.ring.Publish(env)
+	s.ring.publish(env)
 	return env
 }
 
 // NewReader returns a Reader positioned after afterSeq. Pass 0 to start from
 // the oldest buffered event.
 func (s *CaptureSession) NewReader(afterSeq uint64) *Reader {
-	return s.ring.NewReader(afterSeq)
+	return s.ring.newReader(afterSeq)
 }
 
 // Close flushes and releases all open file descriptors.

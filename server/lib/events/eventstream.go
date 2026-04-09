@@ -10,7 +10,7 @@ import (
 type EventStream struct {
 	mu   sync.Mutex
 	seq  uint64
-	ring *RingBuffer
+	ring *ringBuffer
 }
 
 type EventStreamConfig struct {
@@ -19,7 +19,7 @@ type EventStreamConfig struct {
 }
 
 func NewEventStream(cfg EventStreamConfig) (*EventStream, error) {
-	rb, err := NewRingBuffer(cfg.RingCapacity)
+	rb, err := newRingBuffer(cfg.RingCapacity)
 	if err != nil {
 		return nil, fmt.Errorf("event stream: %w", err)
 	}
@@ -35,14 +35,14 @@ func (es *EventStream) Publish(env Envelope) Envelope {
 	es.mu.Unlock()
 
 	env, _ = truncateIfNeeded(env)
-	es.ring.Publish(env)
+	es.ring.publish(env)
 	return env
 }
 
 // NewReader returns a Reader positioned after afterSeq. Pass 0 to start from
 // the oldest buffered event.
 func (es *EventStream) NewReader(afterSeq uint64) *Reader {
-	return es.ring.NewReader(afterSeq)
+	return es.ring.newReader(afterSeq)
 }
 
 // Seq returns the sequence number of the last published event.
