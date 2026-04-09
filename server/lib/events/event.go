@@ -72,7 +72,6 @@ type Event struct {
 	Type      string          `json:"type"`
 	Category  EventCategory   `json:"category"`
 	Source    Source          `json:"source"`
-	URL       string          `json:"url,omitempty"`
 	Data      json.RawMessage `json:"data,omitempty"`
 	Truncated bool            `json:"truncated,omitempty"`
 }
@@ -86,7 +85,11 @@ type Envelope struct {
 
 // truncateIfNeeded marshals env and returns the (possibly truncated) envelope.
 // If the envelope still exceeds maxS2RecordBytes after nulling data (e.g. huge
+<<<<<<< HEAD
 // source.metadata), it is returned as-is, callers must handle nil data.
+=======
+// source.metadata), it is returned as-is — callers must handle nil data.
+>>>>>>> 3eaacb3 (review: remove url)
 func truncateIfNeeded(env Envelope) (Envelope, []byte) {
 	data, err := json.Marshal(env)
 	if err != nil {
