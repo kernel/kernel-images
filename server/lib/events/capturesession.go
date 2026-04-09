@@ -8,16 +8,11 @@ import (
 )
 
 // CaptureConfig holds caller-supplied capture preferences. All fields are
-// optional; zero values mean "use server defaults" (all categories, standard
-// detail level).
+// optional; zero values mean "use server defaults" (all categories).
 type CaptureConfig struct {
 	// Categories limits which event categories are captured. nil or empty
 	// means all categories.
 	Categories []EventCategory
-
-	// DetailLevel overrides the default detail level stamped on events that
-	// don't set their own. Empty means DetailStandard.
-	DetailLevel DetailLevel
 }
 
 // CaptureSession wraps events in envelopes and fans them out to a fileWriter
@@ -34,7 +29,6 @@ type CaptureSession struct {
 	seq              uint64
 	captureSessionID string
 	categories       map[EventCategory]struct{}
-	detailLevel      DetailLevel // defaults to DetailStandard
 	createdAt        time.Time
 }
 
@@ -80,7 +74,6 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.seq = 0
 	s.createdAt = time.Now()
 	s.ring.Reset()
-	s.detailLevel = cfg.DetailLevel
 	cats := cfg.Categories
 	if len(cats) == 0 {
 		cats = AllCategories()
@@ -110,13 +103,6 @@ func (s *CaptureSession) Publish(ev Event) {
 
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
-	}
-	if ev.DetailLevel == "" {
-		if s.detailLevel != "" {
-			ev.DetailLevel = s.detailLevel
-		} else {
-			ev.DetailLevel = DetailStandard
-		}
 	}
 
 	s.seq++
@@ -166,8 +152,7 @@ func (s *CaptureSession) Config() CaptureConfig {
 		cats = append(cats, c)
 	}
 	return CaptureConfig{
-		Categories:  cats,
-		DetailLevel: s.detailLevel,
+		Categories: cats,
 	}
 }
 
@@ -183,7 +168,6 @@ func (s *CaptureSession) CreatedAt() time.Time {
 func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.detailLevel = cfg.DetailLevel
 	cats := cfg.Categories
 	if len(cats) == 0 {
 		cats = AllCategories()

@@ -39,9 +39,8 @@ func TestEventSerialization(t *testing.T) {
 				"parent_frame_id": "parent-frame-1",
 			},
 		},
-		DetailLevel: DetailStandard,
-		URL:         "https://example.com",
-		Data:        json.RawMessage(`{"message":"hello"}`),
+		URL:  "https://example.com",
+		Data: json.RawMessage(`{"message":"hello"}`),
 	}
 
 	b, err := json.Marshal(ev)
@@ -52,7 +51,6 @@ func TestEventSerialization(t *testing.T) {
 
 	assert.Equal(t, "console.log", decoded["type"])
 	assert.Equal(t, "console", decoded["category"])
-	assert.Equal(t, "standard", decoded["detail_level"])
 	assert.Equal(t, "https://example.com", decoded["url"])
 
 	src, ok := decoded["source"].(map[string]any)
@@ -121,7 +119,7 @@ func TestEventOmitEmpty(t *testing.T) {
 
 	s := string(b)
 	assert.NotContains(t, s, `"event"`)
-	assert.Contains(t, s, `"detail_level"`)
+	assert.NotContains(t, s, `"detail_level"`)
 }
 
 func mkEnv(seq uint64, ev Event) Envelope {
@@ -601,23 +599,6 @@ func TestCaptureSession(t *testing.T) {
 		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 		require.Len(t, lines, 1)
 		assert.Contains(t, lines[0], `"truncated":true`)
-	})
-
-	t.Run("defaults_detail_level", func(t *testing.T) {
-		p, _ := newCaptureSession(t)
-		reader := p.NewReader(0)
-
-		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, DetailStandard, env.Event.DetailLevel)
-
-		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1, DetailLevel: DetailVerbose})
-		env2 := readEnvelope(t, reader, ctx)
-		assert.Equal(t, DetailVerbose, env2.Event.DetailLevel)
 	})
 
 }
