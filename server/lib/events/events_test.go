@@ -39,7 +39,6 @@ func TestEventSerialization(t *testing.T) {
 				"parent_frame_id": "parent-frame-1",
 			},
 		},
-		URL:  "https://example.com",
 		Data: json.RawMessage(`{"message":"hello"}`),
 	}
 
@@ -51,7 +50,6 @@ func TestEventSerialization(t *testing.T) {
 
 	assert.Equal(t, "console.log", decoded["type"])
 	assert.Equal(t, "console", decoded["category"])
-	assert.Equal(t, "https://example.com", decoded["url"])
 
 	src, ok := decoded["source"].(map[string]any)
 	require.True(t, ok)
