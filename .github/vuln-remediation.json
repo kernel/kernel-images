@@ -1,0 +1,5 @@
+{
+  "non_production_paths": ["shared/cdp-test/", "images/chromium-headful/client/", "scripts/"],
+  "skip_packages": [],
+  "ecosystems": ["go", "npm", "pip"]
+}

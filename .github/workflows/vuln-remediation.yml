@@ -1,0 +1,17 @@
+name: Vulnerability Remediation
+
+on:
+  schedule:
+    - cron: '0 3 * * 3'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  remediate:
+    uses: kernel/infra/.github/workflows/vuln-remediation.yml@main
+    with:
+      go-version-file: 'server/go.mod'
+    secrets: inherit
