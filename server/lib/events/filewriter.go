@@ -7,25 +7,25 @@ import (
 	"sync"
 )
 
-// FileWriter is a per-category JSONL appender. It opens each log file lazily on
+// fileWriter is a per-category JSONL appender. It opens each log file lazily on
 // first write (O_APPEND|O_CREATE|O_WRONLY) and serialises all concurrent writes
 // with a single mutex
-type FileWriter struct {
+type fileWriter struct {
 	mu    sync.Mutex
 	files map[EventCategory]*os.File
 	dir   string
 }
 
-// NewFileWriter returns a FileWriter that writes to dir, creating it if needed.
-func NewFileWriter(dir string) (*FileWriter, error) {
+// newFileWriter returns a fileWriter that writes to dir, creating it if needed.
+func newFileWriter(dir string) (*fileWriter, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("filewriter: create dir %s: %w", dir, err)
 	}
-	return &FileWriter{dir: dir, files: make(map[EventCategory]*os.File)}, nil
+	return &fileWriter{dir: dir, files: make(map[EventCategory]*os.File)}, nil
 }
 
 // Write appends data as a single JSONL line to the per-category log file.
-func (fw *FileWriter) Write(env Envelope, data []byte) error {
+func (fw *fileWriter) Write(env Envelope, data []byte) error {
 	cat := env.Event.Category
 	if cat == "" {
 		return fmt.Errorf("filewriter: event %q has empty category", env.Event.Type)
@@ -56,7 +56,7 @@ func (fw *FileWriter) Write(env Envelope, data []byte) error {
 }
 
 // Close closes all open log file descriptors
-func (fw *FileWriter) Close() error {
+func (fw *fileWriter) Close() error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 

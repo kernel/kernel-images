@@ -20,9 +20,9 @@ type CaptureConfig struct {
 	DetailLevel DetailLevel
 }
 
-// CaptureSession wraps events in envelopes and fans them out to a FileWriter
+// CaptureSession wraps events in envelopes and fans them out to a fileWriter
 // (durable) and RingBuffer (in-memory). Call Start to begin or restart a session,
-// then Publish concurrently. Close flushes the FileWriter.
+// then Publish concurrently. Close flushes the fileWriter.
 //
 // Reusable: call Start with a new ID to begin a new session; call Stop to end
 // the current session without closing the underlying writers. Close tears down
@@ -30,7 +30,7 @@ type CaptureConfig struct {
 type CaptureSession struct {
 	mu               sync.Mutex
 	ring             *RingBuffer
-	files            *FileWriter
+	files            *fileWriter
 	seq              uint64
 	captureSessionID string
 	categories       map[EventCategory]struct{}
@@ -48,7 +48,7 @@ type CaptureSessionConfig struct {
 }
 
 func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
-	fw, err := NewFileWriter(cfg.LogDir)
+	fw, err := newFileWriter(cfg.LogDir)
 	if err != nil {
 		return nil, fmt.Errorf("capture session: %w", err)
 	}
@@ -66,7 +66,7 @@ func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
 
 // Start sets the capture session ID and applies the given config. It resets
 // the sequence counter so each session starts at seq 1.
-// The FileWriter is intentionally not rotated: events from different sessions
+// The fileWriter is intentionally not rotated: events from different sessions
 // are interleaved in the same per-category JSONL files and distinguished by
 // their envelope's capture_session_id.
 func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
@@ -88,7 +88,7 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 }
 
 // Publish wraps ev in an Envelope, truncates if needed, then writes to
-// FileWriter (durable) before RingBuffer (in-memory fan-out).
+// fileWriter (durable) before RingBuffer (in-memory fan-out).
 func (s *CaptureSession) Publish(ev Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

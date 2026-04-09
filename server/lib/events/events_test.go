@@ -332,7 +332,7 @@ func TestConcurrentReaders(t *testing.T) {
 func TestFileWriter(t *testing.T) {
 	t.Run("category_routing", func(t *testing.T) {
 		dir := t.TempDir()
-		fw, err := NewFileWriter(dir)
+		fw, err := newFileWriter(dir)
 		require.NoError(t, err)
 		defer fw.Close()
 
@@ -376,7 +376,7 @@ func TestFileWriter(t *testing.T) {
 
 	t.Run("empty_category_rejected", func(t *testing.T) {
 		dir := t.TempDir()
-		fw, err := NewFileWriter(dir)
+		fw, err := newFileWriter(dir)
 		require.NoError(t, err)
 		defer fw.Close()
 
@@ -389,7 +389,7 @@ func TestFileWriter(t *testing.T) {
 
 	t.Run("concurrent_writes", func(t *testing.T) {
 		dir := t.TempDir()
-		fw, err := NewFileWriter(dir)
+		fw, err := newFileWriter(dir)
 		require.NoError(t, err)
 		defer fw.Close()
 
@@ -426,7 +426,7 @@ func TestFileWriter(t *testing.T) {
 
 	t.Run("lazy_open", func(t *testing.T) {
 		dir := t.TempDir()
-		fw, err := NewFileWriter(dir)
+		fw, err := newFileWriter(dir)
 		require.NoError(t, err)
 		defer fw.Close()
 
