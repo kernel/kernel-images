@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -15,15 +16,15 @@ type RingBuffer struct {
 	readerWake chan struct{}   // closed-and-replaced on each Publish to wake blocked readers
 }
 
-func NewRingBuffer(capacity int) *RingBuffer {
+func NewRingBuffer(capacity int) (*RingBuffer, error) {
 	if capacity <= 0 {
-		panic("events: ring buffer capacity must be > 0")
+		return nil, fmt.Errorf("events: ring buffer capacity must be > 0, got %d", capacity)
 	}
 	return &RingBuffer{
 		buf:        make([]Envelope, capacity),
 		cap:        uint64(capacity),
 		readerWake: make(chan struct{}),
-	}
+	}, nil
 }
 
 // Reset clears the buffer and wakes any blocked readers so they re-evaluate

@@ -132,9 +132,16 @@ func cdpEvent(typ string, cat EventCategory) Event {
 	return Event{Type: typ, Category: cat, Source: Source{Kind: KindCDP}}
 }
 
+func newTestRingBuffer(t *testing.T, capacity int) *RingBuffer {
+	t.Helper()
+	rb, err := NewRingBuffer(capacity)
+	require.NoError(t, err)
+	return rb
+}
+
 // TestRingBuffer: publish 3 envelopes; reader reads all 3 in order
 func TestRingBuffer(t *testing.T) {
-	rb := NewRingBuffer(10)
+	rb := newTestRingBuffer(t,10)
 	reader := rb.NewReader(0)
 
 	envelopes := []Envelope{
@@ -159,7 +166,7 @@ func TestRingBuffer(t *testing.T) {
 
 // TestRingBufferOverflowNoBlock: writer never blocks even with no readers
 func TestRingBufferOverflowNoBlock(t *testing.T) {
-	rb := NewRingBuffer(2)
+	rb := newTestRingBuffer(t,2)
 
 	done := make(chan struct{})
 	go func() {
@@ -186,7 +193,7 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 }
 
 func TestRingBufferOverflowExistingReader(t *testing.T) {
-	rb := NewRingBuffer(2)
+	rb := newTestRingBuffer(t,2)
 	reader := rb.NewReader(0)
 
 	rb.Publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
@@ -211,7 +218,7 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 }
 
 func TestNewReaderResume(t *testing.T) {
-	rb := NewRingBuffer(10)
+	rb := newTestRingBuffer(t,10)
 	for i := uint64(1); i <= 5; i++ {
 		rb.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
 	}
@@ -235,7 +242,7 @@ func TestNewReaderResume(t *testing.T) {
 	})
 
 	t.Run("resume_before_oldest_triggers_drop", func(t *testing.T) {
-		small := NewRingBuffer(3)
+		small := newTestRingBuffer(t, 3)
 		for i := uint64(1); i <= 5; i++ {
 			small.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
 		}
@@ -253,7 +260,7 @@ func TestNewReaderResume(t *testing.T) {
 
 func TestConcurrentPublishRead(t *testing.T) {
 	const numEvents = 20
-	rb := NewRingBuffer(32)
+	rb := newTestRingBuffer(t,32)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -285,7 +292,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 }
 
 func TestConcurrentReaders(t *testing.T) {
-	rb := NewRingBuffer(20)
+	rb := newTestRingBuffer(t,20)
 
 	numReaders := 3
 	numEvents := 5
@@ -616,7 +623,7 @@ func TestCaptureSession(t *testing.T) {
 }
 
 func TestRingBufferResetWithActiveReader(t *testing.T) {
-	rb := NewRingBuffer(10)
+	rb := newTestRingBuffer(t,10)
 	reader := rb.NewReader(0)
 
 	// Publish some events so the reader advances.
@@ -645,8 +652,12 @@ func TestRingBufferResetWithActiveReader(t *testing.T) {
 	assert.Equal(t, "page.navigation", env.Event.Type)
 }
 
-func TestNewRingBufferPanicsOnZeroCapacity(t *testing.T) {
-	assert.Panics(t, func() { NewRingBuffer(0) })
-	assert.Panics(t, func() { NewRingBuffer(-1) })
+func TestNewRingBufferRejectsNonPositiveCapacity(t *testing.T) {
+	for _, cap := range []int{0, -1} {
+		rb, err := NewRingBuffer(cap)
+		assert.Nil(t, rb)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "capacity must be > 0")
+	}
 }
 

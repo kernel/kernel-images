@@ -48,6 +48,10 @@ type CaptureSessionConfig struct {
 }
 
 func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
+	rb, err := NewRingBuffer(cfg.RingCapacity)
+	if err != nil {
+		return nil, fmt.Errorf("capture session: %w", err)
+	}
 	fw, err := newFileWriter(cfg.LogDir)
 	if err != nil {
 		return nil, fmt.Errorf("capture session: %w", err)
@@ -58,7 +62,7 @@ func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
 		cats[c] = struct{}{}
 	}
 	return &CaptureSession{
-		ring:       NewRingBuffer(cfg.RingCapacity),
+		ring:       rb,
 		files:      fw,
 		categories: cats,
 	}, nil
