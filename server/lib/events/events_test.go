@@ -128,9 +128,9 @@ func cdpEvent(typ string, cat EventCategory) Event {
 	return Event{Type: typ, Category: cat, Source: Source{Kind: KindCDP}}
 }
 
-func newTestRingBuffer(t *testing.T, capacity int) *RingBuffer {
+func newTestRingBuffer(t *testing.T, capacity int) *ringBuffer {
 	t.Helper()
-	rb, err := NewRingBuffer(capacity)
+	rb, err := newRingBuffer(capacity)
 	require.NoError(t, err)
 	return rb
 }
@@ -138,7 +138,7 @@ func newTestRingBuffer(t *testing.T, capacity int) *RingBuffer {
 // TestRingBuffer: publish 3 envelopes; reader reads all 3 in order
 func TestRingBuffer(t *testing.T) {
 	rb := newTestRingBuffer(t,10)
-	reader := rb.NewReader(0)
+	reader := rb.newReader(0)
 
 	envelopes := []Envelope{
 		mkEnv(1, cdpEvent("console.log", CategoryConsole)),
@@ -147,7 +147,7 @@ func TestRingBuffer(t *testing.T) {
 	}
 
 	for _, env := range envelopes {
-		rb.Publish(env)
+		rb.publish(env)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -166,9 +166,9 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		rb.Publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
-		rb.Publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
-		rb.Publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
+		rb.publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
+		rb.publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
+		rb.publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
 		close(done)
 	}()
 
@@ -178,7 +178,7 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 		t.Fatal("Publish blocked with no readers")
 	}
 
-	reader := rb.NewReader(0)
+	reader := rb.newReader(0)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -190,11 +190,11 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 
 func TestRingBufferOverflowExistingReader(t *testing.T) {
 	rb := newTestRingBuffer(t,2)
-	reader := rb.NewReader(0)
+	reader := rb.newReader(0)
 
-	rb.Publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
-	rb.Publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
-	rb.Publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
+	rb.publish(mkEnv(1, cdpEvent("console.log", CategoryConsole)))
+	rb.publish(mkEnv(2, cdpEvent("console.log", CategoryConsole)))
+	rb.publish(mkEnv(3, cdpEvent("console.log", CategoryConsole)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -216,20 +216,20 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 func TestNewReaderResume(t *testing.T) {
 	rb := newTestRingBuffer(t,10)
 	for i := uint64(1); i <= 5; i++ {
-		rb.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+		rb.publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	t.Run("resume_mid_stream", func(t *testing.T) {
-		reader := rb.NewReader(3)
+		reader := rb.newReader(3)
 		env := readEnvelope(t, reader, ctx)
 		assert.Equal(t, uint64(4), env.Seq)
 	})
 
 	t.Run("resume_at_latest", func(t *testing.T) {
-		reader := rb.NewReader(5)
+		reader := rb.newReader(5)
 		// Nothing to read — should block until ctx cancels
 		shortCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 		defer cancel()
@@ -240,10 +240,10 @@ func TestNewReaderResume(t *testing.T) {
 	t.Run("resume_before_oldest_triggers_drop", func(t *testing.T) {
 		small := newTestRingBuffer(t, 3)
 		for i := uint64(1); i <= 5; i++ {
-			small.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+			small.publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
 		}
 		// oldest in ring is seq 3, requesting resume after seq 1
-		reader := small.NewReader(1)
+		reader := small.newReader(1)
 		res, err := reader.Read(ctx)
 		require.NoError(t, err)
 		assert.Nil(t, res.Envelope)
@@ -261,7 +261,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	reader := rb.NewReader(0)
+	reader := rb.newReader(0)
 
 	var wg sync.WaitGroup
 
@@ -280,7 +280,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 1; i <= numEvents; i++ {
-			rb.Publish(mkEnv(uint64(i), cdpEvent("console.log", CategoryConsole)))
+			rb.publish(mkEnv(uint64(i), cdpEvent("console.log", CategoryConsole)))
 		}
 	}()
 
@@ -295,11 +295,11 @@ func TestConcurrentReaders(t *testing.T) {
 
 	readers := make([]*Reader, numReaders)
 	for i := range readers {
-		readers[i] = rb.NewReader(0)
+		readers[i] = rb.newReader(0)
 	}
 
 	for i := 0; i < numEvents; i++ {
-		rb.Publish(mkEnv(uint64(i+1), cdpEvent("console.log", CategoryConsole)))
+		rb.publish(mkEnv(uint64(i+1), cdpEvent("console.log", CategoryConsole)))
 	}
 
 	var wg sync.WaitGroup
@@ -603,11 +603,11 @@ func TestCaptureSession(t *testing.T) {
 
 func TestRingBufferResetWithActiveReader(t *testing.T) {
 	rb := newTestRingBuffer(t,10)
-	reader := rb.NewReader(0)
+	reader := rb.newReader(0)
 
 	// Publish some events so the reader advances.
 	for i := uint64(1); i <= 5; i++ {
-		rb.Publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
+		rb.publish(mkEnv(i, cdpEvent("console.log", CategoryConsole)))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -617,7 +617,7 @@ func TestRingBufferResetWithActiveReader(t *testing.T) {
 	// reader.nextSeq is now 6.
 
 	// Reset — reader should wake up and block until new publishes arrive.
-	rb.Reset()
+	rb.reset()
 
 	shortCtx, shortCancel := context.WithTimeout(ctx, 50*time.Millisecond)
 	defer shortCancel()
@@ -625,7 +625,7 @@ func TestRingBufferResetWithActiveReader(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "reader should block after reset")
 
 	// Publish new events; reader should resume from seq 1.
-	rb.Publish(mkEnv(1, cdpEvent("page.navigation", CategoryPage)))
+	rb.publish(mkEnv(1, cdpEvent("page.navigation", CategoryPage)))
 	env := readEnvelope(t, reader, ctx)
 	assert.Equal(t, uint64(1), env.Seq)
 	assert.Equal(t, "page.navigation", env.Event.Type)
@@ -633,7 +633,7 @@ func TestRingBufferResetWithActiveReader(t *testing.T) {
 
 func TestNewRingBufferRejectsNonPositiveCapacity(t *testing.T) {
 	for _, cap := range []int{0, -1} {
-		rb, err := NewRingBuffer(cap)
+		rb, err := newRingBuffer(cap)
 		assert.Nil(t, rb)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "capacity must be > 0")
