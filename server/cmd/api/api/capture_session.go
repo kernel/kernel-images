@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/google/uuid"
+	"github.com/nrednav/cuid2"
 	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
 
 	"github.com/onkernel/kernel-images/server/lib/events"
@@ -27,7 +27,7 @@ func (s *ApiService) StartCaptureSession(ctx context.Context, req oapi.StartCapt
 		return oapi.StartCaptureSession400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 	}
 
-	id := uuid.New().String()
+	id := cuid2.Generate()
 	s.captureSession.Start(id, cfg)
 
 	if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
@@ -107,11 +107,8 @@ func (s *ApiService) buildSessionResponse() oapi.CaptureSession {
 		status = oapi.CaptureSessionStatusRunning
 	}
 
-	// callers hold monitorMu, guaranteeing ID is a valid UUID.
-	id, _ := uuid.Parse(s.captureSession.ID())
-
 	return oapi.CaptureSession{
-		Id:     id,
+		Id:     s.captureSession.ID(),
 		Status: status,
 		Config: oapi.CaptureConfig{
 			Categories: &cats,
