@@ -4,11 +4,6 @@ on:
   schedule:
     - cron: '0 3 * * 3'
   workflow_dispatch:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/vuln-remediation*'
-      - 'socket.yml'
 
 permissions:
   contents: write
@@ -16,7 +11,7 @@ permissions:
 
 jobs:
   remediate:
-    uses: kernel/infra/.github/workflows/vuln-remediation.yml@security/vuln-remediation-reusable
+    uses: kernel/infra/.github/workflows/vuln-remediation.yml@main
     with:
       go-version-file: 'server/go.mod'
     secrets: inherit
