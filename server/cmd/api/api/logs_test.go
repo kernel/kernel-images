@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 func TestLogsStream_PathFollow(t *testing.T) {

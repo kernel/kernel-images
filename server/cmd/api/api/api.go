@@ -9,13 +9,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	"github.com/onkernel/kernel-images/server/lib/nekoclient"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/policy"
-	"github.com/onkernel/kernel-images/server/lib/recorder"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/policy"
+	"github.com/kernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
 type ApiService struct {

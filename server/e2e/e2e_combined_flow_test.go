@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 

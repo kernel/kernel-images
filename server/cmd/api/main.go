@@ -19,16 +19,16 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"golang.org/x/sync/errgroup"
 
-	serverpkg "github.com/onkernel/kernel-images/server"
-	"github.com/onkernel/kernel-images/server/cmd/api/api"
-	"github.com/onkernel/kernel-images/server/cmd/config"
-	"github.com/onkernel/kernel-images/server/lib/chromedriverproxy"
-	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	"github.com/onkernel/kernel-images/server/lib/nekoclient"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/recorder"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	serverpkg "github.com/kernel/kernel-images/server"
+	"github.com/kernel/kernel-images/server/cmd/api/api"
+	"github.com/kernel/kernel-images/server/cmd/config"
+	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
+	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
 func main() {

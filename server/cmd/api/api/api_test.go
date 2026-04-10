@@ -11,11 +11,11 @@ import (
 
 	"log/slog"
 
-	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/onkernel/kernel-images/server/lib/nekoclient"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/recorder"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
