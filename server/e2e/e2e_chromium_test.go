@@ -20,7 +20,7 @@ import (
 	"time"
 
 	_ "github.com/glebarez/sqlite"
-	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 )

@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
-	"github.com/onkernel/kernel-images/server/lib/wsproxy"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/wsproxy"
 )
 
 var devtoolsListeningRegexp = regexp.MustCompile(`DevTools listening on (ws://\S+)`)

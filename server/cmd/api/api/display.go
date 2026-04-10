@@ -13,10 +13,10 @@ import (
 	"time"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/cdpclient"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/recorder"
 )
 
 // PatchDisplay updates the display configuration. When require_idle

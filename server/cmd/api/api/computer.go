@@ -16,10 +16,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	"github.com/onkernel/kernel-images/server/lib/mousetrajectory"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/typinghumanizer"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/mousetrajectory"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/typinghumanizer"
 )
 
 // validationError represents a client-side error (400).

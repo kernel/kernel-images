@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync/atomic"
 
-	"github.com/onkernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/events"
 )
 
 // UpstreamProvider abstracts *devtoolsproxy.UpstreamManager for testability.

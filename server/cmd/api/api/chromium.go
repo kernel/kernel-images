@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/chromiumflags"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/policy"
-	"github.com/onkernel/kernel-images/server/lib/ziputil"
+	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/policy"
+	"github.com/kernel/kernel-images/server/lib/ziputil"
 )
 
 var nameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,255}$`)
