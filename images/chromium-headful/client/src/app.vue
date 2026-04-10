@@ -127,7 +127,7 @@
   @media only screen and (max-width: 1024px) {
     html,
     body {
-      overflow-y: auto !important;
+      overflow: hidden !important;
       width: auto !important;
       height: auto !important;
     }

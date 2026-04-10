@@ -17,7 +17,6 @@
           :style="{ pointerEvents: hosting ? 'auto' : 'none' }"
           @click.stop.prevent
           @contextmenu.stop.prevent
-          @wheel.stop.prevent="onWheel"
           @mousemove.stop.prevent="onMouseMove"
           @mousedown.stop.prevent="onMouseDown"
           @mouseup.stop.prevent="onMouseUp"
@@ -231,6 +230,8 @@
   import GuacamoleKeyboard from '~/utils/guacamole-keyboard.ts'
 
   const WHEEL_LINE_HEIGHT = 19
+  const SCROLL_SENSITIVITY_BASE = 10
+  const INT16_MAX = 32767
 
   @Component({
     name: 'neko-video',
@@ -248,6 +249,8 @@
     @Ref('player') readonly _player!: HTMLElement
     @Ref('video') readonly _video!: HTMLVideoElement
     @Ref('resolution') readonly _resolution!: Resolution
+
+    private _wheelHandler: ((e: WheelEvent) => void) | null = null
     @Ref('clipboard') readonly _clipboard!: Clipboard
 
     // all controls are hidden (e.g. for cast mode)
@@ -527,6 +530,14 @@
         this.$nextTick(() => { this.isVideoSyncing = false })
       })
 
+      this._wheelHandler = (e: WheelEvent) => {
+        if (!this.hosting) return
+        e.preventDefault()
+        if (this.locked) return
+        this.onWheel(e)
+      }
+      document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
+
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
         if (!this.hosting || this.locked) {
@@ -552,6 +563,10 @@
     }
 
     beforeDestroy() {
+      if (this._wheelHandler) {
+        document.removeEventListener('wheel', this._wheelHandler, { capture: true })
+        this._wheelHandler = null
+      }
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -708,46 +723,28 @@
       })
     }
 
-    wheelThrottle = false
     onWheel(e: WheelEvent) {
-      if (!this.hosting || this.locked) {
-        return
-      }
+      this.sendMousePos(e)
 
       let x = e.deltaX
       let y = e.deltaY
 
-      // Normalize to pixel units. deltaMode 1 = lines, 2 = pages; convert
-      // both to approximate pixel values so the divisor below works uniformly.
       if (e.deltaMode !== 0) {
         x *= WHEEL_LINE_HEIGHT
         y *= WHEEL_LINE_HEIGHT
       }
 
       if (this.scroll_invert) {
-        x = x * -1
-        y = y * -1
+        x *= -1
+        y *= -1
       }
 
-      // The server sends one XTestFakeButtonEvent per unit we pass here,
-      // and each event scrolls Chromium by ~120 px. Raw pixel deltas from
-      // trackpads are already in pixels (~120 per notch), so dividing by
-      // PIXELS_PER_TICK converts them to discrete scroll "ticks". The
-      // result is clamped to [-scroll, scroll] (the user-facing sensitivity
-      // setting) so fast swipes don't over-scroll.
-      const PIXELS_PER_TICK = 120
-      x = x === 0 ? 0 : Math.min(Math.max(Math.round(x / PIXELS_PER_TICK) || Math.sign(x), -this.scroll), this.scroll)
-      y = y === 0 ? 0 : Math.min(Math.max(Math.round(y / PIXELS_PER_TICK) || Math.sign(y), -this.scroll), this.scroll)
+      const sensitivity = this.scroll / SCROLL_SENSITIVITY_BASE
+      const dx = Math.max(-INT16_MAX, Math.min(INT16_MAX, Math.round(x * sensitivity)))
+      const dy = Math.max(-INT16_MAX, Math.min(INT16_MAX, Math.round(y * sensitivity)))
 
-      this.sendMousePos(e)
-
-      if (!this.wheelThrottle) {
-        this.wheelThrottle = true
-        this.$client.sendData('wheel', { x, y })
-
-        window.setTimeout(() => {
-          this.wheelThrottle = false
-        }, 100)
+      if (dx !== 0 || dy !== 0) {
+        this.$client.sendData('wheel', { x: dx, y: dy, controlKey: e.ctrlKey || e.metaKey })
       }
     }
 
