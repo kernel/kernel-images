@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Typing Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', 'Monaco', monospace;
+      background: #0d1117;
+      color: #e6edf3;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 48px;
+    }
+    #banner {
+      padding: 14px 40px;
+      background: rgba(22, 27, 34, 0.95);
+      border: 2px solid #30363d;
+      border-radius: 12px;
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 6px;
+      text-transform: uppercase;
+      color: #58a6ff;
+      text-align: center;
+      transition: color 0.3s, border-color 0.3s;
+    }
+    #banner.instant { color: #f85149; border-color: #f85149; }
+    #banner.smooth  { color: #3fb950; border-color: #3fb950; }
+    #banner.typos   { color: #d2a8ff; border-color: #d2a8ff; }
+    .typing-area {
+      width: 700px;
+      min-height: 120px;
+      padding: 24px 28px;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 12px;
+      position: relative;
+    }
+    .typing-area .label {
+      position: absolute;
+      top: -12px;
+      left: 16px;
+      background: #0d1117;
+      padding: 2px 10px;
+      font-size: 11px;
+      color: #8b949e;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+    }
+    #input {
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: #e6edf3;
+      font-family: inherit;
+      font-size: 20px;
+      line-height: 1.6;
+      caret-color: #58a6ff;
+      resize: none;
+      overflow: hidden;
+    }
+    #input::placeholder { color: #484f58; }
+    #keystroke-viz {
+      width: 700px;
+      height: 80px;
+      position: relative;
+      overflow: hidden;
+    }
+    #keystroke-viz canvas {
+      width: 100%;
+      height: 100%;
+    }
+    .hint {
+      color: #484f58;
+      font-size: 12px;
+      letter-spacing: 1px;
+    }
+  </style>
+</head>
+<body>
+  <div id="banner">Typing Demo</div>
+
+  <div class="typing-area">
+    <div class="label">Input</div>
+    <textarea id="input" rows="3" placeholder="Text will appear here..."></textarea>
+  </div>
+
+  <div id="keystroke-viz">
+    <canvas id="viz-canvas"></canvas>
+  </div>
+
+  <div class="hint">Keystroke timing visualization</div>
+
+  <script>
+    const input = document.getElementById('input');
+    const banner = document.getElementById('banner');
+    const vizCanvas = document.getElementById('viz-canvas');
+    const vizCtx = vizCanvas.getContext('2d');
+
+    let keyTimes = [];
+    let lastKeyTime = 0;
+
+    function resizeCanvas() {
+      vizCanvas.width = vizCanvas.parentElement.clientWidth;
+      vizCanvas.height = vizCanvas.parentElement.clientHeight;
+      drawViz();
+    }
+
+    function drawViz() {
+      const w = vizCanvas.width;
+      const h = vizCanvas.height;
+      vizCtx.clearRect(0, 0, w, h);
+
+      if (keyTimes.length < 2) return;
+
+      const intervals = [];
+      for (let i = 1; i < keyTimes.length; i++) {
+        intervals.push(keyTimes[i] - keyTimes[i - 1]);
+      }
+
+      const maxInterval = Math.min(Math.max(...intervals), 500);
+      const barWidth = Math.max(2, (w - 20) / intervals.length - 1);
+
+      vizCtx.fillStyle = 'rgba(88, 166, 255, 0.7)';
+      const bannerEl = document.getElementById('banner');
+      if (bannerEl.classList.contains('instant')) vizCtx.fillStyle = 'rgba(248, 81, 73, 0.7)';
+      if (bannerEl.classList.contains('smooth')) vizCtx.fillStyle = 'rgba(63, 185, 80, 0.7)';
+      if (bannerEl.classList.contains('typos')) vizCtx.fillStyle = 'rgba(210, 168, 255, 0.7)';
+
+      for (let i = 0; i < intervals.length; i++) {
+        const barH = Math.max(2, (intervals[i] / maxInterval) * (h - 10));
+        const x = 10 + i * (barWidth + 1);
+        vizCtx.fillRect(x, h - barH, barWidth, barH);
+      }
+    }
+
+    input.addEventListener('keydown', () => {
+      const now = performance.now();
+      keyTimes.push(now);
+      if (keyTimes.length > 300) keyTimes.shift();
+      drawViz();
+    });
+
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    window.demoApi = {
+      setMode: (label, cls) => {
+        banner.textContent = label;
+        banner.className = cls || '';
+      },
+      clear: () => {
+        input.value = '';
+        keyTimes = [];
+        vizCtx.clearRect(0, 0, vizCanvas.width, vizCanvas.height);
+      },
+      focus: () => {
+        input.focus();
+      }
+    };
+  </script>
+</body>
+</html>

@@ -23,7 +23,9 @@ oapi-generate: $(OAPI_CODEGEN)
 	openapi-down-convert --input openapi.yaml --output openapi-3.0.yaml
 	$(OAPI_CODEGEN) -config ./oapi-codegen.yaml ./openapi-3.0.yaml
 	@echo "Fixing oapi-codegen issue https://github.com/oapi-codegen/oapi-codegen/issues/1764..."
-	go run ./scripts/oapi/patch_sse_methods.go -file ./lib/oapi/oapi.go -expected-replacements 3
+	go run ./scripts/oapi/patch_sse_methods -file ./lib/oapi/oapi.go -expected-replacements 3
+	@echo "Patching strict JSON optional bodies (io.EOF) + response omitempty tags..."
+	go run ./scripts/oapi/patch_strict_optional_json -file ./lib/oapi/oapi.go
 	go fmt ./lib/oapi/oapi.go
 	go mod tidy
 

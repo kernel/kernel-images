@@ -1367,8 +1367,26 @@ components:
           description: Text to type on the host computer
         delay:
           type: integer
-          description: Delay in milliseconds between keystrokes
+          description: Delay in milliseconds between keystrokes. Ignored when smooth is true.
           minimum: 0
+          default: 0
+        smooth:
+          type: boolean
+          description: |
+            Use human-like variable keystroke timing instead of a fixed delay.
+            Defaults to true (same as moveMouse/dragMouse). Set to false for
+            xdotool typing with an optional fixed delay between keys (delay=0 is instant).
+            When true, text is typed in word-sized chunks with variable intra-word delays
+            and natural inter-word pauses. The delay field is ignored when smooth is true.
+          default: true
+        typo_chance:
+          type: number
+          description: |
+            Per-character typo injection rate; mistakes are corrected with backspace.
+            Default 0. Only applies when smooth is true (silently ignored when
+            smooth is false).
+          minimum: 0
+          maximum: 0.10
           default: 0
       additionalProperties: false
     ClipboardContent:
