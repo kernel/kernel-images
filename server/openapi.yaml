@@ -1463,7 +1463,6 @@ components:
       properties:
         id:
           type: string
-          format: uuid
         status:
           type: string
           enum:
