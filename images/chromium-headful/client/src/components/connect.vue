@@ -2,15 +2,8 @@
   <div class="connect">
     <div class="window">
       <div class="loader" v-if="connecting">
-        <div class="ocm-orb" aria-hidden="true">
-          <div class="ocm-orb__primary"></div>
-          <div class="ocm-orb__bloom"></div>
-          <svg class="ocm-orb__grain" xmlns="http://www.w3.org/2000/svg">
-            <filter id="ocm-orb-noise-connect">
-              <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" />
-            </filter>
-            <rect width="100%" height="100%" filter="url(#ocm-orb-noise-connect)" />
-          </svg>
+        <div class="ocm-wordmark" aria-hidden="true">
+          <span class="ocm-wordmark__open">OpenClaw</span><span class="ocm-wordmark__machines">Machines</span>
         </div>
       </div>
     </div>
@@ -54,66 +47,48 @@
         }
       }
 
-      // OCM orange orb — ported from frontend/src/components/hero/OrbBackground.tsx.
-      // The original is React-driven for a hero-sized organic drift; here we
-      // collapse it into a pure-CSS pop-in + breathe loop for the 140px loading
-      // slot. Two blurred radial-gradient divs compose the orb (primary + bloom)
-      // with an SVG feTurbulence grain overlay.
+      // OCM wordmark loading indicator. Pops in small-to-big with an
+      // overshoot (same cubic-bezier + duration as the prior orb) and then
+      // gently breathes. Two-tone brand colors match the OCM product
+      // marks (red "OpenClaw" + teal "Machines"), identical to Layout.tsx
+      // in the frontend.
       .loader {
-        width: 140px;
-        height: 140px;
+        width: auto;
+        height: auto;
         position: relative;
         margin: 0 auto;
         display: flex;
         justify-content: center;
         align-items: center;
-        overflow: hidden; // clip the blur halo to the loading slot
 
-        .ocm-orb {
-          position: relative;
-          width: 100%;
-          height: 100%;
-          animation: ocm-orb-popin 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        .ocm-wordmark {
+          display: inline-flex;
+          align-items: baseline;
+          gap: 0.3em;
+          font-family: 'Whitney', 'Segoe UI', system-ui, sans-serif;
+          font-size: 44px;
+          font-weight: 900;
+          letter-spacing: -0.01em;
+          white-space: nowrap;
+          line-height: 1;
+          // Pop-in on mount (same style as the orb), then continuous breathe.
+          animation:
+            ocm-wordmark-popin 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both,
+            ocm-wordmark-breathe 3.6s ease-in-out 0.9s infinite;
         }
 
-        .ocm-orb__primary,
-        .ocm-orb__bloom {
-          position: absolute;
-          top: 50%;
-          left: 50%;
-          border-radius: 50%;
-          will-change: transform, opacity;
+        .ocm-wordmark__open {
+          color: #ef4444; // red-500 — matches Layout.tsx brand red
         }
 
-        .ocm-orb__primary {
-          width: 78%;
-          height: 78%;
-          filter: blur(16px);
-          background: radial-gradient(circle, #fb923c 0%, #f97316 40%, transparent 70%);
-          animation: ocm-orb-breathe-primary 3.6s ease-in-out infinite;
-        }
-
-        .ocm-orb__bloom {
-          width: 56%;
-          height: 56%;
-          filter: blur(12px);
-          background: radial-gradient(circle, #fbbf24 0%, #f59e0b 50%, transparent 70%);
-          animation: ocm-orb-breathe-bloom 3.6s ease-in-out infinite;
-        }
-
-        .ocm-orb__grain {
-          position: absolute;
-          inset: 0;
-          width: 100%;
-          height: 100%;
-          opacity: 0.06;
-          pointer-events: none;
+        .ocm-wordmark__machines {
+          color: #2dd4bf; // teal-400 — matches Layout.tsx brand teal
         }
       }
     }
   }
 
-  @keyframes ocm-orb-popin {
+  @keyframes ocm-wordmark-popin {
     0% {
       transform: scale(0.05);
       opacity: 0;
@@ -128,25 +103,14 @@
     }
   }
 
-  @keyframes ocm-orb-breathe-primary {
+  @keyframes ocm-wordmark-breathe {
     0%, 100% {
-      transform: translate(-50%, -50%) scale(0.92);
-      opacity: 0.75;
+      transform: scale(0.98);
+      opacity: 0.85;
     }
     50% {
-      transform: translate(-50%, -50%) scale(1.08);
+      transform: scale(1.02);
       opacity: 1;
-    }
-  }
-
-  @keyframes ocm-orb-breathe-bloom {
-    0%, 100% {
-      transform: translate(-50%, -50%) scale(1.05);
-      opacity: 0.5;
-    }
-    50% {
-      transform: translate(-50%, -50%) scale(0.9);
-      opacity: 0.7;
     }
   }
 </style>
