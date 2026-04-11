@@ -3,7 +3,16 @@
     <div class="window">
       <div class="loading" v-if="loading">
         <div class="loader">
-          <img src="../assets/images/logo.svg" alt="loading" aria-hidden="true" class="kernel-logo" />
+          <div class="ocm-orb" aria-hidden="true">
+            <div class="ocm-orb__primary"></div>
+            <div class="ocm-orb__bloom"></div>
+            <svg class="ocm-orb__grain" xmlns="http://www.w3.org/2000/svg">
+              <filter id="ocm-orb-noise-about">
+                <feTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch" />
+              </filter>
+              <rect width="100%" height="100%" filter="url(#ocm-orb-noise-about)" />
+            </svg>
+          </div>
         </div>
       </div>
 
@@ -72,19 +81,56 @@
           }
         }
 
+        // OCM orange orb — see connect.vue for design notes.
         .loader {
-          width: 90px;
-          height: 90px;
+          width: 140px;
+          height: 140px;
           position: relative;
           margin: 0 auto 20px auto;
           display: flex;
           justify-content: center;
           align-items: center;
+          overflow: hidden;
 
-          .kernel-logo {
+          .ocm-orb {
+            position: relative;
             width: 100%;
             height: 100%;
-            animation: kernel-logo-pulse 1.5s ease-in-out infinite;
+            animation: ocm-orb-popin 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+          }
+
+          .ocm-orb__primary,
+          .ocm-orb__bloom {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            border-radius: 50%;
+            will-change: transform, opacity;
+          }
+
+          .ocm-orb__primary {
+            width: 78%;
+            height: 78%;
+            filter: blur(16px);
+            background: radial-gradient(circle, #fb923c 0%, #f97316 40%, transparent 70%);
+            animation: ocm-orb-breathe-primary 3.6s ease-in-out infinite;
+          }
+
+          .ocm-orb__bloom {
+            width: 56%;
+            height: 56%;
+            filter: blur(12px);
+            background: radial-gradient(circle, #fbbf24 0%, #f59e0b 50%, transparent 70%);
+            animation: ocm-orb-breathe-bloom 3.6s ease-in-out infinite;
+          }
+
+          .ocm-orb__grain {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.06;
+            pointer-events: none;
           }
         }
       }
@@ -95,15 +141,40 @@
     }
   }
 
-  @keyframes kernel-logo-pulse {
-    0%,
-    100% {
-      transform: scale(0.85);
-      opacity: 0.7;
+  @keyframes ocm-orb-popin {
+    0% {
+      transform: scale(0.05);
+      opacity: 0;
     }
-    50% {
+    70% {
+      transform: scale(1.06);
+      opacity: 1;
+    }
+    100% {
       transform: scale(1);
       opacity: 1;
+    }
+  }
+
+  @keyframes ocm-orb-breathe-primary {
+    0%, 100% {
+      transform: translate(-50%, -50%) scale(0.92);
+      opacity: 0.75;
+    }
+    50% {
+      transform: translate(-50%, -50%) scale(1.08);
+      opacity: 1;
+    }
+  }
+
+  @keyframes ocm-orb-breathe-bloom {
+    0%, 100% {
+      transform: translate(-50%, -50%) scale(1.05);
+      opacity: 0.5;
+    }
+    50% {
+      transform: translate(-50%, -50%) scale(0.9);
+      opacity: 0.7;
     }
   }
 </style>
