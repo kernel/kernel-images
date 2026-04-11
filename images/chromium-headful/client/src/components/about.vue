@@ -95,8 +95,8 @@
             white-space: nowrap;
             line-height: 1;
             animation:
-              ocm-wordmark-popin 0.9s cubic-bezier(0.34, 1.56, 0.64, 1) both,
-              ocm-wordmark-breathe 3.6s ease-in-out 0.9s infinite;
+              ocm-wordmark-popin 2.5s cubic-bezier(0.34, 1.56, 0.64, 1) both,
+              ocm-wordmark-breathe 5s ease-in-out 2.5s infinite;
           }
 
           .ocm-wordmark__open {
