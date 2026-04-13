@@ -9,7 +9,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/go-connections/nat"
-	instanceoapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )

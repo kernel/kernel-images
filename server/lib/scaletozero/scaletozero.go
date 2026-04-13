@@ -5,7 +5,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/onkernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/logger"
 )
 
 // Unikraft scale-to-zero control file

@@ -136,7 +136,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this._id = ''
   }
 
-  public sendData(event: 'wheel' | 'mousemove', data: { x: number; y: number }): void
+  public sendData(event: 'wheel', data: { x: number; y: number; controlKey?: boolean }): void
+  public sendData(event: 'mousemove', data: { x: number; y: number }): void
   public sendData(event: 'mousedown' | 'mouseup' | 'keydown' | 'keyup', data: { key: number }): void
   public sendData(event: string, data: any) {
     if (!this.connected) {
@@ -156,12 +157,13 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
         payload.setUint16(5, data.y, true)
         break
       case 'wheel':
-        buffer = new ArrayBuffer(7)
+        buffer = new ArrayBuffer(8)
         payload = new DataView(buffer)
         payload.setUint8(0, OPCODE.SCROLL)
-        payload.setUint16(1, 4, true)
+        payload.setUint16(1, 5, true)
         payload.setInt16(3, data.x, true)
         payload.setInt16(5, data.y, true)
+        payload.setUint8(7, data.controlKey ? 1 : 0)
         break
       case 'keydown':
       case 'mousedown':

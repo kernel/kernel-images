@@ -17,10 +17,10 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/nrednav/cuid2"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/ziputil"
-	"github.com/onkernel/kernel-images/server/lib/zstdutil"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/ziputil"
+	"github.com/kernel/kernel-images/server/lib/zstdutil"
 )
 
 // fsWatch represents an in-memory directory watch.

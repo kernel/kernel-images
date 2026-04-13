@@ -1,4 +1,4 @@
-module github.com/onkernel/kernel-images/server
+module github.com/kernel/kernel-images/server
 
 go 1.25.0
 
@@ -101,4 +101,4 @@ require (
 	modernc.org/sqlite v1.23.1 // indirect
 )
 
-replace github.com/m1k1o/neko/server => github.com/onkernel/neko/server v0.0.0-20260213021128-abe9ac59a634
+replace github.com/m1k1o/neko/server => github.com/kernel/neko/server v0.0.0-20260213021128-abe9ac59a634

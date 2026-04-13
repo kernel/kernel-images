@@ -5,7 +5,7 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/onkernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/logger"
 )
 
 // Middleware returns a standard net/http middleware that disables scale-to-zero

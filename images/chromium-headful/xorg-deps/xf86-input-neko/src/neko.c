@@ -54,10 +54,15 @@
 #include <X11/keysym.h>
 #include <mipointer.h>
 #include <xserver-properties.h>
+#include <inputstr.h>
 #include <pthread.h>
 
-#define MAX_USED_VALUATORS 3 /* x, y, pressure */
-#define TOUCH_MAX_SLOTS 10 /* max number of simultaneous touches */
+#define MAX_USED_VALUATORS 5 /* x, y, pressure, v-scroll, h-scroll */
+#define TOUCH_VALUATORS    3 /* touch only uses x, y, pressure */
+#define TOUCH_MAX_SLOTS   10 /* max number of simultaneous touches */
+
+#define NEKO_SCROLL       0x80
+#define SCROLL_INCREMENT 120.0
 
 struct neko_message
 {
@@ -149,16 +154,25 @@ ReadInput(InputInfoPtr pInfo)
             ValuatorMask *m = priv->valuators;
             valuator_mask_zero(m);
 
-            // do not send valuators if x and y are -1
-            if (msg.x != -1 && msg.y != -1)
+            if (msg.type == NEKO_SCROLL)
             {
-                valuator_mask_set_double(m, 0, msg.x);
-                valuator_mask_set_double(m, 1, msg.y);
-                valuator_mask_set_double(m, 2, msg.pressure);
+                if (msg.y != 0)
+                    valuator_mask_set_double(m, 3, (double)msg.y);
+                if (msg.x != 0)
+                    valuator_mask_set_double(m, 4, (double)msg.x);
+                xf86PostMotionEventM(pInfo->dev, FALSE, m);
             }
-
-            // TODO: extend to other types, such as keyboard and mouse
-            xf86PostTouchEvent(pInfo->dev, msg.touchId, msg.type, 0, m);
+            else
+            {
+                // do not send valuators if x and y are -1
+                if (msg.x != -1 && msg.y != -1)
+                {
+                    valuator_mask_set_double(m, 0, msg.x);
+                    valuator_mask_set_double(m, 1, msg.y);
+                    valuator_mask_set_double(m, 2, msg.pressure);
+                }
+                xf86PostTouchEvent(pInfo->dev, msg.touchId, msg.type, 0, m);
+            }
         }
 
         /* Close socket. */
@@ -181,11 +195,11 @@ InitTouch(InputInfoPtr pInfo)
     struct neko_priv *priv = pInfo->private;
 
 	const int nbtns = 11;
-	const int naxes = 3;
+	const int naxes = MAX_USED_VALUATORS; /* x, y, pressure, v-scroll, h-scroll */
 
     unsigned char map[nbtns + 1];
     Atom btn_labels[nbtns];
-    Atom axis_labels[naxes];
+    Atom axis_labels[MAX_USED_VALUATORS];
 
     // init button map
     memset(map, 0, sizeof(map));
@@ -209,10 +223,12 @@ InitTouch(InputInfoPtr pInfo)
     btn_labels[10] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_BACK);
 
     // init axis labels
-    memset(axis_labels, 0, ARRAY_SIZE(axis_labels) * sizeof(Atom));
+    memset(axis_labels, 0, sizeof(axis_labels));
     axis_labels[0] = XIGetKnownProperty(AXIS_LABEL_PROP_ABS_MT_POSITION_X);
     axis_labels[1] = XIGetKnownProperty(AXIS_LABEL_PROP_ABS_MT_POSITION_Y);
     axis_labels[2] = XIGetKnownProperty(AXIS_LABEL_PROP_ABS_MT_PRESSURE);
+    axis_labels[3] = XIGetKnownProperty(AXIS_LABEL_PROP_REL_VSCROLL);
+    axis_labels[4] = XIGetKnownProperty(AXIS_LABEL_PROP_REL_HSCROLL);
 
     /* initialize mouse emulation valuators */
     if (InitPointerDeviceStruct((DevicePtr)pInfo->dev,
@@ -274,22 +290,28 @@ InitTouch(InputInfoPtr pInfo)
         priv->pmax + 1,   /* max_res */
         Absolute);
 
-    /*
-        The mode field is either XIDirectTouch for direct−input touch devices
-        such as touchscreens or XIDependentTouch for indirect input devices such
-        as touchpads. For XIDirectTouch devices, touch events are sent to window
-        at the position the touch occured. For XIDependentTouch devices, touch
-        events are sent to the window at the position of the device's sprite.
+    /* scroll valuator axes — relative, so min=max=0 */
+    xf86InitValuatorAxisStruct(pInfo->dev, 3,
+        axis_labels[3],
+        NO_AXIS_LIMITS, NO_AXIS_LIMITS, /* no limits for scroll */
+        0, 0, 0,
+        Relative);
+    SetScrollValuator(pInfo->dev, 3, SCROLL_TYPE_VERTICAL,
+        SCROLL_INCREMENT, SCROLL_FLAG_PREFERRED);
 
-        The num_touches field defines the maximum number of simultaneous touches
-        the device supports. A num_touches of 0 means the maximum number of
-        simultaneous touches is undefined or unspecified. This field should be
-        used as a guide only, devices will lie about their capabilities.
-    */
+    xf86InitValuatorAxisStruct(pInfo->dev, 4,
+        axis_labels[4],
+        NO_AXIS_LIMITS, NO_AXIS_LIMITS,
+        0, 0, 0,
+        Relative);
+    SetScrollValuator(pInfo->dev, 4, SCROLL_TYPE_HORIZONTAL,
+        SCROLL_INCREMENT, SCROLL_FLAG_PREFERRED);
+
+    /* Touch class only uses the first 3 axes (x, y, pressure). */
     if (InitTouchClassDeviceStruct(pInfo->dev,
             priv->slots,
             XIDirectTouch,
-            naxes) == FALSE)
+            TOUCH_VALUATORS) == FALSE)
     {
         xf86IDrvMsg(pInfo, X_ERROR,
             "unable to allocate TouchClassDeviceStruct\n");
@@ -354,7 +376,7 @@ PreInit(__attribute__ ((unused)) InputDriverPtr drv,
         return BadValue;
     }
 
-    pInfo->type_name      = (char*)XI_TOUCHSCREEN;
+    pInfo->type_name      = (char*)XI_MOUSE;
     pInfo->device_control = DeviceControl;
     pInfo->read_input     = NULL;
     pInfo->control_proc   = NULL;

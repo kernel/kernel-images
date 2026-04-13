@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 // LogsStream implements Server-Sent Events log streaming.

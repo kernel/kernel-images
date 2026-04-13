@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
 
 func main() {
