@@ -67,7 +67,7 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context) {
 	data, _ := json.Marshal(map[string]string{screenshotDataKey: encoded})
 
 	m.publish(events.Event{
-		Ts:       time.Now().UnixMilli(),
+		Ts:       time.Now().UnixMicro(),
 		Type:     EventScreenshot,
 		Category: events.CategorySystem,
 		Source:   events.Source{Kind: events.KindLocalProcess},

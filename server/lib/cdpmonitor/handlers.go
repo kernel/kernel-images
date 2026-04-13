@@ -26,7 +26,7 @@ func (m *Monitor) publishEvent(eventType string, category events.EventCategory, 
 		src.Metadata[MetadataKeyCDPSessionID] = sessionID
 	}
 	m.publish(events.Event{
-		Ts:       time.Now().UnixMilli(),
+		Ts:       time.Now().UnixMicro(),
 		Type:     eventType,
 		Category: category,
 		Source:   src,
