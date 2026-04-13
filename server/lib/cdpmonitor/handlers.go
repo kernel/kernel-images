@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/events"
 )
 
 // logUnmarshalErr logs a Debug message when a handler can't parse CDP params.
@@ -23,7 +23,7 @@ func (m *Monitor) publishEvent(eventType string, category events.EventCategory, 
 		if src.Metadata == nil {
 			src.Metadata = make(map[string]string)
 		}
-		src.Metadata["cdp_session_id"] = sessionID
+		src.Metadata[MetadataKeyCDPSessionID] = sessionID
 	}
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMilli(),
@@ -111,6 +111,11 @@ func (m *Monitor) handleExceptionThrown(params json.RawMessage, sessionID string
 	m.tryScreenshot(m.getLifecycleCtx())
 }
 
+// bindingMinInterval is the minimum time between accepted __kernelEvent binding
+// calls per session. This caps throughput at 20 events/s per session, preventing
+// a misbehaving page from flooding the event pipeline.
+const bindingMinInterval = 50 * time.Millisecond
+
 // handleBindingCalled processes __kernelEvent binding calls from the page.
 func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) {
 	var p struct {
@@ -124,6 +129,7 @@ func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) 
 	if p.Name != bindingName {
 		return
 	}
+
 	payload := json.RawMessage(p.Payload)
 	if !json.Valid(payload) {
 		return
@@ -136,8 +142,24 @@ func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) 
 	}
 	switch header.Type {
 	case EventInteractionClick, EventInteractionKey, EventScrollSettled:
-		m.publishEvent(header.Type, events.CategoryInteraction, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", payload, sessionID)
+	default:
+		return
 	}
+
+	// Rate-limit per (session, event type): cap at 20 events/s per pair so a
+	// misbehaving page cannot flood the event pipeline with a single event type.
+	now := time.Now()
+	rateKey := sessionID + ":" + header.Type
+	m.bindingRateMu.Lock()
+	last := m.bindingLastSeen[rateKey]
+	if now.Sub(last) < bindingMinInterval {
+		m.bindingRateMu.Unlock()
+		return
+	}
+	m.bindingLastSeen[rateKey] = now
+	m.bindingRateMu.Unlock()
+
+	m.publishEvent(header.Type, events.CategoryInteraction, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", payload, sessionID)
 }
 
 // handleTimelineEvent processes PerformanceTimeline layout-shift events.
@@ -152,7 +174,7 @@ func (m *Monitor) handleTimelineEvent(params json.RawMessage, sessionID string) 
 		m.logUnmarshalErr("PerformanceTimeline.timelineEventAdded", err)
 		return
 	}
-	if p.Event.Type != "layout-shift" {
+	if p.Event.Type != timelineEventLayoutShift {
 		return
 	}
 	m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", params, sessionID)
@@ -184,7 +206,11 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 	// netPending for genuinely new requests to avoid permanently inflating the
 	// counter and blocking network_idle.
 	m.pendReqMu.Lock()
-	_, isRedirect := m.pendingRequests[p.RequestID]
+	existing, isRedirect := m.pendingRequests[p.RequestID]
+	addedAt := existing.addedAt
+	if !isRedirect {
+		addedAt = time.Now()
+	}
 	m.pendingRequests[p.RequestID] = networkReqState{
 		sessionID:    sessionID,
 		method:       p.Request.Method,
@@ -192,6 +218,7 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 		headers:      p.Request.Headers,
 		postData:     p.Request.PostData,
 		resourceType: p.ResourceType,
+		addedAt:      addedAt,
 	}
 	m.pendReqMu.Unlock()
 	ev := map[string]any{

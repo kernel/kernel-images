@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -315,5 +315,44 @@ func TestBindingAndTimeline(t *testing.T) {
 			},
 		})
 		ec.assertNone(t, "interaction_click", 100*time.Millisecond)
+	})
+
+	t.Run("rate_limited_per_session", func(t *testing.T) {
+		// Send two binding events back-to-back within the 50ms window.
+		// Only the first should produce a published event.
+		before := func() int {
+			ec.mu.Lock()
+			defer ec.mu.Unlock()
+			count := 0
+			for _, ev := range ec.events {
+				if ev.Type == EventInteractionClick {
+					count++
+				}
+			}
+			return count
+		}
+		countBefore := before()
+
+		for range 3 {
+			srv.sendToMonitor(t, map[string]any{
+				"method": "Runtime.bindingCalled",
+				"params": map[string]any{
+					"name":    "__kernelEvent",
+					"payload": `{"type":"interaction_click","x":1,"y":1,"selector":"a","tag":"A","text":"x"}`,
+				},
+			})
+		}
+
+		// Wait a bit for async delivery, then check only 1 new event was published.
+		time.Sleep(200 * time.Millisecond)
+		ec.mu.Lock()
+		countAfter := 0
+		for _, ev := range ec.events {
+			if ev.Type == EventInteractionClick {
+				countAfter++
+			}
+		}
+		ec.mu.Unlock()
+		assert.Equal(t, countBefore+1, countAfter, "rate limiter should have dropped the 2nd and 3rd events")
 	})
 }

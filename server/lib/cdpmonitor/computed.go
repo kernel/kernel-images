@@ -5,12 +5,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/events"
 )
+
 const (
 	// networkIdleDebounce matches Playwright's networkidle heuristic: fire after
 	// 500 ms with no in-flight network requests.
-	networkIdleDebounce  = 500 * time.Millisecond
+	networkIdleDebounce   = 500 * time.Millisecond
 	layoutSettledDebounce = 1 * time.Second
 )
 

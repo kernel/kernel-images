@@ -10,7 +10,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/events"
 )
 
 // tryScreenshot fires a screenshot if the 2s rate-limit window has elapsed.
@@ -65,14 +65,14 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context) {
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(pngBytes)
-	data, _ := json.Marshal(map[string]string{"png": encoded})
+	data, _ := json.Marshal(map[string]string{screenshotDataKey: encoded})
 
 	m.publish(events.Event{
-		Ts:          time.Now().UnixMilli(),
-		Type:        "screenshot",
-		Category:    events.CategorySystem,
-		Source:      events.Source{Kind: events.KindLocalProcess},
-		Data:        data,
+		Ts:       time.Now().UnixMilli(),
+		Type:     EventScreenshot,
+		Category: events.CategorySystem,
+		Source:   events.Source{Kind: events.KindLocalProcess},
+		Data:     data,
 	})
 }
 

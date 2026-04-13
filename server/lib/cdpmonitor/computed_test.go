@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/stretchr/testify/assert"
 )
 

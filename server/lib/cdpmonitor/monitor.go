@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/kernel/kernel-images/server/lib/events"
 )
 
@@ -60,16 +61,20 @@ type Monitor struct {
 
 	computed *computedState
 
-	lastScreenshotAt    atomic.Int64 // unix millis of last capture
-	screenshotInFlight  atomic.Bool  // true while a captureScreenshot goroutine is running
-	screenshotFn        func(ctx context.Context, displayNum int) ([]byte, error) // nil → real ffmpeg
+	lastScreenshotAt   atomic.Int64                                              // unix millis of last capture
+	screenshotInFlight atomic.Bool                                               // true while a captureScreenshot goroutine is running
+	screenshotFn       func(ctx context.Context, displayNum int) ([]byte, error) // nil → real ffmpeg
+
+	// bindingRateMu guards bindingLastSeen.
+	bindingRateMu   sync.Mutex
+	bindingLastSeen map[string]time.Time // sessionID → last accepted binding event time
 
 	// asyncWg tracks short-lived goroutines only (fetchResponseBody, enableDomains,
 	// initSession). readLoop and subscribeToUpstream are not tracked; they exit via context.
 	asyncWg   sync.WaitGroup
 	restartMu sync.Mutex // serializes handleUpstreamRestart to prevent overlapping reconnects
 
-	lifecycleCtx context.Context    // cancelled on Stop()
+	lifecycleCtx context.Context // cancelled on Stop()
 	cancel       context.CancelFunc
 	done         chan struct{}
 	readReady    chan struct{} // closed when readLoop has started reading
@@ -87,15 +92,40 @@ func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log 
 		sessions:        make(map[string]targetInfo),
 		pending:         make(map[int64]chan cdpMessage),
 		pendingRequests: make(map[string]networkReqState),
+		bindingLastSeen: make(map[string]time.Time),
 	}
 	m.computed = newComputedState(publish)
 	m.lifecycleCtx = context.Background()
+	m.mainSessionID.Store(mainSessionUnset)
 	return m
 }
 
 // IsRunning reports whether the monitor is actively capturing.
 func (m *Monitor) IsRunning() bool {
 	return m.running.Load()
+}
+
+// Health returns a point-in-time snapshot of internal counters useful for
+// debugging and operational visibility.
+func (m *Monitor) Health() MonitorHealth {
+	m.pendMu.Lock()
+	pendCmds := len(m.pending)
+	m.pendMu.Unlock()
+
+	m.pendReqMu.Lock()
+	pendReqs := len(m.pendingRequests)
+	m.pendReqMu.Unlock()
+
+	m.sessionsMu.RLock()
+	sessions := len(m.sessions)
+	m.sessionsMu.RUnlock()
+
+	return MonitorHealth{
+		Running:         m.running.Load(),
+		PendingCommands: pendCmds,
+		PendingRequests: pendReqs,
+		Sessions:        sessions,
+	}
 }
 
 // getLifecycleCtx returns the current lifecycle context under lifeMu.
@@ -135,9 +165,11 @@ func (m *Monitor) Start(parentCtx context.Context) error {
 	m.lifeMu.Unlock()
 
 	m.running.Store(true)
+	m.log.Info("cdpmonitor: started", "url", devtoolsURL)
 
 	go m.readLoop(ctx)
 	go m.subscribeToUpstream(ctx)
+	go m.sweepPendingRequests(ctx)
 	m.asyncWg.Go(func() { m.initSession(ctx) })
 
 	return nil
@@ -148,6 +180,7 @@ func (m *Monitor) Stop() {
 	if !m.running.Swap(false) {
 		return
 	}
+	m.log.Info("cdpmonitor: stopping")
 
 	m.lifeMu.Lock()
 	if m.cancel != nil {
@@ -172,6 +205,7 @@ func (m *Monitor) Stop() {
 	m.lifeMu.Unlock()
 
 	m.clearState()
+	m.log.Info("cdpmonitor: stopped")
 }
 
 // clearState resets sessions, pending requests, and computed state.
@@ -180,16 +214,47 @@ func (m *Monitor) clearState() {
 	m.sessionsMu.Lock()
 	m.sessions = make(map[string]targetInfo)
 	m.sessionsMu.Unlock()
-	m.mainSessionID.Store("")
+	m.mainSessionID.Store(mainSessionUnset)
 
 	m.pendReqMu.Lock()
 	m.pendingRequests = make(map[string]networkReqState)
 	m.pendReqMu.Unlock()
 
+	m.bindingRateMu.Lock()
+	m.bindingLastSeen = make(map[string]time.Time)
+	m.bindingRateMu.Unlock()
+
 	m.failPendingCommands()
 
 	// pendingRequests is already empty above, so inflight=0 is correct.
 	m.computed.resetOnNavigation(0)
+}
+
+const pendingRequestTTL = 5 * time.Minute
+const sweepInterval = 1 * time.Minute
+
+// sweepPendingRequests periodically evicts networkReqState entries that have
+// been in the map for longer than pendingRequestTTL. This bounds map growth on
+// long-lived SPAs where loadingFinished never arrives (e.g. tabs closed mid-flight).
+// It exits when ctx is cancelled (Stop/reconnect).
+func (m *Monitor) sweepPendingRequests(ctx context.Context) {
+	ticker := time.NewTicker(sweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			m.pendReqMu.Lock()
+			for id, state := range m.pendingRequests {
+				if now.Sub(state.addedAt) > pendingRequestTTL {
+					delete(m.pendingRequests, id)
+					m.computed.onLoadingFinished() // keep netPending consistent
+				}
+			}
+			m.pendReqMu.Unlock()
+		}
+	}
 }
 
 // failPendingCommands unblocks all in-flight send() calls by delivering an
@@ -262,8 +327,15 @@ func (m *Monitor) readLoop(ctx context.Context) {
 	}
 }
 
+const sendTimeout = 30 * time.Second
+
 // send issues a CDP command and blocks until the response arrives.
+// A 30 s deadline is applied so a non-responsive Chrome cannot stall
+// callers indefinitely; the caller's own deadline (if shorter) wins.
 func (m *Monitor) send(ctx context.Context, method string, params any, sessionID string) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	defer cancel()
+
 	id := m.nextID.Add(1)
 
 	var rawParams json.RawMessage
@@ -326,13 +398,37 @@ func (m *Monitor) initSession(ctx context.Context) {
 	case <-ctx.Done():
 		return
 	}
-	_, _ = m.send(ctx, "Target.setAutoAttach", map[string]any{
+
+	if _, err := m.send(ctx, "Target.setAutoAttach", map[string]any{
 		"autoAttach":             true,
 		"waitForDebuggerOnStart": false,
 		"flatten":                true,
-	}, "")
+	}, ""); err != nil && ctx.Err() == nil {
+		// Without auto-attach the monitor will never see new targets: treat as fatal.
+		m.log.Error("cdpmonitor: Target.setAutoAttach failed — monitor will not observe new targets", "err", err)
+		m.publish(events.Event{
+			Ts:       time.Now().UnixMilli(),
+			Type:     EventMonitorInitFailed,
+			Category: events.CategorySystem,
+			Source:   events.Source{Kind: events.KindLocalProcess},
+			Data:     json.RawMessage(`{"step":"Target.setAutoAttach"}`),
+		})
+		return
+	}
+
 	m.enableDomains(ctx, "")
-	_ = m.injectScript(ctx, "")
+
+	if err := m.injectScript(ctx, ""); err != nil && ctx.Err() == nil {
+		m.log.Warn("cdpmonitor: failed to inject interaction script on root session", "err", err)
+		m.publish(events.Event{
+			Ts:       time.Now().UnixMilli(),
+			Type:     EventMonitorInitFailed,
+			Category: events.CategorySystem,
+			Source:   events.Source{Kind: events.KindLocalProcess},
+			Data:     json.RawMessage(`{"step":"Page.addScriptToEvaluateOnNewDocument"}`),
+		})
+	}
+
 	m.attachExistingTargets(ctx)
 }
 
@@ -349,20 +445,15 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return
 	}
+	m.sessionsMu.RLock()
+	attached := make(map[string]bool, len(m.sessions))
+	for _, info := range m.sessions {
+		attached[info.targetID] = true
+	}
+	m.sessionsMu.RUnlock()
+
 	for _, ti := range resp.TargetInfos {
-		if ti.Type != "page" {
-			continue
-		}
-		m.sessionsMu.RLock()
-		alreadyAttached := false
-		for _, info := range m.sessions {
-			if info.targetID == ti.TargetID {
-				alreadyAttached = true
-				break
-			}
-		}
-		m.sessionsMu.RUnlock()
-		if alreadyAttached {
+		if ti.Type != targetTypePage || attached[ti.TargetID] {
 			continue
 		}
 		targetID := ti.TargetID
@@ -437,11 +528,11 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 		return
 	}
 	m.publish(events.Event{
-		Ts:          time.Now().UnixMilli(),
-		Type:        EventMonitorDisconnected,
-		Category:    events.CategorySystem,
-		Source:      events.Source{Kind: events.KindLocalProcess},
-		Data: json.RawMessage(`{"reason":"chrome_restarted"}`),
+		Ts:       time.Now().UnixMilli(),
+		Type:     EventMonitorDisconnected,
+		Category: events.CategorySystem,
+		Source:   events.Source{Kind: events.KindLocalProcess},
+		Data:     json.RawMessage(`{"reason":"` + ReasonChromeRestarted + `"}`),
 	})
 
 	startReconnect := time.Now()
@@ -462,7 +553,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 				Type:     EventMonitorReconnectFailed,
 				Category: events.CategorySystem,
 				Source:   events.Source{Kind: events.KindLocalProcess},
-				Data:     json.RawMessage(`{"reason":"reconnect_exhausted"}`),
+				Data:     json.RawMessage(`{"reason":"` + ReasonReconnectExhausted + `"}`),
 			})
 		}
 		return
@@ -476,12 +567,13 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.clearState()
 
 	m.asyncWg.Go(func() { m.initSession(ctx) })
+	m.log.Info("cdpmonitor: reconnected", "url", newURL, "duration_ms", time.Since(startReconnect).Milliseconds())
 
 	m.publish(events.Event{
-		Ts:          time.Now().UnixMilli(),
-		Type:        EventMonitorReconnected,
-		Category:    events.CategorySystem,
-		Source:      events.Source{Kind: events.KindLocalProcess},
+		Ts:       time.Now().UnixMilli(),
+		Type:     EventMonitorReconnected,
+		Category: events.CategorySystem,
+		Source:   events.Source{Kind: events.KindLocalProcess},
 		Data: json.RawMessage(fmt.Sprintf(
 			`{"reconnect_duration_ms":%d}`,
 			time.Since(startReconnect).Milliseconds(),
