@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os/exec"
 	"time"
 
@@ -14,33 +13,23 @@ import (
 )
 
 // tryScreenshot fires a screenshot if the 2s rate-limit window has elapsed.
-// screenshotInFlight CAS is checked first so that a blocked attempt never
-// consumes the rate-limit window without starting a capture. lastScreenshotAt
-// is only advanced after the in-flight slot is claimed; if that CAS then loses
-// to a concurrent goroutine the slot is released and we return cleanly.
-// sourceEvent is the CDP event that triggered the capture; sessionID is used
-// to snapshot nav context before the async goroutine fires.
-func (m *Monitor) tryScreenshot(ctx context.Context, sourceEvent, sessionID string) {
+// lastScreenshotAt CAS enforces the window; screenshotInFlight CAS prevents
+// overlapping captures when captureScreenshot outlasts the 2s window (timeout is 10s).
+func (m *Monitor) tryScreenshot(ctx context.Context) {
 	now := time.Now().UnixMilli()
 	last := m.lastScreenshotAt.Load()
 	if now-last < 2000 {
 		return
 	}
+	if !m.lastScreenshotAt.CompareAndSwap(last, now) {
+		return
+	}
 	if !m.screenshotInFlight.CompareAndSwap(false, true) {
 		return
 	}
-	if !m.lastScreenshotAt.CompareAndSwap(last, now) {
-		m.screenshotInFlight.Store(false)
-		return
-	}
-	var navData json.RawMessage
-	var navMeta map[string]string
-	if cs := m.computedFor(sessionID); cs != nil {
-		navData, navMeta = cs.navSnapshot()
-	}
 	m.asyncWg.Go(func() {
 		defer m.screenshotInFlight.Store(false)
-		m.captureScreenshot(ctx, sourceEvent, navData, navMeta)
+		m.captureScreenshot(ctx)
 	})
 }
 
@@ -48,9 +37,7 @@ const screenshotTimeout = 10 * time.Second
 
 // captureScreenshot takes a screenshot via ffmpeg x11grab (or the screenshotFn
 // seam in tests), optionally downscales it, and publishes a screenshot event.
-// navData and navMeta are pre-snapped from the owning session's computedState;
-// they may be nil if no state machine exists for the session.
-func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent string, navData json.RawMessage, navMeta map[string]string) {
+func (m *Monitor) captureScreenshot(parentCtx context.Context) {
 	ctx, cancel := context.WithTimeout(parentCtx, screenshotTimeout)
 	defer cancel()
 	var pngBytes []byte
@@ -77,20 +64,13 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent strin
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(pngBytes)
-	payload := map[string]any{screenshotDataKey: encoded}
-	if navData != nil {
-		var nav map[string]any
-		if json.Unmarshal(navData, &nav) == nil {
-			maps.Copy(payload, nav)
-		}
-	}
-	data, _ := json.Marshal(payload)
+	data, _ := json.Marshal(map[string]string{screenshotDataKey: encoded})
 
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventScreenshot,
 		Category: events.CategorySystem,
-		Source:   events.Source{Kind: events.KindLocalProcess, Event: sourceEvent, Metadata: navMeta},
+		Source:   events.Source{Kind: events.KindLocalProcess},
 		Data:     data,
 	})
 }

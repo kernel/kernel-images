@@ -1,88 +1,12 @@
 package cdpmonitor
 
 import (
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/stretchr/testify/assert"
 )
-
-// eventCollector gathers published events for test assertions.
-type eventCollector struct {
-	mu   sync.Mutex
-	evs  []events.Event
-	subs []chan events.Event
-}
-
-func newEventCollector() *eventCollector { return &eventCollector{} }
-
-func (ec *eventCollector) publishFn() PublishFunc {
-	return func(ev events.Event) {
-		ec.mu.Lock()
-		ec.evs = append(ec.evs, ev)
-		for _, ch := range ec.subs {
-			select {
-			case ch <- ev:
-			default:
-			}
-		}
-		ec.mu.Unlock()
-	}
-}
-
-func (ec *eventCollector) subscribe() (<-chan events.Event, func()) {
-	ch := make(chan events.Event, 32)
-	ec.mu.Lock()
-	ec.subs = append(ec.subs, ch)
-	ec.mu.Unlock()
-	return ch, func() {
-		ec.mu.Lock()
-		for i, s := range ec.subs {
-			if s == ch {
-				ec.subs = append(ec.subs[:i], ec.subs[i+1:]...)
-				break
-			}
-		}
-		ec.mu.Unlock()
-	}
-}
-
-func (ec *eventCollector) waitFor(t *testing.T, typ string, timeout time.Duration) events.Event {
-	t.Helper()
-	ch, unsub := ec.subscribe()
-	defer unsub()
-	deadline := time.After(timeout)
-	for {
-		select {
-		case ev := <-ch:
-			if ev.Type == typ {
-				return ev
-			}
-		case <-deadline:
-			t.Fatalf("timed out waiting for event %q", typ)
-			return events.Event{}
-		}
-	}
-}
-
-func (ec *eventCollector) assertNone(t *testing.T, typ string, window time.Duration) {
-	t.Helper()
-	ch, unsub := ec.subscribe()
-	defer unsub()
-	deadline := time.After(window)
-	for {
-		select {
-		case ev := <-ch:
-			if ev.Type == typ {
-				t.Fatalf("unexpected event %q received", typ)
-			}
-		case <-deadline:
-			return
-		}
-	}
-}
 
 // newTestComputed creates a computedState with an eventCollector for testing.
 func newTestComputed(t *testing.T) (*computedState, *eventCollector) {

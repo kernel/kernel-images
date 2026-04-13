@@ -25,6 +25,14 @@ type PublishFunc func(ev events.Event)
 const wsReadLimit = 8 * 1024 * 1024
 
 // Monitor manages a CDP WebSocket connection with auto-attach session fan-out.
+//
+// Lock ordering (outer → inner):
+//
+//	restartMu → lifeMu → pendReqMu → computed.mu → pendMu → sessionsMu
+//
+// Never acquire a lock that appears later in this order while holding an
+// earlier one, to prevent deadlock.
+//
 // WebSocket concurrency: coder/websocket guarantees that one concurrent Read
 // and one concurrent Write are safe. The readLoop holds the sole Read; all
 // writes go through send, which serialises them with conn.Write's internal
@@ -51,7 +59,7 @@ type Monitor struct {
 	pendReqMu       sync.Mutex
 	pendingRequests map[string]networkReqState // requestId → networkReqState
 
-	computedStates map[string]*computedState // sessionID → state machine; guarded by sessionsMu
+	computed *computedState
 
 	lastScreenshotAt   atomic.Int64                                              // unix millis of last capture
 	screenshotInFlight atomic.Bool                                               // true while a captureScreenshot goroutine is running
@@ -83,11 +91,11 @@ func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log 
 		displayNum:      displayNum,
 		log:             log,
 		sessions:        make(map[string]targetInfo),
-		computedStates:  make(map[string]*computedState),
 		pending:         make(map[int64]chan cdpMessage),
 		pendingRequests: make(map[string]networkReqState),
 		bindingLastSeen: make(map[string]time.Time),
 	}
+	m.computed = newComputedState(publish)
 	m.lifecycleCtx = context.Background()
 	m.mainSessionID.Store(mainSessionUnset)
 	return m
@@ -98,9 +106,40 @@ func (m *Monitor) IsRunning() bool {
 	return m.running.Load()
 }
 
+// Health returns a point-in-time snapshot of internal counters useful for
+// debugging and operational visibility.
+func (m *Monitor) Health() MonitorHealth {
+	m.pendMu.Lock()
+	pendCmds := len(m.pending)
+	m.pendMu.Unlock()
+
+	m.pendReqMu.Lock()
+	pendReqs := len(m.pendingRequests)
+	m.pendReqMu.Unlock()
+
+	m.sessionsMu.RLock()
+	sessions := len(m.sessions)
+	m.sessionsMu.RUnlock()
+
+	return MonitorHealth{
+		Running:         m.running.Load(),
+		PendingCommands: pendCmds,
+		PendingRequests: pendReqs,
+		Sessions:        sessions,
+	}
+}
+
+// getLifecycleCtx returns the current lifecycle context under lifeMu.
+func (m *Monitor) getLifecycleCtx() context.Context {
+	m.lifeMu.Lock()
+	ctx := m.lifecycleCtx
+	m.lifeMu.Unlock()
+	return ctx
+}
+
 // Start begins CDP capture. Restarts if already running.
 // Not concurrency-safe; callers must serialize Start calls.
-func (m *Monitor) Start(ctx context.Context) error {
+func (m *Monitor) Start(_ context.Context) error {
 	m.Stop() // no-op if not running
 
 	devtoolsURL := m.upstreamMgr.Current()
@@ -108,7 +147,8 @@ func (m *Monitor) Start(ctx context.Context) error {
 		return fmt.Errorf("cdpmonitor: no DevTools URL available")
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
+	// Use background context so the monitor outlives the caller's request context.
+	ctx, cancel := context.WithCancel(context.Background())
 
 	conn, _, err := websocket.Dial(ctx, devtoolsURL, nil)
 	if err != nil {
@@ -139,13 +179,6 @@ func (m *Monitor) Start(ctx context.Context) error {
 // Stop cancels the context and waits for goroutines to exit.
 func (m *Monitor) Stop() {
 	if !m.running.Swap(false) {
-		m.lifeMu.Lock()
-		cancel := m.cancel
-		m.lifeMu.Unlock()
-		if cancel != nil {
-			cancel()
-		}
-		m.asyncWg.Wait()
 		return
 	}
 	m.log.Info("cdpmonitor: stopping")
@@ -180,13 +213,8 @@ func (m *Monitor) Stop() {
 // It also fails all in-flight send() calls so their goroutines are unblocked.
 func (m *Monitor) clearState() {
 	m.sessionsMu.Lock()
-	prev := m.computedStates
 	m.sessions = make(map[string]targetInfo)
-	m.computedStates = make(map[string]*computedState)
 	m.sessionsMu.Unlock()
-	for _, cs := range prev {
-		cs.stop()
-	}
 	m.mainSessionID.Store(mainSessionUnset)
 
 	m.pendReqMu.Lock()
@@ -198,6 +226,9 @@ func (m *Monitor) clearState() {
 	m.bindingRateMu.Unlock()
 
 	m.failPendingCommands()
+
+	// pendingRequests is already empty above, so inflight=0 is correct.
+	m.computed.resetOnNavigation(0)
 }
 
 const pendingRequestTTL = 5 * time.Minute
@@ -215,30 +246,16 @@ func (m *Monitor) sweepPendingRequests(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			var toSweep []networkReqState
 			m.pendReqMu.Lock()
 			for id, state := range m.pendingRequests {
 				if now.Sub(state.addedAt) > pendingRequestTTL {
 					delete(m.pendingRequests, id)
-					toSweep = append(toSweep, state)
+					m.computed.onLoadingFinished() // keep netPending consistent
 				}
 			}
 			m.pendReqMu.Unlock()
-			for _, state := range toSweep {
-				if cs := m.computedFor(state.sessionID); cs != nil {
-					cs.onLoadingFinished()
-				}
-			}
 		}
 	}
-}
-
-// computedFor returns the computedState for the given sessionID, or nil if none exists.
-func (m *Monitor) computedFor(sessionID string) *computedState {
-	m.sessionsMu.RLock()
-	cs := m.computedStates[sessionID]
-	m.sessionsMu.RUnlock()
-	return cs
 }
 
 // failPendingCommands unblocks all in-flight send() calls by delivering an
@@ -411,7 +428,7 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 		return
 	}
 	var resp struct {
-		TargetInfos []cdpTargetTargetInfo `json:"targetInfos"`
+		TargetInfos []cdpTargetInfo `json:"targetInfos"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return
@@ -429,10 +446,20 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 		}
 		targetID := ti.TargetID
 		m.asyncWg.Go(func() {
-			_, _ = m.send(ctx, "Target.attachToTarget", map[string]any{
+			res, err := m.send(ctx, "Target.attachToTarget", map[string]any{
 				"targetId": targetID,
 				"flatten":  true,
 			}, "")
+			if err != nil {
+				return
+			}
+			var attachResp struct {
+				SessionID string `json:"sessionId"`
+			}
+			if json.Unmarshal(res, &attachResp) == nil && attachResp.SessionID != "" {
+				m.enableDomains(ctx, attachResp.SessionID, targetTypePage)
+				_ = m.injectScript(ctx, attachResp.SessionID)
+			}
 		})
 	}
 }
@@ -508,16 +535,6 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	if !m.reconnectWithBackoff(ctx, newURL) {
 		// Context cancelled means Stop() was called, not a failure.
 		if ctx.Err() == nil {
-			// Cancel the lifecycle context before setting running=false so that
-			// goroutines blocked on ctx.Done() begin exiting. If we set
-			// running=false first, a concurrent Stop() call returns immediately
-			// without cancelling, permanently orphaning those goroutines in asyncWg.
-			m.lifeMu.Lock()
-			if m.cancel != nil {
-				m.cancel()
-			}
-			m.lifeMu.Unlock()
-			m.clearState()
 			m.running.Store(false)
 			m.publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
