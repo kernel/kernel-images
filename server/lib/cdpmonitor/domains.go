@@ -9,17 +9,33 @@ import (
 // Page JS calls this to fire Runtime.bindingCalled CDP events.
 const bindingName = "__kernelEvent"
 
+// isPageLikeTarget reports whether the target type supports page-level CDP
+// domains (Page.*, PerformanceTimeline.*, Page.addScriptToEvaluateOnNewDocument).
+// Workers and service workers only support Runtime.* and Network.*.
+func isPageLikeTarget(targetType string) bool {
+	return targetType == "page" || targetType == "iframe"
+}
+
 // enableDomains enables CDP domains, registers the event binding, and starts
 // layout-shift observation. Failures are non-fatal.
-func (m *Monitor) enableDomains(ctx context.Context, sessionID string) {
+// Page-level domains (Page.enable, PerformanceTimeline.enable, Runtime.addBinding)
+// are skipped for worker and service_worker targets that don't support them.
+func (m *Monitor) enableDomains(ctx context.Context, sessionID string, targetType string) {
 	for _, method := range []string{
 		"Runtime.enable",
 		"Network.enable",
-		"Page.enable",
 	} {
 		if _, err := m.send(ctx, method, nil, sessionID); err != nil && ctx.Err() == nil {
 			m.log.Warn("cdpmonitor: failed to enable CDP domain", "method", method, "session", sessionID, "err", err)
 		}
+	}
+
+	if !isPageLikeTarget(targetType) {
+		return
+	}
+
+	if _, err := m.send(ctx, "Page.enable", nil, sessionID); err != nil && ctx.Err() == nil {
+		m.log.Warn("cdpmonitor: failed to enable CDP domain", "method", "Page.enable", "session", sessionID, "err", err)
 	}
 
 	if _, err := m.send(ctx, "Runtime.addBinding", map[string]any{

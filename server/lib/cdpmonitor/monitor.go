@@ -416,19 +416,6 @@ func (m *Monitor) initSession(ctx context.Context) {
 		return
 	}
 
-	m.enableDomains(ctx, "")
-
-	if err := m.injectScript(ctx, ""); err != nil && ctx.Err() == nil {
-		m.log.Warn("cdpmonitor: failed to inject interaction script on root session", "err", err)
-		m.publish(events.Event{
-			Ts:       time.Now().UnixMilli(),
-			Type:     EventMonitorInitFailed,
-			Category: events.CategorySystem,
-			Source:   events.Source{Kind: events.KindLocalProcess},
-			Data:     json.RawMessage(`{"step":"Page.addScriptToEvaluateOnNewDocument"}`),
-		})
-	}
-
 	m.attachExistingTargets(ctx)
 }
 
@@ -469,7 +456,7 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 				SessionID string `json:"sessionId"`
 			}
 			if json.Unmarshal(res, &attached) == nil && attached.SessionID != "" {
-				m.enableDomains(ctx, attached.SessionID)
+				m.enableDomains(ctx, attached.SessionID, targetTypePage)
 				_ = m.injectScript(ctx, attached.SessionID)
 			}
 		})

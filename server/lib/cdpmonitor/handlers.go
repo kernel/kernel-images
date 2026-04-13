@@ -430,10 +430,14 @@ func (m *Monitor) handleAttachedToTarget(msg cdpMessage) {
 	}
 	m.sessionsMu.Unlock()
 
+	targetType := params.TargetInfo.Type
 	// Async to avoid blocking the readLoop.
 	m.asyncWg.Go(func() {
-		m.enableDomains(m.getLifecycleCtx(), params.SessionID)
-		_ = m.injectScript(m.getLifecycleCtx(), params.SessionID)
+		ctx := m.getLifecycleCtx()
+		m.enableDomains(ctx, params.SessionID, targetType)
+		if isPageLikeTarget(targetType) {
+			_ = m.injectScript(ctx, params.SessionID)
+		}
 	})
 }
 
