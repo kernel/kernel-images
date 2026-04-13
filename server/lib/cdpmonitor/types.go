@@ -12,61 +12,37 @@ import (
 // on the root session (sessionID="") before navigation has been recorded.
 const mainSessionUnset = "\x00unset"
 
-// CDP-derived events — direct translations of DevTools Protocol notifications.
-// Each maps 1-to-1 with a specific CDP domain event (Runtime.*, Network.*,
-// Page.*, PerformanceTimeline.*) received from Chrome.
+// Event type constants for all events published by the cdpmonitor.
 const (
-	EventConsoleLog           = "console_log"            // Runtime.consoleAPICalled (non-error types)
-	EventConsoleError         = "console_error"          // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
-	EventNetworkRequest       = "network_request"        // Network.requestWillBeSent
-	EventNetworkResponse      = "network_response"       // Network.loadingFinished (with prior responseReceived)
-	EventNetworkLoadingFailed = "network_loading_failed" // Network.loadingFailed
-	EventNavigation           = "page_navigation"        // Page.frameNavigated
-	EventDOMContentLoaded     = "page_dom_content_loaded" // Page.domContentEventFired
-	EventPageLoad             = "page_load"               // Page.loadEventFired
-	EventLayoutShift          = "page_layout_shift"       // PerformanceTimeline event of type "layout-shift"
-	EventLCP                  = "page_lcp"                // PerformanceTimeline event of type "largest-contentful-paint"
-	EventTabOpened            = "page_tab_opened"         // Target.attachedToTarget for type=page
+	EventConsoleLog             = "console_log"
+	EventConsoleError           = "console_error"
+	EventNetworkRequest         = "network_request"
+	EventNetworkResponse        = "network_response"
+	EventNetworkLoadingFailed   = "network_loading_failed"
+	EventNetworkIdle            = "network_idle"
+	EventNavigation             = "navigation"
+	EventDOMContentLoaded       = "dom_content_loaded"
+	EventPageLoad               = "page_load"
+	EventLayoutShift            = "layout_shift"
+	EventLayoutSettled          = "layout_settled"
+	EventNavigationSettled      = "navigation_settled"
+	EventTargetCreated          = "target_created"
+	EventTargetDestroyed        = "target_destroyed"
+	EventInteractionClick       = "interaction_click"
+	EventInteractionKey         = "interaction_key"
+	EventScrollSettled          = "scroll_settled"
+	EventScreenshot             = "screenshot"
+	EventMonitorDisconnected    = "monitor_disconnected"
+	EventMonitorReconnected     = "monitor_reconnected"
+	EventMonitorReconnectFailed = "monitor_reconnect_failed"
+	EventMonitorInitFailed      = "monitor_init_failed"
 )
 
-// Computed events — synthetic events derived by computed.go state machines.
-// None of these correspond to a single CDP notification; they are inferred from
-// sequences of CDP events and debounce timers.
-const (
-	EventNetworkIdle       = "network_idle"           // 500 ms after all in-flight requests finish
-	EventLayoutSettled     = "page_layout_settled"    // 1 s after page_load with no intervening layout shifts
-	EventNavigationSettled = "page_navigation_settled" // fires once page_dom_content_loaded and page_layout_settled both hold
-)
+// Metadata key written into events.Source.Metadata for CDP-sourced events.
+const MetadataKeyCDPSessionID = "cdp_session_id"
 
-// Interaction events — fired by injected page-side JS (interaction.js) via the
-// Runtime.bindingCalled mechanism. They originate in the browser's renderer
-// process, not from Chrome's network or page domains.
-const (
-	EventInteractionClick = "interaction_click"         // document click (target selector, coords, text)
-	EventInteractionKey   = "interaction_key"           // keydown (key name, target selector)
-	EventScrollSettled    = "interaction_scroll_settled" // 300 ms after the last scroll event on a target
-)
-
-// Monitor lifecycle and internal events — emitted by the monitor itself, not by Chrome.
-const (
-	EventScreenshot             = "monitor_screenshot"    // ffmpeg frame capture on page load or JS exception
-	EventMonitorDisconnected    = "monitor_disconnected"    // WebSocket to Chrome closed unexpectedly
-	EventMonitorReconnected     = "monitor_reconnected"     // successfully reconnected after a disconnect
-	EventMonitorReconnectFailed = "monitor_reconnect_failed" // reconnect attempts exhausted
-	EventMonitorInitFailed      = "monitor_init_failed"     // could not initialise the CDP session
-)
-
-// Metadata keys written into events.Source.Metadata for CDP-sourced events.
-const (
-	MetadataKeyCDPSessionID = "cdp_session_id"
-	MetadataKeyTargetID     = "target_id"
-	MetadataKeyTargetType   = "target_type"
-)
-
-const (
-	timelineEventLayoutShift = "layout-shift"
-	timelineEventLCP         = "largest-contentful-paint"
-)
+// CDP PerformanceTimeline event type for layout shifts.
+const timelineEventLayoutShift = "layout-shift"
 
 // CDP target type for browser pages (as opposed to workers, iframes, etc.).
 const targetTypePage = "page"
@@ -79,6 +55,14 @@ const (
 	ReasonChromeRestarted    = "chrome_restarted"
 	ReasonReconnectExhausted = "reconnect_exhausted"
 )
+
+// MonitorHealth is a point-in-time snapshot of the monitor's operational state.
+type MonitorHealth struct {
+	Running         bool
+	PendingCommands int // in-flight send() calls
+	PendingRequests int // unresolved network requests
+	Sessions        int // attached CDP sessions
+}
 
 // targetInfo holds metadata about an attached CDP target/session.
 type targetInfo struct {
@@ -117,8 +101,6 @@ type networkReqState struct {
 	headers      json.RawMessage
 	postData     string
 	resourceType string
-	loaderID     string
-	frameID      string
 	status       int
 	statusText   string
 	resHeaders   json.RawMessage
@@ -126,13 +108,69 @@ type networkReqState struct {
 	addedAt      time.Time // for TTL eviction
 }
 
-// navContext carries the identity of the navigation that owns a computedState.
-// Stamped at Page.frameNavigated and precomputed into event payloads/metadata.
-type navContext struct {
-	sessionID  string
-	targetID   string
-	targetType string
-	frameID    string
-	loaderID   string
-	url        string
+// cdpConsoleArg is a single Runtime.consoleAPICalled argument.
+// Value is json.RawMessage because CDP sends strings, numbers, objects, etc.
+type cdpConsoleArg struct {
+	Type  string          `json:"type"`
+	Value json.RawMessage `json:"value,omitempty"`
+}
+
+// cdpConsoleParams is the shape of Runtime.consoleAPICalled params.
+type cdpConsoleParams struct {
+	Type       string          `json:"type"`
+	Args       []cdpConsoleArg `json:"args"`
+	StackTrace json.RawMessage `json:"stackTrace"`
+}
+
+// cdpExceptionDetails is the shape of Runtime.exceptionThrown params.
+type cdpExceptionDetails struct {
+	ExceptionDetails struct {
+		Text         string          `json:"text"`
+		LineNumber   int             `json:"lineNumber"`
+		ColumnNumber int             `json:"columnNumber"`
+		URL          string          `json:"url"`
+		StackTrace   json.RawMessage `json:"stackTrace"`
+	} `json:"exceptionDetails"`
+}
+
+// cdpTargetInfo is the shared TargetInfo shape used by Target events.
+type cdpTargetInfo struct {
+	TargetID string `json:"targetId"`
+	Type     string `json:"type"`
+	URL      string `json:"url"`
+}
+
+// cdpNetworkRequestParams is the shape of Network.requestWillBeSent params.
+type cdpNetworkRequestParams struct {
+	RequestID    string `json:"requestId"`
+	ResourceType string `json:"resourceType"`
+	Request      struct {
+		Method   string          `json:"method"`
+		URL      string          `json:"url"`
+		Headers  json.RawMessage `json:"headers"`
+		PostData string          `json:"postData"`
+	} `json:"request"`
+	Initiator json.RawMessage `json:"initiator"`
+}
+
+// cdpResponseReceivedParams is the shape of Network.responseReceived params.
+type cdpResponseReceivedParams struct {
+	RequestID string `json:"requestId"`
+	Response  struct {
+		Status     int             `json:"status"`
+		StatusText string          `json:"statusText"`
+		Headers    json.RawMessage `json:"headers"`
+		MimeType   string          `json:"mimeType"`
+	} `json:"response"`
+}
+
+// cdpAttachedToTargetParams is the shape of Target.attachedToTarget params.
+type cdpAttachedToTargetParams struct {
+	SessionID  string        `json:"sessionId"`
+	TargetInfo cdpTargetInfo `json:"targetInfo"`
+}
+
+// cdpTargetCreatedParams is the shape of Target.targetCreated params.
+type cdpTargetCreatedParams struct {
+	TargetInfo cdpTargetInfo `json:"targetInfo"`
 }

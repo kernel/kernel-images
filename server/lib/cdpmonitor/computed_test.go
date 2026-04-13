@@ -1,14 +1,88 @@
 package cdpmonitor
 
 import (
-	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
+
+// eventCollector gathers published events for test assertions.
+type eventCollector struct {
+	mu   sync.Mutex
+	evs  []events.Event
+	subs []chan events.Event
+}
+
+func newEventCollector() *eventCollector { return &eventCollector{} }
+
+func (ec *eventCollector) publishFn() PublishFunc {
+	return func(ev events.Event) {
+		ec.mu.Lock()
+		ec.evs = append(ec.evs, ev)
+		for _, ch := range ec.subs {
+			select {
+			case ch <- ev:
+			default:
+			}
+		}
+		ec.mu.Unlock()
+	}
+}
+
+func (ec *eventCollector) subscribe() (<-chan events.Event, func()) {
+	ch := make(chan events.Event, 32)
+	ec.mu.Lock()
+	ec.subs = append(ec.subs, ch)
+	ec.mu.Unlock()
+	return ch, func() {
+		ec.mu.Lock()
+		for i, s := range ec.subs {
+			if s == ch {
+				ec.subs = append(ec.subs[:i], ec.subs[i+1:]...)
+				break
+			}
+		}
+		ec.mu.Unlock()
+	}
+}
+
+func (ec *eventCollector) waitFor(t *testing.T, typ string, timeout time.Duration) events.Event {
+	t.Helper()
+	ch, unsub := ec.subscribe()
+	defer unsub()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == typ {
+				return ev
+			}
+		case <-deadline:
+			t.Fatalf("timed out waiting for event %q", typ)
+			return events.Event{}
+		}
+	}
+}
+
+func (ec *eventCollector) assertNone(t *testing.T, typ string, window time.Duration) {
+	t.Helper()
+	ch, unsub := ec.subscribe()
+	defer unsub()
+	deadline := time.After(window)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == typ {
+				t.Fatalf("unexpected event %q received", typ)
+			}
+		case <-deadline:
+			return
+		}
+	}
+}
 
 // newTestComputed creates a computedState with an eventCollector for testing.
 func newTestComputed(t *testing.T) (*computedState, *eventCollector) {
@@ -21,7 +95,7 @@ func newTestComputed(t *testing.T) (*computedState, *eventCollector) {
 func TestNetworkIdle(t *testing.T) {
 	t.Run("debounce_500ms", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
+		cs.resetOnNavigation(0)
 
 		cs.onRequest()
 		cs.onRequest()
@@ -39,7 +113,7 @@ func TestNetworkIdle(t *testing.T) {
 
 	t.Run("timer_reset_on_new_request", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
+		cs.resetOnNavigation(0)
 
 		cs.onRequest()
 		cs.onLoadingFinished()
@@ -57,141 +131,55 @@ func TestNetworkIdle(t *testing.T) {
 func TestLayoutSettled(t *testing.T) {
 	t.Run("debounce_1s_after_page_load", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
+		cs.resetOnNavigation(0)
 
 		t0 := time.Now()
 		cs.onPageLoad()
 
-		ev := ec.waitFor(t, "page_layout_settled", 3*time.Second)
+		ev := ec.waitFor(t, "layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "fired too early")
 		assert.Equal(t, events.CategoryPage, ev.Category)
 	})
 
-	t.Run("layout_shift_before_page_load_ignored", func(t *testing.T) {
-		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
-
-		// layout_shift before page_load should be ignored; layout_settled must
-		// still fire after page_load's 1s debounce.
-		cs.onLayoutShift()
-		t0 := time.Now()
-		cs.onPageLoad()
-
-		ec.waitFor(t, "page_layout_settled", 3*time.Second)
-		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "should fire 1s after page_load, not layout_shift")
-	})
-
 	t.Run("layout_shift_resets_timer", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
+		cs.resetOnNavigation(0)
 		cs.onPageLoad()
 
 		time.Sleep(600 * time.Millisecond)
 		cs.onLayoutShift()
 		t1 := time.Now()
 
-		ec.waitFor(t, "page_layout_settled", 3*time.Second)
+		ec.waitFor(t, "layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t1).Milliseconds(), int64(900), "should reset after layout_shift")
 	})
 }
 
 func TestNavigationSettled(t *testing.T) {
-	t.Run("fires_after_dom_content_loaded_and_layout_settled", func(t *testing.T) {
+	t.Run("fires_when_all_three_flags_set", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
+		cs.resetOnNavigation(0)
 
 		cs.onDOMContentLoaded()
+		cs.onRequest()
+		cs.onLoadingFinished()
 		cs.onPageLoad()
 
-		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
+		ev := ec.waitFor(t, "navigation_settled", 3*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
-	})
-
-	t.Run("not_blocked_by_pending_network_request", func(t *testing.T) {
-		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
-
-		cs.onRequest() // never finishes
-		cs.onDOMContentLoaded()
-		cs.onPageLoad()
-
-		ec.waitFor(t, "page_navigation_settled", 3*time.Second)
-		ec.assertNone(t, "network_idle", 100*time.Millisecond)
 	})
 
 	t.Run("interrupted_by_new_navigation", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
+		cs.resetOnNavigation(0)
 
 		cs.onDOMContentLoaded()
-		// page_load not yet fired so layout_settled is still pending.
-
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
-
-		ec.assertNone(t, "page_navigation_settled", 1500*time.Millisecond)
-	})
-}
-
-func TestNavDataMetadata(t *testing.T) {
-	ctx := navContext{
-		sessionID:  "s1",
-		targetID:   "t1",
-		targetType: "page",
-		frameID:    "f1",
-		loaderID:   "l1",
-		url:        "https://example.com",
-	}
-
-	t.Run("layout_settled_carries_navData_and_navMeta", func(t *testing.T) {
-		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, ctx))
-		cs.onPageLoad()
-
-		ev := ec.waitFor(t, "page_layout_settled", 3*time.Second)
-		assert.Equal(t, events.CategoryPage, ev.Category)
-		assert.Equal(t, "s1", ev.Source.Metadata[MetadataKeyCDPSessionID])
-		assert.Equal(t, "t1", ev.Source.Metadata[MetadataKeyTargetID])
-		assert.Equal(t, "page", ev.Source.Metadata[MetadataKeyTargetType])
-		var data map[string]any
-		require.NoError(t, json.Unmarshal(ev.Data, &data))
-		assert.Equal(t, "s1", data["session_id"])
-		assert.Equal(t, "l1", data["loader_id"])
-		assert.Equal(t, "https://example.com", data["url"])
-	})
-
-	t.Run("navigation_settled_carries_navData_and_navMeta", func(t *testing.T) {
-		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, ctx))
-
-		cs.onDOMContentLoaded()
-		cs.onPageLoad()
-
-		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
-		assert.Equal(t, events.CategoryPage, ev.Category)
-		assert.Equal(t, "s1", ev.Source.Metadata[MetadataKeyCDPSessionID])
-		assert.Equal(t, "t1", ev.Source.Metadata[MetadataKeyTargetID])
-		var data map[string]any
-		require.NoError(t, json.Unmarshal(ev.Data, &data))
-		assert.Equal(t, "s1", data["session_id"])
-		assert.Equal(t, "l1", data["loader_id"])
-	})
-}
-
-func TestStopSuppressesTimers(t *testing.T) {
-	t.Run("stop_suppresses_network_idle", func(t *testing.T) {
-		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 		cs.onRequest()
-		cs.onLoadingFinished() // arms 500ms network_idle timer
-		cs.stop()
-		ec.assertNone(t, "network_idle", 1200*time.Millisecond)
-	})
+		cs.onLoadingFinished()
 
-	t.Run("stop_suppresses_layout_settled", func(t *testing.T) {
-		cs, ec := newTestComputed(t)
-		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
-		cs.onPageLoad() // arms 1s layout_settled timer
-		cs.stop()
-		ec.assertNone(t, "page_layout_settled", 1500*time.Millisecond)
+		// Interrupt before layout_settled fires.
+		cs.resetOnNavigation(0)
+
+		ec.assertNone(t, "navigation_settled", 1500*time.Millisecond)
 	})
 }
