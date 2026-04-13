@@ -28,14 +28,14 @@ const wsReadLimit = 8 * 1024 * 1024
 //
 // Lock ordering (outer → inner):
 //
-//	lifeMu → restartMu → pendReqMu → computed.mu → pendMu → sessionsMu
+//	restartMu → lifeMu → pendReqMu → computed.mu → pendMu → sessionsMu
 //
 // Never acquire a lock that appears later in this order while holding an
 // earlier one, to prevent deadlock.
 //
 // WebSocket concurrency: coder/websocket guarantees that one concurrent Read
 // and one concurrent Write are safe. The readLoop holds the sole Read; all
-// writes go through sendMsg, which serialises them with conn.Write's internal
+// writes go through send, which serialises them with conn.Write's internal
 // lock. No external write mutex is needed.
 type Monitor struct {
 	upstreamMgr UpstreamProvider
@@ -69,8 +69,9 @@ type Monitor struct {
 	bindingRateMu   sync.Mutex
 	bindingLastSeen map[string]time.Time // sessionID → last accepted binding event time
 
-	// asyncWg tracks short-lived goroutines only (fetchResponseBody, enableDomains,
-	// initSession). readLoop and subscribeToUpstream are not tracked; they exit via context.
+	// asyncWg tracks all goroutines except readLoop (which is tracked via done).
+	// subscribeToUpstream and sweepPendingRequests are included so Stop() can
+	// wait for them to exit before returning.
 	asyncWg   sync.WaitGroup
 	restartMu sync.Mutex // serializes handleUpstreamRestart to prevent overlapping reconnects
 
@@ -138,7 +139,7 @@ func (m *Monitor) getLifecycleCtx() context.Context {
 
 // Start begins CDP capture. Restarts if already running.
 // Not concurrency-safe; callers must serialize Start calls.
-func (m *Monitor) Start(parentCtx context.Context) error {
+func (m *Monitor) Start(_ context.Context) error {
 	m.Stop() // no-op if not running
 
 	devtoolsURL := m.upstreamMgr.Current()
@@ -168,8 +169,8 @@ func (m *Monitor) Start(parentCtx context.Context) error {
 	m.log.Info("cdpmonitor: started", "url", devtoolsURL)
 
 	go m.readLoop(ctx)
-	go m.subscribeToUpstream(ctx)
-	go m.sweepPendingRequests(ctx)
+	m.asyncWg.Go(func() { m.subscribeToUpstream(ctx) })
+	m.asyncWg.Go(func() { m.sweepPendingRequests(ctx) })
 	m.asyncWg.Go(func() { m.initSession(ctx) })
 
 	return nil
@@ -452,12 +453,12 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 			if err != nil {
 				return
 			}
-			var attached struct {
+			var attachResp struct {
 				SessionID string `json:"sessionId"`
 			}
-			if json.Unmarshal(res, &attached) == nil && attached.SessionID != "" {
-				m.enableDomains(ctx, attached.SessionID, targetTypePage)
-				_ = m.injectScript(ctx, attached.SessionID)
+			if json.Unmarshal(res, &attachResp) == nil && attachResp.SessionID != "" {
+				m.enableDomains(ctx, attachResp.SessionID, targetTypePage)
+				_ = m.injectScript(ctx, attachResp.SessionID)
 			}
 		})
 	}
@@ -554,17 +555,15 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.clearState()
 
 	m.asyncWg.Go(func() { m.initSession(ctx) })
-	m.log.Info("cdpmonitor: reconnected", "url", newURL, "duration_ms", time.Since(startReconnect).Milliseconds())
+	reconnectDurationMs := time.Since(startReconnect).Milliseconds()
+	m.log.Info("cdpmonitor: reconnected", "url", newURL, "duration_ms", reconnectDurationMs)
 
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMilli(),
 		Type:     EventMonitorReconnected,
 		Category: events.CategorySystem,
 		Source:   events.Source{Kind: events.KindLocalProcess},
-		Data: json.RawMessage(fmt.Sprintf(
-			`{"reconnect_duration_ms":%d}`,
-			time.Since(startReconnect).Milliseconds(),
-		)),
+		Data:     json.RawMessage(fmt.Sprintf(`{"reconnect_duration_ms":%d}`, reconnectDurationMs)),
 	})
 }
 

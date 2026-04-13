@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os/exec"
 	"time"
 
@@ -54,7 +53,7 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context) {
 		return
 	}
 
-	// Downscale if base64 output would exceed 950KB (~729KB raw).
+	// Downscale if base64 output would exceed ~972KB (~729KB raw × 4/3 base64 inflation).
 	const rawThreshold = 729 * 1024
 	for scale := 2; len(pngBytes) > rawThreshold && scale <= 16 && m.screenshotFn == nil; scale *= 2 {
 		pngBytes, err = captureViaFFmpeg(ctx, m.displayNum, scale)
@@ -89,12 +88,12 @@ func captureViaFFmpeg(ctx context.Context, displayNum, divisor int) ([]byte, err
 	}
 	args = append(args, "-f", "image2", "pipe:1")
 
-	var out bytes.Buffer
+	var out, stderr bytes.Buffer
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
 	cmd.Stdout = &out
-	cmd.Stderr = io.Discard
+	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %s", err, stderr.String())
 	}
 	return out.Bytes(), nil
 }
