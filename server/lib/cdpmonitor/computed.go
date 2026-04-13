@@ -79,6 +79,9 @@ func (s *computedState) resetOnNavigation(inflight int) {
 	s.netTimer = nil
 	s.netPending = inflight
 	s.netFired = false
+	if inflight == 0 {
+		s.startNetIdleTimer()
+	}
 
 	stopTimer(s.layoutTimer)
 	s.layoutTimer = nil
@@ -115,6 +118,11 @@ func (s *computedState) onLoadingFinished() {
 		return
 	}
 	// All requests done and not yet fired: start 500ms debounce timer.
+	s.startNetIdleTimer()
+}
+
+// startNetIdleTimer arms the network_idle debounce timer. Must be called with s.mu held.
+func (s *computedState) startNetIdleTimer() {
 	stopTimer(s.netTimer)
 	navSeq := s.navSeq
 	s.netTimer = time.AfterFunc(networkIdleDebounce, func() {
@@ -126,7 +134,7 @@ func (s *computedState) onLoadingFinished() {
 		s.netFired = true
 		s.navNetIdle = true
 		evs := []events.Event{{
-			Ts:       time.Now().UnixMilli(),
+			Ts:       time.Now().UnixMicro(),
 			Type:     EventNetworkIdle,
 			Category: events.CategoryNetwork,
 			Source:   events.Source{Kind: events.KindCDP},
@@ -177,7 +185,7 @@ func (s *computedState) emitLayoutSettled(navSeq int) {
 	s.layoutFired = true
 	s.navLayoutSettled = true
 	evs := []events.Event{{
-		Ts:       time.Now().UnixMilli(),
+		Ts:       time.Now().UnixMicro(),
 		Type:     EventLayoutSettled,
 		Category: events.CategoryPage,
 		Source:   events.Source{Kind: events.KindCDP},
@@ -207,7 +215,7 @@ func (s *computedState) pendingNavigationSettled() []events.Event {
 	if s.navDOMLoaded && s.navNetIdle && s.navLayoutSettled && !s.navFired {
 		s.navFired = true
 		return []events.Event{{
-			Ts:       time.Now().UnixMilli(),
+			Ts:       time.Now().UnixMicro(),
 			Type:     EventNavigationSettled,
 			Category: events.CategoryPage,
 			Source:   events.Source{Kind: events.KindCDP},
