@@ -1,0 +1,357 @@
+package cdpmonitor
+
+import (
+	"context"
+	"encoding/json"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// discardLogger is defined in cdp_test.go (package-level, shared across test files).
+
+func TestLifecycle(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	ec := newEventCollector()
+	upstream := newTestUpstream(srv.wsURL())
+	m := New(upstream, ec.publishFn(), 99, discardLogger)
+
+	assert.False(t, m.IsRunning(), "idle at boot")
+
+	require.NoError(t, m.Start(context.Background()))
+	assert.True(t, m.IsRunning(), "running after Start")
+	srv.readFromMonitor(t, 2*time.Second)
+
+	m.Stop()
+	assert.False(t, m.IsRunning(), "stopped after Stop")
+
+	require.NoError(t, m.Start(context.Background()))
+	assert.True(t, m.IsRunning(), "running after second Start")
+	srv.readFromMonitor(t, 2*time.Second)
+
+	require.NoError(t, m.Start(context.Background()))
+	assert.True(t, m.IsRunning(), "running after implicit restart")
+
+	m.Stop()
+	assert.False(t, m.IsRunning(), "stopped at end")
+}
+
+func TestReconnect(t *testing.T) {
+	srv1 := newTestServer(t)
+
+	upstream := newTestUpstream(srv1.wsURL())
+	ec := newEventCollector()
+	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	require.NoError(t, m.Start(context.Background()))
+	defer m.Stop()
+
+	srv1.readFromMonitor(t, 2*time.Second)
+
+	srv2 := newTestServer(t)
+	defer srv2.close()
+	defer srv1.close()
+
+	upstream.notifyRestart(srv2.wsURL())
+
+	ec.waitFor(t, "monitor_disconnected", 3*time.Second)
+	srv2.readFromMonitor(t, 5*time.Second)
+
+	ev := ec.waitFor(t, "monitor_reconnected", 3*time.Second)
+	var data map[string]any
+	require.NoError(t, json.Unmarshal(ev.Data, &data))
+	_, ok := data["reconnect_duration_ms"]
+	assert.True(t, ok, "missing reconnect_duration_ms")
+}
+
+func TestScreenshot(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	m, ec, cleanup := startMonitor(t, srv, nil)
+	defer cleanup()
+
+	var captureCount atomic.Int32
+	m.screenshotFn = func(ctx context.Context, displayNum int) ([]byte, error) {
+		captureCount.Add(1)
+		return minimalPNG, nil
+	}
+
+	t.Run("capture_and_publish", func(t *testing.T) {
+		m.tryScreenshot(context.Background())
+		require.Eventually(t, func() bool { return captureCount.Load() == 1 }, 2*time.Second, 20*time.Millisecond)
+
+		ev := ec.waitFor(t, "screenshot", 2*time.Second)
+		assert.Equal(t, events.CategorySystem, ev.Category)
+		assert.Equal(t, events.KindLocalProcess, ev.Source.Kind)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.NotEmpty(t, data["png"])
+	})
+
+	t.Run("rate_limited", func(t *testing.T) {
+		before := captureCount.Load()
+		m.tryScreenshot(context.Background())
+		time.Sleep(100 * time.Millisecond)
+		assert.Equal(t, before, captureCount.Load(), "should be rate-limited within 2s")
+	})
+
+	t.Run("captures_after_cooldown", func(t *testing.T) {
+		m.lastScreenshotAt.Store(time.Now().Add(-3 * time.Second).UnixMilli())
+		before := captureCount.Load()
+		m.tryScreenshot(context.Background())
+		require.Eventually(t, func() bool { return captureCount.Load() > before }, 2*time.Second, 20*time.Millisecond)
+	})
+}
+
+// TestFailPendingCommandsUnblocksSend verifies that clearState (called during
+// reconnect) unblocks any goroutine blocked in send() by delivering an error.
+func TestFailPendingCommandsUnblocksSend(t *testing.T) {
+	ec := newEventCollector()
+	upstream := newTestUpstream("ws://127.0.0.1:0")
+	m := New(upstream, ec.publishFn(), 0, discardLogger)
+
+	// Pre-register a fake pending command channel as if send() had registered it.
+	id := int64(42)
+	ch := make(chan cdpMessage, 1)
+	m.pendMu.Lock()
+	m.pending[id] = ch
+	m.pendMu.Unlock()
+
+	// failPendingCommands should deliver an error message to ch without blocking.
+	done := make(chan struct{})
+	go func() {
+		m.failPendingCommands()
+		close(done)
+	}()
+
+	select {
+	case msg := <-ch:
+		require.NotNil(t, msg.Error, "expected error response from failPendingCommands")
+		assert.Equal(t, -1, msg.Error.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("failPendingCommands did not unblock the pending channel")
+	}
+	<-done
+}
+
+// TestInitSessionAutoAttachFailure verifies that a monitor_init_failed event is
+// published (and the monitor logs the failure) when Target.setAutoAttach returns
+// an error.
+func TestInitSessionAutoAttachFailure(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	ec := newEventCollector()
+	upstream := newTestUpstream(srv.wsURL())
+	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	require.NoError(t, m.Start(context.Background()))
+	defer m.Stop()
+
+	stopResponder := make(chan struct{})
+	defer close(stopResponder)
+
+	go listenAndRespond(srv, stopResponder, func(msg cdpMessage) any {
+		if msg.Method == "Target.setAutoAttach" {
+			return map[string]any{
+				"id":    msg.ID,
+				"error": map[string]any{"code": -32601, "message": "Method not found"},
+			}
+		}
+		return nil
+	})
+
+	ec.waitFor(t, EventMonitorInitFailed, 3*time.Second)
+}
+
+func TestAutoAttach(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	ec := newEventCollector()
+	upstream := newTestUpstream(srv.wsURL())
+	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	require.NoError(t, m.Start(context.Background()))
+	defer m.Stop()
+
+	msg := srv.readFromMonitor(t, 3*time.Second)
+	assert.Equal(t, "Target.setAutoAttach", msg.Method)
+
+	var params struct {
+		AutoAttach             bool `json:"autoAttach"`
+		WaitForDebuggerOnStart bool `json:"waitForDebuggerOnStart"`
+		Flatten                bool `json:"flatten"`
+	}
+	require.NoError(t, json.Unmarshal(msg.Params, &params))
+	assert.True(t, params.AutoAttach)
+	assert.False(t, params.WaitForDebuggerOnStart)
+	assert.True(t, params.Flatten)
+
+	stopResponder := make(chan struct{})
+	go listenAndRespond(srv, stopResponder, nil)
+	defer close(stopResponder)
+	srv.sendToMonitor(t, map[string]any{"id": msg.ID, "result": map[string]any{}})
+
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":  "session-abc",
+			"targetInfo": map[string]any{"targetId": "target-xyz", "type": "page", "url": "https://example.com"},
+		},
+	})
+	require.Eventually(t, func() bool {
+		m.sessionsMu.RLock()
+		defer m.sessionsMu.RUnlock()
+		_, ok := m.sessions["session-abc"]
+		return ok
+	}, 2*time.Second, 50*time.Millisecond, "session not stored")
+
+	m.sessionsMu.RLock()
+	info := m.sessions["session-abc"]
+	m.sessionsMu.RUnlock()
+	assert.Equal(t, "target-xyz", info.targetID)
+	assert.Equal(t, "page", info.targetType)
+}
+
+func TestAttachExistingTargets(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	responder := func(msg cdpMessage) any {
+		switch msg.Method {
+		case "Target.getTargets":
+			return map[string]any{
+				"id": msg.ID,
+				"result": map[string]any{
+					"targetInfos": []any{
+						map[string]any{"targetId": "existing-1", "type": "page", "url": "https://preexisting.example.com"},
+					},
+				},
+			}
+		case "Target.attachToTarget":
+			srv.sendToMonitor(t, map[string]any{
+				"method": "Target.attachedToTarget",
+				"params": map[string]any{
+					"sessionId":  "session-existing-1",
+					"targetInfo": map[string]any{"targetId": "existing-1", "type": "page", "url": "https://preexisting.example.com"},
+				},
+			})
+			return map[string]any{"id": msg.ID, "result": map[string]any{"sessionId": "session-existing-1"}}
+		}
+		return nil
+	}
+
+	m, _, cleanup := startMonitor(t, srv, responder)
+	defer cleanup()
+
+	require.Eventually(t, func() bool {
+		m.sessionsMu.RLock()
+		defer m.sessionsMu.RUnlock()
+		_, ok := m.sessions["session-existing-1"]
+		return ok
+	}, 3*time.Second, 50*time.Millisecond, "existing target not auto-attached")
+
+	m.sessionsMu.RLock()
+	info := m.sessions["session-existing-1"]
+	m.sessionsMu.RUnlock()
+	assert.Equal(t, "existing-1", info.targetID)
+}
+
+// TestRedirectCounter verifies that redirect hops (same requestId, multiple
+// requestWillBeSent) do not double-increment netPending, which would permanently
+// block network_idle.
+func TestRedirectCounter(t *testing.T) {
+	m, ec := newComputedMonitor(t)
+	navigateMonitor(m, "https://example.com")
+
+	// First requestWillBeSent — genuine new request.
+	p1, _ := json.Marshal(map[string]any{
+		"requestId":    "r-redirect",
+		"resourceType": "Document",
+		"request":      map[string]any{"method": "GET", "url": "https://example.com/old"},
+		"initiator":    map[string]any{"type": "other"},
+	})
+	m.handleNetworkRequest(p1, "s1")
+
+	// Second requestWillBeSent with the same requestId — this is the redirect hop.
+	p2, _ := json.Marshal(map[string]any{
+		"requestId":    "r-redirect",
+		"resourceType": "Document",
+		"request":      map[string]any{"method": "GET", "url": "https://example.com/new"},
+		"initiator":    map[string]any{"type": "other"},
+	})
+	m.handleNetworkRequest(p2, "s1")
+
+	// Only one loadingFinished fires per redirect chain.
+	p3, _ := json.Marshal(map[string]any{"requestId": "r-redirect"})
+	m.handleLoadingFinished(p3, "s1")
+
+	// If netPending was double-incremented, network_idle would never fire.
+	ec.waitFor(t, "network_idle", 2*time.Second)
+}
+
+// TestSubframeNavigationNoReset verifies that a frameNavigated event with a
+// non-empty parentId does not reset computed state (netPending, timers, etc.).
+func TestSubframeNavigationNoReset(t *testing.T) {
+	m, ec := newComputedMonitor(t)
+	navigateMonitor(m, "https://example.com") // top-level nav, sets mainSessionID
+
+	// Start a request on the main frame.
+	simulateRequest(m, "main-req")
+
+	// An iframe navigates — should not reset state or clear pendingRequests.
+	iframeNav, _ := json.Marshal(map[string]any{
+		"frame": map[string]any{
+			"id":       "iframe-frame",
+			"parentId": "top-frame",
+			"url":      "https://iframe.example.com",
+		},
+	})
+	m.handleFrameNavigated(iframeNav, "s1")
+
+	// mainSessionID should still be "s1", not reset by the subframe nav.
+	assert.Equal(t, "s1", m.mainSessionID.Load(), "mainSessionID should not change on subframe nav")
+
+	// Finishing the main request should still drive network_idle (state not reset).
+	simulateFinished(m, "main-req")
+	ec.waitFor(t, "network_idle", 2*time.Second)
+}
+
+func TestSubframeLifecycleIgnored(t *testing.T) {
+	t.Run("subframe_dom_content_loaded_does_not_advance_state", func(t *testing.T) {
+		m, ec := newComputedMonitor(t)
+		navigateMonitor(m, "https://example.com") // sets mainSessionID = "s1"
+
+		// Fire domContentLoaded from an iframe session, not the main frame.
+		m.handleDOMContentLoaded(json.RawMessage(`{}`), "iframe-session")
+
+		// Now fire the real main-frame domContentLoaded + the rest of the conditions.
+		simulateRequest(m, "r1")
+		simulateFinished(m, "r1")
+		m.handleLoadEventFired(json.RawMessage(`{}`), "s1")
+		// navigation_settled requires navDOMLoaded; if the iframe event had set it,
+		// the event might fire without the main-frame DOMContentLoaded arriving.
+		// Assert it does NOT fire yet (iframe set navDOMLoaded but main frame hasn't).
+		ec.assertNone(t, "navigation_settled", 1500*time.Millisecond)
+	})
+
+	t.Run("subframe_load_event_does_not_start_layout_timer", func(t *testing.T) {
+		m, ec := newComputedMonitor(t)
+		navigateMonitor(m, "https://example.com")
+
+		// Subframe fires loadEventFired — should not start the layout_settled timer.
+		m.handleLoadEventFired(json.RawMessage(`{}`), "iframe-session")
+		ec.assertNone(t, "layout_settled", 1500*time.Millisecond)
+
+		// Main frame fires — timer should start now.
+		t0 := time.Now()
+		m.handleLoadEventFired(json.RawMessage(`{}`), "s1")
+		ec.waitFor(t, "layout_settled", 3*time.Second)
+		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "fired too early")
+	})
+}
