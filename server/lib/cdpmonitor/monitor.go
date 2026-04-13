@@ -408,7 +408,7 @@ func (m *Monitor) initSession(ctx context.Context) {
 		// Without auto-attach the monitor will never see new targets: treat as fatal.
 		m.log.Error("cdpmonitor: Target.setAutoAttach failed — monitor will not observe new targets", "err", err)
 		m.publish(events.Event{
-			Ts:       time.Now().UnixMilli(),
+			Ts:       time.Now().UnixMicro(),
 			Type:     EventMonitorInitFailed,
 			Category: events.CategorySystem,
 			Source:   events.Source{Kind: events.KindLocalProcess},
@@ -516,7 +516,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 		return
 	}
 	m.publish(events.Event{
-		Ts:       time.Now().UnixMilli(),
+		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorDisconnected,
 		Category: events.CategorySystem,
 		Source:   events.Source{Kind: events.KindLocalProcess},
@@ -537,7 +537,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 		if ctx.Err() == nil {
 			m.running.Store(false)
 			m.publish(events.Event{
-				Ts:       time.Now().UnixMilli(),
+				Ts:       time.Now().UnixMicro(),
 				Type:     EventMonitorReconnectFailed,
 				Category: events.CategorySystem,
 				Source:   events.Source{Kind: events.KindLocalProcess},
@@ -559,7 +559,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.log.Info("cdpmonitor: reconnected", "url", newURL, "duration_ms", reconnectDurationMs)
 
 	m.publish(events.Event{
-		Ts:       time.Now().UnixMilli(),
+		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorReconnected,
 		Category: events.CategorySystem,
 		Source:   events.Source{Kind: events.KindLocalProcess},

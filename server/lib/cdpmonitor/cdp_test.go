@@ -333,3 +333,39 @@ func startMonitor(t *testing.T, srv *testServer, fn ResponderFunc) (*Monitor, *e
 	}
 	return m, ec, cleanup
 }
+
+// newComputedMonitor creates an unconnected Monitor for testing computed state
+// (network_idle, layout_settled, navigation_settled) without a real websocket.
+func newComputedMonitor(t *testing.T) (*Monitor, *eventCollector) {
+	t.Helper()
+	ec := newEventCollector()
+	upstream := newTestUpstream("ws://127.0.0.1:0")
+	m := New(upstream, ec.publishFn(), 0, discardLogger)
+	return m, ec
+}
+
+// navigateMonitor sends a Page.frameNavigated to reset computed state.
+func navigateMonitor(m *Monitor, url string) {
+	p, _ := json.Marshal(map[string]any{
+		"frame": map[string]any{"id": "f1", "url": url},
+	})
+	m.handleFrameNavigated(p, "s1")
+}
+
+// simulateRequest sends a Network.requestWillBeSent through the handler.
+func simulateRequest(m *Monitor, id string) {
+	p, _ := json.Marshal(map[string]any{
+		"requestId": id, "resourceType": "Document",
+		"request": map[string]any{"method": "GET", "url": "https://example.com/" + id},
+	})
+	m.handleNetworkRequest(p, "s1")
+}
+
+// simulateFinished stores minimal state and sends Network.loadingFinished.
+func simulateFinished(m *Monitor, id string) {
+	m.pendReqMu.Lock()
+	m.pendingRequests[id] = networkReqState{method: "GET", url: "https://example.com/" + id}
+	m.pendReqMu.Unlock()
+	p, _ := json.Marshal(map[string]any{"requestId": id})
+	m.handleLoadingFinished(p, "s1")
+}
