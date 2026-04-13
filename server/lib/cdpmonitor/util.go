@@ -62,26 +62,30 @@ func isCapturedMIME(mime string) bool {
 	return false
 }
 
+// structuredPrefixes lists MIME type prefixes that warrant full (8 KB) body capture.
+var structuredPrefixes = []string{
+	"application/json",
+	"application/xml",
+	"application/x-www-form-urlencoded",
+	"application/graphql",
+	"text/xml",
+	"text/csv",
+}
+
 // bodyCapFor returns the max body capture size for a MIME type.
-// Structured data (JSON, XML, form data) gets 8 KB; everything else gets 4 KB.
+// Structured data (JSON, XML, CSV, form data) gets 8 KB; everything else gets 4 KB.
+// Vendor types with +json, +xml, or +csv suffixes are also treated as structured,
+// matching the allow-list in isCapturedMIME.
 func bodyCapFor(mime string) int {
 	const fullCap = 8 * 1024
 	const contextCap = 4 * 1024
-	structuredPrefixes := []string{
-		"application/json",
-		"application/xml",
-		"application/x-www-form-urlencoded",
-		"application/graphql",
-		"text/xml",
-		"text/csv",
-	}
 	for _, p := range structuredPrefixes {
 		if strings.HasPrefix(mime, p) {
 			return fullCap
 		}
 	}
-	// vnd types with +json/+xml suffix are treated as structured.
-	for _, suffix := range []string{"+json", "+xml"} {
+	// vnd types with +json/+xml/+csv suffix are treated as structured.
+	for _, suffix := range []string{"+json", "+xml", "+csv"} {
 		if strings.HasSuffix(mime, suffix) {
 			return fullCap
 		}

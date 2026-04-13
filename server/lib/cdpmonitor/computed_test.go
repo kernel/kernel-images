@@ -141,6 +141,20 @@ func TestLayoutSettled(t *testing.T) {
 		assert.Equal(t, events.CategoryPage, ev.Category)
 	})
 
+	t.Run("layout_shift_before_page_load_ignored", func(t *testing.T) {
+		cs, ec := newTestComputed(t)
+		cs.resetOnNavigation(0)
+
+		// layout_shift before page_load should be ignored; layout_settled must
+		// still fire after page_load's 1s debounce.
+		cs.onLayoutShift()
+		t0 := time.Now()
+		cs.onPageLoad()
+
+		ec.waitFor(t, "layout_settled", 3*time.Second)
+		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "should fire 1s after page_load, not layout_shift")
+	})
+
 	t.Run("layout_shift_resets_timer", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
 		cs.resetOnNavigation(0)

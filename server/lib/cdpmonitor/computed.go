@@ -11,7 +11,10 @@ import (
 const (
 	// networkIdleDebounce matches Playwright's networkidle heuristic: fire after
 	// 500 ms with no in-flight network requests.
-	networkIdleDebounce   = 500 * time.Millisecond
+	networkIdleDebounce = 500 * time.Millisecond
+	// layoutSettledDebounce gives the page 1 s after the last layout shift (or
+	// page_load if no shifts occur) before declaring the layout stable. 1 s is
+	// chosen to cover typical late-loading web fonts and deferred image reflows.
 	layoutSettledDebounce = 1 * time.Second
 )
 
@@ -104,6 +107,8 @@ func (s *computedState) onLoadingFinished() {
 
 	s.netPending--
 	if s.netPending < 0 {
+		// Clamping to zero: received a loadingFinished with no matching onRequest.
+		// This can happen if we attached mid-flight and missed the requestWillBeSent event.
 		s.netPending = 0
 	}
 	if s.netPending > 0 || s.netFired {
