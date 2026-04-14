@@ -846,7 +846,7 @@
     }
 
     async onPaste() {
-      if (!this.hosting) return
+      if (!this.hosting || this.locked) return
 
       await this.syncClipboard()
 
