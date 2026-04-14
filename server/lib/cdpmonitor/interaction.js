@@ -8,18 +8,50 @@
     return el.id ? '#' + el.id : (el.className ? '.' + String(el.className).split(' ')[0] : '');
   }
 
+  // Sensitive autocomplete values whose fields must never emit key content.
+  // Covers passwords, payment card data, and government identifiers.
+  var SENSITIVE_AUTOCOMPLETE = {
+    'current-password': true, 'new-password': true, 'one-time-code': true,
+    'cc-number': true, 'cc-csc': true, 'cc-exp': true, 'cc-exp-month': true,
+    'cc-exp-year': true, 'cc-name': true, 'cc-type': true,
+    'transaction-amount': true,
+    'ssn': true, 'passport': true, 'drivers-license': true
+  };
+
+  // Sensitive name/id substrings — defence-in-depth for fields without autocomplete.
+  var SENSITIVE_NAME_RE = /passw|passwd|secret|cvv|cvc|ssn|card.?num|account.?num|pin\b|tax.?id|natl.?id/i;
+
+  // Returns true if the element is one where keystroke content must be suppressed.
+  function isSensitiveInput(el) {
+    if (!el || !el.tagName) return false;
+    var tag = el.tagName.toUpperCase();
+    if (tag !== 'INPUT' && tag !== 'TEXTAREA') return false;
+    // <input type="password"> is the primary guard.
+    if (el.type === 'password') return true;
+    // autocomplete attribute check.
+    var ac = (el.getAttribute && el.getAttribute('autocomplete')) || '';
+    if (SENSITIVE_AUTOCOMPLETE[ac.toLowerCase().trim()]) return true;
+    // name/id heuristic as fallback.
+    var name = (el.name || el.id || '');
+    return SENSITIVE_NAME_RE.test(name);
+  }
+
   document.addEventListener('click', function(e) {
     var t = e.target || {};
+    // Suppress text capture for sensitive inputs; record the click position/selector only.
+    var text = isSensitiveInput(t) ? '' : (t.textContent || '').slice(0, 100);
     send(JSON.stringify({
       type: 'interaction_click',
       x: e.clientX, y: e.clientY,
       selector: sel(t), tag: t.tagName || '',
-      text: (t.textContent || '').slice(0, 100)
+      text: text
     }));
   }, true);
 
   document.addEventListener('keydown', function(e) {
     var t = e.target || {};
+    // Never record which key was pressed inside a sensitive field.
+    if (isSensitiveInput(t)) return;
     send(JSON.stringify({
       type: 'interaction_key',
       key: e.key,
