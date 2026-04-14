@@ -267,7 +267,7 @@ supervisorctl -c /etc/supervisor/supervisord.conf start kernel-images-api
 wait_for_tcp_port 127.0.0.1 "${API_PORT}" "kernel-images API"
 
 echo "[wrapper] Starting ChromeDriver via supervisord"
-supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver || true
+supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
 wait_for_tcp_port 127.0.0.1 9225 "ChromeDriver" 50 0.2 "10s" || true
 
 echo "[wrapper] Starting PulseAudio daemon via supervisord"
