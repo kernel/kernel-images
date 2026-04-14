@@ -12,30 +12,48 @@ import (
 // on the root session (sessionID="") before navigation has been recorded.
 const mainSessionUnset = "\x00unset"
 
-// Event type constants for all events published by the cdpmonitor.
+// CDP-derived events — direct translations of DevTools Protocol notifications.
+// Each maps 1-to-1 with a specific CDP domain event (Runtime.*, Network.*,
+// Page.*, PerformanceTimeline.*) received from Chrome.
 const (
-	EventConsoleLog             = "console_log"
-	EventConsoleError           = "console_error"
-	EventNetworkRequest         = "network_request"
-	EventNetworkResponse        = "network_response"
-	EventNetworkLoadingFailed   = "network_loading_failed"
-	EventNetworkIdle            = "network_idle"
-	EventNavigation             = "navigation"
-	EventDOMContentLoaded       = "dom_content_loaded"
-	EventPageLoad               = "page_load"
-	EventLayoutShift            = "layout_shift"
-	EventLayoutSettled          = "layout_settled"
-	EventNavigationSettled      = "navigation_settled"
-	EventTargetCreated          = "target_created"
-	EventTargetDestroyed        = "target_destroyed"
-	EventInteractionClick       = "interaction_click"
-	EventInteractionKey         = "interaction_key"
-	EventScrollSettled          = "scroll_settled"
-	EventScreenshot             = "screenshot"
-	EventMonitorDisconnected    = "monitor_disconnected"
-	EventMonitorReconnected     = "monitor_reconnected"
-	EventMonitorReconnectFailed = "monitor_reconnect_failed"
-	EventMonitorInitFailed      = "monitor_init_failed"
+	EventConsoleLog           = "console_log"             // Runtime.consoleAPICalled (type=log) or Runtime.exceptionThrown
+	EventConsoleError         = "console_error"           // Runtime.consoleAPICalled (type=error)
+	EventNetworkRequest       = "network_request"         // Network.requestWillBeSent
+	EventNetworkResponse      = "network_response"        // Network.loadingFinished (with prior responseReceived)
+	EventNetworkLoadingFailed = "network_loading_failed"  // Network.loadingFailed
+	EventNavigation           = "navigation"              // Page.frameNavigated
+	EventDOMContentLoaded     = "dom_content_loaded"      // Page.domContentEventFired
+	EventPageLoad             = "page_load"               // Page.loadEventFired
+	EventLayoutShift          = "layout_shift"            // PerformanceTimeline event of type "layout-shift"
+	EventTargetCreated        = "target_created"          // Target.targetCreated
+	EventTargetDestroyed      = "target_destroyed"        // Target.targetDestroyed
+)
+
+// Computed events — synthetic events derived by computed.go state machines.
+// None of these correspond to a single CDP notification; they are inferred from
+// sequences of CDP events and debounce timers.
+const (
+	EventNetworkIdle       = "network_idle"        // 500 ms after all in-flight requests finish
+	EventLayoutSettled     = "layout_settled"      // 1 s after page_load with no intervening layout shifts
+	EventNavigationSettled = "navigation_settled"  // fires once dom_content_loaded + network_idle + layout_settled all hold
+)
+
+// Interaction events — fired by injected page-side JS (interaction.js) via the
+// Runtime.bindingCalled mechanism. They originate in the browser's renderer
+// process, not from Chrome's network or page domains.
+const (
+	EventInteractionClick = "interaction_click"  // document click (target selector, coords, text)
+	EventInteractionKey   = "interaction_key"    // keydown (key name, target selector)
+	EventScrollSettled    = "scroll_settled"     // 300 ms after the last scroll event on a target
+)
+
+// Monitor lifecycle and internal events — emitted by the monitor itself, not by Chrome.
+const (
+	EventScreenshot             = "screenshot"              // periodic ffmpeg frame capture
+	EventMonitorDisconnected    = "monitor_disconnected"    // WebSocket to Chrome closed unexpectedly
+	EventMonitorReconnected     = "monitor_reconnected"     // successfully reconnected after a disconnect
+	EventMonitorReconnectFailed = "monitor_reconnect_failed" // reconnect attempts exhausted
+	EventMonitorInitFailed      = "monitor_init_failed"     // could not initialise the CDP session
 )
 
 // Metadata key written into events.Source.Metadata for CDP-sourced events.
