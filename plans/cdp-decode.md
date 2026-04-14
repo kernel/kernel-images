@@ -81,7 +81,7 @@ Each struct retains every PDL field for that type at the top level, even fields 
 
 **Tests:**
 
-- `cdp_proto_test.go` (NEW) — golden-fixture tests. For each Layer-1 struct, a captured real Chrome-emitted JSON frame in `testdata/`. Test decodes the frame, then re-marshals and asserts the round-trip preserves all top-level keys (catches dropped fields). This is the mechanical audit.
+- `cdp_proto_test.go` (NEW) — golden-fixture tests. For each Layer-1 struct, a captured real Chrome-emitted JSON frame in `testdata/`. Test decodes into the Layer-1 struct, re-marshals, then compares **normalized full JSON** (recursive key-sorted, whitespace-stripped) against the original frame. A full structural round-trip catches not just dropped top-level fields but also dropped nested fields, silently-coerced types, and field-name mismatches. Any non-equivalence is an audit failure.
 - `handlers_test.go` — update call sites to construct Layer-1 structs directly instead of raw JSON where convenient; existing wire-level tests in `cdp_test.go` and `monitor_test.go` continue to exercise the dispatch path end-to-end.
 
 ## Design decisions
@@ -102,4 +102,8 @@ Each struct retains every PDL field for that type at the top level, even fields 
 
 - Recursive typing of `StackTrace`, `Initiator`, `ResourceTiming`, etc. (kept as raw JSON until needed).
 - Layer-1 coverage for events the monitor doesn't currently handle (LCP, BindingCalled, etc.).
-- A code generator from `.pdl` → Go. The pin + golden tests are the audit mechanism for now.
+- Full codegen from `.pdl` → Go in this PR. The pin + golden round-trip tests are the audit mechanism for now.
+
+## Follow-up: light codegen from json/js_protocol.json
+
+The DevTools repo ships a JSON form of the protocol (`json/js_protocol.json`, `json/browser_protocol.json`) alongside the `.pdl` sources. A small generator could read these, emit Layer-1 struct skeletons for the domains we care about, and diff against the hand-written types — catching fields that were added upstream since the pin. Worth doing once Layer 1 stabilizes and we have a second or third reason to regenerate (e.g. adding LCP). Not blocking this PR; the golden round-trip test covers drift for the types we already have.
