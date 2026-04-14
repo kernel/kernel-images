@@ -1,0 +1,44 @@
+{
+  "type": "log",
+  "args": [
+    {
+      "type": "string",
+      "value": "hello world"
+    },
+    {
+      "type": "number",
+      "value": 42,
+      "description": "42"
+    },
+    {
+      "type": "object",
+      "subtype": "array",
+      "className": "Array",
+      "objectId": "{\"injectedScriptId\":1,\"id\":1}",
+      "description": "Array(2)",
+      "preview": {
+        "type": "object",
+        "subtype": "array",
+        "description": "Array(2)",
+        "overflow": false,
+        "properties": [
+          {"name": "0", "type": "number", "value": "1"},
+          {"name": "1", "type": "number", "value": "2"}
+        ]
+      }
+    }
+  ],
+  "executionContextId": 3,
+  "timestamp": 1234567890.123,
+  "stackTrace": {
+    "callFrames": [
+      {
+        "functionName": "",
+        "scriptId": "4",
+        "url": "https://example.com/app.js",
+        "lineNumber": 10,
+        "columnNumber": 5
+      }
+    ]
+  }
+}

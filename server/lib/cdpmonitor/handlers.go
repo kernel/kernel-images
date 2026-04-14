@@ -34,49 +34,98 @@ func (m *Monitor) publishEvent(eventType string, category events.EventCategory, 
 	})
 }
 
+// decodeParams unmarshals msg.Params into dst, logging on failure.
+// Returns true on success so dispatch can gate the handler call.
+func (m *Monitor) decodeParams(method string, params json.RawMessage, dst any) bool {
+	if err := json.Unmarshal(params, dst); err != nil {
+		m.logUnmarshalErr(method, err)
+		return false
+	}
+	return true
+}
+
 // dispatchEvent routes a CDP event to its handler.
 func (m *Monitor) dispatchEvent(msg cdpMessage) {
 	switch msg.Method {
 	case "Runtime.consoleAPICalled":
-		m.handleConsole(msg.Params, msg.SessionID)
+		var p cdpRuntimeConsoleAPICalledParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleConsole(p, msg.SessionID)
+		}
 	case "Runtime.exceptionThrown":
-		m.handleExceptionThrown(msg.Params, msg.SessionID)
+		var p cdpRuntimeExceptionThrownParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleExceptionThrown(p, msg.SessionID)
+		}
 	case "Runtime.bindingCalled":
-		m.handleBindingCalled(msg.Params, msg.SessionID)
+		var p cdpRuntimeBindingCalledParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleBindingCalled(p, msg.SessionID)
+		}
 	case "Network.requestWillBeSent":
-		m.handleNetworkRequest(msg.Params, msg.SessionID)
+		var p cdpNetworkRequestWillBeSentParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleNetworkRequest(p, msg.SessionID)
+		}
 	case "Network.responseReceived":
-		m.handleResponseReceived(msg.Params, msg.SessionID)
+		var p cdpNetworkResponseReceivedParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleResponseReceived(p, msg.SessionID)
+		}
 	case "Network.loadingFinished":
-		m.handleLoadingFinished(msg.Params, msg.SessionID)
+		var p cdpNetworkLoadingFinishedParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleLoadingFinished(p, msg.SessionID)
+		}
 	case "Network.loadingFailed":
-		m.handleLoadingFailed(msg.Params, msg.SessionID)
+		var p cdpNetworkLoadingFailedParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleLoadingFailed(p, msg.SessionID)
+		}
 	case "Page.frameNavigated":
-		m.handleFrameNavigated(msg.Params, msg.SessionID)
+		var p cdpPageFrameNavigatedParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleFrameNavigated(p, msg.SessionID)
+		}
 	case "Page.domContentEventFired":
-		m.handleDOMContentLoaded(msg.Params, msg.SessionID)
+		var p cdpPageDomContentEventFiredParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleDOMContentLoaded(p, msg.SessionID)
+		}
 	case "Page.loadEventFired":
-		m.handleLoadEventFired(msg.Params, msg.SessionID)
+		var p cdpPageLoadEventFiredParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleLoadEventFired(p, msg.SessionID)
+		}
 	case "PerformanceTimeline.timelineEventAdded":
-		m.handleTimelineEvent(msg.Params, msg.SessionID)
+		var p cdpPerformanceTimelineEventAddedParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleTimelineEvent(p, msg.SessionID)
+		}
 	case "Target.attachedToTarget":
-		m.handleAttachedToTarget(msg)
+		var p cdpTargetAttachedToTargetParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleAttachedToTarget(p)
+		}
 	case "Target.targetCreated":
-		m.handleTargetCreated(msg.Params, msg.SessionID)
+		var p cdpTargetTargetCreatedParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleTargetCreated(p, msg.SessionID)
+		}
 	case "Target.targetDestroyed":
-		m.handleTargetDestroyed(msg.Params, msg.SessionID)
+		var p cdpTargetTargetDestroyedParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleTargetDestroyed(p, msg.SessionID)
+		}
 	case "Target.detachedFromTarget":
-		m.handleDetachedFromTarget(msg.Params)
+		var p cdpTargetDetachedFromTargetParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleDetachedFromTarget(p)
+		}
 	}
 }
 
-func (m *Monitor) handleConsole(params json.RawMessage, sessionID string) {
-	var p cdpConsoleParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Runtime.consoleAPICalled", err)
-		return
-	}
-
+func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID string) {
 	text := ""
 	if len(p.Args) > 0 {
 		text = consoleArgString(p.Args[0])
@@ -94,12 +143,7 @@ func (m *Monitor) handleConsole(params json.RawMessage, sessionID string) {
 	m.publishEvent(EventConsoleLog, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
 }
 
-func (m *Monitor) handleExceptionThrown(params json.RawMessage, sessionID string) {
-	var p cdpExceptionDetails
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Runtime.exceptionThrown", err)
-		return
-	}
+func (m *Monitor) handleExceptionThrown(p cdpRuntimeExceptionThrownParams, sessionID string) {
 	data, _ := json.Marshal(map[string]any{
 		"text":        p.ExceptionDetails.Text,
 		"line":        p.ExceptionDetails.LineNumber,
@@ -117,15 +161,7 @@ func (m *Monitor) handleExceptionThrown(params json.RawMessage, sessionID string
 const bindingMinInterval = 50 * time.Millisecond
 
 // handleBindingCalled processes __kernelEvent binding calls from the page.
-func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) {
-	var p struct {
-		Name    string `json:"name"`
-		Payload string `json:"payload"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Runtime.bindingCalled", err)
-		return
-	}
+func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID string) {
 	if p.Name != bindingName {
 		return
 	}
@@ -163,21 +199,12 @@ func (m *Monitor) handleBindingCalled(params json.RawMessage, sessionID string) 
 }
 
 // handleTimelineEvent processes PerformanceTimeline layout-shift events.
-func (m *Monitor) handleTimelineEvent(params json.RawMessage, sessionID string) {
-	var p struct {
-		Event struct {
-			Type        string          `json:"type"`
-			LayoutShift json.RawMessage `json:"layoutShiftDetails,omitempty"`
-		} `json:"event"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("PerformanceTimeline.timelineEventAdded", err)
-		return
-	}
+func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, sessionID string) {
 	if p.Event.Type != timelineEventLayoutShift {
 		return
 	}
-	m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", params, sessionID)
+	data, _ := json.Marshal(p)
+	m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
 	m.computed.onLayoutShift()
 }
 
@@ -186,12 +213,7 @@ func (m *Monitor) handleTimelineEvent(params json.RawMessage, sessionID string) 
 // bodies which may contain cookies, bearer tokens, or other credentials.
 // This mirrors what CDP/DevTools itself exposes. Consumers should treat the
 // event stream as privileged data; opt-in redaction can be added later.
-func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string) {
-	var p cdpNetworkRequestParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Network.requestWillBeSent", err)
-		return
-	}
+func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sessionID string) {
 	// Extract only the initiator type; the stack trace is too verbose and dominates event size.
 	var initiatorType string
 	var raw struct {
@@ -217,7 +239,7 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 		url:          p.Request.URL,
 		headers:      p.Request.Headers,
 		postData:     p.Request.PostData,
-		resourceType: p.ResourceType,
+		resourceType: p.Type,
 		addedAt:      addedAt,
 	}
 	m.pendReqMu.Unlock()
@@ -230,8 +252,8 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 	if p.Request.PostData != "" {
 		ev["post_data"] = p.Request.PostData
 	}
-	if p.ResourceType != "" {
-		ev["resource_type"] = p.ResourceType
+	if p.Type != "" {
+		ev["resource_type"] = p.Type
 	}
 	data, _ := json.Marshal(ev)
 	m.publishEvent(EventNetworkRequest, events.CategoryNetwork, events.Source{Kind: events.KindCDP}, "Network.requestWillBeSent", data, sessionID)
@@ -240,12 +262,7 @@ func (m *Monitor) handleNetworkRequest(params json.RawMessage, sessionID string)
 	}
 }
 
-func (m *Monitor) handleResponseReceived(params json.RawMessage, _ string) {
-	var p cdpResponseReceivedParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Network.responseReceived", err)
-		return
-	}
+func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, _ string) {
 	m.pendReqMu.Lock()
 	if state, ok := m.pendingRequests[p.RequestID]; ok {
 		state.status = p.Response.Status
@@ -257,14 +274,7 @@ func (m *Monitor) handleResponseReceived(params json.RawMessage, _ string) {
 	m.pendReqMu.Unlock()
 }
 
-func (m *Monitor) handleLoadingFinished(params json.RawMessage, sessionID string) {
-	var p struct {
-		RequestID string `json:"requestId"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Network.loadingFinished", err)
-		return
-	}
+func (m *Monitor) handleLoadingFinished(p cdpNetworkLoadingFinishedParams, sessionID string) {
 	m.pendReqMu.Lock()
 	state, ok := m.pendingRequests[p.RequestID]
 	if ok {
@@ -330,16 +340,7 @@ func (m *Monitor) fetchResponseBody(requestID, sessionID string, state networkRe
 	return truncateBody(body, bodyCapFor(state.mimeType))
 }
 
-func (m *Monitor) handleLoadingFailed(params json.RawMessage, sessionID string) {
-	var p struct {
-		RequestID string `json:"requestId"`
-		ErrorText string `json:"errorText"`
-		Canceled  bool   `json:"canceled"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Network.loadingFailed", err)
-		return
-	}
+func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID string) {
 	m.pendReqMu.Lock()
 	state, ok := m.pendingRequests[p.RequestID]
 	if ok {
@@ -361,18 +362,7 @@ func (m *Monitor) handleLoadingFailed(params json.RawMessage, sessionID string) 
 	}
 }
 
-func (m *Monitor) handleFrameNavigated(params json.RawMessage, sessionID string) {
-	var p struct {
-		Frame struct {
-			ID       string `json:"id"`
-			ParentID string `json:"parentId"`
-			URL      string `json:"url"`
-		} `json:"frame"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Page.frameNavigated", err)
-		return
-	}
+func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID string) {
 	data, _ := json.Marshal(map[string]any{
 		"url":             p.Frame.URL,
 		"frame_id":        p.Frame.ID,
@@ -398,8 +388,9 @@ func (m *Monitor) handleFrameNavigated(params json.RawMessage, sessionID string)
 	}
 }
 
-func (m *Monitor) handleDOMContentLoaded(params json.RawMessage, sessionID string) {
-	m.publishEvent(EventDOMContentLoaded, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.domContentEventFired", params, sessionID)
+func (m *Monitor) handleDOMContentLoaded(p cdpPageDomContentEventFiredParams, sessionID string) {
+	data, _ := json.Marshal(p)
+	m.publishEvent(EventDOMContentLoaded, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.domContentEventFired", data, sessionID)
 	// Only advance the state machine for the main frame; subframe events arrive
 	// on their own sessionId and would trigger navigation_settled prematurely.
 	if m.mainSessionID.Load() == sessionID {
@@ -407,8 +398,9 @@ func (m *Monitor) handleDOMContentLoaded(params json.RawMessage, sessionID strin
 	}
 }
 
-func (m *Monitor) handleLoadEventFired(params json.RawMessage, sessionID string) {
-	m.publishEvent(EventPageLoad, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", params, sessionID)
+func (m *Monitor) handleLoadEventFired(p cdpPageLoadEventFiredParams, sessionID string) {
+	data, _ := json.Marshal(p)
+	m.publishEvent(EventPageLoad, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", data, sessionID)
 	if m.mainSessionID.Load() == sessionID {
 		m.computed.onPageLoad()
 		m.tryScreenshot(m.getLifecycleCtx())
@@ -416,37 +408,29 @@ func (m *Monitor) handleLoadEventFired(params json.RawMessage, sessionID string)
 }
 
 // handleAttachedToTarget stores the new session then enables domains and injects script.
-func (m *Monitor) handleAttachedToTarget(msg cdpMessage) {
-	var params cdpAttachedToTargetParams
-	if err := json.Unmarshal(msg.Params, &params); err != nil {
-		m.logUnmarshalErr("Target.attachedToTarget", err)
-		return
-	}
+// The outer message sessionID (root session) is unused; the child session we
+// attached to is in p.SessionID.
+func (m *Monitor) handleAttachedToTarget(p cdpTargetAttachedToTargetParams) {
 	m.sessionsMu.Lock()
-	m.sessions[params.SessionID] = targetInfo{
-		targetID:   params.TargetInfo.TargetID,
-		url:        params.TargetInfo.URL,
-		targetType: params.TargetInfo.Type,
+	m.sessions[p.SessionID] = targetInfo{
+		targetID:   p.TargetInfo.TargetID,
+		url:        p.TargetInfo.URL,
+		targetType: p.TargetInfo.Type,
 	}
 	m.sessionsMu.Unlock()
 
-	targetType := params.TargetInfo.Type
+	targetType := p.TargetInfo.Type
 	// Async to avoid blocking the readLoop.
 	m.asyncWg.Go(func() {
 		ctx := m.getLifecycleCtx()
-		m.enableDomains(ctx, params.SessionID, targetType)
+		m.enableDomains(ctx, p.SessionID, targetType)
 		if isPageLikeTarget(targetType) {
-			_ = m.injectScript(ctx, params.SessionID)
+			_ = m.injectScript(ctx, p.SessionID)
 		}
 	})
 }
 
-func (m *Monitor) handleTargetCreated(params json.RawMessage, sessionID string) {
-	var p cdpTargetCreatedParams
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Target.targetCreated", err)
-		return
-	}
+func (m *Monitor) handleTargetCreated(p cdpTargetTargetCreatedParams, sessionID string) {
 	data, _ := json.Marshal(map[string]any{
 		"target_id":   p.TargetInfo.TargetID,
 		"target_type": p.TargetInfo.Type,
@@ -455,28 +439,14 @@ func (m *Monitor) handleTargetCreated(params json.RawMessage, sessionID string) 
 	m.publishEvent(EventTargetCreated, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Target.targetCreated", data, sessionID)
 }
 
-func (m *Monitor) handleTargetDestroyed(params json.RawMessage, sessionID string) {
-	var p struct {
-		TargetID string `json:"targetId"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Target.targetDestroyed", err)
-		return
-	}
+func (m *Monitor) handleTargetDestroyed(p cdpTargetTargetDestroyedParams, sessionID string) {
 	data, _ := json.Marshal(map[string]any{
 		"target_id": p.TargetID,
 	})
 	m.publishEvent(EventTargetDestroyed, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Target.targetDestroyed", data, sessionID)
 }
 
-func (m *Monitor) handleDetachedFromTarget(params json.RawMessage) {
-	var p struct {
-		SessionID string `json:"sessionId"`
-	}
-	if err := json.Unmarshal(params, &p); err != nil {
-		m.logUnmarshalErr("Target.detachedFromTarget", err)
-		return
-	}
+func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) {
 	if p.SessionID == "" {
 		return
 	}

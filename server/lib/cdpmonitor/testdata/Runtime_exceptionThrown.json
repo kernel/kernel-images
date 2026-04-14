@@ -1,0 +1,30 @@
+{
+  "timestamp": 1234567890.456,
+  "exceptionDetails": {
+    "exceptionId": 1,
+    "text": "Uncaught",
+    "lineNumber": 42,
+    "columnNumber": 7,
+    "scriptId": "5",
+    "url": "https://example.com/app.js",
+    "stackTrace": {
+      "callFrames": [
+        {
+          "functionName": "throwIt",
+          "scriptId": "5",
+          "url": "https://example.com/app.js",
+          "lineNumber": 42,
+          "columnNumber": 7
+        }
+      ]
+    },
+    "exception": {
+      "type": "object",
+      "subtype": "error",
+      "className": "TypeError",
+      "description": "TypeError: Cannot read properties of undefined",
+      "objectId": "{\"injectedScriptId\":1,\"id\":2}"
+    },
+    "executionContextId": 3
+  }
+}

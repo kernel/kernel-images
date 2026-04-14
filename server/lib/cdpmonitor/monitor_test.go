@@ -269,27 +269,25 @@ func TestRedirectCounter(t *testing.T) {
 	m, ec := newComputedMonitor(t)
 	navigateMonitor(m, "https://example.com")
 
+	initiator := json.RawMessage(`{"type":"other"}`)
 	// First requestWillBeSent — genuine new request.
-	p1, _ := json.Marshal(map[string]any{
-		"requestId":    "r-redirect",
-		"resourceType": "Document",
-		"request":      map[string]any{"method": "GET", "url": "https://example.com/old"},
-		"initiator":    map[string]any{"type": "other"},
-	})
-	m.handleNetworkRequest(p1, "s1")
+	m.handleNetworkRequest(cdpNetworkRequestWillBeSentParams{
+		RequestID: "r-redirect",
+		Type:      "Document",
+		Request:   cdpNetworkRequest{Method: "GET", URL: "https://example.com/old"},
+		Initiator: initiator,
+	}, "s1")
 
 	// Second requestWillBeSent with the same requestId — this is the redirect hop.
-	p2, _ := json.Marshal(map[string]any{
-		"requestId":    "r-redirect",
-		"resourceType": "Document",
-		"request":      map[string]any{"method": "GET", "url": "https://example.com/new"},
-		"initiator":    map[string]any{"type": "other"},
-	})
-	m.handleNetworkRequest(p2, "s1")
+	m.handleNetworkRequest(cdpNetworkRequestWillBeSentParams{
+		RequestID: "r-redirect",
+		Type:      "Document",
+		Request:   cdpNetworkRequest{Method: "GET", URL: "https://example.com/new"},
+		Initiator: initiator,
+	}, "s1")
 
 	// Only one loadingFinished fires per redirect chain.
-	p3, _ := json.Marshal(map[string]any{"requestId": "r-redirect"})
-	m.handleLoadingFinished(p3, "s1")
+	m.handleLoadingFinished(cdpNetworkLoadingFinishedParams{RequestID: "r-redirect"}, "s1")
 
 	// If netPending was double-incremented, network_idle would never fire.
 	ec.waitFor(t, "network_idle", 2*time.Second)
@@ -305,14 +303,13 @@ func TestSubframeNavigationNoReset(t *testing.T) {
 	simulateRequest(m, "main-req")
 
 	// An iframe navigates — should not reset state or clear pendingRequests.
-	iframeNav, _ := json.Marshal(map[string]any{
-		"frame": map[string]any{
-			"id":       "iframe-frame",
-			"parentId": "top-frame",
-			"url":      "https://iframe.example.com",
+	m.handleFrameNavigated(cdpPageFrameNavigatedParams{
+		Frame: cdpPageFrame{
+			ID:       "iframe-frame",
+			ParentID: "top-frame",
+			URL:      "https://iframe.example.com",
 		},
-	})
-	m.handleFrameNavigated(iframeNav, "s1")
+	}, "s1")
 
 	// mainSessionID should still be "s1", not reset by the subframe nav.
 	assert.Equal(t, "s1", m.mainSessionID.Load(), "mainSessionID should not change on subframe nav")
@@ -328,12 +325,12 @@ func TestSubframeLifecycleIgnored(t *testing.T) {
 		navigateMonitor(m, "https://example.com") // sets mainSessionID = "s1"
 
 		// Fire domContentLoaded from an iframe session, not the main frame.
-		m.handleDOMContentLoaded(json.RawMessage(`{}`), "iframe-session")
+		m.handleDOMContentLoaded(cdpPageDomContentEventFiredParams{}, "iframe-session")
 
 		// Now fire the real main-frame domContentLoaded + the rest of the conditions.
 		simulateRequest(m, "r1")
 		simulateFinished(m, "r1")
-		m.handleLoadEventFired(json.RawMessage(`{}`), "s1")
+		m.handleLoadEventFired(cdpPageLoadEventFiredParams{},"s1")
 		// navigation_settled requires navDOMLoaded; if the iframe event had set it,
 		// the event might fire without the main-frame DOMContentLoaded arriving.
 		// Assert it does NOT fire yet (iframe set navDOMLoaded but main frame hasn't).
@@ -345,12 +342,12 @@ func TestSubframeLifecycleIgnored(t *testing.T) {
 		navigateMonitor(m, "https://example.com")
 
 		// Subframe fires loadEventFired — should not start the layout_settled timer.
-		m.handleLoadEventFired(json.RawMessage(`{}`), "iframe-session")
+		m.handleLoadEventFired(cdpPageLoadEventFiredParams{},"iframe-session")
 		ec.assertNone(t, "layout_settled", 1500*time.Millisecond)
 
 		// Main frame fires — timer should start now.
 		t0 := time.Now()
-		m.handleLoadEventFired(json.RawMessage(`{}`), "s1")
+		m.handleLoadEventFired(cdpPageLoadEventFiredParams{},"s1")
 		ec.waitFor(t, "layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "fired too early")
 	})

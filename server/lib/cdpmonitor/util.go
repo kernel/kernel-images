@@ -8,7 +8,7 @@ import (
 
 // consoleArgString extracts a display string from a CDP console argument.
 // For strings it unquotes the JSON value; for other types it returns the raw JSON.
-func consoleArgString(a cdpConsoleArg) string {
+func consoleArgString(a cdpRuntimeRemoteObject) string {
 	if len(a.Value) == 0 {
 		return a.Type // e.g. "undefined", "null"
 	}

@@ -1,0 +1,36 @@
+{
+  "requestId": "1000.5",
+  "loaderId": "LOADER123",
+  "timestamp": 1234.9,
+  "type": "XHR",
+  "response": {
+    "url": "https://api.example.com/data",
+    "status": 200,
+    "statusText": "OK",
+    "headers": {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-cache"
+    },
+    "mimeType": "application/json",
+    "charset": "utf-8",
+    "connectionReused": true,
+    "connectionId": 42,
+    "remoteIPAddress": "93.184.216.34",
+    "remotePort": 443,
+    "fromDiskCache": false,
+    "fromServiceWorker": false,
+    "fromPrefetchCache": false,
+    "encodedDataLength": 1234,
+    "timing": {
+      "requestTime": 1234.5,
+      "sendStart": 0.5,
+      "sendEnd": 1.0,
+      "receiveHeadersEnd": 200
+    },
+    "responseTime": 1715000000.4,
+    "protocol": "http/1.1",
+    "securityState": "secure"
+  },
+  "hasExtraInfo": true,
+  "frameId": "FRAME123"
+}
