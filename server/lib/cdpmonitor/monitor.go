@@ -428,7 +428,7 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 		return
 	}
 	var resp struct {
-		TargetInfos []cdpTargetInfo `json:"targetInfos"`
+		TargetInfos []cdpTargetTargetInfo `json:"targetInfos"`
 	}
 	if err := json.Unmarshal(result, &resp); err != nil {
 		return

@@ -346,19 +346,21 @@ func newComputedMonitor(t *testing.T) (*Monitor, *eventCollector) {
 
 // navigateMonitor sends a Page.frameNavigated to reset computed state.
 func navigateMonitor(m *Monitor, url string) {
-	p, _ := json.Marshal(map[string]any{
-		"frame": map[string]any{"id": "f1", "url": url},
-	})
-	m.handleFrameNavigated(p, "s1")
+	m.handleFrameNavigated(cdpPageFrameNavigatedParams{
+		Frame: cdpPageFrame{ID: "f1", URL: url},
+	}, "s1")
 }
 
 // simulateRequest sends a Network.requestWillBeSent through the handler.
 func simulateRequest(m *Monitor, id string) {
-	p, _ := json.Marshal(map[string]any{
-		"requestId": id, "resourceType": "Document",
-		"request": map[string]any{"method": "GET", "url": "https://example.com/" + id},
-	})
-	m.handleNetworkRequest(p, "s1")
+	m.handleNetworkRequest(cdpNetworkRequestWillBeSentParams{
+		RequestID: id,
+		Type:      "Document",
+		Request: cdpNetworkRequest{
+			Method: "GET",
+			URL:    "https://example.com/" + id,
+		},
+	}, "s1")
 }
 
 // simulateFinished stores minimal state and sends Network.loadingFinished.
@@ -366,6 +368,5 @@ func simulateFinished(m *Monitor, id string) {
 	m.pendReqMu.Lock()
 	m.pendingRequests[id] = networkReqState{method: "GET", url: "https://example.com/" + id}
 	m.pendReqMu.Unlock()
-	p, _ := json.Marshal(map[string]any{"requestId": id})
-	m.handleLoadingFinished(p, "s1")
+	m.handleLoadingFinished(cdpNetworkLoadingFinishedParams{RequestID: id}, "s1")
 }

@@ -18,7 +18,6 @@ package cdpmonitor
 // with stdlib and the events package.
 //
 // PDL source: https://chromedevtools.github.io/devtools-protocol/tot/
-// Written against Chrome M146 (ChromeDriver 146.0.7680.165).
 
 import "encoding/json"
 
@@ -239,22 +238,6 @@ type cdpPerformanceTimelineEventAddedParams struct {
 	Event cdpPerformanceTimelineEvent `json:"event"`
 }
 
-// cdpLayoutShiftDetails mirrors PerformanceTimeline.LayoutShiftDetails (PDL wire format).
-type cdpLayoutShiftDetails struct {
-	Value          float64 `json:"value"`
-	HadRecentInput bool    `json:"hadRecentInput"`
-}
-
-// cdpLcpDetails mirrors PerformanceTimeline.LargestContentfulPaintDetails (PDL wire format).
-type cdpLcpDetails struct {
-	RenderTime float64 `json:"renderTime"`
-	LoadTime   float64 `json:"loadTime"`
-	Size       float64 `json:"size"`
-	ElementID  string  `json:"elementId,omitempty"`
-	URL        string  `json:"url,omitempty"`
-	NodeID     int     `json:"nodeId,omitempty"`
-}
-
 // --- Target domain ---
 
 // cdpTargetTargetInfo mirrors Target.TargetInfo.
@@ -277,6 +260,16 @@ type cdpTargetAttachedToTargetParams struct {
 	SessionID          string              `json:"sessionId"`
 	TargetInfo         cdpTargetTargetInfo `json:"targetInfo"`
 	WaitingForDebugger bool                `json:"waitingForDebugger"`
+}
+
+// cdpTargetTargetCreatedParams mirrors Target.targetCreated params.
+type cdpTargetTargetCreatedParams struct {
+	TargetInfo cdpTargetTargetInfo `json:"targetInfo"`
+}
+
+// cdpTargetTargetDestroyedParams mirrors Target.targetDestroyed params.
+type cdpTargetTargetDestroyedParams struct {
+	TargetID string `json:"targetId"`
 }
 
 // cdpTargetDetachedFromTargetParams mirrors Target.detachedFromTarget params.

@@ -37,6 +37,8 @@ func TestLayer1Roundtrip(t *testing.T) {
 		{"Page.loadEventFired", "Page_loadEventFired.json", func() any { return new(cdpPageLoadEventFiredParams) }},
 		{"PerformanceTimeline.timelineEventAdded", "PerformanceTimeline_timelineEventAdded.json", func() any { return new(cdpPerformanceTimelineEventAddedParams) }},
 		{"Target.attachedToTarget", "Target_attachedToTarget.json", func() any { return new(cdpTargetAttachedToTargetParams) }},
+		{"Target.targetCreated", "Target_targetCreated.json", func() any { return new(cdpTargetTargetCreatedParams) }},
+		{"Target.targetDestroyed", "Target_targetDestroyed.json", func() any { return new(cdpTargetTargetDestroyedParams) }},
 		{"Target.detachedFromTarget", "Target_detachedFromTarget.json", func() any { return new(cdpTargetDetachedFromTargetParams) }},
 	}
 

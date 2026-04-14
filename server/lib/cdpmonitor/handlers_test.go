@@ -101,8 +101,8 @@ func TestNetworkEvents(t *testing.T) {
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.requestWillBeSent",
 			"params": map[string]any{
-				"requestId":    "req-001",
-				"resourceType": "XHR",
+				"requestId": "req-001",
+				"type":      "XHR",
 				"request": map[string]any{
 					"method":  "POST",
 					"url":     "https://api.example.com/data",
@@ -119,6 +119,7 @@ func TestNetworkEvents(t *testing.T) {
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "POST", data["method"])
 		assert.Equal(t, "https://api.example.com/data", data["url"])
+		assert.Equal(t, "XHR", data["resource_type"], "resource_type must be populated from PDL 'type' wire field")
 
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.responseReceived",
@@ -170,12 +171,14 @@ func TestNetworkEvents(t *testing.T) {
 
 	t.Run("binary_resource_skips_body", func(t *testing.T) {
 		getBodyCalled.Store(false)
+		// Use PDL wire key "type" (not "resourceType") — Chrome emits ResourceType
+		// under "type" for Network.requestWillBeSent.
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.requestWillBeSent",
 			"params": map[string]any{
-				"requestId":    "img-001",
-				"resourceType": "Image",
-				"request":      map[string]any{"method": "GET", "url": "https://example.com/photo.png"},
+				"requestId": "img-001",
+				"type":      "Image",
+				"request":   map[string]any{"method": "GET", "url": "https://example.com/photo.png"},
 			},
 		})
 		srv.sendToMonitor(t, map[string]any{
