@@ -845,17 +845,32 @@
       this.focused = false
     }
 
-    async onPaste() {
+    async onPaste(event: ClipboardEvent) {
       if (!this.hosting || this.locked) return
 
       try {
-        await this.syncClipboard()
+        // Read clipboard text directly from the paste event. This is
+        // synchronous and works in every browser — including Safari
+        // cross-origin iframes that block navigator.clipboard.readText()
+        // when the parent page lacks a Permissions-Policy header.
+        const text = event.clipboardData?.getData('text/plain')
+
+        if (text && text !== this.clipboard) {
+          this.$accessor.remote.setClipboard(text)
+          this.$accessor.remote.sendClipboard(text)
+        } else if (!text) {
+          await this.syncClipboard()
+        }
+
+        // Give the neko server time to write the clipboard text to the Xorg
+        // selection before we trigger the paste. The clipboard update arrives
+        // via WebSocket while the keystroke travels the WebRTC data channel;
+        // without this delay the remote pastes stale content.
+        await new Promise((resolve) => setTimeout(resolve, 80))
 
         // Send the full Ctrl+V sequence. We can't rely on Guacamole having
         // captured the original Cmd/Ctrl keydown because Safari may intercept
-        // modifier shortcuts before they reach iframe JavaScript. And even if
-        // it did, the await above yields to the event loop, allowing keyup
-        // events to release Ctrl on the remote before we get here.
+        // modifier shortcuts before they reach iframe JavaScript.
         const ctrlKey = this.keyMap(0xffe3)
         const vKey = this.keyMap(0x0076)
         this.$client.sendData('keydown', { key: ctrlKey })
