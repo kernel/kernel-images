@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/kernel/kernel-images/server/lib/logger"
 )
@@ -88,19 +89,35 @@ func (o *Oncer) Enable(ctx context.Context) error {
 }
 
 type DebouncedController struct {
-	ctrl        Controller
-	mu          sync.Mutex
-	disabled    bool
-	activeCount int
+	ctrl           Controller
+	cooldown       time.Duration
+	mu             sync.Mutex
+	disabled       bool
+	activeCount    int
+	reenableTimer  *time.Timer
 }
 
+// NewDebouncedController creates a DebouncedController with no re-enable cooldown.
 func NewDebouncedController(ctrl Controller) Controller {
 	return &DebouncedController{ctrl: ctrl}
+}
+
+// NewDebouncedControllerWithCooldown creates a DebouncedController that delays
+// re-enabling scale-to-zero by the given cooldown after the last active holder
+// releases. A new Disable call during the cooldown cancels the pending
+// re-enable, avoiding rapid toggling from sequential requests.
+func NewDebouncedControllerWithCooldown(ctrl Controller, cooldown time.Duration) Controller {
+	return &DebouncedController{ctrl: ctrl, cooldown: cooldown}
 }
 
 func (c *DebouncedController) Disable(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if c.reenableTimer != nil {
+		c.reenableTimer.Stop()
+		c.reenableTimer = nil
+	}
 
 	c.activeCount++
 	if c.disabled {
@@ -129,10 +146,29 @@ func (c *DebouncedController) Enable(ctx context.Context) error {
 		return nil
 	}
 
-	if err := c.ctrl.Enable(ctx); err != nil {
-		return err
+	// No cooldown: re-enable immediately (original behavior).
+	if c.cooldown <= 0 {
+		if err := c.ctrl.Enable(ctx); err != nil {
+			return err
+		}
+		c.disabled = false
+		return nil
 	}
 
-	c.disabled = false
+	// Schedule re-enable after cooldown. If a new Disable arrives before the
+	// timer fires, it will be cancelled.
+	c.reenableTimer = time.AfterFunc(c.cooldown, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if c.activeCount > 0 || !c.disabled {
+			return
+		}
+
+		if c.ctrl.Enable(context.Background()) == nil {
+			c.disabled = false
+		}
+	})
+
 	return nil
 }
