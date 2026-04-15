@@ -49,7 +49,7 @@ func main() {
 	// ensure ffmpeg is available
 	mustFFmpeg()
 
-	stz := scaletozero.NewDebouncedControllerWithCooldown(scaletozero.NewUnikraftCloudController(), 1*time.Second)
+	stz := scaletozero.NewDebouncedControllerWithCooldown(scaletozero.NewUnikraftCloudController(), config.ScaleToZeroCooldown)
 	r := chi.NewRouter()
 	r.Use(
 		chiMiddleware.Logger,
