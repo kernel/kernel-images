@@ -848,19 +848,23 @@
     async onPaste() {
       if (!this.hosting || this.locked) return
 
-      await this.syncClipboard()
+      try {
+        await this.syncClipboard()
 
-      // Send the full Ctrl+V sequence. We can't rely on Guacamole having
-      // captured the original Cmd/Ctrl keydown because Safari may intercept
-      // modifier shortcuts before they reach iframe JavaScript. And even if
-      // it did, the await above yields to the event loop, allowing keyup
-      // events to release Ctrl on the remote before we get here.
-      const ctrlKey = this.keyMap(0xffe3)
-      const vKey = this.keyMap(0x0076)
-      this.$client.sendData('keydown', { key: ctrlKey })
-      this.$client.sendData('keydown', { key: vKey })
-      this.$client.sendData('keyup', { key: vKey })
-      this.$client.sendData('keyup', { key: ctrlKey })
+        // Send the full Ctrl+V sequence. We can't rely on Guacamole having
+        // captured the original Cmd/Ctrl keydown because Safari may intercept
+        // modifier shortcuts before they reach iframe JavaScript. And even if
+        // it did, the await above yields to the event loop, allowing keyup
+        // events to release Ctrl on the remote before we get here.
+        const ctrlKey = this.keyMap(0xffe3)
+        const vKey = this.keyMap(0x0076)
+        this.$client.sendData('keydown', { key: ctrlKey })
+        this.$client.sendData('keydown', { key: vKey })
+        this.$client.sendData('keyup', { key: vKey })
+        this.$client.sendData('keyup', { key: ctrlKey })
+      } finally {
+        this.pastePending = false
+      }
     }
 
     onOverlayFocus() {
