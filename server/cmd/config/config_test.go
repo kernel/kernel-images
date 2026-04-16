@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -24,6 +25,7 @@ func TestLoad(t *testing.T) {
 				OutputDir:                ".",
 				PathToFFmpeg:             "ffmpeg",
 				DevToolsProxyPort:        9222,
+				ScaleToZeroCooldown:      time.Second,
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
 				DevToolsProxyAddr:        "127.0.0.1:9222",
@@ -39,6 +41,7 @@ func TestLoad(t *testing.T) {
 				"OUTPUT_DIR":                 "/tmp",
 				"FFMPEG_PATH":                "/usr/local/bin/ffmpeg",
 				"DEVTOOLS_PROXY_PORT":        "9876",
+				"SCALE_TO_ZERO_COOLDOWN":     "5s",
 				"CHROMEDRIVER_PROXY_PORT":    "5432",
 				"CHROMEDRIVER_UPSTREAM_ADDR": "127.0.0.1:9999",
 			},
@@ -50,6 +53,7 @@ func TestLoad(t *testing.T) {
 				OutputDir:                "/tmp",
 				PathToFFmpeg:             "/usr/local/bin/ffmpeg",
 				DevToolsProxyPort:        9876,
+				ScaleToZeroCooldown:      5 * time.Second,
 				ChromeDriverProxyPort:    5432,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9999",
 				DevToolsProxyAddr:        "127.0.0.1:9876",
@@ -69,6 +73,7 @@ func TestLoad(t *testing.T) {
 				OutputDir:                ".",
 				PathToFFmpeg:             "ffmpeg",
 				DevToolsProxyPort:        7777,
+				ScaleToZeroCooldown:      time.Second,
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
 				DevToolsProxyAddr:        "10.0.0.1:1234",
