@@ -1,6 +1,6 @@
 # External Event Ingestion + SSE Streaming — Plan
 
-**Scope:** Two new HTTP endpoints layered on top of the merged CDP base: `POST /events/capture_session/publish` (external event ingestion) and `GET /events/capture_session/stream` (SSE live stream), both wired into the existing resource-style `CaptureSession`.
+**Scope:** Two new HTTP endpoints layered on top of the merged CDP base: `POST /events/publish` (external event ingestion) and `GET /events/stream` (SSE live stream), both wired into the existing resource-style `CaptureSession`.
 
 ---
 
@@ -10,7 +10,7 @@ The CDP monitor produces a unified `events.Event` stream into a `CaptureSession`
 
 ```
 GET    /events/capture_session     — read current session
-POST   /events/capture_session     — start a session
+POST   /events/capture_session     — start a session (409 if one is active)
 PATCH  /events/capture_session     — update config
 DELETE /events/capture_session     — stop the session
 ```
@@ -20,91 +20,37 @@ Gaps this plan closes:
 1. External producers (kernel API callers, browser extensions, local processes) have no way to inject events into the same merged stream.
 2. There is no live pull interface — consumers can read the session state but cannot subscribe to events in real time with reconnection support.
 
-Both new endpoints share the existing `CaptureSession` — no new storage, no new transport, no new schema.
-
 ---
 
 ## 2. What's Changing
 
 ### 2.1 New endpoints
 
-| Method | Path | Handler | operationId |
-| --- | --- | --- | --- |
-| POST | `/events/capture_session/publish` | `ApiService.PublishEvent` | `publishEvent` |
-| GET | `/events/capture_session/stream` | `ApiService.StreamCaptureSession` (SSE) | `streamCaptureSession` |
+| Method | Path | Handler |
+| --- | --- | --- |
+| POST | `/events/publish` | `ApiService.PublishEvent` |
+| GET | `/events/stream` | `ApiService.StreamEvents` (SSE) |
 
-The stream endpoint follows the same singleton pattern as the other `/events/capture_session` routes. Handlers reference `s.captureSession` directly; the endpoint returns 404 when no session is active.
-
-Both registered in `server/cmd/api/main.go` alongside the `/events/capture_session` routes from the base branch.
-
-### 2.2 `POST /events/capture_session/publish`
+### 2.2 `POST /events/publish`
 
 Accepts a JSON `events.Event` body and publishes it into the currently active `CaptureSession`.
 
-**Defaults applied server-side when caller omits them:**
-
-- `source.kind` — stamped to `kernel_api` when absent, so downstream consumers can distinguish external traffic from CDP traffic.
+**Publish requires an active capture session.** If no session is active the handler returns `400` — the caller must `POST /events/start` first. The session is a precondition for publishing, not an implicitly-created resource.
 
 **Validation and status codes:**
 
+- `400` when no capture session is active.
 - `400` on invalid JSON body.
 - `400` when `type` is empty.
-- `400` when `category` is absent or not in the known set (`events.ValidCategory`). External callers always know their category; derivation is not performed.
-- `404` when no capture session is active (consistent with the resource model — publish has no implicit session).
 - `200` on successful publish.
 
-The handler does not take `monitorMu` — `CaptureSession.Publish` is serialised internally and guarantees monotonic seq delivery.
+The handler unconditionally sets `source.kind = KindKernelAPI` **after** decoding, overwriting whatever the caller supplied. This is not a default — it is an enforcement. A caller that sends `"source": {"kind": "cdp"}` must not be able to forge CDP provenance; `source.kind` is documented as the fan-out key (§3.2) and its value for this endpoint is not negotiable.
 
-**Request** — `type` and `category` are required:
+The handler does not take `monitorMu` — `CaptureSession.Publish` is serialised internally and guarantees monotonic seq delivery. This creates a narrow TOCTOU: a concurrent `StopCapture` can clear the session ID between the `Active()` check and the `Publish()` call, causing the event to be written to the ring buffer with an empty `captureSessionID` (after the `session_ended` marker). This is accepted; grabbing `monitorMu` on every publish would serialize all external events behind CDP monitor start/stop.
 
-```json
-POST /events/capture_session/publish
-Content-Type: application/json
+### 2.3 `GET /events/stream`
 
-{
-  "type": "network_request",
-  "category": "network",
-  "ts": 1713100000000000,
-  "source": {
-    "kind": "kernel_api",
-    "event": "fetch",
-    "metadata": { "request_id": "abc123" }
-  },
-  "detail_level": "standard",
-  "url": "https://example.com/api/data",
-  "data": { "method": "GET", "status": 200 }
-}
-```
-
-Minimal valid request:
-
-```json
-{ "type": "network_request", "category": "network" }
-```
-
-**Response** `200` — pipeline stamps `seq` and `capture_session_id`, returns the full `Envelope`:
-
-```json
-{
-  "capture_session_id": "sess_01j...",
-  "seq": 42,
-  "event": {
-    "ts": 1713100000000000,
-    "type": "network_request",
-    "category": "network",
-    "source": { "kind": "kernel_api" },
-    "detail_level": "standard",
-    "url": "https://example.com/api/data",
-    "data": { "method": "GET", "status": 200 }
-  }
-}
-```
-
-**Capture-session category filter interaction.** The base branch introduced `CaptureConfig.Categories` to let callers filter what the CDP monitor records. External publishes are **not** filtered by this config — an explicit publish is treated as a caller intent and always reaches the pipeline. (Open question §6.5.)
-
-### 2.3 `GET /events/capture_session/stream`
-
-Server-Sent Events endpoint backed by the singleton `CaptureSession`. Follows the same pattern as `GET /events/capture_session` — no path parameter, operates on the currently active session, returns 404 when none is active.
+Server-Sent Events endpoint backed by a `CaptureSession` reader. Supports multiple concurrent clients — each connection creates an independent `Reader` on the ring buffer.
 
 **Frame format:**
 
@@ -119,37 +65,121 @@ data: {envelope-json}
 - `Cache-Control: no-cache`
 - `X-Accel-Buffering: no` (disables nginx / reverse-proxy buffering)
 
-**Reconnection.** Honours the `Last-Event-ID` request header. On reconnect the client passes the last `seq` it saw; the handler constructs `captureSession.NewReader(lastSeq)` which resumes at the first envelope with `Seq > lastSeq` — gap-tolerant, does not require `lastSeq+1`.
+After writing headers, the handler calls `flusher.Flush()` once before entering the read loop so the client's `EventSource.onopen` fires immediately rather than waiting for the first event.
 
-**No-session behaviour.** Returns `404` when no capture session is active, matching the resource-style semantics of the base branch.
+**Read position.** A client chooses where to start reading:
+
+- `afterSeq=0` (default) — read from the **oldest event still in the ring buffer**. This is the behaviour when no `Last-Event-ID` header is sent.
+- `afterSeq=N` (via `Last-Event-ID: N` header) — resume after seq N. The reader returns the first envelope with `Seq > N`. Gap-tolerant: if events between the client's last seq and the oldest surviving seq were evicted, the reader reports a `Dropped` count and fast-forwards.
+
+`Last-Event-ID: 0` and a missing `Last-Event-ID` header are treated identically — both start from the oldest buffered event. This is correct because synthetic `events_dropped` envelopes carry `Seq==0`; a reconnecting client that received only a dropped frame and sends `Last-Event-ID: 0` must not be fast-forwarded past real events.
+
+**Multi-client fan-out.** The ring buffer's closed-channel broadcast means N concurrent readers are woken on every publish with no per-reader allocation on the write path. Each reader tracks its own `nextSeq` independently — a slow client does not block others or the publisher.
+
+**No-session behaviour.** Returns `400` when no capture session is active, consistent with `/events/publish`.
+
+**Client disconnect.** A consumer leaves the stream by closing the connection. The request context is cancelled, `reader.Read(ctx)` returns `ctx.Err()`, and the handler goroutine exits. No server-side cleanup is required — the `Reader` struct is GC'd once the goroutine returns.
 
 **Flusher guard.** If the `ResponseWriter` does not implement `http.Flusher`, the handler returns `500` **before writing any headers** to avoid partial responses.
 
-**Lifecycle.** The handler loops on `reader.Read(ctx)` bound to the request context; when the client disconnects, the read returns and the goroutine exits cleanly.
+**Keepalive.** The handler emits a comment frame (`:\n\n`) when no event has been sent for 15 seconds. Without this, reverse proxies that enforce a read timeout (nginx default: `proxy_read_timeout 60s`, some load balancers shorter) tear down idle connections. `X-Accel-Buffering: no` suppresses proxy buffering but does not reset the read timeout. Implementation: wrap each `reader.Read` call in a `context.WithTimeout(ctx, 15*time.Second)`; a `DeadlineExceeded` result (when the parent `ctx` is still live) means no event arrived — write the comment frame, flush, and loop. The simple `for { reader.Read }` structure is preserved with no goroutine or channel needed.
+
+**Lifecycle.** The handler loops on `reader.Read` with a 15s per-call deadline. It exits on three conditions: (1) the client disconnects — the parent `ctx` is cancelled and `reader.Read` returns `ctx.Err()`; (2) a `session_ended` envelope is received — the handler writes the final SSE frame and returns; (3) a write to the `ResponseWriter` fails — the handler returns. No server-side cleanup is required in any case.
+
+### 2.4 `POST /events/stop` — session clearing
+
+`StopCapture` must stop the entire capture session, not just the CDP monitor. Currently it calls `cdpMonitor.Stop()` but leaves the capture session state intact, so `Active()` remains true and subsequent publishes or stream connections succeed against a session that is conceptually stopped.
+
+**Required change:** `StopCapture` calls `captureSession.Stop()` after `cdpMonitor.Stop()`. `CaptureSession.Stop()` does two things in order:
+
+1. Publishes a synthetic `session_ended` envelope (type `"session_ended"`, source kind `"kernel_api"`) into the ring buffer — this is a real envelope with a real monotonic seq so every open `StreamEvents` connection receives it.
+2. Clears the session ID so `Active()` returns false.
+
+**Cross-session reader termination.** Without this boundary, a `Reader` blocked across a Stop→Start cycle wakes up on the first `Publish()` of the new session and silently delivers new-session envelopes to a connection that was opened on the old session (the `CaptureSessionID` in the envelope changes but no signal is sent). The `session_ended` envelope is the signal. `StreamEvents` exits its read loop after sending the `session_ended` frame, closing the connection cleanly. The client may then reconnect and open a new stream against the new session.
+
+**Seq counter.** `Stop()` does **not** reset the seq counter — seq remains monotonic across start/stop cycles within the same process lifetime. This avoids any possibility of a reconnecting SSE client receiving a lower seq than its last `Last-Event-ID`.
+
+### 2.5 OpenAPI spec entries
+
+Both endpoints must be added to `server/openapi.yaml` under `paths:` alongside the existing `/events/capture_session` block.
+
+`POST /events/publish` — standard JSON request/response:
+
+```yaml
+  /events/publish:
+    post:
+      summary: Publish an external event into the active capture session
+      operationId: PublishEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Event'
+      responses:
+        '200':
+          description: Event accepted and published
+        '400':
+          description: No active capture session, invalid JSON, or missing `type`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+```
+
+`GET /events/stream` — SSE long-lived response. OpenAPI 3.x has no native SSE type; document the response as `text/event-stream` with a string schema and describe the frame format in `description:`:
+
+```yaml
+  /events/stream:
+    get:
+      summary: Stream capture-session events as Server-Sent Events
+      operationId: StreamEvents
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          schema:
+            type: string
+          required: false
+          description: Resume after this sequence number. Omit to start from the oldest buffered event.
+      responses:
+        '200':
+          description: Live stream of capture-session events. A synthetic `events_dropped` event is sent when events were evicted from the buffer before the client could read them.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        '400':
+          description: No active capture session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: ResponseWriter does not support flushing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+```
 
 ---
 
 ## 3. Key Design Decisions
 
 1. **Shared pipeline, not a new queue.** External events flow through the same `CaptureSession` as CDP events, so `seq` is globally monotonic across all sources. Consumers never have to merge streams.
-2. `**source.kind` is the fan-out key.\*\* `kernel_api` for publish, `cdp` for the monitor, `extension` / `local_process` reserved for future producers. Category is a required caller-supplied field; source is the precise provenance.
-3. **Publish does not honour** `CaptureConfig.Categories`**.** The config is a filter on what the CDP monitor records — an explicit publish is a deliberate caller action and bypasses it.
-4. **SSE over WebSocket.** SSE is one-way, proxy-friendly, and has built-in reconnection semantics (`Last-Event-ID`) that map cleanly to our `seq` cursor. No extra framing library.
-5. **Direct writes, no goroutine.** `StreamEvents` writes straight to the `ResponseWriter` from the request goroutine. No `io.Pipe`, no background worker — correct for HTTP/1.1 SSE and simpler to reason about on disconnect.
-6. **Seq==0 skip on fast-forward.** Synthetic `events_dropped` envelopes carry `Seq==0`; the `Last-Event-ID` seek skips them so they never advance the cursor past a real event.
-7. **Envelope size cap enforced in the pipeline, not the handler.** `truncateIfNeeded` (1 MB limit) lives on the publish path; `PublishEvent` does not re-check size.
-8. **404 when no session.** Both endpoints 404 if no capture session is active, consistent with the resource model. Publishes are not buffered and streams do not wait.
 
----
+2. `source.kind` **is the fan-out key.** `kernel_api` for publish, `cdp` for the monitor, `extension` / `local_process` reserved for future producers.
 
----
+3. **SSE over WebSocket.** SSE is one-way, proxy-friendly, and has built-in reconnection semantics (`Last-Event-ID`) that map cleanly to our `seq` cursor. No extra framing library.
 
-## 4. Testing
+4. **Direct writes, no goroutine.** `StreamEvents` writes straight to the `ResponseWriter` from the request goroutine. No `io.Pipe`, no background worker — correct for HTTP/1.1 SSE and simpler to reason about on disconnect.
 
-- Unit tests in `events_publish_test.go` and `events_stream_test.go` run against a real `ApiService` + `CaptureSession` (no mocks).
-- Race: `go test ./... -race` passes for the whole server module.
-- SSE tests use an `httptest.Server` + a small SSE client that parses `id:` / `data:` frames and asserts ordering and content.
-- `Last-Event-ID` reconnection is exercised by: publish N events → stream receives them → disconnect → publish M more → reconnect with last `seq` → assert stream resumes at seq N+1 (or the first surviving seq if the ring dropped events).
-- No-session 404 is covered for both endpoints.
+5. **Seq==0 skip on fast-forward.** Synthetic `events_dropped` envelopes carry `Seq==0`; the `Last-Event-ID` seek skips them so they never advance the cursor past a real event.
 
----
+6. **400 when no session.** Both endpoints return `400` if no capture session is active. The session is a precondition — the caller must start one first. `400` (No active capture session). Note: `GET /events/capture_session` (base branch) returns `404` when no session exists — clients must handle both codes depending on which endpoint they call.
+
+7. **Multi-client streaming.** Each `GET /events/stream` creates an independent ring buffer `Reader`. Readers are woken via closed-channel broadcast — O(1) on the publish side regardless of subscriber count. A slow reader falls behind and gets a `Dropped` notification; it never blocks the publisher or other readers.
+
+8. **CaptureSession active-state tracking.** `Start()` sets the session ID; `Stop()` clears it — `StopCapture` calls both `cdpMonitor.Stop()` and `captureSession.Stop()`. `Active() bool` is a required new method (`return s.captureSessionID.Load() != nil && *s.captureSessionID.Load() != ""`); it does not exist yet and is a prerequisite for both `PublishEvent` and `StreamEvents`. Seq is **not** reset on stop — it stays monotonic across start/stop cycles so reconnecting SSE clients never see a lower seq than their last `Last-Event-ID`.
+
+9. `session_ended` **envelope for cross-session reader safety.** A `Reader` held open across Stop→Start wakes silently on the new session's first `Publish` and starts delivering new-session envelopes. Context cancellation on Stop would require storing per-connection cancel funcs in `ApiService`. Instead, `Stop()` publishes a synthetic `session_ended` envelope (real seq, `source.kind = "kernel_api"`) before clearing the session ID. `StreamEvents` exits its loop after sending this frame. This keeps the disconnect path entirely in the event stream — no shared mutable state in the handler, no cancel-func bookkeeping.
