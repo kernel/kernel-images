@@ -423,20 +423,10 @@ func (m *Monitor) attachExistingTargets(ctx context.Context) {
 		}
 		targetID := ti.TargetID
 		m.asyncWg.Go(func() {
-			res, err := m.send(ctx, "Target.attachToTarget", map[string]any{
+			_, _ = m.send(ctx, "Target.attachToTarget", map[string]any{
 				"targetId": targetID,
 				"flatten":  true,
 			}, "")
-			if err != nil {
-				return
-			}
-			var attachResp struct {
-				SessionID string `json:"sessionId"`
-			}
-			if json.Unmarshal(res, &attachResp) == nil && attachResp.SessionID != "" {
-				m.enableDomains(ctx, attachResp.SessionID, targetTypePage)
-				_ = m.injectScript(ctx, attachResp.SessionID)
-			}
 		})
 	}
 }
