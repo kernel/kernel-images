@@ -25,7 +25,10 @@
   function isSensitiveInput(el) {
     if (!el || !el.tagName) return false;
     var tag = el.tagName.toUpperCase();
-    if (tag !== 'INPUT' && tag !== 'TEXTAREA') return false;
+    var isEditable = tag === 'INPUT' || tag === 'TEXTAREA'
+      || el.isContentEditable
+      || (el.getAttribute && el.getAttribute('role') === 'textbox');
+    if (!isEditable) return false;
     // <input type="password"> is the primary guard.
     if (el.type === 'password') return true;
     // autocomplete attribute check.
@@ -34,8 +37,8 @@
     for (var i = 0; i < acTokens.length; i++) {
       if (SENSITIVE_AUTOCOMPLETE[acTokens[i]]) return true;
     }
-    // name/id heuristic as fallback.
-    var name = (el.name || el.id || '');
+    // name/id/aria-label heuristic as fallback — covers custom controls that use ARIA.
+    var name = (el.name || el.id || (el.getAttribute && el.getAttribute('aria-label')) || '');
     return SENSITIVE_NAME_RE.test(name);
   }
 
