@@ -107,16 +107,6 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		if m.decodeParams(msg.Method, msg.Params, &p) {
 			m.handleAttachedToTarget(p)
 		}
-	case "Target.targetCreated":
-		var p cdpTargetTargetCreatedParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleTargetCreated(p, msg.SessionID)
-		}
-	case "Target.targetDestroyed":
-		var p cdpTargetTargetDestroyedParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleTargetDestroyed(p, msg.SessionID)
-		}
 	case "Target.detachedFromTarget":
 		var p cdpTargetDetachedFromTargetParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
@@ -432,22 +422,6 @@ func (m *Monitor) handleAttachedToTarget(p cdpTargetAttachedToTargetParams) {
 			_ = m.injectScript(ctx, p.SessionID)
 		}
 	})
-}
-
-func (m *Monitor) handleTargetCreated(p cdpTargetTargetCreatedParams, sessionID string) {
-	data, _ := json.Marshal(map[string]any{
-		"target_id":   p.TargetInfo.TargetID,
-		"target_type": p.TargetInfo.Type,
-		"url":         p.TargetInfo.URL,
-	})
-	m.publishEvent(EventTargetCreated, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Target.targetCreated", data, sessionID)
-}
-
-func (m *Monitor) handleTargetDestroyed(p cdpTargetTargetDestroyedParams, sessionID string) {
-	data, _ := json.Marshal(map[string]any{
-		"target_id": p.TargetID,
-	})
-	m.publishEvent(EventTargetDestroyed, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Target.targetDestroyed", data, sessionID)
 }
 
 func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) {

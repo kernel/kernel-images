@@ -235,33 +235,6 @@ func TestPageEvents(t *testing.T) {
 	assert.Equal(t, events.CategoryPage, ev3.Category)
 }
 
-func TestTargetEvents(t *testing.T) {
-	srv := newTestServer(t)
-	defer srv.close()
-
-	_, ec, cleanup := startMonitor(t, srv, nil)
-	defer cleanup()
-
-	srv.sendToMonitor(t, map[string]any{
-		"method": "Target.targetCreated",
-		"params": map[string]any{
-			"targetInfo": map[string]any{"targetId": "t-1", "type": "page", "url": "https://new.example.com"},
-		},
-	})
-	ev := ec.waitFor(t, "target_created", 2*time.Second)
-	assert.Equal(t, events.CategoryPage, ev.Category)
-	var data map[string]any
-	require.NoError(t, json.Unmarshal(ev.Data, &data))
-	assert.Equal(t, "t-1", data["target_id"])
-
-	srv.sendToMonitor(t, map[string]any{
-		"method": "Target.targetDestroyed",
-		"params": map[string]any{"targetId": "t-1"},
-	})
-	ev2 := ec.waitFor(t, "target_destroyed", 2*time.Second)
-	assert.Equal(t, events.CategoryPage, ev2.Category)
-}
-
 func TestBindingAndTimeline(t *testing.T) {
 	srv := newTestServer(t)
 	defer srv.close()

@@ -25,8 +25,6 @@ const (
 	EventDOMContentLoaded     = "dom_content_loaded"      // Page.domContentEventFired
 	EventPageLoad             = "page_load"               // Page.loadEventFired
 	EventLayoutShift          = "layout_shift"            // PerformanceTimeline event of type "layout-shift"
-	EventTargetCreated        = "target_created"          // Target.targetCreated
-	EventTargetDestroyed      = "target_destroyed"        // Target.targetDestroyed
 )
 
 // Computed events — synthetic events derived by computed.go state machines.

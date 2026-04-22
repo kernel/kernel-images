@@ -263,16 +263,6 @@ type cdpTargetAttachedToTargetParams struct {
 	WaitingForDebugger bool                `json:"waitingForDebugger"`
 }
 
-// cdpTargetTargetCreatedParams mirrors Target.targetCreated params.
-type cdpTargetTargetCreatedParams struct {
-	TargetInfo cdpTargetTargetInfo `json:"targetInfo"`
-}
-
-// cdpTargetTargetDestroyedParams mirrors Target.targetDestroyed params.
-type cdpTargetTargetDestroyedParams struct {
-	TargetID string `json:"targetId"`
-}
-
 // cdpTargetDetachedFromTargetParams mirrors Target.detachedFromTarget params.
 type cdpTargetDetachedFromTargetParams struct {
 	SessionID string `json:"sessionId"`
