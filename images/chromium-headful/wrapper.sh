@@ -82,6 +82,17 @@ fi
 export HOSTNAME="${HOSTNAME:-kernel-vm}"
 
 # -----------------------------------------------------------------------------
+# Disable IPv6 -----------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# The VM environment has no IPv6 route, so any IPv6 connection attempt will fail
+# immediately with ENETUNREACH. Chromium's built-in DNS client may attempt
+# DNS-over-HTTPS to IPv6 endpoints (e.g. [2001:4860:4860::8888]:443), and each
+# failed attempt wastes a connection slot from the MaxConnectionsPerProxy pool.
+# Disabling IPv6 at the kernel level prevents these wasted attempts.
+echo 1 > /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null || true
+echo 1 > /proc/sys/net/ipv6/conf/default/disable_ipv6 2>/dev/null || true
+
+# -----------------------------------------------------------------------------
 # House-keeping for the unprivileged "kernel" user --------------------------------
 # Some Chromium subsystems want to create files under $HOME (NSS cert DB, dconf
 # cache).  If those directories are missing or owned by root Chromium emits

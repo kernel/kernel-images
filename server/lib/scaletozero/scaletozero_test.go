@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -168,4 +169,94 @@ func TestUnikraftCloudControllerTruncatesExistingContent(t *testing.T) {
 	b, err := os.ReadFile(p)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("+"), b)
+}
+
+func TestDebouncedControllerCooldownDelaysEnable(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedControllerWithCooldown(mock, 50*time.Millisecond)
+
+	require.NoError(t, c.Disable(t.Context()))
+	require.NoError(t, c.Enable(t.Context()))
+
+	// Enable should not have been called yet — still in cooldown
+	mock.mu.Lock()
+	assert.Equal(t, 1, mock.disableCalls)
+	assert.Equal(t, 0, mock.enableCalls)
+	mock.mu.Unlock()
+
+	// Wait for cooldown to fire
+	time.Sleep(100 * time.Millisecond)
+
+	mock.mu.Lock()
+	assert.Equal(t, 1, mock.enableCalls)
+	mock.mu.Unlock()
+}
+
+func TestDebouncedControllerCooldownCancelledByNewDisable(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedControllerWithCooldown(mock, 50*time.Millisecond)
+
+	require.NoError(t, c.Disable(t.Context()))
+	require.NoError(t, c.Enable(t.Context()))
+
+	// New request arrives before cooldown fires
+	require.NoError(t, c.Disable(t.Context()))
+
+	// Wait past what would have been the cooldown
+	time.Sleep(100 * time.Millisecond)
+
+	mock.mu.Lock()
+	// Enable should NOT have been called — the new Disable cancelled the timer
+	assert.Equal(t, 0, mock.enableCalls)
+	// Only one actual Disable write (second Disable was already disabled)
+	assert.Equal(t, 1, mock.disableCalls)
+	mock.mu.Unlock()
+
+	// Release the second request
+	require.NoError(t, c.Enable(t.Context()))
+	time.Sleep(100 * time.Millisecond)
+
+	mock.mu.Lock()
+	assert.Equal(t, 1, mock.enableCalls)
+	mock.mu.Unlock()
+}
+
+func TestDebouncedControllerCooldownCollapsesRapidSequential(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedControllerWithCooldown(mock, 50*time.Millisecond)
+
+	// Simulate 10 rapid sequential requests
+	for i := 0; i < 10; i++ {
+		require.NoError(t, c.Disable(t.Context()))
+		require.NoError(t, c.Enable(t.Context()))
+	}
+
+	// Only 1 Disable write; Enable not yet called (still in cooldown)
+	mock.mu.Lock()
+	assert.Equal(t, 1, mock.disableCalls)
+	assert.Equal(t, 0, mock.enableCalls)
+	mock.mu.Unlock()
+
+	// Wait for final cooldown
+	time.Sleep(100 * time.Millisecond)
+
+	mock.mu.Lock()
+	assert.Equal(t, 1, mock.disableCalls)
+	assert.Equal(t, 1, mock.enableCalls)
+	mock.mu.Unlock()
+}
+
+func TestDebouncedControllerCooldownZeroBehavesLikeOriginal(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedControllerWithCooldown(mock, 0)
+
+	require.NoError(t, c.Disable(t.Context()))
+	require.NoError(t, c.Enable(t.Context()))
+
+	assert.Equal(t, 1, mock.disableCalls)
+	assert.Equal(t, 1, mock.enableCalls)
 }

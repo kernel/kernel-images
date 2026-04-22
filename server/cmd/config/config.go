@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/kelseyhightower/envconfig"
 )
@@ -23,6 +24,9 @@ type Config struct {
 	// DevTools proxy configuration
 	DevToolsProxyPort int  `envconfig:"DEVTOOLS_PROXY_PORT" default:"9222"`
 	LogCDPMessages    bool `envconfig:"LOG_CDP_MESSAGES" default:"false"`
+
+	// How long to wait after the last active request before re-enabling scale-to-zero.
+	ScaleToZeroCooldown time.Duration `envconfig:"SCALE_TO_ZERO_COOLDOWN" default:"1s"`
 
 	// ChromeDriver proxy: external port where the proxy listens.
 	ChromeDriverProxyPort int `envconfig:"CHROMEDRIVER_PROXY_PORT" default:"9224"`

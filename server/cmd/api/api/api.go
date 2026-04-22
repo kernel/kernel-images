@@ -9,7 +9,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -68,11 +70,26 @@ type ApiService struct {
 	// xvfbResizeMu serializes background Xvfb restarts to prevent races
 	// when multiple CDP fast-path resizes fire in quick succession.
 	xvfbResizeMu sync.Mutex
+
+	// CDP event pipeline and cdpMonitor.
+	captureSession  *events.CaptureSession
+	cdpMonitor      *cdpmonitor.Monitor
+	monitorMu       sync.Mutex
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
 
-func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFactory, upstreamMgr *devtoolsproxy.UpstreamManager, stz scaletozero.Controller, nekoAuthClient *nekoclient.AuthClient) (*ApiService, error) {
+func New(
+	recordManager recorder.RecordManager,
+	factory recorder.FFmpegRecorderFactory,
+	upstreamMgr *devtoolsproxy.UpstreamManager,
+	stz scaletozero.Controller,
+	nekoAuthClient *nekoclient.AuthClient,
+	captureSession *events.CaptureSession,
+	displayNum int,
+) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
 		return nil, fmt.Errorf("recordManager cannot be nil")
@@ -82,11 +99,16 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		return nil, fmt.Errorf("upstreamMgr cannot be nil")
 	case nekoAuthClient == nil:
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
+	case captureSession == nil:
+		return nil, fmt.Errorf("captureSession cannot be nil")
 	}
 
+	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum)
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &ApiService{
-		recordManager:     recordManager,
-		factory:           factory,
+		recordManager:   recordManager,
+		factory:         factory,
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
@@ -94,6 +116,10 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
+		captureSession:    captureSession,
+		cdpMonitor:        mon,
+		lifecycleCtx:      ctx,
+		lifecycleCancel:   cancel,
 	}, nil
 }
 
@@ -313,5 +339,11 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	s.monitorMu.Lock()
+	s.lifecycleCancel()
+	s.cdpMonitor.Stop()
+	s.captureSession.Stop()
+	_ = s.captureSession.Close()
+	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)
 }

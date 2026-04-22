@@ -1194,8 +1194,152 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /events/capture_session:
+    get:
+      summary: Get the capture session
+      description: >
+        Returns the current state of the capture session. Returns 404 if
+        no session is active.
+      operationId: getCaptureSession
+      responses:
+        "200":
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    post:
+      summary: Start the capture session
+      description: >
+        Starts the capture session. At most one session may exist at a
+        time; returns 409 if a session is already active. The caller must
+        DELETE the existing session before starting a new one.
+      operationId: startCaptureSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartCaptureSessionRequest"
+      responses:
+        "201":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    patch:
+      summary: Update the capture session
+      description: >
+        Updates the active capture session. Returns 404 if no session is
+        active.
+      operationId: updateCaptureSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCaptureSessionRequest"
+      responses:
+        "200":
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      summary: Stop the capture session
+      description: >
+        Stops the capture session and its CDP monitor, returning the final
+        session state. Returns 404 if no session is active.
+      operationId: stopCaptureSession
+      responses:
+        "200":
+          description: Session stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
 components:
   schemas:
+    CaptureConfig:
+      type: object
+      description: Capture filtering preferences.
+      properties:
+        categories:
+          type: array
+          description: >
+            Event categories to capture. When omitted or empty, all
+            categories are captured.
+          items:
+            type: string
+            enum:
+              - console
+              - network
+              - page
+              - interaction
+              - liveview
+              - captcha
+              - system
+      additionalProperties: false
+    CaptureSession:
+      type: object
+      description: A capture session resource.
+      required:
+        - id
+        - status
+        - config
+        - seq
+        - created_at
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum:
+            - running
+            - stopped
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+        seq:
+          type: integer
+          format: int64
+          description: Monotonically increasing sequence number (last published).
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    StartCaptureSessionRequest:
+      type: object
+      description: >
+        Optional capture configuration. All fields default to the
+        server-defined profile when omitted or when no body is sent.
+      properties:
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+      additionalProperties: false
+    UpdateCaptureSessionRequest:
+      type: object
+      description: Fields to update on the capture session.
+      properties:
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+      additionalProperties: false
     StartRecordingRequest:
       type: object
       properties:
