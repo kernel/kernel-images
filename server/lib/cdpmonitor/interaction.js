@@ -30,7 +30,10 @@
     if (el.type === 'password') return true;
     // autocomplete attribute check.
     var ac = (el.getAttribute && el.getAttribute('autocomplete')) || '';
-    if (SENSITIVE_AUTOCOMPLETE[ac.toLowerCase().trim()]) return true;
+    var acTokens = ac.toLowerCase().trim().split(/\s+/);
+    for (var i = 0; i < acTokens.length; i++) {
+      if (SENSITIVE_AUTOCOMPLETE[acTokens[i]]) return true;
+    }
     // name/id heuristic as fallback.
     var name = (el.name || el.id || '');
     return SENSITIVE_NAME_RE.test(name);
