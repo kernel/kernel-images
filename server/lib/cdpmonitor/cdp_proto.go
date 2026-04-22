@@ -18,6 +18,7 @@ package cdpmonitor
 // with stdlib and the events package.
 //
 // PDL source: https://chromedevtools.github.io/devtools-protocol/tot/
+// Written against Chrome M146 (ChromeDriver 146.0.7680.165).
 
 import "encoding/json"
 
