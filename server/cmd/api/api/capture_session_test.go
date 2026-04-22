@@ -248,5 +248,12 @@ func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
 	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), newCaptureSession(t), 0)
 	require.NoError(t, err)
+	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc
 }
+
+type stubCdpMonitor struct{}
+
+func (s *stubCdpMonitor) Start(_ context.Context) error { return nil }
+func (s *stubCdpMonitor) Stop()                         {}
+func (s *stubCdpMonitor) IsRunning() bool               { return false }

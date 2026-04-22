@@ -21,6 +21,14 @@ import (
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
+type cdpMonitorController interface {
+	Start(ctx context.Context) error
+	Stop()
+	IsRunning() bool
+}
+
+var _ cdpMonitorController = (*cdpmonitor.Monitor)(nil)
+
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
 	defaultRecorderID string
@@ -74,7 +82,7 @@ type ApiService struct {
 
 	// CDP event pipeline and cdpMonitor.
 	captureSession  *events.CaptureSession
-	cdpMonitor      *cdpmonitor.Monitor
+	cdpMonitor      cdpMonitorController
 	monitorMu       sync.Mutex
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
