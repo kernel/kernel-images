@@ -125,12 +125,13 @@ func execLookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
-// waitForPort waits until the given port is available for binding on both IPv4 and IPv6.
+// waitForPort waits until the given port is available for binding on IPv4.
 // This handles the delay after SIGKILL before the kernel releases the socket.
 // We disable SO_REUSEADDR to get an accurate check matching chromium's bind behavior.
+// Only IPv4 is checked because IPv6 is disabled at the kernel level in the VM.
 func waitForPort(port string, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
-	addrs := []string{"127.0.0.1:" + port, "[::1]:" + port}
+	addrs := []string{"127.0.0.1:" + port}
 
 	// ListenConfig with Control to disable SO_REUSEADDR for accurate port availability check
 	lc := &net.ListenConfig{
@@ -167,7 +168,7 @@ func waitForPort(port string, timeout time.Duration) {
 }
 
 // killExistingChromium kills any existing chromium browser processes and waits for them to die.
-// This ensures a clean restart where the new process can bind to both IPv4 and IPv6.
+// This ensures a clean restart where the new process can bind to IPv4.
 // Note: We use -x for exact match to avoid killing chromium-launcher itself.
 func killExistingChromium() {
 	// Kill chromium processes by exact name match.
