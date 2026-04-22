@@ -95,7 +95,6 @@
           target_selector: s
         }));
       }
-      scrollStart = {x: pos.x, y: pos.y};
       scrollTarget = null;
     }, 300);
   }, true);
