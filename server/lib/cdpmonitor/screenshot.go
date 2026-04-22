@@ -13,18 +13,21 @@ import (
 )
 
 // tryScreenshot fires a screenshot if the 2s rate-limit window has elapsed.
-// lastScreenshotAt CAS enforces the window; screenshotInFlight CAS prevents
-// overlapping captures when captureScreenshot outlasts the 2s window (timeout is 10s).
+// screenshotInFlight CAS is checked first so that a blocked attempt never
+// consumes the rate-limit window without starting a capture. lastScreenshotAt
+// is only advanced after the in-flight slot is claimed; if that CAS then loses
+// to a concurrent goroutine the slot is released and we return cleanly.
 func (m *Monitor) tryScreenshot(ctx context.Context) {
 	now := time.Now().UnixMilli()
 	last := m.lastScreenshotAt.Load()
 	if now-last < 2000 {
 		return
 	}
-	if !m.lastScreenshotAt.CompareAndSwap(last, now) {
+	if !m.screenshotInFlight.CompareAndSwap(false, true) {
 		return
 	}
-	if !m.screenshotInFlight.CompareAndSwap(false, true) {
+	if !m.lastScreenshotAt.CompareAndSwap(last, now) {
+		m.screenshotInFlight.Store(false)
 		return
 	}
 	m.asyncWg.Go(func() {
