@@ -140,7 +140,11 @@ func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID st
 		"args":        argValues,
 		"stack_trace": p.StackTrace,
 	})
-	m.publishEvent(EventConsoleLog, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
+	eventType := EventConsoleLog
+	if p.Type == "error" {
+		eventType = EventConsoleError
+	}
+	m.publishEvent(eventType, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
 }
 
 func (m *Monitor) handleExceptionThrown(p cdpRuntimeExceptionThrownParams, sessionID string) {

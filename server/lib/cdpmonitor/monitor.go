@@ -106,29 +106,6 @@ func (m *Monitor) IsRunning() bool {
 	return m.running.Load()
 }
 
-// Health returns a point-in-time snapshot of internal counters useful for
-// debugging and operational visibility.
-func (m *Monitor) Health() MonitorHealth {
-	m.pendMu.Lock()
-	pendCmds := len(m.pending)
-	m.pendMu.Unlock()
-
-	m.pendReqMu.Lock()
-	pendReqs := len(m.pendingRequests)
-	m.pendReqMu.Unlock()
-
-	m.sessionsMu.RLock()
-	sessions := len(m.sessions)
-	m.sessionsMu.RUnlock()
-
-	return MonitorHealth{
-		Running:         m.running.Load(),
-		PendingCommands: pendCmds,
-		PendingRequests: pendReqs,
-		Sessions:        sessions,
-	}
-}
-
 // getLifecycleCtx returns the current lifecycle context under lifeMu.
 func (m *Monitor) getLifecycleCtx() context.Context {
 	m.lifeMu.Lock()
