@@ -16,8 +16,8 @@ const mainSessionUnset = "\x00unset"
 // Each maps 1-to-1 with a specific CDP domain event (Runtime.*, Network.*,
 // Page.*, PerformanceTimeline.*) received from Chrome.
 const (
-	EventConsoleLog           = "console_log"             // Runtime.consoleAPICalled (type=log) or Runtime.exceptionThrown
-	EventConsoleError         = "console_error"           // Runtime.consoleAPICalled (type=error)
+	EventConsoleLog           = "console_log"             // Runtime.consoleAPICalled (non-error types)
+	EventConsoleError         = "console_error"           // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
 	EventNetworkRequest       = "network_request"         // Network.requestWillBeSent
 	EventNetworkResponse      = "network_response"        // Network.loadingFinished (with prior responseReceived)
 	EventNetworkLoadingFailed = "network_loading_failed"  // Network.loadingFailed
@@ -73,14 +73,6 @@ const (
 	ReasonChromeRestarted    = "chrome_restarted"
 	ReasonReconnectExhausted = "reconnect_exhausted"
 )
-
-// MonitorHealth is a point-in-time snapshot of the monitor's operational state.
-type MonitorHealth struct {
-	Running         bool
-	PendingCommands int // in-flight send() calls
-	PendingRequests int // unresolved network requests
-	Sessions        int // attached CDP sessions
-}
 
 // targetInfo holds metadata about an attached CDP target/session.
 type targetInfo struct {
