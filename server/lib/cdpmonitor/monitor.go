@@ -156,6 +156,13 @@ func (m *Monitor) Start(_ context.Context) error {
 // Stop cancels the context and waits for goroutines to exit.
 func (m *Monitor) Stop() {
 	if !m.running.Swap(false) {
+		m.lifeMu.Lock()
+		cancel := m.cancel
+		m.lifeMu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+		m.asyncWg.Wait()
 		return
 	}
 	m.log.Info("cdpmonitor: stopping")
@@ -502,6 +509,16 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	if !m.reconnectWithBackoff(ctx, newURL) {
 		// Context cancelled means Stop() was called, not a failure.
 		if ctx.Err() == nil {
+			// Cancel the lifecycle context before setting running=false so that
+			// goroutines blocked on ctx.Done() begin exiting. If we set
+			// running=false first, a concurrent Stop() call returns immediately
+			// without cancelling, permanently orphaning those goroutines in asyncWg.
+			m.lifeMu.Lock()
+			if m.cancel != nil {
+				m.cancel()
+			}
+			m.lifeMu.Unlock()
+			m.clearState()
 			m.running.Store(false)
 			m.publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
