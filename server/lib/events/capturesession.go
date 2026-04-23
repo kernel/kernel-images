@@ -78,95 +78,21 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	}
 }
 
-// Stop ends the current session. The ring buffer is left intact so existing
-// readers can finish draining.
-func (s *CaptureSession) Stop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.captureSessionID = ""
-}
-
-// ID returns the active capture session ID, or "" if no session is running.
-func (s *CaptureSession) ID() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.captureSessionID
-}
-
-// Config returns the current capture configuration.
-func (s *CaptureSession) Config() CaptureConfig {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	cats := make([]EventCategory, 0, len(s.categories))
-	for c := range s.categories {
-		cats = append(cats, c)
-	}
-	return CaptureConfig{Categories: cats}
-}
-
-// UpdateConfig replaces the category filter for the running session.
-func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(cfg.Categories) > 0 {
-		s.categories = make(map[EventCategory]struct{}, len(cfg.Categories))
-		for _, c := range cfg.Categories {
-			s.categories[c] = struct{}{}
-		}
-	} else {
-		s.categories = nil
-	}
-}
-
-// CreatedAt returns when the current session was started.
-func (s *CaptureSession) CreatedAt() time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.createdAt
-}
-
-// Seq returns the sequence number of the last published event.
-func (s *CaptureSession) Seq() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.seq
-}
-
-// Publish assigns a monotonically increasing sequence number, writes to the
-// RingBuffer (always), and writes to the FileWriter when a session is active
-// and the event's category is in the filter.
-// Returns the Envelope as stored in the ring.
-func (s *CaptureSession) Publish(ev Event) Envelope {
-	s.mu.Lock()
-
-	// No active session, drop silently. This can happen when events
-	// arrive between Stop() and producers noticing, or before Start().
-	if s.captureSessionID == "" {
-		s.mu.Unlock()
-		return Envelope{}
-	}
-
-	// Drop events whose category is outside the configured set.
-	if _, ok := s.categories[ev.Category]; !ok {
-		s.mu.Unlock()
-		return Envelope{}
-	}
-
+// publishLocked is the core publish path. It must be called with s.mu held.
+// It does not check captureSessionID or the category filter — callers are
+// responsible for those guards. This allows Stop to publish the synthetic
+// session_ended envelope regardless of the configured category filter.
+func (s *CaptureSession) publishLocked(ev Event) Envelope {
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
 	}
-
-	sessionID := s.captureSessionID
 	s.seq++
 	env := Envelope{
-		CaptureSessionID: sessionID,
+		CaptureSessionID: s.captureSessionID,
 		Seq:              s.seq,
 		Event:            ev,
 	}
-	s.mu.Unlock()
-
 	env, data := truncateIfNeeded(env)
-
 	if data == nil {
 		slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
 	} else {
@@ -179,10 +105,101 @@ func (s *CaptureSession) Publish(ev Event) Envelope {
 	return env
 }
 
-// NewReader returns a Reader positioned after afterSeq. Pass 0 to start from
-// the oldest buffered event.
+// Publish wraps ev in an Envelope, truncates if needed, then writes to
+// fileWriter (durable) before RingBuffer (in-memory fan-out).
+func (s *CaptureSession) Publish(ev Event) Envelope {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// No active session, drop silently. This can happen when events
+	// arrive between Stop() and producers noticing, or before Start().
+	if s.captureSessionID == "" {
+		return Envelope{}
+	}
+
+	// Drop events whose category is outside the configured set.
+	if _, ok := s.categories[ev.Category]; !ok {
+		return Envelope{}
+	}
+
+	return s.publishLocked(ev)
+}
+
+// NewReader returns a Reader positioned at the start of the ring buffer.
 func (s *CaptureSession) NewReader(afterSeq uint64) *Reader {
 	return s.ring.newReader(afterSeq)
+}
+
+// ID returns the current capture session ID, or "" if no session is active.
+func (s *CaptureSession) ID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.captureSessionID
+}
+
+// Seq returns the current sequence number (last published).
+func (s *CaptureSession) Seq() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seq
+}
+
+// Config returns the current capture configuration.
+func (s *CaptureSession) Config() CaptureConfig {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cats := make([]EventCategory, 0, len(s.categories))
+	for c := range s.categories {
+		cats = append(cats, c)
+	}
+	return CaptureConfig{
+		Categories: cats,
+	}
+}
+
+// CreatedAt returns when the current session was started.
+func (s *CaptureSession) CreatedAt() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.createdAt
+}
+
+// UpdateConfig applies a new CaptureConfig to the running session without
+// resetting the sequence counter or ring buffer.
+func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cats := cfg.Categories
+	if len(cats) == 0 {
+		cats = allCategories
+	}
+	s.categories = make(map[EventCategory]struct{}, len(cats))
+	for _, c := range cats {
+		s.categories[c] = struct{}{}
+	}
+}
+
+// Active reports whether a capture session is currently running.
+func (s *CaptureSession) Active() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.captureSessionID != ""
+}
+
+// Stop ends the current session. It publishes a synthetic session_ended
+// envelope so open SSE stream connections receive a terminal frame and can
+// close cleanly, then clears the session ID. The ring buffer is intentionally
+// left intact so existing readers can finish draining. A new session can be
+// started by calling Start again.
+func (s *CaptureSession) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_ = s.publishLocked(Event{
+		Type:     "session_ended",
+		Category: CategorySystem,
+		Source:   Source{Kind: KindKernelAPI},
+	})
+	s.captureSessionID = ""
 }
 
 // Close flushes and releases all open file descriptors.
