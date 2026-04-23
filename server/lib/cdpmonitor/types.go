@@ -47,7 +47,7 @@ const (
 
 // Monitor lifecycle and internal events — emitted by the monitor itself, not by Chrome.
 const (
-	EventScreenshot             = "screenshot"              // periodic ffmpeg frame capture
+	EventScreenshot             = "screenshot"              // ffmpeg frame capture on page load or JS exception
 	EventMonitorDisconnected    = "monitor_disconnected"    // WebSocket to Chrome closed unexpectedly
 	EventMonitorReconnected     = "monitor_reconnected"     // successfully reconnected after a disconnect
 	EventMonitorReconnectFailed = "monitor_reconnect_failed" // reconnect attempts exhausted
