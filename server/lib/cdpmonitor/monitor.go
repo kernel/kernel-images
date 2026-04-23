@@ -106,14 +106,6 @@ func (m *Monitor) IsRunning() bool {
 	return m.running.Load()
 }
 
-// getLifecycleCtx returns the current lifecycle context under lifeMu.
-func (m *Monitor) getLifecycleCtx() context.Context {
-	m.lifeMu.Lock()
-	ctx := m.lifecycleCtx
-	m.lifeMu.Unlock()
-	return ctx
-}
-
 // Start begins CDP capture. Restarts if already running.
 // Not concurrency-safe; callers must serialize Start calls.
 func (m *Monitor) Start(ctx context.Context) error {

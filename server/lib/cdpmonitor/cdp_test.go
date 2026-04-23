@@ -368,5 +368,5 @@ func simulateFinished(m *Monitor, id string) {
 	m.pendReqMu.Lock()
 	m.pendingRequests[id] = networkReqState{method: "GET", url: "https://example.com/" + id}
 	m.pendReqMu.Unlock()
-	m.handleLoadingFinished(cdpNetworkLoadingFinishedParams{RequestID: id}, "s1")
+	m.handleLoadingFinished(context.Background(), cdpNetworkLoadingFinishedParams{RequestID: id}, "s1")
 }
