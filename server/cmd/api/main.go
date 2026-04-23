@@ -24,6 +24,7 @@ import (
 	"github.com/kernel/kernel-images/server/cmd/config"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -49,7 +50,7 @@ func main() {
 	// ensure ffmpeg is available
 	mustFFmpeg()
 
-	stz := scaletozero.NewDebouncedController(scaletozero.NewUnikraftCloudController())
+	stz := scaletozero.NewDebouncedControllerWithCooldown(scaletozero.NewUnikraftCloudController(), config.ScaleToZeroCooldown)
 	r := chi.NewRouter()
 	r.Use(
 		chiMiddleware.Logger,
@@ -90,12 +91,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Construct events pipeline
+	captureSession, err := events.NewCaptureSession(events.CaptureSessionConfig{
+		LogDir:       "/var/log/kernel",
+		RingCapacity: 1024,
+	})
+	if err != nil {
+		slogger.Error("failed to create capture session", "err", err)
+		os.Exit(1)
+	}
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
 		upstreamMgr,
 		stz,
 		nekoAuthClient,
+		captureSession,
+		config.DisplayNum,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)

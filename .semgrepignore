@@ -1,0 +1,10 @@
+node_modules/
+vendor/
+dist/
+.next/
+*_test.go
+go.sum
+package-lock.json
+server/lib/oapi/oapi.go
+images/chromium-headful/client/
+shared/cdp-test/
