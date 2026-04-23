@@ -25,14 +25,6 @@ type PublishFunc func(ev events.Event)
 const wsReadLimit = 8 * 1024 * 1024
 
 // Monitor manages a CDP WebSocket connection with auto-attach session fan-out.
-//
-// Lock ordering (outer → inner):
-//
-//	restartMu → lifeMu → pendReqMu → computed.mu → pendMu → sessionsMu
-//
-// Never acquire a lock that appears later in this order while holding an
-// earlier one, to prevent deadlock.
-//
 // WebSocket concurrency: coder/websocket guarantees that one concurrent Read
 // and one concurrent Write are safe. The readLoop holds the sole Read; all
 // writes go through send, which serialises them with conn.Write's internal
