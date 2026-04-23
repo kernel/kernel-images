@@ -1,7 +1,7 @@
 # Envoy bootstrap configuration for xDS-managed proxy
 # This config connects to a control plane for dynamic configuration management
 # Requires: INST_NAME, METRO_NAME, XDS_SERVER, and KERNEL_INSTANCE_JWT
-# (or legacy XDS_JWT, normalized by init-envoy.sh) environment variables
+# environment variables
 
 # Node identity sent to xDS server for configuration targeting, authenticated by JWT
 node:

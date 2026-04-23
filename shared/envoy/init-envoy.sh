@@ -2,9 +2,9 @@
 
 set -o pipefail -o errexit -o nounset
 
-# Prefer the generic instance JWT env var, but keep XDS_JWT fallback during
-# the migration window so older control-plane deployments continue to work.
-INSTANCE_JWT="${KERNEL_INSTANCE_JWT:-${XDS_JWT:-}}"
+# The browser instance JWT is the sole token contract for xDS and host-local
+# services in the image runtime.
+INSTANCE_JWT="${KERNEL_INSTANCE_JWT:-}"
 
 # Check for required environment variables, to see if envoy is enabled
 if [[ -z "${INST_NAME:-}" || -z "${METRO_NAME:-}" || -z "${XDS_SERVER:-}" || -z "${INSTANCE_JWT:-}" ]]; then
