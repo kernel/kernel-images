@@ -287,7 +287,7 @@ func TestRedirectCounter(t *testing.T) {
 	}, "s1")
 
 	// Only one loadingFinished fires per redirect chain.
-	m.handleLoadingFinished(cdpNetworkLoadingFinishedParams{RequestID: "r-redirect"}, "s1")
+	m.handleLoadingFinished(context.Background(), cdpNetworkLoadingFinishedParams{RequestID: "r-redirect"}, "s1")
 
 	// If netPending was double-incremented, network_idle would never fire.
 	ec.waitFor(t, "network_idle", 2*time.Second)
@@ -330,7 +330,7 @@ func TestSubframeLifecycleIgnored(t *testing.T) {
 		// Now fire the real main-frame domContentLoaded + the rest of the conditions.
 		simulateRequest(m, "r1")
 		simulateFinished(m, "r1")
-		m.handleLoadEventFired(cdpPageLoadEventFiredParams{},"s1")
+		m.handleLoadEventFired(context.Background(), cdpPageLoadEventFiredParams{}, "s1")
 		// navigation_settled requires navDOMLoaded; if the iframe event had set it,
 		// the event might fire without the main-frame DOMContentLoaded arriving.
 		// Assert it does NOT fire yet (iframe set navDOMLoaded but main frame hasn't).
@@ -342,12 +342,12 @@ func TestSubframeLifecycleIgnored(t *testing.T) {
 		navigateMonitor(m, "https://example.com")
 
 		// Subframe fires loadEventFired — should not start the layout_settled timer.
-		m.handleLoadEventFired(cdpPageLoadEventFiredParams{},"iframe-session")
+		m.handleLoadEventFired(context.Background(), cdpPageLoadEventFiredParams{}, "iframe-session")
 		ec.assertNone(t, "layout_settled", 1500*time.Millisecond)
 
 		// Main frame fires — timer should start now.
 		t0 := time.Now()
-		m.handleLoadEventFired(cdpPageLoadEventFiredParams{},"s1")
+		m.handleLoadEventFired(context.Background(), cdpPageLoadEventFiredParams{}, "s1")
 		ec.waitFor(t, "layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "fired too early")
 	})

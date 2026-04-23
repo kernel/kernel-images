@@ -1,6 +1,7 @@
 package cdpmonitor
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"time"
@@ -46,6 +47,10 @@ func (m *Monitor) decodeParams(method string, params json.RawMessage, dst any) b
 
 // dispatchEvent routes a CDP event to its handler.
 func (m *Monitor) dispatchEvent(msg cdpMessage) {
+	m.lifeMu.Lock()
+	ctx := m.lifecycleCtx
+	m.lifeMu.Unlock()
+
 	switch msg.Method {
 	case "Runtime.consoleAPICalled":
 		var p cdpRuntimeConsoleAPICalledParams
@@ -55,7 +60,7 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 	case "Runtime.exceptionThrown":
 		var p cdpRuntimeExceptionThrownParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleExceptionThrown(p, msg.SessionID)
+			m.handleExceptionThrown(ctx, p, msg.SessionID)
 		}
 	case "Runtime.bindingCalled":
 		var p cdpRuntimeBindingCalledParams
@@ -75,7 +80,7 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 	case "Network.loadingFinished":
 		var p cdpNetworkLoadingFinishedParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleLoadingFinished(p, msg.SessionID)
+			m.handleLoadingFinished(ctx, p, msg.SessionID)
 		}
 	case "Network.loadingFailed":
 		var p cdpNetworkLoadingFailedParams
@@ -95,7 +100,7 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 	case "Page.loadEventFired":
 		var p cdpPageLoadEventFiredParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleLoadEventFired(p, msg.SessionID)
+			m.handleLoadEventFired(ctx, p, msg.SessionID)
 		}
 	case "PerformanceTimeline.timelineEventAdded":
 		var p cdpPerformanceTimelineEventAddedParams
@@ -105,7 +110,7 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 	case "Target.attachedToTarget":
 		var p cdpTargetAttachedToTargetParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleAttachedToTarget(p)
+			m.handleAttachedToTarget(ctx, p)
 		}
 	case "Target.detachedFromTarget":
 		var p cdpTargetDetachedFromTargetParams
@@ -137,7 +142,7 @@ func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID st
 	m.publishEvent(eventType, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
 }
 
-func (m *Monitor) handleExceptionThrown(p cdpRuntimeExceptionThrownParams, sessionID string) {
+func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExceptionThrownParams, sessionID string) {
 	data, _ := json.Marshal(map[string]any{
 		"text":        p.ExceptionDetails.Text,
 		"line":        p.ExceptionDetails.LineNumber,
@@ -146,7 +151,7 @@ func (m *Monitor) handleExceptionThrown(p cdpRuntimeExceptionThrownParams, sessi
 		"stack_trace": p.ExceptionDetails.StackTrace,
 	})
 	m.publishEvent(EventConsoleError, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.exceptionThrown", data, sessionID)
-	m.tryScreenshot(m.getLifecycleCtx())
+	m.tryScreenshot(ctx)
 }
 
 // bindingMinInterval is the minimum time between accepted __kernelEvent binding
@@ -268,7 +273,7 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, _ s
 	m.pendReqMu.Unlock()
 }
 
-func (m *Monitor) handleLoadingFinished(p cdpNetworkLoadingFinishedParams, sessionID string) {
+func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoadingFinishedParams, sessionID string) {
 	m.pendReqMu.Lock()
 	state, ok := m.pendingRequests[p.RequestID]
 	if ok {
@@ -281,7 +286,7 @@ func (m *Monitor) handleLoadingFinished(p cdpNetworkLoadingFinishedParams, sessi
 	m.computed.onLoadingFinished()
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	m.asyncWg.Go(func() {
-		body := m.fetchResponseBody(p.RequestID, sessionID, state)
+		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
 		ev := map[string]any{
 			"method":  state.method,
 			"url":     state.url,
@@ -306,11 +311,11 @@ func (m *Monitor) handleLoadingFinished(p cdpNetworkLoadingFinishedParams, sessi
 }
 
 // fetchResponseBody retrieves and truncates the response body for textual resources.
-func (m *Monitor) fetchResponseBody(requestID, sessionID string, state networkReqState) string {
+func (m *Monitor) fetchResponseBody(ctx context.Context, requestID, sessionID string, state networkReqState) string {
 	if !isTextualResource(state.resourceType, state.mimeType) {
 		return ""
 	}
-	result, err := m.send(m.getLifecycleCtx(), "Network.getResponseBody", map[string]any{
+	result, err := m.send(ctx, "Network.getResponseBody", map[string]any{
 		"requestId": requestID,
 	}, sessionID)
 	if err != nil {
@@ -392,19 +397,19 @@ func (m *Monitor) handleDOMContentLoaded(p cdpPageDomContentEventFiredParams, se
 	}
 }
 
-func (m *Monitor) handleLoadEventFired(p cdpPageLoadEventFiredParams, sessionID string) {
+func (m *Monitor) handleLoadEventFired(ctx context.Context, p cdpPageLoadEventFiredParams, sessionID string) {
 	data, _ := json.Marshal(p)
 	m.publishEvent(EventPageLoad, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", data, sessionID)
 	if m.mainSessionID.Load() == sessionID {
 		m.computed.onPageLoad()
-		m.tryScreenshot(m.getLifecycleCtx())
+		m.tryScreenshot(ctx)
 	}
 }
 
 // handleAttachedToTarget stores the new session then enables domains and injects script.
 // The outer message sessionID (root session) is unused; the child session we
 // attached to is in p.SessionID.
-func (m *Monitor) handleAttachedToTarget(p cdpTargetAttachedToTargetParams) {
+func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttachedToTargetParams) {
 	m.sessionsMu.Lock()
 	m.sessions[p.SessionID] = targetInfo{
 		targetID:   p.TargetInfo.TargetID,
@@ -416,7 +421,6 @@ func (m *Monitor) handleAttachedToTarget(p cdpTargetAttachedToTargetParams) {
 	targetType := p.TargetInfo.Type
 	// Async to avoid blocking the readLoop.
 	m.asyncWg.Go(func() {
-		ctx := m.getLifecycleCtx()
 		m.enableDomains(ctx, p.SessionID, targetType)
 		if isPageLikeTarget(targetType) {
 			_ = m.injectScript(ctx, p.SessionID)
