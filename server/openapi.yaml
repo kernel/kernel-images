@@ -1274,8 +1274,113 @@ paths:
                 $ref: "#/components/schemas/CaptureSession"
         "404":
           $ref: "#/components/responses/NotFoundError"
+  /events/publish:
+    post:
+      summary: Publish an event into the active capture session
+      description: >
+        Injects an event into the active capture session's event stream.
+        The event is assigned a monotonically increasing sequence number and
+        fanned out to all open stream connections. Returns 400 if no capture
+        session is active.
+      operationId: publishEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Event"
+      responses:
+        "200":
+          description: Event accepted and published
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+  /events/stream:
+    get:
+      summary: Stream capture-session events as Server-Sent Events
+      description: >
+        Opens a live SSE stream of events from the active capture session.
+        Each frame has the form `id: {seq}\ndata: {envelope-json}\n\n`.
+        A synthetic `events_dropped` frame is sent when events were evicted
+        from the buffer before the client could read them; its `id` is 0.
+        A `session_ended` frame is sent when the session stops; the connection
+        closes after that frame. Returns 400 if no capture session is active.
+      operationId: streamEvents
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          schema:
+            type: string
+          required: false
+          description: >
+            Resume after this sequence number. Omit or send 0 to start from
+            the oldest buffered event.
+      responses:
+        "200":
+          description: Live SSE stream of capture-session events.
+          headers:
+            X-SSE-Content-Type:
+              description: Media type of SSE data events (application/json)
+              schema:
+                type: string
+                const: application/json
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequestError"
 components:
   schemas:
+    Event:
+      type: object
+      description: A capture event.
+      required:
+        - type
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Unix timestamp in microseconds. Defaults to the current time when omitted.
+        type:
+          type: string
+          description: Event type identifier.
+        category:
+          type: string
+          description: Event category.
+          enum:
+            - console
+            - network
+            - page
+            - interaction
+            - liveview
+            - captcha
+            - system
+        source:
+          $ref: "#/components/schemas/EventSource"
+        data:
+          description: Arbitrary event payload.
+        truncated:
+          type: boolean
+          description: Set by the server when the data field was truncated to fit the size limit.
+    EventSource:
+      type: object
+      description: Provenance of the event.
+      properties:
+        kind:
+          type: string
+          description: Source kind.
+          enum:
+            - cdp
+            - kernel_api
+            - extension
+            - local_process
+        event:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+      additionalProperties: false
     CaptureConfig:
       type: object
       description: Capture filtering preferences.
