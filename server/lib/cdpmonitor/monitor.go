@@ -116,7 +116,7 @@ func (m *Monitor) getLifecycleCtx() context.Context {
 
 // Start begins CDP capture. Restarts if already running.
 // Not concurrency-safe; callers must serialize Start calls.
-func (m *Monitor) Start(_ context.Context) error {
+func (m *Monitor) Start(ctx context.Context) error {
 	m.Stop() // no-op if not running
 
 	devtoolsURL := m.upstreamMgr.Current()
@@ -124,8 +124,7 @@ func (m *Monitor) Start(_ context.Context) error {
 		return fmt.Errorf("cdpmonitor: no DevTools URL available")
 	}
 
-	// Use background context so the monitor outlives the caller's request context.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 
 	conn, _, err := websocket.Dial(ctx, devtoolsURL, nil)
 	if err != nil {
