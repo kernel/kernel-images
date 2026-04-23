@@ -78,6 +78,32 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	}
 }
 
+// publishLocked is the core publish path. It must be called with s.mu held.
+// It does not check captureSessionID or the category filter — callers are
+// responsible for those guards. This allows Stop to publish the synthetic
+// session_ended envelope regardless of the configured category filter.
+func (s *CaptureSession) publishLocked(ev Event) {
+	if ev.Ts == 0 {
+		ev.Ts = time.Now().UnixMicro()
+	}
+	s.seq++
+	env := Envelope{
+		CaptureSessionID: s.captureSessionID,
+		Seq:              s.seq,
+		Event:            ev,
+	}
+	env, data := truncateIfNeeded(env)
+	if data == nil {
+		slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
+	} else {
+		filename := string(env.Event.Category) + ".log"
+		if err := s.files.Write(filename, data); err != nil {
+			slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
+		}
+	}
+	s.ring.publish(env)
+}
+
 // Publish wraps ev in an Envelope, truncates if needed, then writes to
 // fileWriter (durable) before RingBuffer (in-memory fan-out).
 func (s *CaptureSession) Publish(ev Event) {
@@ -95,27 +121,7 @@ func (s *CaptureSession) Publish(ev Event) {
 		return
 	}
 
-	if ev.Ts == 0 {
-		ev.Ts = time.Now().UnixMicro()
-	}
-
-	s.seq++
-	env := Envelope{
-		CaptureSessionID: s.captureSessionID,
-		Seq:              s.seq,
-		Event:            ev,
-	}
-	env, data := truncateIfNeeded(env)
-
-	if data == nil {
-		slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
-	} else {
-		filename := string(env.Event.Category) + ".log"
-		if err := s.files.Write(filename, data); err != nil {
-			slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
-		}
-	}
-	s.ring.publish(env)
+	s.publishLocked(ev)
 }
 
 // NewReader returns a Reader positioned at the start of the ring buffer.
@@ -172,12 +178,26 @@ func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
 	}
 }
 
-// Stop ends the current session by clearing the session ID. The ring buffer
-// is intentionally left intact so existing readers can finish draining.
-// A new session can be started by calling Start again.
+// Active reports whether a capture session is currently running.
+func (s *CaptureSession) Active() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.captureSessionID != ""
+}
+
+// Stop ends the current session. It publishes a synthetic session_ended
+// envelope so open SSE stream connections receive a terminal frame and can
+// close cleanly, then clears the session ID. The ring buffer is intentionally
+// left intact so existing readers can finish draining. A new session can be
+// started by calling Start again.
 func (s *CaptureSession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.publishLocked(Event{
+		Type:     "session_ended",
+		Category: CategorySystem,
+		Source:   Source{Kind: KindKernelAPI},
+	})
 	s.captureSessionID = ""
 }
 
