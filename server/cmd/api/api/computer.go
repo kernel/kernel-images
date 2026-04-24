@@ -116,7 +116,7 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 	// When duration_ms is specified, compute the number of trajectory points
 	// to achieve that duration at a ~10ms step delay (human-like event frequency).
 	// Otherwise let the library auto-compute from path length.
-	const defaultStepDelayMs = 10
+	const defaultStepDelayMs = 20
 	var opts *mousetrajectory.Options
 	if body.DurationMs != nil {
 		targetPoints := *body.DurationMs / defaultStepDelayMs
@@ -173,7 +173,10 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 		}()
 	}
 
-	// Move along Bezier path: mousemove_relative for each step with delay
+	// Move along Bezier path: mousemove_relative for each step with delay.
+	// Use Gaussian-distributed delays so that inter-event timing has natural
+	// variance matching real human motor noise, rather than near-constant
+	// intervals that fingerprinting systems can distinguish from humans.
 	for i := 1; i < len(points); i++ {
 		select {
 		case <-ctx.Done():
@@ -190,14 +193,8 @@ func (s *ApiService) doMoveMouseSmooth(ctx context.Context, log *slog.Logger, bo
 				return &executionError{msg: "failed during smooth mouse movement"}
 			}
 		}
-		jitter := stepDelayMs
-		if stepDelayMs > 3 {
-			jitter = stepDelayMs + rand.Intn(5) - 2
-			if jitter < 3 {
-				jitter = 3
-			}
-		}
-		if err := sleepWithContext(ctx, time.Duration(jitter)*time.Millisecond); err != nil {
+		delay := gaussianDelay(stepDelayMs, 3)
+		if err := sleepWithContext(ctx, time.Duration(delay)*time.Millisecond); err != nil {
 			return &executionError{msg: "mouse movement cancelled"}
 		}
 	}
@@ -1233,12 +1230,9 @@ func (s *ApiService) doDragMouseSmooth(ctx context.Context, log *slog.Logger, bo
 		args = append(args, "mousemove_relative", "--", strconv.Itoa(dx), strconv.Itoa(dy))
 
 		if i < numSteps {
-			delay := smoothStepDelay(i, numSteps, baseDelayMs*2, baseDelayMs/2)
-			jitter := delay + rand.Intn(5) - 2
-			if jitter < 3 {
-				jitter = 3
-			}
-			args = append(args, "sleep", fmt.Sprintf("%.3f", float64(jitter)/1000.0))
+			baseDelay := smoothStepDelay(i, numSteps, baseDelayMs*2, baseDelayMs/2)
+			delay := gaussianDelay(baseDelay, 3)
+			args = append(args, "sleep", fmt.Sprintf("%.3f", float64(delay)/1000.0))
 		}
 	}
 
@@ -1252,6 +1246,28 @@ func (s *ApiService) doDragMouseSmooth(ctx context.Context, log *slog.Logger, bo
 
 	log.Info("executed smooth drag movement", "points", len(points), "segments", len(body.Path)-1)
 	return nil
+}
+
+// gaussianDelay returns a Gaussian-distributed delay centered on meanMs with
+// stddev of 40% of meanMs, clamped to [minMs, 3*meanMs]. This produces timing
+// variance that matches real human motor noise rather than the near-zero
+// variance of uniform jitter.
+func gaussianDelay(meanMs int, minMs int) int {
+	stddev := float64(meanMs) * 0.4
+	u1 := rand.Float64()
+	u2 := rand.Float64()
+	if u1 <= 0 {
+		u1 = 1e-10
+	}
+	z := math.Sqrt(-2*math.Log(u1)) * math.Cos(2*math.Pi*u2)
+	delay := int(math.Round(float64(meanMs) + stddev*z))
+	if delay < minMs {
+		delay = minMs
+	}
+	if delay > meanMs*3 {
+		delay = meanMs * 3
+	}
+	return delay
 }
 
 // smoothStepDelay maps position i/n through a smoothstep curve to produce

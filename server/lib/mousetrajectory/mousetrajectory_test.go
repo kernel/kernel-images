@@ -163,6 +163,56 @@ func TestGenerateMultiSegmentTrajectory_SinglePoint(t *testing.T) {
 	assert.Equal(t, 100, result.Points[0][1])
 }
 
+func TestHumanizeMouseTrajectory_VelocityProfile(t *testing.T) {
+	// Verify that arc-length easing produces a bell-shaped velocity profile:
+	// small pixel steps at start/end, large steps in the middle.
+	traj := NewHumanizeMouseTrajectoryWithSeed(0, 0, 400, 0, 42)
+	points := traj.GetPointsInt()
+	require.GreaterOrEqual(t, len(points), 10)
+
+	// Compute pixel distance per step.
+	distances := make([]float64, len(points)-1)
+	for i := 1; i < len(points); i++ {
+		dx := float64(points[i][0] - points[i-1][0])
+		dy := float64(points[i][1] - points[i-1][1])
+		distances[i-1] = math.Sqrt(dx*dx + dy*dy)
+	}
+
+	// First quarter should have smaller average step than middle half.
+	n := len(distances)
+	q1End := n / 4
+	midStart := n / 4
+	midEnd := 3 * n / 4
+
+	var sumFirst, sumMid float64
+	for i := 0; i < q1End; i++ {
+		sumFirst += distances[i]
+	}
+	for i := midStart; i < midEnd; i++ {
+		sumMid += distances[i]
+	}
+	avgFirst := sumFirst / float64(q1End)
+	avgMid := sumMid / float64(midEnd-midStart)
+
+	assert.Greater(t, avgMid, avgFirst,
+		"middle steps (avg=%.2f) should be larger than initial steps (avg=%.2f) for acceleration profile",
+		avgMid, avgFirst)
+
+	// Compute Welford variance of step distances — should be substantial.
+	var wN int
+	var wMean, wM2 float64
+	for _, d := range distances {
+		wN++
+		delta := d - wMean
+		wMean += delta / float64(wN)
+		wM2 += delta * (d - wMean)
+	}
+	distVariance := wM2 / float64(wN-1)
+
+	assert.Greater(t, distVariance, 5.0,
+		"step distance variance (%.2f) should be substantial for human-like velocity profile", distVariance)
+}
+
 func TestGenerateMultiSegmentTrajectory_ContinuousPath(t *testing.T) {
 	waypoints := [][2]int{{100, 100}, {500, 500}, {900, 100}, {1300, 500}}
 	result := GenerateMultiSegmentTrajectory(waypoints, 1920, 1080, nil)
