@@ -115,9 +115,7 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 			if result.Dropped > 0 {
 				env := events.Envelope{
 					CaptureSessionID: sessionID,
-					// Seq 0 is intentional: this synthetic event doesn't advance the
-					// client's Last-Event-ID so reconnects replay from the last real seq.
-					Seq: 0,
+					Seq:              0,
 					Event: events.Event{
 						Ts:       time.Now().UnixMicro(),
 						Type:     events.TypeEventsDropped,
@@ -126,14 +124,15 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 						Data:     json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, result.Dropped)),
 					},
 				}
-				if err := writeEnvelopeFrame(pw, 0, env); err != nil {
+				// Omit the id: field so the client's Last-Event-ID is not overwritten.
+				if err := writeEnvelopeFrame(pw, nil, env); err != nil {
 					return
 				}
 				continue
 			}
 
 			env := result.Envelope
-			if err := writeEnvelopeFrame(pw, env.Seq, *env); err != nil {
+			if err := writeEnvelopeFrame(pw, &env.Seq, *env); err != nil {
 				return
 			}
 			if env.Event.Type == events.TypeSessionEnded {
@@ -146,14 +145,18 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 	return oapi.StreamEvents200TexteventStreamResponse{Body: pr, Headers: headers}, nil
 }
 
-// writeEnvelopeFrame writes a single SSE frame with the given seq as the id.
-func writeEnvelopeFrame(w io.Writer, seq uint64, env events.Envelope) error {
+// writeEnvelopeFrame writes a single SSE frame. If seq is non-nil it is
+// emitted as the id: field, updating the client's Last-Event-ID.
+func writeEnvelopeFrame(w io.Writer, seq *uint64, env events.Envelope) error {
 	data, err := json.Marshal(env)
 	if err != nil {
 		return err
 	}
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "id: %d\ndata: ", seq)
+	if seq != nil {
+		fmt.Fprintf(&buf, "id: %d\n", *seq)
+	}
+	buf.WriteString("data: ")
 	buf.Write(data)
 	buf.WriteString("\n\n")
 	_, err = w.Write(buf.Bytes())
