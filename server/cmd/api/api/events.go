@@ -27,12 +27,19 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	if body == nil || body.Type == "" {
 		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is required"}}, nil
 	}
+	if body.Type == events.TypeSessionEnded || body.Type == events.TypeEventsDropped {
+		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is reserved"}}, nil
+	}
 
 	ev := events.Event{Type: body.Type}
 
 	ev.Ts = time.Now().UnixMicro()
 	if body.Category != nil {
-		ev.Category = events.EventCategory(*body.Category)
+		cat := events.EventCategory(*body.Category)
+		if !events.ValidCategory(cat) {
+			return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid category"}}, nil
+		}
+		ev.Category = cat
 	} else {
 		ev.Category = events.CategorySystem
 	}
@@ -49,6 +56,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	}
 
 	if body.Data != nil {
+		// re-marshal body.Data to normalize it into a canonical RawMessage byte slice.
 		data, err := json.Marshal(body.Data)
 		if err != nil {
 			return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid data"}}, nil
@@ -56,7 +64,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 		ev.Data = json.RawMessage(data)
 	}
 
-	env := s.captureSession.Publish(ev)
+	env := s.captureSession.PublishUnfiltered(ev)
 	return publishEventOKResponse{env}, nil
 }
 
@@ -67,6 +75,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequestObject) (oapi.StreamEventsResponseObject, error) {
 	afterSeq := uint64(0)
 	if id := req.Params.LastEventID; id != nil && *id != "" {
+		// Invalid/non-numeric values fall back to 0, replaying all events from the start.
 		if n, err := strconv.ParseUint(*id, 10, 64); err == nil {
 			afterSeq = n
 		}
@@ -83,12 +92,17 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 			result, err := reader.Read(readCtx)
 			cancel()
 			if err != nil {
-				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
-					// No event in 15 s and client still connected, send keepalive.
-					if _, err := pw.Write([]byte(":\n\n")); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					select {
+					case <-ctx.Done():
 						return
+					default:
+						// No event in 15 s and client still connected, send keepalive.
+						if _, err := pw.Write([]byte(":\n\n")); err != nil {
+							return
+						}
+						continue
 					}
-					continue
 				}
 				return
 			}
@@ -96,10 +110,12 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 			if result.Dropped > 0 {
 				env := events.Envelope{
 					CaptureSessionID: sessionID,
-					Seq:              0,
+					// Seq 0 is intentional: this synthetic event doesn't advance the
+					// client's Last-Event-ID so reconnects replay from the last real seq.
+					Seq: 0,
 					Event: events.Event{
 						Ts:       time.Now().UnixMicro(),
-						Type:     "events_dropped",
+						Type:     events.TypeEventsDropped,
 						Category: events.CategorySystem,
 						Source:   events.Source{Kind: events.KindKernelAPI},
 						Data:     json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, result.Dropped)),
@@ -115,7 +131,7 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 			if err := writeEnvelopeFrame(pw, env.Seq, *env); err != nil {
 				return
 			}
-			if env.Event.Type == "session_ended" {
+			if env.Event.Type == events.TypeSessionEnded {
 				return
 			}
 		}

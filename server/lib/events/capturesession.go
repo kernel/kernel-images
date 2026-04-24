@@ -78,10 +78,7 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	}
 }
 
-// publishLocked is the core publish path. It must be called with s.mu held.
-// It does not check captureSessionID or the category filter — callers are
-// responsible for those guards. This allows Stop to publish the synthetic
-// session_ended envelope regardless of the configured category filter.
+// publishLocked is the core publish path. Requires s.mu held and a captureSessionID
 func (s *CaptureSession) publishLocked(ev Event) Envelope {
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
@@ -107,21 +104,33 @@ func (s *CaptureSession) publishLocked(ev Event) Envelope {
 
 // Publish wraps ev in an Envelope, truncates if needed, then writes to
 // fileWriter (durable) before RingBuffer (in-memory fan-out).
-func (s *CaptureSession) Publish(ev Event) Envelope {
+func (s *CaptureSession) Publish(ev Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// No active session, drop silently. This can happen when events
 	// arrive between Stop() and producers noticing, or before Start().
 	if s.captureSessionID == "" {
-		return Envelope{}
+		return
 	}
 
 	// Drop events whose category is outside the configured set.
 	if _, ok := s.categories[ev.Category]; !ok {
-		return Envelope{}
+		return
 	}
 
+	s.publishLocked(ev)
+}
+
+// PublishUnfiltered publishes ev without applying the category filter. Use for
+// externally-initiated events (e.g. API callers) that must not be silently
+// dropped by capture preferences set by the session owner.
+func (s *CaptureSession) PublishUnfiltered(ev Event) Envelope {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.captureSessionID == "" {
+		return Envelope{}
+	}
 	return s.publishLocked(ev)
 }
 
@@ -194,8 +203,11 @@ func (s *CaptureSession) Active() bool {
 func (s *CaptureSession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.captureSessionID == "" {
+		return
+	}
 	_ = s.publishLocked(Event{
-		Type:     "session_ended",
+		Type:     TypeSessionEnded,
 		Category: CategorySystem,
 		Source:   Source{Kind: KindKernelAPI},
 	})
