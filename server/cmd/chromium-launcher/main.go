@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -16,6 +19,8 @@ import (
 )
 
 func main() {
+	launcherStart := time.Now()
+
 	headless := flag.Bool("headless", false, "Run Chromium with headless flags")
 	chromiumPath := flag.String("chromium", "chromium", "Chromium binary path (default: chromium)")
 	runtimeFlagsPath := flag.String("runtime-flags", "/chromium/flags", "Path to runtime flags overlay file")
@@ -31,7 +36,7 @@ func main() {
 	// This is necessary because supervisord's stopwaitsecs=0 doesn't wait for
 	// the old process to fully die before starting the new one, which can cause
 	// the new process to fall back to IPv6 while the old one holds IPv4.
-	killExistingChromium()
+	killStats := killExistingChromium()
 
 	// Inputs
 	internalPort := strings.TrimSpace(os.Getenv("INTERNAL_PORT"))
@@ -39,8 +44,14 @@ func main() {
 		internalPort = "9223"
 	}
 
+	// Parse devtools port for /proc/net/tcp lookups; default to 9223 on parse failure.
+	internalPortNum := uint16(9223)
+	if n, err := strconv.ParseUint(internalPort, 10, 16); err == nil {
+		internalPortNum = uint16(n)
+	}
+
 	// Wait for devtools port to be available (handles SIGKILL socket cleanup delay)
-	waitForPort(internalPort, 5*time.Second)
+	waitportStats := waitForPort(internalPort, 5*time.Second)
 
 	baseFlags := os.Getenv("CHROMIUM_FLAGS")
 	runtimeTokens, err := chromiumflags.ReadOptionalFlagFile(*runtimeFlagsPath)
@@ -76,6 +87,8 @@ func main() {
 		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
 	)
+
+	emitPhaseCompleteEvent(launcherStart, *headless, internalPortNum, killStats, waitportStats)
 
 	if runAsRoot {
 		// Replace current process with Chromium
@@ -125,12 +138,23 @@ func execLookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
+// waitportStats summarizes a single waitForPort invocation for the
+// chromium_launcher_phase_complete instrumentation event.
+type waitportStats struct {
+	elapsedMs int64
+	attempts  int
+	timedOut  bool
+	lastErr   string
+}
+
 // waitForPort waits until the given port is available for binding on IPv4.
 // This handles the delay after SIGKILL before the kernel releases the socket.
 // We disable SO_REUSEADDR to get an accurate check matching chromium's bind behavior.
 // Only IPv4 is checked because IPv6 is disabled at the kernel level in the VM.
-func waitForPort(port string, timeout time.Duration) {
-	deadline := time.Now().Add(timeout)
+func waitForPort(port string, timeout time.Duration) waitportStats {
+	stats := waitportStats{}
+	start := time.Now()
+	deadline := start.Add(timeout)
 	addrs := []string{"127.0.0.1:" + port}
 
 	// ListenConfig with Control to disable SO_REUSEADDR for accurate port availability check
@@ -150,42 +174,224 @@ func waitForPort(port string, timeout time.Duration) {
 
 	ctx := context.Background()
 	for time.Now().Before(deadline) {
+		stats.attempts++
 		allFree := true
 		for _, addr := range addrs {
 			ln, err := lc.Listen(ctx, "tcp", addr)
 			if err != nil {
+				stats.lastErr = err.Error()
 				allFree = false
 				break
 			}
 			ln.Close()
 		}
 		if allFree {
-			return
+			stats.elapsedMs = time.Since(start).Milliseconds()
+			return stats
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 	// Timeout reached, proceed anyway and let chromium report the error
+	stats.elapsedMs = time.Since(start).Milliseconds()
+	stats.timedOut = true
+	return stats
+}
+
+// killStats summarizes a single killExistingChromium invocation for the
+// chromium_launcher_phase_complete instrumentation event.
+type killStats struct {
+	pkillElapsedMs     int64
+	pgrepWaitElapsedMs int64
+	pgrepAttempts      int
+	timedOut           bool
 }
 
 // killExistingChromium kills any existing chromium browser processes and waits for them to die.
 // This ensures a clean restart where the new process can bind to IPv4.
 // Note: We use -x for exact match to avoid killing chromium-launcher itself.
-func killExistingChromium() {
+func killExistingChromium() killStats {
+	stats := killStats{}
+
 	// Kill chromium processes by exact name match.
 	// Using -x prevents matching "chromium-launcher" which would kill this process.
+	pkillStart := time.Now()
 	_ = exec.Command("pkill", "-9", "-x", "chromium").Run()
+	stats.pkillElapsedMs = time.Since(pkillStart).Milliseconds()
 
 	// Wait up to 2 seconds for processes to fully terminate
-	deadline := time.Now().Add(2 * time.Second)
+	pgrepStart := time.Now()
+	deadline := pgrepStart.Add(2 * time.Second)
 	for time.Now().Before(deadline) {
+		stats.pgrepAttempts++
 		// Check if any chromium browser processes are still running (exact match)
 		output, err := exec.Command("pgrep", "-x", "chromium").Output()
 		if err != nil || len(strings.TrimSpace(string(output))) == 0 {
 			// No processes found, we're done
-			return
+			stats.pgrepWaitElapsedMs = time.Since(pgrepStart).Milliseconds()
+			return stats
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	// Timeout - processes may still exist but we continue anyway
+	stats.pgrepWaitElapsedMs = time.Since(pgrepStart).Milliseconds()
+	stats.timedOut = true
 	fmt.Fprintf(os.Stderr, "warning: chromium processes may still be running after kill attempt\n")
+	return stats
+}
+
+// readVMUptimeMs returns the VM uptime in milliseconds by parsing /proc/uptime.
+// Returns 0 on any error. Read-only, fail-soft.
+func readVMUptimeMs() int64 {
+	data, err := os.ReadFile("/proc/uptime")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 1 {
+		return 0
+	}
+	secs, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0
+	}
+	return int64(secs * 1000)
+}
+
+// readLoadAvg1m returns the 1-minute load average from /proc/loadavg.
+// Returns 0 on any error. Read-only, fail-soft.
+func readLoadAvg1m() float64 {
+	data, err := os.ReadFile("/proc/loadavg")
+	if err != nil {
+		return 0
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 1 {
+		return 0
+	}
+	v, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+// readMemInfo returns MemAvailable / Cached / Dirty in kB from /proc/meminfo.
+// Any field that fails to parse returns 0. Read-only, fail-soft.
+func readMemInfo() (availKb, cachedKb, dirtyKb int64) {
+	availKb, cachedKb, dirtyKb = parseMemInfo("/proc/meminfo")
+	return
+}
+
+func parseMemInfo(path string) (availKb, cachedKb, dirtyKb int64) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		idx := strings.Index(line, ":")
+		if idx < 0 {
+			continue
+		}
+		key := line[:idx]
+		rest := strings.Fields(line[idx+1:])
+		if len(rest) == 0 {
+			continue
+		}
+		val, err := strconv.ParseInt(rest[0], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch key {
+		case "MemAvailable":
+			availKb = val
+		case "Cached":
+			cachedKb = val
+		case "Dirty":
+			dirtyKb = val
+		}
+	}
+	return
+}
+
+// countSocketStates returns counts of ESTABLISHED / TIME_WAIT / LISTEN sockets
+// on 127.0.0.1:port by parsing /proc/net/tcp. Returns zeros on any error.
+// /proc/net/tcp local_address column encodes IP and port as hex; the port is
+// big-endian uppercase hex (e.g. 9223 = 0x2407 = ":2407").
+func countSocketStates(port uint16) (estab, timewait, listen int) {
+	estab, timewait, listen = parseSocketStates("/proc/net/tcp", port)
+	return
+}
+
+func parseSocketStates(path string, port uint16) (estab, timewait, listen int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	portSuffix := fmt.Sprintf(":%04X", port)
+	sc := bufio.NewScanner(f)
+	headerSkipped := false
+	for sc.Scan() {
+		if !headerSkipped {
+			headerSkipped = true
+			continue
+		}
+		fields := strings.Fields(sc.Text())
+		if len(fields) < 4 {
+			continue
+		}
+		if !strings.HasSuffix(fields[1], portSuffix) {
+			continue
+		}
+		switch fields[3] {
+		case "01":
+			estab++
+		case "06":
+			timewait++
+		case "0A":
+			listen++
+		}
+	}
+	return
+}
+
+// emitPhaseCompleteEvent writes a single chromium_launcher_phase_complete JSON
+// log line to stderr right before exec'ing chromium. This is the entry point
+// for SigNoz aggregation against vm-logs / s2.stream.
+func emitPhaseCompleteEvent(
+	launcherStart time.Time,
+	headless bool,
+	internalPortNum uint16,
+	ks killStats,
+	wp waitportStats,
+) {
+	estab, timewait, listen := countSocketStates(internalPortNum)
+	availKb, cachedKb, dirtyKb := readMemInfo()
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logger.Info("chromium_launcher_phase_complete",
+		"instance_name", strings.TrimSpace(os.Getenv("INSTANCE_NAME")),
+		"headless", headless,
+		"internal_port", internalPortNum,
+		"pkill_elapsed_ms", ks.pkillElapsedMs,
+		"pgrep_wait_elapsed_ms", ks.pgrepWaitElapsedMs,
+		"pgrep_attempts", ks.pgrepAttempts,
+		"pgrep_timed_out", ks.timedOut,
+		"waitport_elapsed_ms", wp.elapsedMs,
+		"waitport_attempts", wp.attempts,
+		"waitport_timed_out", wp.timedOut,
+		"waitport_last_err", wp.lastErr,
+		"ss_estab_devtools", estab,
+		"ss_timewait_devtools", timewait,
+		"ss_listen_devtools", listen,
+		"vm_uptime_ms", readVMUptimeMs(),
+		"load_avg_1m", readLoadAvg1m(),
+		"mem_available_kb", availKb,
+		"mem_cached_kb", cachedKb,
+		"mem_dirty_kb", dirtyKb,
+		"launcher_total_ms", time.Since(launcherStart).Milliseconds(),
+		"exec_started_unix_ms", time.Now().UnixMilli(),
+	)
 }
