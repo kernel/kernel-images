@@ -47,7 +47,7 @@ You can build and run the Dockerfile directly as a Docker container.
 ```sh
 cd images/chromium-headful
 IMAGE=kernel-docker ./build-docker.sh
-IMAGE=kernel-docker ENABLE_WEBRTC=true ./run-docker.sh
+IMAGE=kernel-docker ./run-docker.sh
 ```
 
 ## Running on a Unikernel
@@ -89,8 +89,8 @@ Deployed successfully!
 ### Unikernel Notes
 
 - The image requires at least 8gb of memory.
-- To deploy the implementation with WebRTC desktop streaming enabled instead of noVNC: `ENABLE_WEBRTC=true NEKO_ICESERVERS=xxx ./run-unikernel.sh`
-- Deploying to Unikraft Cloud requires the usage of a [TURN server](https://webrtc.org/getting-started/turn-server) when `ENABLE_WEBRTC=true`, as direct exposure of UDP ports is not currently supported. `NEKO_ICESERVERS`: Describes multiple STUN and TURN server that can be used by the ICEAgent to establish a connection with a peer. e.g. `[{"urls": ["turn:turn.example.com:19302", "stun:stun.example.com:19302"], "username": "name", "credential": "password"}, {"urls": ["stun:stun.example2.com:19302"]}]`.
+- The default live view backend is noVNC over HTTPS/WSS. To deploy the WebRTC/Neko path instead, run `LIVE_VIEW_BACKEND=neko NEKO_ICESERVERS=xxx ./run-unikernel.sh`. The legacy alias `ENABLE_WEBRTC=true` still selects Neko when `LIVE_VIEW_BACKEND` is unset.
+- Deploying to Unikraft Cloud with `LIVE_VIEW_BACKEND=neko` requires a [TURN server](https://webrtc.org/getting-started/turn-server), since direct exposure of UDP ports is not currently supported. `NEKO_ICESERVERS`: Describes multiple STUN and TURN server that can be used by the ICEAgent to establish a connection with a peer. e.g. `[{"urls": ["turn:turn.example.com:19302", "stun:stun.example.com:19302"], "username": "name", "credential": "password"}, {"urls": ["stun:stun.example2.com:19302"]}]`.
 - Various services (mutter, tint) take a few seconds to start-up. Once they do, the standby and restart time is extremely fast.
 - The Unikraft deployment generates a url. This url is public, meaning _anyone_ can access the remote GUI if they have the url. Only use this for non-sensitive browser interactions, and delete the unikernel instance when you're done.
 - You can call `browser.close()` to disconnect to the browser, and the unikernel will go into standby after network activity ends. You can then reconnect to the instance using CDP. `browser.close()` ends the websocket connection but doesn't actually close the browser.
@@ -134,14 +134,18 @@ const browser = await chromium.connectOverCDP(webSocketDebuggerUrl);
 
 ## Browser Remote GUI / Live View
 
-You can use the embedded live view to monitor and control the browser. The live view supports both read and write access to the browser. Both map to port `443`.
+You can use the embedded live view to monitor and control the browser. The live view supports both read and write access to the browser.
 
-- NoVNC: A VNC client. Read/write is supported. Set `ENABLE_WEBRTC=false` in `./run-docker.sh`.
-- WebRTC: A WebRTC-based client. Read/write, window resizing, and copy/paste is supported. It's much faster than VNC. Available when `ENABLE_WEBRTC=true` is set.
+- Docker: host port `6080` maps to the container live-view port `8080`.
+- Unikraft Cloud: external port `443` maps to the container live-view port `8080`.
+
+- NoVNC: Default backend. Read/write is supported over plain HTTP/WSS. Open `http://localhost:6080/vnc.html?autoconnect=true&resize=scale` when running in Docker.
+- WebRTC/Neko: Optional backend. Read/write, window resizing, and copy/paste is supported. Enable it with `LIVE_VIEW_BACKEND=neko ./run-docker.sh`. The legacy alias `ENABLE_WEBRTC=true` still works when `LIVE_VIEW_BACKEND` is unset.
 
 ### Notes
 - Audio streaming in the WebRTC implementation is currently non-functional and needs to be fixed.
 - The live view is read/write by default. You can set it to read-only by adding `-e ENABLE_READONLY_VIEW=true \` in `docker run`.
+- ChromeDriver is only installed automatically in `amd64` images. On local `arm64` builds, the live view, CDP, and `/computer/*` APIs still work, but the `9224` ChromeDriver/BiDi path is skipped unless you provide your own compatible binary.
 
 ## Replay Capture
 
@@ -153,7 +157,7 @@ For example:
 cd images/chromium-headful
 export IMAGE=kernel-docker
 ./build-docker.sh
-WITH_KERNEL_IMAGES_API=true ENABLE_WEBRTC=true ./run-docker.sh
+WITH_KERNEL_IMAGES_API=true ./run-docker.sh
 
 # 1. Start a new recording
 curl http://localhost:10001/recording/start -d {}

@@ -59,6 +59,68 @@ wait_for_tcp_port() {
   done
 }
 
+should_start_chromedriver() {
+  local mode="${ENABLE_CHROMEDRIVER:-auto}"
+  local arch
+  arch="$(uname -m)"
+
+  case "${mode}" in
+    auto|true|false)
+      ;;
+    *)
+      echo "[wrapper] Unsupported ENABLE_CHROMEDRIVER value: ${mode}" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ "${mode}" == "false" ]]; then
+    echo "[wrapper] Skipping ChromeDriver because ENABLE_CHROMEDRIVER=false"
+    return 1
+  fi
+
+  if [[ ! -x /usr/local/bin/chromedriver ]]; then
+    if [[ "${mode}" == "true" ]]; then
+      echo "[wrapper] ChromeDriver requested but /usr/local/bin/chromedriver is not installed" >&2
+      exit 1
+    fi
+    echo "[wrapper] Skipping ChromeDriver because no binary is installed for this image"
+    return 1
+  fi
+
+  if [[ "${arch}" != "x86_64" ]]; then
+    if [[ "${mode}" == "true" ]]; then
+      echo "[wrapper] ChromeDriver requested on unsupported runtime architecture: ${arch}" >&2
+      exit 1
+    fi
+    echo "[wrapper] Skipping ChromeDriver on unsupported runtime architecture: ${arch}"
+    return 1
+  fi
+
+  return 0
+}
+
+resolve_live_view_backend() {
+  local backend="${LIVE_VIEW_BACKEND:-}"
+  if [[ -z "${backend}" ]]; then
+    if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
+      backend="neko"
+    else
+      backend="novnc"
+    fi
+  fi
+
+  case "${backend}" in
+    neko|novnc)
+      ;;
+    *)
+      echo "[wrapper] Unsupported LIVE_VIEW_BACKEND: ${backend}" >&2
+      exit 1
+      ;;
+  esac
+
+  printf '%s\n' "${backend}"
+}
+
 # Disable scale-to-zero for the duration of the script when not running under Docker
 if [[ -z "${WITHDOCKER:-}" ]]; then
   echo "[wrapper] Disabling scale-to-zero"
@@ -173,6 +235,13 @@ start_dynamic_log_aggregator() {
 start_dynamic_log_aggregator
 
 export DISPLAY=:1
+export LIVE_VIEW_BACKEND="$(resolve_live_view_backend)"
+if [[ "${LIVE_VIEW_BACKEND}" == "neko" ]]; then
+  export ENABLE_WEBRTC=true
+else
+  export ENABLE_WEBRTC=false
+fi
+echo "[wrapper] Live view backend: ${LIVE_VIEW_BACKEND}"
 
 # Predefine ports and export for services
 export INTERNAL_PORT="${INTERNAL_PORT:-9223}"
@@ -186,6 +255,9 @@ cleanup () {
   echo "[wrapper] Cleaning up..."
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
+  supervisorctl -c /etc/supervisor/supervisord.conf stop novnc || true
+  supervisorctl -c /etc/supervisor/supervisord.conf stop x11vnc || true
+  supervisorctl -c /etc/supervisor/supervisord.conf stop neko || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromedriver || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop kernel-images-api || true
@@ -256,13 +328,20 @@ echo "[wrapper] Starting Chromium via supervisord on internal port $INTERNAL_POR
 supervisorctl -c /etc/supervisor/supervisord.conf start chromium
 wait_for_tcp_port 127.0.0.1 "$INTERNAL_PORT" "Chromium remote debugging" 100 0.2 "20s" || true
 
-if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
-  # use webrtc
+if [[ "${LIVE_VIEW_BACKEND}" == "neko" ]]; then
   echo "[wrapper] ✨ Starting neko (webrtc server) via supervisord."
   supervisorctl -c /etc/supervisor/supervisord.conf start neko
 
   # Wait for neko to be ready.
   wait_for_tcp_port 127.0.0.1 8080 "neko"
+else
+  echo "[wrapper] ✨ Starting x11vnc via supervisord."
+  supervisorctl -c /etc/supervisor/supervisord.conf start x11vnc
+  wait_for_tcp_port 127.0.0.1 5900 "x11vnc"
+
+  echo "[wrapper] ✨ Starting noVNC via supervisord."
+  supervisorctl -c /etc/supervisor/supervisord.conf start novnc
+  wait_for_tcp_port 127.0.0.1 8080 "noVNC"
 fi
 
 echo "[wrapper] ✨ Starting kernel-images API."
@@ -277,9 +356,11 @@ API_OUTPUT_DIR="${KERNEL_IMAGES_API_OUTPUT_DIR:-/recordings}"
 supervisorctl -c /etc/supervisor/supervisord.conf start kernel-images-api
 wait_for_tcp_port 127.0.0.1 "${API_PORT}" "kernel-images API"
 
-echo "[wrapper] Starting ChromeDriver via supervisord"
-supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
-wait_for_tcp_port 127.0.0.1 9225 "ChromeDriver" 50 0.2 "10s" || true
+if should_start_chromedriver; then
+  echo "[wrapper] Starting ChromeDriver via supervisord"
+  supervisorctl -c /etc/supervisor/supervisord.conf start chromedriver
+  wait_for_tcp_port 127.0.0.1 9225 "ChromeDriver" 50 0.2 "10s" || true
+fi
 
 echo "[wrapper] Starting PulseAudio daemon via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start pulseaudio

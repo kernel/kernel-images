@@ -252,6 +252,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get update; \
     apt-get --no-install-recommends -y install \
     wget ca-certificates python2 supervisor xclip xdotool unclutter \
+    novnc websockify x11vnc \
     pulseaudio dbus-x11 xserver-xorg-video-dummy \
     libcairo2 libxcb1 libxrandr2 libxv1 libopus0 libvpx7 \
     x11-xserver-utils \
@@ -277,6 +278,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     /home/$USERNAME/.local/share/xorg; \
     chmod 1777 /var/log/neko; \
     chown $USERNAME /var/log/neko/ /tmp/runtime-$USERNAME; \
+    NOVNC_DIR="$(dirname "$(find /usr/share -path '*/novnc/vnc.html' | head -n1)")"; \
+    test -n "$NOVNC_DIR"; \
+    ln -s "$NOVNC_DIR" /opt/novnc; \
     chown -R $USERNAME:$USERNAME /home/$USERNAME;
 
 # install chromium and sqlite3 for debugging the cookies file
@@ -289,14 +293,24 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt -y install chromium && \
     apt --no-install-recommends -y install sqlite3;
 
-# Chromedriver and Chromium are not necessarily the same version.
-ARG CHROMEDRIVER_VERSION=146.0.7680.165
 RUN set -eux; \
-    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
-    unzip /tmp/cd.zip -d /tmp; \
-    mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
-    chmod +x /usr/local/bin/chromedriver; \
-    rm -rf /tmp/cd.zip /tmp/chromedriver-linux64
+    case "${TARGETARCH:-amd64}" in \
+        amd64) \
+            CHROMEDRIVER_VERSION="$(dpkg-query -W -f='${Version}' chromium | cut -d- -f1)"; \
+            curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
+            unzip /tmp/cd.zip -d /tmp; \
+            mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
+            chmod +x /usr/local/bin/chromedriver; \
+            rm -rf /tmp/cd.zip /tmp/chromedriver-linux64; \
+            ;; \
+        arm64) \
+            echo "Skipping ChromeDriver install for TARGETARCH=arm64; Chrome for Testing publishes only linux64 ChromeDriver"; \
+            ;; \
+        *) \
+            echo "Unsupported TARGETARCH for ChromeDriver: ${TARGETARCH:-unknown}" >&2; \
+            exit 1; \
+            ;; \
+    esac
 
 # Copy Chromium policy configuration
 RUN mkdir -p /etc/chromium/policies/managed

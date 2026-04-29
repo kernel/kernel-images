@@ -13,6 +13,24 @@ mkdir -p "$HOST_RECORDINGS_DIR"
 # RUN_AS_ROOT defaults to false in docker
 RUN_AS_ROOT="${RUN_AS_ROOT:-false}"
 
+LIVE_VIEW_BACKEND="${LIVE_VIEW_BACKEND:-}"
+if [[ -z "$LIVE_VIEW_BACKEND" ]]; then
+  if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
+    LIVE_VIEW_BACKEND="neko"
+  else
+    LIVE_VIEW_BACKEND="novnc"
+  fi
+fi
+
+case "$LIVE_VIEW_BACKEND" in
+  neko|novnc)
+    ;;
+  *)
+    echo "Unsupported LIVE_VIEW_BACKEND: $LIVE_VIEW_BACKEND" >&2
+    exit 1
+    ;;
+esac
+
 # Build Chromium flags file and mount
 CHROMIUM_FLAGS_DEFAULT="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*"
 if [[ "$RUN_AS_ROOT" == "true" ]]; then
@@ -56,6 +74,7 @@ RUN_ARGS=(
   --tmpfs /dev/shm:size=2g
   -v "$HOST_RECORDINGS_DIR:/recordings"
   --memory 8192m
+  -p 6080:8080
   -p 9222:9222
   -p 9224:9224
   -p 444:10001
@@ -64,6 +83,7 @@ RUN_ARGS=(
   -e WIDTH=1920
   -e TZ=${TZ:-'America/Los_Angeles'}
   -e RUN_AS_ROOT="$RUN_AS_ROOT"
+  -e LIVE_VIEW_BACKEND="$LIVE_VIEW_BACKEND"
   --mount type=bind,src="$FLAGS_FILE",dst=/chromium/flags
 )
 
@@ -72,9 +92,8 @@ if [[ -n "${PLAYWRIGHT_ENGINE:-}" ]]; then
 fi
 
 # WebRTC port mapping
-if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
+if [[ "$LIVE_VIEW_BACKEND" == "neko" ]]; then
   echo "Running container with WebRTC"
-  RUN_ARGS+=( -p 8080:8080 )
   RUN_ARGS+=( -e ENABLE_WEBRTC=true )
   if [[ -n "${NEKO_ICESERVERS:-}" ]]; then
     RUN_ARGS+=( -e NEKO_ICESERVERS="$NEKO_ICESERVERS" )
@@ -83,6 +102,8 @@ if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
     RUN_ARGS+=( -e NEKO_WEBRTC_NAT1TO1=127.0.0.1 )
     RUN_ARGS+=( -p 56000-56100:56000-56100/udp )
   fi
+else
+  echo "Running container with noVNC"
 fi
 
 docker rm -f "$NAME" 2>/dev/null || true

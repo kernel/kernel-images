@@ -20,6 +20,24 @@ volume_name="${NAME}-flags"
 # RUN_AS_ROOT defaults to true in unikernel (for now, until we figure it out)
 RUN_AS_ROOT="${RUN_AS_ROOT:-true}"
 
+LIVE_VIEW_BACKEND="${LIVE_VIEW_BACKEND:-}"
+if [[ -z "$LIVE_VIEW_BACKEND" ]]; then
+  if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
+    LIVE_VIEW_BACKEND="neko"
+  else
+    LIVE_VIEW_BACKEND="novnc"
+  fi
+fi
+
+case "$LIVE_VIEW_BACKEND" in
+  neko|novnc)
+    ;;
+  *)
+    echo "Unsupported LIVE_VIEW_BACKEND: $LIVE_VIEW_BACKEND" >&2
+    exit 1
+    ;;
+esac
+
 chromium_flags_default="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*"
 if [[ "$RUN_AS_ROOT" == "true" ]]; then
   chromium_flags_default="$chromium_flags_default --no-sandbox --no-zygote"
@@ -77,11 +95,12 @@ deploy_args=(
   -e TZ=${TZ:-'America/Los_Angeles'}
   -e RUN_AS_ROOT="$RUN_AS_ROOT"
   -e LOG_CDP_MESSAGES=true
+  -e LIVE_VIEW_BACKEND="$LIVE_VIEW_BACKEND"
   -v "$volume_name":/chromium
   -n "$NAME"
 )
 
-if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
+if [[ "$LIVE_VIEW_BACKEND" == "neko" ]]; then
   echo "Deploying with WebRTC enabled"
   kraft cloud inst create --start \
     "${deploy_args[@]}" \
@@ -89,9 +108,9 @@ if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
     -e ENABLE_WEBRTC=true \
     -e NEKO_ICESERVERS="${NEKO_ICESERVERS:-}" "$IMAGE"
 else
-  echo "Deploying without WebRTC"
+  echo "Deploying with noVNC"
   kraft cloud inst create --start \
     "${deploy_args[@]}" \
-    -p 443:6080/http+tls \
+    -p 443:8080/http+tls \
     "$IMAGE"
 fi
