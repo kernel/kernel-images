@@ -332,3 +332,127 @@ func TestBindingAndTimeline(t *testing.T) {
 		assert.Equal(t, countBefore+1, countAfter, "rate limiter should have dropped the 2nd and 3rd events")
 	})
 }
+
+func TestPerTargetStateMachines(t *testing.T) {
+	// attachTarget sends a Target.attachedToTarget message for a page session.
+	attachTarget := func(srv *testServer, t *testing.T, sessionID, targetID string) {
+		t.Helper()
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId": sessionID,
+				"targetInfo": map[string]any{
+					"targetId": targetID, "type": "page",
+					"url": "about:blank", "attached": true,
+				},
+				"waitingForDebugger": false,
+			},
+		})
+	}
+
+	t.Run("two_tabs_independent", func(t *testing.T) {
+		srv := newTestServer(t)
+		defer srv.close()
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		defer cleanup()
+
+		attachTarget(srv, t, "sess-a", "target-a")
+		attachTarget(srv, t, "sess-b", "target-b")
+
+		// Navigate sess-a and start a request.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "sess-a",
+			"params": map[string]any{"frame": map[string]any{
+				"id": "f-a", "url": "https://a.example.com", "loaderId": "l-a",
+			}},
+		})
+		ec.waitFor(t, "navigation", 2*time.Second)
+
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.requestWillBeSent", "sessionId": "sess-a",
+			"params": map[string]any{
+				"requestId": "req-a", "type": "Document", "loaderId": "l-a",
+				"documentURL": "https://a.example.com/",
+				"request":     map[string]any{"method": "GET", "url": "https://a.example.com/"},
+				"initiator":   map[string]any{"type": "other"},
+			},
+		})
+		ec.waitFor(t, "network_request", 2*time.Second)
+
+		// Navigate sess-b — must not reset sess-a's state machine.
+		// With per-session state machines, sess-b starts fresh (netPending=0) and
+		// fires its own network_idle after the 500 ms debounce, independently.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "sess-b",
+			"params": map[string]any{"frame": map[string]any{
+				"id": "f-b", "url": "https://b.example.com", "loaderId": "l-b",
+			}},
+		})
+
+		// Wait past sess-b's 500 ms debounce so its network_idle fires before we
+		// set our checkpoint. The next new network_idle will then come from sess-a.
+		time.Sleep(700 * time.Millisecond)
+
+		// Finish sess-a's request; waitForNew captures the current event count so
+		// sess-b's already-fired network_idle is excluded from the result.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived", "sessionId": "sess-a",
+			"params": map[string]any{
+				"requestId": "req-a", "type": "Document",
+				"response": map[string]any{"status": 200, "statusText": "OK", "headers": map[string]any{}, "mimeType": "text/html"},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.loadingFinished", "sessionId": "sess-a",
+			"params": map[string]any{"requestId": "req-a"},
+		})
+
+		ev := ec.waitForNew(t, "network_idle", 2*time.Second)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "sess-a", data["session_id"], "network_idle must be attributed to sess-a")
+		assert.Equal(t, "l-a", data["loader_id"])
+	})
+
+	t.Run("detach_stops_timer", func(t *testing.T) {
+		srv := newTestServer(t)
+		defer srv.close()
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		defer cleanup()
+
+		attachTarget(srv, t, "sess-c", "target-c")
+
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "sess-c",
+			"params": map[string]any{"frame": map[string]any{
+				"id": "f-c", "url": "https://c.example.com", "loaderId": "l-c",
+			}},
+		})
+		ec.waitFor(t, "navigation", 2*time.Second)
+
+		// Start a request, then finish it (arms the 500 ms network_idle timer).
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.requestWillBeSent", "sessionId": "sess-c",
+			"params": map[string]any{
+				"requestId": "req-c", "type": "Document", "loaderId": "l-c",
+				"documentURL": "https://c.example.com/",
+				"request":     map[string]any{"method": "GET", "url": "https://c.example.com/"},
+				"initiator":   map[string]any{"type": "other"},
+			},
+		})
+		ec.waitFor(t, "network_request", 2*time.Second)
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.loadingFinished", "sessionId": "sess-c",
+			"params": map[string]any{"requestId": "req-c"},
+		})
+
+		// Detach before the 500 ms timer fires; readLoop processes messages in
+		// order so the stop() call lands well within the debounce window.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.detachedFromTarget",
+			"params": map[string]any{"sessionId": "sess-c"},
+		})
+
+		ec.assertNone(t, "network_idle", 1200*time.Millisecond)
+	})
+}

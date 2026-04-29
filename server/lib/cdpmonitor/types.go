@@ -54,8 +54,12 @@ const (
 	EventMonitorInitFailed      = "monitor_init_failed"     // could not initialise the CDP session
 )
 
-// Metadata key written into events.Source.Metadata for CDP-sourced events.
-const MetadataKeyCDPSessionID = "cdp_session_id"
+// Metadata keys written into events.Source.Metadata for CDP-sourced events.
+const (
+	MetadataKeyCDPSessionID = "cdp_session_id"
+	MetadataKeyTargetID     = "target_id"
+	MetadataKeyTargetType   = "target_type"
+)
 
 // CDP PerformanceTimeline event type for layout shifts.
 const timelineEventLayoutShift = "layout-shift"
@@ -109,9 +113,22 @@ type networkReqState struct {
 	headers      json.RawMessage
 	postData     string
 	resourceType string
+	loaderID     string
+	frameID      string
 	status       int
 	statusText   string
 	resHeaders   json.RawMessage
 	mimeType     string
 	addedAt      time.Time // for TTL eviction
+}
+
+// navContext carries the identity of the navigation that owns a computedState.
+// Stamped at Page.frameNavigated and precomputed into event payloads/metadata.
+type navContext struct {
+	sessionID  string
+	targetID   string
+	targetType string
+	frameID    string
+	loaderID   string
+	url        string
 }
