@@ -57,8 +57,11 @@ Chrome can restart independently of the monitor. When that happens, `UpstreamPro
 Locks must be acquired left to right. Never hold a lock on the left while acquiring one further right.
 
 ```
-restartMu -> lifeMu -> pendReqMu -> computed.mu -> pendMu -> sessionsMu
+restartMu -> lifeMu -> pendReqMu -> computed.mu -> pendMu
+restartMu -> lifeMu -> sessionsMu
 ```
+
+`computed.mu` and `sessionsMu` are never held simultaneously; `cs.stop()` and `cs.resetOnNavigation()` are called only after the relevant `sessionsMu` critical section is complete.
 
 `bindingRateMu` is independent of this ordering and is always acquired alone.
 

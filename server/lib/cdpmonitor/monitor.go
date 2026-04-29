@@ -180,12 +180,13 @@ func (m *Monitor) Stop() {
 // It also fails all in-flight send() calls so their goroutines are unblocked.
 func (m *Monitor) clearState() {
 	m.sessionsMu.Lock()
-	for _, cs := range m.computedStates {
-		cs.stop()
-	}
+	prev := m.computedStates
 	m.sessions = make(map[string]targetInfo)
 	m.computedStates = make(map[string]*computedState)
 	m.sessionsMu.Unlock()
+	for _, cs := range prev {
+		cs.stop()
+	}
 	m.mainSessionID.Store(mainSessionUnset)
 
 	m.pendReqMu.Lock()

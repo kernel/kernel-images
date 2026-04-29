@@ -493,10 +493,11 @@ func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) 
 		return
 	}
 	m.sessionsMu.Lock()
-	if cs := m.computedStates[p.SessionID]; cs != nil {
-		cs.stop()
-	}
+	cs := m.computedStates[p.SessionID]
 	delete(m.sessions, p.SessionID)
 	delete(m.computedStates, p.SessionID)
 	m.sessionsMu.Unlock()
+	if cs != nil {
+		cs.stop()
+	}
 }
