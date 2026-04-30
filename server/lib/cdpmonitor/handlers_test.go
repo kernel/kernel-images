@@ -208,10 +208,27 @@ func TestPageEvents(t *testing.T) {
 	_, ec, cleanup := startMonitor(t, srv, nil)
 	defer cleanup()
 
+	// Attach a page target first so computedState exists for nav context.
 	srv.sendToMonitor(t, map[string]any{
-		"method": "Page.frameNavigated",
+		"method": "Target.attachedToTarget",
 		"params": map[string]any{
-			"frame": map[string]any{"id": "frame-1", "url": "https://example.com/page"},
+			"sessionId": "sess-page",
+			"targetInfo": map[string]any{
+				"targetId": "target-page", "type": "page",
+				"url": "about:blank", "attached": true,
+			},
+			"waitingForDebugger": false,
+		},
+	})
+	ec.waitFor(t, "tab_opened", 2*time.Second)
+
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Page.frameNavigated", "sessionId": "sess-page",
+		"params": map[string]any{
+			"frame": map[string]any{
+				"id": "frame-1", "url": "https://example.com/page",
+				"loaderId": "loader-1",
+			},
 		},
 	})
 	ev := ec.waitFor(t, "navigation", 2*time.Second)
@@ -222,17 +239,74 @@ func TestPageEvents(t *testing.T) {
 	assert.Equal(t, "https://example.com/page", data["url"])
 
 	srv.sendToMonitor(t, map[string]any{
-		"method": "Page.domContentEventFired",
+		"method": "Page.domContentEventFired", "sessionId": "sess-page",
 		"params": map[string]any{"timestamp": 1000.0},
 	})
 	ev2 := ec.waitFor(t, "dom_content_loaded", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev2.Category)
+	var data2 map[string]any
+	require.NoError(t, json.Unmarshal(ev2.Data, &data2))
+	assert.Equal(t, float64(1000.0), data2["cdp_timestamp"])
+	assert.Equal(t, "loader-1", data2["loader_id"])
+	assert.Equal(t, "https://example.com/page", data2["url"])
+
 	srv.sendToMonitor(t, map[string]any{
-		"method": "Page.loadEventFired",
+		"method": "Page.loadEventFired", "sessionId": "sess-page",
 		"params": map[string]any{"timestamp": 1001.0},
 	})
 	ev3 := ec.waitFor(t, "page_load", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev3.Category)
+	var data3 map[string]any
+	require.NoError(t, json.Unmarshal(ev3.Data, &data3))
+	assert.Equal(t, float64(1001.0), data3["cdp_timestamp"])
+	assert.Equal(t, "loader-1", data3["loader_id"])
+}
+
+func TestTabOpened(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	_, ec, cleanup := startMonitor(t, srv, nil)
+	defer cleanup()
+
+	t.Run("page_target_emits_tab_opened", func(t *testing.T) {
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId": "sess-tab",
+				"targetInfo": map[string]any{
+					"targetId": "target-tab", "type": "page",
+					"url": "https://example.com", "attached": true,
+					"title": "Example",
+				},
+				"waitingForDebugger": false,
+			},
+		})
+		ev := ec.waitFor(t, "tab_opened", 2*time.Second)
+		assert.Equal(t, events.CategoryPage, ev.Category)
+		assert.Equal(t, "Target.attachedToTarget", ev.Source.Event)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "target-tab", data["target_id"])
+		assert.Equal(t, "page", data["target_type"])
+		assert.Equal(t, "https://example.com", data["url"])
+		assert.Equal(t, "Example", data["title"])
+	})
+
+	t.Run("iframe_target_no_tab_opened", func(t *testing.T) {
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId": "sess-iframe",
+				"targetInfo": map[string]any{
+					"targetId": "target-iframe", "type": "iframe",
+					"url": "https://iframe.example.com", "attached": true,
+				},
+				"waitingForDebugger": false,
+			},
+		})
+		ec.assertNone(t, "tab_opened", 200*time.Millisecond)
+	})
 }
 
 func TestBindingAndTimeline(t *testing.T) {
@@ -274,12 +348,30 @@ func TestBindingAndTimeline(t *testing.T) {
 		srv.sendToMonitor(t, map[string]any{
 			"method": "PerformanceTimeline.timelineEventAdded",
 			"params": map[string]any{
-				"event": map[string]any{"type": "layout-shift"},
+				"event": map[string]any{
+					"type":     "layout-shift",
+					"frameId":  "frame-ls",
+					"time":     1.5,
+					"duration": 0.0,
+					"layoutShiftDetails": map[string]any{
+						"score":          0.12,
+						"hadRecentInput": true,
+					},
+				},
 			},
 		})
 		ev := ec.waitFor(t, "layout_shift", 2*time.Second)
 		assert.Equal(t, events.KindCDP, ev.Source.Kind)
 		assert.Equal(t, "PerformanceTimeline.timelineEventAdded", ev.Source.Event)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "frame-ls", data["frame_id"])
+		assert.Equal(t, float64(1.5), data["time"])
+		shift := data["layout_shift_details"].(map[string]any)
+		assert.Equal(t, 0.12, shift["score"])
+		assert.Equal(t, true, shift["had_recent_input"])
+		_, hasEvent := data["event"]
+		assert.False(t, hasEvent, "raw CDP event wrapper must not appear in payload")
 	})
 
 	t.Run("unknown_binding_ignored", func(t *testing.T) {

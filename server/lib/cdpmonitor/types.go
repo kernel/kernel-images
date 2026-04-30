@@ -16,15 +16,16 @@ const mainSessionUnset = "\x00unset"
 // Each maps 1-to-1 with a specific CDP domain event (Runtime.*, Network.*,
 // Page.*, PerformanceTimeline.*) received from Chrome.
 const (
-	EventConsoleLog           = "console_log"             // Runtime.consoleAPICalled (non-error types)
-	EventConsoleError         = "console_error"           // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
-	EventNetworkRequest       = "network_request"         // Network.requestWillBeSent
-	EventNetworkResponse      = "network_response"        // Network.loadingFinished (with prior responseReceived)
-	EventNetworkLoadingFailed = "network_loading_failed"  // Network.loadingFailed
-	EventNavigation           = "navigation"              // Page.frameNavigated
-	EventDOMContentLoaded     = "dom_content_loaded"      // Page.domContentEventFired
-	EventPageLoad             = "page_load"               // Page.loadEventFired
-	EventLayoutShift          = "layout_shift"            // PerformanceTimeline event of type "layout-shift"
+	EventConsoleLog           = "console_log"            // Runtime.consoleAPICalled (non-error types)
+	EventConsoleError         = "console_error"          // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
+	EventNetworkRequest       = "network_request"        // Network.requestWillBeSent
+	EventNetworkResponse      = "network_response"       // Network.loadingFinished (with prior responseReceived)
+	EventNetworkLoadingFailed = "network_loading_failed" // Network.loadingFailed
+	EventNavigation           = "navigation"             // Page.frameNavigated
+	EventDOMContentLoaded     = "dom_content_loaded"     // Page.domContentEventFired
+	EventPageLoad             = "page_load"              // Page.loadEventFired
+	EventLayoutShift          = "layout_shift"           // PerformanceTimeline event of type "layout-shift"
+	EventTabOpened            = "tab_opened"             // Target.attachedToTarget for type=page
 )
 
 // Computed events — synthetic events derived by computed.go state machines.

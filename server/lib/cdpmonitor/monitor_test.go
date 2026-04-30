@@ -83,12 +83,13 @@ func TestScreenshot(t *testing.T) {
 	}
 
 	t.Run("capture_and_publish", func(t *testing.T) {
-		m.tryScreenshot(context.Background())
+		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		require.Eventually(t, func() bool { return captureCount.Load() == 1 }, 2*time.Second, 20*time.Millisecond)
 
 		ev := ec.waitFor(t, "screenshot", 2*time.Second)
 		assert.Equal(t, events.CategorySystem, ev.Category)
 		assert.Equal(t, events.KindLocalProcess, ev.Source.Kind)
+		assert.Equal(t, "Page.loadEventFired", ev.Source.Event)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.NotEmpty(t, data["png"])
@@ -96,7 +97,7 @@ func TestScreenshot(t *testing.T) {
 
 	t.Run("rate_limited", func(t *testing.T) {
 		before := captureCount.Load()
-		m.tryScreenshot(context.Background())
+		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		time.Sleep(100 * time.Millisecond)
 		assert.Equal(t, before, captureCount.Load(), "should be rate-limited within 2s")
 	})
@@ -104,7 +105,7 @@ func TestScreenshot(t *testing.T) {
 	t.Run("captures_after_cooldown", func(t *testing.T) {
 		m.lastScreenshotAt.Store(time.Now().Add(-3 * time.Second).UnixMilli())
 		before := captureCount.Load()
-		m.tryScreenshot(context.Background())
+		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		require.Eventually(t, func() bool { return captureCount.Load() > before }, 2*time.Second, 20*time.Millisecond)
 	})
 }

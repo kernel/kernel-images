@@ -2,6 +2,7 @@ package cdpmonitor
 
 import (
 	"encoding/json"
+	"maps"
 	"sync"
 	"time"
 
@@ -67,6 +68,25 @@ func newComputedState(publish PublishFunc) *computedState {
 		navData: json.RawMessage(`{}`),
 		navMeta: make(map[string]string),
 	}
+}
+
+// navSnapshot returns the precomputed nav payload and metadata under mu.
+func (s *computedState) navSnapshot() (json.RawMessage, map[string]string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.navData, s.navMeta
+}
+
+// navDataWith merges extra fields into the current nav payload.
+func (s *computedState) navDataWith(extra map[string]any) json.RawMessage {
+	base := make(map[string]any)
+	if s != nil {
+		d, _ := s.navSnapshot()
+		_ = json.Unmarshal(d, &base)
+	}
+	maps.Copy(base, extra)
+	result, _ := json.Marshal(base)
+	return result
 }
 
 func stopTimer(t *time.Timer) {

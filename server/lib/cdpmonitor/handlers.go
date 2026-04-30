@@ -156,7 +156,7 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 		"stack_trace": p.ExceptionDetails.StackTrace,
 	})
 	m.publishEvent(EventConsoleError, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.exceptionThrown", data, sessionID)
-	m.tryScreenshot(ctx)
+	m.tryScreenshot(ctx, "Runtime.exceptionThrown", sessionID)
 }
 
 // bindingMinInterval is the minimum time between accepted __kernelEvent binding
@@ -207,7 +207,30 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 	if p.Event.Type != timelineEventLayoutShift {
 		return
 	}
-	data, _ := json.Marshal(p)
+	ev := map[string]any{
+		"frame_id": p.Event.FrameID,
+		"time":     p.Event.Time,
+		"duration": p.Event.Duration,
+	}
+	var shift cdpLayoutShiftDetails
+	if p.Event.LayoutShiftDetails != nil && json.Unmarshal(p.Event.LayoutShiftDetails, &shift) == nil {
+		ev["layout_shift_details"] = map[string]any{
+			"score":            shift.Score,
+			"had_recent_input": shift.HadRecentInput,
+		}
+	}
+	var lcp cdpLcpDetails
+	if p.Event.LcpDetails != nil && json.Unmarshal(p.Event.LcpDetails, &lcp) == nil {
+		ev["lcp_details"] = map[string]any{
+			"render_time": lcp.RenderTime,
+			"load_time":   lcp.LoadTime,
+			"size":        lcp.Size,
+			"element_id":  lcp.ElementID,
+			"url":         lcp.URL,
+			"node_id":     lcp.NodeID,
+		}
+	}
+	data, _ := json.Marshal(ev)
 	m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
 	if cs := m.computedFor(sessionID); cs != nil {
 		cs.onLayoutShift()
@@ -442,24 +465,23 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 }
 
 func (m *Monitor) handleDOMContentLoaded(p cdpPageDomContentEventFiredParams, sessionID string) {
-	data, _ := json.Marshal(p)
+	cs := m.computedFor(sessionID)
+	data := cs.navDataWith(map[string]any{"cdp_timestamp": p.Timestamp})
 	m.publishEvent(EventDOMContentLoaded, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.domContentEventFired", data, sessionID)
-	// Only page targets have a computedState (not iframes), so computedFor is
-	// the gate — no explicit mainSessionID check needed here.
-	if cs := m.computedFor(sessionID); cs != nil {
+	if cs != nil {
 		cs.onDOMContentLoaded()
 	}
 }
 
 func (m *Monitor) handleLoadEventFired(ctx context.Context, p cdpPageLoadEventFiredParams, sessionID string) {
-	data, _ := json.Marshal(p)
+	cs := m.computedFor(sessionID)
+	data := cs.navDataWith(map[string]any{"cdp_timestamp": p.Timestamp})
 	m.publishEvent(EventPageLoad, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", data, sessionID)
-	if cs := m.computedFor(sessionID); cs != nil {
+	if cs != nil {
 		cs.onPageLoad()
 	}
-
 	if m.mainSessionID.Load() == sessionID {
-		m.tryScreenshot(ctx)
+		m.tryScreenshot(ctx, "Page.loadEventFired", sessionID)
 	}
 }
 
@@ -477,6 +499,17 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 		m.computedStates[p.SessionID] = newComputedState(m.publish)
 	}
 	m.sessionsMu.Unlock()
+
+	if p.TargetInfo.Type == targetTypePage {
+		data, _ := json.Marshal(map[string]any{
+			"target_id":   p.TargetInfo.TargetID,
+			"target_type": p.TargetInfo.Type,
+			"url":         p.TargetInfo.URL,
+			"opener_id":   p.TargetInfo.OpenerID,
+			"title":       p.TargetInfo.Title,
+		})
+		m.publishEvent(EventTabOpened, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Target.attachedToTarget", data, p.SessionID)
+	}
 
 	targetType := p.TargetInfo.Type
 	// Async to avoid blocking the readLoop.

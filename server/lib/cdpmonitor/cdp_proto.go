@@ -239,6 +239,22 @@ type cdpPerformanceTimelineEventAddedParams struct {
 	Event cdpPerformanceTimelineEvent `json:"event"`
 }
 
+// cdpLayoutShiftDetails mirrors PerformanceTimeline.LayoutShiftDetails (PDL wire format).
+type cdpLayoutShiftDetails struct {
+	Score          float64 `json:"score"`
+	HadRecentInput bool    `json:"hadRecentInput"`
+}
+
+// cdpLcpDetails mirrors PerformanceTimeline.LargestContentfulPaintDetails (PDL wire format).
+type cdpLcpDetails struct {
+	RenderTime float64 `json:"renderTime"`
+	LoadTime   float64 `json:"loadTime"`
+	Size       float64 `json:"size"`
+	ElementID  string  `json:"elementId,omitempty"`
+	URL        string  `json:"url,omitempty"`
+	NodeID     int     `json:"nodeId,omitempty"`
+}
+
 // --- Target domain ---
 
 // cdpTargetTargetInfo mirrors Target.TargetInfo.
