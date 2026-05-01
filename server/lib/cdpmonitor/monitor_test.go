@@ -86,7 +86,7 @@ func TestScreenshot(t *testing.T) {
 		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		require.Eventually(t, func() bool { return captureCount.Load() == 1 }, 2*time.Second, 20*time.Millisecond)
 
-		ev := ec.waitFor(t, "screenshot", 2*time.Second)
+		ev := ec.waitFor(t, "monitor_screenshot", 2*time.Second)
 		assert.Equal(t, events.CategorySystem, ev.Category)
 		assert.Equal(t, events.KindLocalProcess, ev.Source.Kind)
 		assert.Equal(t, "Page.loadEventFired", ev.Source.Event)

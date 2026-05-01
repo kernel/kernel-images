@@ -21,34 +21,34 @@ const (
 	EventNetworkRequest       = "network_request"        // Network.requestWillBeSent
 	EventNetworkResponse      = "network_response"       // Network.loadingFinished (with prior responseReceived)
 	EventNetworkLoadingFailed = "network_loading_failed" // Network.loadingFailed
-	EventNavigation           = "navigation"             // Page.frameNavigated
-	EventDOMContentLoaded     = "dom_content_loaded"     // Page.domContentEventFired
-	EventPageLoad             = "page_load"              // Page.loadEventFired
-	EventLayoutShift          = "layout_shift"           // PerformanceTimeline event of type "layout-shift"
-	EventTabOpened            = "tab_opened"             // Target.attachedToTarget for type=page
+	EventNavigation           = "page_navigation"        // Page.frameNavigated
+	EventDOMContentLoaded     = "page_dom_content_loaded" // Page.domContentEventFired
+	EventPageLoad             = "page_load"               // Page.loadEventFired
+	EventLayoutShift          = "page_layout_shift"       // PerformanceTimeline event of type "layout-shift"
+	EventTabOpened            = "page_tab_opened"         // Target.attachedToTarget for type=page
 )
 
 // Computed events — synthetic events derived by computed.go state machines.
 // None of these correspond to a single CDP notification; they are inferred from
 // sequences of CDP events and debounce timers.
 const (
-	EventNetworkIdle       = "network_idle"        // 500 ms after all in-flight requests finish
-	EventLayoutSettled     = "layout_settled"      // 1 s after page_load with no intervening layout shifts
-	EventNavigationSettled = "navigation_settled"  // fires once dom_content_loaded + network_idle + layout_settled all hold
+	EventNetworkIdle       = "network_idle"           // 500 ms after all in-flight requests finish
+	EventLayoutSettled     = "page_layout_settled"    // 1 s after page_load with no intervening layout shifts
+	EventNavigationSettled = "page_navigation_settled" // fires once page_dom_content_loaded + network_idle + page_layout_settled all hold
 )
 
 // Interaction events — fired by injected page-side JS (interaction.js) via the
 // Runtime.bindingCalled mechanism. They originate in the browser's renderer
 // process, not from Chrome's network or page domains.
 const (
-	EventInteractionClick = "interaction_click"  // document click (target selector, coords, text)
-	EventInteractionKey   = "interaction_key"    // keydown (key name, target selector)
-	EventScrollSettled    = "scroll_settled"     // 300 ms after the last scroll event on a target
+	EventInteractionClick = "interaction_click"         // document click (target selector, coords, text)
+	EventInteractionKey   = "interaction_key"           // keydown (key name, target selector)
+	EventScrollSettled    = "interaction_scroll_settled" // 300 ms after the last scroll event on a target
 )
 
 // Monitor lifecycle and internal events — emitted by the monitor itself, not by Chrome.
 const (
-	EventScreenshot             = "screenshot"              // ffmpeg frame capture on page load or JS exception
+	EventScreenshot             = "monitor_screenshot"    // ffmpeg frame capture on page load or JS exception
 	EventMonitorDisconnected    = "monitor_disconnected"    // WebSocket to Chrome closed unexpectedly
 	EventMonitorReconnected     = "monitor_reconnected"     // successfully reconnected after a disconnect
 	EventMonitorReconnectFailed = "monitor_reconnect_failed" // reconnect attempts exhausted

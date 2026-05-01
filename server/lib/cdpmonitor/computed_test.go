@@ -62,7 +62,7 @@ func TestLayoutSettled(t *testing.T) {
 		t0 := time.Now()
 		cs.onPageLoad()
 
-		ev := ec.waitFor(t, "layout_settled", 3*time.Second)
+		ev := ec.waitFor(t, "page_layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "fired too early")
 		assert.Equal(t, events.CategoryPage, ev.Category)
 	})
@@ -77,7 +77,7 @@ func TestLayoutSettled(t *testing.T) {
 		t0 := time.Now()
 		cs.onPageLoad()
 
-		ec.waitFor(t, "layout_settled", 3*time.Second)
+		ec.waitFor(t, "page_layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "should fire 1s after page_load, not layout_shift")
 	})
 
@@ -90,7 +90,7 @@ func TestLayoutSettled(t *testing.T) {
 		cs.onLayoutShift()
 		t1 := time.Now()
 
-		ec.waitFor(t, "layout_settled", 3*time.Second)
+		ec.waitFor(t, "page_layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t1).Milliseconds(), int64(900), "should reset after layout_shift")
 	})
 }
@@ -105,7 +105,7 @@ func TestNavigationSettled(t *testing.T) {
 		cs.onLoadingFinished()
 		cs.onPageLoad()
 
-		ev := ec.waitFor(t, "navigation_settled", 3*time.Second)
+		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
 	})
 
@@ -120,7 +120,7 @@ func TestNavigationSettled(t *testing.T) {
 		// Interrupt before layout_settled fires.
 		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 
-		ec.assertNone(t, "navigation_settled", 1500*time.Millisecond)
+		ec.assertNone(t, "page_navigation_settled", 1500*time.Millisecond)
 	})
 }
 
@@ -139,7 +139,7 @@ func TestNavDataMetadata(t *testing.T) {
 		require.NoError(t, cs.resetOnNavigation(0, ctx))
 		cs.onPageLoad()
 
-		ev := ec.waitFor(t, "layout_settled", 3*time.Second)
+		ev := ec.waitFor(t, "page_layout_settled", 3*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
 		assert.Equal(t, "s1", ev.Source.Metadata[MetadataKeyCDPSessionID])
 		assert.Equal(t, "t1", ev.Source.Metadata[MetadataKeyTargetID])
@@ -160,7 +160,7 @@ func TestNavDataMetadata(t *testing.T) {
 		cs.onLoadingFinished()
 		cs.onPageLoad()
 
-		ev := ec.waitFor(t, "navigation_settled", 3*time.Second)
+		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
 		assert.Equal(t, "s1", ev.Source.Metadata[MetadataKeyCDPSessionID])
 		assert.Equal(t, "t1", ev.Source.Metadata[MetadataKeyTargetID])
@@ -186,6 +186,6 @@ func TestStopSuppressesTimers(t *testing.T) {
 		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 		cs.onPageLoad() // arms 1s layout_settled timer
 		cs.stop()
-		ec.assertNone(t, "layout_settled", 1500*time.Millisecond)
+		ec.assertNone(t, "page_layout_settled", 1500*time.Millisecond)
 	})
 }

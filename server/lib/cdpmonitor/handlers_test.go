@@ -220,7 +220,7 @@ func TestPageEvents(t *testing.T) {
 			"waitingForDebugger": false,
 		},
 	})
-	ec.waitFor(t, "tab_opened", 2*time.Second)
+	ec.waitFor(t, "page_tab_opened", 2*time.Second)
 
 	srv.sendToMonitor(t, map[string]any{
 		"method": "Page.frameNavigated", "sessionId": "sess-page",
@@ -231,7 +231,7 @@ func TestPageEvents(t *testing.T) {
 			},
 		},
 	})
-	ev := ec.waitFor(t, "navigation", 2*time.Second)
+	ev := ec.waitFor(t, "page_navigation", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev.Category)
 	assert.Equal(t, "Page.frameNavigated", ev.Source.Event)
 	var data map[string]any
@@ -242,7 +242,7 @@ func TestPageEvents(t *testing.T) {
 		"method": "Page.domContentEventFired", "sessionId": "sess-page",
 		"params": map[string]any{"timestamp": 1000.0},
 	})
-	ev2 := ec.waitFor(t, "dom_content_loaded", 2*time.Second)
+	ev2 := ec.waitFor(t, "page_dom_content_loaded", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev2.Category)
 	var data2 map[string]any
 	require.NoError(t, json.Unmarshal(ev2.Data, &data2))
@@ -282,7 +282,7 @@ func TestTabOpened(t *testing.T) {
 				"waitingForDebugger": false,
 			},
 		})
-		ev := ec.waitFor(t, "tab_opened", 2*time.Second)
+		ev := ec.waitFor(t, "page_tab_opened", 2*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
 		assert.Equal(t, "Target.attachedToTarget", ev.Source.Event)
 		var data map[string]any
@@ -305,7 +305,7 @@ func TestTabOpened(t *testing.T) {
 				"waitingForDebugger": false,
 			},
 		})
-		ec.assertNone(t, "tab_opened", 200*time.Millisecond)
+		ec.assertNone(t, "page_tab_opened", 200*time.Millisecond)
 	})
 }
 
@@ -329,15 +329,15 @@ func TestBindingAndTimeline(t *testing.T) {
 		assert.Equal(t, "Runtime.bindingCalled", ev.Source.Event)
 	})
 
-	t.Run("scroll_settled", func(t *testing.T) {
+	t.Run("interaction_scroll_settled", func(t *testing.T) {
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
 				"name":    "__kernelEvent",
-				"payload": `{"type":"scroll_settled","from_x":0,"from_y":0,"to_x":0,"to_y":500,"target_selector":"body"}`,
+				"payload": `{"type":"interaction_scroll_settled","from_x":0,"from_y":0,"to_x":0,"to_y":500,"target_selector":"body"}`,
 			},
 		})
-		ev := ec.waitFor(t, "scroll_settled", 2*time.Second)
+		ev := ec.waitFor(t, "interaction_scroll_settled", 2*time.Second)
 		assert.Equal(t, events.CategoryInteraction, ev.Category)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
@@ -360,7 +360,7 @@ func TestBindingAndTimeline(t *testing.T) {
 				},
 			},
 		})
-		ev := ec.waitFor(t, "layout_shift", 2*time.Second)
+		ev := ec.waitFor(t, "page_layout_shift", 2*time.Second)
 		assert.Equal(t, events.KindCDP, ev.Source.Kind)
 		assert.Equal(t, "PerformanceTimeline.timelineEventAdded", ev.Source.Event)
 		var data map[string]any
@@ -458,7 +458,7 @@ func TestPerTargetStateMachines(t *testing.T) {
 				"id": "f-a", "url": "https://a.example.com", "loaderId": "l-a",
 			}},
 		})
-		ec.waitFor(t, "navigation", 2*time.Second)
+		ec.waitFor(t, "page_navigation", 2*time.Second)
 
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.requestWillBeSent", "sessionId": "sess-a",
@@ -520,7 +520,7 @@ func TestPerTargetStateMachines(t *testing.T) {
 				"id": "f-c", "url": "https://c.example.com", "loaderId": "l-c",
 			}},
 		})
-		ec.waitFor(t, "navigation", 2*time.Second)
+		ec.waitFor(t, "page_navigation", 2*time.Second)
 
 		// Start a request, then finish it (arms the 500 ms network_idle timer).
 		srv.sendToMonitor(t, map[string]any{
