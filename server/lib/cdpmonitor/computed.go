@@ -78,15 +78,19 @@ func (s *computedState) navSnapshot() (json.RawMessage, map[string]string) {
 }
 
 // navDataWith merges extra fields into the current nav payload.
+// Nav context fields (session_id, target_id, etc.) always take precedence over
+// caller-supplied extra so a page-controlled payload cannot forge nav identity.
 func (s *computedState) navDataWith(extra map[string]any) json.RawMessage {
-	base := make(map[string]any)
+	result := make(map[string]any)
+	maps.Copy(result, extra)
 	if s != nil {
 		d, _ := s.navSnapshot()
+		base := make(map[string]any)
 		_ = json.Unmarshal(d, &base)
+		maps.Copy(result, base)
 	}
-	maps.Copy(base, extra)
-	result, _ := json.Marshal(base)
-	return result
+	out, _ := json.Marshal(result)
+	return out
 }
 
 func stopTimer(t *time.Timer) {

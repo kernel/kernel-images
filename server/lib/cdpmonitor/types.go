@@ -25,6 +25,7 @@ const (
 	EventDOMContentLoaded     = "page_dom_content_loaded" // Page.domContentEventFired
 	EventPageLoad             = "page_load"               // Page.loadEventFired
 	EventLayoutShift          = "page_layout_shift"       // PerformanceTimeline event of type "layout-shift"
+	EventLCP                  = "page_lcp"                // PerformanceTimeline event of type "largest-contentful-paint"
 	EventTabOpened            = "page_tab_opened"         // Target.attachedToTarget for type=page
 )
 
@@ -62,8 +63,10 @@ const (
 	MetadataKeyTargetType   = "target_type"
 )
 
-// CDP PerformanceTimeline event type for layout shifts.
-const timelineEventLayoutShift = "layout-shift"
+const (
+	timelineEventLayoutShift = "layout-shift"
+	timelineEventLCP         = "largest-contentful-paint"
+)
 
 // CDP target type for browser pages (as opposed to workers, iframes, etc.).
 const targetTypePage = "page"

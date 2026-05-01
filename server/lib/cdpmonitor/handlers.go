@@ -208,41 +208,50 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 	m.publishEvent(header.Type, events.CategoryInteraction, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", cs.navDataWith(payloadMap), sessionID)
 }
 
-// handleTimelineEvent processes PerformanceTimeline layout-shift events.
+// handleTimelineEvent processes PerformanceTimeline layout-shift and LCP events.
 func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, sessionID string) {
-	if p.Event.Type != timelineEventLayoutShift {
-		return
-	}
-	// source_frame_id is the frame where the shift occurred; distinct from nav
-	// context's frame_id (the top-level navigated frame).
-	ev := map[string]any{
-		"source_frame_id": p.Event.FrameID,
-		"time":           p.Event.Time,
-		"duration":       p.Event.Duration,
-	}
-	var shift cdpLayoutShiftDetails
-	if p.Event.LayoutShiftDetails != nil && json.Unmarshal(p.Event.LayoutShiftDetails, &shift) == nil {
-		ev["layout_shift_details"] = map[string]any{
-			"score":            shift.Score,
-			"had_recent_input": shift.HadRecentInput,
+	switch p.Event.Type {
+	case timelineEventLayoutShift:
+		// source_frame_id is the frame where the shift occurred; distinct from nav
+		// context's frame_id (the top-level navigated frame).
+		ev := map[string]any{
+			"source_frame_id": p.Event.FrameID,
+			"time":            p.Event.Time,
+			"duration":        p.Event.Duration,
 		}
-	}
-	var lcp cdpLcpDetails
-	if p.Event.LcpDetails != nil && json.Unmarshal(p.Event.LcpDetails, &lcp) == nil {
-		ev["lcp_details"] = map[string]any{
-			"render_time": lcp.RenderTime,
-			"load_time":   lcp.LoadTime,
-			"size":        lcp.Size,
-			"element_id":  lcp.ElementID,
-			"url":         lcp.URL,
-			"node_id":     lcp.NodeID,
+		var shift cdpLayoutShiftDetails
+		if p.Event.LayoutShiftDetails != nil && json.Unmarshal(p.Event.LayoutShiftDetails, &shift) == nil {
+			ev["layout_shift_details"] = map[string]any{
+				"score":            shift.Score,
+				"had_recent_input": shift.HadRecentInput,
+			}
 		}
-	}
-	cs := m.computedFor(sessionID)
-	data := cs.navDataWith(ev)
-	m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
-	if cs != nil {
-		cs.onLayoutShift()
+		cs := m.computedFor(sessionID)
+		data := cs.navDataWith(ev)
+		m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
+		if cs != nil {
+			cs.onLayoutShift()
+		}
+
+	case timelineEventLCP:
+		ev := map[string]any{
+			"source_frame_id": p.Event.FrameID,
+			"time":            p.Event.Time,
+		}
+		var lcp cdpLcpDetails
+		if p.Event.LcpDetails != nil && json.Unmarshal(p.Event.LcpDetails, &lcp) == nil {
+			ev["lcp_details"] = map[string]any{
+				"render_time": lcp.RenderTime,
+				"load_time":   lcp.LoadTime,
+				"size":        lcp.Size,
+				"element_id":  lcp.ElementID,
+				"url":         lcp.URL,
+				"node_id":     lcp.NodeID,
+			}
+		}
+		cs := m.computedFor(sessionID)
+		data := cs.navDataWith(ev)
+		m.publishEvent(EventLCP, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
 	}
 }
 
