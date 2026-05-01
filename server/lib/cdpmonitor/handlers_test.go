@@ -365,7 +365,7 @@ func TestBindingAndTimeline(t *testing.T) {
 		assert.Equal(t, "PerformanceTimeline.timelineEventAdded", ev.Source.Event)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
-		assert.Equal(t, "frame-ls", data["frame_id"])
+		assert.Equal(t, "frame-ls", data["source_frame_id"])
 		assert.Equal(t, float64(1.5), data["time"])
 		shift := data["layout_shift_details"].(map[string]any)
 		assert.Equal(t, 0.12, shift["score"])

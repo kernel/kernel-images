@@ -134,25 +134,28 @@ func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID st
 	for _, a := range p.Args {
 		argValues = append(argValues, consoleArgString(a))
 	}
-	data, _ := json.Marshal(map[string]any{
+	eventType := EventConsoleLog
+	if p.Type == "error" {
+		eventType = EventConsoleError
+	}
+	cs := m.computedFor(sessionID)
+	data := cs.navDataWith(map[string]any{
 		"level":       p.Type,
 		"text":        text,
 		"args":        argValues,
 		"stack_trace": p.StackTrace,
 	})
-	eventType := EventConsoleLog
-	if p.Type == "error" {
-		eventType = EventConsoleError
-	}
 	m.publishEvent(eventType, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
 }
 
 func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExceptionThrownParams, sessionID string) {
-	data, _ := json.Marshal(map[string]any{
+	cs := m.computedFor(sessionID)
+	// source_url is the script file URL; distinct from nav context's url (the page URL).
+	data := cs.navDataWith(map[string]any{
 		"text":        p.ExceptionDetails.Text,
 		"line":        p.ExceptionDetails.LineNumber,
 		"column":      p.ExceptionDetails.ColumnNumber,
-		"url":         p.ExceptionDetails.URL,
+		"source_url":  p.ExceptionDetails.URL,
 		"stack_trace": p.ExceptionDetails.StackTrace,
 	})
 	m.publishEvent(EventConsoleError, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.exceptionThrown", data, sessionID)
@@ -199,7 +202,10 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 	m.bindingLastSeen[rateKey] = now
 	m.bindingRateMu.Unlock()
 
-	m.publishEvent(header.Type, events.CategoryInteraction, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", payload, sessionID)
+	var payloadMap map[string]any
+	_ = json.Unmarshal(payload, &payloadMap)
+	cs := m.computedFor(sessionID)
+	m.publishEvent(header.Type, events.CategoryInteraction, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", cs.navDataWith(payloadMap), sessionID)
 }
 
 // handleTimelineEvent processes PerformanceTimeline layout-shift events.
@@ -207,10 +213,12 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 	if p.Event.Type != timelineEventLayoutShift {
 		return
 	}
+	// source_frame_id is the frame where the shift occurred; distinct from nav
+	// context's frame_id (the top-level navigated frame).
 	ev := map[string]any{
-		"frame_id": p.Event.FrameID,
-		"time":     p.Event.Time,
-		"duration": p.Event.Duration,
+		"source_frame_id": p.Event.FrameID,
+		"time":           p.Event.Time,
+		"duration":       p.Event.Duration,
 	}
 	var shift cdpLayoutShiftDetails
 	if p.Event.LayoutShiftDetails != nil && json.Unmarshal(p.Event.LayoutShiftDetails, &shift) == nil {
@@ -230,9 +238,10 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 			"node_id":     lcp.NodeID,
 		}
 	}
-	data, _ := json.Marshal(ev)
+	cs := m.computedFor(sessionID)
+	data := cs.navDataWith(ev)
 	m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
-	if cs := m.computedFor(sessionID); cs != nil {
+	if cs != nil {
 		cs.onLayoutShift()
 	}
 }
@@ -415,7 +424,17 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 }
 
 func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID string) {
+	// Pre-fetch target info and computedState before acquiring pendReqMu to
+	// avoid a pendReqMu → sessionsMu ordering cycle.
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	cs := m.computedStates[sessionID]
+	m.sessionsMu.RUnlock()
+
 	data, _ := json.Marshal(map[string]any{
+		"session_id":      sessionID,
+		"target_id":       info.targetID,
+		"target_type":     info.targetType,
 		"url":             p.Frame.URL,
 		"frame_id":        p.Frame.ID,
 		"parent_frame_id": p.Frame.ParentID,
@@ -427,13 +446,6 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	// should not disrupt main-page tracking.
 	if p.Frame.ParentID == "" {
 		m.mainSessionID.Store(sessionID)
-
-		// Pre-fetch target info and computedState under sessionsMu before acquiring
-		// pendReqMu, to avoid a pendReqMu → sessionsMu ordering cycle.
-		m.sessionsMu.RLock()
-		info := m.sessions[sessionID]
-		cs := m.computedStates[sessionID]
-		m.sessionsMu.RUnlock()
 
 		navCtx := navContext{
 			sessionID:  sessionID,
