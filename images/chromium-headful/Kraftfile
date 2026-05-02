@@ -9,4 +9,4 @@ labels:
 
 rootfs: ./initrd
 
-cmd: ["/wrapper.sh"]
+cmd: ["/wrapper"]

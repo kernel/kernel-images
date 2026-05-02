@@ -28,6 +28,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/chromium-launcher ./cmd/chromium-launcher
 
+# Build container entrypoint wrapper (replaces wrapper.sh)
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/wrapper ./cmd/wrapper
+
 FROM docker.io/ubuntu:22.04 AS ffmpeg-downloader
 
 # Allow cross-compilation when building with BuildKit platforms
@@ -217,8 +223,8 @@ RUN useradd -m -s /bin/bash kernel
 COPY images/chromium-headless/image/start-xvfb.sh /images/chromium-headless/image/start-xvfb.sh
 RUN chmod +x /images/chromium-headless/image/start-xvfb.sh
 
-# Wrapper script to set environment
-COPY images/chromium-headless/image/wrapper.sh /usr/bin/wrapper.sh
+# Container entrypoint wrapper (Go binary, replaces wrapper.sh)
+COPY --from=server-builder /out/wrapper /wrapper
 
 # Supervisord configuration
 COPY images/chromium-headless/image/supervisord.conf /etc/supervisor/supervisord.conf
@@ -251,4 +257,4 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:esbuild \
     && rm /tmp/playwright-daemon.ts
 
-ENTRYPOINT [ "/usr/bin/wrapper.sh" ]
+ENTRYPOINT [ "/wrapper" ]

@@ -73,37 +73,7 @@ sed -e "s|{INST_NAME}|$inst_esc|g" \
 echo "[envoy-init] Starting Envoy via supervisord"
 supervisorctl -c /etc/supervisor/supervisord.conf start envoy
 
-# Wait for Envoy port to be open
-echo "[envoy-init] Waiting for Envoy port to open..."
-port_open=false
-for i in {1..50}; do
-  if nc -z 127.0.0.1 "3128" 2>/dev/null; then
-    echo "[envoy-init] Envoy port confirmed open"
-    port_open=true
-    break
-  fi
-  sleep 0.2
-done
-
-if [[ "$port_open" != "true" ]]; then
-  echo "[envoy-init] ERROR: Envoy port 3128 failed to open after 10 seconds"
-  exit 1
-fi
-
-# Test proxy functionality
-echo "[envoy-init] Testing proxy functionality..."
-proxy_working=false
-for i in {1..50}; do
-  if curl -s -f -x https://127.0.0.1:3128 --max-time 2 https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html >/dev/null 2>&1; then
-    echo "[envoy-init] Confirmed a request is proxied"
-    proxy_working=true
-    break
-  fi
-  echo "[envoy-init] Check failed, trying again..."
-  sleep 0.2
-done
-
-if [[ "$proxy_working" != "true" ]]; then
-  echo "[envoy-init] ERROR: Envoy proxy test failed after 10 seconds"
-  exit 1
-fi
+# Readiness (port 3128 reachable) is now probed by the Go wrapper's
+# waitAllReady alongside CDP/chromedriver, so this script returns as soon
+# as the start request has been issued. Removing the in-script poll lets
+# init-envoy.sh run concurrently with Phase A bring-up.

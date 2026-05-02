@@ -27,6 +27,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/chromium-launcher ./cmd/chromium-launcher
 
+# Build container entrypoint wrapper (replaces wrapper.sh)
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/wrapper ./cmd/wrapper
+
 # webrtc client
 FROM node:22-bullseye-slim AS client
 WORKDIR /src
@@ -348,7 +354,6 @@ COPY --from=xorg-deps /usr/local/lib/xorg/modules/input/neko_drv.so /usr/lib/xor
 COPY images/chromium-headful/image-chromium/ /
 COPY images/chromium-headful/start-pulseaudio.sh /images/chromium-headful/start-pulseaudio.sh
 RUN chmod +x /images/chromium-headful/start-pulseaudio.sh
-COPY images/chromium-headful/wrapper.sh /wrapper.sh
 COPY images/chromium-headful/supervisord.conf /etc/supervisor/supervisord.conf
 COPY images/chromium-headful/supervisor/services/ /etc/supervisor/conf.d/services/
 COPY shared/envoy/supervisor-envoy.conf /etc/supervisor/conf.d/services/envoy.conf
@@ -365,6 +370,7 @@ RUN chmod +x /usr/local/bin/init-envoy.sh
 # copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
 COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launcher
+COPY --from=server-builder /out/wrapper /wrapper
 
 # Copy and compile the Playwright daemon
 COPY server/runtime/playwright-daemon.ts /tmp/playwright-daemon.ts
@@ -381,4 +387,4 @@ RUN esbuild /tmp/playwright-daemon.ts \
 
 RUN useradd -m -s /bin/bash kernel
 
-ENTRYPOINT [ "/wrapper.sh" ]
+ENTRYPOINT [ "/wrapper" ]
