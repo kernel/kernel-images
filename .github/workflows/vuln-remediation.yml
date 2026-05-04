@@ -14,4 +14,5 @@ jobs:
     uses: kernel/security-workflows/.github/workflows/vuln-remediation.yml@main
     with:
       go-version-file: 'server/go.mod'
+      setup-python: true
     secrets: inherit
