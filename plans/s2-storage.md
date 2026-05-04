@@ -82,12 +82,12 @@ Producers are created on first `Append` for a given stream name and cached until
 
 ### 3. Batching: 100ms linger / 50 records (S2 backend)
 
-The S2 SDK batcher coalesces records before flushing to the network. Configuration:
+The S2 SDK batcher coalesces records before flushing to the network. Both values are configurable via environment variables with the defaults below:
 
-```
-Linger:     100ms
-MaxRecords: 50
-```
+| Env var | Default | Description |
+| --- | --- | --- |
+| `S2_BATCHER_LINGER_MS` | `100` | Flush delay in milliseconds |
+| `S2_BATCHER_MAX_RECORDS` | `50` | Max records per batch |
 
 These are independent of the ring buffer read loop — the writer appends one record per ring Read, and the batcher decides when to flush.
 
@@ -110,6 +110,92 @@ Shutdown must be strictly ordered to avoid writing to a closed `FileWriter`:
 4. storageWriter.Close() — drains in-flight S2 writes
 5. apiService.Shutdown() — closes CaptureSession (and its FileWriter)
 ```
+
+---
+
+## API Surface Changes
+
+The storage writer runs as a background goroutine and is **not part of the OpenAPI surface**. Only two existing endpoints change behaviour; all others are unaffected.
+
+| Endpoint | Service | Change |
+| --- | --- | --- |
+| `POST /events/stop` | image server | After stopping, call `s2storage.Remove(captureSessionID)` to evict the producer. No request/response change. Requires a new `CaptureSession.CurrentID() string` accessor. |
+| `POST /events/capture_session` | kernel server | After the image server returns a capture session ID, the kernel server writes that ID to `sessions.s2_stream`. No request/response change to the image server endpoint itself. |
+
+---
+
+## Wiring into `main.go`
+
+Three additions to `main.go`:
+
+**1. Conditional construction**: S2 is enabled when `S2_BASIN` and `S2_TOKEN` are both present. If either is empty the storage writer is not started and the server behaves exactly as before.
+
+```
+config.S2Basin != "" && config.S2Token != ""  →  build s2storage + EventsStorageWriter
+otherwise                                      →  no-op (nil storageWriter)
+```
+
+**2. Goroutine launch**: immediately after the HTTP servers are started:
+
+```go
+storageDone := make(chan struct{})
+go func() {
+    defer close(storageDone)
+    storageWriter.Run(ctx)   // blocks until ctx cancelled
+}()
+```
+
+**3. Shutdown ordering**: the existing `errgroup` in main already waits for `apiService.Shutdown`. The storage writer must drain before that:
+
+```
+ctx cancelled
+  → storageWriter.Run returns  (ring reader unblocks)
+  → storageDone closes
+  → storageWriter.Close()      (drains in-flight S2 acks)
+  → apiService.Shutdown()      (closes CaptureSession + FileWriter)
+```
+
+This is implemented by waiting on `storageDone` before calling `apiService.Shutdown`, outside the errgroup.
+
+---
+
+## Credentials and Configuration
+
+**In the image server (**`config.go`**):**
+
+```go
+S2Basin           string `envconfig:"S2_BASIN"              default:""`
+S2Token           string `envconfig:"S2_TOKEN"              default:""`
+S2BatcherLingerMs int    `envconfig:"S2_BATCHER_LINGER_MS"  default:"100"`
+S2BatcherMaxRecs  int    `envconfig:"S2_BATCHER_MAX_RECORDS" default:"50"`
+```
+
+**In the VM (infra):**
+
+| Vault variable | Purpose |
+| --- | --- |
+| `vault_s2_events_basin_production` | S2 basin for browser event capture (prod) |
+| `vault_s2_events_basin_staging` | S2 basin for browser event capture (staging) |
+| `vault_s2_events_token_production` | Access token for the above basin (prod) |
+| `vault_s2_events_token_staging` | Access token for the above basin (staging) |
+
+---
+
+## Session Discoverability
+
+### New column: `s2_stream` on `Sessions`
+
+The capture session ID (= S2 stream name) must survive after the image server container is destroyed so that callers can replay events later. The kernel server stores it on the `Sessions` row at capture session start.
+
+**Schema change** (mirrors `replay_prefix` in `kernel/packages/api/ent/schema/session.go`):
+
+```go
+field.String("s2_stream").Optional()
+```
+
+**Write path** — after `POST /events/capture_session` succeeds, the kernel server sets `s2_stream` to the returned capture session ID on the active `Sessions` row.
+
+**Read path** — to replay a session, query `sessions.s2_stream` for the session ID, then read the S2 stream by that name from seq 0.
 
 ---
 
