@@ -354,7 +354,7 @@ func TestBindingAndTimeline(t *testing.T) {
 					"time":     1.5,
 					"duration": 0.0,
 					"layoutShiftDetails": map[string]any{
-						"score":          0.12,
+						"value":          0.12,
 						"hadRecentInput": true,
 					},
 				},
@@ -368,7 +368,7 @@ func TestBindingAndTimeline(t *testing.T) {
 		assert.Equal(t, "frame-ls", data["source_frame_id"])
 		assert.Equal(t, float64(1.5), data["time"])
 		shift := data["layout_shift_details"].(map[string]any)
-		assert.Equal(t, 0.12, shift["score"])
+		assert.Equal(t, 0.12, shift["value"])
 		assert.Equal(t, true, shift["had_recent_input"])
 		_, hasEvent := data["event"]
 		assert.False(t, hasEvent, "raw CDP event wrapper must not appear in payload")

@@ -192,7 +192,7 @@ Fields below are the unique additions per event type. Unless otherwise noted, ev
 | `page_navigation` | `session_id`, `target_id`, `target_type`, `url`, `frame_id`, `parent_frame_id` (absent for top-level frames), `loader_id`. This event establishes the nav context stamped on all subsequent events for the session. |
 | `page_dom_content_loaded` | Nav context + `cdp_timestamp` (CDP monotonic seconds; not a wall-clock timestamp -- use `event.ts` for ordering). |
 | `page_load` | Nav context + `cdp_timestamp` (CDP monotonic seconds). |
-| `page_layout_shift` | Nav context + `source_frame_id`, `time`, `duration`. Optional `layout_shift_details` object: `score`, `had_recent_input`. Optional `lcp_details` object: `render_time`, `load_time`, `size`, `element_id`, `url`, `node_id`. Chrome multiplexes LCP candidate data through the same `PerformanceTimeline.timelineEventAdded` notification, so both may appear on a single event. |
+| `page_layout_shift` | Nav context + `source_frame_id`, `time`, `duration`. Optional `layout_shift_details` object: `value`, `had_recent_input`. Optional `lcp_details` object: `render_time`, `load_time`, `size`, `element_id`, `url`, `node_id`. Chrome multiplexes LCP candidate data through the same `PerformanceTimeline.timelineEventAdded` notification, so both may appear on a single event. |
 
 #### Computed events
 

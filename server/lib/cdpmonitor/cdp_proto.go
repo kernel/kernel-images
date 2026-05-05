@@ -241,7 +241,7 @@ type cdpPerformanceTimelineEventAddedParams struct {
 
 // cdpLayoutShiftDetails mirrors PerformanceTimeline.LayoutShiftDetails (PDL wire format).
 type cdpLayoutShiftDetails struct {
-	Score          float64 `json:"score"`
+	Value          float64 `json:"value"`
 	HadRecentInput bool    `json:"hadRecentInput"`
 }
 

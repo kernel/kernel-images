@@ -222,7 +222,7 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 		var shift cdpLayoutShiftDetails
 		if p.Event.LayoutShiftDetails != nil && json.Unmarshal(p.Event.LayoutShiftDetails, &shift) == nil {
 			ev["layout_shift_details"] = map[string]any{
-				"score":            shift.Score,
+				"value":            shift.Value,
 				"had_recent_input": shift.HadRecentInput,
 			}
 		}
