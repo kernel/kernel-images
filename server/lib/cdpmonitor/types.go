@@ -35,7 +35,7 @@ const (
 const (
 	EventNetworkIdle       = "network_idle"           // 500 ms after all in-flight requests finish
 	EventLayoutSettled     = "page_layout_settled"    // 1 s after page_load with no intervening layout shifts
-	EventNavigationSettled = "page_navigation_settled" // fires once page_dom_content_loaded + network_idle + page_layout_settled all hold
+	EventNavigationSettled = "page_navigation_settled" // fires once page_dom_content_loaded and page_layout_settled both hold
 )
 
 // Interaction events — fired by injected page-side JS (interaction.js) via the

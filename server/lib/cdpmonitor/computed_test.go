@@ -96,17 +96,27 @@ func TestLayoutSettled(t *testing.T) {
 }
 
 func TestNavigationSettled(t *testing.T) {
-	t.Run("fires_when_all_three_flags_set", func(t *testing.T) {
+	t.Run("fires_after_dom_content_loaded_and_layout_settled", func(t *testing.T) {
 		cs, ec := newTestComputed(t)
 		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 
 		cs.onDOMContentLoaded()
-		cs.onRequest()
-		cs.onLoadingFinished()
 		cs.onPageLoad()
 
 		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
+	})
+
+	t.Run("not_blocked_by_pending_network_request", func(t *testing.T) {
+		cs, ec := newTestComputed(t)
+		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
+
+		cs.onRequest() // never finishes
+		cs.onDOMContentLoaded()
+		cs.onPageLoad()
+
+		ec.waitFor(t, "page_navigation_settled", 3*time.Second)
+		ec.assertNone(t, "network_idle", 100*time.Millisecond)
 	})
 
 	t.Run("interrupted_by_new_navigation", func(t *testing.T) {
@@ -114,10 +124,8 @@ func TestNavigationSettled(t *testing.T) {
 		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 
 		cs.onDOMContentLoaded()
-		cs.onRequest()
-		cs.onLoadingFinished()
+		// page_load not yet fired so layout_settled is still pending.
 
-		// Interrupt before layout_settled fires.
 		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 
 		ec.assertNone(t, "page_navigation_settled", 1500*time.Millisecond)
@@ -156,8 +164,6 @@ func TestNavDataMetadata(t *testing.T) {
 		require.NoError(t, cs.resetOnNavigation(0, ctx))
 
 		cs.onDOMContentLoaded()
-		cs.onRequest()
-		cs.onLoadingFinished()
 		cs.onPageLoad()
 
 		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)

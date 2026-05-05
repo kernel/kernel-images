@@ -51,10 +51,9 @@ type computedState struct {
 	layoutFired  bool
 	pageLoadSeen bool
 
-	// navigation_settled: fires once dom_content_loaded, network_idle, and
-	// layout_settled have all fired after the same Page.frameNavigated.
+	// navigation_settled: fires once dom_content_loaded and layout_settled have
+	// both fired after the same Page.frameNavigated. Decoupled from network_idle
 	navDOMLoaded     bool
-	navNetIdle       bool
 	navLayoutSettled bool
 	navFired         bool
 }
@@ -159,7 +158,6 @@ func (s *computedState) resetOnNavigation(inflight int, ctx navContext) error {
 	s.pageLoadSeen = false
 
 	s.navDOMLoaded = false
-	s.navNetIdle = false
 	s.navLayoutSettled = false
 	s.navFired = false
 	return nil
@@ -214,8 +212,8 @@ func (s *computedState) startNetIdleTimer() {
 			return
 		}
 		s.netFired = true
-		s.navNetIdle = true
-		evs := []events.Event{{
+		s.mu.Unlock()
+		s.publish(events.Event{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventNetworkIdle,
 			Category: events.CategoryNetwork,
@@ -224,12 +222,7 @@ func (s *computedState) startNetIdleTimer() {
 				Metadata: navMeta,
 			},
 			Data: navData,
-		}}
-		evs = append(evs, s.pendingNavigationSettled()...)
-		s.mu.Unlock()
-		for _, ev := range evs {
-			s.publish(ev)
-		}
+		})
 	})
 }
 
@@ -302,13 +295,13 @@ func (s *computedState) onDOMContentLoaded() {
 	}
 }
 
-// pendingNavigationSettled returns a navigation_settled event if all three
+// pendingNavigationSettled returns a navigation_settled event if both
 // conditions are met. Must be called with s.mu held.
 func (s *computedState) pendingNavigationSettled() []events.Event {
 	if s.dead {
 		return nil
 	}
-	if s.navDOMLoaded && s.navNetIdle && s.navLayoutSettled && !s.navFired {
+	if s.navDOMLoaded && s.navLayoutSettled && !s.navFired {
 		s.navFired = true
 		return []events.Event{{
 			Ts:       time.Now().UnixMicro(),

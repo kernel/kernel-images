@@ -12,7 +12,7 @@ Chrome can restart independently of the monitor. When that happens, `UpstreamPro
 
 **CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`
 
-**Computed** (inferred from sequences of CDP events): `network_idle` (fires when in-flight requests drop to zero), `page_layout_settled` (1 s after `page_load` with no intervening layout shifts), `page_navigation_settled` (fires once `page_dom_content_loaded`, `network_idle`, and `page_layout_settled` have all fired for the same navigation).
+**Computed** (inferred from sequences of CDP events): `network_idle` (fires when in-flight requests drop to zero), `page_layout_settled` (1 s after `page_load` with no intervening layout shifts), `page_navigation_settled` (fires once `page_dom_content_loaded` and `page_layout_settled` have both fired for the same navigation; intentionally independent of `network_idle` so that a single hung request cannot stall the event).
 
 **Interaction** (fired by `interaction.js` via `Runtime.bindingCalled`): `interaction_click`, `interaction_key`, `interaction_scroll_settled`
 
