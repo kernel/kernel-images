@@ -72,13 +72,27 @@ func ensurePlaywrightDeps(t *testing.T) {
 
 	playwrightDepsOnce.Do(func() {
 		nodeModulesPath := getPlaywrightPath() + "/node_modules"
+		tsxPath := getPlaywrightPath() + "/node_modules/tsx/dist/cli.mjs"
 		if _, err := os.Stat(nodeModulesPath); os.IsNotExist(err) {
+			t.Log("Installing playwright dependencies...")
 			cmd := exec.Command("pnpm", "install")
 			cmd.Dir = getPlaywrightPath()
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				playwrightDepsErr = fmt.Errorf("failed to install playwright dependencies: %w\noutput: %s", err, string(output))
+				return
 			}
+			t.Log("Playwright dependencies installed successfully")
+		} else if _, err := os.Stat(tsxPath); os.IsNotExist(err) {
+			t.Log("Installing playwright dependencies...")
+			cmd := exec.Command("pnpm", "install")
+			cmd.Dir = getPlaywrightPath()
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				playwrightDepsErr = fmt.Errorf("failed to install playwright dependencies: %w\noutput: %s", err, string(output))
+				return
+			}
+			t.Log("Playwright dependencies installed successfully")
 		}
 	})
 

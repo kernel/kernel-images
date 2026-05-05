@@ -61,7 +61,7 @@ type MultiSegmentResult struct {
 	StepDelayMs int
 }
 
-const defaultStepDelayMs = 10
+const defaultStepDelayMs = 20
 
 // GenerateMultiSegmentTrajectory creates a human-like Bezier trajectory through
 // a sequence of waypoints. Each consecutive pair gets its own Bezier curve, with
