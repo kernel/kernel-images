@@ -80,8 +80,9 @@ type ApiService struct {
 	// when multiple CDP fast-path resizes fire in quick succession.
 	xvfbResizeMu sync.Mutex
 
-	// CDP event pipeline and cdpMonitor.
+	// CDP event pipeline, cdpMonitor, and optional durable storage writer.
 	captureSession  *events.CaptureSession
+	storageWriter   *events.EventsStorageWriter // nil if S2 not configured
 	cdpMonitor      cdpMonitorController
 	monitorMu       sync.Mutex
 	lifecycleCtx    context.Context
@@ -97,6 +98,7 @@ func New(
 	stz scaletozero.Controller,
 	nekoAuthClient *nekoclient.AuthClient,
 	captureSession *events.CaptureSession,
+	storageWriter *events.EventsStorageWriter,
 	displayNum int,
 ) (*ApiService, error) {
 	switch {
@@ -116,8 +118,8 @@ func New(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{
-		recordManager:   recordManager,
-		factory:         factory,
+		recordManager:     recordManager,
+		factory:           factory,
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
@@ -126,6 +128,7 @@ func New(
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
 		captureSession:    captureSession,
+		storageWriter:     storageWriter,
 		cdpMonitor:        mon,
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,

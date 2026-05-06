@@ -101,6 +101,19 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Optionally connect S2 durable storage sink (requires S2_BASIN + S2_TOKEN).
+	var storageWriter *events.EventsStorageWriter
+	if config.S2Basin != "" && config.S2Token != "" {
+		s2backend, err := events.NewS2Storage(ctx, config.S2Basin, config.S2Token,
+			config.S2BatcherLingerMs, config.S2BatcherMaxRecs)
+		if err != nil {
+			slogger.Error("failed to connect to S2", "err", err)
+			os.Exit(1)
+		}
+		storageWriter = events.NewEventsStorageWriter(captureSession, s2backend)
+		slogger.Info("s2 durable event storage enabled", "basin", config.S2Basin)
+	}
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
@@ -108,6 +121,7 @@ func main() {
 		stz,
 		nekoAuthClient,
 		captureSession,
+		storageWriter,
 		config.DisplayNum,
 	)
 	if err != nil {
@@ -242,19 +256,37 @@ func main() {
 		}
 	}()
 
+	// Start the S2 storage writer goroutine (no-op if S2 not configured).
+	storageDone := make(chan struct{})
+	if storageWriter != nil {
+		go func() {
+			defer close(storageDone)
+			storageWriter.Run(ctx)
+		}()
+	} else {
+		close(storageDone)
+	}
+
 	// graceful shutdown
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-	g, _ := errgroup.WithContext(shutdownCtx)
 
+	// Drain storage writer before closing CaptureSession (apiService.Shutdown
+	// calls captureSession.Close which must come after the writer is done).
+	<-storageDone
+	if storageWriter != nil {
+		if err := storageWriter.Close(); err != nil {
+			slogger.Error("storage writer close failed", "err", err)
+		}
+	}
+
+	// Shut down HTTP servers and upstream manager in parallel.
+	g, _ := errgroup.WithContext(shutdownCtx)
 	g.Go(func() error {
 		return srv.Shutdown(shutdownCtx)
-	})
-	g.Go(func() error {
-		return apiService.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {
 		upstreamMgr.Stop()
@@ -263,9 +295,13 @@ func main() {
 	g.Go(func() error {
 		return srvChromeDriver.Shutdown(shutdownCtx)
 	})
-
 	if err := g.Wait(); err != nil {
 		slogger.Error("server failed to shutdown", "err", err)
+	}
+
+	// Close CaptureSession last, after storage is fully drained.
+	if err := apiService.Shutdown(shutdownCtx); err != nil {
+		slogger.Error("api service failed to shutdown", "err", err)
 	}
 }
 

@@ -29,6 +29,8 @@ func TestLoad(t *testing.T) {
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
 				DevToolsProxyAddr:        "127.0.0.1:9222",
+				S2BatcherLingerMs:        100,
+				S2BatcherMaxRecs:         50,
 			},
 		},
 		{
@@ -57,6 +59,8 @@ func TestLoad(t *testing.T) {
 				ChromeDriverProxyPort:    5432,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9999",
 				DevToolsProxyAddr:        "127.0.0.1:9876",
+				S2BatcherLingerMs:        100,
+				S2BatcherMaxRecs:         50,
 			},
 		},
 		{
@@ -77,6 +81,8 @@ func TestLoad(t *testing.T) {
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
 				DevToolsProxyAddr:        "10.0.0.1:1234",
+				S2BatcherLingerMs:        100,
+				S2BatcherMaxRecs:         50,
 			},
 		},
 		{

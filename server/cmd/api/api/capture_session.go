@@ -81,6 +81,7 @@ func (s *ApiService) StopCaptureSession(_ context.Context, _ oapi.StopCaptureSes
 		return oapi.StopCaptureSession404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "no active capture session"}}, nil
 	}
 
+	sessionID := s.captureSession.ID()
 	s.cdpMonitor.Stop()
 	// Snapshot the final state before clearing the session ID so buildSessionResponse
 	// can still parse it. Force the status to Stopped because cdpMonitor.Stop may
@@ -88,6 +89,9 @@ func (s *ApiService) StopCaptureSession(_ context.Context, _ oapi.StopCaptureSes
 	resp := s.buildSessionResponse()
 	resp.Status = oapi.CaptureSessionStatusStopped
 	s.captureSession.Stop()
+	if s.storageWriter != nil {
+		s.storageWriter.RemoveSession(sessionID)
+	}
 
 	return oapi.StopCaptureSession200JSONResponse(resp), nil
 }
