@@ -76,6 +76,8 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 	afterSeq := uint64(0)
 	if id := req.Params.LastEventID; id != nil && *id != "" {
 		// Invalid/non-numeric values fall back to 0, replaying all events from the start.
+		// Note: seq is per capture session and resets on each Start(). A Last-Event-ID
+		// from a previous session may silently overlap with the current session's seqs.
 		if n, err := strconv.ParseUint(*id, 10, 64); err == nil {
 			afterSeq = n
 		}

@@ -1473,7 +1473,9 @@ components:
         seq:
           type: integer
           format: int64
-          description: Monotonically increasing sequence number (last published).
+          description: >-
+            Monotonically increasing sequence number (last published).
+            Resets to 0 at the start of each capture session.
           minimum: 0
         created_at:
           type: string
