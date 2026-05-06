@@ -24,6 +24,14 @@ if [[ -n "${PLAYWRIGHT_ENGINE:-}" ]]; then
   RUN_ARGS+=( -e PLAYWRIGHT_ENGINE="$PLAYWRIGHT_ENGINE" )
 fi
 
+# S2 durable event storage
+if [[ -n "${S2_BASIN:-}" ]]; then
+  RUN_ARGS+=( -e S2_BASIN="$S2_BASIN" )
+fi
+if [[ -n "${S2_ACCESS_TOKEN:-}" ]]; then
+  RUN_ARGS+=( -e S2_ACCESS_TOKEN="$S2_ACCESS_TOKEN" )
+fi
+
 # If a positional argument is given, use it as the entrypoint
 ENTRYPOINT_ARG=()
 if [[ $# -ge 1 && -n "$1" ]]; then
