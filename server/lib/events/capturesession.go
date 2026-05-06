@@ -57,7 +57,9 @@ func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
 }
 
 // Start sets the capture session ID and applies the given config. It resets
-// the sequence counter so each session starts at seq 1.
+// the sequence counter so each session starts at seq 1. Sequence numbers are
+// scoped to the active session; Last-Event-ID values from a previous session
+// are not valid for reconnecting to a new one.
 // The fileWriter is intentionally not rotated: events from different sessions
 // are interleaved in the same per-category JSONL files and distinguished by
 // their envelope's capture_session_id.
