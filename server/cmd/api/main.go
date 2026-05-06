@@ -121,7 +121,6 @@ func main() {
 		stz,
 		nekoAuthClient,
 		captureSession,
-		storageWriter,
 		config.DisplayNum,
 	)
 	if err != nil {
@@ -256,12 +255,19 @@ func main() {
 		}
 	}()
 
+	// Give the storage writer its own cancellable context so we can stop it
+	// independently of the signal context. This lets us call captureSession.Stop()
+	// (which publishes SessionEnded to the ring) before cancelling the writer,
+	// ensuring the writer can process and flush SessionEnded to S2.
+	writerCtx, writerCancel := context.WithCancel(context.Background())
+	defer writerCancel()
+
 	// Start the S2 storage writer goroutine (no-op if S2 not configured).
 	storageDone := make(chan struct{})
 	if storageWriter != nil {
 		go func() {
 			defer close(storageDone)
-			storageWriter.Run(ctx)
+			storageWriter.Run(writerCtx)
 		}()
 	} else {
 		close(storageDone)
@@ -273,6 +279,14 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
+
+	// Stop the active capture session now, while the storage writer is still
+	// alive (writerCtx not yet cancelled), so the writer can process the
+	// SessionEnded event and flush it to S2 before tearing down.
+	captureSession.Stop()
+
+	// Cancel the writer so it exits after draining remaining events.
+	writerCancel()
 
 	// Drain storage writer, close it (bounded by shutdownCtx), and shut down
 	// all HTTP servers in parallel so the full 10s budget is available to each.
