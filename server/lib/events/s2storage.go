@@ -13,14 +13,14 @@ import (
 // s2Producer bundles a Producer with its supporting session and tracks
 // in-flight ack goroutines so Close can drain cleanly.
 type s2Producer struct {
-	cancel  context.CancelFunc
-	prod    *s2.Producer
-	session *s2.AppendSession
-	wg      sync.WaitGroup
+	cancel   context.CancelFunc
+	producer *s2.Producer
+	session  *s2.AppendSession
+	wg       sync.WaitGroup
 }
 
 func (p *s2Producer) close() {
-	_ = p.prod.Close()
+	_ = p.producer.Close()
 	p.wg.Wait()
 	_ = p.session.Close()
 	p.cancel()
@@ -33,7 +33,7 @@ type S2Storage struct {
 	lingerMs int
 	maxRecs  int
 	mu       sync.Mutex
-	prods    map[string]*s2Producer
+	producers map[string]*s2Producer
 }
 
 // NewS2Storage creates an S2Storage and performs a startup connectivity probe
@@ -52,14 +52,14 @@ func NewS2Storage(ctx context.Context, basinName, token string, lingerMs, maxRec
 		basin:    basin,
 		lingerMs: lingerMs,
 		maxRecs:  maxRecs,
-		prods:    make(map[string]*s2Producer),
+		producers: make(map[string]*s2Producer),
 	}, nil
 }
 
 // getOrCreate returns the existing producer for streamName or lazily creates
 // one. Must be called with s.mu held.
 func (s *S2Storage) getOrCreate(streamName string) (*s2Producer, error) {
-	if p, ok := s.prods[streamName]; ok {
+	if p, ok := s.producers[streamName]; ok {
 		return p, nil
 	}
 
@@ -77,13 +77,13 @@ func (s *S2Storage) getOrCreate(streamName string) (*s2Producer, error) {
 		MaxRecords: s.maxRecs,
 	})
 
-	prod := s2.NewProducer(ctx, batcher, session)
+	producer := s2.NewProducer(ctx, batcher, session)
 	p := &s2Producer{
-		cancel:  cancel,
-		prod:    prod,
-		session: session,
+		cancel:   cancel,
+		producer: producer,
+		session:  session,
 	}
-	s.prods[streamName] = p
+	s.producers[streamName] = p
 	return p, nil
 }
 
@@ -97,7 +97,7 @@ func (s *S2Storage) Append(ctx context.Context, streamName string, data []byte) 
 		return err
 	}
 
-	fut, err := p.prod.Submit(s2.AppendRecord{Body: data})
+	fut, err := p.producer.Submit(s2.AppendRecord{Body: data})
 	if err != nil {
 		return fmt.Errorf("s2: submit to %q: %w", streamName, err)
 	}
@@ -105,12 +105,12 @@ func (s *S2Storage) Append(ctx context.Context, streamName string, data []byte) 
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		ticket, err := fut.Wait(context.Background())
+		pendingAck, err := fut.Wait(context.Background())
 		if err != nil {
 			slog.Warn("s2: ack wait failed", "stream", streamName, "err", err)
 			return
 		}
-		if _, err := ticket.Ack(context.Background()); err != nil {
+		if _, err := pendingAck.Ack(context.Background()); err != nil {
 			slog.Warn("s2: ack failed", "stream", streamName, "err", err)
 		}
 	}()
@@ -123,9 +123,9 @@ func (s *S2Storage) Append(ctx context.Context, streamName string, data []byte) 
 // Called from the DELETE /events/capture_session handler after session teardown.
 func (s *S2Storage) Remove(streamName string) {
 	s.mu.Lock()
-	p, ok := s.prods[streamName]
+	p, ok := s.producers[streamName]
 	if ok {
-		delete(s.prods, streamName)
+		delete(s.producers, streamName)
 	}
 	s.mu.Unlock()
 	if ok {
@@ -136,10 +136,10 @@ func (s *S2Storage) Remove(streamName string) {
 // Close drains all in-flight producers and releases resources.
 func (s *S2Storage) Close() error {
 	s.mu.Lock()
-	prods := s.prods
-	s.prods = make(map[string]*s2Producer)
+	producers := s.producers
+	s.producers = make(map[string]*s2Producer)
 	s.mu.Unlock()
-	for _, p := range prods {
+	for _, p := range producers {
 		p.close()
 	}
 	return nil

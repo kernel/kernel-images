@@ -46,7 +46,7 @@ func ValidCategory(c EventCategory) bool {
 const (
 	SessionEnded   = "session_ended"
 	EventsDropped  = "events_dropped"
-	EventsStorageError = "system_durable_error"
+	EventsStorageError = "storage_error"
 )
 
 type SourceKind string

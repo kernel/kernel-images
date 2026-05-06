@@ -6,28 +6,28 @@ import (
 	"log/slog"
 )
 
-// EventsStorage is the durable backend interface for the storage writer.
+// EventsStorage is the durable storage interface for the storage writer.
 type EventsStorage interface {
 	Append(ctx context.Context, streamName string, data []byte) error
 	Close() error
 }
 
-// sessionRemover is implemented by backends that support per-session cleanup.
+// sessionRemover is implemented by storage implementations that support per-session cleanup.
 type sessionRemover interface {
 	Remove(streamName string)
 }
 
 // EventsStorageWriter reads envelopes from the ring buffer and writes them to
-// an EventsStorage backend. A single goroutine drives the write loop; call
+// an EventsStorage. A single goroutine drives the write loop; call
 // Run to start it and Close to drain in-flight writes after Run returns.
 type EventsStorageWriter struct {
 	session *CaptureSession
-	backend EventsStorage
+	eventsStorage EventsStorage
 }
 
-// NewEventsStorageWriter constructs a writer backed by the given storage.
+// NewEventsStorageWriter constructs a writer for the given storage.
 func NewEventsStorageWriter(session *CaptureSession, backend EventsStorage) *EventsStorageWriter {
-	return &EventsStorageWriter{session: session, backend: backend}
+	return &EventsStorageWriter{session: session, eventsStorage: backend}
 }
 
 // Run reads from the ring buffer until ctx is cancelled. It returns nil on
@@ -49,16 +49,13 @@ func (w *EventsStorageWriter) Run(ctx context.Context) {
 			// Skip re-queued error events to prevent feedback loops.
 			continue
 		}
-		if env.CaptureSessionID == "" {
-			continue
-		}
 		data, err := json.Marshal(env)
 		if err != nil {
 			slog.Error("events_storage_writer: marshal failed, skipping",
 				"seq", env.Seq, "err", err)
 			continue
 		}
-		if err := w.backend.Append(ctx, env.CaptureSessionID, data); err != nil {
+		if err := w.eventsStorage.Append(ctx, env.CaptureSessionID, data); err != nil {
 			slog.Error("events_storage_writer: append failed",
 				"seq", env.Seq, "stream", env.CaptureSessionID, "err", err)
 			errData, _ := json.Marshal(map[string]string{"error": err.Error()})
@@ -72,17 +69,17 @@ func (w *EventsStorageWriter) Run(ctx context.Context) {
 	}
 }
 
-// Close drains in-flight writes and tears down the backend. Call after Run
+// Close drains in-flight writes and tears down the storage. Call after Run
 // returns to ensure all pending records are flushed.
 func (w *EventsStorageWriter) Close() error {
-	return w.backend.Close()
+	return w.eventsStorage.Close()
 }
 
-// RemoveSession evicts the backend's producer for the given session ID,
-// allowing it to drain and release resources. No-op if the backend does not
+// RemoveSession evicts the storage's producer for the given session ID,
+// allowing it to drain and release resources. No-op if the storage does not
 // implement sessionRemover.
 func (w *EventsStorageWriter) RemoveSession(id string) {
-	if r, ok := w.backend.(sessionRemover); ok {
+	if r, ok := w.eventsStorage.(sessionRemover); ok {
 		r.Remove(id)
 	}
 }

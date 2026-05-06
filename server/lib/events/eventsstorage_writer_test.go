@@ -12,8 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockBackend is an in-memory EventsStorage for writer tests. No S2 dependency.
-type mockBackend struct {
+// mockStorage is an in-memory EventsStorage for writer tests. No S2 dependency.
+type mockStorage struct {
 	mu    sync.Mutex
 	calls []appendCall
 	err   error
@@ -24,7 +24,7 @@ type appendCall struct {
 	data       []byte
 }
 
-func (m *mockBackend) Append(_ context.Context, streamName string, data []byte) error {
+func (m *mockStorage) Append(_ context.Context, streamName string, data []byte) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
@@ -36,9 +36,9 @@ func (m *mockBackend) Append(_ context.Context, streamName string, data []byte) 
 	return nil
 }
 
-func (m *mockBackend) Close() error { return nil }
+func (m *mockStorage) Close() error { return nil }
 
-func (m *mockBackend) recorded() []appendCall {
+func (m *mockStorage) recorded() []appendCall {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]appendCall, len(m.calls))
@@ -47,7 +47,7 @@ func (m *mockBackend) recorded() []appendCall {
 }
 
 // waitForN polls until at least n appends are recorded or the timeout elapses.
-func waitForN(t *testing.T, b *mockBackend, n int, timeout time.Duration) []appendCall {
+func waitForN(t *testing.T, b *mockStorage, n int, timeout time.Duration) []appendCall {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -60,14 +60,14 @@ func waitForN(t *testing.T, b *mockBackend, n int, timeout time.Duration) []appe
 	return nil
 }
 
-func newWriterTest(t *testing.T, ringCap int) (*CaptureSession, *EventsStorageWriter, *mockBackend) {
+func newWriterTest(t *testing.T, ringCap int) (*CaptureSession, *EventsStorageWriter, *mockStorage) {
 	t.Helper()
 	session, err := NewCaptureSession(CaptureSessionConfig{
 		LogDir:       t.TempDir(),
 		RingCapacity: ringCap,
 	})
 	require.NoError(t, err)
-	backend := &mockBackend{}
+	backend := &mockStorage{}
 	writer := NewEventsStorageWriter(session, backend)
 	return session, writer, backend
 }
@@ -142,7 +142,7 @@ func TestEventsStorageWriter_AppendError(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "expected system_durable_error event in ring")
-	// The backend should have received no successful appends.
+	// The storage should have received no successful appends.
 	assert.Empty(t, backend.recorded())
 }
 
@@ -169,28 +169,22 @@ func TestEventsStorageWriter_EventsStorageErrorSkipped(t *testing.T) {
 	}
 }
 
-func TestEventsStorageWriter_EmptySessionIDSkipped(t *testing.T) {
+func TestEventsStorageWriter_SessionEndedForwarded(t *testing.T) {
 	session, writer, backend := newWriterTest(t, 64)
 	cancel, done := startWriter(writer)
-	defer func() { cancel(); <-done }()
 
-	// Publish without starting a session — CaptureSession.Publish drops
-	// events silently when no session is active. But we can also verify
-	// that envelopes with empty capture_session_id are never forwarded.
-	// Start and immediately stop to emit session_ended (captureSessionID still set at publish).
 	session.Start("session-x", CaptureConfig{})
-	session.Stop() // publishes session_ended, then clears ID
+	session.Stop() // emits session_ended before clearing the session ID
 
-	// Give the writer a moment to process session_ended.
 	time.Sleep(20 * time.Millisecond)
 	cancel()
 	<-done
 
-	// session_ended is a normal event and should be forwarded.
 	calls := backend.recorded()
+	require.NotEmpty(t, calls, "session_ended event should be forwarded to storage")
 	for _, c := range calls {
 		env := unmarshalEnv(t, c.data)
-		assert.NotEmpty(t, env.CaptureSessionID)
+		assert.Equal(t, "session-x", env.CaptureSessionID)
 	}
 }
 
