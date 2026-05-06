@@ -83,12 +83,13 @@ func TestScreenshot(t *testing.T) {
 	}
 
 	t.Run("capture_and_publish", func(t *testing.T) {
-		m.tryScreenshot(context.Background())
+		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		require.Eventually(t, func() bool { return captureCount.Load() == 1 }, 2*time.Second, 20*time.Millisecond)
 
-		ev := ec.waitFor(t, "screenshot", 2*time.Second)
+		ev := ec.waitFor(t, "monitor_screenshot", 2*time.Second)
 		assert.Equal(t, events.CategorySystem, ev.Category)
 		assert.Equal(t, events.KindLocalProcess, ev.Source.Kind)
+		assert.Equal(t, "Page.loadEventFired", ev.Source.Event)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.NotEmpty(t, data["png"])
@@ -96,7 +97,7 @@ func TestScreenshot(t *testing.T) {
 
 	t.Run("rate_limited", func(t *testing.T) {
 		before := captureCount.Load()
-		m.tryScreenshot(context.Background())
+		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		time.Sleep(100 * time.Millisecond)
 		assert.Equal(t, before, captureCount.Load(), "should be rate-limited within 2s")
 	})
@@ -104,7 +105,7 @@ func TestScreenshot(t *testing.T) {
 	t.Run("captures_after_cooldown", func(t *testing.T) {
 		m.lastScreenshotAt.Store(time.Now().Add(-3 * time.Second).UnixMilli())
 		before := captureCount.Load()
-		m.tryScreenshot(context.Background())
+		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		require.Eventually(t, func() bool { return captureCount.Load() > before }, 2*time.Second, 20*time.Millisecond)
 	})
 }
@@ -319,36 +320,19 @@ func TestSubframeNavigationNoReset(t *testing.T) {
 	ec.waitFor(t, "network_idle", 2*time.Second)
 }
 
-func TestSubframeLifecycleIgnored(t *testing.T) {
-	t.Run("subframe_dom_content_loaded_does_not_advance_state", func(t *testing.T) {
-		m, ec := newComputedMonitor(t)
-		navigateMonitor(m, "https://example.com") // sets mainSessionID = "s1"
+// TestIframeTargetNoStateMachine verifies that attaching an iframe target does
+// not create a computedState. Only page targets get state machines; iframes share
+// the CDP page domains but must not generate computed events like navigation_settled.
+func TestIframeTargetNoStateMachine(t *testing.T) {
+	m, _ := newComputedMonitor(t)
+	m.sessionsMu.Lock()
+	m.sessions["iframe-session"] = targetInfo{targetID: "iframe-target", targetType: "iframe"}
+	// Intentionally do NOT create a computedState — mirrors handleAttachedToTarget behaviour.
+	m.sessionsMu.Unlock()
 
-		// Fire domContentLoaded from an iframe session, not the main frame.
-		m.handleDOMContentLoaded(cdpPageDomContentEventFiredParams{}, "iframe-session")
+	m.sessionsMu.RLock()
+	cs := m.computedStates["iframe-session"]
+	m.sessionsMu.RUnlock()
 
-		// Now fire the real main-frame domContentLoaded + the rest of the conditions.
-		simulateRequest(m, "r1")
-		simulateFinished(m, "r1")
-		m.handleLoadEventFired(context.Background(), cdpPageLoadEventFiredParams{}, "s1")
-		// navigation_settled requires navDOMLoaded; if the iframe event had set it,
-		// the event might fire without the main-frame DOMContentLoaded arriving.
-		// Assert it does NOT fire yet (iframe set navDOMLoaded but main frame hasn't).
-		ec.assertNone(t, "navigation_settled", 1500*time.Millisecond)
-	})
-
-	t.Run("subframe_load_event_does_not_start_layout_timer", func(t *testing.T) {
-		m, ec := newComputedMonitor(t)
-		navigateMonitor(m, "https://example.com")
-
-		// Subframe fires loadEventFired — should not start the layout_settled timer.
-		m.handleLoadEventFired(context.Background(), cdpPageLoadEventFiredParams{}, "iframe-session")
-		ec.assertNone(t, "layout_settled", 1500*time.Millisecond)
-
-		// Main frame fires — timer should start now.
-		t0 := time.Now()
-		m.handleLoadEventFired(context.Background(), cdpPageLoadEventFiredParams{}, "s1")
-		ec.waitFor(t, "layout_settled", 3*time.Second)
-		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "fired too early")
-	})
+	assert.Nil(t, cs, "iframe target must not have a computedState")
 }

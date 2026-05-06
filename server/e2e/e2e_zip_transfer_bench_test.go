@@ -54,6 +54,7 @@ func TestZipTransferTiming(t *testing.T) {
 	err = populateUserData(ctx, client)
 	require.NoError(t, err, "failed to populate user-data")
 	t.Logf("User-data population took %dms", time.Since(populateStart).Milliseconds())
+	stopChromiumForStableUserData(t, ctx, client)
 
 	// Get initial directory size for reference
 	dirSize, fileCount, err := getDirStats(ctx, client, "/home/kernel/user-data")
@@ -137,6 +138,25 @@ func populateUserData(ctx context.Context, client *instanceoapi.ClientWithRespon
 		return fmt.Errorf("playwright execution failed: %s", errMsg)
 	}
 	return nil
+}
+
+func stopChromiumForStableUserData(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
+	t.Helper()
+
+	args := []string{"-c", "/etc/supervisor/supervisord.conf", "stop", "chromium"}
+	req := instanceoapi.ProcessExecJSONRequestBody{
+		Command: "supervisorctl",
+		Args:    &args,
+	}
+	rsp, err := client.ProcessExecWithResponse(ctx, req)
+	require.NoError(t, err, "failed to stop chromium before reading user-data")
+	require.Equal(t, http.StatusOK, rsp.StatusCode(), "unexpected status stopping chromium: %s body=%s", rsp.Status(), string(rsp.Body))
+	if rsp.JSON200 != nil && rsp.JSON200.ExitCode != nil {
+		require.Equal(t, 0, *rsp.JSON200.ExitCode, "supervisorctl stop chromium failed")
+	}
+
+	// Give Chromium's profile databases a brief moment to settle after shutdown.
+	time.Sleep(500 * time.Millisecond)
 }
 
 // getDirStats returns approximate size and file count of a directory
@@ -286,6 +306,7 @@ func TestZstdTransferTiming(t *testing.T) {
 	err = populateUserData(ctx, client)
 	require.NoError(t, err, "failed to populate user-data")
 	t.Logf("User-data population took %dms", time.Since(populateStart).Milliseconds())
+	stopChromiumForStableUserData(t, ctx, client)
 
 	// Get directory stats for reference
 	dirSize, fileCount, err := getDirStats(ctx, client, "/home/kernel/user-data")
@@ -436,6 +457,7 @@ func TestZipVsZstdComparison(t *testing.T) {
 	t.Logf("Populating user-data by browsing...")
 	err = populateUserData(ctx, client)
 	require.NoError(t, err, "failed to populate user-data")
+	stopChromiumForStableUserData(t, ctx, client)
 
 	// Get directory stats
 	dirSize, fileCount, err := getDirStats(ctx, client, "/home/kernel/user-data")

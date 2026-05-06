@@ -45,7 +45,7 @@ func (m *Monitor) enableDomains(ctx context.Context, sessionID string, targetTyp
 	}
 
 	if _, err := m.send(ctx, "PerformanceTimeline.enable", map[string]any{
-		"eventTypes": []string{timelineEventLayoutShift},
+		"eventTypes": []string{timelineEventLayoutShift, timelineEventLCP},
 	}, sessionID); err != nil && ctx.Err() == nil {
 		m.log.Warn("cdpmonitor: failed to enable PerformanceTimeline", "session", sessionID, "err", err)
 	}

@@ -2,8 +2,12 @@
 
 set -o pipefail -o errexit -o nounset
 
+# The browser instance JWT is the sole token contract for xDS and host-local
+# services in the image runtime.
+INSTANCE_JWT="${KERNEL_INSTANCE_JWT:-}"
+
 # Check for required environment variables, to see if envoy is enabled
-if [[ -z "${INST_NAME:-}" || -z "${METRO_NAME:-}" || -z "${XDS_SERVER:-}" || -z "${XDS_JWT:-}" ]]; then
+if [[ -z "${INST_NAME:-}" || -z "${METRO_NAME:-}" || -z "${XDS_SERVER:-}" || -z "${INSTANCE_JWT:-}" ]]; then
   echo "[envoy-init] Required environment variables not set. Skipping Envoy initialization."
   exit 0
 fi
@@ -55,15 +59,15 @@ else
 fi
 
 # Render template with provided environment variables
-echo "[envoy-init] Rendering template with INST_NAME=${INST_NAME}, METRO_NAME=${METRO_NAME}, XDS_SERVER=${XDS_SERVER}, XDS_JWT=***"
+echo "[envoy-init] Rendering template with INST_NAME=${INST_NAME}, METRO_NAME=${METRO_NAME}, XDS_SERVER=${XDS_SERVER}, KERNEL_INSTANCE_JWT=***"
 inst_esc=$(printf '%s' "$INST_NAME" | sed -e 's/[\/&]/\\&/g')
 metro_esc=$(printf '%s' "$METRO_NAME" | sed -e 's/[\/&]/\\&/g')
 xds_esc=$(printf '%s' "$XDS_SERVER" | sed -e 's/[\/&]/\\&/g')
-jwt_esc=$(printf '%s' "$XDS_JWT" | sed -e 's/[\/&]/\\&/g')
+jwt_esc=$(printf '%s' "$INSTANCE_JWT" | sed -e 's/[\/&]/\\&/g')
 sed -e "s|{INST_NAME}|$inst_esc|g" \
     -e "s|{METRO_NAME}|$metro_esc|g" \
     -e "s|{XDS_SERVER}|$xds_esc|g" \
-    -e "s|{XDS_JWT}|$jwt_esc|g" \
+    -e "s|{KERNEL_INSTANCE_JWT}|$jwt_esc|g" \
     /etc/envoy/templates/bootstrap.yaml > /etc/envoy/bootstrap.yaml
 
 echo "[envoy-init] Starting Envoy via supervisord"

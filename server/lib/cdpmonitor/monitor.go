@@ -51,7 +51,7 @@ type Monitor struct {
 	pendReqMu       sync.Mutex
 	pendingRequests map[string]networkReqState // requestId → networkReqState
 
-	computed *computedState
+	computedStates map[string]*computedState // sessionID → state machine; guarded by sessionsMu
 
 	lastScreenshotAt   atomic.Int64                                              // unix millis of last capture
 	screenshotInFlight atomic.Bool                                               // true while a captureScreenshot goroutine is running
@@ -83,11 +83,11 @@ func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log 
 		displayNum:      displayNum,
 		log:             log,
 		sessions:        make(map[string]targetInfo),
+		computedStates:  make(map[string]*computedState),
 		pending:         make(map[int64]chan cdpMessage),
 		pendingRequests: make(map[string]networkReqState),
 		bindingLastSeen: make(map[string]time.Time),
 	}
-	m.computed = newComputedState(publish)
 	m.lifecycleCtx = context.Background()
 	m.mainSessionID.Store(mainSessionUnset)
 	return m
@@ -180,8 +180,13 @@ func (m *Monitor) Stop() {
 // It also fails all in-flight send() calls so their goroutines are unblocked.
 func (m *Monitor) clearState() {
 	m.sessionsMu.Lock()
+	prev := m.computedStates
 	m.sessions = make(map[string]targetInfo)
+	m.computedStates = make(map[string]*computedState)
 	m.sessionsMu.Unlock()
+	for _, cs := range prev {
+		cs.stop()
+	}
 	m.mainSessionID.Store(mainSessionUnset)
 
 	m.pendReqMu.Lock()
@@ -193,9 +198,6 @@ func (m *Monitor) clearState() {
 	m.bindingRateMu.Unlock()
 
 	m.failPendingCommands()
-
-	// pendingRequests is already empty above, so inflight=0 is correct.
-	m.computed.resetOnNavigation(0)
 }
 
 const pendingRequestTTL = 5 * time.Minute
@@ -213,16 +215,30 @@ func (m *Monitor) sweepPendingRequests(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			var toSweep []networkReqState
 			m.pendReqMu.Lock()
 			for id, state := range m.pendingRequests {
 				if now.Sub(state.addedAt) > pendingRequestTTL {
 					delete(m.pendingRequests, id)
-					m.computed.onLoadingFinished() // keep netPending consistent
+					toSweep = append(toSweep, state)
 				}
 			}
 			m.pendReqMu.Unlock()
+			for _, state := range toSweep {
+				if cs := m.computedFor(state.sessionID); cs != nil {
+					cs.onLoadingFinished()
+				}
+			}
 		}
 	}
+}
+
+// computedFor returns the computedState for the given sessionID, or nil if none exists.
+func (m *Monitor) computedFor(sessionID string) *computedState {
+	m.sessionsMu.RLock()
+	cs := m.computedStates[sessionID]
+	m.sessionsMu.RUnlock()
+	return cs
 }
 
 // failPendingCommands unblocks all in-flight send() calls by delivering an

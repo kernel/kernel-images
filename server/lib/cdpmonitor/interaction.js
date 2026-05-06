@@ -113,7 +113,7 @@
       var pos = scrollPos(target);
       if (Math.abs(pos.x - fromX) > 5 || Math.abs(pos.y - fromY) > 5) {
         send(JSON.stringify({
-          type: 'scroll_settled',
+          type: 'interaction_scroll_settled',
           from_x: fromX, from_y: fromY,
           to_x: pos.x, to_y: pos.y,
           target_selector: s

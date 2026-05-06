@@ -16,49 +16,57 @@ const mainSessionUnset = "\x00unset"
 // Each maps 1-to-1 with a specific CDP domain event (Runtime.*, Network.*,
 // Page.*, PerformanceTimeline.*) received from Chrome.
 const (
-	EventConsoleLog           = "console_log"             // Runtime.consoleAPICalled (non-error types)
-	EventConsoleError         = "console_error"           // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
-	EventNetworkRequest       = "network_request"         // Network.requestWillBeSent
-	EventNetworkResponse      = "network_response"        // Network.loadingFinished (with prior responseReceived)
-	EventNetworkLoadingFailed = "network_loading_failed"  // Network.loadingFailed
-	EventNavigation           = "navigation"              // Page.frameNavigated
-	EventDOMContentLoaded     = "dom_content_loaded"      // Page.domContentEventFired
+	EventConsoleLog           = "console_log"            // Runtime.consoleAPICalled (non-error types)
+	EventConsoleError         = "console_error"          // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
+	EventNetworkRequest       = "network_request"        // Network.requestWillBeSent
+	EventNetworkResponse      = "network_response"       // Network.loadingFinished (with prior responseReceived)
+	EventNetworkLoadingFailed = "network_loading_failed" // Network.loadingFailed
+	EventNavigation           = "page_navigation"        // Page.frameNavigated
+	EventDOMContentLoaded     = "page_dom_content_loaded" // Page.domContentEventFired
 	EventPageLoad             = "page_load"               // Page.loadEventFired
-	EventLayoutShift          = "layout_shift"            // PerformanceTimeline event of type "layout-shift"
+	EventLayoutShift          = "page_layout_shift"       // PerformanceTimeline event of type "layout-shift"
+	EventLCP                  = "page_lcp"                // PerformanceTimeline event of type "largest-contentful-paint"
+	EventTabOpened            = "page_tab_opened"         // Target.attachedToTarget for type=page
 )
 
 // Computed events — synthetic events derived by computed.go state machines.
 // None of these correspond to a single CDP notification; they are inferred from
 // sequences of CDP events and debounce timers.
 const (
-	EventNetworkIdle       = "network_idle"        // 500 ms after all in-flight requests finish
-	EventLayoutSettled     = "layout_settled"      // 1 s after page_load with no intervening layout shifts
-	EventNavigationSettled = "navigation_settled"  // fires once dom_content_loaded + network_idle + layout_settled all hold
+	EventNetworkIdle       = "network_idle"           // 500 ms after all in-flight requests finish
+	EventLayoutSettled     = "page_layout_settled"    // 1 s after page_load with no intervening layout shifts
+	EventNavigationSettled = "page_navigation_settled" // fires once page_dom_content_loaded and page_layout_settled both hold
 )
 
 // Interaction events — fired by injected page-side JS (interaction.js) via the
 // Runtime.bindingCalled mechanism. They originate in the browser's renderer
 // process, not from Chrome's network or page domains.
 const (
-	EventInteractionClick = "interaction_click"  // document click (target selector, coords, text)
-	EventInteractionKey   = "interaction_key"    // keydown (key name, target selector)
-	EventScrollSettled    = "scroll_settled"     // 300 ms after the last scroll event on a target
+	EventInteractionClick = "interaction_click"         // document click (target selector, coords, text)
+	EventInteractionKey   = "interaction_key"           // keydown (key name, target selector)
+	EventScrollSettled    = "interaction_scroll_settled" // 300 ms after the last scroll event on a target
 )
 
 // Monitor lifecycle and internal events — emitted by the monitor itself, not by Chrome.
 const (
-	EventScreenshot             = "screenshot"              // ffmpeg frame capture on page load or JS exception
+	EventScreenshot             = "monitor_screenshot"    // ffmpeg frame capture on page load or JS exception
 	EventMonitorDisconnected    = "monitor_disconnected"    // WebSocket to Chrome closed unexpectedly
 	EventMonitorReconnected     = "monitor_reconnected"     // successfully reconnected after a disconnect
 	EventMonitorReconnectFailed = "monitor_reconnect_failed" // reconnect attempts exhausted
 	EventMonitorInitFailed      = "monitor_init_failed"     // could not initialise the CDP session
 )
 
-// Metadata key written into events.Source.Metadata for CDP-sourced events.
-const MetadataKeyCDPSessionID = "cdp_session_id"
+// Metadata keys written into events.Source.Metadata for CDP-sourced events.
+const (
+	MetadataKeyCDPSessionID = "cdp_session_id"
+	MetadataKeyTargetID     = "target_id"
+	MetadataKeyTargetType   = "target_type"
+)
 
-// CDP PerformanceTimeline event type for layout shifts.
-const timelineEventLayoutShift = "layout-shift"
+const (
+	timelineEventLayoutShift = "layout-shift"
+	timelineEventLCP         = "largest-contentful-paint"
+)
 
 // CDP target type for browser pages (as opposed to workers, iframes, etc.).
 const targetTypePage = "page"
@@ -109,9 +117,22 @@ type networkReqState struct {
 	headers      json.RawMessage
 	postData     string
 	resourceType string
+	loaderID     string
+	frameID      string
 	status       int
 	statusText   string
 	resHeaders   json.RawMessage
 	mimeType     string
 	addedAt      time.Time // for TTL eviction
+}
+
+// navContext carries the identity of the navigation that owns a computedState.
+// Stamped at Page.frameNavigated and precomputed into event payloads/metadata.
+type navContext struct {
+	sessionID  string
+	targetID   string
+	targetType string
+	frameID    string
+	loaderID   string
+	url        string
 }

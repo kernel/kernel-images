@@ -208,13 +208,30 @@ func TestPageEvents(t *testing.T) {
 	_, ec, cleanup := startMonitor(t, srv, nil)
 	defer cleanup()
 
+	// Attach a page target first so computedState exists for nav context.
 	srv.sendToMonitor(t, map[string]any{
-		"method": "Page.frameNavigated",
+		"method": "Target.attachedToTarget",
 		"params": map[string]any{
-			"frame": map[string]any{"id": "frame-1", "url": "https://example.com/page"},
+			"sessionId": "sess-page",
+			"targetInfo": map[string]any{
+				"targetId": "target-page", "type": "page",
+				"url": "about:blank", "attached": true,
+			},
+			"waitingForDebugger": false,
 		},
 	})
-	ev := ec.waitFor(t, "navigation", 2*time.Second)
+	ec.waitFor(t, "page_tab_opened", 2*time.Second)
+
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Page.frameNavigated", "sessionId": "sess-page",
+		"params": map[string]any{
+			"frame": map[string]any{
+				"id": "frame-1", "url": "https://example.com/page",
+				"loaderId": "loader-1",
+			},
+		},
+	})
+	ev := ec.waitFor(t, "page_navigation", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev.Category)
 	assert.Equal(t, "Page.frameNavigated", ev.Source.Event)
 	var data map[string]any
@@ -222,17 +239,74 @@ func TestPageEvents(t *testing.T) {
 	assert.Equal(t, "https://example.com/page", data["url"])
 
 	srv.sendToMonitor(t, map[string]any{
-		"method": "Page.domContentEventFired",
+		"method": "Page.domContentEventFired", "sessionId": "sess-page",
 		"params": map[string]any{"timestamp": 1000.0},
 	})
-	ev2 := ec.waitFor(t, "dom_content_loaded", 2*time.Second)
+	ev2 := ec.waitFor(t, "page_dom_content_loaded", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev2.Category)
+	var data2 map[string]any
+	require.NoError(t, json.Unmarshal(ev2.Data, &data2))
+	assert.Equal(t, float64(1000.0), data2["cdp_timestamp"])
+	assert.Equal(t, "loader-1", data2["loader_id"])
+	assert.Equal(t, "https://example.com/page", data2["url"])
+
 	srv.sendToMonitor(t, map[string]any{
-		"method": "Page.loadEventFired",
+		"method": "Page.loadEventFired", "sessionId": "sess-page",
 		"params": map[string]any{"timestamp": 1001.0},
 	})
 	ev3 := ec.waitFor(t, "page_load", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev3.Category)
+	var data3 map[string]any
+	require.NoError(t, json.Unmarshal(ev3.Data, &data3))
+	assert.Equal(t, float64(1001.0), data3["cdp_timestamp"])
+	assert.Equal(t, "loader-1", data3["loader_id"])
+}
+
+func TestTabOpened(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	_, ec, cleanup := startMonitor(t, srv, nil)
+	defer cleanup()
+
+	t.Run("page_target_emits_tab_opened", func(t *testing.T) {
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId": "sess-tab",
+				"targetInfo": map[string]any{
+					"targetId": "target-tab", "type": "page",
+					"url": "https://example.com", "attached": true,
+					"title": "Example",
+				},
+				"waitingForDebugger": false,
+			},
+		})
+		ev := ec.waitFor(t, "page_tab_opened", 2*time.Second)
+		assert.Equal(t, events.CategoryPage, ev.Category)
+		assert.Equal(t, "Target.attachedToTarget", ev.Source.Event)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "target-tab", data["target_id"])
+		assert.Equal(t, "page", data["target_type"])
+		assert.Equal(t, "https://example.com", data["url"])
+		assert.Equal(t, "Example", data["title"])
+	})
+
+	t.Run("iframe_target_no_tab_opened", func(t *testing.T) {
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId": "sess-iframe",
+				"targetInfo": map[string]any{
+					"targetId": "target-iframe", "type": "iframe",
+					"url": "https://iframe.example.com", "attached": true,
+				},
+				"waitingForDebugger": false,
+			},
+		})
+		ec.assertNone(t, "page_tab_opened", 200*time.Millisecond)
+	})
 }
 
 func TestBindingAndTimeline(t *testing.T) {
@@ -255,15 +329,15 @@ func TestBindingAndTimeline(t *testing.T) {
 		assert.Equal(t, "Runtime.bindingCalled", ev.Source.Event)
 	})
 
-	t.Run("scroll_settled", func(t *testing.T) {
+	t.Run("interaction_scroll_settled", func(t *testing.T) {
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
 				"name":    "__kernelEvent",
-				"payload": `{"type":"scroll_settled","from_x":0,"from_y":0,"to_x":0,"to_y":500,"target_selector":"body"}`,
+				"payload": `{"type":"interaction_scroll_settled","from_x":0,"from_y":0,"to_x":0,"to_y":500,"target_selector":"body"}`,
 			},
 		})
-		ev := ec.waitFor(t, "scroll_settled", 2*time.Second)
+		ev := ec.waitFor(t, "interaction_scroll_settled", 2*time.Second)
 		assert.Equal(t, events.CategoryInteraction, ev.Category)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
@@ -274,12 +348,30 @@ func TestBindingAndTimeline(t *testing.T) {
 		srv.sendToMonitor(t, map[string]any{
 			"method": "PerformanceTimeline.timelineEventAdded",
 			"params": map[string]any{
-				"event": map[string]any{"type": "layout-shift"},
+				"event": map[string]any{
+					"type":     "layout-shift",
+					"frameId":  "frame-ls",
+					"time":     1.5,
+					"duration": 0.0,
+					"layoutShiftDetails": map[string]any{
+						"value":          0.12,
+						"hadRecentInput": true,
+					},
+				},
 			},
 		})
-		ev := ec.waitFor(t, "layout_shift", 2*time.Second)
+		ev := ec.waitFor(t, "page_layout_shift", 2*time.Second)
 		assert.Equal(t, events.KindCDP, ev.Source.Kind)
 		assert.Equal(t, "PerformanceTimeline.timelineEventAdded", ev.Source.Event)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "frame-ls", data["source_frame_id"])
+		assert.Equal(t, float64(1.5), data["time"])
+		shift := data["layout_shift_details"].(map[string]any)
+		assert.Equal(t, 0.12, shift["value"])
+		assert.Equal(t, true, shift["had_recent_input"])
+		_, hasEvent := data["event"]
+		assert.False(t, hasEvent, "raw CDP event wrapper must not appear in payload")
 	})
 
 	t.Run("unknown_binding_ignored", func(t *testing.T) {
@@ -330,5 +422,129 @@ func TestBindingAndTimeline(t *testing.T) {
 		}
 		ec.mu.Unlock()
 		assert.Equal(t, countBefore+1, countAfter, "rate limiter should have dropped the 2nd and 3rd events")
+	})
+}
+
+func TestPerTargetStateMachines(t *testing.T) {
+	// attachTarget sends a Target.attachedToTarget message for a page session.
+	attachTarget := func(srv *testServer, t *testing.T, sessionID, targetID string) {
+		t.Helper()
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.attachedToTarget",
+			"params": map[string]any{
+				"sessionId": sessionID,
+				"targetInfo": map[string]any{
+					"targetId": targetID, "type": "page",
+					"url": "about:blank", "attached": true,
+				},
+				"waitingForDebugger": false,
+			},
+		})
+	}
+
+	t.Run("two_tabs_independent", func(t *testing.T) {
+		srv := newTestServer(t)
+		defer srv.close()
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		defer cleanup()
+
+		attachTarget(srv, t, "sess-a", "target-a")
+		attachTarget(srv, t, "sess-b", "target-b")
+
+		// Navigate sess-a and start a request.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "sess-a",
+			"params": map[string]any{"frame": map[string]any{
+				"id": "f-a", "url": "https://a.example.com", "loaderId": "l-a",
+			}},
+		})
+		ec.waitFor(t, "page_navigation", 2*time.Second)
+
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.requestWillBeSent", "sessionId": "sess-a",
+			"params": map[string]any{
+				"requestId": "req-a", "type": "Document", "loaderId": "l-a",
+				"documentURL": "https://a.example.com/",
+				"request":     map[string]any{"method": "GET", "url": "https://a.example.com/"},
+				"initiator":   map[string]any{"type": "other"},
+			},
+		})
+		ec.waitFor(t, "network_request", 2*time.Second)
+
+		// Navigate sess-b — must not reset sess-a's state machine.
+		// With per-session state machines, sess-b starts fresh (netPending=0) and
+		// fires its own network_idle after the 500 ms debounce, independently.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "sess-b",
+			"params": map[string]any{"frame": map[string]any{
+				"id": "f-b", "url": "https://b.example.com", "loaderId": "l-b",
+			}},
+		})
+
+		// Wait past sess-b's 500 ms debounce so its network_idle fires before we
+		// set our checkpoint. The next new network_idle will then come from sess-a.
+		time.Sleep(700 * time.Millisecond)
+
+		// Finish sess-a's request; waitForNew captures the current event count so
+		// sess-b's already-fired network_idle is excluded from the result.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived", "sessionId": "sess-a",
+			"params": map[string]any{
+				"requestId": "req-a", "type": "Document",
+				"response": map[string]any{"status": 200, "statusText": "OK", "headers": map[string]any{}, "mimeType": "text/html"},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.loadingFinished", "sessionId": "sess-a",
+			"params": map[string]any{"requestId": "req-a"},
+		})
+
+		ev := ec.waitForNew(t, "network_idle", 2*time.Second)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "sess-a", data["session_id"], "network_idle must be attributed to sess-a")
+		assert.Equal(t, "l-a", data["loader_id"])
+	})
+
+	t.Run("detach_stops_timer", func(t *testing.T) {
+		srv := newTestServer(t)
+		defer srv.close()
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		defer cleanup()
+
+		attachTarget(srv, t, "sess-c", "target-c")
+
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Page.frameNavigated", "sessionId": "sess-c",
+			"params": map[string]any{"frame": map[string]any{
+				"id": "f-c", "url": "https://c.example.com", "loaderId": "l-c",
+			}},
+		})
+		ec.waitFor(t, "page_navigation", 2*time.Second)
+
+		// Start a request, then finish it (arms the 500 ms network_idle timer).
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.requestWillBeSent", "sessionId": "sess-c",
+			"params": map[string]any{
+				"requestId": "req-c", "type": "Document", "loaderId": "l-c",
+				"documentURL": "https://c.example.com/",
+				"request":     map[string]any{"method": "GET", "url": "https://c.example.com/"},
+				"initiator":   map[string]any{"type": "other"},
+			},
+		})
+		ec.waitFor(t, "network_request", 2*time.Second)
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.loadingFinished", "sessionId": "sess-c",
+			"params": map[string]any{"requestId": "req-c"},
+		})
+
+		// Detach before the 500 ms timer fires; readLoop processes messages in
+		// order so the stop() call lands well within the debounce window.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Target.detachedFromTarget",
+			"params": map[string]any{"sessionId": "sess-c"},
+		})
+
+		ec.assertNone(t, "network_idle", 1200*time.Millisecond)
 	})
 }

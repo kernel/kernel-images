@@ -25,6 +25,11 @@ func (m *Monitor) publishEvent(eventType string, category events.EventCategory, 
 			src.Metadata = make(map[string]string)
 		}
 		src.Metadata[MetadataKeyCDPSessionID] = sessionID
+		m.sessionsMu.RLock()
+		info := m.sessions[sessionID]
+		m.sessionsMu.RUnlock()
+		src.Metadata[MetadataKeyTargetID] = info.targetID
+		src.Metadata[MetadataKeyTargetType] = info.targetType
 	}
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
@@ -129,29 +134,32 @@ func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID st
 	for _, a := range p.Args {
 		argValues = append(argValues, consoleArgString(a))
 	}
-	data, _ := json.Marshal(map[string]any{
+	eventType := EventConsoleLog
+	if p.Type == "error" {
+		eventType = EventConsoleError
+	}
+	cs := m.computedFor(sessionID)
+	data := cs.navDataWith(map[string]any{
 		"level":       p.Type,
 		"text":        text,
 		"args":        argValues,
 		"stack_trace": p.StackTrace,
 	})
-	eventType := EventConsoleLog
-	if p.Type == "error" {
-		eventType = EventConsoleError
-	}
 	m.publishEvent(eventType, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.consoleAPICalled", data, sessionID)
 }
 
 func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExceptionThrownParams, sessionID string) {
-	data, _ := json.Marshal(map[string]any{
+	cs := m.computedFor(sessionID)
+	// source_url is the script file URL; distinct from nav context's url (the page URL).
+	data := cs.navDataWith(map[string]any{
 		"text":        p.ExceptionDetails.Text,
 		"line":        p.ExceptionDetails.LineNumber,
 		"column":      p.ExceptionDetails.ColumnNumber,
-		"url":         p.ExceptionDetails.URL,
+		"source_url":  p.ExceptionDetails.URL,
 		"stack_trace": p.ExceptionDetails.StackTrace,
 	})
 	m.publishEvent(EventConsoleError, events.CategoryConsole, events.Source{Kind: events.KindCDP}, "Runtime.exceptionThrown", data, sessionID)
-	m.tryScreenshot(ctx)
+	m.tryScreenshot(ctx, "Runtime.exceptionThrown", sessionID)
 }
 
 // bindingMinInterval is the minimum time between accepted __kernelEvent binding
@@ -194,17 +202,57 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 	m.bindingLastSeen[rateKey] = now
 	m.bindingRateMu.Unlock()
 
-	m.publishEvent(header.Type, events.CategoryInteraction, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", payload, sessionID)
+	var payloadMap map[string]any
+	_ = json.Unmarshal(payload, &payloadMap)
+	cs := m.computedFor(sessionID)
+	m.publishEvent(header.Type, events.CategoryInteraction, events.Source{Kind: events.KindCDP}, "Runtime.bindingCalled", cs.navDataWith(payloadMap), sessionID)
 }
 
-// handleTimelineEvent processes PerformanceTimeline layout-shift events.
+// handleTimelineEvent processes PerformanceTimeline layout-shift and LCP events.
 func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, sessionID string) {
-	if p.Event.Type != timelineEventLayoutShift {
-		return
+	switch p.Event.Type {
+	case timelineEventLayoutShift:
+		// source_frame_id is the frame where the shift occurred; distinct from nav
+		// context's frame_id (the top-level navigated frame).
+		ev := map[string]any{
+			"source_frame_id": p.Event.FrameID,
+			"time":            p.Event.Time,
+			"duration":        p.Event.Duration,
+		}
+		var shift cdpLayoutShiftDetails
+		if p.Event.LayoutShiftDetails != nil && json.Unmarshal(p.Event.LayoutShiftDetails, &shift) == nil {
+			ev["layout_shift_details"] = map[string]any{
+				"value":            shift.Value,
+				"had_recent_input": shift.HadRecentInput,
+			}
+		}
+		cs := m.computedFor(sessionID)
+		data := cs.navDataWith(ev)
+		m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
+		if cs != nil {
+			cs.onLayoutShift()
+		}
+
+	case timelineEventLCP:
+		ev := map[string]any{
+			"source_frame_id": p.Event.FrameID,
+			"time":            p.Event.Time,
+		}
+		var lcp cdpLcpDetails
+		if p.Event.LcpDetails != nil && json.Unmarshal(p.Event.LcpDetails, &lcp) == nil {
+			ev["lcp_details"] = map[string]any{
+				"render_time": lcp.RenderTime,
+				"load_time":   lcp.LoadTime,
+				"size":        lcp.Size,
+				"element_id":  lcp.ElementID,
+				"url":         lcp.URL,
+				"node_id":     lcp.NodeID,
+			}
+		}
+		cs := m.computedFor(sessionID)
+		data := cs.navDataWith(ev)
+		m.publishEvent(EventLCP, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
 	}
-	data, _ := json.Marshal(p)
-	m.publishEvent(EventLayoutShift, events.CategoryPage, events.Source{Kind: events.KindCDP}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
-	m.computed.onLayoutShift()
 }
 
 // handleNetworkRequest publishes network_request events.
@@ -239,10 +287,16 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		headers:      p.Request.Headers,
 		postData:     p.Request.PostData,
 		resourceType: p.Type,
+		loaderID:     p.LoaderID,
+		frameID:      p.FrameID,
 		addedAt:      addedAt,
 	}
 	m.pendReqMu.Unlock()
 	ev := map[string]any{
+		"request_id":     p.RequestID,
+		"loader_id":      p.LoaderID,
+		"frame_id":       p.FrameID,
+		"document_url":   p.DocumentURL,
 		"method":         p.Request.Method,
 		"url":            p.Request.URL,
 		"headers":        p.Request.Headers,
@@ -254,10 +308,16 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	if p.Type != "" {
 		ev["resource_type"] = p.Type
 	}
+	if isRedirect {
+		ev["is_redirect"] = true
+		ev["redirect_url"] = existing.url
+	}
 	data, _ := json.Marshal(ev)
 	m.publishEvent(EventNetworkRequest, events.CategoryNetwork, events.Source{Kind: events.KindCDP}, "Network.requestWillBeSent", data, sessionID)
 	if !isRedirect {
-		m.computed.onRequest()
+		if cs := m.computedFor(sessionID); cs != nil {
+			cs.onRequest()
+		}
 	}
 }
 
@@ -283,15 +343,20 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 	if !ok {
 		return
 	}
-	m.computed.onLoadingFinished()
+	if cs := m.computedFor(state.sessionID); cs != nil {
+		cs.onLoadingFinished()
+	}
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	m.asyncWg.Go(func() {
 		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
 		ev := map[string]any{
-			"method":  state.method,
-			"url":     state.url,
-			"status":  state.status,
-			"headers": state.resHeaders,
+			"request_id": p.RequestID,
+			"loader_id":  state.loaderID,
+			"frame_id":   state.frameID,
+			"method":     state.method,
+			"url":        state.url,
+			"status":     state.status,
+			"headers":    state.resHeaders,
 		}
 		if state.statusText != "" {
 			ev["status_text"] = state.statusText
@@ -348,24 +413,41 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 	m.pendReqMu.Unlock()
 
 	ev := map[string]any{
+		"request_id": p.RequestID,
 		"error_text": p.ErrorText,
 		"canceled":   p.Canceled,
 	}
 	if ok {
 		ev["url"] = state.url
+		ev["loader_id"] = state.loaderID
+		ev["frame_id"] = state.frameID
+		ev["resource_type"] = state.resourceType
 	}
 	data, _ := json.Marshal(ev)
 	m.publishEvent(EventNetworkLoadingFailed, events.CategoryNetwork, events.Source{Kind: events.KindCDP}, "Network.loadingFailed", data, sessionID)
 	if ok {
-		m.computed.onLoadingFinished()
+		if cs := m.computedFor(state.sessionID); cs != nil {
+			cs.onLoadingFinished()
+		}
 	}
 }
 
 func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID string) {
+	// Pre-fetch target info and computedState before acquiring pendReqMu to
+	// avoid a pendReqMu → sessionsMu ordering cycle.
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	cs := m.computedStates[sessionID]
+	m.sessionsMu.RUnlock()
+
 	data, _ := json.Marshal(map[string]any{
+		"session_id":      sessionID,
+		"target_id":       info.targetID,
+		"target_type":     info.targetType,
 		"url":             p.Frame.URL,
 		"frame_id":        p.Frame.ID,
 		"parent_frame_id": p.Frame.ParentID,
+		"loader_id":       p.Frame.LoaderID,
 	})
 	m.publishEvent(EventNavigation, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.frameNavigated", data, sessionID)
 
@@ -373,36 +455,54 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	// should not disrupt main-page tracking.
 	if p.Frame.ParentID == "" {
 		m.mainSessionID.Store(sessionID)
+
+		navCtx := navContext{
+			sessionID:  sessionID,
+			targetID:   info.targetID,
+			targetType: info.targetType,
+			frameID:    p.Frame.ID,
+			loaderID:   p.Frame.LoaderID,
+			url:        p.Frame.URL,
+		}
+
 		m.pendReqMu.Lock()
 		for id, req := range m.pendingRequests {
 			if req.sessionID == sessionID {
 				delete(m.pendingRequests, id)
 			}
 		}
-		inflight := len(m.pendingRequests)
-		// Reset computed state while still holding pendReqMu so new requests
-		// arriving concurrently can't increment netPending before the reset.
-		m.computed.resetOnNavigation(inflight)
+		// Reset while holding pendReqMu so new requests arriving concurrently
+		// can't increment netPending before the reset completes.
+		// inflight=0: remaining pendingRequests belong to other target sessions;
+		// their loadingFinished events decrement those sessions' own state machines,
+		// not this one, so we start fresh.
+		if cs != nil {
+			if err := cs.resetOnNavigation(0, navCtx); err != nil {
+				m.log.Error("cdpmonitor: failed to build nav event payload", "err", err)
+			}
+		}
 		m.pendReqMu.Unlock()
 	}
 }
 
 func (m *Monitor) handleDOMContentLoaded(p cdpPageDomContentEventFiredParams, sessionID string) {
-	data, _ := json.Marshal(p)
+	cs := m.computedFor(sessionID)
+	data := cs.navDataWith(map[string]any{"cdp_timestamp": p.Timestamp})
 	m.publishEvent(EventDOMContentLoaded, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.domContentEventFired", data, sessionID)
-	// Only advance the state machine for the main frame; subframe events arrive
-	// on their own sessionId and would trigger navigation_settled prematurely.
-	if m.mainSessionID.Load() == sessionID {
-		m.computed.onDOMContentLoaded()
+	if cs != nil {
+		cs.onDOMContentLoaded()
 	}
 }
 
 func (m *Monitor) handleLoadEventFired(ctx context.Context, p cdpPageLoadEventFiredParams, sessionID string) {
-	data, _ := json.Marshal(p)
+	cs := m.computedFor(sessionID)
+	data := cs.navDataWith(map[string]any{"cdp_timestamp": p.Timestamp})
 	m.publishEvent(EventPageLoad, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Page.loadEventFired", data, sessionID)
+	if cs != nil {
+		cs.onPageLoad()
+	}
 	if m.mainSessionID.Load() == sessionID {
-		m.computed.onPageLoad()
-		m.tryScreenshot(ctx)
+		m.tryScreenshot(ctx, "Page.loadEventFired", sessionID)
 	}
 }
 
@@ -416,7 +516,21 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 		url:        p.TargetInfo.URL,
 		targetType: p.TargetInfo.Type,
 	}
+	if p.TargetInfo.Type == targetTypePage {
+		m.computedStates[p.SessionID] = newComputedState(m.publish)
+	}
 	m.sessionsMu.Unlock()
+
+	if p.TargetInfo.Type == targetTypePage {
+		data, _ := json.Marshal(map[string]any{
+			"target_id":   p.TargetInfo.TargetID,
+			"target_type": p.TargetInfo.Type,
+			"url":         p.TargetInfo.URL,
+			"opener_id":   p.TargetInfo.OpenerID,
+			"title":       p.TargetInfo.Title,
+		})
+		m.publishEvent(EventTabOpened, events.CategoryPage, events.Source{Kind: events.KindCDP}, "Target.attachedToTarget", data, p.SessionID)
+	}
 
 	targetType := p.TargetInfo.Type
 	// Async to avoid blocking the readLoop.
@@ -433,6 +547,11 @@ func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) 
 		return
 	}
 	m.sessionsMu.Lock()
+	cs := m.computedStates[p.SessionID]
 	delete(m.sessions, p.SessionID)
+	delete(m.computedStates, p.SessionID)
 	m.sessionsMu.Unlock()
+	if cs != nil {
+		cs.stop()
+	}
 }
