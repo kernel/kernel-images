@@ -14,6 +14,7 @@ import (
 // in-flight ack goroutines so Close can drain cleanly.
 type s2Producer struct {
 	cancel   context.CancelFunc
+	ctx      context.Context
 	producer *s2.Producer
 	session  *s2.AppendSession
 	wg       sync.WaitGroup
@@ -80,6 +81,7 @@ func (s *S2Storage) getOrCreate(streamName string) (*s2Producer, error) {
 	producer := s2.NewProducer(ctx, batcher, session)
 	p := &s2Producer{
 		cancel:   cancel,
+		ctx:      ctx,
 		producer: producer,
 		session:  session,
 	}
@@ -97,20 +99,21 @@ func (s *S2Storage) Append(ctx context.Context, streamName string, data []byte) 
 		return err
 	}
 
+	p.wg.Add(1)
 	fut, err := p.producer.Submit(s2.AppendRecord{Body: data})
 	if err != nil {
+		p.wg.Done()
 		return fmt.Errorf("s2: submit to %q: %w", streamName, err)
 	}
 
-	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		pendingAck, err := fut.Wait(context.Background())
+		pendingAck, err := fut.Wait(p.ctx)
 		if err != nil {
 			slog.Warn("s2: ack wait failed", "stream", streamName, "err", err)
 			return
 		}
-		if _, err := pendingAck.Ack(context.Background()); err != nil {
+		if _, err := pendingAck.Ack(p.ctx); err != nil {
 			slog.Warn("s2: ack failed", "stream", streamName, "err", err)
 		}
 	}()
