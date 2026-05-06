@@ -42,6 +42,13 @@ func (w *EventsStorageWriter) Run(ctx context.Context) {
 		if result.Dropped > 0 {
 			slog.Warn("events_storage_writer: ring buffer overflow, events dropped",
 				"count", result.Dropped)
+			dropData, _ := json.Marshal(map[string]uint64{"dropped": result.Dropped})
+			w.session.PublishUnfiltered(Event{
+				Type:     EventsStorageError,
+				Category: CategorySystem,
+				Source:   Source{Kind: KindLocalProcess},
+				Data:     dropData,
+			})
 			continue
 		}
 		env := result.Envelope
@@ -56,6 +63,9 @@ func (w *EventsStorageWriter) Run(ctx context.Context) {
 			continue
 		}
 		if err := w.eventsStorage.Append(ctx, env.CaptureSessionID, data); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			slog.Error("events_storage_writer: append failed",
 				"seq", env.Seq, "stream", env.CaptureSessionID, "err", err)
 			errData, _ := json.Marshal(map[string]string{"error": err.Error()})
