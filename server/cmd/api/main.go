@@ -274,17 +274,27 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
-	// Drain storage writer before closing CaptureSession (apiService.Shutdown
-	// calls captureSession.Close which must come after the writer is done).
-	<-storageDone
+	// Drain storage writer, close it (bounded by shutdownCtx), and shut down
+	// all HTTP servers in parallel so the full 10s budget is available to each.
+	g, _ := errgroup.WithContext(shutdownCtx)
+
 	if storageWriter != nil {
-		if err := storageWriter.Close(); err != nil {
-			slogger.Error("storage writer close failed", "err", err)
-		}
+		g.Go(func() error {
+			<-storageDone
+			closeDone := make(chan error, 1)
+			go func() { closeDone <- storageWriter.Close() }()
+			select {
+			case err := <-closeDone:
+				if err != nil {
+					slogger.Error("storage writer close failed", "err", err)
+				}
+			case <-shutdownCtx.Done():
+				slogger.Error("storage writer close timed out, forcing shutdown")
+			}
+			return nil
+		})
 	}
 
-	// Shut down HTTP servers and upstream manager in parallel.
-	g, _ := errgroup.WithContext(shutdownCtx)
 	g.Go(func() error {
 		return srv.Shutdown(shutdownCtx)
 	})
@@ -300,6 +310,8 @@ func main() {
 	}
 
 	// Close CaptureSession last, after storage is fully drained.
+	// apiService.Shutdown calls captureSession.Close, which must come after
+	// the storage writer has finished consuming events.
 	if err := apiService.Shutdown(shutdownCtx); err != nil {
 		slogger.Error("api service failed to shutdown", "err", err)
 	}
