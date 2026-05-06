@@ -77,8 +77,7 @@ func (s *ApiService) StopCaptureSession(_ context.Context, _ oapi.StopCaptureSes
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	sessionID := s.captureSession.ID()
-	if sessionID == "" {
+	if s.captureSession.ID() == "" {
 		return oapi.StopCaptureSession404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "no active capture session"}}, nil
 	}
 
