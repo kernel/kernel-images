@@ -104,14 +104,14 @@ func main() {
 	// Optionally connect S2 durable storage sink (requires S2_BASIN + S2_TOKEN).
 	var storageWriter *events.EventsStorageWriter
 	if config.S2Basin != "" && config.S2Token != "" {
-		s2backend, err := events.NewS2Storage(ctx, config.S2Basin, config.S2Token,
+		s2backend, err := events.NewS2Storage(config.S2Basin, config.S2Token,
 			config.S2BatcherLingerMs, config.S2BatcherMaxRecs)
 		if err != nil {
-			slogger.Error("failed to connect to S2", "err", err)
-			os.Exit(1)
+			slogger.Warn("s2 storage unavailable, running without durable event storage", "err", err)
+		} else {
+			storageWriter = events.NewEventsStorageWriter(captureSession, s2backend)
+			slogger.Info("s2 durable event storage enabled", "basin", config.S2Basin)
 		}
-		storageWriter = events.NewEventsStorageWriter(captureSession, s2backend)
-		slogger.Info("s2 durable event storage enabled", "basin", config.S2Basin)
 	}
 
 	apiService, err := api.New(

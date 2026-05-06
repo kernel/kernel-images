@@ -37,17 +37,12 @@ type S2Storage struct {
 	producers map[string]*s2Producer
 }
 
-// NewS2Storage creates an S2Storage and performs a startup connectivity probe
-// against the given basin. Returns an error if the basin/token is invalid or
-// unreachable.
-func NewS2Storage(ctx context.Context, basinName, token string, lingerMs, maxRecs int) (*S2Storage, error) {
+// NewS2Storage creates an S2Storage for the given basin. Connectivity errors
+// are surfaced lazily on the first Append call, so this constructor succeeds
+// even with append-only tokens that lack streams:list permission.
+func NewS2Storage(basinName, token string, lingerMs, maxRecs int) (*S2Storage, error) {
 	client := s2.New(token, nil)
 	basin := client.Basin(basinName)
-
-	limit := 1
-	if _, err := basin.Streams.List(ctx, &s2.ListStreamsArgs{Limit: &limit}); err != nil {
-		return nil, fmt.Errorf("s2 connectivity probe failed for basin %q: %w", basinName, err)
-	}
 
 	return &S2Storage{
 		basin:    basin,
