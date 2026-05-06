@@ -27,7 +27,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	if body == nil || body.Type == "" {
 		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is required"}}, nil
 	}
-	if body.Type == events.SessionEnded || body.Type == events.EventsDropped {
+	if body.Type == events.SessionEnded || body.Type == events.EventsDropped || body.Type == events.EventsStorageError {
 		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is reserved"}}, nil
 	}
 
