@@ -43,20 +43,10 @@ func (w *EventsStorageWriter) Run(ctx context.Context) {
 		if result.Dropped > 0 {
 			slog.Warn("events_storage_writer: ring buffer overflow, events dropped",
 				"count", result.Dropped)
-			if ctx.Err() != nil {
-				return
-			}
-			dropData, _ := json.Marshal(map[string]uint64{"dropped": result.Dropped})
-			w.session.PublishUnfiltered(Event{
-				Type:     EventsDropped,
-				Category: CategorySystem,
-				Source:   Source{Kind: KindLocalProcess},
-				Data:     dropData,
-			})
 			continue
 		}
 		env := result.Envelope
-		if env.Event.Type == EventsStorageError || env.Event.Type == EventsDropped {
+		if env.Event.Type == EventsStorageError {
 			// Skip system error events to prevent feedback loops.
 			continue
 		}

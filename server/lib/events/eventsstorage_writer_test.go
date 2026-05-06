@@ -237,24 +237,14 @@ func TestEventsStorageWriter_SessionEndedForwarded(t *testing.T) {
 }
 
 func TestEventsStorageWriter_RingOverflow(t *testing.T) {
-	// Publish twice the ring capacity before starting the writer, so the writer
-	// will encounter result.Dropped > 0 on its first Read and take the overflow
-	// path (PublishUnfiltered an EventsStorageError system event).
-	//
-	// Cascade behaviour: each error event published by the writer advances
-	// latestSeq and oldest by 1, keeping nextSeq exactly 1 behind oldest on the
-	// next Read — creating an unbounded feedback loop. The loop terminates when
-	// session.Stop() clears the session ID, turning PublishUnfiltered into a
-	// no-op. Once no new events are injected the writer drains the ring, catches
-	// up to latest, blocks, sees ctx.Done(), and returns.
+	// Publish twice the ring capacity before starting the writer so the writer
+	// encounters result.Dropped > 0 on its first Read. After Fix 4 the writer
+	// only logs a warning and continues — no PublishUnfiltered feedback loop.
 	//
 	// Verifiable invariants:
-	//   (a) Run exits cleanly within the timeout (no panic, no goroutine leak).
-	//   (b) backend received fewer appends than events published — confirming that
-	//       drops occurred and the overflow path actually executed. Because error
-	//       events cycle through the ring and overwrite earlier entries before the
-	//       test reader can observe them, the overflow path is confirmed here via
-	//       the count discrepancy rather than by reading a specific error event.
+	//   (a) Run exits cleanly after context cancellation (no goroutine leak).
+	//   (b) backend received at most ringCap appends — the events that survived
+	//       the overflow and were available for the writer to drain.
 	const ringCap = 64
 	session, writer, backend := newWriterTest(t, ringCap)
 
@@ -264,21 +254,7 @@ func TestEventsStorageWriter_RingOverflow(t *testing.T) {
 		session.Publish(Event{Type: "ev", Category: CategoryConsole})
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		writer.Run(ctx)
-	}()
-
-	// Let the writer run briefly to hit the overflow path at least once,
-	// then stop the session (makes PublishUnfiltered a no-op, breaking the
-	// cascade) and cancel the context so Run can exit.
-	// A short fixed pause is acceptable here: the writer's log output
-	// ("ring buffer overflow, events dropped") is the observable proof that the
-	// overflow path ran; we just need to give the goroutine a scheduling window.
-	time.Sleep(5 * time.Millisecond)
-	session.Stop()
+	cancel, done := startWriter(writer)
 	cancel()
 
 	select {
@@ -287,12 +263,7 @@ func TestEventsStorageWriter_RingOverflow(t *testing.T) {
 		t.Fatal("Run did not return after context cancellation")
 	}
 
-	// Fewer appends than events published confirms drops occurred (overflow path ran).
-	calls := backend.recorded()
-	assert.Less(t, len(calls), published,
-		"backend should have received fewer appends than published events (overflow drops confirmed)")
-	// Sanity: no more than ringCap events could have survived the drop.
-	assert.LessOrEqual(t, len(calls), ringCap,
+	assert.LessOrEqual(t, len(backend.recorded()), ringCap,
 		"writer should not see more events than ring capacity")
 }
 
