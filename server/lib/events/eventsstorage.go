@@ -26,9 +26,10 @@ type EventsStorageWriter struct {
 }
 
 // NewEventsStorageWriter constructs a writer for the given storage.
-func NewEventsStorageWriter(session *CaptureSession, backend EventsStorage) *EventsStorageWriter {
-	return &EventsStorageWriter{session: session, eventsStorage: backend}
+func NewEventsStorageWriter(session *CaptureSession, eventsStorage EventsStorage) *EventsStorageWriter {
+	return &EventsStorageWriter{session: session, eventsStorage: eventsStorage}
 }
+
 
 // Run reads from the ring buffer until ctx is cancelled. It returns nil on
 // clean shutdown (ctx.Err()) and must not be called concurrently.

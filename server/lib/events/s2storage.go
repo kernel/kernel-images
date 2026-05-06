@@ -3,26 +3,22 @@ package events
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 
 	s2 "github.com/s2-streamstore/s2-sdk-go/s2"
 )
 
-// s2Producer bundles a Producer with its supporting session and tracks
-// in-flight ack goroutines so Close can drain cleanly.
+// s2Producer bundles a Producer with its supporting session.
 type s2Producer struct {
 	cancel   context.CancelFunc
 	ctx      context.Context
 	producer *s2.Producer
 	session  *s2.AppendSession
-	wg       sync.WaitGroup
 }
 
 func (p *s2Producer) close() {
 	_ = p.producer.Close()
-	p.wg.Wait()
 	_ = p.session.Close()
 	p.cancel()
 }
@@ -30,10 +26,10 @@ func (p *s2Producer) close() {
 // S2Storage is an EventsStorage backed by S2 append-only streams. One
 // producer is lazily created per capture session and evicted on session end.
 type S2Storage struct {
-	basin    *s2.BasinClient
-	lingerMs int
-	maxRecs  int
-	mu       sync.Mutex
+	basin     *s2.BasinClient
+	lingerMs  int
+	maxRecs   int
+	mu        sync.Mutex
 	producers map[string]*s2Producer
 }
 
@@ -45,9 +41,9 @@ func NewS2Storage(basinName, token string, lingerMs, maxRecs int) (*S2Storage, e
 	basin := client.Basin(basinName)
 
 	return &S2Storage{
-		basin:    basin,
-		lingerMs: lingerMs,
-		maxRecs:  maxRecs,
+		basin:     basin,
+		lingerMs:  lingerMs,
+		maxRecs:   maxRecs,
 		producers: make(map[string]*s2Producer),
 	}, nil
 }
@@ -84,8 +80,10 @@ func (s *S2Storage) getOrCreate(streamName string) (*s2Producer, error) {
 	return p, nil
 }
 
-// Append submits data to the named stream. The S2 batcher coalesces records
-// before flushing to the network; acks are handled asynchronously.
+// Append submits data to the named stream and waits for the S2 ack before
+// returning. The batcher coalesces records before flushing; Append blocks
+// until the batch is confirmed durable so the caller can rely on the nil
+// return value as a true durability signal.
 func (s *S2Storage) Append(ctx context.Context, streamName string, data []byte) error {
 	s.mu.Lock()
 	p, err := s.getOrCreate(streamName)
@@ -94,31 +92,23 @@ func (s *S2Storage) Append(ctx context.Context, streamName string, data []byte) 
 		return err
 	}
 
-	p.wg.Add(1)
 	fut, err := p.producer.Submit(s2.AppendRecord{Body: data})
 	if err != nil {
-		p.wg.Done()
 		return fmt.Errorf("s2: submit to %q: %w", streamName, err)
 	}
 
-	go func() {
-		defer p.wg.Done()
-		pendingAck, err := fut.Wait(p.ctx)
-		if err != nil {
-			slog.Warn("s2: ack wait failed", "stream", streamName, "err", err)
-			return
-		}
-		if _, err := pendingAck.Ack(p.ctx); err != nil {
-			slog.Warn("s2: ack failed", "stream", streamName, "err", err)
-		}
-	}()
-
+	pendingAck, err := fut.Wait(ctx)
+	if err != nil {
+		return fmt.Errorf("s2: ack wait for %q: %w", streamName, err)
+	}
+	if _, err := pendingAck.Ack(ctx); err != nil {
+		return fmt.Errorf("s2: ack for %q: %w", streamName, err)
+	}
 	return nil
 }
 
 // Remove drains and closes the producer for streamName, preventing unbounded
 // producer accumulation on long-running servers that cycle through sessions.
-// Called from the DELETE /events/capture_session handler after session teardown.
 func (s *S2Storage) Remove(streamName string) {
 	s.mu.Lock()
 	p, ok := s.producers[streamName]
