@@ -37,10 +37,13 @@ type Config struct {
 	DevToolsProxyAddr string `envconfig:"DEVTOOLS_PROXY_ADDR" default:""`
 
 	// S2 durable event storage. Both fields must be non-empty to enable the sink.
-	S2Basin           string `envconfig:"S2_BASIN"                default:""`
-	S2Token           string `envconfig:"S2_ACCESS_TOKEN"         default:""`
-	S2BatcherLingerMs int    `envconfig:"S2_BATCHER_LINGER_MS"    default:"100"`
-	S2BatcherMaxRecs  int    `envconfig:"S2_BATCHER_MAX_RECORDS"  default:"50"`
+	S2Basin string `envconfig:"S2_BASIN"        default:""`
+	S2Token string `envconfig:"S2_ACCESS_TOKEN" default:""`
+	// S2BatcherLingerMs and S2BatcherMaxRecs control the batcher's flush triggers.
+	// 100ms linger keeps event latency low for near-real-time replay; 50 records
+	// per batch keeps individual S2 append payloads small.
+	S2BatcherLingerMs int `envconfig:"S2_BATCHER_LINGER_MS"  default:"100"`
+	S2BatcherMaxRecs  int `envconfig:"S2_BATCHER_MAX_RECORDS" default:"50"`
 }
 
 // Load loads configuration from environment variables
