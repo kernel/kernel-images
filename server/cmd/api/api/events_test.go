@@ -81,7 +81,7 @@ func TestEventLifecycle(t *testing.T) {
 	// Verify session_ended arrives on the stream.
 	select {
 	case env := <-received:
-		assert.Equal(t, events.TypeSessionEnded, env.Event.Type)
+		assert.Equal(t, events.SessionEnded, env.Event.Type)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for session_ended")
 	}
