@@ -65,6 +65,10 @@ func (w *EventsStorageWriter) Run(ctx context.Context) {
 				Source:   Source{Kind: KindLocalProcess},
 				Data:     errData,
 			})
+		} else if env.Event.Type == SessionEnded {
+			if r, ok := w.eventsStorage.(sessionRemover); ok {
+				r.Remove(env.CaptureSessionID)
+			}
 		}
 	}
 }
