@@ -244,11 +244,11 @@ func (m *mockRecordManager) ListActiveRecorders(_ context.Context) []recorder.Re
 func (m *mockRecordManager) StopAll(_ context.Context) error                           { return nil }
 
 // newTestService builds an ApiService with minimal dependencies for capture session tests.
-// storageWriter is nil; the RemoveSession path (triggered by SessionEnded events via the
-// writer's Run loop) is not exercised here — it lives in eventsstorage_writer_test.go.
+// The RemoveSession path (triggered by SessionEnded events via the writer's Run loop) is
+// not exercised here — it lives in eventsstorage_writer_test.go.
 func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
-	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), newCaptureSession(t), nil, 0)
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), newCaptureSession(t), 0)
 	require.NoError(t, err)
 	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc

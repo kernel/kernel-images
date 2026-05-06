@@ -80,9 +80,8 @@ type ApiService struct {
 	// when multiple CDP fast-path resizes fire in quick succession.
 	xvfbResizeMu sync.Mutex
 
-	// CDP event pipeline, cdpMonitor, and optional S2 storage writer (nil if not configured).
+	// CDP event pipeline and cdpMonitor.
 	captureSession  *events.CaptureSession
-	storageWriter   *events.EventsStorageWriter
 	cdpMonitor      cdpMonitorController
 	monitorMu       sync.Mutex
 	lifecycleCtx    context.Context
@@ -91,7 +90,7 @@ type ApiService struct {
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
 
-// New constructs an ApiService. storageWriter may be nil when S2 storage is not configured.
+// New constructs an ApiService.
 func New(
 	recordManager recorder.RecordManager,
 	factory recorder.FFmpegRecorderFactory,
@@ -99,7 +98,6 @@ func New(
 	stz scaletozero.Controller,
 	nekoAuthClient *nekoclient.AuthClient,
 	captureSession *events.CaptureSession,
-	storageWriter *events.EventsStorageWriter, // nil if S2 storage is not configured
 	displayNum int,
 ) (*ApiService, error) {
 	switch {
@@ -129,7 +127,6 @@ func New(
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
 		captureSession:    captureSession,
-		storageWriter:     storageWriter,
 		cdpMonitor:        mon,
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
