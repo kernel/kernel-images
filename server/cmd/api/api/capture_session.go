@@ -77,7 +77,8 @@ func (s *ApiService) StopCaptureSession(_ context.Context, _ oapi.StopCaptureSes
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	if s.captureSession.ID() == "" {
+	sessionID := s.captureSession.ID()
+	if sessionID == "" {
 		return oapi.StopCaptureSession404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "no active capture session"}}, nil
 	}
 
@@ -87,6 +88,9 @@ func (s *ApiService) StopCaptureSession(_ context.Context, _ oapi.StopCaptureSes
 	// tear down asynchronously, leaving IsRunning briefly true.
 	resp := s.buildSessionResponse()
 	resp.Status = oapi.CaptureSessionStatusStopped
+	// Session cleanup (Remove on the S2 producer) happens automatically in
+	// EventsStorageWriter.Run when it processes the SessionEnded event, ensuring
+	// all pending writes are flushed before the producer is torn down.
 	s.captureSession.Stop()
 
 	return oapi.StopCaptureSession200JSONResponse(resp), nil
