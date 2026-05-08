@@ -171,7 +171,3 @@ func (s *CaptureSession) Stop() {
 	s.captureSessionID = ""
 }
 
-// Close releases resources held by the EventStream.
-func (s *CaptureSession) Close() error {
-	return s.es.Close()
-}

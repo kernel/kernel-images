@@ -93,7 +93,6 @@ func main() {
 
 	// Construct events pipeline
 	eventStream, err := events.NewEventStream(events.EventStreamConfig{
-		LogDir:       "/var/log/kernel",
 		RingCapacity: 1024,
 	})
 	if err != nil {
