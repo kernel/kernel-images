@@ -58,6 +58,13 @@ func main() {
 	prof := detectProfile()
 	logf("starting wrapper (profile=%s)", profileName(prof))
 
+	// Register signal handling early so a SIGTERM/SIGINT during the
+	// seconds-long startup window queues into the channel instead of
+	// triggering Go's default exit-immediately behavior. The handler
+	// goroutine is installed below, once supervisord is running.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
+
 	// /dev/shm: only mount when not running under Docker (Docker manages it).
 	if os.Getenv("WITHDOCKER") == "" {
 		_ = os.MkdirAll("/dev/shm", 0o1777)
@@ -123,6 +130,15 @@ func main() {
 	if err := supCmd.Start(); err != nil {
 		fatalf("supervisord start: %v", err)
 	}
+	// Install the shutdown goroutine now so it can clean up if a signal
+	// arrives during the readiness window. Any signal queued in `sigs`
+	// before this point gets picked up on the first iteration.
+	go func() {
+		<-sigs
+		logf("shutdown: stopping services")
+		_ = exec.Command("supervisorctl", "-c", supervisorConf, "stop", "all").Run()
+		_ = supCmd.Process.Signal(syscall.SIGTERM)
+	}()
 	waitForSocket(supervisorSock, 10*time.Second)
 
 	// Phase A: identity-free services. Chromium itself doesn't read any
@@ -184,7 +200,7 @@ func main() {
 	// post-fork (stop+start to force a re-read of refreshed envs).
 	phaseCStart := time.Now()
 	if isExecutable("/usr/local/bin/init-envoy.sh") {
-		runStream("envoy-init", "/usr/local/bin/init-envoy.sh")
+		runStreamFatal("envoy-init", "/usr/local/bin/init-envoy.sh")
 	}
 	restartAll("kernel-images-api")
 	phaseCDone := time.Now()
@@ -211,16 +227,6 @@ func main() {
 
 	// Re-enable scale-to-zero now that the hot path is up.
 	enableScaleToZero()
-
-	// Forward signals so cleanup runs and supervisord is taken down cleanly.
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigs
-		logf("shutdown: stopping services")
-		_ = exec.Command("supervisorctl", "-c", supervisorConf, "stop", "all").Run()
-		_ = supCmd.Process.Signal(syscall.SIGTERM)
-	}()
 
 	// Block on supervisord; container exits when it does.
 	if err := supCmd.Wait(); err != nil {

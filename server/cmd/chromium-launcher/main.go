@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
 func main() {
@@ -45,7 +46,9 @@ func main() {
 	// Wait for the X server. The wrapper starts chromium in parallel with
 	// xorg/xvfb, so the display socket may not be ready yet — without this
 	// gate chromium would fail on connect and supervisord would restart us.
-	waitForX(":1", 20*time.Second)
+	if d := x11.WaitForDisplay(":1", 20*time.Second); d >= 20*time.Second {
+		fmt.Fprintf(os.Stderr, "warning: X display :1 not responsive after %s\n", d)
+	}
 
 	baseFlags := os.Getenv("CHROMIUM_FLAGS")
 	runtimeTokens, err := chromiumflags.ReadOptionalFlagFile(*runtimeFlagsPath)
@@ -128,30 +131,6 @@ func execLookPath(file string) (string, error) {
 		return file, nil
 	}
 	return exec.LookPath(file)
-}
-
-// waitForX blocks until the X server is reachable on display :N. We try
-// both the named unix socket (Xorg, headful) and the abstract namespace
-// socket (Xvfb runs with -nolisten unix, which disables the named socket
-// but leaves the abstract one). Mirrors the wrapper's check so chromium
-// can be started in parallel with the X server without failing on connect.
-func waitForX(display string, timeout time.Duration) {
-	num := strings.TrimPrefix(display, ":")
-	named := "/tmp/.X11-unix/X" + num
-	abstract := "@/tmp/.X11-unix/X" + num
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if c, err := net.DialTimeout("unix", named, 200*time.Millisecond); err == nil {
-			_ = c.Close()
-			return
-		}
-		if c, err := net.DialTimeout("unix", abstract, 200*time.Millisecond); err == nil {
-			_ = c.Close()
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	fmt.Fprintf(os.Stderr, "warning: X display %s not responsive after %s\n", display, timeout)
 }
 
 // waitForPort waits until the given port is available for binding on IPv4.

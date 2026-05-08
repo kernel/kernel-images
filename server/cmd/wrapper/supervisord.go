@@ -96,11 +96,20 @@ func tailFile(path string) {
 	}
 }
 
-func runStream(label, name string, args ...string) {
+func runStream(label, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = prefixWriter{label: label, w: os.Stdout}
 	cmd.Stderr = prefixWriter{label: label, w: os.Stderr}
-	_ = cmd.Run()
+	return cmd.Run()
+}
+
+// runStreamFatal is runStream + fatalf on non-zero exit. Use for scripts the
+// boot path cannot proceed without (init-envoy). The old wrapper.sh ran under
+// `set -o errexit`, so these were already fatal there.
+func runStreamFatal(label, name string, args ...string) {
+	if err := runStream(label, name, args...); err != nil {
+		fatalf("%s failed: %v", label, err)
+	}
 }
 
 type prefixWriter struct {
