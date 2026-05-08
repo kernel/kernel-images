@@ -128,26 +128,12 @@ func main() {
 	}
 	waitForSocket(supervisorSock, 10*time.Second)
 
-	// Envoy cert work (openssl, update-ca-certificates, certutil) is the
-	// only piece of Envoy bring-up that's identity-free, and it has to land
-	// before chromium starts because chromium reads the system CA trust
-	// store at process start. Run it concurrently with Phase A so the
-	// shell-out cost overlaps xorg/dbus/chromedriver bring-up. Template
-	// render and `supervisorctl start envoy` happen later in Phase C —
-	// those depend on INST_NAME/METRO_NAME/XDS_SERVER/KERNEL_INSTANCE_JWT.
-	envoyCertsDone := make(chan struct{})
-	if isExecutable("/usr/local/bin/init-envoy.sh") {
-		go func() {
-			defer close(envoyCertsDone)
-			runStream("envoy-init", "/usr/local/bin/init-envoy.sh", "certs")
-		}()
-	} else {
-		close(envoyCertsDone)
-	}
-
 	// Phase A: identity-free services with no X/dbus dependency. chromedriver
 	// listens on 9225 immediately and only attaches to chromium on session
-	// creation, so it can come up alongside the display stack.
+	// creation, so it can come up alongside the display stack. The envoy
+	// forward-proxy CA cert is baked into the image at build time (see
+	// shared/envoy/bake-certs.sh), so chromium trusts it on first start with
+	// no runtime cert work to wait on.
 	xServer := "xorg"
 	if prof == profileHeadless {
 		xServer = "xvfb"
@@ -161,13 +147,10 @@ func main() {
 	// parallel with chromium.
 	_ = os.WriteFile(filepath.Join(supervisordLogD, "chromium"), nil, 0o644)
 
-	// Gate chromium on the envoy cert being installed in the trust store.
-	<-envoyCertsDone
-
 	// Phase B: identity-free X/dbus consumers. Chromium itself doesn't read
-	// any per-instance identity envs — it just needs the envoy cert (Phase A)
-	// in trust. mutter is the compositor on headful; neko is the WebRTC
-	// streamer when ENABLE_WEBRTC=true.
+	// any per-instance identity envs — it just needs the envoy cert (baked
+	// into the image) in trust. mutter is the compositor on headful; neko is
+	// the WebRTC streamer when ENABLE_WEBRTC=true.
 	webrtc := prof == profileHeadful && os.Getenv("ENABLE_WEBRTC") == "true"
 	var phaseB []string
 	if prof == profileHeadful {
@@ -203,7 +186,7 @@ func main() {
 	// so the same code path works for boot (start a stopped service) and
 	// post-fork (stop+start to force a re-read of refreshed envs).
 	if isExecutable("/usr/local/bin/init-envoy.sh") {
-		runStream("envoy-init", "/usr/local/bin/init-envoy.sh", "config")
+		runStream("envoy-init", "/usr/local/bin/init-envoy.sh")
 	}
 	restartAll("kernel-images-api")
 

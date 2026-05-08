@@ -240,6 +240,12 @@ COPY shared/envoy/bootstrap.yaml /etc/envoy/templates/bootstrap.yaml
 COPY shared/envoy/init-envoy.sh /usr/local/bin/init-envoy.sh
 RUN chmod +x /usr/local/bin/init-envoy.sh
 
+# Bake the envoy forward-proxy CA cert into the image (system trust store +
+# NSS DB for both root and kernel users). See bake-certs.sh for the security
+# rationale on sharing the cert across containers built from this image.
+COPY shared/envoy/bake-certs.sh /usr/local/bin/bake-certs.sh
+RUN chmod +x /usr/local/bin/bake-certs.sh && /usr/local/bin/bake-certs.sh && rm /usr/local/bin/bake-certs.sh
+
 # Copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
 COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launcher

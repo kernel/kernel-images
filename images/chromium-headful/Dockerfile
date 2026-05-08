@@ -387,4 +387,10 @@ RUN esbuild /tmp/playwright-daemon.ts \
 
 RUN useradd -m -s /bin/bash kernel
 
+# Bake the envoy forward-proxy CA cert into the image (system trust store +
+# NSS DB for both root and kernel users). See bake-certs.sh for the security
+# rationale on sharing the cert across containers built from this image.
+COPY shared/envoy/bake-certs.sh /usr/local/bin/bake-certs.sh
+RUN chmod +x /usr/local/bin/bake-certs.sh && /usr/local/bin/bake-certs.sh && rm /usr/local/bin/bake-certs.sh
+
 ENTRYPOINT [ "/wrapper" ]
