@@ -24,6 +24,7 @@ type CaptureSession struct {
 	ring             *ringBuffer
 	files            *fileWriter
 	seq              uint64
+	sessionStartSeq  uint64 // seq at the time the current session started
 	captureSessionID string
 	categories       map[EventCategory]struct{}
 	createdAt        time.Time
@@ -56,10 +57,9 @@ func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
 	}, nil
 }
 
-// Start sets the capture session ID and applies the given config. It resets
-// the sequence counter so each session starts at seq 1. Sequence numbers are
-// scoped to the active session; Last-Event-ID values from a previous session
-// are not valid for reconnecting to a new one.
+// Start sets the capture session ID and applies the given config. Sequence
+// numbers are process-monotonic and do not reset between sessions; a
+// Last-Event-ID from any previous session is valid for resuming the stream.
 // The fileWriter is intentionally not rotated: events from different sessions
 // are interleaved in the same per-category JSONL files and distinguished by
 // their envelope's capture_session_id.
@@ -67,9 +67,8 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.captureSessionID = captureSessionID
-	s.seq = 0
+	s.sessionStartSeq = s.seq
 	s.createdAt = time.Now()
-	s.ring.reset()
 	cats := cfg.Categories
 	if len(cats) == 0 {
 		cats = allCategories
@@ -154,6 +153,15 @@ func (s *CaptureSession) Seq() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.seq
+}
+
+// SessionStartSeq returns the sequence number at which the current session
+// started. Fresh SSE connections with no Last-Event-ID should begin here so
+// they see only the current session's events.
+func (s *CaptureSession) SessionStartSeq() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionStartSeq
 }
 
 // Config returns the current capture configuration.

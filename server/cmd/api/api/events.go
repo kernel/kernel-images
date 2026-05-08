@@ -83,12 +83,12 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 		return oapi.StreamEvents400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no active capture session"}}, nil
 	}
 
-	afterSeq := uint64(0)
+	// Default to the start of the current session so fresh connections only see
+	// current-session events. Seqs are process-monotonic, so a Last-Event-ID
+	// from any previous session is valid and resumes correctly from that point.
+	afterSeq := s.captureSession.SessionStartSeq()
 	if id := req.Params.LastEventID; id != nil && *id != "" {
-		// Invalid/non-numeric values fall back to 0, replaying all events from the start.
-		// Note: seq is per capture session and resets on each Start(). A Last-Event-ID
-		// from a previous session may silently overlap with the current session's seqs.
-		if n, err := strconv.ParseUint(*id, 10, 64); err == nil {
+		if n, err := strconv.ParseUint(*id, 10, 64); err == nil && n > 0 {
 			afterSeq = n
 		}
 	}

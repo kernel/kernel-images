@@ -489,6 +489,33 @@ func TestCaptureSession(t *testing.T) {
 		}
 	})
 
+	t.Run("seq_continues_across_sessions", func(t *testing.T) {
+		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: t.TempDir(), RingCapacity: 100})
+		require.NoError(t, err)
+		t.Cleanup(func() { p.Close() })
+
+		p.Start("session-1", CaptureConfig{})
+		p.Publish(cdpEvent("ev.one", CategorySystem))
+		p.Publish(cdpEvent("ev.two", CategorySystem))
+		// seqs 1 and 2 belong to session-1
+
+		p.Start("session-2", CaptureConfig{})
+		p.Publish(cdpEvent("ev.three", CategorySystem))
+		// seq 3 belongs to session-2
+
+		assert.Equal(t, uint64(2), p.SessionStartSeq(), "session-2 starts after seq 2")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		// Reconnect after session-1's last seq — should receive session-2's event.
+		reader := p.NewReader(2)
+		env := readEnvelope(t, reader, ctx)
+		assert.Equal(t, uint64(3), env.Seq)
+		assert.Equal(t, "session-2", env.CaptureSessionID)
+		assert.Equal(t, "ev.three", env.Event.Type)
+	})
+
 	t.Run("publish_increments_seq", func(t *testing.T) {
 		p, _ := newCaptureSession(t)
 		reader := p.NewReader(0)

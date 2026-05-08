@@ -1307,9 +1307,8 @@ paths:
         from the buffer before the client could read them; its `id` is 0.
         A `session_ended` frame is sent when the session stops; the connection
         closes after that frame. Returns 400 if no capture session is active.
-        Sequence numbers are scoped to the active capture session and reset
-        when a new session is started; callers should reconnect without
-        `Last-Event-ID` (or with `Last-Event-ID: 0`) after a session change.
+        Sequence numbers are process-monotonic and do not reset between sessions;
+        a Last-Event-ID from any previous session is valid for resuming the stream.
       operationId: streamEvents
       parameters:
         - in: header
@@ -1318,11 +1317,10 @@ paths:
             type: string
           required: false
           description: >
-            Resume after this sequence number within the current capture
-            session. Omit or send 0 to start from the oldest buffered event.
-            Sequence numbers reset to 0 when a new capture session is started;
-            a value from a previous session is not meaningful here and may
-            cause the stream to miss events silently.
+            Resume after this sequence number. Omit or send 0 to start from
+            the beginning of the current session. Sequence numbers are
+            process-monotonic, so a value from a previous session resumes
+            correctly from that point.
       responses:
         "200":
           description: Live SSE stream of capture-session events.
@@ -1483,8 +1481,8 @@ components:
           type: integer
           format: int64
           description: >-
-            Monotonically increasing sequence number (last published).
-            Resets to 0 at the start of each capture session.
+            Process-monotonic sequence number of the last published event.
+            Does not reset between sessions.
           minimum: 0
         created_at:
           type: string
