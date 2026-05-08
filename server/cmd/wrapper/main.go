@@ -128,24 +128,24 @@ func main() {
 	}
 	waitForSocket(supervisorSock, 10*time.Second)
 
-	// Envoy bootstrap: cert generation, NSS DB, template render, and
-	// `supervisorctl start envoy`. Run concurrently with Phase A so the
-	// shell-out work (openssl, certutil, update-ca-certificates) overlaps
-	// xorg/dbus/chromedriver bring-up. Phase B (chromium) gates on this
-	// because chromium reads the system CA trust store at process start
-	// and needs the envoy self-signed cert in place. The envoy listener
-	// itself (port 3128) is probed in waitAllReady, not here.
-	envoyDone := make(chan struct{})
+	// Envoy cert work (openssl, update-ca-certificates, certutil) is the
+	// only piece of Envoy bring-up that's identity-free, and it has to land
+	// before chromium starts because chromium reads the system CA trust
+	// store at process start. Run it concurrently with Phase A so the
+	// shell-out cost overlaps xorg/dbus/chromedriver bring-up. Template
+	// render and `supervisorctl start envoy` happen later in Phase C —
+	// those depend on INST_NAME/METRO_NAME/XDS_SERVER/KERNEL_INSTANCE_JWT.
+	envoyCertsDone := make(chan struct{})
 	if isExecutable("/usr/local/bin/init-envoy.sh") {
 		go func() {
-			defer close(envoyDone)
-			runStream("envoy-init", "/usr/local/bin/init-envoy.sh")
+			defer close(envoyCertsDone)
+			runStream("envoy-init", "/usr/local/bin/init-envoy.sh", "certs")
 		}()
 	} else {
-		close(envoyDone)
+		close(envoyCertsDone)
 	}
 
-	// Phase A: services with no X/dbus/chromium dependency. chromedriver
+	// Phase A: identity-free services with no X/dbus dependency. chromedriver
 	// listens on 9225 immediately and only attaches to chromium on session
 	// creation, so it can come up alongside the display stack.
 	xServer := "xorg"
@@ -161,24 +161,51 @@ func main() {
 	// parallel with chromium.
 	_ = os.WriteFile(filepath.Join(supervisordLogD, "chromium"), nil, 0o644)
 
-	// Gate chromium on envoy cert/template work being done.
-	<-envoyDone
+	// Gate chromium on the envoy cert being installed in the trust store.
+	<-envoyCertsDone
 
-	// Phase B: everything that needs X+dbus, started in a single supervisorctl
-	// invocation. On headful, mutter is the compositor and neko/api come up
-	// alongside chromium so their bring-up overlaps with chromium boot rather
-	// than trailing CDP. Headless has no compositor and no neko.
+	// Phase B: identity-free X/dbus consumers. Chromium itself doesn't read
+	// any per-instance identity envs — it just needs the envoy cert (Phase A)
+	// in trust. mutter is the compositor on headful; neko is the WebRTC
+	// streamer when ENABLE_WEBRTC=true.
 	webrtc := prof == profileHeadful && os.Getenv("ENABLE_WEBRTC") == "true"
 	var phaseB []string
 	if prof == profileHeadful {
-		phaseB = []string{"mutter", "chromium", "kernel-images-api"}
+		phaseB = []string{"mutter", "chromium"}
 		if webrtc {
 			phaseB = append(phaseB, "neko")
 		}
 	} else {
-		phaseB = []string{"chromium", "kernel-images-api"}
+		phaseB = []string{"chromium"}
 	}
 	startAll(phaseB...)
+
+	// FORK HOOK:
+	//   When this binary runs as a forked snapshot restore, the per-fork
+	//   identity envs (INST_NAME, METRO_NAME, XDS_SERVER, KERNEL_INSTANCE_JWT,
+	//   plus any future per-tenant secrets) won't be set yet at this point —
+	//   the snapshot was taken from a different instance. Insert the
+	//   following sequence here once the env-delivery channel exists:
+	//     1. Block on the host-pushed env bundle (vsock socket, virtio-fs
+	//        drop file, or whatever transport the control plane settles on).
+	//     2. Apply the bundle to this process's environ via os.Setenv so
+	//        Phase C below picks them up via the existing $VAR expansion in
+	//        init-envoy.sh and the supervisorctl-spawned services inherit
+	//        them.
+	//     3. Phase C uses `supervisorctl restart envoy` (idempotent — start
+	//        on first boot, stop+start on a re-render after fork) so a
+	//        restored snapshot drops its stale identity cleanly.
+	//   Boot path keeps running through unchanged: the wait simply no-ops
+	//   when there's no fork bundle to receive.
+
+	// Phase C: identity-bound. Render envoy bootstrap with INST_NAME/JWT/etc
+	// and (re)start envoy + kernel-images-api. Both services use `restart`
+	// so the same code path works for boot (start a stopped service) and
+	// post-fork (stop+start to force a re-read of refreshed envs).
+	if isExecutable("/usr/local/bin/init-envoy.sh") {
+		runStream("envoy-init", "/usr/local/bin/init-envoy.sh", "config")
+	}
+	restartAll("kernel-images-api")
 
 	// Wait for the union of caller-visible ready signals. Each probe runs
 	// concurrently and logs as soon as its target is reachable.
@@ -219,10 +246,22 @@ func main() {
 // supervisorctl once (it accepts multiple args) so we don't pay python
 // cold-start costs per service.
 func startAll(progs ...string) {
+	supervisorctl("start", progs...)
+}
+
+// restartAll is the start-or-stop+start variant. It's used for services
+// that may already be running from a snapshot restore (post-fork, see the
+// FORK HOOK in main) so they pick up refreshed envs cleanly. supervisorctl
+// `restart` is a no-op stop on cold programs followed by a normal start.
+func restartAll(progs ...string) {
+	supervisorctl("restart", progs...)
+}
+
+func supervisorctl(verb string, progs ...string) {
 	if len(progs) == 0 {
 		return
 	}
-	args := append([]string{"-c", supervisorConf, "start"}, progs...)
+	args := append([]string{"-c", supervisorConf, verb}, progs...)
 	cmd := exec.Command("supervisorctl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
