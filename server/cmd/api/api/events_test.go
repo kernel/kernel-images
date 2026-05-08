@@ -56,7 +56,7 @@ func TestEventLifecycle(t *testing.T) {
 
 	// Publish an event.
 	resp, err := svc.PublishEvent(ctx, oapi.PublishEventRequestObject{
-		Body: &oapi.Event{Type: "test.event"},
+		Body: &oapi.PublishEventRequest{Type: "test.event"},
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.PublishEvent200Response{}, resp)

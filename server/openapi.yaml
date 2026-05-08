@@ -1280,15 +1280,14 @@ paths:
       description: >
         Injects an event into the active capture session's event stream.
         The event is assigned a monotonically increasing sequence number and
-        fanned out to all open stream connections. Returns 400 if no capture
-        session is active.
+        fanned out to all open stream connections.
       operationId: publishEvent
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/Event"
+              $ref: "#/components/schemas/PublishEventRequest"
       responses:
         "200":
           description: Event accepted and published
@@ -1386,6 +1385,34 @@ components:
           type: object
           additionalProperties:
             type: string
+      additionalProperties: false
+    PublishEventRequest:
+      type: object
+      description: Request body for publishing an event into the active capture session.
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          description: Event type identifier.
+        category:
+          type: string
+          description: >
+            Event category. Defaults to "system" when omitted.
+            The value "kernel_api" for source.kind is reserved for server-generated events.
+          enum:
+            - console
+            - network
+            - page
+            - interaction
+            - liveview
+            - captcha
+            - system
+          default: system
+        source:
+          $ref: "#/components/schemas/EventSource"
+        data:
+          description: Capture Session Event Payload
       additionalProperties: false
     CaptureConfig:
       type: object

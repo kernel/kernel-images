@@ -32,9 +32,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 
 	ev := events.Event{Type: body.Type}
 
-	if body.Ts != nil {
-		ev.Ts = *body.Ts
-	}
+	ev.Ts = time.Now().UnixMicro()
 	if body.Category != nil {
 		cat := events.EventCategory(*body.Category)
 		if !events.ValidCategory(cat) {
@@ -45,9 +43,13 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 		ev.Category = events.CategorySystem
 	}
 
-	// Enforce source.kind = KindKernelAPI so callers can't spoof the origin.
-	ev.Source.Kind = events.KindKernelAPI
 	if body.Source != nil {
+		if body.Source.Kind != nil {
+			if *body.Source.Kind == oapi.KernelApi {
+				return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source.kind kernel_api is reserved for server-generated events"}}, nil
+			}
+			ev.Source.Kind = events.SourceKind(*body.Source.Kind)
+		}
 		if body.Source.Event != nil {
 			ev.Source.Event = *body.Source.Event
 		}
