@@ -1333,7 +1333,7 @@ paths:
           content:
             text/event-stream:
               schema:
-                type: string
+                $ref: "#/components/schemas/PublishedEnvelope"
         "400":
           $ref: "#/components/responses/BadRequestError"
 components:
