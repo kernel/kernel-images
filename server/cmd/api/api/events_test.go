@@ -59,12 +59,17 @@ func TestEventLifecycle(t *testing.T) {
 		Body: &oapi.PublishEventRequest{Type: "test.event"},
 	})
 	require.NoError(t, err)
-	assert.IsType(t, oapi.PublishEvent200Response{}, resp)
+	r200pub, ok := resp.(oapi.PublishEvent200JSONResponse)
+	require.True(t, ok, "expected 200 JSON response")
+	assert.Equal(t, "test.event", r200pub.Event.Type)
+	assert.Greater(t, r200pub.Seq, int64(0))
+	assert.NotEmpty(t, r200pub.CaptureSessionId)
 
-	// Verify the published event arrives on the stream.
+	// Verify the published event arrives on the stream with the same seq.
 	select {
 	case env := <-received:
 		assert.Equal(t, "test.event", env.Event.Type)
+		assert.Equal(t, r200pub.Seq, int64(env.Seq))
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for test.event")
 	}

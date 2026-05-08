@@ -67,8 +67,11 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 		ev.Data = json.RawMessage(data)
 	}
 
-	s.captureSession.PublishUnfiltered(ev)
-	return oapi.PublishEvent200Response{}, nil
+	env := s.captureSession.PublishUnfiltered(ev)
+	if env.CaptureSessionID == "" {
+		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no active capture session"}}, nil
+	}
+	return oapi.PublishEvent200JSONResponse(buildEnvelopeResponse(env)), nil
 }
 
 // StreamEvents handles GET /events/stream.
@@ -147,6 +150,41 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 
 	headers := oapi.StreamEvents200ResponseHeaders{XSSEContentType: "application/json"}
 	return oapi.StreamEvents200TexteventStreamResponse{Body: pr, Headers: headers}, nil
+}
+
+func buildEnvelopeResponse(env events.Envelope) oapi.PublishedEnvelope {
+	cat := oapi.EventCategory(env.Event.Category)
+	respEvent := oapi.Event{
+		Ts:       &env.Event.Ts,
+		Type:     env.Event.Type,
+		Category: &cat,
+		Data:     env.Event.Data,
+	}
+	if env.Event.Truncated {
+		t := true
+		respEvent.Truncated = &t
+	}
+	src := env.Event.Source
+	if src.Kind != "" || src.Event != "" || src.Metadata != nil {
+		s := &oapi.EventSource{}
+		if src.Kind != "" {
+			kind := oapi.EventSourceKind(src.Kind)
+			s.Kind = &kind
+		}
+		if src.Event != "" {
+			s.Event = &src.Event
+		}
+		if src.Metadata != nil {
+			m := map[string]string(src.Metadata)
+			s.Metadata = &m
+		}
+		respEvent.Source = s
+	}
+	return oapi.PublishedEnvelope{
+		CaptureSessionId: env.CaptureSessionID,
+		Seq:              int64(env.Seq),
+		Event:            respEvent,
+	}
 }
 
 // writeEnvelopeFrame writes a single SSE frame. If seq is non-nil it is

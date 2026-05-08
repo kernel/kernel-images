@@ -80,8 +80,8 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	}
 }
 
-// publishLocked is the core publish path. Requires s.mu held and a captureSessionID
-func (s *CaptureSession) publishLocked(ev Event) {
+// publishLocked is the core publish path. Requires s.mu held and a captureSessionID.
+func (s *CaptureSession) publishLocked(ev Event) Envelope {
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
 	}
@@ -101,6 +101,7 @@ func (s *CaptureSession) publishLocked(ev Event) {
 		}
 	}
 	s.ring.publish(env)
+	return env
 }
 
 // Publish wraps ev in an Envelope, truncates if needed, then writes to
@@ -126,13 +127,14 @@ func (s *CaptureSession) Publish(ev Event) {
 // PublishUnfiltered publishes ev without applying the category filter. Use for
 // externally-initiated events (e.g. API callers) that must not be silently
 // dropped by capture preferences set by the session owner.
-func (s *CaptureSession) PublishUnfiltered(ev Event) {
+// Returns the assigned Envelope, or a zero Envelope if no session is active.
+func (s *CaptureSession) PublishUnfiltered(ev Event) Envelope {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.captureSessionID == "" {
-		return
+		return Envelope{}
 	}
-	s.publishLocked(ev)
+	return s.publishLocked(ev)
 }
 
 // NewReader returns a Reader positioned at the start of the ring buffer.

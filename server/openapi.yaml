@@ -1291,6 +1291,10 @@ paths:
       responses:
         "200":
           description: Event accepted and published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishedEnvelope"
         "400":
           $ref: "#/components/responses/BadRequestError"
   /events/stream:
@@ -1413,6 +1417,28 @@ components:
           $ref: "#/components/schemas/EventSource"
         data:
           description: Capture Session Event Payload
+      additionalProperties: false
+    PublishedEnvelope:
+      type: object
+      description: The envelope assigned to a successfully published event.
+      required:
+        - capture_session_id
+        - seq
+        - event
+      properties:
+        capture_session_id:
+          type: string
+          description: ID of the capture session the event was published into.
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Monotonically increasing sequence number assigned to this event
+            within the current capture session. Use with Last-Event-ID to
+            resume the SSE stream from this point.
+        event:
+          $ref: "#/components/schemas/Event"
       additionalProperties: false
     CaptureConfig:
       type: object
