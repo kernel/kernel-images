@@ -1375,7 +1375,8 @@ components:
       properties:
         kind:
           type: string
-          description: Source kind.
+          description: >
+            Source kind. "kernel_api" is reserved for server-generated events.
           enum:
             - cdp
             - kernel_api
@@ -1399,9 +1400,7 @@ components:
           description: Event type identifier.
         category:
           type: string
-          description: >
-            Event category. Defaults to "system" when omitted.
-            The value "kernel_api" for source.kind is reserved for server-generated events.
+          description: Event category.
           enum:
             - console
             - network

@@ -13,13 +13,11 @@ type EventStream struct {
 	ring *ringBuffer
 }
 
-// EventStreamConfig holds the parameters for creating an EventStream.
 type EventStreamConfig struct {
 	// RingCapacity is the number of envelopes the ring buffer holds.
 	RingCapacity int
 }
 
-// NewEventStream creates an EventStream.
 func NewEventStream(cfg EventStreamConfig) (*EventStream, error) {
 	rb, err := newRingBuffer(cfg.RingCapacity)
 	if err != nil {
