@@ -306,13 +306,14 @@ func newMockNekoClient(t *testing.T) *nekoclient.AuthClient {
 
 func newCaptureSession(t *testing.T) *events.CaptureSession {
 	t.Helper()
-	cs, err := events.NewCaptureSession(events.CaptureSessionConfig{
+	es, err := events.NewEventStream(events.EventStreamConfig{
 		LogDir:       t.TempDir(),
 		RingCapacity: 64,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	cs := events.NewCaptureSession(es)
 	t.Cleanup(func() { cs.Close() })
 	return cs
 }

@@ -450,8 +450,9 @@ func TestCaptureSession(t *testing.T) {
 	newCaptureSession := func(t *testing.T) (*CaptureSession, string) {
 		t.Helper()
 		dir := t.TempDir()
-		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: dir, RingCapacity: 100})
+		es, err := NewEventStream(EventStreamConfig{LogDir: dir, RingCapacity: 100})
 		require.NoError(t, err)
+		p := NewCaptureSession(es)
 		p.Start("test-session", CaptureConfig{})
 		t.Cleanup(func() { p.Close() })
 		return p, dir
@@ -462,8 +463,9 @@ func TestCaptureSession(t *testing.T) {
 		const eventsEach = 50
 		const total = goroutines * eventsEach
 
-		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: t.TempDir(), RingCapacity: total})
+		es, err := NewEventStream(EventStreamConfig{LogDir: t.TempDir(), RingCapacity: total})
 		require.NoError(t, err)
+		p := NewCaptureSession(es)
 		p.Start("test-concurrent", CaptureConfig{})
 		t.Cleanup(func() { p.Close() })
 		reader := p.NewReader(0)
@@ -490,8 +492,9 @@ func TestCaptureSession(t *testing.T) {
 	})
 
 	t.Run("seq_continues_across_sessions", func(t *testing.T) {
-		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: t.TempDir(), RingCapacity: 100})
+		es, err := NewEventStream(EventStreamConfig{LogDir: t.TempDir(), RingCapacity: 100})
 		require.NoError(t, err)
+		p := NewCaptureSession(es)
 		t.Cleanup(func() { p.Close() })
 
 		p.Start("session-1", CaptureConfig{})

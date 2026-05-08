@@ -1,8 +1,6 @@
 package events
 
 import (
-	"fmt"
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -10,64 +8,41 @@ import (
 // CaptureConfig holds caller-supplied capture preferences. All fields are
 // optional; zero values mean "use server defaults" (all categories).
 type CaptureConfig struct {
-	// Categories limits which event categories are captured
-	// nil represents all categories.
+	// Categories limits which event categories are captured.
+	// nil or empty includes all categories.
 	Categories []EventCategory
 }
 
-// CaptureSession wraps events in envelopes and fans them out to a fileWriter
-// Reusable: call Start with a new ID to begin a new session; call Stop to end
-// the current session without closing the underlying writers. Close tears down
-// file descriptors and should only be called during server shutdown.
+// CaptureSession manages a capture session against a shared EventStream.
+// It is responsible for (a) category-filtering Publish calls and (b) tracking
+// session-scoped metadata (ID, config, timestamps).
 type CaptureSession struct {
+	es               *EventStream
 	mu               sync.Mutex
-	ring             *ringBuffer
-	files            *fileWriter
-	seq              uint64
-	sessionStartSeq  uint64 // seq at the time the current session started
 	captureSessionID string
+	sessionStartSeq  uint64
 	categories       map[EventCategory]struct{}
 	createdAt        time.Time
 }
 
-// CaptureSessionConfig holds the parameters for creating a CaptureSession.
-type CaptureSessionConfig struct {
-	LogDir string
-	// RingCapacity is the number of envelopes the in-memory ring buffer holds.
-	RingCapacity int
-}
-
-func NewCaptureSession(cfg CaptureSessionConfig) (*CaptureSession, error) {
-	rb, err := newRingBuffer(cfg.RingCapacity)
-	if err != nil {
-		return nil, fmt.Errorf("capture session: %w", err)
-	}
-	fw, err := newFileWriter(cfg.LogDir)
-	if err != nil {
-		return nil, fmt.Errorf("capture session: %w", err)
-	}
+func NewCaptureSession(es *EventStream) *CaptureSession {
 	cats := make(map[EventCategory]struct{}, len(allCategories))
 	for _, c := range allCategories {
 		cats[c] = struct{}{}
 	}
-	return &CaptureSession{
-		ring:       rb,
-		files:      fw,
-		categories: cats,
-	}, nil
+	return &CaptureSession{es: es, categories: cats}
 }
 
-// Start sets the capture session ID and applies the given config. Sequence
+// Start begins a new capture session with the given ID and config. Sequence
 // numbers are process-monotonic and do not reset between sessions; a
-// Last-Event-ID from any previous session is valid for resuming the stream.
-// The fileWriter is intentionally not rotated: events from different sessions
-// are interleaved in the same per-category JSONL files and distinguished by
-// their envelope's capture_session_id.
+// Last-Event-ID from any previous session is valid for resuming the SSE stream.
+// Events from different sessions are interleaved in the same per-category JSONL
+// files and distinguished by their envelope's captureSessionID.
 func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.captureSessionID = captureSessionID
-	s.sessionStartSeq = s.seq
+	s.sessionStartSeq = s.es.Seq()
 	s.createdAt = time.Now()
 	cats := cfg.Categories
 	if len(cats) == 0 {
@@ -79,54 +54,33 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	}
 }
 
-// publishLocked is the core publish path. Requires s.mu held and a captureSessionID.
+// publishLocked builds an envelope and forwards it to the EventStream.
+// Requires s.mu to be held.
 func (s *CaptureSession) publishLocked(ev Event) Envelope {
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
 	}
-	s.seq++
-	env := Envelope{
+	return s.es.publish(Envelope{
 		CaptureSessionID: s.captureSessionID,
-		Seq:              s.seq,
 		Event:            ev,
-	}
-	env, data := truncateIfNeeded(env)
-	if data == nil {
-		slog.Error("capture_session: marshal failed, skipping file write", "seq", env.Seq, "category", env.Event.Category)
-	} else {
-		filename := string(env.Event.Category) + ".log"
-		if err := s.files.Write(filename, data); err != nil {
-			slog.Error("capture_session: file write failed", "seq", env.Seq, "category", env.Event.Category, "err", err)
-		}
-	}
-	s.ring.publish(env)
-	return env
+	})
 }
 
-// Publish wraps ev in an Envelope, truncates if needed, then writes to
-// fileWriter (durable) before RingBuffer (in-memory fan-out).
+// Publish applies the category filter then forwards ev to the EventStream.
 func (s *CaptureSession) Publish(ev Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	// No active session, drop silently. This can happen when events
-	// arrive between Stop() and producers noticing, or before Start().
 	if s.captureSessionID == "" {
 		return
 	}
-
-	// Drop events whose category is outside the configured set.
 	if _, ok := s.categories[ev.Category]; !ok {
 		return
 	}
-
 	s.publishLocked(ev)
 }
 
-// PublishUnfiltered publishes ev without applying the category filter. Use for
-// externally-initiated events (e.g. API callers) that must not be silently
-// dropped by capture preferences set by the session owner.
-// Returns the assigned Envelope, or a zero Envelope if no session is active.
+// PublishUnfiltered forwards ev to the EventStream without applying the category
+// filter. Returns the assigned Envelope, or a zero Envelope if no session is active.
 func (s *CaptureSession) PublishUnfiltered(ev Event) Envelope {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -136,9 +90,9 @@ func (s *CaptureSession) PublishUnfiltered(ev Event) Envelope {
 	return s.publishLocked(ev)
 }
 
-// NewReader returns a Reader positioned at the start of the ring buffer.
+// NewReader returns a Reader from the EventStream positioned after afterSeq.
 func (s *CaptureSession) NewReader(afterSeq uint64) *Reader {
-	return s.ring.newReader(afterSeq)
+	return s.es.NewReader(afterSeq)
 }
 
 // ID returns the current capture session ID, or "" if no session is active.
@@ -148,16 +102,13 @@ func (s *CaptureSession) ID() string {
 	return s.captureSessionID
 }
 
-// Seq returns the current sequence number (last published).
+// Seq returns the sequence number of the last published event.
 func (s *CaptureSession) Seq() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.seq
+	return s.es.Seq()
 }
 
 // SessionStartSeq returns the sequence number at which the current session
-// started. Fresh SSE connections with no Last-Event-ID should begin here so
-// they see only the current session's events.
+// started. Fresh SSE connections with no Last-Event-ID should begin here.
 func (s *CaptureSession) SessionStartSeq() uint64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,9 +123,7 @@ func (s *CaptureSession) Config() CaptureConfig {
 	for c := range s.categories {
 		cats = append(cats, c)
 	}
-	return CaptureConfig{
-		Categories: cats,
-	}
+	return CaptureConfig{Categories: cats}
 }
 
 // CreatedAt returns when the current session was started.
@@ -184,8 +133,7 @@ func (s *CaptureSession) CreatedAt() time.Time {
 	return s.createdAt
 }
 
-// UpdateConfig applies a new CaptureConfig to the running session without
-// resetting the sequence counter or ring buffer.
+// UpdateConfig applies a new CaptureConfig to the running session.
 func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -206,11 +154,9 @@ func (s *CaptureSession) Active() bool {
 	return s.captureSessionID != ""
 }
 
-// Stop ends the current session. It publishes a synthetic session_ended
-// envelope so open SSE stream connections receive a terminal frame and can
-// close cleanly, then clears the session ID. The ring buffer is intentionally
-// left intact so existing readers can finish draining. A new session can be
-// started by calling Start again.
+// Stop ends the current session by publishing a synthetic session_ended event,
+// then clears the session ID. The ring buffer is left intact so existing readers
+// can finish draining.
 func (s *CaptureSession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -225,7 +171,7 @@ func (s *CaptureSession) Stop() {
 	s.captureSessionID = ""
 }
 
-// Close flushes and releases all open file descriptors.
+// Close releases resources held by the EventStream.
 func (s *CaptureSession) Close() error {
-	return s.files.Close()
+	return s.es.Close()
 }
