@@ -1334,6 +1334,33 @@ paths:
             text/event-stream:
               schema:
                 $ref: "#/components/schemas/PublishedEnvelope"
+  /system/standby/disable:
+    post:
+      summary: Pin scale-to-zero off until /system/standby/enable is called
+      description: >
+        Disables scale-to-zero out-of-band of the request-driven middleware,
+        holding it disabled across idle periods. The pin is independent of the
+        inflight-request refcount: request-driven Enable calls will not release
+        it. Idempotent — repeated calls have no additional effect.
+      operationId: disableStandby
+      responses:
+        "204":
+          description: Standby pinned disabled
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /system/standby/enable:
+    post:
+      summary: Release the standby pin set by /system/standby/disable
+      description: >
+        Releases the out-of-band scale-to-zero pin. If no request-driven
+        holders remain, scale-to-zero re-enables (honoring any configured
+        cooldown). Idempotent — calling without a held pin has no effect.
+      operationId: enableStandby
+      responses:
+        "204":
+          description: Standby pin released
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   schemas:
     Event:
