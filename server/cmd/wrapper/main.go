@@ -566,6 +566,11 @@ func dismissNoSandboxWarning() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// Without a settle delay the click can land before the --no-sandbox infobar
+	// has finished painting, leaving the warning on screen. The legacy
+	// wrapper.sh slept 5s here for the same reason. Runs off the hot path
+	// (goroutine fired post-readiness) so this doesn't extend time-to-CDP.
+	time.Sleep(5 * time.Second)
 	port := os.Getenv("KERNEL_IMAGES_API_PORT")
 	if port == "" {
 		port = defaultAPIPort
