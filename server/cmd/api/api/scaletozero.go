@@ -8,7 +8,7 @@ import (
 )
 
 func (s *ApiService) DisableScaleToZero(ctx context.Context, _ oapi.DisableScaleToZeroRequestObject) (oapi.DisableScaleToZeroResponseObject, error) {
-	if err := s.stz.Disable(ctx); err != nil {
+	if err := s.stz.Pin(ctx); err != nil {
 		logger.FromContext(ctx).Error("failed to disable scale-to-zero", "err", err)
 		return oapi.DisableScaleToZero500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to disable scale-to-zero"}}, nil
 	}
@@ -16,7 +16,7 @@ func (s *ApiService) DisableScaleToZero(ctx context.Context, _ oapi.DisableScale
 }
 
 func (s *ApiService) EnableScaleToZero(ctx context.Context, _ oapi.EnableScaleToZeroRequestObject) (oapi.EnableScaleToZeroResponseObject, error) {
-	if err := s.stz.Enable(ctx); err != nil {
+	if err := s.stz.Unpin(ctx); err != nil {
 		logger.FromContext(ctx).Error("failed to enable scale-to-zero", "err", err)
 		return oapi.EnableScaleToZero500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to enable scale-to-zero"}}, nil
 	}

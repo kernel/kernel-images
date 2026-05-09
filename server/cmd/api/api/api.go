@@ -49,7 +49,7 @@ type ApiService struct {
 
 	// DevTools upstream manager (Chromium supervisord log tailer)
 	upstreamMgr *devtoolsproxy.UpstreamManager
-	stz         scaletozero.Controller
+	stz         scaletozero.PinnedController
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
@@ -96,7 +96,7 @@ func New(
 	recordManager recorder.RecordManager,
 	factory recorder.FFmpegRecorderFactory,
 	upstreamMgr *devtoolsproxy.UpstreamManager,
-	stz scaletozero.Controller,
+	stz scaletozero.PinnedController,
 	nekoAuthClient *nekoclient.AuthClient,
 	captureSession *capturesession.CaptureSession,
 	eventStream    *events.EventStream,

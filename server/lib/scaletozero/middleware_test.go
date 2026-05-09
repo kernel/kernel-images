@@ -1,44 +1,17 @@
 package scaletozero
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-type mockController struct {
-	mu           sync.Mutex
-	acquireCalls int
-	releaseCalls int
-	acquireErr   error
-	releaseErr   error
-}
-
-func (m *mockController) Acquire(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.acquireCalls++
-	return m.acquireErr
-}
-
-func (m *mockController) Release(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.releaseCalls++
-	return m.releaseErr
-}
-
-func (m *mockController) Disable(ctx context.Context) error { return nil }
-func (m *mockController) Enable(ctx context.Context) error  { return nil }
-
-func TestMiddlewareAcquiresAndReleasesForExternalAddr(t *testing.T) {
+func TestMiddlewareDisablesAndEnablesForExternalAddr(t *testing.T) {
 	t.Parallel()
-	mock := &mockController{}
+	mock := &mockScaleToZeroer{}
 	handler := Middleware(mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -50,8 +23,8 @@ func TestMiddlewareAcquiresAndReleasesForExternalAddr(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Equal(t, 1, mock.acquireCalls)
-	assert.Equal(t, 1, mock.releaseCalls)
+	assert.Equal(t, 1, mock.disableCalls)
+	assert.Equal(t, 1, mock.enableCalls)
 }
 
 func TestMiddlewareSkipsLoopbackAddrs(t *testing.T) {
@@ -68,7 +41,7 @@ func TestMiddlewareSkipsLoopbackAddrs(t *testing.T) {
 	for _, tc := range loopbackAddrs {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			mock := &mockController{}
+			mock := &mockScaleToZeroer{}
 			var called bool
 			handler := Middleware(mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				called = true
@@ -83,15 +56,15 @@ func TestMiddlewareSkipsLoopbackAddrs(t *testing.T) {
 
 			assert.True(t, called, "handler should still be called")
 			assert.Equal(t, http.StatusOK, rec.Code)
-			assert.Equal(t, 0, mock.acquireCalls, "should not acquire for loopback addr")
-			assert.Equal(t, 0, mock.releaseCalls, "should not release for loopback addr")
+			assert.Equal(t, 0, mock.disableCalls, "should not disable for loopback addr")
+			assert.Equal(t, 0, mock.enableCalls, "should not enable for loopback addr")
 		})
 	}
 }
 
-func TestMiddlewareAcquireError(t *testing.T) {
+func TestMiddlewareDisableError(t *testing.T) {
 	t.Parallel()
-	mock := &mockController{acquireErr: assert.AnError}
+	mock := &mockScaleToZeroer{disableErr: assert.AnError}
 	var called bool
 	handler := Middleware(mock)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -103,9 +76,9 @@ func TestMiddlewareAcquireError(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	assert.False(t, called, "handler should not be called on acquire error")
+	assert.False(t, called, "handler should not be called on disable error")
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
-	assert.Equal(t, 0, mock.releaseCalls)
+	assert.Equal(t, 0, mock.enableCalls)
 }
 
 func TestIsLoopbackAddr(t *testing.T) {
