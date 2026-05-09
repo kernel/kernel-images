@@ -370,3 +370,22 @@ func TestDebouncedControllerUnpinHonorsCooldown(t *testing.T) {
 	assert.Equal(t, 1, mock.enableCalls)
 	mock.mu.Unlock()
 }
+
+func TestDebouncedControllerUnpinRetryableAfterEnableFailure(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.Pin(t.Context()))
+
+	// First Unpin: underlying Enable fails. Pin must remain held so the caller
+	// can retry; otherwise the controller is stuck in disabled=true forever.
+	mock.enableErr = assert.AnError
+	require.Error(t, c.Unpin(t.Context()))
+	assert.Equal(t, 1, mock.enableCalls)
+
+	// Retry succeeds.
+	mock.enableErr = nil
+	require.NoError(t, c.Unpin(t.Context()))
+	assert.Equal(t, 2, mock.enableCalls)
+}

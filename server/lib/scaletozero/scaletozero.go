@@ -204,7 +204,13 @@ func (c *DebouncedController) Unpin(ctx context.Context) error {
 	}
 	c.pinned = false
 
-	return c.maybeReenableLocked(ctx)
+	if err := c.maybeReenableLocked(ctx); err != nil {
+		// Restore the pin so a retry can re-attempt the underlying Enable;
+		// otherwise the caller has no API-driven recovery path.
+		c.pinned = true
+		return err
+	}
+	return nil
 }
 
 // maybeReenableLocked re-enables scale-to-zero if no holders (request-driven or
