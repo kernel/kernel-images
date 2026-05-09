@@ -261,63 +261,63 @@ func TestDebouncedControllerCooldownZeroBehavesLikeOriginal(t *testing.T) {
 	assert.Equal(t, 1, mock.enableCalls)
 }
 
-func TestDebouncedControllerDisableStzHoldsAcrossMiddlewareEnable(t *testing.T) {
+func TestDebouncedControllerPinHoldsAcrossMiddlewareEnable(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
 	c := NewDebouncedController(mock)
 
-	// Out-of-band disable first.
-	require.NoError(t, c.DisableStz(t.Context()))
+	// Pin first.
+	require.NoError(t, c.Pin(t.Context()))
 	assert.Equal(t, 1, mock.disableCalls)
 
 	// Simulate a middleware-wrapped request: Disable then Enable.
 	require.NoError(t, c.Disable(t.Context()))
 	require.NoError(t, c.Enable(t.Context()))
 
-	// Override still held, so no Enable should have hit the underlying ctrl.
+	// Pin still held, so no Enable should have hit the underlying ctrl.
 	assert.Equal(t, 1, mock.disableCalls)
 	assert.Equal(t, 0, mock.enableCalls)
 
-	// Release the override: Enable fires.
-	require.NoError(t, c.EnableStz(t.Context()))
+	// Release the pin: Enable fires.
+	require.NoError(t, c.Unpin(t.Context()))
 	assert.Equal(t, 1, mock.enableCalls)
 }
 
-func TestDebouncedControllerDisableStzIdempotent(t *testing.T) {
+func TestDebouncedControllerPinIdempotent(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
 	c := NewDebouncedController(mock)
 
-	require.NoError(t, c.DisableStz(t.Context()))
-	require.NoError(t, c.DisableStz(t.Context()))
-	require.NoError(t, c.DisableStz(t.Context()))
+	require.NoError(t, c.Pin(t.Context()))
+	require.NoError(t, c.Pin(t.Context()))
+	require.NoError(t, c.Pin(t.Context()))
 	assert.Equal(t, 1, mock.disableCalls)
 
-	require.NoError(t, c.EnableStz(t.Context()))
-	require.NoError(t, c.EnableStz(t.Context()))
+	require.NoError(t, c.Unpin(t.Context()))
+	require.NoError(t, c.Unpin(t.Context()))
 	assert.Equal(t, 1, mock.enableCalls)
 }
 
-func TestDebouncedControllerEnableStzWithoutDisableNoWrite(t *testing.T) {
+func TestDebouncedControllerUnpinWithoutPinNoWrite(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
 	c := NewDebouncedController(mock)
 
-	require.NoError(t, c.EnableStz(t.Context()))
+	require.NoError(t, c.Unpin(t.Context()))
 	assert.Equal(t, 0, mock.disableCalls)
 	assert.Equal(t, 0, mock.enableCalls)
 }
 
-func TestDebouncedControllerEnableStzDefersToActiveRequests(t *testing.T) {
+func TestDebouncedControllerUnpinDefersToActiveRequests(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
 	c := NewDebouncedController(mock)
 
-	require.NoError(t, c.DisableStz(t.Context()))
+	require.NoError(t, c.Pin(t.Context()))
 	require.NoError(t, c.Disable(t.Context())) // simulate inflight request
 
-	// Releasing the override while a request is inflight must not re-enable.
-	require.NoError(t, c.EnableStz(t.Context()))
+	// Releasing the pin while a request is inflight must not re-enable.
+	require.NoError(t, c.Unpin(t.Context()))
 	assert.Equal(t, 0, mock.enableCalls)
 
 	// Request completes -> Enable fires.
@@ -325,7 +325,7 @@ func TestDebouncedControllerEnableStzDefersToActiveRequests(t *testing.T) {
 	assert.Equal(t, 1, mock.enableCalls)
 }
 
-func TestDebouncedControllerDisableStzCancelsCooldownTimer(t *testing.T) {
+func TestDebouncedControllerPinCancelsCooldownTimer(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
 	c := NewDebouncedControllerWithCooldown(mock, 50*time.Millisecond)
@@ -334,8 +334,8 @@ func TestDebouncedControllerDisableStzCancelsCooldownTimer(t *testing.T) {
 	require.NoError(t, c.Disable(t.Context()))
 	require.NoError(t, c.Enable(t.Context()))
 
-	// DisableStz during the cooldown: should cancel the pending re-enable.
-	require.NoError(t, c.DisableStz(t.Context()))
+	// Pin during the cooldown: should cancel the pending re-enable.
+	require.NoError(t, c.Pin(t.Context()))
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -344,20 +344,20 @@ func TestDebouncedControllerDisableStzCancelsCooldownTimer(t *testing.T) {
 	assert.Equal(t, 0, mock.enableCalls)
 	mock.mu.Unlock()
 
-	require.NoError(t, c.EnableStz(t.Context()))
+	require.NoError(t, c.Unpin(t.Context()))
 	time.Sleep(100 * time.Millisecond)
 	mock.mu.Lock()
 	assert.Equal(t, 1, mock.enableCalls)
 	mock.mu.Unlock()
 }
 
-func TestDebouncedControllerEnableStzHonorsCooldown(t *testing.T) {
+func TestDebouncedControllerUnpinHonorsCooldown(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
 	c := NewDebouncedControllerWithCooldown(mock, 50*time.Millisecond)
 
-	require.NoError(t, c.DisableStz(t.Context()))
-	require.NoError(t, c.EnableStz(t.Context()))
+	require.NoError(t, c.Pin(t.Context()))
+	require.NoError(t, c.Unpin(t.Context()))
 
 	// Cooldown should defer the underlying Enable.
 	mock.mu.Lock()
