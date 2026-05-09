@@ -1334,31 +1334,28 @@ paths:
             text/event-stream:
               schema:
                 $ref: "#/components/schemas/PublishedEnvelope"
-  /scaletozero/pin:
+  /scaletozero/disable:
     post:
-      summary: Hold this VM awake until /scaletozero/unpin
+      summary: Idempotently disable scale to zero on this VM.
       description: >
         Prevents the VM from scaling to zero, regardless of HTTP traffic on it.
-        Call this when the VM needs to stay awake across idle periods (e.g.
-        when adding it to a warm pool). Stays in effect until /scaletozero/unpin
-        is called on the same VM. Idempotent.
-      operationId: pinScaleToZero
+        Calling the API on this VM will wake it because Unikraft will automatically wake for any request to the VM.
+      operationId: disableScaleToZero
       responses:
         "204":
-          description: Scale-to-zero pinned
+          description: Scale-to-zero disabled
         "500":
           $ref: "#/components/responses/InternalError"
-  /scaletozero/unpin:
+  /scaletozero/enable:
     post:
-      summary: Release the awake-hold set by /scaletozero/pin
+      summary: Idempotently enable scale to zero on this VM.
       description: >
         Restores normal scale-to-zero behavior on this VM, allowing it to
-        scale to zero again when idle. Call this when the VM no longer needs
-        to be held awake (e.g. when claimed from a warm pool). Idempotent.
-      operationId: unpinScaleToZero
+        scale to zero again when idle. Call this when the VM no longer needs to be held awake.
+      operationId: enableScaleToZero
       responses:
         "204":
-          description: Scale-to-zero unpinned
+          description: Scale-to-zero enabled
         "500":
           $ref: "#/components/responses/InternalError"
 components:

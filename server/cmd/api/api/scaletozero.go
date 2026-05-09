@@ -7,18 +7,18 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
-func (s *ApiService) PinScaleToZero(ctx context.Context, _ oapi.PinScaleToZeroRequestObject) (oapi.PinScaleToZeroResponseObject, error) {
+func (s *ApiService) DisableScaleToZero(ctx context.Context, _ oapi.DisableScaleToZeroRequestObject) (oapi.DisableScaleToZeroResponseObject, error) {
 	if err := s.stz.Pin(ctx); err != nil {
-		logger.FromContext(ctx).Error("failed to pin scale-to-zero", "err", err)
-		return oapi.PinScaleToZero500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to pin scale-to-zero"}}, nil
+		logger.FromContext(ctx).Error("failed to disable scale-to-zero", "err", err)
+		return oapi.DisableScaleToZero500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to disable scale-to-zero"}}, nil
 	}
-	return oapi.PinScaleToZero204Response{}, nil
+	return oapi.DisableScaleToZero204Response{}, nil
 }
 
-func (s *ApiService) UnpinScaleToZero(ctx context.Context, _ oapi.UnpinScaleToZeroRequestObject) (oapi.UnpinScaleToZeroResponseObject, error) {
+func (s *ApiService) EnableScaleToZero(ctx context.Context, _ oapi.EnableScaleToZeroRequestObject) (oapi.EnableScaleToZeroResponseObject, error) {
 	if err := s.stz.Unpin(ctx); err != nil {
-		logger.FromContext(ctx).Error("failed to unpin scale-to-zero", "err", err)
-		return oapi.UnpinScaleToZero500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to unpin scale-to-zero"}}, nil
+		logger.FromContext(ctx).Error("failed to enable scale-to-zero", "err", err)
+		return oapi.EnableScaleToZero500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to enable scale-to-zero"}}, nil
 	}
-	return oapi.UnpinScaleToZero204Response{}, nil
+	return oapi.EnableScaleToZero204Response{}, nil
 }

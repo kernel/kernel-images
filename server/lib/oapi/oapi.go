@@ -1646,11 +1646,11 @@ type ClientInterface interface {
 
 	StopRecording(ctx context.Context, body StopRecordingJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// PinScaleToZero request
-	PinScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// DisableScaleToZero request
+	DisableScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// UnpinScaleToZero request
-	UnpinScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+	// EnableScaleToZero request
+	EnableScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) PatchChromiumFlagsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -2661,8 +2661,8 @@ func (c *Client) StopRecording(ctx context.Context, body StopRecordingJSONReques
 	return c.Client.Do(req)
 }
 
-func (c *Client) PinScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPinScaleToZeroRequest(c.Server)
+func (c *Client) DisableScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDisableScaleToZeroRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -2673,8 +2673,8 @@ func (c *Client) PinScaleToZero(ctx context.Context, reqEditors ...RequestEditor
 	return c.Client.Do(req)
 }
 
-func (c *Client) UnpinScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewUnpinScaleToZeroRequest(c.Server)
+func (c *Client) EnableScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewEnableScaleToZeroRequest(c.Server)
 	if err != nil {
 		return nil, err
 	}
@@ -4821,8 +4821,8 @@ func NewStopRecordingRequestWithBody(server string, contentType string, body io.
 	return req, nil
 }
 
-// NewPinScaleToZeroRequest generates requests for PinScaleToZero
-func NewPinScaleToZeroRequest(server string) (*http.Request, error) {
+// NewDisableScaleToZeroRequest generates requests for DisableScaleToZero
+func NewDisableScaleToZeroRequest(server string) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -4830,7 +4830,7 @@ func NewPinScaleToZeroRequest(server string) (*http.Request, error) {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/scaletozero/pin")
+	operationPath := fmt.Sprintf("/scaletozero/disable")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -4848,8 +4848,8 @@ func NewPinScaleToZeroRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
-// NewUnpinScaleToZeroRequest generates requests for UnpinScaleToZero
-func NewUnpinScaleToZeroRequest(server string) (*http.Request, error) {
+// NewEnableScaleToZeroRequest generates requests for EnableScaleToZero
+func NewEnableScaleToZeroRequest(server string) (*http.Request, error) {
 	var err error
 
 	serverURL, err := url.Parse(server)
@@ -4857,7 +4857,7 @@ func NewUnpinScaleToZeroRequest(server string) (*http.Request, error) {
 		return nil, err
 	}
 
-	operationPath := fmt.Sprintf("/scaletozero/unpin")
+	operationPath := fmt.Sprintf("/scaletozero/enable")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -5139,11 +5139,11 @@ type ClientWithResponsesInterface interface {
 
 	StopRecordingWithResponse(ctx context.Context, body StopRecordingJSONRequestBody, reqEditors ...RequestEditorFn) (*StopRecordingResponse, error)
 
-	// PinScaleToZeroWithResponse request
-	PinScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*PinScaleToZeroResponse, error)
+	// DisableScaleToZeroWithResponse request
+	DisableScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*DisableScaleToZeroResponse, error)
 
-	// UnpinScaleToZeroWithResponse request
-	UnpinScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*UnpinScaleToZeroResponse, error)
+	// EnableScaleToZeroWithResponse request
+	EnableScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*EnableScaleToZeroResponse, error)
 }
 
 type PatchChromiumFlagsResponse struct {
@@ -6405,14 +6405,14 @@ func (r StopRecordingResponse) StatusCode() int {
 	return 0
 }
 
-type PinScaleToZeroResponse struct {
+type DisableScaleToZeroResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON500      *InternalError
 }
 
 // Status returns HTTPResponse.Status
-func (r PinScaleToZeroResponse) Status() string {
+func (r DisableScaleToZeroResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -6420,21 +6420,21 @@ func (r PinScaleToZeroResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r PinScaleToZeroResponse) StatusCode() int {
+func (r DisableScaleToZeroResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
 	return 0
 }
 
-type UnpinScaleToZeroResponse struct {
+type EnableScaleToZeroResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
 	JSON500      *InternalError
 }
 
 // Status returns HTTPResponse.Status
-func (r UnpinScaleToZeroResponse) Status() string {
+func (r EnableScaleToZeroResponse) Status() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Status
 	}
@@ -6442,7 +6442,7 @@ func (r UnpinScaleToZeroResponse) Status() string {
 }
 
 // StatusCode returns HTTPResponse.StatusCode
-func (r UnpinScaleToZeroResponse) StatusCode() int {
+func (r EnableScaleToZeroResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -7174,22 +7174,22 @@ func (c *ClientWithResponses) StopRecordingWithResponse(ctx context.Context, bod
 	return ParseStopRecordingResponse(rsp)
 }
 
-// PinScaleToZeroWithResponse request returning *PinScaleToZeroResponse
-func (c *ClientWithResponses) PinScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*PinScaleToZeroResponse, error) {
-	rsp, err := c.PinScaleToZero(ctx, reqEditors...)
+// DisableScaleToZeroWithResponse request returning *DisableScaleToZeroResponse
+func (c *ClientWithResponses) DisableScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*DisableScaleToZeroResponse, error) {
+	rsp, err := c.DisableScaleToZero(ctx, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePinScaleToZeroResponse(rsp)
+	return ParseDisableScaleToZeroResponse(rsp)
 }
 
-// UnpinScaleToZeroWithResponse request returning *UnpinScaleToZeroResponse
-func (c *ClientWithResponses) UnpinScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*UnpinScaleToZeroResponse, error) {
-	rsp, err := c.UnpinScaleToZero(ctx, reqEditors...)
+// EnableScaleToZeroWithResponse request returning *EnableScaleToZeroResponse
+func (c *ClientWithResponses) EnableScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*EnableScaleToZeroResponse, error) {
+	rsp, err := c.EnableScaleToZero(ctx, reqEditors...)
 	if err != nil {
 		return nil, err
 	}
-	return ParseUnpinScaleToZeroResponse(rsp)
+	return ParseEnableScaleToZeroResponse(rsp)
 }
 
 // ParsePatchChromiumFlagsResponse parses an HTTP response from a PatchChromiumFlagsWithResponse call
@@ -9197,15 +9197,15 @@ func ParseStopRecordingResponse(rsp *http.Response) (*StopRecordingResponse, err
 	return response, nil
 }
 
-// ParsePinScaleToZeroResponse parses an HTTP response from a PinScaleToZeroWithResponse call
-func ParsePinScaleToZeroResponse(rsp *http.Response) (*PinScaleToZeroResponse, error) {
+// ParseDisableScaleToZeroResponse parses an HTTP response from a DisableScaleToZeroWithResponse call
+func ParseDisableScaleToZeroResponse(rsp *http.Response) (*DisableScaleToZeroResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &PinScaleToZeroResponse{
+	response := &DisableScaleToZeroResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -9223,15 +9223,15 @@ func ParsePinScaleToZeroResponse(rsp *http.Response) (*PinScaleToZeroResponse, e
 	return response, nil
 }
 
-// ParseUnpinScaleToZeroResponse parses an HTTP response from a UnpinScaleToZeroWithResponse call
-func ParseUnpinScaleToZeroResponse(rsp *http.Response) (*UnpinScaleToZeroResponse, error) {
+// ParseEnableScaleToZeroResponse parses an HTTP response from a EnableScaleToZeroWithResponse call
+func ParseEnableScaleToZeroResponse(rsp *http.Response) (*EnableScaleToZeroResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
 	defer func() { _ = rsp.Body.Close() }()
 	if err != nil {
 		return nil, err
 	}
 
-	response := &UnpinScaleToZeroResponse{
+	response := &EnableScaleToZeroResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -9410,12 +9410,12 @@ type ServerInterface interface {
 	// Stop the recording
 	// (POST /recording/stop)
 	StopRecording(w http.ResponseWriter, r *http.Request)
-	// Hold this VM awake until /scaletozero/unpin
-	// (POST /scaletozero/pin)
-	PinScaleToZero(w http.ResponseWriter, r *http.Request)
-	// Release the awake-hold set by /scaletozero/pin
-	// (POST /scaletozero/unpin)
-	UnpinScaleToZero(w http.ResponseWriter, r *http.Request)
+	// Idempotently disable scale to zero on this VM.
+	// (POST /scaletozero/disable)
+	DisableScaleToZero(w http.ResponseWriter, r *http.Request)
+	// Idempotently enable scale to zero on this VM.
+	// (POST /scaletozero/enable)
+	EnableScaleToZero(w http.ResponseWriter, r *http.Request)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -9740,15 +9740,15 @@ func (_ Unimplemented) StopRecording(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Hold this VM awake until /scaletozero/unpin
-// (POST /scaletozero/pin)
-func (_ Unimplemented) PinScaleToZero(w http.ResponseWriter, r *http.Request) {
+// Idempotently disable scale to zero on this VM.
+// (POST /scaletozero/disable)
+func (_ Unimplemented) DisableScaleToZero(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Release the awake-hold set by /scaletozero/pin
-// (POST /scaletozero/unpin)
-func (_ Unimplemented) UnpinScaleToZero(w http.ResponseWriter, r *http.Request) {
+// Idempotently enable scale to zero on this VM.
+// (POST /scaletozero/enable)
+func (_ Unimplemented) EnableScaleToZero(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -10799,11 +10799,11 @@ func (siw *ServerInterfaceWrapper) StopRecording(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
-// PinScaleToZero operation middleware
-func (siw *ServerInterfaceWrapper) PinScaleToZero(w http.ResponseWriter, r *http.Request) {
+// DisableScaleToZero operation middleware
+func (siw *ServerInterfaceWrapper) DisableScaleToZero(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PinScaleToZero(w, r)
+		siw.Handler.DisableScaleToZero(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -10813,11 +10813,11 @@ func (siw *ServerInterfaceWrapper) PinScaleToZero(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
-// UnpinScaleToZero operation middleware
-func (siw *ServerInterfaceWrapper) UnpinScaleToZero(w http.ResponseWriter, r *http.Request) {
+// EnableScaleToZero operation middleware
+func (siw *ServerInterfaceWrapper) EnableScaleToZero(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UnpinScaleToZero(w, r)
+		siw.Handler.EnableScaleToZero(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -11100,10 +11100,10 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Post(options.BaseURL+"/recording/stop", wrapper.StopRecording)
 	})
 	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/scaletozero/pin", wrapper.PinScaleToZero)
+		r.Post(options.BaseURL+"/scaletozero/disable", wrapper.DisableScaleToZero)
 	})
 	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/scaletozero/unpin", wrapper.UnpinScaleToZero)
+		r.Post(options.BaseURL+"/scaletozero/enable", wrapper.EnableScaleToZero)
 	})
 
 	return r
@@ -13335,48 +13335,48 @@ func (response StopRecording500JSONResponse) VisitStopRecordingResponse(w http.R
 	return json.NewEncoder(w).Encode(response)
 }
 
-type PinScaleToZeroRequestObject struct {
+type DisableScaleToZeroRequestObject struct {
 }
 
-type PinScaleToZeroResponseObject interface {
-	VisitPinScaleToZeroResponse(w http.ResponseWriter) error
+type DisableScaleToZeroResponseObject interface {
+	VisitDisableScaleToZeroResponse(w http.ResponseWriter) error
 }
 
-type PinScaleToZero204Response struct {
+type DisableScaleToZero204Response struct {
 }
 
-func (response PinScaleToZero204Response) VisitPinScaleToZeroResponse(w http.ResponseWriter) error {
+func (response DisableScaleToZero204Response) VisitDisableScaleToZeroResponse(w http.ResponseWriter) error {
 	w.WriteHeader(204)
 	return nil
 }
 
-type PinScaleToZero500JSONResponse struct{ InternalErrorJSONResponse }
+type DisableScaleToZero500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response PinScaleToZero500JSONResponse) VisitPinScaleToZeroResponse(w http.ResponseWriter) error {
+func (response DisableScaleToZero500JSONResponse) VisitDisableScaleToZeroResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
 }
 
-type UnpinScaleToZeroRequestObject struct {
+type EnableScaleToZeroRequestObject struct {
 }
 
-type UnpinScaleToZeroResponseObject interface {
-	VisitUnpinScaleToZeroResponse(w http.ResponseWriter) error
+type EnableScaleToZeroResponseObject interface {
+	VisitEnableScaleToZeroResponse(w http.ResponseWriter) error
 }
 
-type UnpinScaleToZero204Response struct {
+type EnableScaleToZero204Response struct {
 }
 
-func (response UnpinScaleToZero204Response) VisitUnpinScaleToZeroResponse(w http.ResponseWriter) error {
+func (response EnableScaleToZero204Response) VisitEnableScaleToZeroResponse(w http.ResponseWriter) error {
 	w.WriteHeader(204)
 	return nil
 }
 
-type UnpinScaleToZero500JSONResponse struct{ InternalErrorJSONResponse }
+type EnableScaleToZero500JSONResponse struct{ InternalErrorJSONResponse }
 
-func (response UnpinScaleToZero500JSONResponse) VisitUnpinScaleToZeroResponse(w http.ResponseWriter) error {
+func (response EnableScaleToZero500JSONResponse) VisitEnableScaleToZeroResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(500)
 
@@ -13544,12 +13544,12 @@ type StrictServerInterface interface {
 	// Stop the recording
 	// (POST /recording/stop)
 	StopRecording(ctx context.Context, request StopRecordingRequestObject) (StopRecordingResponseObject, error)
-	// Hold this VM awake until /scaletozero/unpin
-	// (POST /scaletozero/pin)
-	PinScaleToZero(ctx context.Context, request PinScaleToZeroRequestObject) (PinScaleToZeroResponseObject, error)
-	// Release the awake-hold set by /scaletozero/pin
-	// (POST /scaletozero/unpin)
-	UnpinScaleToZero(ctx context.Context, request UnpinScaleToZeroRequestObject) (UnpinScaleToZeroResponseObject, error)
+	// Idempotently disable scale to zero on this VM.
+	// (POST /scaletozero/disable)
+	DisableScaleToZero(ctx context.Context, request DisableScaleToZeroRequestObject) (DisableScaleToZeroResponseObject, error)
+	// Idempotently enable scale to zero on this VM.
+	// (POST /scaletozero/enable)
+	EnableScaleToZero(ctx context.Context, request EnableScaleToZeroRequestObject) (EnableScaleToZeroResponseObject, error)
 }
 
 type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
@@ -15147,23 +15147,23 @@ func (sh *strictHandler) StopRecording(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// PinScaleToZero operation middleware
-func (sh *strictHandler) PinScaleToZero(w http.ResponseWriter, r *http.Request) {
-	var request PinScaleToZeroRequestObject
+// DisableScaleToZero operation middleware
+func (sh *strictHandler) DisableScaleToZero(w http.ResponseWriter, r *http.Request) {
+	var request DisableScaleToZeroRequestObject
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.PinScaleToZero(ctx, request.(PinScaleToZeroRequestObject))
+		return sh.ssi.DisableScaleToZero(ctx, request.(DisableScaleToZeroRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "PinScaleToZero")
+		handler = middleware(handler, "DisableScaleToZero")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(PinScaleToZeroResponseObject); ok {
-		if err := validResponse.VisitPinScaleToZeroResponse(w); err != nil {
+	} else if validResponse, ok := response.(DisableScaleToZeroResponseObject); ok {
+		if err := validResponse.VisitDisableScaleToZeroResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -15171,23 +15171,23 @@ func (sh *strictHandler) PinScaleToZero(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// UnpinScaleToZero operation middleware
-func (sh *strictHandler) UnpinScaleToZero(w http.ResponseWriter, r *http.Request) {
-	var request UnpinScaleToZeroRequestObject
+// EnableScaleToZero operation middleware
+func (sh *strictHandler) EnableScaleToZero(w http.ResponseWriter, r *http.Request) {
+	var request EnableScaleToZeroRequestObject
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UnpinScaleToZero(ctx, request.(UnpinScaleToZeroRequestObject))
+		return sh.ssi.EnableScaleToZero(ctx, request.(EnableScaleToZeroRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UnpinScaleToZero")
+		handler = middleware(handler, "EnableScaleToZero")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UnpinScaleToZeroResponseObject); ok {
-		if err := validResponse.VisitUnpinScaleToZeroResponse(w); err != nil {
+	} else if validResponse, ok := response.(EnableScaleToZeroResponseObject); ok {
+		if err := validResponse.VisitEnableScaleToZeroResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -15375,12 +15375,11 @@ var swaggerSpec = []string{
 	"aUoYN6JtIUGpAcmxywvRcm1tn9jUTjbB/Qa0XA9P5uZBt2hgsVjYXFFsNoN9URkntpuAqvUklWvLBNUm",
 	"yli2B4FYtk/fcMKpLVCtkBcBQzR3kCgps6dHb/7gG8fY6qbFTct8gE0Hip/NZnp2guwD5Y5sRwtZrvLW",
 	"EuxomtaHbYKt0xc4EHp314dvc5Lt9R/7WPRbL9ToextUcm1EXvN0jQkGlazLQZKz59gYFCv+L5jS2Lu0",
-	"LCM66mJZ5JuQLPK7x3FtjsPVq0Y95i9VRt/XcS7ha8GtYpqCFh9AiuO8aTDoNM6x9wQzyD9e2QJu5mss",
-	"+iGIGWFgEEtlkuLVZU5+evv2nGhJ53MWE8EJ0yPyjGI1f6aqE/EfrwgHSFyQNF0TekUvgdBYCqUIS1Js",
-	"U8tEolxvf/ySJvaIs+U2yRWVGcmFSI9G5ELTNWbnwnwOsSa2x3ZjrwXPGbqAsRZt4mvXK5qZ9YzIWQJZ",
-	"LgwJBct1Mn5hBnsrfgMpol2iIvH9oRZDMz3JGXdelJv3mBNpYgH6j1cOcn377aLc/tyL9DegtJCgCDfK",
-	"XIr4rjZRNvZA4OECBkZwi6sKMfiFpw+nbiD6DFp7qUG4GiQVXcyALCFN3AZrZBCnlGW+1mOTDDbj8J3Z",
-	"+s2wiNC7LTy+AaeWLcHucoid/rBQ55p0GNWIof8bAAD//zXpfFyh4gAA",
+	"LCM66mJZ5JuQLPK7x3FtjsPVq0Y95i9VRt/XcS7ha8GtYpqCFh9AiuOEKTpLNzchs3cFM9A/XtkibmYE",
+	"LPwhiBllYJBLZZLi9WVOfnr79pxoSedzFhPBCdMj8oymqa8VcnJ+ZgvHM2WGvDKn1RW9BMI0mUFMCwXk",
+	"HWeXks61fer78ceu3dkluNY9a1/EwOec/ONVsNSH3eaF2flb8RtIEe0S1ojvD7UYml0SB6vkVpBzlkCW",
+	"C22PDTcywhU8VGsgGnURB3wz3t6A0kKCItzoZKkdutxK2Z+jmmNg5K+4QhUCodlcjNUaUKNhSQoWofbb",
+	"Us35xyvChSslQjhAopxus4Q0IdSgLehl5zfHDfA7Qo0deCNmPn36vwEAAP//FmsxyDbiAAA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
