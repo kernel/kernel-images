@@ -183,9 +183,9 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 		return fmt.Errorf("recording already in progress")
 	}
 
-	if err := fr.stz.Disable(ctx); err != nil {
+	if err := fr.stz.Acquire(ctx); err != nil {
 		fr.mu.Unlock()
-		return fmt.Errorf("failed to disable scale-to-zero: %w", err)
+		return fmt.Errorf("failed to acquire scale-to-zero hold: %w", err)
 	}
 
 	// ensure internal state
@@ -196,7 +196,7 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 
 	args, err := ffmpegArgs(fr.params, fr.outputPath)
 	if err != nil {
-		_ = fr.stz.Enable(context.WithoutCancel(ctx))
+		_ = fr.stz.Release(context.WithoutCancel(ctx))
 		fr.cmd = nil
 		close(fr.exited)
 		fr.mu.Unlock()
@@ -214,7 +214,7 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	fr.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
-		_ = fr.stz.Enable(context.WithoutCancel(ctx))
+		_ = fr.stz.Release(context.WithoutCancel(ctx))
 		fr.mu.Lock()
 		fr.ffmpegErr = err
 		fr.cmd = nil // reset cmd on failure to start so IsRecording() remains correct
@@ -238,7 +238,7 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 
 // Stop gracefully stops the recording using a multi-phase shutdown process.
 func (fr *FFmpegRecorder) Stop(ctx context.Context) error {
-	defer fr.stz.Enable(context.WithoutCancel(ctx))
+	defer fr.stz.Release(context.WithoutCancel(ctx))
 
 	// Use singleflight to prevent concurrent Stop() calls from sending multiple SIGINTs
 	// to ffmpeg, which causes immediate abort without proper file closure.
@@ -281,7 +281,7 @@ func (fr *FFmpegRecorder) WaitForFinalization(ctx context.Context) error {
 func (fr *FFmpegRecorder) ForceStop(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 
-	defer fr.stz.Enable(context.WithoutCancel(ctx))
+	defer fr.stz.Release(context.WithoutCancel(ctx))
 	shutdownErr := fr.shutdownInPhases(ctx, []shutdownPhase{
 		{"kill", []syscall.Signal{syscall.SIGKILL}, 100 * time.Millisecond, "immediate kill"},
 	})
@@ -530,7 +530,7 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 // update the internal state accordingly. It also triggers finalization to add proper duration
 // metadata for recordings that exit naturally (max duration, max file size, etc.).
 func (fr *FFmpegRecorder) waitForCommand(ctx context.Context) {
-	defer fr.stz.Enable(context.WithoutCancel(ctx))
+	defer fr.stz.Release(context.WithoutCancel(ctx))
 
 	log := logger.FromContext(ctx)
 

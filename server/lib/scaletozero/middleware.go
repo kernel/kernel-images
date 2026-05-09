@@ -8,10 +8,10 @@ import (
 	"github.com/kernel/kernel-images/server/lib/logger"
 )
 
-// Middleware returns a standard net/http middleware that disables scale-to-zero
-// at the start of each request and re-enables it after the handler completes.
-// Connections from loopback addresses are ignored and do not affect the
-// scale-to-zero state.
+// Middleware returns a standard net/http middleware that acquires a
+// scale-to-zero hold at the start of each request and releases it after the
+// handler completes. Connections from loopback addresses are ignored and do
+// not affect the scale-to-zero state.
 func Middleware(ctrl Controller) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -20,12 +20,12 @@ func Middleware(ctrl Controller) func(http.Handler) http.Handler {
 				return
 			}
 
-			if err := ctrl.Disable(r.Context()); err != nil {
-				logger.FromContext(r.Context()).Error("failed to disable scale-to-zero", "error", err)
-				http.Error(w, "failed to disable scale-to-zero", http.StatusInternalServerError)
+			if err := ctrl.Acquire(r.Context()); err != nil {
+				logger.FromContext(r.Context()).Error("failed to acquire scale-to-zero hold", "error", err)
+				http.Error(w, "failed to acquire scale-to-zero hold", http.StatusInternalServerError)
 				return
 			}
-			defer ctrl.Enable(context.WithoutCancel(r.Context()))
+			defer ctrl.Release(context.WithoutCancel(r.Context()))
 
 			next.ServeHTTP(w, r)
 		})
