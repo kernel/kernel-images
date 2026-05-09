@@ -23,19 +23,19 @@ type Controller interface {
 // PinnedController extends Controller with an out-of-band "pin" that holds
 // scale-to-zero disabled independently of the request-driven refcount used by
 // the HTTP middleware. While the pin is held, request-driven Enable calls do
-// not re-enable scale-to-zero; only DisablePin/EnablePin can release it.
+// not re-enable scale-to-zero; only Unpin can release it.
 //
 // This is intended for explicit lifecycle control (e.g. a control-plane API
 // reserving a VM in a hot pool) where the holder is not tied to an inflight
 // HTTP request.
 type PinnedController interface {
 	Controller
-	// DisablePin pins scale-to-zero disabled until EnablePin is called. The
-	// pin is a boolean, not a counter: repeated calls are idempotent.
-	DisablePin(ctx context.Context) error
-	// EnablePin releases the pin. If no request-driven holders remain,
+	// Pin holds scale-to-zero disabled until Unpin is called. The pin is a
+	// boolean, not a counter: repeated calls are idempotent.
+	Pin(ctx context.Context) error
+	// Unpin releases the pin. If no request-driven holders remain,
 	// scale-to-zero is re-enabled (honoring any configured cooldown).
-	EnablePin(ctx context.Context) error
+	Unpin(ctx context.Context) error
 }
 
 type unikraftCloudController struct {
@@ -82,10 +82,10 @@ type NoopController struct{}
 
 func NewNoopController() *NoopController { return &NoopController{} }
 
-func (NoopController) Disable(context.Context) error    { return nil }
-func (NoopController) Enable(context.Context) error     { return nil }
-func (NoopController) DisablePin(context.Context) error { return nil }
-func (NoopController) EnablePin(context.Context) error  { return nil }
+func (NoopController) Disable(context.Context) error { return nil }
+func (NoopController) Enable(context.Context) error  { return nil }
+func (NoopController) Pin(context.Context) error     { return nil }
+func (NoopController) Unpin(context.Context) error   { return nil }
 
 // Oncer wraps a Controller and ensures that Disable and Enable are called at most once.
 type Oncer struct {
@@ -165,10 +165,10 @@ func (c *DebouncedController) Enable(ctx context.Context) error {
 	return c.maybeReenableLocked(ctx)
 }
 
-// DisablePin sets the out-of-band pin and ensures scale-to-zero is disabled.
+// Pin sets the out-of-band pin and ensures scale-to-zero is disabled.
 // Idempotent: re-pinning while already pinned is a no-op. Cancels any pending
 // cooldown timer.
-func (c *DebouncedController) DisablePin(ctx context.Context) error {
+func (c *DebouncedController) Pin(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -192,10 +192,10 @@ func (c *DebouncedController) DisablePin(ctx context.Context) error {
 	return nil
 }
 
-// EnablePin releases the pin. If no request-driven holders remain, scale-to-zero
+// Unpin releases the pin. If no request-driven holders remain, scale-to-zero
 // is re-enabled (honoring any configured cooldown). Idempotent: calling when no
 // pin is held is a no-op.
-func (c *DebouncedController) EnablePin(ctx context.Context) error {
+func (c *DebouncedController) Unpin(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
