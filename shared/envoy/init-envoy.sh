@@ -35,10 +35,18 @@ sed -e "s|{INST_NAME}|$inst_esc|g" \
     /etc/envoy/templates/bootstrap.yaml > /etc/envoy/bootstrap.yaml
 
 echo "[envoy-init] Starting Envoy via supervisord"
-# `restart` is start-or-stop+start: on first boot this just starts envoy,
-# on a re-render (e.g. post-fork env refresh) it forces a clean re-read
-# of the rendered bootstrap. Either way no callers see stale identity.
-supervisorctl -c /etc/supervisor/supervisord.conf restart envoy
+# Envoy's supervisor program has autostart=false, so on cold boot it's in
+# the STOPPED state. supervisorctl's `restart` is implemented as stop+start
+# and reports a non-zero exit when the stop sees a service that isn't
+# running — which under `set -o errexit` would abort the boot path. Branch
+# on the current state so cold boots only `start`, while re-renders (e.g.
+# post-fork env refresh) `restart` to force a clean re-read of the
+# rendered bootstrap.
+if supervisorctl -c /etc/supervisor/supervisord.conf status envoy | grep -q RUNNING; then
+  supervisorctl -c /etc/supervisor/supervisord.conf restart envoy
+else
+  supervisorctl -c /etc/supervisor/supervisord.conf start envoy
+fi
 
 # Readiness (port 3128 reachable) is probed by the Go wrapper's
 # waitAllReady alongside CDP/chromedriver, so this script returns as soon

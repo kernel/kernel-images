@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,8 +79,8 @@ func dismissNoSandboxWarning() {
 	}
 	width := parts[0]
 	x := width
-	if w := atoi(width); w > 30 {
-		x = fmt.Sprintf("%d", w-30)
+	if w, err := strconv.Atoi(width); err == nil && w > 30 {
+		x = strconv.Itoa(w - 30)
 	}
 	target := "New Tab - Chromium"
 	deadline := time.Now().Add(30 * time.Second)
@@ -109,13 +110,3 @@ func dismissNoSandboxWarning() {
 		"-d", body).Run()
 }
 
-func atoi(s string) int {
-	n := 0
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0
-		}
-		n = n*10 + int(c-'0')
-	}
-	return n
-}

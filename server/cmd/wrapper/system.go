@@ -17,6 +17,21 @@ func writeScaleToZero(c string) {
 	_ = os.WriteFile(scaleToZeroFile, []byte(c), 0o644)
 }
 
+// scaleToZeroManaged reports whether the wrapper should re-enable scale-to-zero
+// once boot completes. Default is true (preserves the previous behavior); set
+// ENABLE_STZ=false or 0 to keep STZ disabled for the lifetime of the container.
+func scaleToZeroManaged() bool {
+	v := os.Getenv("ENABLE_STZ")
+	return v != "false" && v != "0"
+}
+
+func stzMode(managed bool) string {
+	if managed {
+		return "managed"
+	}
+	return "off"
+}
+
 func prepareUserDirs(asRoot bool) {
 	if asRoot {
 		for _, d := range []string{"/tmp", "/var/log", supervisordLogD, "/home/kernel", "/home/kernel/user-data"} {

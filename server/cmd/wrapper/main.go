@@ -56,7 +56,8 @@ func profileName(p profile) string {
 func main() {
 	t0 := time.Now()
 	prof := detectProfile()
-	logf("starting wrapper (profile=%s)", profileName(prof))
+	stzManaged := scaleToZeroManaged()
+	logf("starting wrapper (profile=%s stz=%s)", profileName(prof), stzMode(stzManaged))
 
 	// Register signal handling early so a SIGTERM/SIGINT during the
 	// seconds-long startup window queues into the channel instead of
@@ -72,9 +73,13 @@ func main() {
 		_ = exec.Command("mount", "-t", "tmpfs", "tmpfs", "/dev/shm").Run()
 	}
 
-	// Disable scale-to-zero for the duration of startup; restored on exit.
+	// Disable scale-to-zero for the duration of startup. When ENABLE_STZ is
+	// false/0 the caller wants STZ off permanently, so we don't re-enable on
+	// exit or once the hot path is up.
 	disableScaleToZero()
-	defer enableScaleToZero()
+	if stzManaged {
+		defer enableScaleToZero()
+	}
 
 	// Headless ships a default CHROMIUM_FLAGS list (headless+stealth flags)
 	// when callers don't set one. Headful's defaults are caller-supplied.
@@ -141,13 +146,13 @@ func main() {
 	}()
 	waitForSocket(supervisorSock, 10*time.Second)
 
-	// Phase A: identity-free services. Chromium itself doesn't read any
-	// per-instance identity envs — it just needs the envoy CA cert (baked
-	// into the image at build time, see shared/envoy/bake-certs.sh) so it
-	// trusts the forward proxy on first start with no runtime cert work to
-	// wait on. chromium-launcher internally waits for the X server before
-	// exec'ing chromium, so we start it in parallel with the X server to
-	// overlap chromium-launcher's preamble with display startup.
+	// Browser phase: identity-free services. Chromium itself doesn't read
+	// any per-instance identity envs — it just needs the envoy CA cert
+	// (baked into the image at build time, see shared/envoy/bake-certs.sh)
+	// so it trusts the forward proxy on first start with no runtime cert
+	// work to wait on. chromium-launcher internally waits for the X server
+	// before exec'ing chromium, so we start it in parallel with the X
+	// server to overlap chromium-launcher's preamble with display startup.
 	// chromedriver listens on 9225 immediately and only attaches to
 	// chromium on session creation, so it can come up alongside everything.
 	// mutter has no internal X-wait, so it's started after the X server is
@@ -163,7 +168,7 @@ func main() {
 	// parallel with chromium.
 	_ = os.WriteFile(filepath.Join(supervisordLogD, "chromium"), nil, 0o644)
 
-	phaseAStart := time.Now()
+	browserStart := time.Now()
 	startAll(xServer, "dbus", "chromedriver", "chromium")
 	waitForX(defaultDisplay, 20*time.Second)
 	waitForSocket(dbusSocket, 10*time.Second)
@@ -174,7 +179,7 @@ func main() {
 		}
 		startAll(post...)
 	}
-	phaseADone := time.Now()
+	browserDone := time.Now()
 
 	// FORK HOOK:
 	//   When this binary runs as a forked snapshot restore, the per-fork
@@ -185,33 +190,35 @@ func main() {
 	//     1. Block on the host-pushed env bundle (vsock socket, virtio-fs
 	//        drop file, or whatever transport the control plane settles on).
 	//     2. Apply the bundle to this process's environ via os.Setenv so
-	//        Phase C below picks them up via the existing $VAR expansion in
-	//        init-envoy.sh and the supervisorctl-spawned services inherit
-	//        them.
-	//     3. Phase C uses `supervisorctl restart envoy` (idempotent — start
-	//        on first boot, stop+start on a re-render after fork) so a
-	//        restored snapshot drops its stale identity cleanly.
+	//        the identity phase below picks them up via the existing $VAR
+	//        expansion in init-envoy.sh and the supervisorctl-spawned
+	//        services inherit them.
+	//     3. The identity phase uses `supervisorctl restart envoy`
+	//        (idempotent — start on first boot, stop+start on a re-render
+	//        after fork) so a restored snapshot drops its stale identity
+	//        cleanly.
 	//   Boot path keeps running through unchanged: the wait simply no-ops
 	//   when there's no fork bundle to receive.
 
-	// Phase C: identity-bound. Render envoy bootstrap with INST_NAME/JWT/etc
-	// and (re)start envoy + kernel-images-api. Both services use `restart`
-	// so the same code path works for boot (start a stopped service) and
-	// post-fork (stop+start to force a re-read of refreshed envs).
-	phaseCStart := time.Now()
+	// Identity phase: identity-bound services. Render envoy bootstrap with
+	// INST_NAME/JWT/etc and (re)start envoy + kernel-images-api. Both
+	// services use `restart` so the same code path works for boot (start a
+	// stopped service) and post-fork (stop+start to force a re-read of
+	// refreshed envs).
+	identityStart := time.Now()
 	if isExecutable("/usr/local/bin/init-envoy.sh") {
 		runStreamFatal("envoy-init", "/usr/local/bin/init-envoy.sh")
 	}
 	restartAll("kernel-images-api")
-	phaseCDone := time.Now()
+	identityDone := time.Now()
 
 	// Wait for the union of caller-visible ready signals. Each probe runs
 	// concurrently and logs as soon as its target is reachable.
 	probeDurations := waitAllReady(t0, webrtc)
-	logf("ready in %s (phaseA=%s phaseC=%s; %s)",
+	logf("ready in %s (browser=%s identity=%s; %s)",
 		since(t0),
-		phaseADone.Sub(phaseAStart).Truncate(time.Millisecond),
-		phaseCDone.Sub(phaseCStart).Truncate(time.Millisecond),
+		browserDone.Sub(browserStart).Truncate(time.Millisecond),
+		identityDone.Sub(identityStart).Truncate(time.Millisecond),
 		formatProbeDurations(probeDurations))
 
 	// Cosmetic + non-critical services come up off the hot path. Headless has
@@ -225,8 +232,11 @@ func main() {
 		}()
 	}
 
-	// Re-enable scale-to-zero now that the hot path is up.
-	enableScaleToZero()
+	// Re-enable scale-to-zero now that the hot path is up — unless the caller
+	// asked to keep it disabled via ENABLE_STZ=false/0.
+	if stzManaged {
+		enableScaleToZero()
+	}
 
 	// Block on supervisord; container exits when it does.
 	if err := supCmd.Wait(); err != nil {
@@ -235,37 +245,23 @@ func main() {
 }
 
 // waitAllReady gates on all caller-visible ready signals concurrently:
-//   - CDP   : HTTP /json/version on the public CDP port (proves api proxy is wired
-//             through to chromium's DevTools server)
-//   - cd    : TCP on chromedriver's internal port 9225 (api on 9224 is bound when
-//             api itself is up, which CDP readiness already implies)
-//   - proxy : TCP on chromium's --forward-proxy-port (8888)
-//   - neko  : TCP on neko's HTTP port (8080), only when ENABLE_WEBRTC=true
-//   - envoy : TCP on envoy's listener (3128), only when envoy is enabled
+//   - cdp          : HTTP /json/version on the public CDP port (proves api proxy is
+//                    wired through to chromium's DevTools server)
+//   - chromedriver : TCP on chromedriver's internal port 9225 (api on 9224 is bound
+//                    when api itself is up, which CDP readiness already implies)
+//   - neko         : TCP on neko's HTTP port (8080), only when ENABLE_WEBRTC=true
+//   - envoy        : TCP on envoy's listener (3128), only when envoy is enabled
 func waitAllReady(t0 time.Time, webrtc bool) map[string]time.Duration {
 	chromePort := os.Getenv("CHROME_PORT")
-	if chromePort == "" {
-		chromePort = "9222"
-	}
-	probes := []struct {
-		name string
-		fn   func() bool
-	}{
+	probes := []probe{
 		{"cdp", func() bool { return httpProbeOK("http://127.0.0.1:" + chromePort + "/json/version") }},
 		{"chromedriver", func() bool { return tcpOK("127.0.0.1", "9225") }},
-		{"forward-proxy", func() bool { return tcpOK("127.0.0.1", "8888") }},
 	}
 	if webrtc {
-		probes = append(probes, struct {
-			name string
-			fn   func() bool
-		}{"neko", func() bool { return tcpOK("127.0.0.1", "8080") }})
+		probes = append(probes, probe{"neko", func() bool { return tcpOK("127.0.0.1", "8080") }})
 	}
 	if envoyEnabled() {
-		probes = append(probes, struct {
-			name string
-			fn   func() bool
-		}{"envoy", func() bool { return tcpOK("127.0.0.1", "3128") }})
+		probes = append(probes, probe{"envoy", func() bool { return tcpOK("127.0.0.1", "3128") }})
 	}
 
 	type result struct {
@@ -301,11 +297,16 @@ func waitAllReady(t0 time.Time, webrtc bool) map[string]time.Duration {
 	return durations
 }
 
+type probe struct {
+	name string
+	fn   func() bool
+}
+
 // formatProbeDurations renders waitAllReady's per-probe ready times in a stable
 // order so log lines diff cleanly across runs. Probes that never succeeded are
 // omitted (they'd already have logged a WARNING separately).
 func formatProbeDurations(d map[string]time.Duration) string {
-	order := []string{"cdp", "chromedriver", "forward-proxy", "neko", "envoy"}
+	order := []string{"cdp", "chromedriver", "neko", "envoy"}
 	parts := make([]string, 0, len(d))
 	for _, name := range order {
 		if v, ok := d[name]; ok {
