@@ -20,22 +20,22 @@ type Controller interface {
 	Enable(ctx context.Context) error
 }
 
-// PinnedController extends Controller with an out-of-band "pin" that holds
-// scale-to-zero disabled independently of the request-driven refcount used by
-// the HTTP middleware. While the pin is held, request-driven Enable calls do
-// not re-enable scale-to-zero; only Unpin can release it.
+// PinnedController extends Controller with an out-of-band override that holds
+// scale-to-zero off independently of the request-driven refcount used by the
+// HTTP middleware. While the override is held, request-driven Enable calls do
+// not re-enable scale-to-zero; only EnableStz can release it.
 //
 // This is intended for explicit lifecycle control (e.g. a control-plane API
 // reserving a VM in a hot pool) where the holder is not tied to an inflight
 // HTTP request.
 type PinnedController interface {
 	Controller
-	// Pin holds scale-to-zero disabled until Unpin is called. The pin is a
-	// boolean, not a counter: repeated calls are idempotent.
-	Pin(ctx context.Context) error
-	// Unpin releases the pin. If no request-driven holders remain,
+	// DisableStz holds scale-to-zero off until EnableStz is called. Boolean,
+	// not a counter: repeated calls are idempotent.
+	DisableStz(ctx context.Context) error
+	// EnableStz releases the override. If no request-driven holders remain,
 	// scale-to-zero is re-enabled (honoring any configured cooldown).
-	Unpin(ctx context.Context) error
+	EnableStz(ctx context.Context) error
 }
 
 type unikraftCloudController struct {
@@ -84,8 +84,8 @@ func NewNoopController() *NoopController { return &NoopController{} }
 
 func (NoopController) Disable(context.Context) error { return nil }
 func (NoopController) Enable(context.Context) error  { return nil }
-func (NoopController) Pin(context.Context) error     { return nil }
-func (NoopController) Unpin(context.Context) error   { return nil }
+func (NoopController) DisableStz(context.Context) error { return nil }
+func (NoopController) EnableStz(context.Context) error  { return nil }
 
 // Oncer wraps a Controller and ensures that Disable and Enable are called at most once.
 type Oncer struct {
@@ -114,7 +114,7 @@ type DebouncedController struct {
 	mu            sync.Mutex
 	disabled      bool
 	activeCount   int
-	pinned        bool
+	stzDisabled   bool
 	reenableTimer *time.Timer
 }
 
@@ -165,10 +165,10 @@ func (c *DebouncedController) Enable(ctx context.Context) error {
 	return c.maybeReenableLocked(ctx)
 }
 
-// Pin sets the out-of-band pin and ensures scale-to-zero is disabled.
-// Idempotent: re-pinning while already pinned is a no-op. Cancels any pending
+// DisableStz sets the out-of-band override and ensures scale-to-zero is off.
+// Idempotent: calling while already disabled is a no-op. Cancels any pending
 // cooldown timer.
-func (c *DebouncedController) Pin(ctx context.Context) error {
+func (c *DebouncedController) DisableStz(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -177,7 +177,7 @@ func (c *DebouncedController) Pin(ctx context.Context) error {
 		c.reenableTimer = nil
 	}
 
-	if c.pinned {
+	if c.stzDisabled {
 		return nil
 	}
 
@@ -188,29 +188,29 @@ func (c *DebouncedController) Pin(ctx context.Context) error {
 		c.disabled = true
 	}
 
-	c.pinned = true
+	c.stzDisabled = true
 	return nil
 }
 
-// Unpin releases the pin. If no request-driven holders remain, scale-to-zero
-// is re-enabled (honoring any configured cooldown). Idempotent: calling when no
-// pin is held is a no-op.
-func (c *DebouncedController) Unpin(ctx context.Context) error {
+// EnableStz releases the override. If no request-driven holders remain,
+// scale-to-zero is re-enabled (honoring any configured cooldown). Idempotent:
+// calling when no override is held is a no-op.
+func (c *DebouncedController) EnableStz(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if !c.pinned {
+	if !c.stzDisabled {
 		return nil
 	}
-	c.pinned = false
+	c.stzDisabled = false
 
 	return c.maybeReenableLocked(ctx)
 }
 
 // maybeReenableLocked re-enables scale-to-zero if no holders (request-driven or
-// pin) remain. Caller must hold c.mu.
+// out-of-band override) remain. Caller must hold c.mu.
 func (c *DebouncedController) maybeReenableLocked(ctx context.Context) error {
-	if c.activeCount > 0 || c.pinned || !c.disabled {
+	if c.activeCount > 0 || c.stzDisabled || !c.disabled {
 		return nil
 	}
 
@@ -229,7 +229,7 @@ func (c *DebouncedController) maybeReenableLocked(ctx context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
-		if c.activeCount > 0 || c.pinned || !c.disabled {
+		if c.activeCount > 0 || c.stzDisabled || !c.disabled {
 			return
 		}
 
