@@ -109,6 +109,7 @@ func main() {
 		stz,
 		nekoAuthClient,
 		captureSession,
+		eventStream,
 		config.DisplayNum,
 	)
 	if err != nil {

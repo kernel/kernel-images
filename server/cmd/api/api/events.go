@@ -15,13 +15,9 @@ import (
 )
 
 // PublishEvent handles POST /events/publish.
-// Injects a caller-supplied event into the active capture session. Returns 400
-// if no session is active or the event fails validation.
+// Injects a caller-supplied event into the event bus. Returns 400 if the event
+// fails validation.
 func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventRequestObject) (oapi.PublishEventResponseObject, error) {
-	if !s.captureSession.Active() {
-		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no active capture session"}}, nil
-	}
-
 	body := req.Body
 	if body == nil || body.Type == "" {
 		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is required"}}, nil
@@ -67,34 +63,25 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 		ev.Data = json.RawMessage(data)
 	}
 
-	env := s.captureSession.PublishUnfiltered(ev)
-	if env.Seq == 0 {
-		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no active capture session"}}, nil
-	}
+	env := s.eventStream.Publish(events.Envelope{Event: ev})
 	return oapi.PublishEvent200JSONResponse(buildEnvelopeResponse(env)), nil
 }
 
 // StreamEvents handles GET /events/stream.
-// Opens an SSE stream of envelopes from the active capture session's ring buffer.
+// Opens an SSE stream of envelopes from the event bus ring buffer.
 // Supports reconnection via the Last-Event-ID header. Emits a keepalive comment
-// frame every 15 s when no event arrives, and exits cleanly on session_ended.
+// frame every 15 s when no event arrives.
 func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequestObject) (oapi.StreamEventsResponseObject, error) {
-	if !s.captureSession.Active() {
-		return oapi.StreamEvents400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no active capture session"}}, nil
-	}
-
-	// Default to the start of the current session so fresh connections only see
-	// current-session events. Seqs are process-monotonic, so a Last-Event-ID
-	// from any previous session is valid and resumes correctly from that point.
-	afterSeq := s.captureSession.SessionStartSeq()
+	// Default to the current seq so fresh connections only see new events.
+	// Seqs are process-monotonic; a Last-Event-ID from any prior session resumes correctly.
+	afterSeq := s.eventStream.Seq()
 	if id := req.Params.LastEventID; id != nil && *id != "" {
 		if n, err := strconv.ParseUint(*id, 10, 64); err == nil && n > 0 {
 			afterSeq = n
 		}
 	}
 
-	sessionID := s.captureSession.ID()
-	reader := s.captureSession.NewReader(afterSeq)
+	reader := s.eventStream.NewReader(afterSeq)
 
 	pr, pw := io.Pipe()
 	go func() {
@@ -126,7 +113,7 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 						Type:     events.TypeEventsDropped,
 						Category: events.CategorySystem,
 						Source:   events.Source{Kind: events.KindKernelAPI},
-						Data:     json.RawMessage(fmt.Sprintf(`{"capture_session_id":%q,"dropped":%d}`, sessionID, result.Dropped)),
+						Data:     json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, result.Dropped)),
 					},
 				}
 				// Omit the id: field so the client's Last-Event-ID is not overwritten.
@@ -138,9 +125,6 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 
 			env := result.Envelope
 			if err := writeEnvelopeFrame(pw, &env.Seq, *env); err != nil {
-				return
-			}
-			if env.Event.Type == events.TypeSessionEnded {
 				return
 			}
 		}

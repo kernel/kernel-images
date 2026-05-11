@@ -1276,9 +1276,9 @@ paths:
           $ref: "#/components/responses/NotFoundError"
   /events/publish:
     post:
-      summary: Publish an event into the active capture session
+      summary: Publish an event into the event bus
       description: >
-        Injects an event into the active capture session's event stream.
+        Injects an event into the global event bus.
         The event is assigned a monotonically increasing sequence number and
         fanned out to all open stream connections.
       operationId: publishEvent
@@ -1299,16 +1299,16 @@ paths:
           $ref: "#/components/responses/BadRequestError"
   /events/stream:
     get:
-      summary: Stream capture-session events as Server-Sent Events
+      summary: Stream events as Server-Sent Events
       description: >
-        Opens a live SSE stream of events from the active capture session.
+        Opens a live SSE stream of events from the global event bus.
         Each frame has the form `id: {seq}\ndata: {envelope-json}\n\n`.
         A synthetic `events_dropped` frame is sent when events were evicted
         from the buffer before the client could read them; its `id` is 0.
-        A `session_ended` frame is sent when the session stops; the connection
-        closes after that frame. Returns 400 if no capture session is active.
         Sequence numbers are process-monotonic and do not reset between sessions;
         a Last-Event-ID from any previous session is valid for resuming the stream.
+        Fresh connections with no Last-Event-ID start from the current sequence
+        and only see new events.
       operationId: streamEvents
       parameters:
         - in: header
@@ -1318,12 +1318,11 @@ paths:
           required: false
           description: >
             Resume after this sequence number. Omit or send 0 to start from
-            the beginning of the current session. Sequence numbers are
-            process-monotonic, so a value from a previous session resumes
-            correctly from that point.
+            the current position. Sequence numbers are process-monotonic, so
+            a value from a previous session resumes correctly from that point.
       responses:
         "200":
-          description: Live SSE stream of capture-session events.
+          description: Live SSE stream of events.
           headers:
             X-SSE-Content-Type:
               description: Media type of SSE data events (application/json)
@@ -1334,8 +1333,6 @@ paths:
             text/event-stream:
               schema:
                 $ref: "#/components/schemas/PublishedEnvelope"
-        "400":
-          $ref: "#/components/responses/BadRequestError"
 components:
   schemas:
     Event:
@@ -1391,7 +1388,7 @@ components:
       additionalProperties: false
     PublishEventRequest:
       type: object
-      description: Request body for publishing an event into the active capture session.
+      description: Request body for publishing an event into the event bus.
       required:
         - type
       properties:

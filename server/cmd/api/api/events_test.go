@@ -85,12 +85,4 @@ func TestEventLifecycle(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for session_ended")
 	}
-
-	// Verify the stream closes after session_ended.
-	select {
-	case _, open := <-received:
-		assert.False(t, open, "stream should be closed after session_ended")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for stream to close")
-	}
 }
