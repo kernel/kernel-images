@@ -166,8 +166,10 @@ RUN set -eux; \
     chmod +x /usr/local/bin/chromedriver /opt/chrome-for-testing/chromium; \
     rm -rf /tmp/chrome.zip /tmp/cd.zip /tmp/chromedriver-linux64
 
-# Copy Chromium policy configuration
-RUN mkdir -p /etc/chromium/policies/managed
+# Chrome for Testing reads managed policies from /etc/opt/chrome_for_testing/policies, but
+# the server writes them to /etc/chromium/policies. Symlink so writes flow to the real path.
+RUN mkdir -p /etc/chromium/policies/managed /etc/opt/chrome_for_testing && \
+    ln -sfn /etc/chromium/policies /etc/opt/chrome_for_testing/policies
 COPY shared/chromium-policies/managed/policy.json /etc/chromium/policies/managed/policy.json
 
 # Install FFmpeg (latest static build) for the recording server
