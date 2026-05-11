@@ -1303,10 +1303,11 @@ paths:
       description: >
         Opens a live SSE stream of events from the global event bus.
         Each frame has the form `id: {seq}\ndata: {envelope-json}\n\n`.
-        A synthetic `events_dropped` frame is sent when events were evicted
-        from the buffer before the client could read them; its `id` is 0.
         Sequence numbers are process-monotonic and do not reset between sessions;
         a Last-Event-ID from any previous session is valid for resuming the stream.
+        Drops are signaled by gaps in the `id` field: if the received `id` is more
+        than 1 ahead of the last-seen `id`, events were evicted from the buffer.
+        Clients should track the last-seen `id` to detect gaps.
         Fresh connections with no Last-Event-ID start from the current sequence
         and only see new events.
       operationId: streamEvents
