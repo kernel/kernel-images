@@ -68,10 +68,13 @@ func (rb *ringBuffer) newReader(afterSeq uint64) *Reader {
 
 // ReadResult is returned by Reader.Read. Exactly one of Envelope or Dropped is
 // set: Envelope is non-nil for a normal read, Dropped is non-zero when the
-// reader fell behind and events were lost.
+// reader fell behind and events were lost. When Dropped > 0, DroppedFrom and
+// DroppedTo are the inclusive seq range of the dropped events.
 type ReadResult struct {
-	Envelope *Envelope
-	Dropped  uint64
+	Envelope    *Envelope
+	Dropped     uint64
+	DroppedFrom uint64 // first seq of the dropped range (only valid when Dropped > 0)
+	DroppedTo   uint64 // last seq of the dropped range (only valid when Dropped > 0)
 }
 
 // Reader tracks an independent read position in a ringBuffer.
@@ -102,10 +105,11 @@ func (r *Reader) Read(ctx context.Context) (ReadResult, error) {
 		}
 
 		if r.nextSeq < oldest {
+			from := r.nextSeq
 			dropped := oldest - r.nextSeq
 			r.nextSeq = oldest
 			r.rb.mu.RUnlock()
-			return ReadResult{Dropped: dropped}, nil
+			return ReadResult{Dropped: dropped, DroppedFrom: from, DroppedTo: oldest - 1}, nil
 		}
 
 		if r.nextSeq <= latest {

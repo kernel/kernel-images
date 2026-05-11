@@ -49,7 +49,7 @@ func (w *StorageWriter) Run(ctx context.Context) error {
 			return err
 		}
 		if res.Dropped > 0 {
-			w.log.Warn("storage writer: dropped events", "count", res.Dropped)
+			w.log.Warn("storage writer: dropped events", "count", res.Dropped, "from_seq", res.DroppedFrom, "to_seq", res.DroppedTo)
 			continue
 		}
 		if err := w.storage.Append(ctx, *res.Envelope); err != nil {
