@@ -145,19 +145,10 @@ func (s *CaptureSession) Active() bool {
 	return s.captureSessionID != ""
 }
 
-// Stop ends the current session by publishing a synthetic capture_session_ended event,
-// then clears the session ID. The ring buffer is left intact so existing readers
-// can finish draining.
+// Stop ends the current session. The ring buffer is left intact so existing
+// readers can finish draining.
 func (s *CaptureSession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.captureSessionID == "" {
-		return
-	}
-	s.publishLocked(events.Event{
-		Type:     events.CaptureSessionEnded,
-		Category: events.CategorySystem,
-		Source:   events.Source{Kind: events.KindKernelAPI},
-	})
 	s.captureSessionID = ""
 }

@@ -23,10 +23,6 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	if body == nil || body.Type == "" {
 		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is required"}}, nil
 	}
-	if body.Type == events.CaptureSessionEnded || body.Type == events.EventsDropped {
-		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is reserved"}}, nil
-	}
-
 	ev := events.Event{Type: body.Type}
 
 	ev.Ts = time.Now().UnixMicro()
@@ -108,19 +104,6 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 			}
 
 			if result.Dropped > 0 {
-				env := events.Envelope{
-					Event: events.Event{
-						Ts:       time.Now().UnixMicro(),
-						Type:     events.EventsDropped,
-						Category: events.CategorySystem,
-						Source:   events.Source{Kind: events.KindKernelAPI},
-						Data:     json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, result.Dropped)),
-					},
-				}
-				// Omit the id: field so the client's Last-Event-ID is not overwritten.
-				if err := writeEnvelopeFrame(pw, nil, env); err != nil {
-					return
-				}
 				continue
 			}
 

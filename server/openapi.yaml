@@ -1424,9 +1424,9 @@ components:
           format: int64
           minimum: 1
           description: >
-            Monotonically increasing sequence number assigned to this event
-            within the current capture session. Use with Last-Event-ID to
-            resume the SSE stream from this point.
+            Process-monotonic sequence number assigned across the lifetime of
+            the server. Use with Last-Event-ID to resume the SSE stream from
+            this point.
         event:
           $ref: "#/components/schemas/Event"
       additionalProperties: false

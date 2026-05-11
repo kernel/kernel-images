@@ -77,12 +77,4 @@ func TestEventLifecycle(t *testing.T) {
 	stopResp, err := svc.StopCaptureSession(ctx, oapi.StopCaptureSessionRequestObject{})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.StopCaptureSession200JSONResponse{}, stopResp)
-
-	// Verify capture_session_ended arrives on the stream.
-	select {
-	case env := <-received:
-		assert.Equal(t, events.CaptureSessionEnded, env.Event.Type)
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for capture_session_ended")
-	}
 }
