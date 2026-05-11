@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 )
 
 // Storage is the durable storage backend for browser events.
@@ -18,10 +19,11 @@ type Storage interface {
 // is cancelled. Call Close after Run returns to flush in-flight writes.
 // Starts from the oldest available event in the ring, not the current tail.
 type StorageWriter struct {
-	reader  *Reader
-	storage Storage
-	log     *slog.Logger
-	once    sync.Once
+	reader       *Reader
+	storage      Storage
+	log          *slog.Logger
+	once         sync.Once
+	appendErrors atomic.Uint64 // total append failures; best-effort, not retried
 }
 
 // NewStorageWriter creates a writer that reads from es starting at seq 0.
@@ -53,9 +55,15 @@ func (w *StorageWriter) Run(ctx context.Context) error {
 			continue
 		}
 		if err := w.storage.Append(ctx, *res.Envelope); err != nil {
-			w.log.Error("storage writer: append failed", "seq", res.Envelope.Seq, "err", err)
+			total := w.appendErrors.Add(1)
+			w.log.Error("storage writer: append failed", "seq", res.Envelope.Seq, "err", err, "total_append_errors", total)
 		}
 	}
+}
+
+// AppendErrors returns the total number of Append failures since Run started.
+func (w *StorageWriter) AppendErrors() uint64 {
+	return w.appendErrors.Load()
 }
 
 // Close drains in-flight writes and releases backend resources.
