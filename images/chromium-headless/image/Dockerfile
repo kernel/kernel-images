@@ -136,6 +136,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     dbus-x11 \
     xvfb \
     x11-utils \
+    x11-xserver-utils \
     xclip \
     xdotool \
     fontconfig \
