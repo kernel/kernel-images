@@ -39,12 +39,10 @@ func cdpEvent(typ string, cat events.EventCategory) events.Event {
 	return events.Event{Type: typ, Category: cat, Source: events.Source{Kind: events.KindCDP}}
 }
 
-func sessionIDFromData(t *testing.T, data json.RawMessage) string {
+func sessionIDFromMetadata(t *testing.T, src events.Source) string {
 	t.Helper()
-	var m map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(data, &m))
-	var id string
-	require.NoError(t, json.Unmarshal(m["capture_session_id"], &id))
+	id, ok := src.Metadata["capture_session_id"]
+	require.True(t, ok, "capture_session_id not found in source.metadata")
 	return id
 }
 
@@ -96,7 +94,7 @@ func TestCaptureSession(t *testing.T) {
 		reader := p.NewReader(2)
 		env := readEnvelope(t, reader, ctx)
 		assert.Equal(t, uint64(3), env.Seq)
-		assert.Equal(t, "session-2", sessionIDFromData(t, env.Event.Data))
+		assert.Equal(t, "session-2", sessionIDFromMetadata(t, env.Event.Source))
 		assert.Equal(t, "ev.three", env.Event.Type)
 	})
 
@@ -147,7 +145,7 @@ func TestCaptureSession(t *testing.T) {
 		assert.Equal(t, events.CategoryPage, env.Event.Category)
 	})
 
-	t.Run("start_sets_capture_session_id_in_data", func(t *testing.T) {
+	t.Run("start_sets_capture_session_id_in_source_metadata", func(t *testing.T) {
 		p := newTestCaptureSession(t)
 		p.Start("test-uuid", CaptureConfig{})
 
@@ -158,10 +156,10 @@ func TestCaptureSession(t *testing.T) {
 		defer cancel()
 
 		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, "test-uuid", sessionIDFromData(t, env.Event.Data))
+		assert.Equal(t, "test-uuid", sessionIDFromMetadata(t, env.Event.Source))
 	})
 
-	t.Run("capture_session_id_merged_with_existing_data", func(t *testing.T) {
+	t.Run("data_unchanged_when_session_id_in_metadata", func(t *testing.T) {
 		p := newTestCaptureSession(t)
 		p.Start("merge-session", CaptureConfig{})
 
@@ -178,10 +176,8 @@ func TestCaptureSession(t *testing.T) {
 		defer cancel()
 
 		env := readEnvelope(t, reader, ctx)
-		var m map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal(env.Event.Data, &m))
-		assert.Contains(t, m, "capture_session_id")
-		assert.Contains(t, m, "url")
+		assert.Equal(t, "merge-session", sessionIDFromMetadata(t, env.Event.Source))
+		assert.JSONEq(t, `{"url":"https://example.com"}`, string(env.Event.Data))
 	})
 
 	t.Run("truncation_applied", func(t *testing.T) {
@@ -209,32 +205,3 @@ func TestCaptureSession(t *testing.T) {
 	})
 }
 
-func TestMergeSessionID(t *testing.T) {
-	t.Run("nil data", func(t *testing.T) {
-		result := mergeSessionID(nil, "abc")
-		var m map[string]string
-		require.NoError(t, json.Unmarshal(result, &m))
-		assert.Equal(t, "abc", m["capture_session_id"])
-	})
-
-	t.Run("null data", func(t *testing.T) {
-		result := mergeSessionID(json.RawMessage("null"), "abc")
-		var m map[string]string
-		require.NoError(t, json.Unmarshal(result, &m))
-		assert.Equal(t, "abc", m["capture_session_id"])
-	})
-
-	t.Run("object data", func(t *testing.T) {
-		result := mergeSessionID(json.RawMessage(`{"key":"val"}`), "abc")
-		var m map[string]string
-		require.NoError(t, json.Unmarshal(result, &m))
-		assert.Equal(t, "abc", m["capture_session_id"])
-		assert.Equal(t, "val", m["key"])
-	})
-
-	t.Run("non-object data is unchanged", func(t *testing.T) {
-		raw := json.RawMessage(`[1,2,3]`)
-		result := mergeSessionID(raw, "abc")
-		assert.Equal(t, string(raw), string(result))
-	})
-}

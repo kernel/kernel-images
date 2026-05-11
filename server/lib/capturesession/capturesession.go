@@ -1,7 +1,6 @@
 package capturesession
 
 import (
-	"encoding/json"
 	"sync"
 	"time"
 
@@ -56,13 +55,16 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	}
 }
 
-// publishLocked stamps capture_session_id into ev.Data and forwards to the bus.
+// publishLocked stamps capture_session_id into ev.Source.Metadata and forwards to the bus.
 // Requires s.mu to be held.
 func (s *CaptureSession) publishLocked(ev events.Event) events.Envelope {
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
 	}
-	ev.Data = mergeSessionID(ev.Data, s.captureSessionID)
+	if ev.Source.Metadata == nil {
+		ev.Source.Metadata = make(map[string]string)
+	}
+	ev.Source.Metadata["capture_session_id"] = s.captureSessionID
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 
@@ -77,17 +79,6 @@ func (s *CaptureSession) Publish(ev events.Event) {
 		return
 	}
 	s.publishLocked(ev)
-}
-
-// PublishUnfiltered forwards ev to the EventStream without applying the category
-// filter. Returns the assigned Envelope, or a zero Envelope if no session is active.
-func (s *CaptureSession) PublishUnfiltered(ev events.Event) events.Envelope {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.captureSessionID == "" {
-		return events.Envelope{}
-	}
-	return s.publishLocked(ev)
 }
 
 // NewReader returns a Reader from the EventStream positioned after afterSeq.
@@ -169,23 +160,4 @@ func (s *CaptureSession) Stop() {
 		Source:   events.Source{Kind: events.KindKernelAPI},
 	})
 	s.captureSessionID = ""
-}
-
-// mergeSessionID inserts capture_session_id into a JSON object Data payload.
-// If data is nil or null, returns {"capture_session_id":"<id>"}.
-// If data is a JSON object, merges the field in.
-// Non-object data is left unchanged (capture_session_id is not injected).
-func mergeSessionID(data json.RawMessage, sessionID string) json.RawMessage {
-	if len(data) == 0 || string(data) == "null" {
-		b, _ := json.Marshal(map[string]string{"capture_session_id": sessionID})
-		return b
-	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(data, &m); err != nil {
-		return data
-	}
-	idBytes, _ := json.Marshal(sessionID)
-	m["capture_session_id"] = idBytes
-	b, _ := json.Marshal(m)
-	return b
 }
