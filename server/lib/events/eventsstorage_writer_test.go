@@ -15,7 +15,7 @@ type mockBackend struct {
 	mu        sync.Mutex
 	appended  []Envelope
 	err       error
-	errCount  int // total calls that returned an error
+	errCount  int
 }
 
 func (m *mockBackend) Append(_ context.Context, env Envelope) error {
@@ -116,7 +116,11 @@ func TestStorageWriter_DroppedEvents(t *testing.T) {
 	cancel()
 	<-done
 
-	for _, env := range backend.envelopes() {
+	// With ring capacity 4 and 8 publishes, the writer must have skipped at
+	// least 4 events via a drop gap — so fewer than 8 envelopes landed.
+	got := backend.envelopes()
+	assert.Less(t, len(got), 8, "expected fewer than 8 envelopes due to ring overflow")
+	for _, env := range got {
 		assert.NotEmpty(t, env.Event.Type)
 	}
 }
@@ -164,5 +168,5 @@ func TestStorageWriter_ContextCancelled(t *testing.T) {
 	cancel()
 
 	err := w.Run(ctx)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 }

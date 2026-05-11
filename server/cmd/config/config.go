@@ -37,11 +37,9 @@ type Config struct {
 	DevToolsProxyAddr string `envconfig:"DEVTOOLS_PROXY_ADDR" default:""`
 
 	// S2 durable event storage. All three fields must be set to enable the S2 sink.
-	S2Basin          string        `envconfig:"S2_BASIN"              default:""`
-	S2AccessToken    string        `envconfig:"S2_ACCESS_TOKEN"       default:""`
-	S2Stream         string        `envconfig:"S2_STREAM"             default:""`
-	S2BatcherLinger  time.Duration `envconfig:"S2_BATCHER_LINGER"     default:"100ms"`
-	S2BatcherMaxRecs int           `envconfig:"S2_BATCHER_MAX_RECORDS" default:"50"`
+	S2Basin       string `envconfig:"S2_BASIN"        default:""`
+	S2AccessToken string `envconfig:"S2_ACCESS_TOKEN" default:""`
+	S2Stream      string `envconfig:"S2_STREAM"       default:""`
 }
 
 // Load loads configuration from environment variables

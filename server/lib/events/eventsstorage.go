@@ -6,6 +6,7 @@ import (
 )
 
 // Storage is the durable storage backend for browser events.
+// Append is called serially from StorageWriter.Run and need not be thread-safe.
 type Storage interface {
 	Append(ctx context.Context, env Envelope) error
 	Close() error
@@ -14,6 +15,7 @@ type Storage interface {
 // StorageWriter drains the ring buffer and forwards each envelope to the
 // configured Storage backend. Single-use: call Run once; it blocks until ctx
 // is cancelled. Call Close after Run returns to flush in-flight writes.
+// Starts from the oldest available event in the ring, not the current tail.
 type StorageWriter struct {
 	reader  *Reader
 	storage Storage
@@ -28,12 +30,12 @@ func NewStorageWriter(es *EventStream, storage Storage) *StorageWriter {
 }
 
 // Run reads from the ring buffer and appends each envelope to storage until
-// ctx is cancelled. It returns nil on clean shutdown.
+// ctx is cancelled. Returns ctx.Err() on clean shutdown.
 func (w *StorageWriter) Run(ctx context.Context) error {
 	for {
 		res, err := w.reader.Read(ctx)
 		if err != nil {
-			return nil
+			return ctx.Err()
 		}
 		if res.Dropped > 0 {
 			slog.Warn("storage writer: dropped events", "count", res.Dropped)

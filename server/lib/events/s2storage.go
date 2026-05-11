@@ -24,16 +24,25 @@ type s2Producer struct {
 	wg sync.WaitGroup
 }
 
-func (sp *s2Producer) close() error {
-	sp.wg.Wait()
+func (sp *s2Producer) close(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		sp.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	return sp.p.Close()
 }
 
 // S2Storage is a Storage backed by S2. All events are appended to a single
 // fixed stream whose name is provided at construction time.
 type S2Storage struct {
-	stream   *s2.StreamClient
-	producer *s2Producer
+	producer   s2Producer
+	shutdownCh chan struct{} // closed when Close is called, bounds ack goroutine contexts
 }
 
 // NewS2Storage creates an S2Storage that appends to the given stream within basin.
@@ -41,15 +50,6 @@ type S2Storage struct {
 func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cfg S2Config) (*S2Storage, error) {
 	if basin == "" || accessToken == "" || streamName == "" {
 		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
-	}
-
-	linger := cfg.BatcherLinger
-	if linger <= 0 {
-		linger = 100 * time.Millisecond
-	}
-	maxRecs := cfg.BatcherMaxRecords
-	if maxRecs <= 0 {
-		maxRecs = 50
 	}
 
 	client := s2.New(accessToken, nil)
@@ -61,14 +61,14 @@ func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 	}
 
 	batcher := s2.NewBatcher(ctx, &s2.BatchingOptions{
-		Linger:     linger,
-		MaxRecords: maxRecs,
+		Linger:     cfg.BatcherLinger,
+		MaxRecords: cfg.BatcherMaxRecords,
 	})
 	producer := s2.NewProducer(ctx, batcher, session)
 
 	return &S2Storage{
-		stream:   stream,
-		producer: &s2Producer{p: producer},
+		producer:   s2Producer{p: producer},
+		shutdownCh: make(chan struct{}),
 	}, nil
 }
 
@@ -87,9 +87,17 @@ func (s *S2Storage) Append(_ context.Context, env Envelope) error {
 	s.producer.wg.Add(1)
 	go func() {
 		defer s.producer.wg.Done()
-		// Use a fresh background context so the ack isn't tied to any request
-		// context, but the wg ensures Close() waits before the process exits.
-		ticket, err := future.Wait(context.Background())
+		ackCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			select {
+			case <-s.shutdownCh:
+				cancel()
+			case <-ackCtx.Done():
+			}
+		}()
+
+		ticket, err := future.Wait(ackCtx)
 		if err != nil {
 			slog.Error("s2storage: wait for submit failed", "seq", env.Seq, "err", err)
 			return
@@ -97,7 +105,7 @@ func (s *S2Storage) Append(_ context.Context, env Envelope) error {
 		if ticket == nil {
 			return
 		}
-		if _, err := ticket.Ack(context.Background()); err != nil {
+		if _, err := ticket.Ack(ackCtx); err != nil {
 			slog.Error("s2storage: ack failed", "seq", env.Seq, "err", err)
 		}
 	}()
@@ -105,8 +113,9 @@ func (s *S2Storage) Append(_ context.Context, env Envelope) error {
 	return nil
 }
 
-// Close drains in-flight ack goroutines then closes the producer, which flushes
-// the S2 batcher to the network.
+// Close cancels in-flight ack goroutines, waits for them to drain, then closes
+// the producer (which flushes the S2 batcher to the network).
 func (s *S2Storage) Close() error {
-	return s.producer.close()
+	close(s.shutdownCh)
+	return s.producer.close(context.Background())
 }
