@@ -11,6 +11,7 @@ import (
 
 	"log/slog"
 
+	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
@@ -304,13 +305,13 @@ func newMockNekoClient(t *testing.T) *nekoclient.AuthClient {
 	return client
 }
 
-func newCaptureSession(t *testing.T) *events.CaptureSession {
+func newCaptureSession(t *testing.T) *capturesession.CaptureSession {
 	t.Helper()
 	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return events.NewCaptureSession(es)
+	return capturesession.NewCaptureSession(es)
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {

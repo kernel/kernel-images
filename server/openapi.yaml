@@ -1419,13 +1419,9 @@ components:
       type: object
       description: The envelope assigned to a successfully published event.
       required:
-        - capture_session_id
         - seq
         - event
       properties:
-        capture_session_id:
-          type: string
-          description: ID of the capture session the event was published into.
         seq:
           type: integer
           format: int64

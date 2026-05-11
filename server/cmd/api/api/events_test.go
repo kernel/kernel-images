@@ -63,7 +63,6 @@ func TestEventLifecycle(t *testing.T) {
 	require.True(t, ok, "expected 200 JSON response")
 	assert.Equal(t, "test.event", r200pub.Event.Type)
 	assert.Greater(t, r200pub.Seq, int64(0))
-	assert.NotEmpty(t, r200pub.CaptureSessionId)
 
 	// Verify the published event arrives on the stream with the same seq.
 	select {

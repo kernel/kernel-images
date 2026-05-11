@@ -68,7 +68,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	}
 
 	env := s.captureSession.PublishUnfiltered(ev)
-	if env.CaptureSessionID == "" {
+	if env.Seq == 0 {
 		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no active capture session"}}, nil
 	}
 	return oapi.PublishEvent200JSONResponse(buildEnvelopeResponse(env)), nil
@@ -121,14 +121,12 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 
 			if result.Dropped > 0 {
 				env := events.Envelope{
-					CaptureSessionID: sessionID,
-					Seq:              0,
 					Event: events.Event{
 						Ts:       time.Now().UnixMicro(),
 						Type:     events.TypeEventsDropped,
 						Category: events.CategorySystem,
 						Source:   events.Source{Kind: events.KindKernelAPI},
-						Data:     json.RawMessage(fmt.Sprintf(`{"dropped":%d}`, result.Dropped)),
+						Data:     json.RawMessage(fmt.Sprintf(`{"capture_session_id":%q,"dropped":%d}`, sessionID, result.Dropped)),
 					},
 				}
 				// Omit the id: field so the client's Last-Event-ID is not overwritten.
@@ -181,9 +179,8 @@ func buildEnvelopeResponse(env events.Envelope) oapi.PublishedEnvelope {
 		respEvent.Source = s
 	}
 	return oapi.PublishedEnvelope{
-		CaptureSessionId: env.CaptureSessionID,
-		Seq:              int64(env.Seq),
-		Event:            respEvent,
+		Seq:   int64(env.Seq),
+		Event: respEvent,
 	}
 }
 

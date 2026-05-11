@@ -1,8 +1,11 @@
-package events
+package capturesession
 
 import (
+	"encoding/json"
 	"sync"
 	"time"
+
+	"github.com/kernel/kernel-images/server/lib/events"
 )
 
 // CaptureConfig holds caller-supplied capture preferences. All fields are
@@ -10,24 +13,25 @@ import (
 type CaptureConfig struct {
 	// Categories limits which event categories are captured.
 	// nil or empty includes all categories.
-	Categories []EventCategory
+	Categories []events.EventCategory
 }
 
 // CaptureSession manages a capture session against a shared EventStream.
-// It is responsible for (a) category-filtering Publish calls and (b) tracking
-// session-scoped metadata (ID, config, timestamps).
+// It is responsible for (a) category-filtering Publish calls, (b) tracking
+// session-scoped metadata (ID, config, timestamps), and (c) embedding
+// capture_session_id into Event.Data before forwarding to the bus.
 type CaptureSession struct {
-	es               *EventStream
+	es               *events.EventStream
 	mu               sync.Mutex
 	captureSessionID string
 	sessionStartSeq  uint64
-	categories       map[EventCategory]struct{}
+	categories       map[events.EventCategory]struct{}
 	createdAt        time.Time
 }
 
-func NewCaptureSession(es *EventStream) *CaptureSession {
-	cats := make(map[EventCategory]struct{}, len(allCategories))
-	for _, c := range allCategories {
+func NewCaptureSession(es *events.EventStream) *CaptureSession {
+	cats := make(map[events.EventCategory]struct{}, len(events.AllCategories))
+	for _, c := range events.AllCategories {
 		cats[c] = struct{}{}
 	}
 	return &CaptureSession{es: es, categories: cats}
@@ -36,8 +40,6 @@ func NewCaptureSession(es *EventStream) *CaptureSession {
 // Start begins a new capture session with the given ID and config. Sequence
 // numbers are process-monotonic and do not reset between sessions; a
 // Last-Event-ID from any previous session is valid for resuming the SSE stream.
-// Events from different sessions are interleaved in the same per-category JSONL
-// files and distinguished by their envelope's captureSessionID.
 func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -46,28 +48,26 @@ func (s *CaptureSession) Start(captureSessionID string, cfg CaptureConfig) {
 	s.createdAt = time.Now()
 	cats := cfg.Categories
 	if len(cats) == 0 {
-		cats = allCategories
+		cats = events.AllCategories
 	}
-	s.categories = make(map[EventCategory]struct{}, len(cats))
+	s.categories = make(map[events.EventCategory]struct{}, len(cats))
 	for _, c := range cats {
 		s.categories[c] = struct{}{}
 	}
 }
 
-// publishLocked builds an envelope and forwards it to the EventStream.
+// publishLocked stamps capture_session_id into ev.Data and forwards to the bus.
 // Requires s.mu to be held.
-func (s *CaptureSession) publishLocked(ev Event) Envelope {
+func (s *CaptureSession) publishLocked(ev events.Event) events.Envelope {
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
 	}
-	return s.es.publish(Envelope{
-		CaptureSessionID: s.captureSessionID,
-		Event:            ev,
-	})
+	ev.Data = mergeSessionID(ev.Data, s.captureSessionID)
+	return s.es.Publish(events.Envelope{Event: ev})
 }
 
 // Publish applies the category filter then forwards ev to the EventStream.
-func (s *CaptureSession) Publish(ev Event) {
+func (s *CaptureSession) Publish(ev events.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.captureSessionID == "" {
@@ -81,17 +81,17 @@ func (s *CaptureSession) Publish(ev Event) {
 
 // PublishUnfiltered forwards ev to the EventStream without applying the category
 // filter. Returns the assigned Envelope, or a zero Envelope if no session is active.
-func (s *CaptureSession) PublishUnfiltered(ev Event) Envelope {
+func (s *CaptureSession) PublishUnfiltered(ev events.Event) events.Envelope {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.captureSessionID == "" {
-		return Envelope{}
+		return events.Envelope{}
 	}
 	return s.publishLocked(ev)
 }
 
 // NewReader returns a Reader from the EventStream positioned after afterSeq.
-func (s *CaptureSession) NewReader(afterSeq uint64) *Reader {
+func (s *CaptureSession) NewReader(afterSeq uint64) *events.Reader {
 	return s.es.NewReader(afterSeq)
 }
 
@@ -119,7 +119,7 @@ func (s *CaptureSession) SessionStartSeq() uint64 {
 func (s *CaptureSession) Config() CaptureConfig {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cats := make([]EventCategory, 0, len(s.categories))
+	cats := make([]events.EventCategory, 0, len(s.categories))
 	for c := range s.categories {
 		cats = append(cats, c)
 	}
@@ -139,9 +139,9 @@ func (s *CaptureSession) UpdateConfig(cfg CaptureConfig) {
 	defer s.mu.Unlock()
 	cats := cfg.Categories
 	if len(cats) == 0 {
-		cats = allCategories
+		cats = events.AllCategories
 	}
-	s.categories = make(map[EventCategory]struct{}, len(cats))
+	s.categories = make(map[events.EventCategory]struct{}, len(cats))
 	for _, c := range cats {
 		s.categories[c] = struct{}{}
 	}
@@ -163,11 +163,29 @@ func (s *CaptureSession) Stop() {
 	if s.captureSessionID == "" {
 		return
 	}
-	s.publishLocked(Event{
-		Type:     TypeSessionEnded,
-		Category: CategorySystem,
-		Source:   Source{Kind: KindKernelAPI},
+	s.publishLocked(events.Event{
+		Type:     events.TypeSessionEnded,
+		Category: events.CategorySystem,
+		Source:   events.Source{Kind: events.KindKernelAPI},
 	})
 	s.captureSessionID = ""
 }
 
+// mergeSessionID inserts capture_session_id into a JSON object Data payload.
+// If data is nil or null, returns {"capture_session_id":"<id>"}.
+// If data is a JSON object, merges the field in.
+// Non-object data is left unchanged (capture_session_id is not injected).
+func mergeSessionID(data json.RawMessage, sessionID string) json.RawMessage {
+	if len(data) == 0 || string(data) == "null" {
+		b, _ := json.Marshal(map[string]string{"capture_session_id": sessionID})
+		return b
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data
+	}
+	idBytes, _ := json.Marshal(sessionID)
+	m["capture_session_id"] = idBytes
+	b, _ := json.Marshal(m)
+	return b
+}

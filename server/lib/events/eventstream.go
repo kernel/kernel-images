@@ -26,10 +26,9 @@ func NewEventStream(cfg EventStreamConfig) (*EventStream, error) {
 	return &EventStream{ring: rb}, nil
 }
 
-// publish assigns a monotonically increasing seq to env, truncates oversized
-// payloads, and pushes it to the ring buffer. Called by CaptureSession under
-// its own lock; env must already have CaptureSessionID set.
-func (es *EventStream) publish(env Envelope) Envelope {
+// Publish assigns a monotonically increasing seq to env, truncates oversized
+// payloads, and pushes it to the ring buffer.
+func (es *EventStream) Publish(env Envelope) Envelope {
 	es.mu.Lock()
 	es.seq++
 	env.Seq = es.seq

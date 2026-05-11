@@ -8,6 +8,7 @@ import (
 	"github.com/nrednav/cuid2"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 
+	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 )
@@ -119,26 +120,26 @@ func (s *ApiService) buildSessionResponse() oapi.CaptureSession {
 }
 
 // captureConfigFrom converts the optional StartCaptureSessionRequest body
-// into an events.CaptureConfig.
-func captureConfigFrom(body *oapi.StartCaptureSessionRequest) (events.CaptureConfig, error) {
+// into a capturesession.CaptureConfig.
+func captureConfigFrom(body *oapi.StartCaptureSessionRequest) (capturesession.CaptureConfig, error) {
 	if body == nil {
-		return events.CaptureConfig{}, nil
+		return capturesession.CaptureConfig{}, nil
 	}
 	return captureConfigFromOAPI(body.Config)
 }
 
-// captureConfigFromOAPI converts an oapi.CaptureConfig to events.CaptureConfig.
-func captureConfigFromOAPI(cfg *oapi.CaptureConfig) (events.CaptureConfig, error) {
+// captureConfigFromOAPI converts an oapi.CaptureConfig to capturesession.CaptureConfig.
+func captureConfigFromOAPI(cfg *oapi.CaptureConfig) (capturesession.CaptureConfig, error) {
 	if cfg == nil || cfg.Categories == nil {
-		return events.CaptureConfig{}, nil
+		return capturesession.CaptureConfig{}, nil
 	}
-	out := events.CaptureConfig{
+	out := capturesession.CaptureConfig{
 		Categories: make([]events.EventCategory, 0, len(*cfg.Categories)),
 	}
 	for _, c := range *cfg.Categories {
 		cat := events.EventCategory(c)
 		if !events.ValidCategory(cat) {
-			return events.CaptureConfig{}, fmt.Errorf("unknown category: %q", c)
+			return capturesession.CaptureConfig{}, fmt.Errorf("unknown category: %q", c)
 		}
 		out.Categories = append(out.Categories, cat)
 	}

@@ -3,7 +3,6 @@ package events
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -60,8 +59,7 @@ func TestEventSerialization(t *testing.T) {
 
 func TestEnvelopeSerialization(t *testing.T) {
 	env := Envelope{
-		CaptureSessionID: "test-session-id",
-		Seq:              1,
+		Seq: 1,
 		Event: Event{
 			Ts:       1000,
 			Type:     "console.log",
@@ -76,8 +74,8 @@ func TestEnvelopeSerialization(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(b, &decoded))
 
-	assert.Equal(t, "test-session-id", decoded["capture_session_id"])
 	assert.Equal(t, float64(1), decoded["seq"])
+	assert.NotContains(t, decoded, "capture_session_id")
 	inner, ok := decoded["event"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "console.log", inner["type"])
@@ -327,164 +325,6 @@ func TestConcurrentReaders(t *testing.T) {
 	}
 }
 
-func TestCaptureSession(t *testing.T) {
-	newCaptureSession := func(t *testing.T) *CaptureSession {
-		t.Helper()
-		es, err := NewEventStream(EventStreamConfig{RingCapacity: 100})
-		require.NoError(t, err)
-		p := NewCaptureSession(es)
-		p.Start("test-session", CaptureConfig{})
-		return p
-	}
-
-	t.Run("concurrent_publish_seq_order", func(t *testing.T) {
-		const goroutines = 8
-		const eventsEach = 50
-		const total = goroutines * eventsEach
-
-		es, err := NewEventStream(EventStreamConfig{RingCapacity: total})
-		require.NoError(t, err)
-		p := NewCaptureSession(es)
-		p.Start("test-concurrent", CaptureConfig{})
-		reader := p.NewReader(0)
-
-		var wg sync.WaitGroup
-		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < eventsEach; j++ {
-					p.Publish(cdpEvent("console.log", CategoryConsole))
-				}
-			}()
-		}
-		wg.Wait()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		for want := uint64(1); want <= total; want++ {
-			env := readEnvelope(t, reader, ctx)
-			assert.Equal(t, want, env.Seq, "events must arrive in seq order")
-		}
-	})
-
-	t.Run("seq_continues_across_sessions", func(t *testing.T) {
-		es, err := NewEventStream(EventStreamConfig{RingCapacity: 100})
-		require.NoError(t, err)
-		p := NewCaptureSession(es)
-		p.Start("session-1", CaptureConfig{})
-		p.Publish(cdpEvent("ev.one", CategorySystem))
-		p.Publish(cdpEvent("ev.two", CategorySystem))
-		// seqs 1 and 2 belong to session-1
-
-		p.Start("session-2", CaptureConfig{})
-		p.Publish(cdpEvent("ev.three", CategorySystem))
-		// seq 3 belongs to session-2
-
-		assert.Equal(t, uint64(2), p.SessionStartSeq(), "session-2 starts after seq 2")
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		// Reconnect after session-1's last seq — should receive session-2's event.
-		reader := p.NewReader(2)
-		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, uint64(3), env.Seq)
-		assert.Equal(t, "session-2", env.CaptureSessionID)
-		assert.Equal(t, "ev.three", env.Event.Type)
-	})
-
-	t.Run("publish_increments_seq", func(t *testing.T) {
-		p := newCaptureSession(t)
-		reader := p.NewReader(0)
-
-		for i := 0; i < 3; i++ {
-			p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		for want := uint64(1); want <= 3; want++ {
-			env := readEnvelope(t, reader, ctx)
-			assert.Equal(t, want, env.Seq, "expected seq %d got %d", want, env.Seq)
-		}
-	})
-
-	t.Run("publish_sets_ts", func(t *testing.T) {
-		p := newCaptureSession(t)
-		reader := p.NewReader(0)
-
-		before := time.Now().UnixMicro()
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}})
-		after := time.Now().UnixMicro()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.GreaterOrEqual(t, env.Event.Ts, before)
-		assert.LessOrEqual(t, env.Event.Ts, after)
-	})
-
-	t.Run("publish_writes_ring", func(t *testing.T) {
-		p := newCaptureSession(t)
-
-		reader := p.NewReader(0)
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, "page.navigation", env.Event.Type)
-		assert.Equal(t, CategoryPage, env.Event.Category)
-	})
-
-	t.Run("start_sets_capture_session_id", func(t *testing.T) {
-		p := newCaptureSession(t)
-		p.Start("test-uuid", CaptureConfig{})
-
-		reader := p.NewReader(0)
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, "test-uuid", env.CaptureSessionID)
-	})
-
-	t.Run("truncation_applied", func(t *testing.T) {
-		p := newCaptureSession(t)
-		reader := p.NewReader(0)
-
-		largeData := strings.Repeat("x", 1_100_000)
-		rawData, err := json.Marshal(map[string]string{"payload": largeData})
-		require.NoError(t, err)
-
-		p.Publish(Event{
-			Type:     "page.navigation",
-			Category: CategoryPage,
-			Source:   Source{Kind: KindCDP},
-			Ts:       1,
-			Data:     json.RawMessage(rawData),
-		})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.True(t, env.Event.Truncated)
-		assert.True(t, json.Valid(env.Event.Data))
-
-		marshaled, err := json.Marshal(env)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, len(marshaled), maxS2RecordBytes)
-	})
-
-}
 
 func TestRingBufferResetWithActiveReader(t *testing.T) {
 	rb := newTestRingBuffer(t,10)

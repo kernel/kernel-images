@@ -955,9 +955,6 @@ type PublishEventRequestCategory string
 
 // PublishedEnvelope The envelope assigned to a successfully published event.
 type PublishedEnvelope struct {
-	// CaptureSessionId ID of the capture session the event was published into.
-	CaptureSessionId string `json:"capture_session_id"`
-
 	// Event A capture event.
 	Event Event `json:"event"`
 

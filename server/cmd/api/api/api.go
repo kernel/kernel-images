@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -81,7 +81,7 @@ type ApiService struct {
 	xvfbResizeMu sync.Mutex
 
 	// CDP event pipeline and cdpMonitor.
-	captureSession  *events.CaptureSession
+	captureSession  *capturesession.CaptureSession
 	cdpMonitor      cdpMonitorController
 	monitorMu       sync.Mutex
 	lifecycleCtx    context.Context
@@ -96,7 +96,7 @@ func New(
 	upstreamMgr *devtoolsproxy.UpstreamManager,
 	stz scaletozero.Controller,
 	nekoAuthClient *nekoclient.AuthClient,
-	captureSession *events.CaptureSession,
+	captureSession *capturesession.CaptureSession,
 	displayNum int,
 ) (*ApiService, error) {
 	switch {

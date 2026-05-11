@@ -22,6 +22,7 @@ import (
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
+	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -99,7 +100,7 @@ func main() {
 		slogger.Error("failed to create event stream", "err", err)
 		os.Exit(1)
 	}
-	captureSession := events.NewCaptureSession(eventStream)
+	captureSession := capturesession.NewCaptureSession(eventStream)
 
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
