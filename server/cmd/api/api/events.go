@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -64,7 +65,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	}
 
 	env := s.eventStream.Publish(events.Envelope{Event: ev})
-	return oapi.PublishEvent200JSONResponse(buildEnvelopeResponse(env)), nil
+	return publishEventOKResponse{env}, nil
 }
 
 // StreamEvents handles GET /events/stream.
@@ -134,38 +135,14 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 	return oapi.StreamEvents200TexteventStreamResponse{Body: pr, Headers: headers}, nil
 }
 
-func buildEnvelopeResponse(env events.Envelope) oapi.PublishedEnvelope {
-	cat := oapi.EventCategory(env.Event.Category)
-	respEvent := oapi.Event{
-		Ts:       &env.Event.Ts,
-		Type:     env.Event.Type,
-		Category: &cat,
-		Data:     env.Event.Data,
-	}
-	if env.Event.Truncated {
-		t := true
-		respEvent.Truncated = &t
-	}
-	src := env.Event.Source
-	if src.Kind != "" || src.Event != "" || src.Metadata != nil {
-		s := &oapi.EventSource{}
-		if src.Kind != "" {
-			kind := oapi.EventSourceKind(src.Kind)
-			s.Kind = &kind
-		}
-		if src.Event != "" {
-			s.Event = &src.Event
-		}
-		if src.Metadata != nil {
-			m := map[string]string(src.Metadata)
-			s.Metadata = &m
-		}
-		respEvent.Source = s
-	}
-	return oapi.PublishedEnvelope{
-		Seq:   int64(env.Seq),
-		Event: respEvent,
-	}
+// publishEventOKResponse serializes events.Envelope directly so the response
+// is identical in shape to the SSE stream frames.
+type publishEventOKResponse struct{ env events.Envelope }
+
+func (r publishEventOKResponse) VisitPublishEventResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	return json.NewEncoder(w).Encode(r.env)
 }
 
 // writeEnvelopeFrame writes a single SSE frame. If seq is non-nil it is
