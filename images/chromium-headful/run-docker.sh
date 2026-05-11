@@ -71,6 +71,17 @@ if [[ -n "${PLAYWRIGHT_ENGINE:-}" ]]; then
   RUN_ARGS+=( -e PLAYWRIGHT_ENGINE="$PLAYWRIGHT_ENGINE" )
 fi
 
+# S2 durable event storage (all three must be set to enable the sink)
+if [[ -n "${S2_BASIN:-}" ]]; then
+  RUN_ARGS+=( -e S2_BASIN="$S2_BASIN" )
+fi
+if [[ -n "${S2_ACCESS_TOKEN:-}" ]]; then
+  RUN_ARGS+=( -e S2_ACCESS_TOKEN="$S2_ACCESS_TOKEN" )
+fi
+if [[ -n "${S2_STREAM:-}" ]]; then
+  RUN_ARGS+=( -e S2_STREAM="$S2_STREAM" )
+fi
+
 # WebRTC port mapping
 if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
   echo "Running container with WebRTC"

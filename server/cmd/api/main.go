@@ -103,18 +103,19 @@ func main() {
 	captureSession := capturesession.NewCaptureSession(eventStream)
 
 	// Optional S2 durable storage sink.
-	var storageWriter *events.EventsStorageWriter
+	var storageWriter *events.StorageWriter
 	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
+		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", config.S2Stream)
 		s2stor, err := events.NewS2Storage(ctx, config.S2Basin, config.S2AccessToken, config.S2Stream,
 			events.S2Config{
-				BatcherLingerMs:   config.S2BatcherLingerMs,
+				BatcherLinger:     config.S2BatcherLinger,
 				BatcherMaxRecords: config.S2BatcherMaxRecs,
 			})
 		if err != nil {
 			slogger.Error("failed to create S2 storage", "err", err)
 			os.Exit(1)
 		}
-		storageWriter = events.NewEventsStorageWriter(eventStream, s2stor)
+		storageWriter = events.NewStorageWriter(eventStream, s2stor)
 	}
 
 	apiService, err := api.New(

@@ -12,15 +12,17 @@ import (
 )
 
 type mockBackend struct {
-	mu       sync.Mutex
-	appended []Envelope
-	err      error
+	mu        sync.Mutex
+	appended  []Envelope
+	err       error
+	errCount  int // total calls that returned an error
 }
 
 func (m *mockBackend) Append(_ context.Context, env Envelope) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.err != nil {
+		m.errCount++
 		return m.err
 	}
 	m.appended = append(m.appended, env)
@@ -37,6 +39,18 @@ func (m *mockBackend) envelopes() []Envelope {
 	return out
 }
 
+func (m *mockBackend) errors() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.errCount
+}
+
+func (m *mockBackend) clearErr() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.err = nil
+}
+
 func newTestStream(t *testing.T, capacity int) *EventStream {
 	t.Helper()
 	es, err := NewEventStream(EventStreamConfig{RingCapacity: capacity})
@@ -48,10 +62,10 @@ func makeEvent(typ string) Event {
 	return Event{Type: typ, Category: CategorySystem}
 }
 
-func TestEventsStorageWriter_NormalAppend(t *testing.T) {
+func TestStorageWriter_NormalAppend(t *testing.T) {
 	es := newTestStream(t, 64)
 	backend := &mockBackend{}
-	w := NewEventsStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend)
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -64,7 +78,6 @@ func TestEventsStorageWriter_NormalAppend(t *testing.T) {
 	env1 := es.Publish(Envelope{Event: makeEvent("test.one")})
 	env2 := es.Publish(Envelope{Event: makeEvent("test.two")})
 
-	// wait for both to land
 	require.Eventually(t, func() bool {
 		return len(backend.envelopes()) == 2
 	}, time.Second, 5*time.Millisecond)
@@ -79,13 +92,12 @@ func TestEventsStorageWriter_NormalAppend(t *testing.T) {
 	assert.Equal(t, "test.two", got[1].Event.Type)
 }
 
-func TestEventsStorageWriter_DroppedEvents(t *testing.T) {
-	// Use a tiny ring so overflow is easy to trigger
+func TestStorageWriter_DroppedEvents(t *testing.T) {
 	es := newTestStream(t, 4)
 	backend := &mockBackend{}
-	w := NewEventsStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend)
 
-	// Publish 8 events without a reader running — fills and wraps the ring
+	// Publish 8 events before the writer starts — fills and wraps the ring.
 	for i := range 8 {
 		es.Publish(Envelope{Event: makeEvent("drop.test." + string(rune('a'+i)))})
 	}
@@ -97,23 +109,22 @@ func TestEventsStorageWriter_DroppedEvents(t *testing.T) {
 		w.Run(ctx) //nolint:errcheck
 	}()
 
-	// Let the writer drain what's available
 	require.Eventually(t, func() bool {
 		return len(backend.envelopes()) > 0
 	}, time.Second, 5*time.Millisecond)
 
 	cancel()
 	<-done
-	// Writer should not have crashed; any envelopes it did receive are valid
+
 	for _, env := range backend.envelopes() {
 		assert.NotEmpty(t, env.Event.Type)
 	}
 }
 
-func TestEventsStorageWriter_AppendError(t *testing.T) {
+func TestStorageWriter_AppendError(t *testing.T) {
 	es := newTestStream(t, 64)
 	backend := &mockBackend{err: errors.New("storage unavailable")}
-	w := NewEventsStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -122,21 +133,35 @@ func TestEventsStorageWriter_AppendError(t *testing.T) {
 		w.Run(ctx) //nolint:errcheck
 	}()
 
+	// Publish an event that will fail. Wait until the writer has attempted it
+	// (errCount > 0), then clear the error and publish a second event. The
+	// writer must continue past the error and deliver the second event.
 	es.Publish(Envelope{Event: makeEvent("will.fail")})
+	require.Eventually(t, func() bool {
+		return backend.errors() > 0
+	}, time.Second, 5*time.Millisecond)
 
-	// Give the writer a moment to process then cancel — it must not crash
-	time.Sleep(20 * time.Millisecond)
+	backend.clearErr()
+	es.Publish(Envelope{Event: makeEvent("will.succeed")})
+	require.Eventually(t, func() bool {
+		return len(backend.envelopes()) == 1
+	}, time.Second, 5*time.Millisecond)
+
 	cancel()
 	<-done
+
+	got := backend.envelopes()
+	require.Len(t, got, 1)
+	assert.Equal(t, "will.succeed", got[0].Event.Type)
 }
 
-func TestEventsStorageWriter_ContextCancelled(t *testing.T) {
+func TestStorageWriter_ContextCancelled(t *testing.T) {
 	es := newTestStream(t, 64)
 	backend := &mockBackend{}
-	w := NewEventsStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	err := w.Run(ctx)
 	assert.NoError(t, err)
