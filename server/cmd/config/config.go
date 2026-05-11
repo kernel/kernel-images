@@ -35,6 +35,13 @@ type Config struct {
 	// DevTools proxy address passed to ChromeDriver as goog:chromeOptions.debuggerAddress.
 	// If empty, it is derived from DevToolsProxyPort as 127.0.0.1:<port>.
 	DevToolsProxyAddr string `envconfig:"DEVTOOLS_PROXY_ADDR" default:""`
+
+	// S2 durable event storage. All three fields must be set to enable the S2 sink.
+	S2Basin           string `envconfig:"S2_BASIN"              default:""`
+	S2AccessToken     string `envconfig:"S2_ACCESS_TOKEN"       default:""`
+	S2Stream          string `envconfig:"S2_STREAM"             default:""`
+	S2BatcherLingerMs int    `envconfig:"S2_BATCHER_LINGER_MS"  default:"100"`
+	S2BatcherMaxRecs  int    `envconfig:"S2_BATCHER_MAX_RECORDS" default:"50"`
 }
 
 // Load loads configuration from environment variables

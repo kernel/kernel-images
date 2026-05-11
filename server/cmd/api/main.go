@@ -102,6 +102,21 @@ func main() {
 	}
 	captureSession := capturesession.NewCaptureSession(eventStream)
 
+	// Optional S2 durable storage sink.
+	var storageWriter *events.EventsStorageWriter
+	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
+		s2stor, err := events.NewS2Storage(ctx, config.S2Basin, config.S2AccessToken, config.S2Stream,
+			events.S2Config{
+				BatcherLingerMs:   config.S2BatcherLingerMs,
+				BatcherMaxRecords: config.S2BatcherMaxRecs,
+			})
+		if err != nil {
+			slogger.Error("failed to create S2 storage", "err", err)
+			os.Exit(1)
+		}
+		storageWriter = events.NewEventsStorageWriter(eventStream, s2stor)
+	}
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
@@ -244,9 +259,29 @@ func main() {
 		}
 	}()
 
+	// Start S2 storage writer goroutine. storageDone is closed when Run returns.
+	storageDone := make(chan struct{})
+	if storageWriter != nil {
+		go func() {
+			defer close(storageDone)
+			storageWriter.Run(ctx) //nolint:errcheck
+		}()
+	} else {
+		close(storageDone)
+	}
+
 	// graceful shutdown
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
+
+	// Wait for the storage writer to drain from the ring, then flush S2 before
+	// shutting down the HTTP servers and closing the capture session.
+	<-storageDone
+	if storageWriter != nil {
+		if err := storageWriter.Close(); err != nil {
+			slogger.Error("storage writer close failed", "err", err)
+		}
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
