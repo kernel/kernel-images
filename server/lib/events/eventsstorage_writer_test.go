@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -65,7 +66,7 @@ func makeEvent(typ string) Event {
 func TestStorageWriter_NormalAppend(t *testing.T) {
 	es := newTestStream(t, 64)
 	backend := &mockBackend{}
-	w := NewStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -95,7 +96,7 @@ func TestStorageWriter_NormalAppend(t *testing.T) {
 func TestStorageWriter_DroppedEvents(t *testing.T) {
 	es := newTestStream(t, 4)
 	backend := &mockBackend{}
-	w := NewStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend, slog.Default())
 
 	// Publish 8 events before the writer starts — fills and wraps the ring.
 	for i := range 8 {
@@ -128,7 +129,7 @@ func TestStorageWriter_DroppedEvents(t *testing.T) {
 func TestStorageWriter_AppendError(t *testing.T) {
 	es := newTestStream(t, 64)
 	backend := &mockBackend{err: errors.New("storage unavailable")}
-	w := NewStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -162,7 +163,7 @@ func TestStorageWriter_AppendError(t *testing.T) {
 func TestStorageWriter_ContextCancelled(t *testing.T) {
 	es := newTestStream(t, 64)
 	backend := &mockBackend{}
-	w := NewStorageWriter(es, backend)
+	w := NewStorageWriter(es, backend, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

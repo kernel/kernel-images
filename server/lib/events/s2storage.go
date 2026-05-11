@@ -43,11 +43,12 @@ func (sp *s2Producer) close(ctx context.Context) error {
 type S2Storage struct {
 	producer   s2Producer
 	shutdownCh chan struct{} // closed when Close is called, bounds ack goroutine contexts
+	log        *slog.Logger
 }
 
 // NewS2Storage creates an S2Storage that appends to the given stream within basin.
 // ctx is used for AppendSession creation and should be the process lifetime context.
-func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cfg S2Config) (*S2Storage, error) {
+func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cfg S2Config, log *slog.Logger) (*S2Storage, error) {
 	if basin == "" || accessToken == "" || streamName == "" {
 		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
 	}
@@ -69,6 +70,7 @@ func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 	return &S2Storage{
 		producer:   s2Producer{p: producer},
 		shutdownCh: make(chan struct{}),
+		log:        log,
 	}, nil
 }
 
@@ -99,14 +101,14 @@ func (s *S2Storage) Append(_ context.Context, env Envelope) error {
 
 		ticket, err := future.Wait(ackCtx)
 		if err != nil {
-			slog.Error("s2storage: wait for submit failed", "seq", env.Seq, "err", err)
+			s.log.Error("s2storage: wait for submit failed", "seq", env.Seq, "err", err)
 			return
 		}
 		if ticket == nil {
 			return
 		}
 		if _, err := ticket.Ack(ackCtx); err != nil {
-			slog.Error("s2storage: ack failed", "seq", env.Seq, "err", err)
+			s.log.Error("s2storage: ack failed", "seq", env.Seq, "err", err)
 		}
 	}()
 
