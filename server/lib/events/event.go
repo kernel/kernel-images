@@ -43,8 +43,8 @@ func ValidCategory(c EventCategory) bool {
 
 // System event types emitted by the pipeline itself.
 const (
-	TypeSessionEnded  = "session_ended"
-	TypeEventsDropped = "events_dropped"
+	CaptureSessionEnded = "capture_session_ended"
+	EventsDropped       = "events_dropped"
 )
 
 type SourceKind string
