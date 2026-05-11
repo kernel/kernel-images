@@ -227,11 +227,11 @@ cleanup () {
   echo "[wrapper] Cleaning up..."
   # Re-enable scale-to-zero if the script terminates early
   enable_scale_to_zero
+  supervisorctl -c /etc/supervisor/supervisord.conf stop kernel-images-api || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromedriver || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop chromium || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop xvfb || true
   supervisorctl -c /etc/supervisor/supervisord.conf stop dbus || true
-  supervisorctl -c /etc/supervisor/supervisord.conf stop kernel-images-api || true
   # Stop log tailers
   if [[ -n "${tail_pids[*]:-}" ]]; then
     for tp in "${tail_pids[@]}"; do

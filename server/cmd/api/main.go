@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -151,9 +153,14 @@ func main() {
 		fs.ServeHTTP(w, r)
 	})
 
+	r.Get("/health", healthHandler(upstreamMgr))
+
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.Port),
 		Handler: r,
+		BaseContext: func(_ net.Listener) context.Context {
+			return ctx
+		},
 	}
 
 	// wait up to 10 seconds for initial upstream; exit nonzero if not found
@@ -193,6 +200,9 @@ func main() {
 	srvDevtools := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", config.DevToolsProxyPort),
 		Handler: rDevtools,
+		BaseContext: func(_ net.Listener) context.Context {
+			return ctx
+		},
 	}
 
 	// ChromeDriver proxy: intercepts POST /session to inject the DevTools proxy
@@ -218,6 +228,9 @@ func main() {
 	srvChromeDriver := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", config.ChromeDriverProxyPort),
 		Handler: rChromeDriver,
+		BaseContext: func(_ net.Listener) context.Context {
+			return ctx
+		},
 	}
 
 	go func() {
@@ -268,6 +281,74 @@ func main() {
 
 	if err := g.Wait(); err != nil {
 		slogger.Error("server failed to shutdown", "err", err)
+	}
+}
+
+func healthHandler(mgr *devtoolsproxy.UpstreamManager) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		cdpStatus := "ok"
+		if mgr.Current() == "" {
+			cdpStatus = "not_ready"
+		}
+
+		chromeStatus := "ok"
+		chromeProbeCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		req, _ := http.NewRequestWithContext(chromeProbeCtx, http.MethodGet, "http://127.0.0.1:9223/json/version", nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			chromeStatus = "error"
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		status := http.StatusOK
+		if cdpStatus != "ok" || chromeStatus != "ok" {
+			status = http.StatusServiceUnavailable
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]string{
+			"cdp_status":    cdpStatus,
+			"chrome_status": chromeStatus,
+		})
+	}
+}
+
+// wsTracker tracks active WebSocket connections so they can be
+// closed with a proper close frame during shutdown.
+type wsTracker struct {
+	mu    sync.Mutex
+	conns map[*wsTrackerEntry]struct{}
+}
+
+type wsTrackerEntry struct {
+	closeFunc func()
+}
+
+func newWSTracker() *wsTracker {
+	return &wsTracker{conns: make(map[*wsTrackerEntry]struct{})}
+}
+
+func (t *wsTracker) Add(closeFunc func()) func() {
+	entry := &wsTrackerEntry{closeFunc: closeFunc}
+	t.mu.Lock()
+	t.conns[entry] = struct{}{}
+	t.mu.Unlock()
+	return func() {
+		t.mu.Lock()
+		delete(t.conns, entry)
+		t.mu.Unlock()
+	}
+}
+
+func (t *wsTracker) CloseAll() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for entry := range t.conns {
+		entry.closeFunc()
 	}
 }
 
