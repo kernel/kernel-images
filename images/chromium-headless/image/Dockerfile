@@ -124,7 +124,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     libxfixes3 \
     libxrandr2 \
     libgbm1 \
-    libnss3; \
+    libdbus-1-3 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libxext6; \
     apt-get -yqq --no-install-recommends install \
     ca-certificates \
     curl \
