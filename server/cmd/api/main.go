@@ -271,15 +271,9 @@ func main() {
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
 
-	// Wait for the storage writer to drain from the ring, then flush S2 before
-	// shutting down the HTTP servers and closing the capture session.
-	<-storageDone
-	if storageWriter != nil {
-		if err := storageWriter.Close(); err != nil {
-			slogger.Error("storage writer close failed", "err", err)
-		}
-	}
-
+	// Step 1: shut down all HTTP servers and stop all event publishers (cdpmonitor,
+	// captureSession) before draining the ring. This bounds the set of events that
+	// can arrive after Run exits so Drain sees a stable tail.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	g, _ := errgroup.WithContext(shutdownCtx)
@@ -300,6 +294,20 @@ func main() {
 
 	if err := g.Wait(); err != nil {
 		slogger.Error("server failed to shutdown", "err", err)
+	}
+
+	// Step 2: wait for Run to return (it exits on ctx cancellation), then drain any
+	// events that arrived between the last Read and HTTP shutdown, then flush S2.
+	<-storageDone
+	if storageWriter != nil {
+		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer drainCancel()
+		if err := storageWriter.Drain(drainCtx); err != nil {
+			slogger.Warn("storage writer drain incomplete", "err", err)
+		}
+		if err := storageWriter.Close(); err != nil {
+			slogger.Error("storage writer close failed", "err", err)
+		}
 	}
 }
 

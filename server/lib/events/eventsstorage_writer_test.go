@@ -171,3 +171,39 @@ func TestStorageWriter_ContextCancelled(t *testing.T) {
 	err := w.Run(ctx)
 	assert.ErrorIs(t, err, context.Canceled)
 }
+
+// TestStorageWriter_DrainFlushesRingAfterRunExits verifies that events
+// published before Drain is called are not lost even after Run has returned.
+func TestStorageWriter_DrainFlushesRingAfterRunExits(t *testing.T) {
+	es := newTestStream(t, 64)
+	backend := &mockBackend{}
+	w := NewStorageWriter(es, backend, slog.Default())
+
+	// Publish events before Run starts so the ring is non-empty.
+	for range 5 {
+		es.Publish(Envelope{Event: Event{Type: "pre"}})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
+
+	// Let Run consume some events, then cancel.
+	time.Sleep(20 * time.Millisecond)
+
+	// Publish more events that may arrive while Run is winding down.
+	for range 3 {
+		es.Publish(Envelope{Event: Event{Type: "post"}})
+	}
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	// Drain must flush whatever is left in the ring.
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), time.Second)
+	defer drainCancel()
+	require.NoError(t, w.Drain(drainCtx))
+
+	got := backend.envelopes()
+	// All 8 published events must have been appended across Run + Drain.
+	assert.Len(t, got, 8)
+}
