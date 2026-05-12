@@ -117,7 +117,7 @@ func (s *S2Storage) Append(_ context.Context, env Envelope) error {
 
 // Close cancels in-flight ack goroutines, waits for them to drain, then closes
 // the producer (which flushes the S2 batcher to the network).
-func (s *S2Storage) Close() error {
+func (s *S2Storage) Close(ctx context.Context) error {
 	close(s.shutdownCh)
-	return s.producer.close(context.Background())
+	return s.producer.close(ctx)
 }

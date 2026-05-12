@@ -102,7 +102,7 @@ func main() {
 	}
 	captureSession := capturesession.NewCaptureSession(eventStream)
 
-	// Optional S2 durable storage sink.
+	// Optional S2 storage sink.
 	var storageWriter *events.StorageWriter
 	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
 		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", config.S2Stream)
@@ -261,7 +261,9 @@ func main() {
 	if storageWriter != nil {
 		go func() {
 			defer close(storageDone)
-			storageWriter.Run(ctx) //nolint:errcheck
+			if err := storageWriter.Run(ctx); err != nil && ctx.Err() == nil {
+				slogger.Error("storage writer failed", "err", err)
+			}
 		}()
 	} else {
 		close(storageDone)
@@ -271,9 +273,6 @@ func main() {
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
 
-	// Step 1: shut down all HTTP servers and stop all event publishers (cdpmonitor,
-	// captureSession) before draining the ring. This bounds the set of events that
-	// can arrive after Run exits so Drain sees a stable tail.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	g, _ := errgroup.WithContext(shutdownCtx)
@@ -296,8 +295,7 @@ func main() {
 		slogger.Error("server failed to shutdown", "err", err)
 	}
 
-	// Step 2: wait for Run to return (it exits on ctx cancellation), then drain any
-	// events that arrived between the last Read and HTTP shutdown, then flush S2.
+	// wait for Run to return, then drain any events that arrived and flush S2.
 	<-storageDone
 	if storageWriter != nil {
 		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -305,7 +303,7 @@ func main() {
 		if err := storageWriter.Drain(drainCtx); err != nil {
 			slogger.Warn("storage writer drain incomplete", "err", err)
 		}
-		if err := storageWriter.Close(); err != nil {
+		if err := storageWriter.Close(drainCtx); err != nil {
 			slogger.Error("storage writer close failed", "err", err)
 		}
 	}

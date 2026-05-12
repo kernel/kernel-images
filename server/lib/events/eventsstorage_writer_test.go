@@ -30,7 +30,7 @@ func (m *mockBackend) Append(_ context.Context, env Envelope) error {
 	return nil
 }
 
-func (m *mockBackend) Close() error { return nil }
+func (m *mockBackend) Close(_ context.Context) error { return nil }
 
 func (m *mockBackend) envelopes() []Envelope {
 	m.mu.Lock()

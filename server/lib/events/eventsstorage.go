@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -11,7 +12,7 @@ import (
 // Append is called serially from StorageWriter.Run and need not be thread-safe.
 type Storage interface {
 	Append(ctx context.Context, env Envelope) error
-	Close() error
+	Close(ctx context.Context) error
 }
 
 // StorageWriter drains the ring buffer and forwards each envelope to the
@@ -43,12 +44,12 @@ func NewStorageWriter(es *EventStream, storage Storage, log *slog.Logger) *Stora
 
 // Run reads from the ring buffer and appends each envelope to storage until
 // ctx is cancelled. Returns the context error on clean shutdown. Must be
-// called at most once; panics on a second call.
+// called at most once; returns an error on a second call.
 func (w *StorageWriter) Run(ctx context.Context) error {
 	firstCall := false
 	w.once.Do(func() { firstCall = true })
 	if !firstCall {
-		panic("events: StorageWriter.Run called more than once")
+		return fmt.Errorf("events: StorageWriter.Run called more than once")
 	}
 
 	for {
@@ -96,12 +97,7 @@ func (w *StorageWriter) processResult(ctx context.Context, res ReadResult) error
 	return nil
 }
 
-// AppendErrors returns the total number of Append failures since Run started.
-func (w *StorageWriter) AppendErrors() uint64 {
-	return w.appendErrors.Load()
-}
-
 // Close drains in-flight writes and releases backend resources.
-func (w *StorageWriter) Close() error {
-	return w.storage.Close()
+func (w *StorageWriter) Close(ctx context.Context) error {
+	return w.storage.Close(ctx)
 }
