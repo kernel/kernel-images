@@ -19,16 +19,18 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"golang.org/x/sync/errgroup"
 
-	serverpkg "github.com/onkernel/kernel-images/server"
-	"github.com/onkernel/kernel-images/server/cmd/api/api"
-	"github.com/onkernel/kernel-images/server/cmd/config"
-	"github.com/onkernel/kernel-images/server/lib/chromedriverproxy"
-	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	"github.com/onkernel/kernel-images/server/lib/nekoclient"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/recorder"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	serverpkg "github.com/kernel/kernel-images/server"
+	"github.com/kernel/kernel-images/server/cmd/api/api"
+	"github.com/kernel/kernel-images/server/cmd/config"
+	"github.com/kernel/kernel-images/server/lib/capturesession"
+	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
+	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
 func main() {
@@ -49,7 +51,7 @@ func main() {
 	// ensure ffmpeg is available
 	mustFFmpeg()
 
-	stz := scaletozero.NewDebouncedController(scaletozero.NewUnikraftCloudController())
+	stz := scaletozero.NewDebouncedControllerWithCooldown(scaletozero.NewUnikraftCloudController(), config.ScaleToZeroCooldown)
 	r := chi.NewRouter()
 	r.Use(
 		chiMiddleware.Logger,
@@ -90,12 +92,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Construct events pipeline
+	eventStream, err := events.NewEventStream(events.EventStreamConfig{
+		RingCapacity: 1024,
+	})
+	if err != nil {
+		slogger.Error("failed to create event stream", "err", err)
+		os.Exit(1)
+	}
+	captureSession := capturesession.NewCaptureSession(eventStream)
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
 		upstreamMgr,
 		stz,
 		nekoAuthClient,
+		captureSession,
+		eventStream,
+		config.DisplayNum,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)

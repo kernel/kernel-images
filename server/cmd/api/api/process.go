@@ -24,9 +24,9 @@ import (
 	"github.com/creack/pty"
 	"github.com/google/uuid"
 	openapi_types "github.com/oapi-codegen/runtime/types"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/ptyio"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/ptyio"
 )
 
 type processHandle struct {

@@ -1194,8 +1194,333 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /events/capture_session:
+    get:
+      summary: Get the capture session
+      description: >
+        Returns the current state of the capture session. Returns 404 if
+        no session is active.
+      operationId: getCaptureSession
+      responses:
+        "200":
+          description: Session state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    post:
+      summary: Start the capture session
+      description: >
+        Starts the capture session. At most one session may exist at a
+        time; returns 409 if a session is already active. The caller must
+        DELETE the existing session before starting a new one.
+      operationId: startCaptureSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartCaptureSessionRequest"
+      responses:
+        "201":
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    patch:
+      summary: Update the capture session
+      description: >
+        Updates the active capture session. Returns 404 if no session is
+        active.
+      operationId: updateCaptureSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCaptureSessionRequest"
+      responses:
+        "200":
+          description: Session updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+    delete:
+      summary: Stop the capture session
+      description: >
+        Stops the capture session and its CDP monitor, returning the final
+        session state. Returns 404 if no session is active.
+      operationId: stopCaptureSession
+      responses:
+        "200":
+          description: Session stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CaptureSession"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+  /events/publish:
+    post:
+      summary: Publish an event into the event bus
+      description: >
+        Injects an event into the global event bus.
+        The event is assigned a monotonically increasing sequence number and
+        fanned out to all open stream connections.
+      operationId: publishEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishEventRequest"
+      responses:
+        "200":
+          description: Event accepted and published
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PublishedEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+  /events/stream:
+    get:
+      summary: Stream events as Server-Sent Events
+      description: >
+        Opens a live SSE stream of events from the global event bus.
+        Each frame has the form `id: {seq}\ndata: {envelope-json}\n\n`.
+        Sequence numbers are process-monotonic and do not reset between sessions;
+        a Last-Event-ID from any previous session is valid for resuming the stream.
+        Drops are signaled by gaps in the `id` field: if the received `id` is more
+        than 1 ahead of the last-seen `id`, events were evicted from the buffer.
+        Clients should track the last-seen `id` to detect gaps.
+        Fresh connections with no Last-Event-ID start from the current sequence
+        and only see new events.
+      operationId: streamEvents
+      parameters:
+        - in: header
+          name: Last-Event-ID
+          schema:
+            type: string
+          required: false
+          description: >
+            Resume after this sequence number. Omit or send 0 to start from
+            the current position. Sequence numbers are process-monotonic, so
+            a value from a previous session resumes correctly from that point.
+      responses:
+        "200":
+          description: Live SSE stream of events.
+          headers:
+            X-SSE-Content-Type:
+              description: Media type of SSE data events (application/json)
+              schema:
+                type: string
+                const: application/json
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/PublishedEnvelope"
+  /scaletozero/disable:
+    post:
+      summary: Idempotently disable scale to zero on this VM.
+      description: >
+        Prevents the VM from scaling to zero, regardless of HTTP traffic on it.
+        Calling the API on this VM will wake it because Unikraft will automatically wake for any request to the VM.
+      operationId: disableScaleToZero
+      responses:
+        "204":
+          description: Scale-to-zero disabled
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /scaletozero/enable:
+    post:
+      summary: Idempotently enable scale to zero on this VM.
+      description: >
+        Restores normal scale-to-zero behavior on this VM, allowing it to
+        scale to zero again when idle. Call this when the VM no longer needs to be held awake.
+      operationId: enableScaleToZero
+      responses:
+        "204":
+          description: Scale-to-zero enabled
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   schemas:
+    Event:
+      type: object
+      description: A capture event.
+      required:
+        - type
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Unix timestamp in microseconds. Defaults to the current time when omitted.
+        type:
+          type: string
+          description: Event type identifier.
+        category:
+          type: string
+          description: Event category.
+          enum:
+            - console
+            - network
+            - page
+            - interaction
+            - liveview
+            - captcha
+            - system
+        source:
+          $ref: "#/components/schemas/EventSource"
+        data:
+          description: Arbitrary event payload.
+        truncated:
+          type: boolean
+          description: Set by the server when the data field was truncated to fit the size limit.
+    EventSource:
+      type: object
+      description: Provenance of the event.
+      properties:
+        kind:
+          type: string
+          description: >
+            Source kind. "kernel_api" is reserved for server-generated events.
+          enum:
+            - cdp
+            - kernel_api
+            - extension
+            - local_process
+        event:
+          type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+      additionalProperties: false
+    PublishEventRequest:
+      type: object
+      description: Request body for publishing an event into the event bus.
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          description: Event type identifier.
+        category:
+          type: string
+          description: Event category.
+          enum:
+            - console
+            - network
+            - page
+            - interaction
+            - liveview
+            - captcha
+            - system
+          default: system
+        source:
+          $ref: "#/components/schemas/EventSource"
+        data:
+          description: Capture Session Event Payload
+      additionalProperties: false
+    PublishedEnvelope:
+      type: object
+      description: The envelope assigned to a successfully published event.
+      required:
+        - seq
+        - event
+      properties:
+        seq:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >
+            Process-monotonic sequence number assigned across the lifetime of
+            the server. Use with Last-Event-ID to resume the SSE stream from
+            this point.
+        event:
+          $ref: "#/components/schemas/Event"
+      additionalProperties: false
+    CaptureConfig:
+      type: object
+      description: Capture filtering preferences.
+      properties:
+        categories:
+          type: array
+          description: >
+            Event categories to capture. When omitted or empty, all
+            categories are captured.
+          items:
+            type: string
+            enum:
+              - console
+              - network
+              - page
+              - interaction
+              - liveview
+              - captcha
+              - system
+      additionalProperties: false
+    CaptureSession:
+      type: object
+      description: A capture session resource.
+      required:
+        - id
+        - status
+        - config
+        - seq
+        - created_at
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum:
+            - running
+            - stopped
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+        seq:
+          type: integer
+          format: int64
+          description: >-
+            Process-monotonic sequence number of the last published event.
+            Does not reset between sessions.
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+      additionalProperties: false
+    StartCaptureSessionRequest:
+      type: object
+      description: >
+        Optional capture configuration. All fields default to the
+        server-defined profile when omitted or when no body is sent.
+      properties:
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+      additionalProperties: false
+    UpdateCaptureSessionRequest:
+      type: object
+      description: Fields to update on the capture session.
+      properties:
+        config:
+          $ref: "#/components/schemas/CaptureConfig"
+      additionalProperties: false
     StartRecordingRequest:
       type: object
       properties:

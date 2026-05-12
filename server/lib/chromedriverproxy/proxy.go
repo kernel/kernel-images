@@ -12,7 +12,7 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
-	"github.com/onkernel/kernel-images/server/lib/wsproxy"
+	"github.com/kernel/kernel-images/server/lib/wsproxy"
 )
 
 const (

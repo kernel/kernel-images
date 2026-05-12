@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="GitHub License" src="https://img.shields.io/github/license/onkernel/kernel-images">
+  <img alt="GitHub License" src="https://img.shields.io/github/license/kernel/kernel-images">
   <a href="https://discord.gg/FBrveQRcud"><img src="https://img.shields.io/discord/1342243238748225556?logo=discord&logoColor=white&color=7289DA" alt="Discord"></a>
   <a href="https://x.com/juecd__"><img src="https://img.shields.io/twitter/follow/juecd__" alt="Follow @juecd__"></a>
   <a href="https://x.com/rfgarcia"><img src="https://img.shields.io/twitter/follow/rfgarcia" alt="Follow @rfgarcia"></a>
@@ -183,7 +183,7 @@ See the [LICENSE](./LICENSE) file for details.
 
 ## Support
 
-For issues, questions, or feedback, please [open an issue](https://github.com/onkernel/kernel-images/issues) on this repository. You can also join our [Discord](https://discord.gg/FBrveQRcud).
+For issues, questions, or feedback, please [open an issue](https://github.com/kernel/kernel-images/issues) on this repository. You can also join our [Discord](https://discord.gg/FBrveQRcud).
 
 ## Colophon
 

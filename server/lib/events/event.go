@@ -21,6 +21,26 @@ const (
 	CategorySystem      EventCategory = "system"
 )
 
+// AllCategories is the canonical list of all known event categories.
+var AllCategories = []EventCategory{
+	CategoryConsole, CategoryNetwork, CategoryPage, CategoryInteraction,
+	CategoryLiveview, CategoryCaptcha, CategorySystem,
+}
+
+var validCategories = func() map[EventCategory]struct{} {
+	m := make(map[EventCategory]struct{}, len(AllCategories))
+	for _, c := range AllCategories {
+		m[c] = struct{}{}
+	}
+	return m
+}()
+
+// ValidCategory reports whether c is a known EventCategory.
+func ValidCategory(c EventCategory) bool {
+	_, ok := validCategories[c]
+	return ok
+}
+
 type SourceKind string
 
 const (
@@ -38,38 +58,26 @@ type Source struct {
 	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
-type DetailLevel string
-
-const (
-	DetailMinimal  DetailLevel = "minimal"
-	DetailStandard DetailLevel = "standard"
-	DetailVerbose  DetailLevel = "verbose"
-	DetailRaw      DetailLevel = "raw"
-)
-
 // Event is the portable event schema. It contains only producer-emitted content;
-// pipeline metadata (seq, capture session) lives on the Envelope.
+// pipeline metadata (seq) lives on the Envelope.
 type Event struct {
-	Ts          int64           `json:"ts"` // Unix microseconds (µs since epoch)
-	Type        string          `json:"type"`
-	Category    EventCategory   `json:"category"`
-	Source      Source          `json:"source"`
-	DetailLevel DetailLevel     `json:"detail_level"`
-	URL         string          `json:"url,omitempty"`
-	Data        json.RawMessage `json:"data,omitempty"`
-	Truncated   bool            `json:"truncated,omitempty"`
+	Ts        int64           `json:"ts"` // Unix microseconds (µs since epoch)
+	Type      string          `json:"type"`
+	Category  EventCategory   `json:"category"`
+	Source    Source          `json:"source"`
+	Data      json.RawMessage `json:"data,omitempty"`
+	Truncated bool            `json:"truncated,omitempty"`
 }
 
 // Envelope wraps an Event with pipeline-assigned metadata.
 type Envelope struct {
-	CaptureSessionID string `json:"capture_session_id"`
-	Seq              uint64 `json:"seq"`
-	Event            Event  `json:"event"`
+	Seq   uint64 `json:"seq"`
+	Event Event  `json:"event"`
 }
 
 // truncateIfNeeded marshals env and returns the (possibly truncated) envelope.
 // If the envelope still exceeds maxS2RecordBytes after nulling data (e.g. huge
-// url or source.metadata), it is returned as-is — callers must handle nil data.
+// source.metadata), it is returned as-is, callers must handle nil data.
 func truncateIfNeeded(env Envelope) (Envelope, []byte) {
 	data, err := json.Marshal(env)
 	if err != nil {

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/ziputil"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/ziputil"
 )
 
 // TestWriteReadFile verifies that files can be written and read back successfully.

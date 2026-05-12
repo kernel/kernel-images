@@ -1,0 +1,17 @@
+name: Semgrep
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  scan:
+    uses: kernel/security-workflows/.github/workflows/semgrep.yml@main
+    with:
+      extra-configs: '--config p/golang --config p/javascript'
+      codebase-description: 'Base browser images with Go server and JS client'
+    secrets: inherit

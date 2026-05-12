@@ -16,8 +16,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"golang.org/x/sync/singleflight"
 )
 

@@ -1,0 +1,5 @@
+{
+  "name": "__kernelEvent",
+  "payload": "{\"type\":\"interaction_click\",\"x\":10,\"y\":20,\"selector\":\"button\",\"tag\":\"BUTTON\",\"text\":\"OK\"}",
+  "executionContextId": 3
+}

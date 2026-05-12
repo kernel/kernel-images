@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	"github.com/onkernel/kernel-images/server/lib/recorder"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,8 @@ func testFFmpegFactory(t *testing.T, tempDir string) recorder.FFmpegRecorderFact
 
 func newTestServiceWithFactory(t *testing.T, mgr recorder.RecordManager, factory recorder.FFmpegRecorderFactory) *ApiService {
 	t.Helper()
-	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t))
+	cs, es := newCaptureSession(t)
+	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), cs, es, 0)
 	require.NoError(t, err)
 	return svc
 }

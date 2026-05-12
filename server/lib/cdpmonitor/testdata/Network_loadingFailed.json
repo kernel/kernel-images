@@ -1,0 +1,8 @@
+{
+  "requestId": "1000.6",
+  "timestamp": 1236.1,
+  "type": "XHR",
+  "errorText": "net::ERR_CONNECTION_REFUSED",
+  "canceled": true,
+  "blockedReason": "other"
+}

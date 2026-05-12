@@ -1,0 +1,14 @@
+{
+  "frame": {
+    "id": "FRAME123",
+    "loaderId": "LOADER123",
+    "url": "https://example.com/page",
+    "domainAndRegistry": "example.com",
+    "securityOrigin": "https://example.com",
+    "mimeType": "text/html",
+    "secureContextType": "Secure",
+    "crossOriginIsolatedContextType": "NotIsolated",
+    "gatedAPIFeatures": []
+  },
+  "type": "Navigation"
+}

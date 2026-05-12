@@ -1,0 +1,31 @@
+{
+  "requestId": "1000.5",
+  "loaderId": "LOADER123",
+  "documentURL": "https://example.com/",
+  "request": {
+    "url": "https://api.example.com/data",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json",
+      "User-Agent": "Mozilla/5.0"
+    },
+    "postData": "{\"hello\":\"world\"}",
+    "hasPostData": true,
+    "mixedContentType": "none",
+    "initialPriority": "High",
+    "referrerPolicy": "strict-origin-when-cross-origin",
+    "isSameSite": true
+  },
+  "timestamp": 1234.5678,
+  "wallTime": 1715000000.123,
+  "initiator": {
+    "type": "script",
+    "stack": {
+      "callFrames": []
+    }
+  },
+  "redirectHasExtraInfo": true,
+  "type": "XHR",
+  "frameId": "FRAME123",
+  "hasUserGesture": true
+}

@@ -4,19 +4,31 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sync"
 	"time"
 
-	"github.com/onkernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/onkernel/kernel-images/server/lib/logger"
-	"github.com/onkernel/kernel-images/server/lib/nekoclient"
-	oapi "github.com/onkernel/kernel-images/server/lib/oapi"
-	"github.com/onkernel/kernel-images/server/lib/policy"
-	"github.com/onkernel/kernel-images/server/lib/recorder"
-	"github.com/onkernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/capturesession"
+	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
+	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/policy"
+	"github.com/kernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
+
+type cdpMonitorController interface {
+	Start(ctx context.Context) error
+	Stop()
+	IsRunning() bool
+}
+
+var _ cdpMonitorController = (*cdpmonitor.Monitor)(nil)
 
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
@@ -37,7 +49,7 @@ type ApiService struct {
 
 	// DevTools upstream manager (Chromium supervisord log tailer)
 	upstreamMgr *devtoolsproxy.UpstreamManager
-	stz         scaletozero.Controller
+	stz         scaletozero.PinnedController
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
@@ -68,11 +80,28 @@ type ApiService struct {
 	// xvfbResizeMu serializes background Xvfb restarts to prevent races
 	// when multiple CDP fast-path resizes fire in quick succession.
 	xvfbResizeMu sync.Mutex
+
+	// CDP event pipeline and cdpMonitor.
+	eventStream     *events.EventStream
+	captureSession  *capturesession.CaptureSession
+	cdpMonitor      cdpMonitorController
+	monitorMu       sync.Mutex
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
 
-func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFactory, upstreamMgr *devtoolsproxy.UpstreamManager, stz scaletozero.Controller, nekoAuthClient *nekoclient.AuthClient) (*ApiService, error) {
+func New(
+	recordManager recorder.RecordManager,
+	factory recorder.FFmpegRecorderFactory,
+	upstreamMgr *devtoolsproxy.UpstreamManager,
+	stz scaletozero.PinnedController,
+	nekoAuthClient *nekoclient.AuthClient,
+	captureSession *capturesession.CaptureSession,
+	eventStream    *events.EventStream,
+	displayNum int,
+) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
 		return nil, fmt.Errorf("recordManager cannot be nil")
@@ -82,11 +111,18 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		return nil, fmt.Errorf("upstreamMgr cannot be nil")
 	case nekoAuthClient == nil:
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
+	case captureSession == nil:
+		return nil, fmt.Errorf("captureSession cannot be nil")
+	case eventStream == nil:
+		return nil, fmt.Errorf("eventStream cannot be nil")
 	}
 
+	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &ApiService{
-		recordManager:     recordManager,
-		factory:           factory,
+		recordManager:   recordManager,
+		factory:         factory,
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
@@ -94,6 +130,11 @@ func New(recordManager recorder.RecordManager, factory recorder.FFmpegRecorderFa
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
+		eventStream:       eventStream,
+		captureSession:    captureSession,
+		cdpMonitor:        mon,
+		lifecycleCtx:      ctx,
+		lifecycleCancel:   cancel,
 	}, nil
 }
 
@@ -313,5 +354,10 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	s.monitorMu.Lock()
+	s.lifecycleCancel()
+	s.cdpMonitor.Stop()
+	s.captureSession.Stop()
+	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)
 }

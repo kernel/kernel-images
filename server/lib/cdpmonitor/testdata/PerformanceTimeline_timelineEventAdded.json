@@ -1,0 +1,20 @@
+{
+  "event": {
+    "frameId": "FRAME123",
+    "type": "layout-shift",
+    "name": "layout-shift",
+    "time": 1234.5,
+    "duration": 0.5,
+    "layoutShiftDetails": {
+      "value": 0.15,
+      "hadRecentInput": false,
+      "lastInputTime": 0,
+      "sources": [
+        {
+          "previousRect": {"x": 0, "y": 0, "width": 100, "height": 100},
+          "currentRect": {"x": 0, "y": 50, "width": 100, "height": 100}
+        }
+      ]
+    }
+  }
+}
