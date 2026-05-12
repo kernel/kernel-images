@@ -27,7 +27,6 @@ const (
 	dbusSocket     = "/run/dbus/system_bus_socket"
 	defaultDisplay = ":1"
 	defaultIntPort = "9223"
-	defaultAPIPort = "10001"
 )
 
 type profile int
