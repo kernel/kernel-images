@@ -21,16 +21,15 @@ const (
 	CategorySystem      EventCategory = "system"
 )
 
-// allCategories is the canonical list of all known event categories.
-// Package-internal; treat as read-only.
-var allCategories = []EventCategory{
+// AllCategories is the canonical list of all known event categories.
+var AllCategories = []EventCategory{
 	CategoryConsole, CategoryNetwork, CategoryPage, CategoryInteraction,
 	CategoryLiveview, CategoryCaptcha, CategorySystem,
 }
 
 var validCategories = func() map[EventCategory]struct{} {
-	m := make(map[EventCategory]struct{}, len(allCategories))
-	for _, c := range allCategories {
+	m := make(map[EventCategory]struct{}, len(AllCategories))
+	for _, c := range AllCategories {
 		m[c] = struct{}{}
 	}
 	return m
@@ -60,7 +59,7 @@ type Source struct {
 }
 
 // Event is the portable event schema. It contains only producer-emitted content;
-// pipeline metadata (seq, capture session) lives on the Envelope.
+// pipeline metadata (seq) lives on the Envelope.
 type Event struct {
 	Ts        int64           `json:"ts"` // Unix microseconds (µs since epoch)
 	Type      string          `json:"type"`
@@ -72,9 +71,8 @@ type Event struct {
 
 // Envelope wraps an Event with pipeline-assigned metadata.
 type Envelope struct {
-	CaptureSessionID string `json:"capture_session_id"`
-	Seq              uint64 `json:"seq"`
-	Event            Event  `json:"event"`
+	Seq   uint64 `json:"seq"`
+	Event Event  `json:"event"`
 }
 
 // truncateIfNeeded marshals env and returns the (possibly truncated) envelope.

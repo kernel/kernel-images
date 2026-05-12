@@ -1,12 +1,8 @@
 package events
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -63,8 +59,7 @@ func TestEventSerialization(t *testing.T) {
 
 func TestEnvelopeSerialization(t *testing.T) {
 	env := Envelope{
-		CaptureSessionID: "test-session-id",
-		Seq:              1,
+		Seq: 1,
 		Event: Event{
 			Ts:       1000,
 			Type:     "console.log",
@@ -79,8 +74,8 @@ func TestEnvelopeSerialization(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(b, &decoded))
 
-	assert.Equal(t, "test-session-id", decoded["capture_session_id"])
 	assert.Equal(t, float64(1), decoded["seq"])
+	assert.NotContains(t, decoded, "capture_session_id")
 	inner, ok := decoded["event"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "console.log", inner["type"])
@@ -330,275 +325,6 @@ func TestConcurrentReaders(t *testing.T) {
 	}
 }
 
-// TestFileWriter: per-category JSONL appender tests.
-func TestFileWriter(t *testing.T) {
-	t.Run("category_routing", func(t *testing.T) {
-		dir := t.TempDir()
-		fw, err := newFileWriter(dir)
-		require.NoError(t, err)
-		defer fw.Close()
-
-		envsToFile := []struct {
-			env      Envelope
-			file     string
-			category string
-		}{
-			{Envelope{Seq: 1, Event: Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1}}, "console.log", "console"},
-			{Envelope{Seq: 2, Event: Event{Type: "network.request", Category: CategoryNetwork, Source: Source{Kind: KindCDP}, Ts: 1}}, "network.log", "network"},
-			{Envelope{Seq: 3, Event: Event{Type: "liveview.click", Category: CategoryLiveview, Source: Source{Kind: KindKernelAPI}, Ts: 1}}, "liveview.log", "liveview"},
-			{Envelope{Seq: 4, Event: Event{Type: "captcha.solve", Category: CategoryCaptcha, Source: Source{Kind: KindExtension}, Ts: 1}}, "captcha.log", "captcha"},
-			{Envelope{Seq: 5, Event: Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1}}, "page.log", "page"},
-			{Envelope{Seq: 6, Event: Event{Type: "input.click", Category: CategoryInteraction, Source: Source{Kind: KindCDP}, Ts: 1}}, "interaction.log", "interaction"},
-			{Envelope{Seq: 7, Event: Event{Type: "monitor.connected", Category: CategorySystem, Source: Source{Kind: KindKernelAPI}, Ts: 1}}, "system.log", "system"},
-		}
-
-		for _, e := range envsToFile {
-			data, err := json.Marshal(e.env)
-			require.NoError(t, err)
-			require.NoError(t, fw.Write(e.file, data))
-		}
-
-		for _, e := range envsToFile {
-			data, err := os.ReadFile(filepath.Join(dir, e.file))
-			require.NoError(t, err, "missing file %s for type %s", e.file, e.env.Event.Type)
-
-			line := bytes.TrimRight(data, "\n")
-			require.True(t, json.Valid(line), "invalid JSON in %s", e.file)
-
-			var decoded map[string]any
-			require.NoError(t, json.Unmarshal(line, &decoded))
-			inner, ok := decoded["event"].(map[string]any)
-			require.True(t, ok)
-			assert.Equal(t, e.category, inner["category"], "wrong category in %s", e.file)
-			srcMap, ok := inner["source"].(map[string]any)
-			require.True(t, ok, "source should be an object in %s", e.file)
-			assert.Equal(t, string(e.env.Event.Source.Kind), srcMap["kind"], "wrong source kind in %s", e.file)
-		}
-	})
-
-	t.Run("empty_filename_rejected", func(t *testing.T) {
-		dir := t.TempDir()
-		fw, err := newFileWriter(dir)
-		require.NoError(t, err)
-		defer fw.Close()
-
-		err = fw.Write("", []byte(`{"seq":1}`))
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "empty filename")
-	})
-
-	t.Run("concurrent_writes", func(t *testing.T) {
-		dir := t.TempDir()
-		fw, err := newFileWriter(dir)
-		require.NoError(t, err)
-		defer fw.Close()
-
-		const goroutines = 10
-		const eventsPerGoroutine = 100
-
-		var wg sync.WaitGroup
-		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				for j := 0; j < eventsPerGoroutine; j++ {
-					env := Envelope{
-						Seq:   uint64(i*eventsPerGoroutine + j),
-						Event: Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1},
-					}
-					envData, err := json.Marshal(env)
-					require.NoError(t, err)
-					require.NoError(t, fw.Write("console.log", envData))
-				}
-			}(i)
-		}
-		wg.Wait()
-
-		data, err := os.ReadFile(filepath.Join(dir, "console.log"))
-		require.NoError(t, err)
-
-		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-		assert.Len(t, lines, goroutines*eventsPerGoroutine)
-		for _, line := range lines {
-			assert.True(t, json.Valid([]byte(line)), "invalid JSON line: %s", line)
-		}
-	})
-
-	t.Run("lazy_open", func(t *testing.T) {
-		dir := t.TempDir()
-		fw, err := newFileWriter(dir)
-		require.NoError(t, err)
-		defer fw.Close()
-
-		entries, err := os.ReadDir(dir)
-		require.NoError(t, err)
-		assert.Empty(t, entries, "files opened before first Write")
-
-		env := Envelope{Seq: 1, Event: Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1}}
-		envData, err := json.Marshal(env)
-		require.NoError(t, err)
-		require.NoError(t, fw.Write("console.log", envData))
-
-		entries, err = os.ReadDir(dir)
-		require.NoError(t, err)
-		assert.Len(t, entries, 1, "expected exactly one file after first Write")
-		assert.Equal(t, "console.log", entries[0].Name())
-	})
-}
-
-func TestCaptureSession(t *testing.T) {
-	newCaptureSession := func(t *testing.T) (*CaptureSession, string) {
-		t.Helper()
-		dir := t.TempDir()
-		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: dir, RingCapacity: 100})
-		require.NoError(t, err)
-		p.Start("test-session", CaptureConfig{})
-		t.Cleanup(func() { p.Close() })
-		return p, dir
-	}
-
-	t.Run("concurrent_publish_seq_order", func(t *testing.T) {
-		const goroutines = 8
-		const eventsEach = 50
-		const total = goroutines * eventsEach
-
-		p, err := NewCaptureSession(CaptureSessionConfig{LogDir: t.TempDir(), RingCapacity: total})
-		require.NoError(t, err)
-		p.Start("test-concurrent", CaptureConfig{})
-		t.Cleanup(func() { p.Close() })
-		reader := p.NewReader(0)
-
-		var wg sync.WaitGroup
-		for i := 0; i < goroutines; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				for j := 0; j < eventsEach; j++ {
-					p.Publish(cdpEvent("console.log", CategoryConsole))
-				}
-			}()
-		}
-		wg.Wait()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		for want := uint64(1); want <= total; want++ {
-			env := readEnvelope(t, reader, ctx)
-			assert.Equal(t, want, env.Seq, "events must arrive in seq order")
-		}
-	})
-
-	t.Run("publish_increments_seq", func(t *testing.T) {
-		p, _ := newCaptureSession(t)
-		reader := p.NewReader(0)
-
-		for i := 0; i < 3; i++ {
-			p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		for want := uint64(1); want <= 3; want++ {
-			env := readEnvelope(t, reader, ctx)
-			assert.Equal(t, want, env.Seq, "expected seq %d got %d", want, env.Seq)
-		}
-	})
-
-	t.Run("publish_sets_ts", func(t *testing.T) {
-		p, _ := newCaptureSession(t)
-		reader := p.NewReader(0)
-
-		before := time.Now().UnixMicro()
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}})
-		after := time.Now().UnixMicro()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.GreaterOrEqual(t, env.Event.Ts, before)
-		assert.LessOrEqual(t, env.Event.Ts, after)
-	})
-
-	t.Run("publish_writes_file", func(t *testing.T) {
-		p, dir := newCaptureSession(t)
-
-		p.Publish(Event{Type: "console.log", Category: CategoryConsole, Source: Source{Kind: KindCDP}, Ts: 1})
-
-		data, err := os.ReadFile(filepath.Join(dir, "console.log"))
-		require.NoError(t, err)
-
-		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-		require.Len(t, lines, 1)
-		assert.True(t, json.Valid([]byte(lines[0])))
-		assert.Contains(t, lines[0], `"console.log"`)
-	})
-
-	t.Run("publish_writes_ring", func(t *testing.T) {
-		p, _ := newCaptureSession(t)
-
-		reader := p.NewReader(0)
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, "page.navigation", env.Event.Type)
-		assert.Equal(t, CategoryPage, env.Event.Category)
-	})
-
-	t.Run("start_sets_capture_session_id", func(t *testing.T) {
-		p, _ := newCaptureSession(t)
-		p.Start("test-uuid", CaptureConfig{})
-
-		reader := p.NewReader(0)
-		p.Publish(Event{Type: "page.navigation", Category: CategoryPage, Source: Source{Kind: KindCDP}, Ts: 1})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, "test-uuid", env.CaptureSessionID)
-	})
-
-	t.Run("truncation_applied", func(t *testing.T) {
-		p, dir := newCaptureSession(t)
-		reader := p.NewReader(0)
-
-		largeData := strings.Repeat("x", 1_100_000)
-		rawData, err := json.Marshal(map[string]string{"payload": largeData})
-		require.NoError(t, err)
-
-		p.Publish(Event{
-			Type:     "page.navigation",
-			Category: CategoryPage,
-			Source:   Source{Kind: KindCDP},
-			Ts:       1,
-			Data:     json.RawMessage(rawData),
-		})
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		env := readEnvelope(t, reader, ctx)
-		assert.True(t, env.Event.Truncated)
-		assert.True(t, json.Valid(env.Event.Data))
-
-		marshaled, err := json.Marshal(env)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, len(marshaled), maxS2RecordBytes)
-
-		data, err := os.ReadFile(filepath.Join(dir, "page.log"))
-		require.NoError(t, err)
-		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
-		require.Len(t, lines, 1)
-		assert.Contains(t, lines[0], `"truncated":true`)
-	})
-
-}
 
 func TestRingBufferResetWithActiveReader(t *testing.T) {
 	rb := newTestRingBuffer(t,10)

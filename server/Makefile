@@ -19,7 +19,7 @@ oapi-generate:
 	openapi-down-convert --input openapi.yaml --output openapi-3.0.yaml
 	go tool oapi-codegen -config ./oapi-codegen.yaml ./openapi-3.0.yaml
 	@echo "Fixing oapi-codegen issue https://github.com/oapi-codegen/oapi-codegen/issues/1764..."
-	go run ./scripts/oapi/patch_sse_methods -file ./lib/oapi/oapi.go -expected-replacements 3
+	go run ./scripts/oapi/patch_sse_methods -file ./lib/oapi/oapi.go -expected-replacements 4
 	go fmt ./lib/oapi/oapi.go
 	go mod tidy
 

@@ -22,6 +22,7 @@ import (
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
+	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -92,14 +93,14 @@ func main() {
 	}
 
 	// Construct events pipeline
-	captureSession, err := events.NewCaptureSession(events.CaptureSessionConfig{
-		LogDir:       "/var/log/kernel",
+	eventStream, err := events.NewEventStream(events.EventStreamConfig{
 		RingCapacity: 1024,
 	})
 	if err != nil {
-		slogger.Error("failed to create capture session", "err", err)
+		slogger.Error("failed to create event stream", "err", err)
 		os.Exit(1)
 	}
+	captureSession := capturesession.NewCaptureSession(eventStream)
 
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
@@ -108,6 +109,7 @@ func main() {
 		stz,
 		nekoAuthClient,
 		captureSession,
+		eventStream,
 		config.DisplayNum,
 	)
 	if err != nil {

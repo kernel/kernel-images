@@ -19,7 +19,7 @@ func TestCaptureConfigFrom(t *testing.T) {
 	})
 
 	t.Run("valid categories", func(t *testing.T) {
-		cats := []oapi.CaptureConfigCategories{oapi.Console, oapi.Network}
+		cats := []oapi.CaptureConfigCategories{oapi.CaptureConfigCategoriesConsole, oapi.CaptureConfigCategoriesNetwork}
 		body := &oapi.StartCaptureSessionRequest{
 			Config: &oapi.CaptureConfig{Categories: &cats},
 		}
@@ -64,7 +64,7 @@ func TestStartCaptureSession(t *testing.T) {
 
 	t.Run("success with config", func(t *testing.T) {
 		svc := newTestService(t, newMockRecordManager())
-		cats := []oapi.CaptureConfigCategories{oapi.Console}
+		cats := []oapi.CaptureConfigCategories{oapi.CaptureConfigCategoriesConsole}
 		resp, err := svc.StartCaptureSession(ctx, oapi.StartCaptureSessionRequestObject{
 			Body: &oapi.StartCaptureSessionRequest{
 				Config: &oapi.CaptureConfig{Categories: &cats},
@@ -141,7 +141,7 @@ func TestUpdateCaptureSession(t *testing.T) {
 		_, err := svc.StartCaptureSession(ctx, oapi.StartCaptureSessionRequestObject{})
 		require.NoError(t, err)
 
-		cats := []oapi.CaptureConfigCategories{oapi.Console}
+		cats := []oapi.CaptureConfigCategories{oapi.CaptureConfigCategoriesConsole}
 		resp, err := svc.UpdateCaptureSession(ctx, oapi.UpdateCaptureSessionRequestObject{
 			Body: &oapi.UpdateCaptureSessionRequest{
 				Config: &oapi.CaptureConfig{Categories: &cats},
@@ -152,7 +152,7 @@ func TestUpdateCaptureSession(t *testing.T) {
 		require.True(t, ok)
 		require.NotNil(t, r200.Config.Categories)
 		assert.Len(t, *r200.Config.Categories, 1)
-		assert.Equal(t, oapi.Console, (*r200.Config.Categories)[0])
+		assert.Equal(t, oapi.CaptureConfigCategoriesConsole, (*r200.Config.Categories)[0])
 	})
 
 	t.Run("empty body is no-op", func(t *testing.T) {
@@ -246,7 +246,15 @@ func (m *mockRecordManager) StopAll(_ context.Context) error                    
 // newTestService builds an ApiService with minimal dependencies for capture session tests.
 func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
-	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), newCaptureSession(t), 0)
+	cs, es := newCaptureSession(t)
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), cs, es, 0)
 	require.NoError(t, err)
+	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc
 }
+
+type stubCdpMonitor struct{}
+
+func (s *stubCdpMonitor) Start(_ context.Context) error { return nil }
+func (s *stubCdpMonitor) Stop()                         {}
+func (s *stubCdpMonitor) IsRunning() bool               { return false }

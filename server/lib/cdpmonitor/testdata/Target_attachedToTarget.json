@@ -1,0 +1,13 @@
+{
+  "sessionId": "SESSION123",
+  "targetInfo": {
+    "targetId": "TARGET123",
+    "type": "page",
+    "title": "Example",
+    "url": "https://example.com/",
+    "attached": true,
+    "canAccessOpener": true,
+    "browserContextId": "CTX123"
+  },
+  "waitingForDebugger": true
+}

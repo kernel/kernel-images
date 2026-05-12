@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"sync"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -19,6 +21,14 @@ import (
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
+
+type cdpMonitorController interface {
+	Start(ctx context.Context) error
+	Stop()
+	IsRunning() bool
+}
+
+var _ cdpMonitorController = (*cdpmonitor.Monitor)(nil)
 
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
@@ -39,7 +49,7 @@ type ApiService struct {
 
 	// DevTools upstream manager (Chromium supervisord log tailer)
 	upstreamMgr *devtoolsproxy.UpstreamManager
-	stz         scaletozero.Controller
+	stz         scaletozero.PinnedController
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
@@ -72,8 +82,9 @@ type ApiService struct {
 	xvfbResizeMu sync.Mutex
 
 	// CDP event pipeline and cdpMonitor.
-	captureSession  *events.CaptureSession
-	cdpMonitor      *cdpmonitor.Monitor
+	eventStream     *events.EventStream
+	captureSession  *capturesession.CaptureSession
+	cdpMonitor      cdpMonitorController
 	monitorMu       sync.Mutex
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
@@ -85,9 +96,10 @@ func New(
 	recordManager recorder.RecordManager,
 	factory recorder.FFmpegRecorderFactory,
 	upstreamMgr *devtoolsproxy.UpstreamManager,
-	stz scaletozero.Controller,
+	stz scaletozero.PinnedController,
 	nekoAuthClient *nekoclient.AuthClient,
-	captureSession *events.CaptureSession,
+	captureSession *capturesession.CaptureSession,
+	eventStream    *events.EventStream,
 	displayNum int,
 ) (*ApiService, error) {
 	switch {
@@ -101,9 +113,11 @@ func New(
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
 	case captureSession == nil:
 		return nil, fmt.Errorf("captureSession cannot be nil")
+	case eventStream == nil:
+		return nil, fmt.Errorf("eventStream cannot be nil")
 	}
 
-	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum)
+	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{
@@ -116,6 +130,7 @@ func New(
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
+		eventStream:       eventStream,
 		captureSession:    captureSession,
 		cdpMonitor:        mon,
 		lifecycleCtx:      ctx,
@@ -343,7 +358,6 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()
 	s.captureSession.Stop()
-	_ = s.captureSession.Close()
 	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)
 }
