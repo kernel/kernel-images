@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -29,12 +30,13 @@ func (sp *s2Producer) close(ctx context.Context) error {
 		sp.wg.Wait()
 		close(done)
 	}()
+	var drainErr error
 	select {
 	case <-done:
 	case <-ctx.Done():
-		return ctx.Err()
+		drainErr = ctx.Err()
 	}
-	return sp.p.Close()
+	return errors.Join(drainErr, sp.p.Close())
 }
 
 // S2Storage appends all events to a single fixed stream set at construction time.
