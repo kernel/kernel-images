@@ -80,7 +80,7 @@ func (w *StorageWriter) Drain(ctx context.Context) error {
 
 func (w *StorageWriter) processResult(ctx context.Context, res ReadResult) error {
 	if res.Dropped > 0 {
-		w.log.Warn("storage writer: dropped events", "count", res.Dropped, "from_seq", res.DroppedFrom, "to_seq", res.DroppedTo)
+		w.log.Warn("storage writer: dropped events", "count", res.Dropped)
 		return nil
 	}
 	if err := w.storage.Append(ctx, *res.Envelope); err != nil {
