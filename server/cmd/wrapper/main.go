@@ -222,14 +222,9 @@ func main() {
 		formatProbeDurations(probeDurations))
 
 	// Cosmetic + non-critical services come up off the hot path. Headless has
-	// no audio stack and no UI to dismiss.
+	// no audio stack.
 	if prof == profileHeadful {
-		go func() {
-			startAll("pulseaudio")
-			if os.Getenv("RUN_AS_ROOT") == "true" {
-				dismissNoSandboxWarning()
-			}
-		}()
+		go startAll("pulseaudio")
 	}
 
 	// Re-enable scale-to-zero now that the hot path is up — unless the caller
