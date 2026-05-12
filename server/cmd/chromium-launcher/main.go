@@ -50,6 +50,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "warning: X display :1 not responsive after %s\n", d)
 	}
 
+	// Headful: wait for mutter to register before exec'ing chromium. If
+	// chromium maps its window with no WM present, the CSD hint it sends has
+	// no listener; mutter starts later, reparents the existing window, and
+	// applies default SSD — i.e., the titlebar with the close X. Headless
+	// has no WM, so skip.
+	if !*headless {
+		if d := x11.WaitForMutter(20 * time.Second); d >= 20*time.Second {
+			fmt.Fprintf(os.Stderr, "warning: mutter not registered after %s\n", d)
+		}
+	}
+
 	baseFlags := os.Getenv("CHROMIUM_FLAGS")
 	runtimeTokens, err := chromiumflags.ReadOptionalFlagFile(*runtimeFlagsPath)
 	if err != nil {
