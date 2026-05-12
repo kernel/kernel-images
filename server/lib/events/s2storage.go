@@ -58,6 +58,12 @@ func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 		return nil, fmt.Errorf("s2storage: open append session: %w", err)
 	}
 
+	if cfg.BatcherLinger == 0 {
+		cfg.BatcherLinger = 100 * time.Millisecond
+	}
+	if cfg.BatcherMaxRecords == 0 {
+		cfg.BatcherMaxRecords = 50
+	}
 	batcher := s2.NewBatcher(ctx, &s2.BatchingOptions{
 		Linger:     cfg.BatcherLinger,
 		MaxRecords: cfg.BatcherMaxRecords,
