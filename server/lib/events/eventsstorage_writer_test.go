@@ -70,11 +70,8 @@ func TestStorageWriter_NormalAppend(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w.Run(ctx) //nolint:errcheck
-	}()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
 
 	env1 := es.Publish(Envelope{Event: makeEvent("test.one")})
 	env2 := es.Publish(Envelope{Event: makeEvent("test.two")})
@@ -84,7 +81,7 @@ func TestStorageWriter_NormalAppend(t *testing.T) {
 	}, time.Second, 5*time.Millisecond)
 
 	cancel()
-	<-done
+	require.ErrorIs(t, <-done, context.Canceled)
 
 	got := backend.envelopes()
 	assert.Equal(t, env1.Seq, got[0].Seq)
@@ -104,18 +101,15 @@ func TestStorageWriter_DroppedEvents(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w.Run(ctx) //nolint:errcheck
-	}()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
 
 	require.Eventually(t, func() bool {
 		return len(backend.envelopes()) > 0
 	}, time.Second, 5*time.Millisecond)
 
 	cancel()
-	<-done
+	require.ErrorIs(t, <-done, context.Canceled)
 
 	// With ring capacity 4 and 8 publishes, the writer must have skipped at
 	// least 4 events via a drop gap — so fewer than 8 envelopes landed.
@@ -132,11 +126,8 @@ func TestStorageWriter_AppendError(t *testing.T) {
 	w := NewStorageWriter(es, backend, slog.Default())
 
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		w.Run(ctx) //nolint:errcheck
-	}()
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx) }()
 
 	// Publish an event that will fail. Wait until the writer has attempted it
 	// (errCount > 0), then clear the error and publish a second event. The
@@ -153,7 +144,7 @@ func TestStorageWriter_AppendError(t *testing.T) {
 	}, time.Second, 5*time.Millisecond)
 
 	cancel()
-	<-done
+	require.ErrorIs(t, <-done, context.Canceled)
 
 	got := backend.envelopes()
 	require.Len(t, got, 1)
@@ -198,10 +189,11 @@ func TestStorageWriter_DrainFlushesRingAfterRunExits(t *testing.T) {
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
 
-	// Drain must flush whatever is left in the ring.
+	// Drain then Close mirrors the real shutdown sequence.
 	drainCtx, drainCancel := context.WithTimeout(context.Background(), time.Second)
 	defer drainCancel()
 	require.NoError(t, w.Drain(drainCtx))
+	require.NoError(t, w.Close(drainCtx))
 
 	got := backend.envelopes()
 	// All 8 published events must have been appended across Run + Drain.

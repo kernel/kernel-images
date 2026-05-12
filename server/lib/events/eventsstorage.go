@@ -8,23 +8,16 @@ import (
 	"sync/atomic"
 )
 
-// Storage is the durable storage backend for browser events.
-// Append is called serially from StorageWriter.Run and need not be thread-safe.
 type Storage interface {
 	Append(ctx context.Context, env Envelope) error
 	Close(ctx context.Context) error
 }
 
-// StorageWriter drains the ring buffer and forwards each envelope to the
-// configured Storage backend. Single-use: call Run once; it blocks until ctx
-// is cancelled. After ctx is cancelled, call Drain to flush events that
-// arrived before all publishers stopped, then call Close to flush the backend.
-//
-// Delivery is at-least-once: on process restart the ring is empty so no
-// cross-restart duplicates occur, but consumers should dedupe by env.Seq in
-// case StorageWriter is ever restarted within a process lifetime.
-//
-// Starts from the oldest available event in the ring, not the current tail.
+// StorageWriter reads from the ring buffer and forwards each envelope to
+// Storage. Single-use and not thread-safe: call Run once, then after
+// it returns call Drain followed by Close. Reads start from the oldest
+// available event in the ring, not the current tail. Delivery is
+// at-least-once; consumers should dedupe by env.Seq.
 type StorageWriter struct {
 	reader       *Reader
 	storage      Storage

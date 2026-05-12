@@ -56,7 +56,7 @@ func TestS2StorageWriter(t *testing.T) {
 
 	checkResp, err := streamClient.CheckTail(ctx)
 	require.NoError(t, err, "check tail before test")
-	startSeq := checkResp.SeqNum
+	startSeq := checkResp.Tail.SeqNum
 
 	// Start a capture session.
 	startResp, err := client.StartCaptureSessionWithResponse(ctx, instanceoapi.StartCaptureSessionJSONRequestBody{})
@@ -81,17 +81,17 @@ func TestS2StorageWriter(t *testing.T) {
 
 	// Read records written after the pre-test tail and verify at least one
 	// envelope is present.
-	readSession, err := streamClient.ReadSession(ctx, &s2.ReadOptions{
+	readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer readCancel()
+
+	readSession, err := streamClient.ReadSession(readCtx, &s2.ReadOptions{
 		SeqNum: s2.Uint64(startSeq),
 	})
 	require.NoError(t, err, "open S2 read session")
 	defer readSession.Close()
 
-	readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
-	defer readCancel()
-
 	var count int
-	for readSession.Next(readCtx) {
+	for readSession.Next() {
 		count++
 	}
 	// EOF is expected once we reach the tail — not an error.
