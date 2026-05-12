@@ -124,7 +124,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     libxfixes3 \
     libxrandr2 \
     libgbm1 \
-    libnss3; \
+    libdbus-1-3 \
+    libglib2.0-0 \
+    libgtk-3-0 \
+    libxext6; \
     apt-get -yqq --no-install-recommends install \
     ca-certificates \
     curl \
@@ -136,6 +139,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     dbus-x11 \
     xvfb \
     x11-utils \
+    x11-xserver-utils \
     xclip \
     xdotool \
     fontconfig \
@@ -146,27 +150,30 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     supervisor; \
     fc-cache -f
 
-# install chromium and sqlite3 for debugging the cookies file
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
-    add-apt-repository -y ppa:xtradeb/apps
+# sqlite3 for debugging the cookies file; unzip for the chrome-for-testing archives below.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
     --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
     apt-get update -y && \
-    apt-get -y install chromium && \
     apt-get --no-install-recommends -y install sqlite3 unzip;
 
-# Chromedriver and Chromium are not necessarily the same version.
-ARG CHROMEDRIVER_VERSION=146.0.7680.165
+# Install Chrome + ChromeDriver as a matched pair from chrome-for-testing so they cannot drift apart.
+ARG CHROME_VERSION=148.0.7778.97
 RUN set -eux; \
-    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
-    unzip /tmp/cd.zip -d /tmp; \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -o /tmp/chrome.zip; \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
+    unzip -q /tmp/chrome.zip -d /opt; \
+    unzip -q /tmp/cd.zip -d /tmp; \
+    mv /opt/chrome-linux64 /opt/chrome-for-testing; \
+    mv /opt/chrome-for-testing/chrome /opt/chrome-for-testing/chromium; \
+    ln -sf /opt/chrome-for-testing/chromium /usr/bin/chromium; \
     mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
-    chmod +x /usr/local/bin/chromedriver; \
-    rm -rf /tmp/cd.zip /tmp/chromedriver-linux64
+    chmod +x /usr/local/bin/chromedriver /opt/chrome-for-testing/chromium; \
+    rm -rf /tmp/chrome.zip /tmp/cd.zip /tmp/chromedriver-linux64
 
-# Copy Chromium policy configuration
-RUN mkdir -p /etc/chromium/policies/managed
+# Chrome for Testing reads managed policies from /etc/opt/chrome_for_testing/policies, but
+# the server writes them to /etc/chromium/policies. Symlink so writes flow to the real path.
+RUN mkdir -p /etc/chromium/policies/managed /etc/opt/chrome_for_testing && \
+    ln -sfn /etc/chromium/policies /etc/opt/chrome_for_testing/policies
 COPY shared/chromium-policies/managed/policy.json /etc/chromium/policies/managed/policy.json
 
 # Install FFmpeg (latest static build) for the recording server

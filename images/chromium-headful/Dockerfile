@@ -279,27 +279,35 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     chown $USERNAME /var/log/neko/ /tmp/runtime-$USERNAME; \
     chown -R $USERNAME:$USERNAME /home/$USERNAME;
 
-# install chromium and sqlite3 for debugging the cookies file
+# sqlite3 for debugging the cookies file; runtime libs are chrome-for-testing's listed deb.deps.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
     --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
-    add-apt-repository -y ppa:xtradeb/apps;
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
-    apt update -y && \
-    apt -y install chromium && \
-    apt --no-install-recommends -y install sqlite3;
+    apt-get update -y && \
+    apt-get --no-install-recommends -y install \
+        sqlite3 \
+        libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 \
+        libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
+        libnspr4 libnss3 libpango-1.0-0 libxcomposite1 libxdamage1 \
+        libxext6 libxfixes3 libxkbcommon0;
 
-# Chromedriver and Chromium are not necessarily the same version.
-ARG CHROMEDRIVER_VERSION=146.0.7680.165
+# Install Chrome + ChromeDriver as a matched pair from chrome-for-testing so they cannot drift apart.
+ARG CHROME_VERSION=148.0.7778.97
 RUN set -eux; \
-    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
-    unzip /tmp/cd.zip -d /tmp; \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -o /tmp/chrome.zip; \
+    curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
+    unzip -q /tmp/chrome.zip -d /opt; \
+    unzip -q /tmp/cd.zip -d /tmp; \
+    mv /opt/chrome-linux64 /opt/chrome-for-testing; \
+    mv /opt/chrome-for-testing/chrome /opt/chrome-for-testing/chromium; \
+    ln -sf /opt/chrome-for-testing/chromium /usr/bin/chromium; \
     mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
-    chmod +x /usr/local/bin/chromedriver; \
-    rm -rf /tmp/cd.zip /tmp/chromedriver-linux64
+    chmod +x /usr/local/bin/chromedriver /opt/chrome-for-testing/chromium; \
+    rm -rf /tmp/chrome.zip /tmp/cd.zip /tmp/chromedriver-linux64
 
-# Copy Chromium policy configuration
-RUN mkdir -p /etc/chromium/policies/managed
+# Chrome for Testing reads managed policies from /etc/opt/chrome_for_testing/policies, but
+# the server writes them to /etc/chromium/policies. Symlink so writes flow to the real path.
+RUN mkdir -p /etc/chromium/policies/managed /etc/opt/chrome_for_testing && \
+    ln -sfn /etc/chromium/policies /etc/opt/chrome_for_testing/policies
 COPY shared/chromium-policies/managed/policy.json /etc/chromium/policies/managed/policy.json
 
 # install Node.js 22.x by copying from the node:22-bullseye-slim stage
