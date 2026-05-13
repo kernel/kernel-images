@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/s2-streamstore/s2-sdk-go/s2"
@@ -36,17 +37,28 @@ func (sp *s2Producer) close(ctx context.Context) error {
 	case <-ctx.Done():
 		drainErr = ctx.Err()
 	}
-	return errors.Join(drainErr, sp.p.Close())
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- sp.p.Close() }()
+	select {
+	case err := <-closeDone:
+		return errors.Join(drainErr, err)
+	case <-ctx.Done():
+		return errors.Join(drainErr, ctx.Err())
+	}
 }
 
 // S2Storage appends all events to a single fixed stream set at construction time.
 type S2Storage struct {
-	producer   s2Producer
-	shutdownCh chan struct{} // closed when Close is called, bounds ack goroutine contexts
-	log        *slog.Logger
+	producer       s2Producer
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	closeOnce      sync.Once
+	ackErrors      atomic.Uint64
+	log            *slog.Logger
 }
 
-// ctx is used for AppendSession creation and must be the process lifetime context.
+// ctx controls AppendSession creation; pass context.Background() so the pipeline
+// outlives signal cancellation and can be explicitly flushed via Close.
 func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cfg S2Config, log *slog.Logger) (*S2Storage, error) {
 	if basin == "" || accessToken == "" || streamName == "" {
 		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
@@ -72,14 +84,20 @@ func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 	})
 	producer := s2.NewProducer(ctx, batcher, session)
 
+	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	return &S2Storage{
-		producer:   s2Producer{p: producer},
-		shutdownCh: make(chan struct{}),
-		log:        log,
+		producer:       s2Producer{p: producer},
+		shutdownCtx:    shutdownCtx,
+		shutdownCancel: shutdownCancel,
+		log:            log,
 	}, nil
 }
 
-func (s *S2Storage) Append(_ context.Context, env Envelope) error {
+func (s *S2Storage) Append(ctx context.Context, env Envelope) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	data, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("s2storage: marshal envelope seq=%d: %w", env.Seq, err)
@@ -93,35 +111,33 @@ func (s *S2Storage) Append(_ context.Context, env Envelope) error {
 	s.producer.wg.Add(1)
 	go func() {
 		defer s.producer.wg.Done()
-		ackCtx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			select {
-			case <-s.shutdownCh:
-				cancel()
-			case <-ackCtx.Done():
-			}
-		}()
 
-		ticket, err := future.Wait(ackCtx)
+		ticket, err := future.Wait(s.shutdownCtx)
 		if err != nil {
-			s.log.Error("s2storage: wait for submit failed", "seq", env.Seq, "err", err)
+			total := s.ackErrors.Add(1)
+			s.log.Error("s2storage: wait for submit failed", "seq", env.Seq, "err", err, "total_ack_errors", total)
 			return
 		}
 		if ticket == nil {
 			return
 		}
-		if _, err := ticket.Ack(ackCtx); err != nil {
-			s.log.Error("s2storage: ack failed", "seq", env.Seq, "err", err)
+		if _, err := ticket.Ack(s.shutdownCtx); err != nil {
+			total := s.ackErrors.Add(1)
+			s.log.Error("s2storage: ack failed", "seq", env.Seq, "err", err, "total_ack_errors", total)
 		}
 	}()
 
 	return nil
 }
 
+// AckErrors returns the total number of async ack failures since construction.
+func (s *S2Storage) AckErrors() uint64 {
+	return s.ackErrors.Load()
+}
+
 // Close cancels in-flight ack goroutines, waits for them to drain, then closes
 // the producer (which flushes the S2 batcher to the network).
 func (s *S2Storage) Close(ctx context.Context) error {
-	close(s.shutdownCh)
+	s.closeOnce.Do(s.shutdownCancel)
 	return s.producer.close(ctx)
 }

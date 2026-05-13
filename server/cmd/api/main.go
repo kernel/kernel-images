@@ -303,7 +303,10 @@ func main() {
 		if err := storageWriter.Drain(drainCtx); err != nil {
 			slogger.Warn("storage writer drain incomplete", "err", err)
 		}
-		if err := storageWriter.Close(drainCtx); err != nil {
+
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+		if err := storageWriter.Close(closeCtx); err != nil {
 			slogger.Error("storage writer close failed", "err", err)
 		}
 	}
