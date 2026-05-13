@@ -49,16 +49,18 @@ func (sp *s2Producer) close(ctx context.Context) error {
 
 // s2Storage appends all events to a single fixed stream set at construction time.
 type s2Storage struct {
-	producer       s2Producer
-	shutdownCtx    context.Context
-	shutdownCancel context.CancelFunc
-	closeOnce      sync.Once
-	ackErrors      atomic.Uint64
-	log            *slog.Logger
+	producer        s2Producer
+	sessionCancel   context.CancelFunc
+	shutdownCtx     context.Context
+	shutdownCancel  context.CancelFunc
+	closeOnce       sync.Once
+	ackErrors       atomic.Uint64
+	log             *slog.Logger
 }
 
-// newS2Storage opens an AppendSession bound to ctx. ctx governs the lifetime of
-// the session pump.
+// newS2Storage opens an AppendSession using an independent context so the session
+// outlives the signal context. The caller's ctx is used only to bound the setup
+// call itself; the session stays alive until Close tears it down after flushing.
 func newS2Storage(ctx context.Context, basin, accessToken, streamName string, cfg S2Config, log *slog.Logger) (*s2Storage, error) {
 	if basin == "" || accessToken == "" || streamName == "" {
 		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
@@ -67,8 +69,12 @@ func newS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 	client := s2.New(accessToken, nil)
 	stream := client.Basin(basin).Stream(s2.StreamName(streamName))
 
-	session, err := stream.AppendSession(ctx, nil)
+	// sessionCtx is independent of the signal context so SIGTERM does not kill
+	// the session before the batcher has been flushed. Close cancels it after flush.
+	sessionCtx, sessionCancel := context.WithCancel(context.Background())
+	session, err := stream.AppendSession(sessionCtx, nil)
 	if err != nil {
+		sessionCancel()
 		return nil, fmt.Errorf("s2storage: open append session: %w", err)
 	}
 
@@ -87,6 +93,7 @@ func newS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	return &s2Storage{
 		producer:       s2Producer{p: producer},
+		sessionCancel:  sessionCancel,
 		shutdownCtx:    shutdownCtx,
 		shutdownCancel: shutdownCancel,
 		log:            log,
@@ -131,11 +138,13 @@ func (s *s2Storage) Append(ctx context.Context, env Envelope) error {
 	return nil
 }
 
-// Close cancels in-flight ack goroutines, waits for them to drain, then closes
-// the producer (which flushes the S2 batcher to the network).
+// Close cancels in-flight ack goroutines, waits for them to drain, flushes the
+// S2 batcher to the network, then tears down the session.
 func (s *s2Storage) Close(ctx context.Context) error {
 	s.closeOnce.Do(s.shutdownCancel)
-	return s.producer.close(ctx)
+	err := s.producer.close(ctx)
+	s.sessionCancel()
+	return err
 }
 
 // S2StorageWriter reads from an EventStream and forwards each event to S2.
@@ -167,8 +176,8 @@ func NewS2StorageWriter(es *EventStream, basin, accessToken, streamName string, 
 }
 
 // Start opens the S2 append session and begins reading from the event stream.
-// ctx governs the session pump lifetime, it should be the long-lived signal
-// context so the pump stays alive until SIGTERM.
+// ctx is used only to bound the AppendSession setup call; the session itself
+// outlives ctx and is torn down by Stop.
 func (w *S2StorageWriter) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
