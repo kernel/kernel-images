@@ -28,6 +28,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/chromium-launcher ./cmd/chromium-launcher
 
+# Build container entrypoint wrapper (replaces wrapper.sh)
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/wrapper ./cmd/wrapper
+
 FROM docker.io/ubuntu:22.04 AS ffmpeg-downloader
 
 # Allow cross-compilation when building with BuildKit platforms
@@ -224,8 +230,8 @@ RUN useradd -m -s /bin/bash kernel
 COPY images/chromium-headless/image/start-xvfb.sh /images/chromium-headless/image/start-xvfb.sh
 RUN chmod +x /images/chromium-headless/image/start-xvfb.sh
 
-# Wrapper script to set environment
-COPY images/chromium-headless/image/wrapper.sh /usr/bin/wrapper.sh
+# Container entrypoint wrapper (Go binary, replaces wrapper.sh)
+COPY --from=server-builder /out/wrapper /wrapper
 
 # Supervisord configuration
 COPY images/chromium-headless/image/supervisord.conf /etc/supervisor/supervisord.conf
@@ -240,6 +246,12 @@ RUN chmod +x /usr/local/bin/install-proxy.sh && /usr/local/bin/install-proxy.sh 
 COPY shared/envoy/bootstrap.yaml /etc/envoy/templates/bootstrap.yaml
 COPY shared/envoy/init-envoy.sh /usr/local/bin/init-envoy.sh
 RUN chmod +x /usr/local/bin/init-envoy.sh
+
+# Bake the envoy forward-proxy CA cert into the image (system trust store +
+# NSS DB for both root and kernel users). See bake-certs.sh for the security
+# rationale on sharing the cert across containers built from this image.
+COPY shared/envoy/bake-certs.sh /usr/local/bin/bake-certs.sh
+RUN chmod +x /usr/local/bin/bake-certs.sh && /usr/local/bin/bake-certs.sh && rm /usr/local/bin/bake-certs.sh
 
 # Copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
@@ -258,4 +270,4 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:esbuild \
     && rm /tmp/playwright-daemon.ts
 
-ENTRYPOINT [ "/usr/bin/wrapper.sh" ]
+ENTRYPOINT [ "/wrapper" ]

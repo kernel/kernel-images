@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
 func main() {
@@ -41,6 +42,24 @@ func main() {
 
 	// Wait for devtools port to be available (handles SIGKILL socket cleanup delay)
 	waitForPort(internalPort, 5*time.Second)
+
+	// Wait for the X server. The wrapper starts chromium in parallel with
+	// xorg/xvfb, so the display socket may not be ready yet — without this
+	// gate chromium would fail on connect and supervisord would restart us.
+	if d := x11.WaitForDisplay(":1", 20*time.Second); d >= 20*time.Second {
+		fmt.Fprintf(os.Stderr, "warning: X display :1 not responsive after %s\n", d)
+	}
+
+	// Headful: wait for mutter to register before exec'ing chromium. If
+	// chromium maps its window with no WM present, the CSD hint it sends has
+	// no listener; mutter starts later, reparents the existing window, and
+	// applies default SSD — i.e., the titlebar with the close X. Headless
+	// has no WM, so skip.
+	if !*headless {
+		if d := x11.WaitForMutter(20 * time.Second); d >= 20*time.Second {
+			fmt.Fprintf(os.Stderr, "warning: mutter not registered after %s\n", d)
+		}
+	}
 
 	baseFlags := os.Getenv("CHROMIUM_FLAGS")
 	runtimeTokens, err := chromiumflags.ReadOptionalFlagFile(*runtimeFlagsPath)

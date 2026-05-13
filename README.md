@@ -83,7 +83,7 @@ Deployed successfully!
  ├────── service: <service_name>
  ├─ private fqdn: <id>
  ├─── private ip: <ip>
- └───────── args: /wrapper.sh
+ └───────── args: /wrapper
 ```
 
 ### Unikernel Notes
