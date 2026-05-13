@@ -57,8 +57,10 @@ type S2Storage struct {
 	log            *slog.Logger
 }
 
-// ctx controls AppendSession creation; pass context.Background() so the pipeline
-// outlives signal cancellation and can be explicitly flushed via Close.
+// ctx is used only for the AppendSession setup call; pass a bounded context
+// (e.g. derived from the signal context with a timeout) so SIGTERM or a
+// deadline can abort a hung connection attempt. The batcher and producer
+// goroutines use context.Background() internally and are torn down via Close.
 func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cfg S2Config, log *slog.Logger) (*S2Storage, error) {
 	if basin == "" || accessToken == "" || streamName == "" {
 		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
@@ -78,11 +80,11 @@ func NewS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 	if cfg.BatcherMaxRecords == 0 {
 		cfg.BatcherMaxRecords = 50
 	}
-	batcher := s2.NewBatcher(ctx, &s2.BatchingOptions{
+	batcher := s2.NewBatcher(context.Background(), &s2.BatchingOptions{
 		Linger:     cfg.BatcherLinger,
 		MaxRecords: cfg.BatcherMaxRecords,
 	})
-	producer := s2.NewProducer(ctx, batcher, session)
+	producer := s2.NewProducer(context.Background(), batcher, session)
 
 	shutdownCtx, shutdownCancel := context.WithCancel(context.Background())
 	return &S2Storage{

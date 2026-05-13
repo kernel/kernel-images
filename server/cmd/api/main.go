@@ -106,7 +106,9 @@ func main() {
 	var storageWriter *events.StorageWriter
 	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
 		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", config.S2Stream)
-		s2stor, err := events.NewS2Storage(context.Background(), config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{}, slogger)
+		setupCtx, setupCancel := context.WithTimeout(ctx, 30*time.Second)
+		s2stor, err := events.NewS2Storage(setupCtx, config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{}, slogger)
+		setupCancel()
 		if err != nil {
 			slogger.Error("failed to create S2 storage", "err", err)
 			os.Exit(1)
