@@ -103,17 +103,14 @@ func main() {
 	captureSession := capturesession.NewCaptureSession(eventStream)
 
 	// Optional S2 storage sink.
-	var storageWriter *events.StorageWriter
+	var s2Writer *events.S2StorageWriter
 	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
 		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", config.S2Stream)
-		setupCtx, setupCancel := context.WithTimeout(ctx, 30*time.Second)
-		s2stor, err := events.NewS2Storage(setupCtx, config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{}, slogger)
-		setupCancel()
-		if err != nil {
-			slogger.Error("failed to create S2 storage", "err", err)
+		s2Writer = events.NewS2StorageWriter(eventStream, config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{}, slogger)
+		if err := s2Writer.Start(ctx); err != nil {
+			slogger.Error("failed to start S2 storage writer", "err", err)
 			os.Exit(1)
 		}
-		storageWriter = events.NewStorageWriter(eventStream, s2stor, slogger)
 	}
 
 	apiService, err := api.New(
@@ -258,19 +255,6 @@ func main() {
 		}
 	}()
 
-	// Start S2 storage writer goroutine. storageDone is closed when Run returns.
-	storageDone := make(chan struct{})
-	if storageWriter != nil {
-		go func() {
-			defer close(storageDone)
-			if err := storageWriter.Run(ctx); err != nil && ctx.Err() == nil {
-				slogger.Error("storage writer failed", "err", err)
-			}
-		}()
-	} else {
-		close(storageDone)
-	}
-
 	// graceful shutdown
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
@@ -297,19 +281,11 @@ func main() {
 		slogger.Error("server failed to shutdown", "err", err)
 	}
 
-	// wait for Run to return, then drain any events that arrived and flush S2.
-	<-storageDone
-	if storageWriter != nil {
-		drainCtx, drainCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer drainCancel()
-		if err := storageWriter.Drain(drainCtx); err != nil {
-			slogger.Warn("storage writer drain incomplete", "err", err)
-		}
-
-		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer closeCancel()
-		if err := storageWriter.Close(closeCtx); err != nil {
-			slogger.Error("storage writer close failed", "err", err)
+	if s2Writer != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		if err := s2Writer.Stop(stopCtx); err != nil {
+			slogger.Error("s2 storage writer stop failed", "err", err)
 		}
 	}
 }
