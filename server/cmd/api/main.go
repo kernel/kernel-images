@@ -281,6 +281,8 @@ func main() {
 		slogger.Error("server failed to shutdown", "err", err)
 	}
 
+	// s2Writer shuts down after the servers above, since they might produce events we
+	// want to capture into the stream; we must let them finish before closing the writer.
 	if s2Writer != nil {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
