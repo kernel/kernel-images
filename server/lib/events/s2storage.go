@@ -58,19 +58,24 @@ type s2Storage struct {
 	log             *slog.Logger
 }
 
-// newS2Storage opens an AppendSession using an independent context so the session
-// outlives the signal context. The caller's ctx is used only to bound the setup
-// call itself; the session stays alive until Close tears it down after flushing.
+// newS2Storage opens an AppendSession that runs under an independent context so
+// SIGTERM does not kill it before the batcher flushes. Close cancels that
+// context after the producer has drained.
 func newS2Storage(ctx context.Context, basin, accessToken, streamName string, cfg S2Config, log *slog.Logger) (*s2Storage, error) {
 	if basin == "" || accessToken == "" || streamName == "" {
 		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("s2storage: context already cancelled: %w", err)
 	}
 
 	client := s2.New(accessToken, nil)
 	stream := client.Basin(basin).Stream(s2.StreamName(streamName))
 
 	// sessionCtx is independent of the signal context so SIGTERM does not kill
-	// the session before the batcher has been flushed. Close cancels it after flush.
+	// the session before the batcher has been flushed. Close cancels it after
+	// the producer drains.
 	sessionCtx, sessionCancel := context.WithCancel(context.Background())
 	session, err := stream.AppendSession(sessionCtx, nil)
 	if err != nil {
@@ -176,8 +181,8 @@ func NewS2StorageWriter(es *EventStream, basin, accessToken, streamName string, 
 }
 
 // Start opens the S2 append session and begins reading from the event stream.
-// ctx is used only to bound the AppendSession setup call; the session itself
-// outlives ctx and is torn down by Stop.
+// ctx governs the Run loop — cancel it (e.g. on SIGTERM) to stop reading.
+// The session itself outlives ctx and is torn down by Stop after flushing.
 func (w *S2StorageWriter) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
