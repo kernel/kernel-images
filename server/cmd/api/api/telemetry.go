@@ -40,7 +40,7 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	if allDisabled {
 		if !wasActive {
 			// Already stopped; all-disabled is idempotent.
-			return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped}), nil
+			return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped, Config: disabledConfig()}), nil
 		}
 		// All categories disabled: stop the running session.
 		s.cdpMonitor.Stop()
