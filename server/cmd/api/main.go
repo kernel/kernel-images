@@ -22,8 +22,8 @@ import (
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
-	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
+	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -100,7 +100,7 @@ func main() {
 		slogger.Error("failed to create event stream", "err", err)
 		os.Exit(1)
 	}
-	captureSession := capturesession.NewCaptureSession(eventStream)
+	telemetrySession := telemetry.NewTelemetrySession(eventStream)
 
 	// Optional S2 storage sink.
 	var s2Writer *events.S2StorageWriter
@@ -119,7 +119,7 @@ func main() {
 		upstreamMgr,
 		stz,
 		nekoAuthClient,
-		captureSession,
+		telemetrySession,
 		eventStream,
 		config.DisplayNum,
 	)

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
+	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -81,13 +81,13 @@ type ApiService struct {
 	// when multiple CDP fast-path resizes fire in quick succession.
 	xvfbResizeMu sync.Mutex
 
-	// CDP event pipeline and cdpMonitor.
-	eventStream     *events.EventStream
-	captureSession  *capturesession.CaptureSession
-	cdpMonitor      cdpMonitorController
-	monitorMu       sync.Mutex
-	lifecycleCtx    context.Context
-	lifecycleCancel context.CancelFunc
+	// Telemetry event pipeline and CDP monitor.
+	eventStream      *events.EventStream
+	telemetrySession *telemetry.TelemetrySession
+	cdpMonitor       cdpMonitorController
+	monitorMu        sync.Mutex
+	lifecycleCtx     context.Context
+	lifecycleCancel  context.CancelFunc
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -98,8 +98,8 @@ func New(
 	upstreamMgr *devtoolsproxy.UpstreamManager,
 	stz scaletozero.PinnedController,
 	nekoAuthClient *nekoclient.AuthClient,
-	captureSession *capturesession.CaptureSession,
-	eventStream    *events.EventStream,
+	telemetrySession *telemetry.TelemetrySession,
+	eventStream      *events.EventStream,
 	displayNum int,
 ) (*ApiService, error) {
 	switch {
@@ -111,18 +111,18 @@ func New(
 		return nil, fmt.Errorf("upstreamMgr cannot be nil")
 	case nekoAuthClient == nil:
 		return nil, fmt.Errorf("nekoAuthClient cannot be nil")
-	case captureSession == nil:
-		return nil, fmt.Errorf("captureSession cannot be nil")
+	case telemetrySession == nil:
+		return nil, fmt.Errorf("telemetrySession cannot be nil")
 	case eventStream == nil:
 		return nil, fmt.Errorf("eventStream cannot be nil")
 	}
 
-	mon := cdpmonitor.New(upstreamMgr, captureSession.Publish, displayNum, slog.Default())
+	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{
-		recordManager:   recordManager,
-		factory:         factory,
+		recordManager:     recordManager,
+		factory:           factory,
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
@@ -131,7 +131,7 @@ func New(
 		nekoAuthClient:    nekoAuthClient,
 		policy:            &policy.Policy{},
 		eventStream:       eventStream,
-		captureSession:    captureSession,
+		telemetrySession:  telemetrySession,
 		cdpMonitor:        mon,
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
@@ -357,7 +357,7 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()
-	s.captureSession.Stop()
+	s.telemetrySession.Stop()
 	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)
 }

@@ -15,7 +15,7 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
-// PublishEvent handles POST /events/publish.
+// PublishEvent handles POST /telemetry/events.
 // Injects a caller-supplied event into the event bus. Returns 400 if the event
 // fails validation.
 func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventRequestObject) (oapi.PublishEventResponseObject, error) {
@@ -64,8 +64,8 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	return publishEventOKResponse{env}, nil
 }
 
-// StreamEvents handles GET /events/stream.
-// Opens an SSE stream of envelopes from the event bus ring buffer.
+// StreamEvents handles GET /telemetry/stream.
+// Opens an SSE stream of telemetry event envelopes from the event bus ring buffer.
 // Supports reconnection via the Last-Event-ID header. Emits a keepalive comment
 // frame every 15 s when no event arrives.
 func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequestObject) (oapi.StreamEventsResponseObject, error) {
