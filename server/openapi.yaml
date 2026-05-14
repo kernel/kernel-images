@@ -1424,7 +1424,7 @@ components:
         source:
           $ref: "#/components/schemas/EventSource"
         data:
-          description: Telemetry event payload
+          description: Telemetry event payload.
       additionalProperties: false
     PublishedEnvelope:
       type: object
@@ -1496,6 +1496,7 @@ components:
           description: Unique identifier for the telemetry session.
         status:
           type: string
+          description: Current status of the telemetry session.
           enum:
             - running
             - stopped

@@ -80,7 +80,7 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not active"}}, nil
 	}
 
-	if req.Body != nil {
+	if req.Body != nil && req.Body.Browser != nil {
 		cfg, allDisabled, err := telemetryConfigFromOAPI(req.Body)
 		if err != nil {
 			return oapi.PatchTelemetry400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
