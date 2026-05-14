@@ -76,6 +76,13 @@ func (s *computedState) navSnapshot() (json.RawMessage, map[string]string) {
 	return s.navData, s.navMeta
 }
 
+// currentNavSeq returns the current navigation sequence number under mu.
+func (s *computedState) currentNavSeq() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.navSeq
+}
+
 // navDataWith merges extra fields into the current nav payload.
 // Nav context fields (session_id, target_id, etc.) always take precedence over
 // caller-supplied extra so a page-controlled payload cannot forge nav identity.

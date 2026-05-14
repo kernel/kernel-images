@@ -292,7 +292,13 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		addedAt:      addedAt,
 	}
 	m.pendReqMu.Unlock()
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
 	ev := map[string]any{
+		"session_id":     sessionID,
+		"target_id":      info.targetID,
+		"target_type":    info.targetType,
 		"request_id":     p.RequestID,
 		"loader_id":      p.LoaderID,
 		"frame_id":       p.FrameID,
@@ -312,12 +318,14 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		ev["is_redirect"] = true
 		ev["redirect_url"] = existing.url
 	}
+	cs := m.computedFor(sessionID)
+	if cs != nil {
+		ev["nav_seq"] = cs.currentNavSeq()
+	}
 	data, _ := json.Marshal(ev)
 	m.publishEvent(EventNetworkRequest, events.CategoryNetwork, events.Source{Kind: events.KindCDP}, "Network.requestWillBeSent", data, sessionID)
-	if !isRedirect {
-		if cs := m.computedFor(sessionID); cs != nil {
-			cs.onRequest()
-		}
+	if !isRedirect && cs != nil {
+		cs.onRequest()
 	}
 }
 
@@ -343,20 +351,29 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 	if !ok {
 		return
 	}
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
+	var navSeq int
 	if cs := m.computedFor(state.sessionID); cs != nil {
 		cs.onLoadingFinished()
+		navSeq = cs.currentNavSeq()
 	}
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	m.asyncWg.Go(func() {
 		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
 		ev := map[string]any{
-			"request_id": p.RequestID,
-			"loader_id":  state.loaderID,
-			"frame_id":   state.frameID,
-			"method":     state.method,
-			"url":        state.url,
-			"status":     state.status,
-			"headers":    state.resHeaders,
+			"session_id":  sessionID,
+			"target_id":   info.targetID,
+			"target_type": info.targetType,
+			"request_id":  p.RequestID,
+			"loader_id":   state.loaderID,
+			"frame_id":    state.frameID,
+			"method":      state.method,
+			"url":         state.url,
+			"status":      state.status,
+			"headers":     state.resHeaders,
+			"nav_seq":     navSeq,
 		}
 		if state.statusText != "" {
 			ev["status_text"] = state.statusText
@@ -412,16 +429,25 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 	}
 	m.pendReqMu.Unlock()
 
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
 	ev := map[string]any{
-		"request_id": p.RequestID,
-		"error_text": p.ErrorText,
-		"canceled":   p.Canceled,
+		"session_id":  sessionID,
+		"target_id":   info.targetID,
+		"target_type": info.targetType,
+		"request_id":  p.RequestID,
+		"error_text":  p.ErrorText,
+		"canceled":    p.Canceled,
 	}
 	if ok {
 		ev["url"] = state.url
 		ev["loader_id"] = state.loaderID
 		ev["frame_id"] = state.frameID
 		ev["resource_type"] = state.resourceType
+	}
+	if cs := m.computedFor(sessionID); cs != nil {
+		ev["nav_seq"] = cs.currentNavSeq()
 	}
 	data, _ := json.Marshal(ev)
 	m.publishEvent(EventNetworkLoadingFailed, events.CategoryNetwork, events.Source{Kind: events.KindCDP}, "Network.loadingFailed", data, sessionID)
