@@ -1196,14 +1196,14 @@ paths:
           $ref: "#/components/responses/InternalError"
   /telemetry:
     get:
-      summary: Get current telemetry state
+      summary: Get telemetry configuration
       description: >
-        Returns the current telemetry state and configuration. Returns 404 if
-        telemetry is not active.
+        Returns the current telemetry configuration. Returns 404 if telemetry
+        is not configured.
       operationId: getTelemetry
       responses:
         "200":
-          description: Telemetry state
+          description: Telemetry configuration
           content:
             application/json:
               schema:
@@ -1213,11 +1213,10 @@ paths:
     put:
       summary: Set telemetry configuration
       description: >
-        Creates or replaces the telemetry configuration. Starts telemetry if not
-        already active (returns 201); replaces the configuration if active (returns 200).
-        Setting all four categories to enabled: false stops an active telemetry session
-        (returns 200 with status stopped). Returns 400 if all categories are disabled
-        and telemetry is not currently active.
+        Sets the telemetry configuration. Returns 201 if telemetry was not
+        previously configured; returns 200 if it was. Setting all four categories
+        to enabled: false clears the configuration (returns 200 with
+        status: stopped); this is idempotent when telemetry is not configured.
       operationId: putTelemetry
       requestBody:
         required: false
@@ -1227,13 +1226,13 @@ paths:
               $ref: "#/components/schemas/BrowserTelemetryConfig"
       responses:
         "200":
-          description: Telemetry configuration replaced
+          description: Telemetry configuration updated
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/TelemetryState"
         "201":
-          description: Telemetry started
+          description: Telemetry configuration set
           content:
             application/json:
               schema:
@@ -1243,13 +1242,13 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
     patch:
-      summary: Update active telemetry configuration
+      summary: Update telemetry configuration
       description: >
-        Partially updates the category configuration of the active telemetry session.
-        Only categories explicitly set in the request body are changed; omitted categories
-        retain their current enabled/disabled state.
-        Returns 404 if telemetry is not active. Setting all four categories to
-        enabled: false stops telemetry (returns 200 with status stopped).
+        Partially updates the telemetry configuration. Only categories explicitly
+        set in the request body are changed; omitted categories retain their
+        current settings. Returns 404 if telemetry is not configured. Setting
+        all four categories to enabled: false clears the configuration (returns
+        200 with status: stopped).
       operationId: patchTelemetry
       requestBody:
         required: true
@@ -1297,8 +1296,8 @@ paths:
       description: >
         Opens a live SSE stream of telemetry events.
         Each frame has the form `id: {seq}\ndata: {envelope-json}\n\n`.
-        Sequence numbers are process-monotonic and do not reset between sessions;
-        a Last-Event-ID from any previous session is valid for resuming the stream.
+        Sequence numbers are process-monotonic and persist across configuration
+        changes; a Last-Event-ID from any previous connection is valid for resuming the stream.
         Drops are signaled by gaps in the `id` field: if the received `id` is more
         than 1 ahead of the last-seen `id`, events were evicted from the buffer.
         Clients should track the last-seen `id` to detect gaps.
@@ -1314,7 +1313,7 @@ paths:
           description: >
             Resume after this sequence number. Omit or send 0 to start from
             the current position. Sequence numbers are process-monotonic, so
-            a value from a previous telemetry session resumes correctly from that point.
+            any previous value resumes correctly from that point.
       responses:
         "200":
           description: Live SSE stream of telemetry events.
@@ -1448,11 +1447,11 @@ components:
     BrowserTelemetryConfig:
       type: object
       description: >
-        Telemetry configuration for a browser session. Per-category capture settings.
+        Telemetry configuration for a browser. Per-category capture settings.
         Omit a category or set enabled: true to capture it.
         Set enabled: false to exclude it.
         Omit the browser key entirely to capture all categories.
-        Set all four categories to enabled: false to stop telemetry.
+        Set all four categories to enabled: false to clear the telemetry configuration.
       properties:
         browser:
           $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
@@ -1489,7 +1488,7 @@ components:
       additionalProperties: false
     TelemetryState:
       type: object
-      description: Current telemetry session state and configuration.
+      description: Current telemetry configuration and status.
       required:
         - id
         - status
@@ -1499,10 +1498,10 @@ components:
       properties:
         id:
           type: string
-          description: Unique identifier for the telemetry session.
+          description: Unique identifier for the current telemetry configuration.
         status:
           type: string
-          description: Current status of the telemetry session.
+          description: Current telemetry status.
           enum:
             - running
             - stopped
@@ -1513,12 +1512,12 @@ components:
           format: int64
           description: >-
             Process-monotonic sequence number of the last published event.
-            Does not reset between telemetry sessions.
+            Does not reset across configuration changes.
           minimum: 0
         created_at:
           type: string
           format: date-time
-          description: When the telemetry session was started.
+          description: When the current telemetry configuration was applied.
       additionalProperties: false
     StartRecordingRequest:
       type: object

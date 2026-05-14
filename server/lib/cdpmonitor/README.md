@@ -104,8 +104,8 @@ Every event arrives as an `Envelope`:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `capture_session_id` | string | Pipeline-assigned ID for the capture session (not a CDP concept). |
-| `seq` | uint64 | Monotonically increasing per-capture-session sequence number. |
+| `telemetry_session_id` | string | Pipeline-assigned ID for the telemetry session (not a CDP concept). |
+| `seq` | uint64 | Monotonically increasing per-telemetry-session sequence number. |
 | `event.ts` | int64 | Wall-clock time the monitor emitted the event, as **Unix microseconds** (µs since epoch). |
 | `event.type` | string | See [Event taxonomy](#event-taxonomy). |
 | `event.category` | string | One of: `console`, `network`, `page`, `interaction`, `system`. |
