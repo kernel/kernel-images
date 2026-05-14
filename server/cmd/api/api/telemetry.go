@@ -17,7 +17,7 @@ func (s *ApiService) GetTelemetry(_ context.Context, _ oapi.GetTelemetryRequestO
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	if s.telemetrySession.ID() == "" {
+	if !s.telemetrySession.Active() {
 		return oapi.GetTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not active"}}, nil
 	}
 	return oapi.GetTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
@@ -35,7 +35,7 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 		return oapi.PutTelemetry400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 	}
 
-	wasActive := s.telemetrySession.ID() != ""
+	wasActive := s.telemetrySession.Active()
 
 	if allDisabled {
 		if !wasActive {
@@ -76,15 +76,15 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
-	if s.telemetrySession.ID() == "" {
+	if !s.telemetrySession.Active() {
 		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not active"}}, nil
 	}
 
 	if req.Body != nil && req.Body.Browser != nil {
-		cfg, allDisabled, err := telemetryConfigFromOAPI(req.Body)
-		if err != nil {
-			return oapi.PatchTelemetry400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
-		}
+		// PATCH merges: only categories explicitly set in the request are updated;
+		// omitted categories retain their current enabled/disabled state.
+		current := s.telemetrySession.Config()
+		cfg, allDisabled := mergeTelemetryConfig(current, req.Body.Browser)
 		if allDisabled {
 			// All categories disabled: stop the session.
 			s.cdpMonitor.Stop()
@@ -161,6 +161,59 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 	// CategorySystem is always appended by TelemetrySession.Start/UpdateConfig;
 	// no need to include it here.
 	return telemetry.TelemetryConfig{Categories: cats}, false, nil
+}
+
+// mergeTelemetryConfig applies patch overrides onto current, returning the merged config and
+// whether all user-facing categories ended up disabled (stop signal). Only categories with an
+// explicit Enabled field in patch are changed; omitted categories keep their current state.
+func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.BrowserTelemetryCategoriesConfig) (telemetry.TelemetryConfig, bool) {
+	active := make(map[events.EventCategory]struct{}, len(current.Categories))
+	for _, c := range current.Categories {
+		if c != events.CategorySystem { // system is managed internally by TelemetrySession
+			active[c] = struct{}{}
+		}
+	}
+
+	override := func(cat events.EventCategory, field *oapi.BrowserTelemetryCategoryConfig) {
+		if field == nil || field.Enabled == nil {
+			return // not mentioned in patch — keep current state
+		}
+		if *field.Enabled {
+			active[cat] = struct{}{}
+		} else {
+			delete(active, cat)
+		}
+	}
+
+	override(events.CategoryConsole, patch.Console)
+	override(events.CategoryNetwork, patch.Network)
+	override(events.CategoryPage, patch.Page)
+	override(events.CategoryInteraction, patch.Interaction)
+
+	// CategorySystem is managed internally by TelemetrySession; exclude from the
+	// user-facing allDisabled check.
+	userCats := []events.EventCategory{
+		events.CategoryConsole,
+		events.CategoryNetwork,
+		events.CategoryPage,
+		events.CategoryInteraction,
+	}
+	allDisabled := true
+	for _, c := range userCats {
+		if _, ok := active[c]; ok {
+			allDisabled = false
+			break
+		}
+	}
+	if allDisabled {
+		return telemetry.TelemetryConfig{}, true
+	}
+
+	cats := make([]events.EventCategory, 0, len(active))
+	for c := range active {
+		cats = append(cats, c)
+	}
+	return telemetry.TelemetryConfig{Categories: cats}, false
 }
 
 // telemetryConfigToOAPI converts a telemetry.TelemetryConfig to an oapi.BrowserTelemetryConfig

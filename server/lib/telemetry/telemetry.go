@@ -21,12 +21,12 @@ type TelemetryConfig struct {
 // session-scoped metadata (ID, config, timestamps), and (c) embedding
 // telemetry_session_id into Event.Source.Metadata before forwarding to the bus.
 type TelemetrySession struct {
-	es               *events.EventStream
-	mu               sync.Mutex
-	telemetrySessionID string
-	sessionStartSeq  uint64
-	categories       map[events.EventCategory]struct{}
-	createdAt        time.Time
+	es              *events.EventStream
+	mu              sync.Mutex
+	id              string
+	sessionStartSeq uint64
+	categories      map[events.EventCategory]struct{}
+	createdAt       time.Time
 }
 
 func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
@@ -43,7 +43,7 @@ func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
 func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.telemetrySessionID = telemetrySessionID
+	s.id = telemetrySessionID
 	s.sessionStartSeq = s.es.Seq()
 	s.createdAt = time.Now()
 
@@ -69,7 +69,7 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 	if ev.Source.Metadata == nil {
 		ev.Source.Metadata = make(map[string]string)
 	}
-	ev.Source.Metadata["telemetry_session_id"] = s.telemetrySessionID
+	ev.Source.Metadata["telemetry_session_id"] = s.id
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 
@@ -77,7 +77,7 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 func (s *TelemetrySession) Publish(ev events.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.telemetrySessionID == "" {
+	if s.id == "" {
 		return
 	}
 	if _, ok := s.categories[ev.Category]; !ok {
@@ -95,7 +95,7 @@ func (s *TelemetrySession) NewReader(afterSeq uint64) *events.Reader {
 func (s *TelemetrySession) ID() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.telemetrySessionID
+	return s.id
 }
 
 // Seq returns the sequence number of the last published event.
@@ -149,7 +149,7 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 func (s *TelemetrySession) Active() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.telemetrySessionID != ""
+	return s.id != ""
 }
 
 // Stop ends the current telemetry session. The ring buffer is left intact so
@@ -157,5 +157,5 @@ func (s *TelemetrySession) Active() bool {
 func (s *TelemetrySession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.telemetrySessionID = ""
+	s.id = ""
 }

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
-	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
