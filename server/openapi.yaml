@@ -1245,8 +1245,9 @@ paths:
     patch:
       summary: Update active telemetry configuration
       description: >
-        Replaces the entire category configuration of the active telemetry session.
-        Categories not specified in the request body default to enabled.
+        Partially updates the category configuration of the active telemetry session.
+        Only categories explicitly set in the request body are changed; omitted categories
+        retain their current enabled/disabled state.
         Returns 404 if telemetry is not active. Setting all four categories to
         enabled: false stops telemetry (returns 200 with status stopped).
       operationId: patchTelemetry
