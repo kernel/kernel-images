@@ -1194,89 +1194,80 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
-  /events/capture_session:
+  /telemetry:
     get:
-      summary: Get the capture session
+      summary: Get current telemetry state
       description: >
-        Returns the current state of the capture session. Returns 404 if
-        no session is active.
-      operationId: getCaptureSession
+        Returns the current telemetry state and configuration. Returns 404 if
+        telemetry is not active.
+      operationId: getTelemetry
       responses:
         "200":
-          description: Session state
+          description: Telemetry state
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CaptureSession"
+                $ref: "#/components/schemas/TelemetryState"
         "404":
           $ref: "#/components/responses/NotFoundError"
-    post:
-      summary: Start the capture session
+    put:
+      summary: Set telemetry configuration
       description: >
-        Starts the capture session. At most one session may exist at a
-        time; returns 409 if a session is already active. The caller must
-        DELETE the existing session before starting a new one.
-      operationId: startCaptureSession
+        Creates or replaces the telemetry configuration. Starts telemetry if not
+        already active (returns 201); replaces the configuration if active (returns 200).
+        Setting all four categories to enabled: false stops telemetry (returns 200
+        with status stopped).
+      operationId: putTelemetry
       requestBody:
         required: false
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/StartCaptureSessionRequest"
+              $ref: "#/components/schemas/BrowserTelemetryConfig"
       responses:
-        "201":
-          description: Session started
+        "200":
+          description: Telemetry configuration replaced
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CaptureSession"
+                $ref: "#/components/schemas/TelemetryState"
+        "201":
+          description: Telemetry started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TelemetryState"
         "400":
           $ref: "#/components/responses/BadRequestError"
-        "409":
-          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
     patch:
-      summary: Update the capture session
+      summary: Update active telemetry configuration
       description: >
-        Updates the active capture session. Returns 404 if no session is
-        active.
-      operationId: updateCaptureSession
+        Updates the configuration of the active telemetry session. Returns 404 if
+        telemetry is not active. Setting all four categories to enabled: false
+        stops telemetry (returns 200 with status stopped).
+      operationId: patchTelemetry
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/UpdateCaptureSessionRequest"
+              $ref: "#/components/schemas/BrowserTelemetryConfig"
       responses:
         "200":
-          description: Session updated
+          description: Telemetry configuration updated
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CaptureSession"
+                $ref: "#/components/schemas/TelemetryState"
         "400":
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
-    delete:
-      summary: Stop the capture session
-      description: >
-        Stops the capture session and its CDP monitor, returning the final
-        session state. Returns 404 if no session is active.
-      operationId: stopCaptureSession
-      responses:
-        "200":
-          description: Session stopped
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/CaptureSession"
-        "404":
-          $ref: "#/components/responses/NotFoundError"
-  /events/publish:
+  /telemetry/events:
     post:
-      summary: Publish an event into the event bus
+      summary: Publish an event into the telemetry bus
       description: >
         Injects an event into the global event bus.
         The event is assigned a monotonically increasing sequence number and
@@ -1297,11 +1288,11 @@ paths:
                 $ref: "#/components/schemas/PublishedEnvelope"
         "400":
           $ref: "#/components/responses/BadRequestError"
-  /events/stream:
+  /telemetry/stream:
     get:
-      summary: Stream events as Server-Sent Events
+      summary: Stream telemetry events as Server-Sent Events
       description: >
-        Opens a live SSE stream of events from the global event bus.
+        Opens a live SSE stream of telemetry events from the global event bus.
         Each frame has the form `id: {seq}\ndata: {envelope-json}\n\n`.
         Sequence numbers are process-monotonic and do not reset between sessions;
         a Last-Event-ID from any previous session is valid for resuming the stream.
@@ -1320,10 +1311,10 @@ paths:
           description: >
             Resume after this sequence number. Omit or send 0 to start from
             the current position. Sequence numbers are process-monotonic, so
-            a value from a previous session resumes correctly from that point.
+            a value from a previous telemetry session resumes correctly from that point.
       responses:
         "200":
-          description: Live SSE stream of events.
+          description: Live SSE stream of telemetry events.
           headers:
             X-SSE-Content-Type:
               description: Media type of SSE data events (application/json)
@@ -1455,29 +1446,46 @@ components:
         event:
           $ref: "#/components/schemas/Event"
       additionalProperties: false
-    CaptureConfig:
+    BrowserTelemetryConfig:
       type: object
-      description: Capture filtering preferences.
+      description: >
+        Telemetry configuration for a browser session. Per-category capture settings.
+        Omit a category or set enabled: true to capture it.
+        Set enabled: false to exclude it.
+        Omit the browser key entirely to capture all categories.
+        Set all four categories to enabled: false to stop telemetry.
       properties:
-        categories:
-          type: array
-          description: >
-            Event categories to capture. When omitted or empty, all
-            categories are captured.
-          items:
-            type: string
-            enum:
-              - console
-              - network
-              - page
-              - interaction
-              - liveview
-              - captcha
-              - system
+        browser:
+          $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
       additionalProperties: false
-    CaptureSession:
+    BrowserTelemetryCategoriesConfig:
       type: object
-      description: A capture session resource.
+      description: Per-category telemetry capture settings for browser events.
+      properties:
+        console:
+          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          description: Console output (log, warn, error) and uncaught exceptions.
+        network:
+          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          description: HTTP request/response metadata.
+        page:
+          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          description: Page lifecycle events (navigation, load, layout shifts, LCP).
+        interaction:
+          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          description: User interaction events (clicks, keydowns, scroll).
+      additionalProperties: false
+    BrowserTelemetryCategoryConfig:
+      type: object
+      description: Configuration for a single telemetry category.
+      properties:
+        enabled:
+          type: boolean
+          description: Whether this category is captured. Defaults to true if omitted.
+      additionalProperties: false
+    TelemetryState:
+      type: object
+      description: Current telemetry session state and configuration.
       required:
         - id
         - status
@@ -1493,33 +1501,17 @@ components:
             - running
             - stopped
         config:
-          $ref: "#/components/schemas/CaptureConfig"
+          $ref: "#/components/schemas/BrowserTelemetryConfig"
         seq:
           type: integer
           format: int64
           description: >-
             Process-monotonic sequence number of the last published event.
-            Does not reset between sessions.
+            Does not reset between telemetry sessions.
           minimum: 0
         created_at:
           type: string
           format: date-time
-      additionalProperties: false
-    StartCaptureSessionRequest:
-      type: object
-      description: >
-        Optional capture configuration. All fields default to the
-        server-defined profile when omitted or when no body is sent.
-      properties:
-        config:
-          $ref: "#/components/schemas/CaptureConfig"
-      additionalProperties: false
-    UpdateCaptureSessionRequest:
-      type: object
-      description: Fields to update on the capture session.
-      properties:
-        config:
-          $ref: "#/components/schemas/CaptureConfig"
       additionalProperties: false
     StartRecordingRequest:
       type: object

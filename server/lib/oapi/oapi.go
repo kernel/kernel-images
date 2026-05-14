@@ -26,57 +26,6 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
-// Defines values for CaptureConfigCategories.
-const (
-	CaptureConfigCategoriesCaptcha     CaptureConfigCategories = "captcha"
-	CaptureConfigCategoriesConsole     CaptureConfigCategories = "console"
-	CaptureConfigCategoriesInteraction CaptureConfigCategories = "interaction"
-	CaptureConfigCategoriesLiveview    CaptureConfigCategories = "liveview"
-	CaptureConfigCategoriesNetwork     CaptureConfigCategories = "network"
-	CaptureConfigCategoriesPage        CaptureConfigCategories = "page"
-	CaptureConfigCategoriesSystem      CaptureConfigCategories = "system"
-)
-
-// Valid indicates whether the value is a known member of the CaptureConfigCategories enum.
-func (e CaptureConfigCategories) Valid() bool {
-	switch e {
-	case CaptureConfigCategoriesCaptcha:
-		return true
-	case CaptureConfigCategoriesConsole:
-		return true
-	case CaptureConfigCategoriesInteraction:
-		return true
-	case CaptureConfigCategoriesLiveview:
-		return true
-	case CaptureConfigCategoriesNetwork:
-		return true
-	case CaptureConfigCategoriesPage:
-		return true
-	case CaptureConfigCategoriesSystem:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for CaptureSessionStatus.
-const (
-	CaptureSessionStatusRunning CaptureSessionStatus = "running"
-	CaptureSessionStatusStopped CaptureSessionStatus = "stopped"
-)
-
-// Valid indicates whether the value is a known member of the CaptureSessionStatus enum.
-func (e CaptureSessionStatus) Valid() bool {
-	switch e {
-	case CaptureSessionStatusRunning:
-		return true
-	case CaptureSessionStatusStopped:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for ClickMouseRequestButton.
 const (
 	ClickMouseRequestButtonBack    ClickMouseRequestButton = "back"
@@ -364,31 +313,49 @@ func (e ProcessStreamEventStream) Valid() bool {
 
 // Defines values for PublishEventRequestCategory.
 const (
-	Captcha     PublishEventRequestCategory = "captcha"
-	Console     PublishEventRequestCategory = "console"
-	Interaction PublishEventRequestCategory = "interaction"
-	Liveview    PublishEventRequestCategory = "liveview"
-	Network     PublishEventRequestCategory = "network"
-	Page        PublishEventRequestCategory = "page"
-	System      PublishEventRequestCategory = "system"
+	PublishEventRequestCategoryCaptcha     PublishEventRequestCategory = "captcha"
+	PublishEventRequestCategoryConsole     PublishEventRequestCategory = "console"
+	PublishEventRequestCategoryInteraction PublishEventRequestCategory = "interaction"
+	PublishEventRequestCategoryLiveview    PublishEventRequestCategory = "liveview"
+	PublishEventRequestCategoryNetwork     PublishEventRequestCategory = "network"
+	PublishEventRequestCategoryPage        PublishEventRequestCategory = "page"
+	PublishEventRequestCategorySystem      PublishEventRequestCategory = "system"
 )
 
 // Valid indicates whether the value is a known member of the PublishEventRequestCategory enum.
 func (e PublishEventRequestCategory) Valid() bool {
 	switch e {
-	case Captcha:
+	case PublishEventRequestCategoryCaptcha:
 		return true
-	case Console:
+	case PublishEventRequestCategoryConsole:
 		return true
-	case Interaction:
+	case PublishEventRequestCategoryInteraction:
 		return true
-	case Liveview:
+	case PublishEventRequestCategoryLiveview:
 		return true
-	case Network:
+	case PublishEventRequestCategoryNetwork:
 		return true
-	case Page:
+	case PublishEventRequestCategoryPage:
 		return true
-	case System:
+	case PublishEventRequestCategorySystem:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for TelemetryStateStatus.
+const (
+	TelemetryStateStatusRunning TelemetryStateStatus = "running"
+	TelemetryStateStatusStopped TelemetryStateStatus = "stopped"
+)
+
+// Valid indicates whether the value is a known member of the TelemetryStateStatus enum.
+func (e TelemetryStateStatus) Valid() bool {
+	switch e {
+	case TelemetryStateStatusRunning:
+		return true
+	case TelemetryStateStatusStopped:
 		return true
 	default:
 		return false
@@ -443,29 +410,32 @@ type BatchComputerActionRequest struct {
 	Actions []ComputerAction `json:"actions"`
 }
 
-// CaptureConfig Capture filtering preferences.
-type CaptureConfig struct {
-	// Categories Event categories to capture. When omitted or empty, all categories are captured.
-	Categories *[]CaptureConfigCategories `json:"categories,omitempty"`
+// BrowserTelemetryCategoriesConfig Per-category telemetry capture settings for browser events.
+type BrowserTelemetryCategoriesConfig struct {
+	// Console Configuration for a single telemetry category.
+	Console *BrowserTelemetryCategoryConfig `json:"console,omitempty"`
+
+	// Interaction Configuration for a single telemetry category.
+	Interaction *BrowserTelemetryCategoryConfig `json:"interaction,omitempty"`
+
+	// Network Configuration for a single telemetry category.
+	Network *BrowserTelemetryCategoryConfig `json:"network,omitempty"`
+
+	// Page Configuration for a single telemetry category.
+	Page *BrowserTelemetryCategoryConfig `json:"page,omitempty"`
 }
 
-// CaptureConfigCategories defines model for CaptureConfig.Categories.
-type CaptureConfigCategories string
-
-// CaptureSession A capture session resource.
-type CaptureSession struct {
-	// Config Capture filtering preferences.
-	Config    CaptureConfig `json:"config"`
-	CreatedAt time.Time     `json:"created_at"`
-	Id        string        `json:"id"`
-
-	// Seq Process-monotonic sequence number of the last published event. Does not reset between sessions.
-	Seq    int64                `json:"seq"`
-	Status CaptureSessionStatus `json:"status"`
+// BrowserTelemetryCategoryConfig Configuration for a single telemetry category.
+type BrowserTelemetryCategoryConfig struct {
+	// Enabled Whether this category is captured. Defaults to true if omitted.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
-// CaptureSessionStatus defines model for CaptureSession.Status.
-type CaptureSessionStatus string
+// BrowserTelemetryConfig Telemetry configuration for a browser session. Per-category capture settings. Omit a category or set enabled: true to capture it. Set enabled: false to exclude it. Omit the browser key entirely to capture all categories. Set all four categories to enabled: false to stop telemetry.
+type BrowserTelemetryConfig struct {
+	// Browser Per-category telemetry capture settings for browser events.
+	Browser *BrowserTelemetryCategoriesConfig `json:"browser,omitempty"`
+}
 
 // ClickMouseRequest defines model for ClickMouseRequest.
 type ClickMouseRequest struct {
@@ -1038,12 +1008,6 @@ type SleepAction struct {
 	DurationMs int `json:"duration_ms"`
 }
 
-// StartCaptureSessionRequest Optional capture configuration. All fields default to the server-defined profile when omitted or when no body is sent.
-type StartCaptureSessionRequest struct {
-	// Config Capture filtering preferences.
-	Config *CaptureConfig `json:"config,omitempty"`
-}
-
 // StartFsWatchRequest defines model for StartFsWatchRequest.
 type StartFsWatchRequest struct {
 	// Path Directory to watch.
@@ -1077,6 +1041,21 @@ type StopRecordingRequest struct {
 	Id *string `json:"id,omitempty"`
 }
 
+// TelemetryState Current telemetry session state and configuration.
+type TelemetryState struct {
+	// Config Telemetry configuration for a browser session. Per-category capture settings. Omit a category or set enabled: true to capture it. Set enabled: false to exclude it. Omit the browser key entirely to capture all categories. Set all four categories to enabled: false to stop telemetry.
+	Config    BrowserTelemetryConfig `json:"config"`
+	CreatedAt time.Time              `json:"created_at"`
+	Id        string                 `json:"id"`
+
+	// Seq Process-monotonic sequence number of the last published event. Does not reset between telemetry sessions.
+	Seq    int64                `json:"seq"`
+	Status TelemetryStateStatus `json:"status"`
+}
+
+// TelemetryStateStatus defines model for TelemetryState.Status.
+type TelemetryStateStatus string
+
 // TypeTextRequest defines model for TypeTextRequest.
 type TypeTextRequest struct {
 	// Delay Delay in milliseconds between keystrokes. Ignored when smooth is true.
@@ -1096,12 +1075,6 @@ type TypeTextRequest struct {
 	// Default 0. Only applies when smooth is true (silently ignored when
 	// smooth is false).
 	TypoChance *float32 `json:"typo_chance,omitempty"`
-}
-
-// UpdateCaptureSessionRequest Fields to update on the capture session.
-type UpdateCaptureSessionRequest struct {
-	// Config Capture filtering preferences.
-	Config *CaptureConfig `json:"config,omitempty"`
 }
 
 // WriteClipboardRequest defines model for WriteClipboardRequest.
@@ -1141,12 +1114,6 @@ type UploadExtensionsAndRestartMultipartBody struct {
 		// ZipFile Zip archive containing an unpacked Chromium extension (must include manifest.json)
 		ZipFile openapi_types.File `json:"zip_file"`
 	} `json:"extensions"`
-}
-
-// StreamEventsParams defines parameters for StreamEvents.
-type StreamEventsParams struct {
-	// LastEventID Resume after this sequence number. Omit or send 0 to start from the current position. Sequence numbers are process-monotonic, so a value from a previous session resumes correctly from that point.
-	LastEventID *string `json:"Last-Event-ID,omitempty"`
 }
 
 // DownloadDirZipParams defines parameters for DownloadDirZip.
@@ -1247,6 +1214,12 @@ type DownloadRecordingParams struct {
 	Id *string `form:"id,omitempty" json:"id,omitempty"`
 }
 
+// StreamEventsParams defines parameters for StreamEvents.
+type StreamEventsParams struct {
+	// LastEventID Resume after this sequence number. Omit or send 0 to start from the current position. Sequence numbers are process-monotonic, so a value from a previous telemetry session resumes correctly from that point.
+	LastEventID *string `json:"Last-Event-ID,omitempty"`
+}
+
 // PatchChromiumFlagsJSONRequestBody defines body for PatchChromiumFlags for application/json ContentType.
 type PatchChromiumFlagsJSONRequestBody PatchChromiumFlagsJSONBody
 
@@ -1288,15 +1261,6 @@ type TypeTextJSONRequestBody = TypeTextRequest
 
 // PatchDisplayJSONRequestBody defines body for PatchDisplay for application/json ContentType.
 type PatchDisplayJSONRequestBody = PatchDisplayRequest
-
-// UpdateCaptureSessionJSONRequestBody defines body for UpdateCaptureSession for application/json ContentType.
-type UpdateCaptureSessionJSONRequestBody = UpdateCaptureSessionRequest
-
-// StartCaptureSessionJSONRequestBody defines body for StartCaptureSession for application/json ContentType.
-type StartCaptureSessionJSONRequestBody = StartCaptureSessionRequest
-
-// PublishEventJSONRequestBody defines body for PublishEvent for application/json ContentType.
-type PublishEventJSONRequestBody = PublishEventRequest
 
 // CreateDirectoryJSONRequestBody defines body for CreateDirectory for application/json ContentType.
 type CreateDirectoryJSONRequestBody = CreateDirectoryRequest
@@ -1351,6 +1315,15 @@ type StartRecordingJSONRequestBody = StartRecordingRequest
 
 // StopRecordingJSONRequestBody defines body for StopRecording for application/json ContentType.
 type StopRecordingJSONRequestBody = StopRecordingRequest
+
+// PatchTelemetryJSONRequestBody defines body for PatchTelemetry for application/json ContentType.
+type PatchTelemetryJSONRequestBody = BrowserTelemetryConfig
+
+// PutTelemetryJSONRequestBody defines body for PutTelemetry for application/json ContentType.
+type PutTelemetryJSONRequestBody = BrowserTelemetryConfig
+
+// PublishEventJSONRequestBody defines body for PublishEvent for application/json ContentType.
+type PublishEventJSONRequestBody = PublishEventRequest
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -1499,30 +1472,6 @@ type ClientInterface interface {
 
 	PatchDisplay(ctx context.Context, body PatchDisplayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// StopCaptureSession request
-	StopCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// GetCaptureSession request
-	GetCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// UpdateCaptureSessionWithBody request with any body
-	UpdateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	UpdateCaptureSession(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// StartCaptureSessionWithBody request with any body
-	StartCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	StartCaptureSession(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// PublishEventWithBody request with any body
-	PublishEventWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	PublishEvent(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
-
-	// StreamEvents request
-	StreamEvents(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
-
 	// CreateDirectoryWithBody request with any body
 	CreateDirectoryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -1651,6 +1600,27 @@ type ClientInterface interface {
 
 	// EnableScaleToZero request
 	EnableScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetTelemetry request
+	GetTelemetry(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PatchTelemetryWithBody request with any body
+	PatchTelemetryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PatchTelemetry(ctx context.Context, body PatchTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PutTelemetryWithBody request with any body
+	PutTelemetryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PutTelemetry(ctx context.Context, body PutTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PublishEventWithBody request with any body
+	PublishEventWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PublishEvent(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StreamEvents request
+	StreamEvents(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) PatchChromiumFlagsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -1991,114 +1961,6 @@ func (c *Client) PatchDisplayWithBody(ctx context.Context, contentType string, b
 
 func (c *Client) PatchDisplay(ctx context.Context, body PatchDisplayJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPatchDisplayRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) StopCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStopCaptureSessionRequest(c.Server)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) GetCaptureSession(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewGetCaptureSessionRequest(c.Server)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) UpdateCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewUpdateCaptureSessionRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) UpdateCaptureSession(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewUpdateCaptureSessionRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) StartCaptureSessionWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureSessionRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) StartCaptureSession(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStartCaptureSessionRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PublishEventWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPublishEventRequestWithBody(c.Server, contentType, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) PublishEvent(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewPublishEventRequest(c.Server, body)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
-		return nil, err
-	}
-	return c.Client.Do(req)
-}
-
-func (c *Client) StreamEvents(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
-	req, err := NewStreamEventsRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -2675,6 +2537,102 @@ func (c *Client) DisableScaleToZero(ctx context.Context, reqEditors ...RequestEd
 
 func (c *Client) EnableScaleToZero(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewEnableScaleToZeroRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetTelemetry(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetTelemetryRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchTelemetryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchTelemetryRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PatchTelemetry(ctx context.Context, body PatchTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPatchTelemetryRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutTelemetryWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutTelemetryRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PutTelemetry(ctx context.Context, body PutTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPutTelemetryRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PublishEventWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPublishEventRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PublishEvent(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPublishEventRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) StreamEvents(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStreamEventsRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -3284,222 +3242,6 @@ func NewPatchDisplayRequestWithBody(server string, contentType string, body io.R
 	}
 
 	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewStopCaptureSessionRequest generates requests for StopCaptureSession
-func NewStopCaptureSessionRequest(server string) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/capture_session")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("DELETE", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewGetCaptureSessionRequest generates requests for GetCaptureSession
-func NewGetCaptureSessionRequest(server string) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/capture_session")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return req, nil
-}
-
-// NewUpdateCaptureSessionRequest calls the generic UpdateCaptureSession builder with application/json body
-func NewUpdateCaptureSessionRequest(server string, body UpdateCaptureSessionJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewUpdateCaptureSessionRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewUpdateCaptureSessionRequestWithBody generates requests for UpdateCaptureSession with any type of body
-func NewUpdateCaptureSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/capture_session")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("PATCH", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewStartCaptureSessionRequest calls the generic StartCaptureSession builder with application/json body
-func NewStartCaptureSessionRequest(server string, body StartCaptureSessionJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewStartCaptureSessionRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewStartCaptureSessionRequestWithBody generates requests for StartCaptureSession with any type of body
-func NewStartCaptureSessionRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/capture_session")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewPublishEventRequest calls the generic PublishEvent builder with application/json body
-func NewPublishEventRequest(server string, body PublishEventJSONRequestBody) (*http.Request, error) {
-	var bodyReader io.Reader
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	bodyReader = bytes.NewReader(buf)
-	return NewPublishEventRequestWithBody(server, "application/json", bodyReader)
-}
-
-// NewPublishEventRequestWithBody generates requests for PublishEvent with any type of body
-func NewPublishEventRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/publish")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("POST", queryURL.String(), body)
-	if err != nil {
-		return nil, err
-	}
-
-	req.Header.Add("Content-Type", contentType)
-
-	return req, nil
-}
-
-// NewStreamEventsRequest generates requests for StreamEvents
-func NewStreamEventsRequest(server string, params *StreamEventsParams) (*http.Request, error) {
-	var err error
-
-	serverURL, err := url.Parse(server)
-	if err != nil {
-		return nil, err
-	}
-
-	operationPath := fmt.Sprintf("/events/stream")
-	if operationPath[0] == '/' {
-		operationPath = "." + operationPath
-	}
-
-	queryURL, err := serverURL.Parse(operationPath)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequest("GET", queryURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if params != nil {
-
-		if params.LastEventID != nil {
-			var headerParam0 string
-
-			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Last-Event-ID", *params.LastEventID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
-			if err != nil {
-				return nil, err
-			}
-
-			req.Header.Set("Last-Event-ID", headerParam0)
-		}
-
-	}
 
 	return req, nil
 }
@@ -4875,6 +4617,195 @@ func NewEnableScaleToZeroRequest(server string) (*http.Request, error) {
 	return req, nil
 }
 
+// NewGetTelemetryRequest generates requests for GetTelemetry
+func NewGetTelemetryRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/telemetry")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPatchTelemetryRequest calls the generic PatchTelemetry builder with application/json body
+func NewPatchTelemetryRequest(server string, body PatchTelemetryJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPatchTelemetryRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPatchTelemetryRequestWithBody generates requests for PatchTelemetry with any type of body
+func NewPatchTelemetryRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/telemetry")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PATCH", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPutTelemetryRequest calls the generic PutTelemetry builder with application/json body
+func NewPutTelemetryRequest(server string, body PutTelemetryJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPutTelemetryRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPutTelemetryRequestWithBody generates requests for PutTelemetry with any type of body
+func NewPutTelemetryRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/telemetry")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("PUT", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewPublishEventRequest calls the generic PublishEvent builder with application/json body
+func NewPublishEventRequest(server string, body PublishEventJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPublishEventRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewPublishEventRequestWithBody generates requests for PublishEvent with any type of body
+func NewPublishEventRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/telemetry/events")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewStreamEventsRequest generates requests for StreamEvents
+func NewStreamEventsRequest(server string, params *StreamEventsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/telemetry/stream")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+
+		if params.LastEventID != nil {
+			var headerParam0 string
+
+			headerParam0, err = runtime.StyleParamWithOptions("simple", false, "Last-Event-ID", *params.LastEventID, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Last-Event-ID", headerParam0)
+		}
+
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -4991,30 +4922,6 @@ type ClientWithResponsesInterface interface {
 	PatchDisplayWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchDisplayResponse, error)
 
 	PatchDisplayWithResponse(ctx context.Context, body PatchDisplayJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchDisplayResponse, error)
-
-	// StopCaptureSessionWithResponse request
-	StopCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureSessionResponse, error)
-
-	// GetCaptureSessionWithResponse request
-	GetCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error)
-
-	// UpdateCaptureSessionWithBodyWithResponse request with any body
-	UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
-
-	UpdateCaptureSessionWithResponse(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error)
-
-	// StartCaptureSessionWithBodyWithResponse request with any body
-	StartCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error)
-
-	StartCaptureSessionWithResponse(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error)
-
-	// PublishEventWithBodyWithResponse request with any body
-	PublishEventWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PublishEventResponse, error)
-
-	PublishEventWithResponse(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*PublishEventResponse, error)
-
-	// StreamEventsWithResponse request
-	StreamEventsWithResponse(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*StreamEventsResponse, error)
 
 	// CreateDirectoryWithBodyWithResponse request with any body
 	CreateDirectoryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateDirectoryResponse, error)
@@ -5144,6 +5051,27 @@ type ClientWithResponsesInterface interface {
 
 	// EnableScaleToZeroWithResponse request
 	EnableScaleToZeroWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*EnableScaleToZeroResponse, error)
+
+	// GetTelemetryWithResponse request
+	GetTelemetryWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetTelemetryResponse, error)
+
+	// PatchTelemetryWithBodyWithResponse request with any body
+	PatchTelemetryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchTelemetryResponse, error)
+
+	PatchTelemetryWithResponse(ctx context.Context, body PatchTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchTelemetryResponse, error)
+
+	// PutTelemetryWithBodyWithResponse request with any body
+	PutTelemetryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutTelemetryResponse, error)
+
+	PutTelemetryWithResponse(ctx context.Context, body PutTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*PutTelemetryResponse, error)
+
+	// PublishEventWithBodyWithResponse request with any body
+	PublishEventWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PublishEventResponse, error)
+
+	PublishEventWithResponse(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*PublishEventResponse, error)
+
+	// StreamEventsWithResponse request
+	StreamEventsWithResponse(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*StreamEventsResponse, error)
 }
 
 type PatchChromiumFlagsResponse struct {
@@ -5511,145 +5439,6 @@ func (r PatchDisplayResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PatchDisplayResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type StopCaptureSessionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *CaptureSession
-	JSON404      *NotFoundError
-}
-
-// Status returns HTTPResponse.Status
-func (r StopCaptureSessionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r StopCaptureSessionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type GetCaptureSessionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *CaptureSession
-	JSON404      *NotFoundError
-}
-
-// Status returns HTTPResponse.Status
-func (r GetCaptureSessionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r GetCaptureSessionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type UpdateCaptureSessionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *CaptureSession
-	JSON400      *BadRequestError
-	JSON404      *NotFoundError
-}
-
-// Status returns HTTPResponse.Status
-func (r UpdateCaptureSessionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r UpdateCaptureSessionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type StartCaptureSessionResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON201      *CaptureSession
-	JSON400      *BadRequestError
-	JSON409      *ConflictError
-	JSON500      *InternalError
-}
-
-// Status returns HTTPResponse.Status
-func (r StartCaptureSessionResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r StartCaptureSessionResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type PublishEventResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-	JSON200      *PublishedEnvelope
-	JSON400      *BadRequestError
-}
-
-// Status returns HTTPResponse.Status
-func (r PublishEventResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r PublishEventResponse) StatusCode() int {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.StatusCode
-	}
-	return 0
-}
-
-type StreamEventsResponse struct {
-	Body         []byte
-	HTTPResponse *http.Response
-}
-
-// Status returns HTTPResponse.Status
-func (r StreamEventsResponse) Status() string {
-	if r.HTTPResponse != nil {
-		return r.HTTPResponse.Status
-	}
-	return http.StatusText(0)
-}
-
-// StatusCode returns HTTPResponse.StatusCode
-func (r StreamEventsResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -6449,6 +6238,122 @@ func (r EnableScaleToZeroResponse) StatusCode() int {
 	return 0
 }
 
+type GetTelemetryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TelemetryState
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetTelemetryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetTelemetryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PatchTelemetryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TelemetryState
+	JSON400      *BadRequestError
+	JSON404      *NotFoundError
+}
+
+// Status returns HTTPResponse.Status
+func (r PatchTelemetryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PatchTelemetryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PutTelemetryResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *TelemetryState
+	JSON201      *TelemetryState
+	JSON400      *BadRequestError
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r PutTelemetryResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PutTelemetryResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PublishEventResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *PublishedEnvelope
+	JSON400      *BadRequestError
+}
+
+// Status returns HTTPResponse.Status
+func (r PublishEventResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PublishEventResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type StreamEventsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r StreamEventsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StreamEventsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // PatchChromiumFlagsWithBodyWithResponse request with arbitrary body returning *PatchChromiumFlagsResponse
 func (c *ClientWithResponses) PatchChromiumFlagsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchChromiumFlagsResponse, error) {
 	rsp, err := c.PatchChromiumFlagsWithBody(ctx, contentType, body, reqEditors...)
@@ -6695,84 +6600,6 @@ func (c *ClientWithResponses) PatchDisplayWithResponse(ctx context.Context, body
 		return nil, err
 	}
 	return ParsePatchDisplayResponse(rsp)
-}
-
-// StopCaptureSessionWithResponse request returning *StopCaptureSessionResponse
-func (c *ClientWithResponses) StopCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*StopCaptureSessionResponse, error) {
-	rsp, err := c.StopCaptureSession(ctx, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStopCaptureSessionResponse(rsp)
-}
-
-// GetCaptureSessionWithResponse request returning *GetCaptureSessionResponse
-func (c *ClientWithResponses) GetCaptureSessionWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetCaptureSessionResponse, error) {
-	rsp, err := c.GetCaptureSession(ctx, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseGetCaptureSessionResponse(rsp)
-}
-
-// UpdateCaptureSessionWithBodyWithResponse request with arbitrary body returning *UpdateCaptureSessionResponse
-func (c *ClientWithResponses) UpdateCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
-	rsp, err := c.UpdateCaptureSessionWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseUpdateCaptureSessionResponse(rsp)
-}
-
-func (c *ClientWithResponses) UpdateCaptureSessionWithResponse(ctx context.Context, body UpdateCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateCaptureSessionResponse, error) {
-	rsp, err := c.UpdateCaptureSession(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseUpdateCaptureSessionResponse(rsp)
-}
-
-// StartCaptureSessionWithBodyWithResponse request with arbitrary body returning *StartCaptureSessionResponse
-func (c *ClientWithResponses) StartCaptureSessionWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error) {
-	rsp, err := c.StartCaptureSessionWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStartCaptureSessionResponse(rsp)
-}
-
-func (c *ClientWithResponses) StartCaptureSessionWithResponse(ctx context.Context, body StartCaptureSessionJSONRequestBody, reqEditors ...RequestEditorFn) (*StartCaptureSessionResponse, error) {
-	rsp, err := c.StartCaptureSession(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStartCaptureSessionResponse(rsp)
-}
-
-// PublishEventWithBodyWithResponse request with arbitrary body returning *PublishEventResponse
-func (c *ClientWithResponses) PublishEventWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PublishEventResponse, error) {
-	rsp, err := c.PublishEventWithBody(ctx, contentType, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePublishEventResponse(rsp)
-}
-
-func (c *ClientWithResponses) PublishEventWithResponse(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*PublishEventResponse, error) {
-	rsp, err := c.PublishEvent(ctx, body, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParsePublishEventResponse(rsp)
-}
-
-// StreamEventsWithResponse request returning *StreamEventsResponse
-func (c *ClientWithResponses) StreamEventsWithResponse(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*StreamEventsResponse, error) {
-	rsp, err := c.StreamEvents(ctx, params, reqEditors...)
-	if err != nil {
-		return nil, err
-	}
-	return ParseStreamEventsResponse(rsp)
 }
 
 // CreateDirectoryWithBodyWithResponse request with arbitrary body returning *CreateDirectoryResponse
@@ -7190,6 +7017,75 @@ func (c *ClientWithResponses) EnableScaleToZeroWithResponse(ctx context.Context,
 		return nil, err
 	}
 	return ParseEnableScaleToZeroResponse(rsp)
+}
+
+// GetTelemetryWithResponse request returning *GetTelemetryResponse
+func (c *ClientWithResponses) GetTelemetryWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetTelemetryResponse, error) {
+	rsp, err := c.GetTelemetry(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetTelemetryResponse(rsp)
+}
+
+// PatchTelemetryWithBodyWithResponse request with arbitrary body returning *PatchTelemetryResponse
+func (c *ClientWithResponses) PatchTelemetryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchTelemetryResponse, error) {
+	rsp, err := c.PatchTelemetryWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchTelemetryResponse(rsp)
+}
+
+func (c *ClientWithResponses) PatchTelemetryWithResponse(ctx context.Context, body PatchTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*PatchTelemetryResponse, error) {
+	rsp, err := c.PatchTelemetry(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePatchTelemetryResponse(rsp)
+}
+
+// PutTelemetryWithBodyWithResponse request with arbitrary body returning *PutTelemetryResponse
+func (c *ClientWithResponses) PutTelemetryWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PutTelemetryResponse, error) {
+	rsp, err := c.PutTelemetryWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutTelemetryResponse(rsp)
+}
+
+func (c *ClientWithResponses) PutTelemetryWithResponse(ctx context.Context, body PutTelemetryJSONRequestBody, reqEditors ...RequestEditorFn) (*PutTelemetryResponse, error) {
+	rsp, err := c.PutTelemetry(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePutTelemetryResponse(rsp)
+}
+
+// PublishEventWithBodyWithResponse request with arbitrary body returning *PublishEventResponse
+func (c *ClientWithResponses) PublishEventWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PublishEventResponse, error) {
+	rsp, err := c.PublishEventWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePublishEventResponse(rsp)
+}
+
+func (c *ClientWithResponses) PublishEventWithResponse(ctx context.Context, body PublishEventJSONRequestBody, reqEditors ...RequestEditorFn) (*PublishEventResponse, error) {
+	rsp, err := c.PublishEvent(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePublishEventResponse(rsp)
+}
+
+// StreamEventsWithResponse request returning *StreamEventsResponse
+func (c *ClientWithResponses) StreamEventsWithResponse(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*StreamEventsResponse, error) {
+	rsp, err := c.StreamEvents(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStreamEventsResponse(rsp)
 }
 
 // ParsePatchChromiumFlagsResponse parses an HTTP response from a PatchChromiumFlagsWithResponse call
@@ -7736,208 +7632,6 @@ func ParsePatchDisplayResponse(rsp *http.Response) (*PatchDisplayResponse, error
 		}
 		response.JSON500 = &dest
 
-	}
-
-	return response, nil
-}
-
-// ParseStopCaptureSessionResponse parses an HTTP response from a StopCaptureSessionWithResponse call
-func ParseStopCaptureSessionResponse(rsp *http.Response) (*StopCaptureSessionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &StopCaptureSessionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest CaptureSession
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest NotFoundError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseGetCaptureSessionResponse parses an HTTP response from a GetCaptureSessionWithResponse call
-func ParseGetCaptureSessionResponse(rsp *http.Response) (*GetCaptureSessionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &GetCaptureSessionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest CaptureSession
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest NotFoundError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseUpdateCaptureSessionResponse parses an HTTP response from a UpdateCaptureSessionWithResponse call
-func ParseUpdateCaptureSessionResponse(rsp *http.Response) (*UpdateCaptureSessionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &UpdateCaptureSessionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest CaptureSession
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequestError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
-		var dest NotFoundError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON404 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseStartCaptureSessionResponse parses an HTTP response from a StartCaptureSessionWithResponse call
-func ParseStartCaptureSessionResponse(rsp *http.Response) (*StartCaptureSessionResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &StartCaptureSessionResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
-		var dest CaptureSession
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON201 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequestError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
-		var dest ConflictError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON409 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
-		var dest InternalError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON500 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParsePublishEventResponse parses an HTTP response from a PublishEventWithResponse call
-func ParsePublishEventResponse(rsp *http.Response) (*PublishEventResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &PublishEventResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
-	}
-
-	switch {
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest PublishedEnvelope
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON200 = &dest
-
-	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
-		var dest BadRequestError
-		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
-			return nil, err
-		}
-		response.JSON400 = &dest
-
-	}
-
-	return response, nil
-}
-
-// ParseStreamEventsResponse parses an HTTP response from a StreamEventsWithResponse call
-func ParseStreamEventsResponse(rsp *http.Response) (*StreamEventsResponse, error) {
-	bodyBytes, err := io.ReadAll(rsp.Body)
-	defer func() { _ = rsp.Body.Close() }()
-	if err != nil {
-		return nil, err
-	}
-
-	response := &StreamEventsResponse{
-		Body:         bodyBytes,
-		HTTPResponse: rsp,
 	}
 
 	return response, nil
@@ -9249,6 +8943,175 @@ func ParseEnableScaleToZeroResponse(rsp *http.Response) (*EnableScaleToZeroRespo
 	return response, nil
 }
 
+// ParseGetTelemetryResponse parses an HTTP response from a GetTelemetryWithResponse call
+func ParseGetTelemetryResponse(rsp *http.Response) (*GetTelemetryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetTelemetryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TelemetryState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePatchTelemetryResponse parses an HTTP response from a PatchTelemetryWithResponse call
+func ParsePatchTelemetryResponse(rsp *http.Response) (*PatchTelemetryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PatchTelemetryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TelemetryState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePutTelemetryResponse parses an HTTP response from a PutTelemetryWithResponse call
+func ParsePutTelemetryResponse(rsp *http.Response) (*PutTelemetryResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PutTelemetryResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest TelemetryState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest TelemetryState
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePublishEventResponse parses an HTTP response from a PublishEventWithResponse call
+func ParsePublishEventResponse(rsp *http.Response) (*PublishEventResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PublishEventResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest PublishedEnvelope
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStreamEventsResponse parses an HTTP response from a StreamEventsWithResponse call
+func ParseStreamEventsResponse(rsp *http.Response) (*StreamEventsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StreamEventsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// Update Chromium launch flags and restart
@@ -9299,24 +9162,6 @@ type ServerInterface interface {
 	// Update display configuration
 	// (PATCH /display)
 	PatchDisplay(w http.ResponseWriter, r *http.Request)
-	// Stop the capture session
-	// (DELETE /events/capture_session)
-	StopCaptureSession(w http.ResponseWriter, r *http.Request)
-	// Get the capture session
-	// (GET /events/capture_session)
-	GetCaptureSession(w http.ResponseWriter, r *http.Request)
-	// Update the capture session
-	// (PATCH /events/capture_session)
-	UpdateCaptureSession(w http.ResponseWriter, r *http.Request)
-	// Start the capture session
-	// (POST /events/capture_session)
-	StartCaptureSession(w http.ResponseWriter, r *http.Request)
-	// Publish an event into the event bus
-	// (POST /events/publish)
-	PublishEvent(w http.ResponseWriter, r *http.Request)
-	// Stream events as Server-Sent Events
-	// (GET /events/stream)
-	StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams)
 	// Create a new directory
 	// (PUT /fs/create_directory)
 	CreateDirectory(w http.ResponseWriter, r *http.Request)
@@ -9416,6 +9261,21 @@ type ServerInterface interface {
 	// Idempotently enable scale to zero on this VM.
 	// (POST /scaletozero/enable)
 	EnableScaleToZero(w http.ResponseWriter, r *http.Request)
+	// Get current telemetry state
+	// (GET /telemetry)
+	GetTelemetry(w http.ResponseWriter, r *http.Request)
+	// Update active telemetry configuration
+	// (PATCH /telemetry)
+	PatchTelemetry(w http.ResponseWriter, r *http.Request)
+	// Set telemetry configuration
+	// (PUT /telemetry)
+	PutTelemetry(w http.ResponseWriter, r *http.Request)
+	// Publish an event into the telemetry bus
+	// (POST /telemetry/events)
+	PublishEvent(w http.ResponseWriter, r *http.Request)
+	// Stream telemetry events as Server-Sent Events
+	// (GET /telemetry/stream)
+	StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -9515,42 +9375,6 @@ func (_ Unimplemented) TypeText(w http.ResponseWriter, r *http.Request) {
 // Update display configuration
 // (PATCH /display)
 func (_ Unimplemented) PatchDisplay(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Stop the capture session
-// (DELETE /events/capture_session)
-func (_ Unimplemented) StopCaptureSession(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Get the capture session
-// (GET /events/capture_session)
-func (_ Unimplemented) GetCaptureSession(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Update the capture session
-// (PATCH /events/capture_session)
-func (_ Unimplemented) UpdateCaptureSession(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Start the capture session
-// (POST /events/capture_session)
-func (_ Unimplemented) StartCaptureSession(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Publish an event into the event bus
-// (POST /events/publish)
-func (_ Unimplemented) PublishEvent(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-}
-
-// Stream events as Server-Sent Events
-// (GET /events/stream)
-func (_ Unimplemented) StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -9749,6 +9573,36 @@ func (_ Unimplemented) DisableScaleToZero(w http.ResponseWriter, r *http.Request
 // Idempotently enable scale to zero on this VM.
 // (POST /scaletozero/enable)
 func (_ Unimplemented) EnableScaleToZero(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Get current telemetry state
+// (GET /telemetry)
+func (_ Unimplemented) GetTelemetry(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Update active telemetry configuration
+// (PATCH /telemetry)
+func (_ Unimplemented) PatchTelemetry(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Set telemetry configuration
+// (PUT /telemetry)
+func (_ Unimplemented) PutTelemetry(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Publish an event into the telemetry bus
+// (POST /telemetry/events)
+func (_ Unimplemented) PublishEvent(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Stream telemetry events as Server-Sent Events
+// (GET /telemetry/stream)
+func (_ Unimplemented) StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -9976,116 +9830,6 @@ func (siw *ServerInterfaceWrapper) PatchDisplay(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PatchDisplay(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// StopCaptureSession operation middleware
-func (siw *ServerInterfaceWrapper) StopCaptureSession(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StopCaptureSession(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetCaptureSession operation middleware
-func (siw *ServerInterfaceWrapper) GetCaptureSession(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetCaptureSession(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// UpdateCaptureSession operation middleware
-func (siw *ServerInterfaceWrapper) UpdateCaptureSession(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateCaptureSession(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// StartCaptureSession operation middleware
-func (siw *ServerInterfaceWrapper) StartCaptureSession(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StartCaptureSession(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// PublishEvent operation middleware
-func (siw *ServerInterfaceWrapper) PublishEvent(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PublishEvent(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// StreamEvents operation middleware
-func (siw *ServerInterfaceWrapper) StreamEvents(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params StreamEventsParams
-
-	headers := r.Header
-
-	// ------------- Optional header parameter "Last-Event-ID" -------------
-	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
-		var LastEventID string
-		n := len(valueList)
-		if n != 1 {
-			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Last-Event-ID", Count: n})
-			return
-		}
-
-		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
-		if err != nil {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Last-Event-ID", Err: err})
-			return
-		}
-
-		params.LastEventID = &LastEventID
-
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.StreamEvents(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -10827,6 +10571,102 @@ func (siw *ServerInterfaceWrapper) EnableScaleToZero(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// GetTelemetry operation middleware
+func (siw *ServerInterfaceWrapper) GetTelemetry(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTelemetry(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PatchTelemetry operation middleware
+func (siw *ServerInterfaceWrapper) PatchTelemetry(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PatchTelemetry(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutTelemetry operation middleware
+func (siw *ServerInterfaceWrapper) PutTelemetry(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutTelemetry(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PublishEvent operation middleware
+func (siw *ServerInterfaceWrapper) PublishEvent(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PublishEvent(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StreamEvents operation middleware
+func (siw *ServerInterfaceWrapper) StreamEvents(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StreamEventsParams
+
+	headers := r.Header
+
+	// ------------- Optional header parameter "Last-Event-ID" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Last-Event-ID")]; found {
+		var LastEventID string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Last-Event-ID", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Last-Event-ID", valueList[0], &LastEventID, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Last-Event-ID", Err: err})
+			return
+		}
+
+		params.LastEventID = &LastEventID
+
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamEvents(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -10989,24 +10829,6 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 		r.Patch(options.BaseURL+"/display", wrapper.PatchDisplay)
 	})
 	r.Group(func(r chi.Router) {
-		r.Delete(options.BaseURL+"/events/capture_session", wrapper.StopCaptureSession)
-	})
-	r.Group(func(r chi.Router) {
-		r.Get(options.BaseURL+"/events/capture_session", wrapper.GetCaptureSession)
-	})
-	r.Group(func(r chi.Router) {
-		r.Patch(options.BaseURL+"/events/capture_session", wrapper.UpdateCaptureSession)
-	})
-	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/events/capture_session", wrapper.StartCaptureSession)
-	})
-	r.Group(func(r chi.Router) {
-		r.Post(options.BaseURL+"/events/publish", wrapper.PublishEvent)
-	})
-	r.Group(func(r chi.Router) {
-		r.Get(options.BaseURL+"/events/stream", wrapper.StreamEvents)
-	})
-	r.Group(func(r chi.Router) {
 		r.Put(options.BaseURL+"/fs/create_directory", wrapper.CreateDirectory)
 	})
 	r.Group(func(r chi.Router) {
@@ -11104,6 +10926,21 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Post(options.BaseURL+"/scaletozero/enable", wrapper.EnableScaleToZero)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/telemetry", wrapper.GetTelemetry)
+	})
+	r.Group(func(r chi.Router) {
+		r.Patch(options.BaseURL+"/telemetry", wrapper.PatchTelemetry)
+	})
+	r.Group(func(r chi.Router) {
+		r.Put(options.BaseURL+"/telemetry", wrapper.PutTelemetry)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/telemetry/events", wrapper.PublishEvent)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/telemetry/stream", wrapper.StreamEvents)
 	})
 
 	return r
@@ -11663,218 +11500,6 @@ func (response PatchDisplay500JSONResponse) VisitPatchDisplayResponse(w http.Res
 	w.WriteHeader(500)
 
 	return json.NewEncoder(w).Encode(response)
-}
-
-type StopCaptureSessionRequestObject struct {
-}
-
-type StopCaptureSessionResponseObject interface {
-	VisitStopCaptureSessionResponse(w http.ResponseWriter) error
-}
-
-type StopCaptureSession200JSONResponse CaptureSession
-
-func (response StopCaptureSession200JSONResponse) VisitStopCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StopCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
-
-func (response StopCaptureSession404JSONResponse) VisitStopCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetCaptureSessionRequestObject struct {
-}
-
-type GetCaptureSessionResponseObject interface {
-	VisitGetCaptureSessionResponse(w http.ResponseWriter) error
-}
-
-type GetCaptureSession200JSONResponse CaptureSession
-
-func (response GetCaptureSession200JSONResponse) VisitGetCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
-
-func (response GetCaptureSession404JSONResponse) VisitGetCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type UpdateCaptureSessionRequestObject struct {
-	Body *UpdateCaptureSessionJSONRequestBody
-}
-
-type UpdateCaptureSessionResponseObject interface {
-	VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error
-}
-
-type UpdateCaptureSession200JSONResponse CaptureSession
-
-func (response UpdateCaptureSession200JSONResponse) VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type UpdateCaptureSession400JSONResponse struct{ BadRequestErrorJSONResponse }
-
-func (response UpdateCaptureSession400JSONResponse) VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type UpdateCaptureSession404JSONResponse struct{ NotFoundErrorJSONResponse }
-
-func (response UpdateCaptureSession404JSONResponse) VisitUpdateCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureSessionRequestObject struct {
-	Body *StartCaptureSessionJSONRequestBody
-}
-
-type StartCaptureSessionResponseObject interface {
-	VisitStartCaptureSessionResponse(w http.ResponseWriter) error
-}
-
-type StartCaptureSession201JSONResponse CaptureSession
-
-func (response StartCaptureSession201JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(201)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureSession400JSONResponse struct{ BadRequestErrorJSONResponse }
-
-func (response StartCaptureSession400JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureSession409JSONResponse struct{ ConflictErrorJSONResponse }
-
-func (response StartCaptureSession409JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(409)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StartCaptureSession500JSONResponse struct{ InternalErrorJSONResponse }
-
-func (response StartCaptureSession500JSONResponse) VisitStartCaptureSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(500)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PublishEventRequestObject struct {
-	Body *PublishEventJSONRequestBody
-}
-
-type PublishEventResponseObject interface {
-	VisitPublishEventResponse(w http.ResponseWriter) error
-}
-
-type PublishEvent200JSONResponse PublishedEnvelope
-
-func (response PublishEvent200JSONResponse) VisitPublishEventResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type PublishEvent400JSONResponse struct{ BadRequestErrorJSONResponse }
-
-func (response PublishEvent400JSONResponse) VisitPublishEventResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type StreamEventsRequestObject struct {
-	Params StreamEventsParams
-}
-
-type StreamEventsResponseObject interface {
-	VisitStreamEventsResponse(w http.ResponseWriter) error
-}
-
-type StreamEvents200ResponseHeaders struct {
-	XSSEContentType string
-}
-
-type StreamEvents200TexteventStreamResponse struct {
-	Body          io.Reader
-	Headers       StreamEvents200ResponseHeaders
-	ContentLength int64
-}
-
-func (response StreamEvents200TexteventStreamResponse) VisitStreamEventsResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "text/event-stream")
-	if response.ContentLength != 0 {
-		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
-	}
-	w.Header().Set("X-SSE-Content-Type", fmt.Sprint(response.Headers.XSSEContentType))
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(200)
-
-	if closer, ok := response.Body.(io.ReadCloser); ok {
-		defer closer.Close()
-	}
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		// If w doesn't support flushing, might as well use io.Copy
-		_, err := io.Copy(w, response.Body)
-		return err
-	}
-
-	// Use a buffer for efficient copying and flushing
-	buf := make([]byte, 4096) // text/event-stream are usually very small messages
-	for {
-		n, err := response.Body.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				return werr
-			}
-			flusher.Flush() // Flush after each write
-		}
-		if err != nil {
-			if err == io.EOF {
-				return nil // End of file, no error
-			}
-			return err
-		}
-	}
 }
 
 type CreateDirectoryRequestObject struct {
@@ -13383,6 +13008,193 @@ func (response EnableScaleToZero500JSONResponse) VisitEnableScaleToZeroResponse(
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetTelemetryRequestObject struct {
+}
+
+type GetTelemetryResponseObject interface {
+	VisitGetTelemetryResponse(w http.ResponseWriter) error
+}
+
+type GetTelemetry200JSONResponse TelemetryState
+
+func (response GetTelemetry200JSONResponse) VisitGetTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetTelemetry404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response GetTelemetry404JSONResponse) VisitGetTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchTelemetryRequestObject struct {
+	Body *PatchTelemetryJSONRequestBody
+}
+
+type PatchTelemetryResponseObject interface {
+	VisitPatchTelemetryResponse(w http.ResponseWriter) error
+}
+
+type PatchTelemetry200JSONResponse TelemetryState
+
+func (response PatchTelemetry200JSONResponse) VisitPatchTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchTelemetry400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response PatchTelemetry400JSONResponse) VisitPatchTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchTelemetry404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response PatchTelemetry404JSONResponse) VisitPatchTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PutTelemetryRequestObject struct {
+	Body *PutTelemetryJSONRequestBody
+}
+
+type PutTelemetryResponseObject interface {
+	VisitPutTelemetryResponse(w http.ResponseWriter) error
+}
+
+type PutTelemetry200JSONResponse TelemetryState
+
+func (response PutTelemetry200JSONResponse) VisitPutTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PutTelemetry201JSONResponse TelemetryState
+
+func (response PutTelemetry201JSONResponse) VisitPutTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PutTelemetry400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response PutTelemetry400JSONResponse) VisitPutTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PutTelemetry500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response PutTelemetry500JSONResponse) VisitPutTelemetryResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PublishEventRequestObject struct {
+	Body *PublishEventJSONRequestBody
+}
+
+type PublishEventResponseObject interface {
+	VisitPublishEventResponse(w http.ResponseWriter) error
+}
+
+type PublishEvent200JSONResponse PublishedEnvelope
+
+func (response PublishEvent200JSONResponse) VisitPublishEventResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PublishEvent400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response PublishEvent400JSONResponse) VisitPublishEventResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type StreamEventsRequestObject struct {
+	Params StreamEventsParams
+}
+
+type StreamEventsResponseObject interface {
+	VisitStreamEventsResponse(w http.ResponseWriter) error
+}
+
+type StreamEvents200ResponseHeaders struct {
+	XSSEContentType string
+}
+
+type StreamEvents200TexteventStreamResponse struct {
+	Body          io.Reader
+	Headers       StreamEvents200ResponseHeaders
+	ContentLength int64
+}
+
+func (response StreamEvents200TexteventStreamResponse) VisitStreamEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.Header().Set("X-SSE-Content-Type", fmt.Sprint(response.Headers.XSSEContentType))
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, might as well use io.Copy
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+
+	// Use a buffer for efficient copying and flushing
+	buf := make([]byte, 4096) // text/event-stream are usually very small messages
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+			flusher.Flush() // Flush after each write
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil // End of file, no error
+			}
+			return err
+		}
+	}
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// Update Chromium launch flags and restart
@@ -13433,24 +13245,6 @@ type StrictServerInterface interface {
 	// Update display configuration
 	// (PATCH /display)
 	PatchDisplay(ctx context.Context, request PatchDisplayRequestObject) (PatchDisplayResponseObject, error)
-	// Stop the capture session
-	// (DELETE /events/capture_session)
-	StopCaptureSession(ctx context.Context, request StopCaptureSessionRequestObject) (StopCaptureSessionResponseObject, error)
-	// Get the capture session
-	// (GET /events/capture_session)
-	GetCaptureSession(ctx context.Context, request GetCaptureSessionRequestObject) (GetCaptureSessionResponseObject, error)
-	// Update the capture session
-	// (PATCH /events/capture_session)
-	UpdateCaptureSession(ctx context.Context, request UpdateCaptureSessionRequestObject) (UpdateCaptureSessionResponseObject, error)
-	// Start the capture session
-	// (POST /events/capture_session)
-	StartCaptureSession(ctx context.Context, request StartCaptureSessionRequestObject) (StartCaptureSessionResponseObject, error)
-	// Publish an event into the event bus
-	// (POST /events/publish)
-	PublishEvent(ctx context.Context, request PublishEventRequestObject) (PublishEventResponseObject, error)
-	// Stream events as Server-Sent Events
-	// (GET /events/stream)
-	StreamEvents(ctx context.Context, request StreamEventsRequestObject) (StreamEventsResponseObject, error)
 	// Create a new directory
 	// (PUT /fs/create_directory)
 	CreateDirectory(ctx context.Context, request CreateDirectoryRequestObject) (CreateDirectoryResponseObject, error)
@@ -13550,6 +13344,21 @@ type StrictServerInterface interface {
 	// Idempotently enable scale to zero on this VM.
 	// (POST /scaletozero/enable)
 	EnableScaleToZero(ctx context.Context, request EnableScaleToZeroRequestObject) (EnableScaleToZeroResponseObject, error)
+	// Get current telemetry state
+	// (GET /telemetry)
+	GetTelemetry(ctx context.Context, request GetTelemetryRequestObject) (GetTelemetryResponseObject, error)
+	// Update active telemetry configuration
+	// (PATCH /telemetry)
+	PatchTelemetry(ctx context.Context, request PatchTelemetryRequestObject) (PatchTelemetryResponseObject, error)
+	// Set telemetry configuration
+	// (PUT /telemetry)
+	PutTelemetry(ctx context.Context, request PutTelemetryRequestObject) (PutTelemetryResponseObject, error)
+	// Publish an event into the telemetry bus
+	// (POST /telemetry/events)
+	PublishEvent(ctx context.Context, request PublishEventRequestObject) (PublishEventResponseObject, error)
+	// Stream telemetry events as Server-Sent Events
+	// (GET /telemetry/stream)
+	StreamEvents(ctx context.Context, request StreamEventsRequestObject) (StreamEventsResponseObject, error)
 }
 
 type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
@@ -14059,176 +13868,6 @@ func (sh *strictHandler) PatchDisplay(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PatchDisplayResponseObject); ok {
 		if err := validResponse.VisitPatchDisplayResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// StopCaptureSession operation middleware
-func (sh *strictHandler) StopCaptureSession(w http.ResponseWriter, r *http.Request) {
-	var request StopCaptureSessionRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StopCaptureSession(ctx, request.(StopCaptureSessionRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StopCaptureSession")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StopCaptureSessionResponseObject); ok {
-		if err := validResponse.VisitStopCaptureSessionResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetCaptureSession operation middleware
-func (sh *strictHandler) GetCaptureSession(w http.ResponseWriter, r *http.Request) {
-	var request GetCaptureSessionRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetCaptureSession(ctx, request.(GetCaptureSessionRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetCaptureSession")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetCaptureSessionResponseObject); ok {
-		if err := validResponse.VisitGetCaptureSessionResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// UpdateCaptureSession operation middleware
-func (sh *strictHandler) UpdateCaptureSession(w http.ResponseWriter, r *http.Request) {
-	var request UpdateCaptureSessionRequestObject
-
-	var body UpdateCaptureSessionJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UpdateCaptureSession(ctx, request.(UpdateCaptureSessionRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UpdateCaptureSession")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UpdateCaptureSessionResponseObject); ok {
-		if err := validResponse.VisitUpdateCaptureSessionResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// StartCaptureSession operation middleware
-func (sh *strictHandler) StartCaptureSession(w http.ResponseWriter, r *http.Request) {
-	var request StartCaptureSessionRequestObject
-
-	var body StartCaptureSessionJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		if !errors.Is(err, io.EOF) {
-			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-			return
-		}
-	} else {
-		request.Body = &body
-	}
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StartCaptureSession(ctx, request.(StartCaptureSessionRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StartCaptureSession")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StartCaptureSessionResponseObject); ok {
-		if err := validResponse.VisitStartCaptureSessionResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// PublishEvent operation middleware
-func (sh *strictHandler) PublishEvent(w http.ResponseWriter, r *http.Request) {
-	var request PublishEventRequestObject
-
-	var body PublishEventJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.PublishEvent(ctx, request.(PublishEventRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "PublishEvent")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(PublishEventResponseObject); ok {
-		if err := validResponse.VisitPublishEventResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// StreamEvents operation middleware
-func (sh *strictHandler) StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams) {
-	var request StreamEventsRequestObject
-
-	request.Params = params
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.StreamEvents(ctx, request.(StreamEventsRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "StreamEvents")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(StreamEventsResponseObject); ok {
-		if err := validResponse.VisitStreamEventsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -15195,191 +14834,338 @@ func (sh *strictHandler) EnableScaleToZero(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// GetTelemetry operation middleware
+func (sh *strictHandler) GetTelemetry(w http.ResponseWriter, r *http.Request) {
+	var request GetTelemetryRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetTelemetry(ctx, request.(GetTelemetryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetTelemetry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetTelemetryResponseObject); ok {
+		if err := validResponse.VisitGetTelemetryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PatchTelemetry operation middleware
+func (sh *strictHandler) PatchTelemetry(w http.ResponseWriter, r *http.Request) {
+	var request PatchTelemetryRequestObject
+
+	var body PatchTelemetryJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PatchTelemetry(ctx, request.(PatchTelemetryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PatchTelemetry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PatchTelemetryResponseObject); ok {
+		if err := validResponse.VisitPatchTelemetryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutTelemetry operation middleware
+func (sh *strictHandler) PutTelemetry(w http.ResponseWriter, r *http.Request) {
+	var request PutTelemetryRequestObject
+
+	var body PutTelemetryJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutTelemetry(ctx, request.(PutTelemetryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutTelemetry")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutTelemetryResponseObject); ok {
+		if err := validResponse.VisitPutTelemetryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PublishEvent operation middleware
+func (sh *strictHandler) PublishEvent(w http.ResponseWriter, r *http.Request) {
+	var request PublishEventRequestObject
+
+	var body PublishEventJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PublishEvent(ctx, request.(PublishEventRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PublishEvent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PublishEventResponseObject); ok {
+		if err := validResponse.VisitPublishEventResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamEvents operation middleware
+func (sh *strictHandler) StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams) {
+	var request StreamEventsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamEvents(ctx, request.(StreamEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StreamEventsResponseObject); ok {
+		if err := validResponse.VisitStreamEventsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
