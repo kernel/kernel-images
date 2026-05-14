@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"sort"
 
 	"github.com/nrednav/cuid2"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -39,12 +38,15 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	wasActive := s.telemetrySession.ID() != ""
 
 	if allDisabled {
-		// All categories disabled: stop any running session.
-		if wasActive {
-			s.cdpMonitor.Stop()
-			s.telemetrySession.Stop()
+		if !wasActive {
+			return oapi.PutTelemetry400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "cannot start telemetry with all categories disabled"}}, nil
 		}
-		return oapi.PutTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
+		// All categories disabled: stop the running session.
+		s.cdpMonitor.Stop()
+		resp := s.buildTelemetryResponse()
+		resp.Status = oapi.TelemetryStateStatusStopped
+		s.telemetrySession.Stop()
+		return oapi.PutTelemetry200JSONResponse(resp), nil
 	}
 
 	if wasActive {
@@ -169,7 +171,6 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 	for _, c := range cfg.Categories {
 		active[c] = struct{}{}
 	}
-	sort.Slice(cfg.Categories, func(i, j int) bool { return cfg.Categories[i] < cfg.Categories[j] })
 
 	enabled := func(cat events.EventCategory) *oapi.BrowserTelemetryCategoryConfig {
 		_, on := active[cat]
