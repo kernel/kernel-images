@@ -89,7 +89,7 @@ Every event arrives as an `Envelope`:
 
 ```json
 {
-  "capture_session_id": "cs_abc123",
+  "telemetry_session_id": "cs_abc123",
   "seq": 42,
   "event": {
     "ts": 1746123456789000,

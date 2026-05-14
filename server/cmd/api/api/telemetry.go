@@ -39,14 +39,13 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 
 	if allDisabled {
 		if !wasActive {
-			return oapi.PutTelemetry400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "cannot start telemetry with all categories disabled"}}, nil
+			// Already stopped; all-disabled is idempotent.
+			return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped}), nil
 		}
 		// All categories disabled: stop the running session.
 		s.cdpMonitor.Stop()
-		resp := s.buildTelemetryResponse()
-		resp.Status = oapi.TelemetryStateStatusStopped
 		s.telemetrySession.Stop()
-		return oapi.PutTelemetry200JSONResponse(resp), nil
+		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped, Config: disabledConfig()}), nil
 	}
 
 	if wasActive {
@@ -88,13 +87,8 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 		if allDisabled {
 			// All categories disabled: stop the session.
 			s.cdpMonitor.Stop()
-			// Snapshot the final state before clearing the session ID so buildTelemetryResponse
-			// can still read it. Force status to stopped because cdpMonitor.Stop may
-			// tear down asynchronously, leaving IsRunning briefly true.
-			resp := s.buildTelemetryResponse()
-			resp.Status = oapi.TelemetryStateStatusStopped
 			s.telemetrySession.Stop()
-			return oapi.PatchTelemetry200JSONResponse(resp), nil
+			return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped, Config: disabledConfig()}), nil
 		}
 		s.telemetrySession.UpdateConfig(cfg)
 	}
@@ -214,6 +208,20 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		cats = append(cats, c)
 	}
 	return telemetry.TelemetryConfig{Categories: cats}, false
+}
+
+// disabledConfig returns a BrowserTelemetryConfig with all four user-facing categories explicitly disabled.
+func disabledConfig() oapi.BrowserTelemetryConfig {
+	f := false
+	cat := func() *oapi.BrowserTelemetryCategoryConfig { return &oapi.BrowserTelemetryCategoryConfig{Enabled: &f} }
+	return oapi.BrowserTelemetryConfig{
+		Browser: &oapi.BrowserTelemetryCategoriesConfig{
+			Console:     cat(),
+			Network:     cat(),
+			Page:        cat(),
+			Interaction: cat(),
+		},
+	}
 }
 
 // telemetryConfigToOAPI converts a telemetry.TelemetryConfig to an oapi.BrowserTelemetryConfig

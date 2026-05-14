@@ -1480,7 +1480,12 @@ components:
       properties:
         enabled:
           type: boolean
-          description: Whether this category is captured. Defaults to true if omitted.
+          description: >
+            Whether this category is captured. In PUT requests, omitting this field
+            defaults to true (category enabled). In PATCH requests, omitting this field
+            (or sending an empty object `{}`) is a no-op; the category retains its
+            current state. To enable or disable a category via PATCH, you must send
+            an explicit `true` or `false`.
       additionalProperties: false
     TelemetryState:
       type: object
