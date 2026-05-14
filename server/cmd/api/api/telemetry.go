@@ -213,13 +213,13 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 // disabledConfig returns a BrowserTelemetryConfig with all four user-facing categories explicitly disabled.
 func disabledConfig() oapi.BrowserTelemetryConfig {
 	f := false
-	cat := func() *oapi.BrowserTelemetryCategoryConfig { return &oapi.BrowserTelemetryCategoryConfig{Enabled: &f} }
+	cat := &oapi.BrowserTelemetryCategoryConfig{Enabled: &f}
 	return oapi.BrowserTelemetryConfig{
 		Browser: &oapi.BrowserTelemetryCategoriesConfig{
-			Console:     cat(),
-			Network:     cat(),
-			Page:        cat(),
-			Interaction: cat(),
+			Console:     cat,
+			Network:     cat,
+			Page:        cat,
+			Interaction: cat,
 		},
 	}
 }
