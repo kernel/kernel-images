@@ -1353,7 +1353,7 @@ components:
   schemas:
     Event:
       type: object
-      description: A capture event.
+      description: A telemetry event.
       required:
         - type
       properties:
@@ -1372,8 +1372,6 @@ components:
             - network
             - page
             - interaction
-            - liveview
-            - captcha
             - system
         source:
           $ref: "#/components/schemas/EventSource"
@@ -1419,14 +1417,12 @@ components:
             - network
             - page
             - interaction
-            - liveview
-            - captcha
             - system
           default: system
         source:
           $ref: "#/components/schemas/EventSource"
         data:
-          description: Capture Session Event Payload
+          description: Telemetry event payload
       additionalProperties: false
     PublishedEnvelope:
       type: object
