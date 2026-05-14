@@ -1215,8 +1215,9 @@ paths:
       description: >
         Creates or replaces the telemetry configuration. Starts telemetry if not
         already active (returns 201); replaces the configuration if active (returns 200).
-        Setting all four categories to enabled: false stops telemetry (returns 200
-        with status stopped).
+        Setting all four categories to enabled: false stops an active telemetry session
+        (returns 200 with status stopped). Returns 400 if all categories are disabled
+        and telemetry is not currently active.
       operationId: putTelemetry
       requestBody:
         required: false
@@ -1244,9 +1245,10 @@ paths:
     patch:
       summary: Update active telemetry configuration
       description: >
-        Updates the configuration of the active telemetry session. Returns 404 if
-        telemetry is not active. Setting all four categories to enabled: false
-        stops telemetry (returns 200 with status stopped).
+        Replaces the entire category configuration of the active telemetry session.
+        Categories not specified in the request body default to enabled.
+        Returns 404 if telemetry is not active. Setting all four categories to
+        enabled: false stops telemetry (returns 200 with status stopped).
       operationId: patchTelemetry
       requestBody:
         required: true
@@ -1267,12 +1269,12 @@ paths:
           $ref: "#/components/responses/NotFoundError"
   /telemetry/events:
     post:
-      summary: Publish an event into the telemetry bus
+      summary: Publish an event into the telemetry stream
       description: >
-        Injects an event into the global event bus.
+        Injects an event into the telemetry stream.
         The event is assigned a monotonically increasing sequence number and
         fanned out to all open stream connections.
-      operationId: publishEvent
+      operationId: publishTelemetryEvent
       requestBody:
         required: true
         content:
@@ -1292,7 +1294,7 @@ paths:
     get:
       summary: Stream telemetry events as Server-Sent Events
       description: >
-        Opens a live SSE stream of telemetry events from the global event bus.
+        Opens a live SSE stream of telemetry events.
         Each frame has the form `id: {seq}\ndata: {envelope-json}\n\n`.
         Sequence numbers are process-monotonic and do not reset between sessions;
         a Last-Event-ID from any previous session is valid for resuming the stream.
@@ -1301,7 +1303,7 @@ paths:
         Clients should track the last-seen `id` to detect gaps.
         Fresh connections with no Last-Event-ID start from the current sequence
         and only see new events.
-      operationId: streamEvents
+      operationId: streamTelemetryEvents
       parameters:
         - in: header
           name: Last-Event-ID
@@ -1376,7 +1378,7 @@ components:
         source:
           $ref: "#/components/schemas/EventSource"
         data:
-          description: Arbitrary event payload.
+          description: Telemetry event payload.
         truncated:
           type: boolean
           description: Set by the server when the data field was truncated to fit the size limit.
@@ -1402,7 +1404,7 @@ components:
       additionalProperties: false
     PublishEventRequest:
       type: object
-      description: Request body for publishing an event into the event bus.
+      description: Request body for publishing an event into the telemetry stream.
       required:
         - type
       properties:
@@ -1461,15 +1463,15 @@ components:
         console:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: Console output (log, warn, error) and uncaught exceptions.
-        network:
-          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
-          description: HTTP request/response metadata.
         page:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: Page lifecycle events (navigation, load, layout shifts, LCP).
         interaction:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: User interaction events (clicks, keydowns, scroll).
+        network:
+          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          description: HTTP request/response metadata.
       additionalProperties: false
     BrowserTelemetryCategoryConfig:
       type: object
@@ -1491,6 +1493,7 @@ components:
       properties:
         id:
           type: string
+          description: Unique identifier for the telemetry session.
         status:
           type: string
           enum:
@@ -1508,6 +1511,7 @@ components:
         created_at:
           type: string
           format: date-time
+          description: When the telemetry session was started.
       additionalProperties: false
     StartRecordingRequest:
       type: object

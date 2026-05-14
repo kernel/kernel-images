@@ -15,13 +15,13 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
-// PublishEvent handles POST /telemetry/events.
-// Injects a caller-supplied event into the event bus. Returns 400 if the event
+// PublishTelemetryEvent handles POST /telemetry/events.
+// Injects a caller-supplied event into the telemetry stream. Returns 400 if the event
 // fails validation.
-func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventRequestObject) (oapi.PublishEventResponseObject, error) {
+func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTelemetryEventRequestObject) (oapi.PublishTelemetryEventResponseObject, error) {
 	body := req.Body
 	if body == nil || body.Type == "" {
-		return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is required"}}, nil
+		return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is required"}}, nil
 	}
 	ev := events.Event{Type: body.Type}
 
@@ -29,7 +29,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	if body.Category != nil {
 		cat := events.EventCategory(*body.Category)
 		if !events.ValidCategory(cat) {
-			return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid category"}}, nil
+			return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid category"}}, nil
 		}
 		ev.Category = cat
 	} else {
@@ -39,7 +39,7 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 	if body.Source != nil {
 		if body.Source.Kind != nil {
 			if *body.Source.Kind == oapi.KernelApi {
-				return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source.kind kernel_api is reserved for server-generated events"}}, nil
+				return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source.kind kernel_api is reserved for server-generated events"}}, nil
 			}
 			ev.Source.Kind = events.SourceKind(*body.Source.Kind)
 		}
@@ -55,20 +55,20 @@ func (s *ApiService) PublishEvent(_ context.Context, req oapi.PublishEventReques
 		// re-marshal body.Data to normalize it into a canonical RawMessage byte slice.
 		data, err := json.Marshal(body.Data)
 		if err != nil {
-			return oapi.PublishEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid data"}}, nil
+			return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid data"}}, nil
 		}
 		ev.Data = json.RawMessage(data)
 	}
 
 	env := s.eventStream.Publish(events.Envelope{Event: ev})
-	return publishEventOKResponse{env}, nil
+	return publishTelemetryEventOKResponse{env}, nil
 }
 
-// StreamEvents handles GET /telemetry/stream.
-// Opens an SSE stream of telemetry event envelopes from the event bus ring buffer.
+// StreamTelemetryEvents handles GET /telemetry/stream.
+// Opens an SSE stream of telemetry event envelopes from the telemetry stream ring buffer.
 // Supports reconnection via the Last-Event-ID header. Emits a keepalive comment
 // frame every 15 s when no event arrives.
-func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequestObject) (oapi.StreamEventsResponseObject, error) {
+func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamTelemetryEventsRequestObject) (oapi.StreamTelemetryEventsResponseObject, error) {
 	// Default to the current seq so fresh connections only see new events.
 	// Seqs are process-monotonic; a Last-Event-ID from any prior session resumes correctly.
 	afterSeq := s.eventStream.Seq()
@@ -114,15 +114,15 @@ func (s *ApiService) StreamEvents(ctx context.Context, req oapi.StreamEventsRequ
 		}
 	}()
 
-	headers := oapi.StreamEvents200ResponseHeaders{XSSEContentType: "application/json"}
-	return oapi.StreamEvents200TexteventStreamResponse{Body: pr, Headers: headers}, nil
+	headers := oapi.StreamTelemetryEvents200ResponseHeaders{XSSEContentType: "application/json"}
+	return oapi.StreamTelemetryEvents200TexteventStreamResponse{Body: pr, Headers: headers}, nil
 }
 
-// publishEventOKResponse serializes events.Envelope directly so the response
+// publishTelemetryEventOKResponse serializes events.Envelope directly so the response
 // is identical in shape to the SSE stream frames.
-type publishEventOKResponse struct{ env events.Envelope }
+type publishTelemetryEventOKResponse struct{ env events.Envelope }
 
-func (r publishEventOKResponse) VisitPublishEventResponse(w http.ResponseWriter) error {
+func (r publishTelemetryEventOKResponse) VisitPublishTelemetryEventResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	return json.NewEncoder(w).Encode(r.env)
