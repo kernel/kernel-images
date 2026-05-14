@@ -16,15 +16,14 @@ const (
 	CategoryNetwork     EventCategory = "network"
 	CategoryPage        EventCategory = "page"
 	CategoryInteraction EventCategory = "interaction"
-	CategoryLiveview    EventCategory = "liveview"
-	CategoryCaptcha     EventCategory = "captcha"
 	CategorySystem      EventCategory = "system"
 )
 
-// AllCategories is the canonical list of all known event categories.
+// AllCategories is the canonical list of all configurable event categories.
+// CategorySystem events are always captured regardless of telemetry config.
 var AllCategories = []EventCategory{
 	CategoryConsole, CategoryNetwork, CategoryPage, CategoryInteraction,
-	CategoryLiveview, CategoryCaptcha, CategorySystem,
+	CategorySystem,
 }
 
 var validCategories = func() map[EventCategory]struct{} {
