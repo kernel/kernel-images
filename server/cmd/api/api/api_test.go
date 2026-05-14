@@ -11,8 +11,8 @@ import (
 
 	"log/slog"
 
-	"github.com/kernel/kernel-images/server/lib/capturesession"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -305,20 +305,20 @@ func newMockNekoClient(t *testing.T) *nekoclient.AuthClient {
 	return client
 }
 
-func newCaptureSession(t *testing.T) (*capturesession.CaptureSession, *events.EventStream) {
+func newTelemetrySession(t *testing.T) (*telemetry.TelemetrySession, *events.EventStream) {
 	t.Helper()
 	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 64})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return capturesession.NewCaptureSession(es), es
+	return telemetry.NewTelemetrySession(es), es
 }
 
-// newSvc constructs an ApiService with a fresh capture session and event stream.
+// newSvc constructs an ApiService with a fresh telemetry session and event stream.
 func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	t.Helper()
-	cs, es := newCaptureSession(t)
-	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), cs, es, 0)
+	ts, es := newTelemetrySession(t)
+	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0)
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {

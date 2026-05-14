@@ -75,7 +75,7 @@ func TestEnvelopeSerialization(t *testing.T) {
 	require.NoError(t, json.Unmarshal(b, &decoded))
 
 	assert.Equal(t, float64(1), decoded["seq"])
-	assert.NotContains(t, decoded, "capture_session_id")
+	assert.NotContains(t, decoded, "telemetry_session_id")
 	inner, ok := decoded["event"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "console.log", inner["type"])

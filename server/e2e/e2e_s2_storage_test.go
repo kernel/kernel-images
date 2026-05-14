@@ -16,7 +16,7 @@ import (
 )
 
 // TestS2StorageWriter starts a headless container with S2 credentials, runs a
-// capture session, and verifies that events land in the configured S2 stream.
+// telemetry session, and verifies that events land in the configured S2 stream.
 //
 // Skips automatically when S2_BASIN, S2_ACCESS_TOKEN, or S2_STREAM are unset.
 func TestS2StorageWriter(t *testing.T) {
@@ -58,23 +58,30 @@ func TestS2StorageWriter(t *testing.T) {
 	require.NoError(t, err, "check tail before test")
 	startSeq := checkResp.Tail.SeqNum
 
-	// Start a capture session.
-	startResp, err := client.StartCaptureSessionWithResponse(ctx, instanceoapi.StartCaptureSessionJSONRequestBody{})
+	// Start a telemetry session.
+	startResp, err := client.PutTelemetryWithResponse(ctx, instanceoapi.PutTelemetryJSONRequestBody{})
 	require.NoError(t, err)
-	require.Equal(t, http.StatusCreated, startResp.StatusCode(), "start capture session: %s", string(startResp.Body))
+	require.Equal(t, http.StatusCreated, startResp.StatusCode(), "put telemetry: %s", string(startResp.Body))
 	require.NotNil(t, startResp.JSON201)
 	sessionID := startResp.JSON201.Id
-	t.Logf("capture session started: %s", sessionID)
+	t.Logf("telemetry session started: %s", sessionID)
 
-	// Let the session run briefly so at least one event is published (the
-	// session_started system event is emitted on session start).
+	// Let the session run briefly so at least one event is published.
 	time.Sleep(500 * time.Millisecond)
 
-	// Stop the capture session.
-	stopResp, err := client.StopCaptureSessionWithResponse(ctx)
+	// Stop telemetry by disabling all categories.
+	f := false
+	stopResp, err := client.PatchTelemetryWithResponse(ctx, instanceoapi.PatchTelemetryJSONRequestBody{
+		Browser: &instanceoapi.BrowserTelemetryCategoriesConfig{
+			Console:     &instanceoapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			Network:     &instanceoapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			Page:        &instanceoapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			Interaction: &instanceoapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+		},
+	})
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, stopResp.StatusCode(), "stop capture session: %s", string(stopResp.Body))
-	t.Log("capture session stopped")
+	require.Equal(t, http.StatusOK, stopResp.StatusCode(), "patch telemetry: %s", string(stopResp.Body))
+	t.Log("telemetry session stopped")
 
 	// Give the storage writer time to flush to S2 (batcher linger + network).
 	time.Sleep(2 * time.Second)

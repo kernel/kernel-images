@@ -34,8 +34,8 @@ func testFFmpegFactory(t *testing.T, tempDir string) recorder.FFmpegRecorderFact
 
 func newTestServiceWithFactory(t *testing.T, mgr recorder.RecordManager, factory recorder.FFmpegRecorderFactory) *ApiService {
 	t.Helper()
-	cs, es := newCaptureSession(t)
-	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), cs, es, 0)
+	ts, es := newTelemetrySession(t)
+	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0)
 	require.NoError(t, err)
 	return svc
 }
