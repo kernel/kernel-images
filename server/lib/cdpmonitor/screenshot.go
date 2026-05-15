@@ -32,14 +32,13 @@ func (m *Monitor) tryScreenshot(ctx context.Context, sourceEvent, sessionID stri
 		m.screenshotInFlight.Store(false)
 		return
 	}
-	var navData json.RawMessage
 	var navMeta map[string]string
 	if cs := m.computedFor(sessionID); cs != nil {
-		navData, navMeta = cs.navSnapshot()
+		_, navMeta = cs.navSnapshot()
 	}
 	m.asyncWg.Go(func() {
 		defer m.screenshotInFlight.Store(false)
-		m.captureScreenshot(ctx, sourceEvent, navData, navMeta)
+		m.captureScreenshot(ctx, sourceEvent, navMeta)
 	})
 }
 
@@ -47,9 +46,9 @@ const screenshotTimeout = 10 * time.Second
 
 // captureScreenshot takes a screenshot via ffmpeg x11grab (or the screenshotFn
 // seam in tests), optionally downscales it, and publishes a screenshot event.
-// navData and navMeta are pre-snapped from the owning session's computedState;
-// they may be nil if no state machine exists for the session.
-func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent string, navData json.RawMessage, navMeta map[string]string) {
+// navMeta is pre-snapped from the owning session's computedState; it may be nil
+// if no state machine exists for the session.
+func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent string, navMeta map[string]string) {
 	ctx, cancel := context.WithTimeout(parentCtx, screenshotTimeout)
 	defer cancel()
 	var pngBytes []byte
@@ -79,11 +78,15 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent strin
 		Png: pngBytes,
 	})
 
+	src := oapi.BrowserEventSource{Kind: oapi.LocalProcess, Event: &sourceEvent}
+	if navMeta != nil {
+		src.Metadata = &navMeta
+	}
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventScreenshot,
 		Category: events.System,
-		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess, Event: &sourceEvent, Metadata: &navMeta},
+		Source:   src,
 		Data:     data,
 	})
 }
