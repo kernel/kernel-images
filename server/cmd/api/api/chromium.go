@@ -333,6 +333,11 @@ func writeChromiumFlags(tokens []string) error {
 
 // restartChromiumAndWait restarts Chromium via supervisorctl and waits for DevTools to be ready.
 // Returns an error if the restart fails or times out.
+//
+// On success, emits a chromium_restart_complete log line decomposing the wall clock into
+// supervisorctl_ms (time for supervisorctl restart to return) and post_supervisorctl_ms
+// (gap between supervisorctl returning and a new DevTools URL appearing). Combined with
+// launcher_total_ms from the chromium-launcher event, this localises slow restarts.
 func (s *ApiService) restartChromiumAndWait(ctx context.Context, operation string) error {
 	log := logger.FromContext(ctx)
 	start := time.Now()
@@ -341,32 +346,61 @@ func (s *ApiService) restartChromiumAndWait(ctx context.Context, operation strin
 	updates, cancelSub := s.upstreamMgr.Subscribe()
 	defer cancelSub()
 
+	type restartResult struct {
+		elapsedMs int64
+		err       error
+	}
+
 	// Run supervisorctl restart with a new context to let it run beyond the lifetime of the http request.
 	// This lets us return as soon as the DevTools URL is updated.
-	errCh := make(chan error, 1)
+	resultCh := make(chan restartResult, 1)
 	log.Info("restarting chromium via supervisorctl", "operation", operation)
 	go func() {
 		cmdCtx, cancelCmd := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Minute)
 		defer cancelCmd()
+		cmdStart := time.Now()
 		out, err := exec.CommandContext(cmdCtx, "supervisorctl", "-c", "/etc/supervisor/supervisord.conf", "restart", "chromium").CombinedOutput()
 		if err != nil {
 			log.Error("failed to restart chromium", "error", err, "out", string(out))
-			errCh <- fmt.Errorf("supervisorctl restart failed: %w", err)
 		}
+		resultCh <- restartResult{elapsedMs: time.Since(cmdStart).Milliseconds(), err: err}
 	}()
 
-	// Wait for either a new upstream, a restart error, or timeout
+	var supervisorctlMs int64 = -1
+	var supervisorctlDoneAt time.Time
 	timeout := time.NewTimer(15 * time.Second)
 	defer timeout.Stop()
-	select {
-	case <-updates:
-		log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-		return nil
-	case err := <-errCh:
-		return err
-	case <-timeout.C:
-		log.Info("devtools not ready in time", "operation", operation, "elapsed", time.Since(start).String())
-		return fmt.Errorf("devtools not ready in time")
+	for {
+		select {
+		case r := <-resultCh:
+			if r.err != nil {
+				return fmt.Errorf("supervisorctl restart failed: %w", r.err)
+			}
+			supervisorctlMs = r.elapsedMs
+			supervisorctlDoneAt = time.Now()
+			// Drop resultCh from select so we keep waiting for updates without re-firing.
+			resultCh = nil
+		case url := <-updates:
+			postSupervisorMs := int64(-1)
+			if !supervisorctlDoneAt.IsZero() {
+				postSupervisorMs = time.Since(supervisorctlDoneAt).Milliseconds()
+			}
+			log.Info("chromium_restart_complete",
+				"operation", operation,
+				"supervisorctl_ms", supervisorctlMs,
+				"post_supervisorctl_ms", postSupervisorMs,
+				"total_ms", time.Since(start).Milliseconds(),
+				"first_devtools_url_len", len(url),
+			)
+			return nil
+		case <-timeout.C:
+			log.Info("chromium_restart_timeout",
+				"operation", operation,
+				"elapsed", time.Since(start).String(),
+				"supervisorctl_ms", supervisorctlMs,
+			)
+			return fmt.Errorf("devtools not ready in time")
+		}
 	}
 }
 
