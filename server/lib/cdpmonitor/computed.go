@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 const (
@@ -224,11 +225,8 @@ func (s *computedState) startNetIdleTimer() {
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventNetworkIdle,
 			Category: events.CategoryNetwork,
-			Source: events.Source{
-				Kind:     events.KindCDP,
-				Metadata: navMeta,
-			},
-			Data: navData,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &navMeta},
+			Data:     navData,
 		})
 	})
 }
@@ -278,11 +276,8 @@ func (s *computedState) emitLayoutSettled(navSeq int) {
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventLayoutSettled,
 		Category: events.CategoryPage,
-		Source: events.Source{
-			Kind:     events.KindCDP,
-			Metadata: navMeta,
-		},
-		Data: navData,
+		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &navMeta},
+		Data:     navData,
 	}}
 	evs = append(evs, s.pendingNavigationSettled()...)
 	s.mu.Unlock()
@@ -314,11 +309,8 @@ func (s *computedState) pendingNavigationSettled() []events.Event {
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventNavigationSettled,
 			Category: events.CategoryPage,
-			Source: events.Source{
-				Kind:     events.KindCDP,
-				Metadata: s.navMeta,
-			},
-			Data: s.navData,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &s.navMeta},
+			Data:     s.navData,
 		}}
 	}
 	return nil

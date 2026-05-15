@@ -40,13 +40,9 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 		if body.Source.Kind == oapi.KernelApi {
 			return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source.kind kernel_api is reserved for server-generated events"}}, nil
 		}
-		ev.Source.Kind = events.SourceKind(body.Source.Kind)
-		if body.Source.Event != nil {
-			ev.Source.Event = *body.Source.Event
-		}
-		if body.Source.Metadata != nil {
-			ev.Source.Metadata = *body.Source.Metadata
-		}
+		ev.Source.Kind = oapi.BrowserEventSourceKind(body.Source.Kind)
+		ev.Source.Event = body.Source.Event
+		ev.Source.Metadata = body.Source.Metadata
 	}
 
 	if body.Data != nil {

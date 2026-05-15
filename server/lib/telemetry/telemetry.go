@@ -67,9 +67,10 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 		ev.Ts = time.Now().UnixMicro()
 	}
 	if ev.Source.Metadata == nil {
-		ev.Source.Metadata = make(map[string]string)
+		m := make(map[string]string)
+		ev.Source.Metadata = &m
 	}
-	ev.Source.Metadata["telemetry_session_id"] = s.id
+	(*ev.Source.Metadata)["telemetry_session_id"] = s.id
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 

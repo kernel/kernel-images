@@ -149,9 +149,9 @@ func TestNavDataMetadata(t *testing.T) {
 
 		ev := ec.waitFor(t, "page_layout_settled", 3*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
-		assert.Equal(t, "s1", ev.Source.Metadata[MetadataKeyCDPSessionID])
-		assert.Equal(t, "t1", ev.Source.Metadata[MetadataKeyTargetID])
-		assert.Equal(t, "page", ev.Source.Metadata[MetadataKeyTargetType])
+		assert.Equal(t, "s1", (*ev.Source.Metadata)[MetadataKeyCDPSessionID])
+		assert.Equal(t, "t1", (*ev.Source.Metadata)[MetadataKeyTargetID])
+		assert.Equal(t, "page", (*ev.Source.Metadata)[MetadataKeyTargetType])
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "s1", data["session_id"])
@@ -168,8 +168,8 @@ func TestNavDataMetadata(t *testing.T) {
 
 		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
-		assert.Equal(t, "s1", ev.Source.Metadata[MetadataKeyCDPSessionID])
-		assert.Equal(t, "t1", ev.Source.Metadata[MetadataKeyTargetID])
+		assert.Equal(t, "s1", (*ev.Source.Metadata)[MetadataKeyCDPSessionID])
+		assert.Equal(t, "t1", (*ev.Source.Metadata)[MetadataKeyTargetID])
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "s1", data["session_id"])

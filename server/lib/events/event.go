@@ -3,6 +3,8 @@ package events
 import (
 	"encoding/json"
 	"log/slog"
+
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 // maxS2RecordBytes is the maximum record size for the S2 event pipeline (1 MB).
@@ -40,32 +42,15 @@ func ValidCategory(c EventCategory) bool {
 	return ok
 }
 
-type SourceKind string
-
-const (
-	KindCDP          SourceKind = "cdp"
-	KindKernelAPI    SourceKind = "kernel_api"
-	KindExtension    SourceKind = "extension"
-	KindLocalProcess SourceKind = "local_process"
-)
-
-// Source captures provenance: which producer emitted the event and any
-// producer-specific context (e.g. CDP target/session/frame IDs).
-type Source struct {
-	Kind     SourceKind        `json:"kind"`
-	Event    string            `json:"event,omitempty"`
-	Metadata map[string]string `json:"metadata,omitempty"`
-}
-
 // Event is the portable event schema. It contains only producer-emitted content;
 // pipeline metadata (seq) lives on the Envelope.
 type Event struct {
-	Ts        int64           `json:"ts"` // Unix microseconds (µs since epoch)
-	Type      string          `json:"type"`
-	Category  EventCategory   `json:"category"`
-	Source    Source          `json:"source"`
-	Data      json.RawMessage `json:"data,omitempty"`
-	Truncated bool            `json:"truncated,omitempty"`
+	Ts        int64                   `json:"ts"` // Unix microseconds (µs since epoch)
+	Type      string                  `json:"type"`
+	Category  EventCategory           `json:"category"`
+	Source    oapi.BrowserEventSource `json:"source"`
+	Data      json.RawMessage         `json:"data,omitempty"`
+	Truncated bool                    `json:"truncated,omitempty"`
 }
 
 // Envelope wraps an Event with pipeline-assigned metadata.

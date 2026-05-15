@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,15 +26,18 @@ func TestEventSerialization(t *testing.T) {
 		Ts:       1234567890000,
 		Type:     "console.log",
 		Category: CategoryConsole,
-		Source: Source{
-			Kind:  KindCDP,
-			Event: "Runtime.consoleAPICalled",
-			Metadata: map[string]string{
-				"target_id":       "target-1",
-				"cdp_session_id":  "cdp-session-1",
-				"frame_id":        "frame-1",
-				"parent_frame_id": "parent-frame-1",
-			},
+		Source: oapi.BrowserEventSource{
+			Kind:  oapi.Cdp,
+			Event: func() *string { s := "Runtime.consoleAPICalled"; return &s }(),
+			Metadata: func() *map[string]string {
+				m := map[string]string{
+					"target_id":       "target-1",
+					"cdp_session_id":  "cdp-session-1",
+					"frame_id":        "frame-1",
+					"parent_frame_id": "parent-frame-1",
+				}
+				return &m
+			}(),
 		},
 		Data: json.RawMessage(`{"message":"hello"}`),
 	}
@@ -64,7 +68,7 @@ func TestEnvelopeSerialization(t *testing.T) {
 			Ts:       1000,
 			Type:     "console.log",
 			Category: CategoryConsole,
-			Source:   Source{Kind: KindCDP},
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 		},
 	}
 
@@ -87,7 +91,7 @@ func TestEventData(t *testing.T) {
 		Ts:       1000,
 		Type:     "page.navigation",
 		Category: CategoryPage,
-		Source:   Source{Kind: KindCDP},
+		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 		Data:     rawData,
 	}
 
@@ -104,7 +108,7 @@ func TestEventOmitEmpty(t *testing.T) {
 		Ts:       1000,
 		Type:     "console.log",
 		Category: CategoryConsole,
-		Source:   Source{Kind: KindCDP},
+		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 	}
 
 	b, err := json.Marshal(ev)
@@ -119,7 +123,7 @@ func mkEnv(seq uint64, ev Event) Envelope {
 }
 
 func cdpEvent(typ string, cat EventCategory) Event {
-	return Event{Type: typ, Category: cat, Source: Source{Kind: KindCDP}}
+	return Event{Type: typ, Category: cat, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}}
 }
 
 func newTestRingBuffer(t *testing.T, capacity int) *ringBuffer {

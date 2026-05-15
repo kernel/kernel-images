@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -36,12 +37,13 @@ func readEnvelope(t *testing.T, r *events.Reader, ctx context.Context) events.En
 }
 
 func cdpEvent(typ string, cat events.EventCategory) events.Event {
-	return events.Event{Type: typ, Category: cat, Source: events.Source{Kind: events.KindCDP}}
+	return events.Event{Type: typ, Category: cat, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}}
 }
 
-func telemetrySessionIDFromMetadata(t *testing.T, src events.Source) string {
+func telemetrySessionIDFromMetadata(t *testing.T, src oapi.BrowserEventSource) string {
 	t.Helper()
-	id, ok := src.Metadata["telemetry_session_id"]
+	require.NotNil(t, src.Metadata, "source.metadata is nil")
+	id, ok := (*src.Metadata)["telemetry_session_id"]
 	require.True(t, ok, "telemetry_session_id not found in source.metadata")
 	return id
 }
@@ -103,7 +105,7 @@ func TestTelemetrySession(t *testing.T) {
 		reader := ts.NewReader(0)
 
 		for i := 0; i < 3; i++ {
-			ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: events.Source{Kind: events.KindCDP}, Ts: 1})
+			ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -120,7 +122,7 @@ func TestTelemetrySession(t *testing.T) {
 		reader := ts.NewReader(0)
 
 		before := time.Now().UnixMicro()
-		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: events.Source{Kind: events.KindCDP}})
+		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}})
 		after := time.Now().UnixMicro()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -135,7 +137,7 @@ func TestTelemetrySession(t *testing.T) {
 		ts := newTestTelemetrySession(t)
 
 		reader := ts.NewReader(0)
-		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: events.Source{Kind: events.KindCDP}, Ts: 1})
+		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -150,7 +152,7 @@ func TestTelemetrySession(t *testing.T) {
 		ts.Start("test-uuid", TelemetryConfig{})
 
 		reader := ts.NewReader(0)
-		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: events.Source{Kind: events.KindCDP}, Ts: 1})
+		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -167,7 +169,7 @@ func TestTelemetrySession(t *testing.T) {
 		ts.Publish(events.Event{
 			Type:     "page.navigation",
 			Category: events.CategoryPage,
-			Source:   events.Source{Kind: events.KindCDP},
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 			Ts:       1,
 			Data:     json.RawMessage(`{"url":"https://example.com"}`),
 		})
@@ -186,7 +188,7 @@ func TestTelemetrySession(t *testing.T) {
 		ts.Start("sys-test", TelemetryConfig{Categories: []events.EventCategory{events.CategoryConsole}})
 		reader := ts.NewReader(0)
 
-		ts.Publish(events.Event{Type: "monitor.disconnected", Category: events.CategorySystem, Source: events.Source{Kind: events.KindKernelAPI}, Ts: 1})
+		ts.Publish(events.Event{Type: "monitor.disconnected", Category: events.CategorySystem, Source: oapi.BrowserEventSource{Kind: oapi.KernelApi}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -206,7 +208,7 @@ func TestTelemetrySession(t *testing.T) {
 		ts.Publish(events.Event{
 			Type:     "page.navigation",
 			Category: events.CategoryPage,
-			Source:   events.Source{Kind: events.KindCDP},
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 			Ts:       1,
 			Data:     json.RawMessage(rawData),
 		})

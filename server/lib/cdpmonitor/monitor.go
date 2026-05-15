@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 // UpstreamProvider abstracts *devtoolsproxy.UpstreamManager for testability.
@@ -394,7 +395,7 @@ func (m *Monitor) initSession(ctx context.Context) {
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventMonitorInitFailed,
 			Category: events.CategorySystem,
-			Source:   events.Source{Kind: events.KindLocalProcess},
+			Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 			Data:     json.RawMessage(`{"step":"Target.setAutoAttach"}`),
 		})
 		return
@@ -492,7 +493,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorDisconnected,
 		Category: events.CategorySystem,
-		Source:   events.Source{Kind: events.KindLocalProcess},
+		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 		Data:     json.RawMessage(`{"reason":"` + ReasonChromeRestarted + `"}`),
 	})
 
@@ -523,7 +524,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 				Ts:       time.Now().UnixMicro(),
 				Type:     EventMonitorReconnectFailed,
 				Category: events.CategorySystem,
-				Source:   events.Source{Kind: events.KindLocalProcess},
+				Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 				Data:     json.RawMessage(`{"reason":"` + ReasonReconnectExhausted + `"}`),
 			})
 		}
@@ -545,7 +546,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorReconnected,
 		Category: events.CategorySystem,
-		Source:   events.Source{Kind: events.KindLocalProcess},
+		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 		Data:     json.RawMessage(fmt.Sprintf(`{"reconnect_duration_ms":%d}`, reconnectDurationMs)),
 	})
 }

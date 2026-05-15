@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,8 +29,8 @@ func TestConsoleEvents(t *testing.T) {
 		})
 		ev := ec.waitFor(t, "console_log", 2*time.Second)
 		assert.Equal(t, events.CategoryConsole, ev.Category)
-		assert.Equal(t, events.KindCDP, ev.Source.Kind)
-		assert.Equal(t, "Runtime.consoleAPICalled", ev.Source.Event)
+		assert.Equal(t, oapi.Cdp, ev.Source.Kind)
+		assert.Equal(t, "Runtime.consoleAPICalled", *ev.Source.Event)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "log", data["level"])
@@ -113,7 +114,7 @@ func TestNetworkEvents(t *testing.T) {
 		})
 		ev := ec.waitFor(t, "network_request", 2*time.Second)
 		assert.Equal(t, events.CategoryNetwork, ev.Category)
-		assert.Equal(t, "Network.requestWillBeSent", ev.Source.Event)
+		assert.Equal(t, "Network.requestWillBeSent", *ev.Source.Event)
 
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
@@ -137,7 +138,7 @@ func TestNetworkEvents(t *testing.T) {
 		})
 
 		ev2 := ec.waitFor(t, "network_response", 3*time.Second)
-		assert.Equal(t, "Network.loadingFinished", ev2.Source.Event)
+		assert.Equal(t, "Network.loadingFinished", *ev2.Source.Event)
 		var data2 map[string]any
 		require.NoError(t, json.Unmarshal(ev2.Data, &data2))
 		assert.Equal(t, float64(200), data2["status"])
@@ -233,7 +234,7 @@ func TestPageEvents(t *testing.T) {
 	})
 	ev := ec.waitFor(t, "page_navigation", 2*time.Second)
 	assert.Equal(t, events.CategoryPage, ev.Category)
-	assert.Equal(t, "Page.frameNavigated", ev.Source.Event)
+	assert.Equal(t, "Page.frameNavigated", *ev.Source.Event)
 	var data map[string]any
 	require.NoError(t, json.Unmarshal(ev.Data, &data))
 	assert.Equal(t, "https://example.com/page", data["url"])
@@ -284,7 +285,7 @@ func TestTabOpened(t *testing.T) {
 		})
 		ev := ec.waitFor(t, "page_tab_opened", 2*time.Second)
 		assert.Equal(t, events.CategoryPage, ev.Category)
-		assert.Equal(t, "Target.attachedToTarget", ev.Source.Event)
+		assert.Equal(t, "Target.attachedToTarget", *ev.Source.Event)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "target-tab", data["target_id"])
@@ -326,7 +327,7 @@ func TestBindingAndTimeline(t *testing.T) {
 		})
 		ev := ec.waitFor(t, "interaction_click", 2*time.Second)
 		assert.Equal(t, events.CategoryInteraction, ev.Category)
-		assert.Equal(t, "Runtime.bindingCalled", ev.Source.Event)
+		assert.Equal(t, "Runtime.bindingCalled", *ev.Source.Event)
 	})
 
 	t.Run("interaction_scroll_settled", func(t *testing.T) {
@@ -361,8 +362,8 @@ func TestBindingAndTimeline(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "page_layout_shift", 2*time.Second)
-		assert.Equal(t, events.KindCDP, ev.Source.Kind)
-		assert.Equal(t, "PerformanceTimeline.timelineEventAdded", ev.Source.Event)
+		assert.Equal(t, oapi.Cdp, ev.Source.Kind)
+		assert.Equal(t, "PerformanceTimeline.timelineEventAdded", *ev.Source.Event)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "frame-ls", data["source_frame_id"])

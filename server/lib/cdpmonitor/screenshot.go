@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 // tryScreenshot fires a screenshot if the 2s rate-limit window has elapsed.
@@ -90,7 +91,7 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent strin
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventScreenshot,
 		Category: events.CategorySystem,
-		Source:   events.Source{Kind: events.KindLocalProcess, Event: sourceEvent, Metadata: navMeta},
+		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess, Event: &sourceEvent, Metadata: &navMeta},
 		Data:     data,
 	})
 }
