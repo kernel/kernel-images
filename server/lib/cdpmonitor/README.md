@@ -10,7 +10,7 @@ Chrome can restart independently of the monitor. When that happens, `UpstreamPro
 
 ## Event taxonomy
 
-**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`
+**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`
 
 **Computed** (inferred from sequences of CDP events): `network_idle` (fires when in-flight requests drop to zero), `page_layout_settled` (1 s after `page_load` with no intervening layout shifts), `page_navigation_settled` (fires once `page_dom_content_loaded` and `page_layout_settled` have both fired for the same navigation; intentionally independent of `network_idle` so that a single hung request cannot stall the event).
 
@@ -29,7 +29,7 @@ Chrome can restart independently of the monitor. When that happens, `UpstreamPro
 | Screenshot capture via ffmpeg | `screenshot.go` |
 | CDP protocol types | `cdp_proto.go`, `types.go` |
 | Interaction tracking injected into the page | `interaction.js` |
-| Body/MIME capture sizing and text truncation helpers | `util.go` |
+| Body/MIME capture sizing, text truncation, and typed payload helpers | `util.go` |
 
 ## Internals
 
@@ -68,7 +68,7 @@ restartMu -> lifeMu -> sessionsMu
 | Lock | Protects |
 | --- | --- |
 | `restartMu` | Serializes `handleUpstreamRestart` to prevent overlapping reconnects from rapid Chrome restarts |
-| `lifeMu` | `conn`, `lifecycleCtx`, `cancel`, `done`, `readReady` -- all fields that change during Start / Stop / reconnect |
+| `lifeMu` | `conn`, `lifecycleCtx`, `cancel`, `done`, `readReady`: all fields that change during Start / Stop / reconnect |
 | `pendReqMu` | `pendingRequests` (requestId -&gt; `networkReqState`): in-flight network requests accumulating request/response metadata until `loadingFinished` |
 | `computed.mu` | All `computedState` fields: counters and timers for the `network_idle`, `page_layout_settled`, and `page_navigation_settled` state machines |
 | `pendMu` | `pending` (id -&gt; reply channel): in-flight CDP commands waiting for a response from Chrome |
@@ -79,7 +79,7 @@ Fields that need no mutex use `sync/atomic`: `nextID`, `mainSessionID`, `running
 
 ### WebSocket concurrency
 
-`coder/websocket` guarantees one concurrent `Read` and one concurrent `Write` are safe on the same connection. `readLoop` is the sole reader. All writes go through `send`, which calls `conn.Write` directly -- `conn.Write` is internally serialized by the library, so no external write mutex is needed.
+`coder/websocket` guarantees one concurrent `Read` and one concurrent `Write` are safe on the same connection. `readLoop` is the sole reader. All writes go through `send`, which calls `conn.Write` directly; `conn.Write` is internally serialized by the library, so no external write mutex is needed.
 
 ## Event data model
 
@@ -89,13 +89,21 @@ Every event arrives as an `Envelope`:
 
 ```json
 {
-  "telemetry_session_id": "cs_abc123",
   "seq": 42,
   "event": {
     "ts": 1746123456789000,
     "type": "network_request",
     "category": "network",
-    "source": { ... },
+    "source": {
+      "kind": "cdp",
+      "event": "Network.requestWillBeSent",
+      "metadata": {
+        "telemetry_session_id": "cs_abc123",
+        "cdp_session_id": "...",
+        "target_id": "...",
+        "target_type": "page"
+      }
+    },
     "data": { ... },
     "truncated": false
   }
@@ -104,12 +112,12 @@ Every event arrives as an `Envelope`:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `telemetry_session_id` | string | Pipeline-assigned ID for the telemetry session (not a CDP concept). |
 | `seq` | uint64 | Monotonically increasing per-telemetry-session sequence number. |
 | `event.ts` | int64 | Wall-clock time the monitor emitted the event, as **Unix microseconds** (µs since epoch). |
 | `event.type` | string | See [Event taxonomy](#event-taxonomy). |
 | `event.category` | string | One of: `console`, `network`, `page`, `interaction`, `system`. |
 | `event.truncated` | bool | `true` if `data` was nulled to fit the 1 MB pipeline limit. |
+| `event.source.metadata.telemetry_session_id` | string | Pipeline-assigned ID for the telemetry session, stamped by the telemetry layer. |
 
 ### Source object
 
@@ -149,7 +157,7 @@ target_id          <- one per tab/window; stable across navigations
 | `target_id` | `source.metadata`, most `data` objects | The browser tab. Use this to group all events from one tab session. |
 | `cdp_session_id` | `source.metadata` | The WebSocket sub-channel. Not stable across reconnects. |
 | `frame_id` | `page_navigation`, `network_request`, `network_response`, `network_loading_failed` | The frame the request or navigation belongs to. Top-level frame has no `parent_frame_id`. |
-| `source_frame_id` | `page_layout_shift` | The frame where the layout shift occurred. Distinct from the nav context `frame_id`, which is always the top-level navigated frame. |
+| `source_frame_id` | `page_layout_shift`, `page_lcp` | The frame where the layout shift or LCP element occurred. Distinct from the nav context `frame_id`, which is always the top-level navigated frame. |
 | `loader_id` | `page_navigation`, `network_request`, `network_response` | The document load that owns a request. Join `network_request.loader_id` to `page_navigation.loader_id` to correlate requests with the navigation that triggered them. |
 | `request_id` | `network_request`, `network_response`, `network_loading_failed` | A single request chain (including redirects). Links request to its eventual response or failure. |
 
@@ -167,7 +175,9 @@ Most event `data` objects include a nav context block stamped at the last `page_
 
 ### Per-event data fields
 
-Fields below are the unique additions per event type. Unless otherwise noted, events also include the nav context fields described above. Network events are the exception: they carry their own `loader_id` and `frame_id` directly and do not include nav context.
+The canonical schema for each event's `data` payload is defined in `openapi.yaml` under the corresponding `Browser*EventData` schema (e.g. `BrowserNetworkRequestEventData`). All 22 event shapes are collected into the `KnownBrowserTelemetryEvent` discriminated union, which maps each `type` string to its concrete schema; use that as the entry point when looking up a specific event's fields. The table below summarises the key fields; refer to the schema for the authoritative field list and types.
+
+Unless otherwise noted, events also include the nav context fields described above. Network events are the exception: they carry their own `loader_id` and `frame_id` directly and do not include nav context.
 
 #### Console events
 
@@ -190,9 +200,10 @@ Fields below are the unique additions per event type. Unless otherwise noted, ev
 | --- | --- |
 | `page_tab_opened` | `target_id`, `target_type`, `url`, `opener_id`, `title`. Emitted before the first navigation; no nav context. |
 | `page_navigation` | `session_id`, `target_id`, `target_type`, `url`, `frame_id`, `parent_frame_id` (absent for top-level frames), `loader_id`. This event establishes the nav context stamped on all subsequent events for the session. |
-| `page_dom_content_loaded` | Nav context + `cdp_timestamp` (CDP monotonic seconds; not a wall-clock timestamp -- use `event.ts` for ordering). |
+| `page_dom_content_loaded` | Nav context + `cdp_timestamp` (CDP monotonic seconds; not a wall-clock timestamp, use `event.ts` for ordering). |
 | `page_load` | Nav context + `cdp_timestamp` (CDP monotonic seconds). |
-| `page_layout_shift` | Nav context + `source_frame_id`, `time`, `duration`. Optional `layout_shift_details` object: `value`, `had_recent_input`. Optional `lcp_details` object: `render_time`, `load_time`, `size`, `element_id`, `url`, `node_id`. Chrome multiplexes LCP candidate data through the same `PerformanceTimeline.timelineEventAdded` notification, so both may appear on a single event. |
+| `page_layout_shift` | Nav context + `source_frame_id`, `time`, `duration`. Optional `layout_shift_details`: `value`, `had_recent_input`. |
+| `page_lcp` | Nav context + `source_frame_id`, `time`. Optional `lcp_details`: `render_time`, `load_time`, `size`, `element_id`, `url`, `node_id`. |
 
 #### Computed events
 
