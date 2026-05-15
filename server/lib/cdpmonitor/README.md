@@ -171,7 +171,16 @@ Most event `data` objects include a nav context block stamped at the last `page_
 | `frame_id` | Frame ID of the navigated top-level frame. |
 | `loader_id` | Loader ID of the current document. |
 | `url` | URL of the current page at the time of the last navigation. |
-| `nav_seq` | Monotonically increasing counter, incremented on each `page_navigation`. Use it to detect that the page has navigated between two events in the same session. |
+| `nav_seq` | Monotonically increasing counter, incremented on each `page_navigation`. Use it to detect that the page has navigated between two events in the same session. For `network_request`/`network_response`/`network_loading_failed`, the `nav_seq` is captured at request-send time and carried forward to the response so a request/response pair always shares an epoch. |
+
+### Events that do not compose `BrowserEventContext`
+
+Of the 22 event types, two intentionally omit the standard nav context block:
+
+- `page_tab_opened`: fires before a CDP session is attached to the new target, so `session_id`, `frame_id`, `loader_id`, and `nav_seq` are absent. Only `target_id`, `target_type`, and the tab's initial `url`/`title`/`opener_id` are populated.
+- `page_navigation`: resets the navigation epoch, so it carries the new context fields inline but omits `nav_seq` (the value reported by subsequent events for this epoch is `nav_seq + 1`).
+
+Consumers that destructure `BrowserEventContext` generically should treat these two events as special cases.
 
 ### Per-event data fields
 

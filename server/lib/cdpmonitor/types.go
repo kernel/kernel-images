@@ -116,6 +116,7 @@ type networkReqState struct {
 	resourceType string
 	loaderID     string
 	frameID      string
+	navSeq       int64
 	status       int
 	statusText   string
 	resHeaders   json.RawMessage

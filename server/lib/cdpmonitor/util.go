@@ -17,7 +17,7 @@ func marshalNavEventContext(ctx navContext, seq int) json.RawMessage {
 	data, _ := json.Marshal(oapi.BrowserEventContext{
 		SessionId:  ctx.sessionID,
 		TargetId:   ctx.targetID,
-		TargetType: oapi.BrowserEventContextTargetType(ctx.targetType),
+		TargetType: oapi.BrowserTargetType(ctx.targetType),
 		FrameId:    ptrOf(ctx.frameID),
 		LoaderId:   ptrOf(ctx.loaderID),
 		Url:        ptrOf(ctx.url),

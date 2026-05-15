@@ -1545,6 +1545,10 @@ components:
         HTTP headers map forwarded as-is from CDP without normalization.
         Values are typically strings but may be any JSON type.
       additionalProperties: true
+    BrowserTargetType:
+      type: string
+      description: CDP target type of the page that produced the event.
+      enum: [page, background_page, service_worker, shared_worker, other]
     BrowserEventContext:
       type: object
       description: >
@@ -1560,9 +1564,7 @@ components:
           type: string
           description: Browser target identifier (stable across navigations within a tab).
         target_type:
-          type: string
-          description: CDP target type of the page that produced the event.
-          enum: [page, background_page, service_worker, shared_worker, other]
+          $ref: "#/components/schemas/BrowserTargetType"
         frame_id:
           type: string
           description: CDP frame identifier within the target.
@@ -1792,7 +1794,11 @@ components:
               description: CDP Network.ResourceType for the request, passed through as-is from Chrome. Known values include Document, Fetch, XHR, Script, Stylesheet, Image, Media, Font, TextTrack, EventSource, WebSocket, Manifest, Prefetch, Other, and more.
     BrowserNetworkLoadingFailedEvent:
       type: object
-      description: A browser network loading failed event.
+      description: >
+        A browser network loading failed event. If the request was already in
+        flight when CDP attached (no prior `network_request` was emitted for
+        it), `url`, `frame_id`, `loader_id`, and `resource_type` are absent;
+        `BrowserEventContext` is partially populated in that case.
       required: [ts, type, source]
       properties:
         ts:
@@ -1852,9 +1858,7 @@ components:
           type: string
           description: Browser target identifier.
         target_type:
-          type: string
-          description: CDP target type of the navigated frame.
-          enum: [page, background_page, service_worker, shared_worker, other]
+          $ref: "#/components/schemas/BrowserTargetType"
     BrowserPageNavigationEvent:
       type: object
       description: A browser page navigation started event (CDP Page.frameNavigated). Carries nav context fields inline but not nav_seq, as this event resets the navigation epoch.
@@ -1939,9 +1943,7 @@ components:
           type: string
           description: CDP target identifier for the newly opened tab.
         target_type:
-          type: string
-          description: CDP target type of the new tab.
-          enum: [page, background_page, service_worker, shared_worker, other]
+          $ref: "#/components/schemas/BrowserTargetType"
         url:
           type: string
           description: Initial URL of the new tab.
@@ -1953,7 +1955,12 @@ components:
           description: Target identifier of the tab that opened this one, if any.
     BrowserPageTabOpenedEvent:
       type: object
-      description: A new browser tab or target was opened (CDP Target.attachedToTarget for page targets).
+      description: >
+        A new browser tab or target was opened (CDP Target.attachedToTarget
+        for page targets). Fires before a CDP session is attached to the new
+        target, so `session_id`, `frame_id`, `loader_id`, and `nav_seq` are
+        absent; this event does not compose `BrowserEventContext`. Consumers
+        reading context fields generically should treat it as a special case.
       required: [ts, type, source]
       properties:
         ts:

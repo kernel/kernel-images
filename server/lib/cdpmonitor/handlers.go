@@ -153,7 +153,7 @@ func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID st
 	data, _ := json.Marshal(oapi.BrowserConsoleLogEventData{
 		SessionId:  sid,
 		TargetId:   tid,
-		TargetType: oapi.BrowserConsoleLogEventDataTargetType(ttype),
+		TargetType: oapi.BrowserTargetType(ttype),
 		FrameId:    ptrOf(fid),
 		LoaderId:   ptrOf(lid),
 		Url:        ptrOf(url),
@@ -178,7 +178,7 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 	data, _ := json.Marshal(oapi.BrowserConsoleErrorEventData{
 		SessionId:  sid,
 		TargetId:   tid,
-		TargetType: oapi.BrowserConsoleErrorEventDataTargetType(ttype),
+		TargetType: oapi.BrowserTargetType(ttype),
 		FrameId:    ptrOf(fid),
 		LoaderId:   ptrOf(lid),
 		Url:        ptrOf(url),
@@ -250,7 +250,7 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 		payload := oapi.BrowserPageLayoutShiftEventData{
 			SessionId:     sid,
 			TargetId:      tid,
-			TargetType:    oapi.BrowserPageLayoutShiftEventDataTargetType(ttype),
+			TargetType:    oapi.BrowserTargetType(ttype),
 			FrameId:       ptrOf(fid),
 			LoaderId:      ptrOf(lid),
 			Url:           ptrOf(url),
@@ -281,7 +281,7 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 		lcpPayload := oapi.BrowserPageLcpEventData{
 			SessionId:     sid,
 			TargetId:      tid,
-			TargetType:    oapi.BrowserPageLcpEventDataTargetType(ttype),
+			TargetType:    oapi.BrowserTargetType(ttype),
 			FrameId:       ptrOf(fid),
 			LoaderId:      ptrOf(lid),
 			Url:           ptrOf(url),
@@ -327,6 +327,15 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		initiatorType = raw.Type
 	}
 
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
+	cs := m.computedFor(sessionID)
+	var navSeq int64
+	if cs != nil {
+		navSeq = int64(cs.currentNavSeq())
+	}
+
 	// Redirects reuse the same requestId and fire additional requestWillBeSent
 	// events, but only a single loadingFinished fires per chain. Only increment
 	// netPending for genuinely new requests to avoid permanently inflating the
@@ -336,6 +345,8 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	addedAt := existing.addedAt
 	if !isRedirect {
 		addedAt = time.Now()
+	} else {
+		navSeq = existing.navSeq
 	}
 	m.pendingRequests[p.RequestID] = networkReqState{
 		sessionID:    sessionID,
@@ -346,23 +357,16 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		resourceType: p.Type,
 		loaderID:     p.LoaderID,
 		frameID:      p.FrameID,
+		navSeq:       navSeq,
 		addedAt:      addedAt,
 	}
 	m.pendReqMu.Unlock()
-	m.sessionsMu.RLock()
-	info := m.sessions[sessionID]
-	m.sessionsMu.RUnlock()
-	cs := m.computedFor(sessionID)
-	var navSeq int64
-	if cs != nil {
-		navSeq = int64(cs.currentNavSeq())
-	}
 	var hdrs oapi.BrowserHttpHeaders
 	_ = json.Unmarshal(p.Request.Headers, &hdrs)
 	payload := oapi.BrowserNetworkRequestEventData{
 		SessionId:     sessionID,
 		TargetId:      info.targetID,
-		TargetType:    oapi.BrowserNetworkRequestEventDataTargetType(info.targetType),
+		TargetType:    oapi.BrowserTargetType(info.targetType),
 		FrameId:       ptrOf(p.FrameID),
 		LoaderId:      ptrOf(p.LoaderID),
 		Url:           ptrOf(p.Request.URL),
@@ -415,10 +419,8 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 	m.sessionsMu.RLock()
 	info := m.sessions[sessionID]
 	m.sessionsMu.RUnlock()
-	var navSeq int
 	if cs := m.computedFor(state.sessionID); cs != nil {
 		cs.onLoadingFinished()
-		navSeq = cs.currentNavSeq()
 	}
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	m.asyncWg.Go(func() {
@@ -428,11 +430,11 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 		resPayload := oapi.BrowserNetworkResponseEventData{
 			SessionId:  sessionID,
 			TargetId:   info.targetID,
-			TargetType: oapi.BrowserNetworkResponseEventDataTargetType(info.targetType),
+			TargetType: oapi.BrowserTargetType(info.targetType),
 			FrameId:    ptrOf(state.frameID),
 			LoaderId:   ptrOf(state.loaderID),
 			Url:        ptrOf(state.url),
-			NavSeq:     int64(navSeq),
+			NavSeq:     state.navSeq,
 			RequestId:  p.RequestID,
 			Method:     state.method,
 			Status:     state.status,
@@ -495,14 +497,19 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 	m.sessionsMu.RLock()
 	info := m.sessions[sessionID]
 	m.sessionsMu.RUnlock()
+	// Prefer the navSeq captured at requestWillBeSent time so request/failure
+	// pairs share an epoch. For untracked requests (in flight at CDP attach),
+	// fall back to the current navSeq.
 	var nseq int64
-	if cs := m.computedFor(sessionID); cs != nil {
+	if ok {
+		nseq = state.navSeq
+	} else if cs := m.computedFor(sessionID); cs != nil {
 		nseq = int64(cs.currentNavSeq())
 	}
 	failPayload := oapi.BrowserNetworkLoadingFailedEventData{
 		SessionId:  sessionID,
 		TargetId:   info.targetID,
-		TargetType: oapi.BrowserNetworkLoadingFailedEventDataTargetType(info.targetType),
+		TargetType: oapi.BrowserTargetType(info.targetType),
 		NavSeq:     nseq,
 		RequestId:  p.RequestID,
 		ErrorText:  p.ErrorText,
@@ -536,7 +543,7 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	data, _ := json.Marshal(oapi.BrowserPageNavigationEventData{
 		SessionId:     sessionID,
 		TargetId:      info.targetID,
-		TargetType:    oapi.BrowserPageNavigationEventDataTargetType(info.targetType),
+		TargetType:    oapi.BrowserTargetType(info.targetType),
 		Url:           p.Frame.URL,
 		FrameId:       p.Frame.ID,
 		ParentFrameId: ptrOf(p.Frame.ParentID),
@@ -584,7 +591,7 @@ func (m *Monitor) handleDOMContentLoaded(p cdpPageDomContentEventFiredParams, se
 	data, _ := json.Marshal(oapi.BrowserPageDomContentLoadedEventData{
 		SessionId:    sid,
 		TargetId:     tid,
-		TargetType:   oapi.BrowserPageDomContentLoadedEventDataTargetType(ttype),
+		TargetType:   oapi.BrowserTargetType(ttype),
 		FrameId:      ptrOf(fid),
 		LoaderId:     ptrOf(lid),
 		Url:          ptrOf(url),
@@ -603,7 +610,7 @@ func (m *Monitor) handleLoadEventFired(ctx context.Context, p cdpPageLoadEventFi
 	data, _ := json.Marshal(oapi.BrowserPageLoadEventData{
 		SessionId:    sid,
 		TargetId:     tid,
-		TargetType:   oapi.BrowserPageLoadEventDataTargetType(ttype),
+		TargetType:   oapi.BrowserTargetType(ttype),
 		FrameId:      ptrOf(fid),
 		LoaderId:     ptrOf(lid),
 		Url:          ptrOf(url),
@@ -637,7 +644,7 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 	if p.TargetInfo.Type == targetTypePage {
 		data, _ := json.Marshal(oapi.BrowserPageTabOpenedEventData{
 			TargetId:   p.TargetInfo.TargetID,
-			TargetType: oapi.BrowserPageTabOpenedEventDataTargetType(p.TargetInfo.Type),
+			TargetType: oapi.BrowserTargetType(p.TargetInfo.Type),
 			Url:        p.TargetInfo.URL,
 			OpenerId:   ptrOf(p.TargetInfo.OpenerID),
 			Title:      ptrOf(p.TargetInfo.Title),
