@@ -37,12 +37,10 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 	}
 
 	if body.Source != nil {
-		if body.Source.Kind != nil {
-			if *body.Source.Kind == oapi.KernelApi {
-				return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source.kind kernel_api is reserved for server-generated events"}}, nil
-			}
-			ev.Source.Kind = events.SourceKind(*body.Source.Kind)
+		if body.Source.Kind == oapi.KernelApi {
+			return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source.kind kernel_api is reserved for server-generated events"}}, nil
 		}
+		ev.Source.Kind = events.SourceKind(body.Source.Kind)
 		if body.Source.Event != nil {
 			ev.Source.Event = *body.Source.Event
 		}

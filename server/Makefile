@@ -16,7 +16,7 @@ $(RECORDING_DIR):
 # 3. go mod tidy to pull deps
 oapi-generate:
 	pnpm i -g @apiture/openapi-down-convert
-	openapi-down-convert --input openapi.yaml --output openapi-3.0.yaml
+	openapi-down-convert --input openapi.yaml --output openapi-3.0.yaml --allOf
 	go tool oapi-codegen -config ./oapi-codegen.yaml ./openapi-3.0.yaml
 	@echo "Fixing oapi-codegen issue https://github.com/oapi-codegen/oapi-codegen/issues/1764..."
 	go run ./scripts/oapi/patch_sse_methods -file ./lib/oapi/oapi.go -expected-replacements 4
