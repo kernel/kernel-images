@@ -4,7 +4,27 @@ import (
 	"encoding/json"
 	"strings"
 	"unicode/utf8"
+
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
+
+func ptrOf[T any](v T) *T { return &v }
+
+// marshalNavEventContext marshals a navContext and sequence number into the
+// BrowserEventContext JSON payload used by network_idle, page_layout_settled,
+// and page_navigation_settled events.
+func marshalNavEventContext(ctx navContext, seq int) json.RawMessage {
+	data, _ := json.Marshal(oapi.BrowserEventContext{
+		SessionId:  ctx.sessionID,
+		TargetId:   ctx.targetID,
+		TargetType: oapi.BrowserEventContextTargetType(ctx.targetType),
+		FrameId:    ptrOf(ctx.frameID),
+		LoaderId:   ptrOf(ctx.loaderID),
+		Url:        ptrOf(ctx.url),
+		NavSeq:     int64(seq),
+	})
+	return data
+}
 
 // consoleArgString extracts a display string from a CDP console argument.
 // For strings it unquotes the JSON value; for other types it returns the raw JSON.

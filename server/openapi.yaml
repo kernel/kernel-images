@@ -1304,9 +1304,9 @@ paths:
         Fresh connections with no Last-Event-ID start from the current sequence
         and only see new events.
         The wire shape is the generic `TelemetryEvent`. For browser events
-        emitted by the Kernel image, the event's `data` conforms to the
-        documented per-type schema (see the `Browser*Event` / `Browser*EventData`
-        schemas), selected by `type`.
+        emitted by the Kernel image (or by callers using a documented `type`),
+        the event's `data` conforms to one of the variants of
+        `KnownBrowserTelemetryEvent`, selected by `type`.
       operationId: streamTelemetryEvents
       parameters:
         - in: header
@@ -1388,9 +1388,9 @@ components:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
           description: >
-            Arbitrary JSON payload. For Kernel-emitted browser events, the
-            payload conforms to the corresponding `Browser*EventData` schema
-            indicated by `type`.
+            Arbitrary JSON payload. For browser events listed in
+            `KnownBrowserTelemetryEvent`, the payload conforms to the
+            corresponding `Browser*EventData` schema.
         truncated:
           type: boolean
           description: Set by the server when the data field was truncated to fit the size limit.
@@ -1552,6 +1552,7 @@ components:
         Browser event context stamped by the browser monitor onto all
         CDP-sourced events. Identifies the target, frame, and navigation epoch
         in which the event occurred.
+      required: [session_id, target_id, target_type, nav_seq]
       properties:
         session_id:
           type: string
@@ -1580,6 +1581,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [level, text]
           properties:
             level:
               type: string
@@ -1621,6 +1623,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [text]
           properties:
             text:
               type: string
@@ -1673,6 +1676,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [request_id, method, document_url, headers, initiator_type]
           properties:
             request_id:
               type: string
@@ -1724,6 +1728,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [request_id, method, status, headers]
           properties:
             request_id:
               type: string
@@ -1772,6 +1777,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [request_id, error_text, canceled]
           properties:
             request_id:
               type: string
@@ -1826,6 +1832,7 @@ components:
     BrowserPageNavigationEventData:
       type: object
       additionalProperties: false
+      required: [session_id, target_id, target_type, url, frame_id, loader_id]
       properties:
         url:
           type: string
@@ -1872,6 +1879,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [cdp_timestamp]
           properties:
             cdp_timestamp:
               type: number
@@ -1899,6 +1907,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [cdp_timestamp]
           properties:
             cdp_timestamp:
               type: number
@@ -1925,6 +1934,7 @@ components:
     BrowserPageTabOpenedEventData:
       type: object
       additionalProperties: false
+      required: [target_id, target_type, url]
       properties:
         target_id:
           type: string
@@ -1965,6 +1975,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [source_frame_id, time, duration]
           properties:
             source_frame_id:
               type: string
@@ -2009,6 +2020,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [source_frame_id, time]
           properties:
             source_frame_id:
               type: string
@@ -2104,6 +2116,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [x, y, selector, tag]
           properties:
             x:
               type: integer
@@ -2143,6 +2156,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [key, selector, tag]
           properties:
             key:
               type: string
@@ -2176,6 +2190,7 @@ components:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
         - type: object
+          required: [from_x, from_y, to_x, to_y, target_selector]
           properties:
             from_x:
               type: integer
@@ -2214,6 +2229,7 @@ components:
     BrowserMonitorScreenshotEventData:
       type: object
       additionalProperties: false
+      required: [png]
       properties:
         png:
           type: string
@@ -2241,6 +2257,7 @@ components:
     BrowserMonitorDisconnectedEventData:
       type: object
       additionalProperties: false
+      required: [reason]
       properties:
         reason:
           type: string
@@ -2268,6 +2285,7 @@ components:
     BrowserMonitorReconnectedEventData:
       type: object
       additionalProperties: false
+      required: [reconnect_duration_ms]
       properties:
         reconnect_duration_ms:
           type: integer
@@ -2295,6 +2313,7 @@ components:
     BrowserMonitorReconnectFailedEventData:
       type: object
       additionalProperties: false
+      required: [reason]
       properties:
         reason:
           type: string
@@ -2322,6 +2341,7 @@ components:
     BrowserMonitorInitFailedEventData:
       type: object
       additionalProperties: false
+      required: [step]
       properties:
         step:
           type: string
@@ -2345,6 +2365,63 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    KnownBrowserTelemetryEvent:
+      description: >
+        Discriminated union of browser telemetry events emitted by the Kernel
+        image. This is a structural taxonomy: any event on the telemetry stream
+        whose `data` conforms to one of the variants below (selected by `type`)
+        is a `KnownBrowserTelemetryEvent`, regardless of who published it.
+        Caller-published events via POST /telemetry/events are not constrained
+        to this union; see `TelemetryEvent` for the wire shape. Validation of
+        caller payloads against this taxonomy is the consumer's responsibility.
+      oneOf:
+        - $ref: "#/components/schemas/BrowserConsoleLogEvent"
+        - $ref: "#/components/schemas/BrowserConsoleErrorEvent"
+        - $ref: "#/components/schemas/BrowserNetworkRequestEvent"
+        - $ref: "#/components/schemas/BrowserNetworkResponseEvent"
+        - $ref: "#/components/schemas/BrowserNetworkLoadingFailedEvent"
+        - $ref: "#/components/schemas/BrowserNetworkIdleEvent"
+        - $ref: "#/components/schemas/BrowserPageNavigationEvent"
+        - $ref: "#/components/schemas/BrowserPageDomContentLoadedEvent"
+        - $ref: "#/components/schemas/BrowserPageLoadEvent"
+        - $ref: "#/components/schemas/BrowserPageTabOpenedEvent"
+        - $ref: "#/components/schemas/BrowserPageLayoutShiftEvent"
+        - $ref: "#/components/schemas/BrowserPageLcpEvent"
+        - $ref: "#/components/schemas/BrowserPageLayoutSettledEvent"
+        - $ref: "#/components/schemas/BrowserPageNavigationSettledEvent"
+        - $ref: "#/components/schemas/BrowserInteractionClickEvent"
+        - $ref: "#/components/schemas/BrowserInteractionKeyEvent"
+        - $ref: "#/components/schemas/BrowserInteractionScrollSettledEvent"
+        - $ref: "#/components/schemas/BrowserMonitorScreenshotEvent"
+        - $ref: "#/components/schemas/BrowserMonitorDisconnectedEvent"
+        - $ref: "#/components/schemas/BrowserMonitorReconnectedEvent"
+        - $ref: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
+        - $ref: "#/components/schemas/BrowserMonitorInitFailedEvent"
+      discriminator:
+        propertyName: type
+        mapping:
+          console_log: "#/components/schemas/BrowserConsoleLogEvent"
+          console_error: "#/components/schemas/BrowserConsoleErrorEvent"
+          network_request: "#/components/schemas/BrowserNetworkRequestEvent"
+          network_response: "#/components/schemas/BrowserNetworkResponseEvent"
+          network_loading_failed: "#/components/schemas/BrowserNetworkLoadingFailedEvent"
+          network_idle: "#/components/schemas/BrowserNetworkIdleEvent"
+          page_navigation: "#/components/schemas/BrowserPageNavigationEvent"
+          page_dom_content_loaded: "#/components/schemas/BrowserPageDomContentLoadedEvent"
+          page_load: "#/components/schemas/BrowserPageLoadEvent"
+          page_tab_opened: "#/components/schemas/BrowserPageTabOpenedEvent"
+          page_layout_shift: "#/components/schemas/BrowserPageLayoutShiftEvent"
+          page_lcp: "#/components/schemas/BrowserPageLcpEvent"
+          page_layout_settled: "#/components/schemas/BrowserPageLayoutSettledEvent"
+          page_navigation_settled: "#/components/schemas/BrowserPageNavigationSettledEvent"
+          interaction_click: "#/components/schemas/BrowserInteractionClickEvent"
+          interaction_key: "#/components/schemas/BrowserInteractionKeyEvent"
+          interaction_scroll_settled: "#/components/schemas/BrowserInteractionScrollSettledEvent"
+          monitor_screenshot: "#/components/schemas/BrowserMonitorScreenshotEvent"
+          monitor_disconnected: "#/components/schemas/BrowserMonitorDisconnectedEvent"
+          monitor_reconnected: "#/components/schemas/BrowserMonitorReconnectedEvent"
+          monitor_reconnect_failed: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
+          monitor_init_failed: "#/components/schemas/BrowserMonitorInitFailedEvent"
     TelemetryState:
       type: object
       description: Current telemetry configuration and status.

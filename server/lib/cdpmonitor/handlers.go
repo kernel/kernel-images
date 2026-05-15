@@ -144,26 +144,52 @@ func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID st
 		eventType = EventConsoleError
 	}
 	cs := m.computedFor(sessionID)
-	data := cs.navDataWith(map[string]any{
-		"level":       p.Type,
-		"text":        text,
-		"args":        argValues,
-		"stack_trace": p.StackTrace,
+	sid, tid, ttype, fid, lid, url, nseq := cs.currentNavCtxFields()
+	var stackTrace *oapi.BrowserCallStack
+	if len(p.StackTrace) > 0 {
+		stackTrace = &oapi.BrowserCallStack{}
+		_ = json.Unmarshal(p.StackTrace, stackTrace)
+	}
+	data, _ := json.Marshal(oapi.BrowserConsoleLogEventData{
+		SessionId:  sid,
+		TargetId:   tid,
+		TargetType: oapi.BrowserConsoleLogEventDataTargetType(ttype),
+		FrameId:    ptrOf(fid),
+		LoaderId:   ptrOf(lid),
+		Url:        ptrOf(url),
+		NavSeq:     nseq,
+		Level:      p.Type,
+		Text:       text,
+		Args:       ptrOf(argValues),
+		StackTrace: stackTrace,
 	})
-	m.publishEvent(eventType, oapi.TelemetryEventCategoryConsole, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Runtime.consoleAPICalled", data, sessionID)
+	m.publishEvent(eventType, events.Console, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Runtime.consoleAPICalled", data, sessionID)
 }
 
 func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExceptionThrownParams, sessionID string) {
 	cs := m.computedFor(sessionID)
+	sid, tid, ttype, fid, lid, url, nseq := cs.currentNavCtxFields()
+	var stackTrace *oapi.BrowserCallStack
+	if len(p.ExceptionDetails.StackTrace) > 0 {
+		stackTrace = &oapi.BrowserCallStack{}
+		_ = json.Unmarshal(p.ExceptionDetails.StackTrace, stackTrace)
+	}
 	// source_url is the script file URL; distinct from nav context's url (the page URL).
-	data := cs.navDataWith(map[string]any{
-		"text":        p.ExceptionDetails.Text,
-		"line":        p.ExceptionDetails.LineNumber,
-		"column":      p.ExceptionDetails.ColumnNumber,
-		"source_url":  p.ExceptionDetails.URL,
-		"stack_trace": p.ExceptionDetails.StackTrace,
+	data, _ := json.Marshal(oapi.BrowserConsoleErrorEventData{
+		SessionId:  sid,
+		TargetId:   tid,
+		TargetType: oapi.BrowserConsoleErrorEventDataTargetType(ttype),
+		FrameId:    ptrOf(fid),
+		LoaderId:   ptrOf(lid),
+		Url:        ptrOf(url),
+		NavSeq:     nseq,
+		Text:       p.ExceptionDetails.Text,
+		Line:       ptrOf(p.ExceptionDetails.LineNumber),
+		Column:     ptrOf(p.ExceptionDetails.ColumnNumber),
+		SourceUrl:  ptrOf(p.ExceptionDetails.URL),
+		StackTrace: stackTrace,
 	})
-	m.publishEvent(EventConsoleError, oapi.TelemetryEventCategoryConsole, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Runtime.exceptionThrown", data, sessionID)
+	m.publishEvent(EventConsoleError, events.Console, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Runtime.exceptionThrown", data, sessionID)
 	m.tryScreenshot(ctx, "Runtime.exceptionThrown", sessionID)
 }
 
@@ -210,7 +236,7 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 	var payloadMap map[string]any
 	_ = json.Unmarshal(payload, &payloadMap)
 	cs := m.computedFor(sessionID)
-	m.publishEvent(header.Type, oapi.TelemetryEventCategoryInteraction, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Runtime.bindingCalled", cs.navDataWith(payloadMap), sessionID)
+	m.publishEvent(header.Type, events.Interaction, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Runtime.bindingCalled", cs.navDataWith(payloadMap), sessionID)
 }
 
 // handleTimelineEvent processes PerformanceTimeline layout-shift and LCP events.
@@ -219,44 +245,70 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 	case timelineEventLayoutShift:
 		// source_frame_id is the frame where the shift occurred; distinct from nav
 		// context's frame_id (the top-level navigated frame).
-		ev := map[string]any{
-			"source_frame_id": p.Event.FrameID,
-			"time":            p.Event.Time,
-			"duration":        p.Event.Duration,
+		cs := m.computedFor(sessionID)
+		sid, tid, ttype, fid, lid, url, nseq := cs.currentNavCtxFields()
+		payload := oapi.BrowserPageLayoutShiftEventData{
+			SessionId:     sid,
+			TargetId:      tid,
+			TargetType:    oapi.BrowserPageLayoutShiftEventDataTargetType(ttype),
+			FrameId:       ptrOf(fid),
+			LoaderId:      ptrOf(lid),
+			Url:           ptrOf(url),
+			NavSeq:        nseq,
+			SourceFrameId: p.Event.FrameID,
+			Time:          float32(p.Event.Time),
+			Duration:      float32(p.Event.Duration),
 		}
 		var shift cdpLayoutShiftDetails
 		if p.Event.LayoutShiftDetails != nil && json.Unmarshal(p.Event.LayoutShiftDetails, &shift) == nil {
-			ev["layout_shift_details"] = map[string]any{
-				"value":            shift.Value,
-				"had_recent_input": shift.HadRecentInput,
+			payload.LayoutShiftDetails = &struct {
+				HadRecentInput *bool    `json:"had_recent_input,omitempty"`
+				Value          *float32 `json:"value,omitempty"`
+			}{
+				Value:          ptrOf(float32(shift.Value)),
+				HadRecentInput: ptrOf(shift.HadRecentInput),
 			}
 		}
-		cs := m.computedFor(sessionID)
-		data := cs.navDataWith(ev)
-		m.publishEvent(EventLayoutShift, oapi.TelemetryEventCategoryPage, oapi.BrowserEventSource{Kind: oapi.Cdp}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
+		data, _ := json.Marshal(payload)
+		m.publishEvent(EventLayoutShift, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
 		if cs != nil {
 			cs.onLayoutShift()
 		}
 
 	case timelineEventLCP:
-		ev := map[string]any{
-			"source_frame_id": p.Event.FrameID,
-			"time":            p.Event.Time,
+		cs := m.computedFor(sessionID)
+		sid, tid, ttype, fid, lid, url, nseq := cs.currentNavCtxFields()
+		lcpPayload := oapi.BrowserPageLcpEventData{
+			SessionId:     sid,
+			TargetId:      tid,
+			TargetType:    oapi.BrowserPageLcpEventDataTargetType(ttype),
+			FrameId:       ptrOf(fid),
+			LoaderId:      ptrOf(lid),
+			Url:           ptrOf(url),
+			NavSeq:        nseq,
+			SourceFrameId: p.Event.FrameID,
+			Time:          float32(p.Event.Time),
 		}
 		var lcp cdpLcpDetails
 		if p.Event.LcpDetails != nil && json.Unmarshal(p.Event.LcpDetails, &lcp) == nil {
-			ev["lcp_details"] = map[string]any{
-				"render_time": lcp.RenderTime,
-				"load_time":   lcp.LoadTime,
-				"size":        lcp.Size,
-				"element_id":  lcp.ElementID,
-				"url":         lcp.URL,
-				"node_id":     lcp.NodeID,
+			lcpPayload.LcpDetails = &struct {
+				ElementId  *string  `json:"element_id,omitempty"`
+				LoadTime   *float32 `json:"load_time,omitempty"`
+				NodeId     *int     `json:"node_id,omitempty"`
+				RenderTime *float32 `json:"render_time,omitempty"`
+				Size       *float32 `json:"size,omitempty"`
+				Url        *string  `json:"url,omitempty"`
+			}{
+				RenderTime: ptrOf(float32(lcp.RenderTime)),
+				LoadTime:   ptrOf(float32(lcp.LoadTime)),
+				Size:       ptrOf(float32(lcp.Size)),
+				ElementId:  ptrOf(lcp.ElementID),
+				Url:        ptrOf(lcp.URL),
+				NodeId:     ptrOf(lcp.NodeID),
 			}
 		}
-		cs := m.computedFor(sessionID)
-		data := cs.navDataWith(ev)
-		m.publishEvent(EventLCP, oapi.TelemetryEventCategoryPage, oapi.BrowserEventSource{Kind: oapi.Cdp}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
+		data, _ := json.Marshal(lcpPayload)
+		m.publishEvent(EventLCP, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "PerformanceTimeline.timelineEventAdded", data, sessionID)
 	}
 }
 
@@ -300,35 +352,39 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	m.sessionsMu.RLock()
 	info := m.sessions[sessionID]
 	m.sessionsMu.RUnlock()
-	ev := map[string]any{
-		"session_id":     sessionID,
-		"target_id":      info.targetID,
-		"target_type":    info.targetType,
-		"request_id":     p.RequestID,
-		"loader_id":      p.LoaderID,
-		"frame_id":       p.FrameID,
-		"document_url":   p.DocumentURL,
-		"method":         p.Request.Method,
-		"url":            p.Request.URL,
-		"headers":        p.Request.Headers,
-		"initiator_type": initiatorType,
+	cs := m.computedFor(sessionID)
+	var navSeq int64
+	if cs != nil {
+		navSeq = int64(cs.currentNavSeq())
+	}
+	var hdrs oapi.BrowserHttpHeaders
+	_ = json.Unmarshal(p.Request.Headers, &hdrs)
+	payload := oapi.BrowserNetworkRequestEventData{
+		SessionId:     sessionID,
+		TargetId:      info.targetID,
+		TargetType:    oapi.BrowserNetworkRequestEventDataTargetType(info.targetType),
+		FrameId:       ptrOf(p.FrameID),
+		LoaderId:      ptrOf(p.LoaderID),
+		Url:           ptrOf(p.Request.URL),
+		NavSeq:        navSeq,
+		RequestId:     p.RequestID,
+		Method:        p.Request.Method,
+		DocumentUrl:   p.DocumentURL,
+		Headers:       hdrs,
+		InitiatorType: initiatorType,
 	}
 	if p.Request.PostData != "" {
-		ev["post_data"] = p.Request.PostData
+		payload.PostData = ptrOf(p.Request.PostData)
 	}
 	if p.Type != "" {
-		ev["resource_type"] = p.Type
+		payload.ResourceType = ptrOf(p.Type)
 	}
 	if isRedirect {
-		ev["is_redirect"] = true
-		ev["redirect_url"] = existing.url
+		payload.IsRedirect = ptrOf(true)
+		payload.RedirectUrl = ptrOf(existing.url)
 	}
-	cs := m.computedFor(sessionID)
-	if cs != nil {
-		ev["nav_seq"] = cs.currentNavSeq()
-	}
-	data, _ := json.Marshal(ev)
-	m.publishEvent(EventNetworkRequest, oapi.TelemetryEventCategoryNetwork, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.requestWillBeSent", data, sessionID)
+	data, _ := json.Marshal(payload)
+	m.publishEvent(EventNetworkRequest, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.requestWillBeSent", data, sessionID)
 	if !isRedirect && cs != nil {
 		cs.onRequest()
 	}
@@ -367,33 +423,35 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	m.asyncWg.Go(func() {
 		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
-		ev := map[string]any{
-			"session_id":  sessionID,
-			"target_id":   info.targetID,
-			"target_type": info.targetType,
-			"request_id":  p.RequestID,
-			"loader_id":   state.loaderID,
-			"frame_id":    state.frameID,
-			"method":      state.method,
-			"url":         state.url,
-			"status":      state.status,
-			"headers":     state.resHeaders,
-			"nav_seq":     navSeq,
+		var hdrs oapi.BrowserHttpHeaders
+		_ = json.Unmarshal(state.resHeaders, &hdrs)
+		resPayload := oapi.BrowserNetworkResponseEventData{
+			SessionId:  sessionID,
+			TargetId:   info.targetID,
+			TargetType: oapi.BrowserNetworkResponseEventDataTargetType(info.targetType),
+			FrameId:    ptrOf(state.frameID),
+			LoaderId:   ptrOf(state.loaderID),
+			Url:        ptrOf(state.url),
+			NavSeq:     int64(navSeq),
+			RequestId:  p.RequestID,
+			Method:     state.method,
+			Status:     state.status,
+			Headers:    hdrs,
 		}
 		if state.statusText != "" {
-			ev["status_text"] = state.statusText
+			resPayload.StatusText = ptrOf(state.statusText)
 		}
 		if state.mimeType != "" {
-			ev["mime_type"] = state.mimeType
+			resPayload.MimeType = ptrOf(state.mimeType)
 		}
 		if state.resourceType != "" {
-			ev["resource_type"] = state.resourceType
+			resPayload.ResourceType = ptrOf(state.resourceType)
 		}
 		if body != "" {
-			ev["body"] = body
+			resPayload.Body = ptrOf(body)
 		}
-		data, _ := json.Marshal(ev)
-		m.publishEvent(EventNetworkResponse, oapi.TelemetryEventCategoryNetwork, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.loadingFinished", data, sessionID)
+		data, _ := json.Marshal(resPayload)
+		m.publishEvent(EventNetworkResponse, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.loadingFinished", data, sessionID)
 	})
 }
 
@@ -437,25 +495,29 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 	m.sessionsMu.RLock()
 	info := m.sessions[sessionID]
 	m.sessionsMu.RUnlock()
-	ev := map[string]any{
-		"session_id":  sessionID,
-		"target_id":   info.targetID,
-		"target_type": info.targetType,
-		"request_id":  p.RequestID,
-		"error_text":  p.ErrorText,
-		"canceled":    p.Canceled,
+	var nseq int64
+	if cs := m.computedFor(sessionID); cs != nil {
+		nseq = int64(cs.currentNavSeq())
+	}
+	failPayload := oapi.BrowserNetworkLoadingFailedEventData{
+		SessionId:  sessionID,
+		TargetId:   info.targetID,
+		TargetType: oapi.BrowserNetworkLoadingFailedEventDataTargetType(info.targetType),
+		NavSeq:     nseq,
+		RequestId:  p.RequestID,
+		ErrorText:  p.ErrorText,
+		Canceled:   p.Canceled,
 	}
 	if ok {
-		ev["url"] = state.url
-		ev["loader_id"] = state.loaderID
-		ev["frame_id"] = state.frameID
-		ev["resource_type"] = state.resourceType
+		failPayload.Url = ptrOf(state.url)
+		failPayload.LoaderId = ptrOf(state.loaderID)
+		failPayload.FrameId = ptrOf(state.frameID)
+		if state.resourceType != "" {
+			failPayload.ResourceType = ptrOf(state.resourceType)
+		}
 	}
-	if cs := m.computedFor(sessionID); cs != nil {
-		ev["nav_seq"] = cs.currentNavSeq()
-	}
-	data, _ := json.Marshal(ev)
-	m.publishEvent(EventNetworkLoadingFailed, oapi.TelemetryEventCategoryNetwork, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.loadingFailed", data, sessionID)
+	data, _ := json.Marshal(failPayload)
+	m.publishEvent(EventNetworkLoadingFailed, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.loadingFailed", data, sessionID)
 	if ok {
 		if cs := m.computedFor(state.sessionID); cs != nil {
 			cs.onLoadingFinished()
@@ -471,16 +533,16 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	cs := m.computedStates[sessionID]
 	m.sessionsMu.RUnlock()
 
-	data, _ := json.Marshal(map[string]any{
-		"session_id":      sessionID,
-		"target_id":       info.targetID,
-		"target_type":     info.targetType,
-		"url":             p.Frame.URL,
-		"frame_id":        p.Frame.ID,
-		"parent_frame_id": p.Frame.ParentID,
-		"loader_id":       p.Frame.LoaderID,
+	data, _ := json.Marshal(oapi.BrowserPageNavigationEventData{
+		SessionId:     sessionID,
+		TargetId:      info.targetID,
+		TargetType:    oapi.BrowserPageNavigationEventDataTargetType(info.targetType),
+		Url:           p.Frame.URL,
+		FrameId:       p.Frame.ID,
+		ParentFrameId: ptrOf(p.Frame.ParentID),
+		LoaderId:      p.Frame.LoaderID,
 	})
-	m.publishEvent(EventNavigation, oapi.TelemetryEventCategoryPage, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.frameNavigated", data, sessionID)
+	m.publishEvent(EventNavigation, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.frameNavigated", data, sessionID)
 
 	// Only reset state for top-level navigations; subframe (iframe) navigations
 	// should not disrupt main-page tracking.
@@ -518,8 +580,18 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 
 func (m *Monitor) handleDOMContentLoaded(p cdpPageDomContentEventFiredParams, sessionID string) {
 	cs := m.computedFor(sessionID)
-	data := cs.navDataWith(map[string]any{"cdp_timestamp": p.Timestamp})
-	m.publishEvent(EventDOMContentLoaded, oapi.TelemetryEventCategoryPage, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.domContentEventFired", data, sessionID)
+	sid, tid, ttype, fid, lid, url, nseq := cs.currentNavCtxFields()
+	data, _ := json.Marshal(oapi.BrowserPageDomContentLoadedEventData{
+		SessionId:    sid,
+		TargetId:     tid,
+		TargetType:   oapi.BrowserPageDomContentLoadedEventDataTargetType(ttype),
+		FrameId:      ptrOf(fid),
+		LoaderId:     ptrOf(lid),
+		Url:          ptrOf(url),
+		NavSeq:       nseq,
+		CdpTimestamp: float32(p.Timestamp),
+	})
+	m.publishEvent(EventDOMContentLoaded, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.domContentEventFired", data, sessionID)
 	if cs != nil {
 		cs.onDOMContentLoaded()
 	}
@@ -527,8 +599,18 @@ func (m *Monitor) handleDOMContentLoaded(p cdpPageDomContentEventFiredParams, se
 
 func (m *Monitor) handleLoadEventFired(ctx context.Context, p cdpPageLoadEventFiredParams, sessionID string) {
 	cs := m.computedFor(sessionID)
-	data := cs.navDataWith(map[string]any{"cdp_timestamp": p.Timestamp})
-	m.publishEvent(EventPageLoad, oapi.TelemetryEventCategoryPage, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.loadEventFired", data, sessionID)
+	sid, tid, ttype, fid, lid, url, nseq := cs.currentNavCtxFields()
+	data, _ := json.Marshal(oapi.BrowserPageLoadEventData{
+		SessionId:    sid,
+		TargetId:     tid,
+		TargetType:   oapi.BrowserPageLoadEventDataTargetType(ttype),
+		FrameId:      ptrOf(fid),
+		LoaderId:     ptrOf(lid),
+		Url:          ptrOf(url),
+		NavSeq:       nseq,
+		CdpTimestamp: float32(p.Timestamp),
+	})
+	m.publishEvent(EventPageLoad, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.loadEventFired", data, sessionID)
 	if cs != nil {
 		cs.onPageLoad()
 	}
@@ -553,14 +635,14 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 	m.sessionsMu.Unlock()
 
 	if p.TargetInfo.Type == targetTypePage {
-		data, _ := json.Marshal(map[string]any{
-			"target_id":   p.TargetInfo.TargetID,
-			"target_type": p.TargetInfo.Type,
-			"url":         p.TargetInfo.URL,
-			"opener_id":   p.TargetInfo.OpenerID,
-			"title":       p.TargetInfo.Title,
+		data, _ := json.Marshal(oapi.BrowserPageTabOpenedEventData{
+			TargetId:   p.TargetInfo.TargetID,
+			TargetType: oapi.BrowserPageTabOpenedEventDataTargetType(p.TargetInfo.Type),
+			Url:        p.TargetInfo.URL,
+			OpenerId:   ptrOf(p.TargetInfo.OpenerID),
+			Title:      ptrOf(p.TargetInfo.Title),
 		})
-		m.publishEvent(EventTabOpened, oapi.TelemetryEventCategoryPage, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Target.attachedToTarget", data, p.SessionID)
+		m.publishEvent(EventTabOpened, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Target.attachedToTarget", data, p.SessionID)
 	}
 
 	targetType := p.TargetInfo.Type

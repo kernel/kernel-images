@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func TestConsoleEvents(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "console_log", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryConsole, ev.Category)
+		assert.Equal(t, events.Console, ev.Category)
 		assert.Equal(t, oapi.Cdp, ev.Source.Kind)
 		assert.Equal(t, "Runtime.consoleAPICalled", *ev.Source.Event)
 		var data map[string]any
@@ -50,7 +51,7 @@ func TestConsoleEvents(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "console_error", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryConsole, ev.Category)
+		assert.Equal(t, events.Console, ev.Category)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "Uncaught TypeError", data["text"])
@@ -112,7 +113,7 @@ func TestNetworkEvents(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "network_request", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryNetwork, ev.Category)
+		assert.Equal(t, events.Network, ev.Category)
 		assert.Equal(t, "Network.requestWillBeSent", *ev.Source.Event)
 
 		var data map[string]any
@@ -163,7 +164,7 @@ func TestNetworkEvents(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "network_loading_failed", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryNetwork, ev.Category)
+		assert.Equal(t, events.Network, ev.Category)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "net::ERR_CONNECTION_REFUSED", data["error_text"])
@@ -232,7 +233,7 @@ func TestPageEvents(t *testing.T) {
 		},
 	})
 	ev := ec.waitFor(t, "page_navigation", 2*time.Second)
-	assert.Equal(t, oapi.TelemetryEventCategoryPage, ev.Category)
+	assert.Equal(t, events.Page, ev.Category)
 	assert.Equal(t, "Page.frameNavigated", *ev.Source.Event)
 	var data map[string]any
 	require.NoError(t, json.Unmarshal(ev.Data, &data))
@@ -243,7 +244,7 @@ func TestPageEvents(t *testing.T) {
 		"params": map[string]any{"timestamp": 1000.0},
 	})
 	ev2 := ec.waitFor(t, "page_dom_content_loaded", 2*time.Second)
-	assert.Equal(t, oapi.TelemetryEventCategoryPage, ev2.Category)
+	assert.Equal(t, events.Page, ev2.Category)
 	var data2 map[string]any
 	require.NoError(t, json.Unmarshal(ev2.Data, &data2))
 	assert.Equal(t, float64(1000.0), data2["cdp_timestamp"])
@@ -255,7 +256,7 @@ func TestPageEvents(t *testing.T) {
 		"params": map[string]any{"timestamp": 1001.0},
 	})
 	ev3 := ec.waitFor(t, "page_load", 2*time.Second)
-	assert.Equal(t, oapi.TelemetryEventCategoryPage, ev3.Category)
+	assert.Equal(t, events.Page, ev3.Category)
 	var data3 map[string]any
 	require.NoError(t, json.Unmarshal(ev3.Data, &data3))
 	assert.Equal(t, float64(1001.0), data3["cdp_timestamp"])
@@ -283,7 +284,7 @@ func TestTabOpened(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "page_tab_opened", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryPage, ev.Category)
+		assert.Equal(t, events.Page, ev.Category)
 		assert.Equal(t, "Target.attachedToTarget", *ev.Source.Event)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
@@ -325,7 +326,7 @@ func TestBindingAndTimeline(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "interaction_click", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryInteraction, ev.Category)
+		assert.Equal(t, events.Interaction, ev.Category)
 		assert.Equal(t, "Runtime.bindingCalled", *ev.Source.Event)
 	})
 
@@ -338,7 +339,7 @@ func TestBindingAndTimeline(t *testing.T) {
 			},
 		})
 		ev := ec.waitFor(t, "interaction_scroll_settled", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryInteraction, ev.Category)
+		assert.Equal(t, events.Interaction, ev.Category)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, float64(500), data["to_y"])

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -34,7 +34,7 @@ func TestNetworkIdle(t *testing.T) {
 
 		ev := ec.waitFor(t, "network_idle", 2*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(400), "fired too early")
-		assert.Equal(t, oapi.TelemetryEventCategoryNetwork, ev.Category)
+		assert.Equal(t, events.Network, ev.Category)
 	})
 
 	t.Run("timer_reset_on_new_request", func(t *testing.T) {
@@ -64,7 +64,7 @@ func TestLayoutSettled(t *testing.T) {
 
 		ev := ec.waitFor(t, "page_layout_settled", 3*time.Second)
 		assert.GreaterOrEqual(t, time.Since(t0).Milliseconds(), int64(900), "fired too early")
-		assert.Equal(t, oapi.TelemetryEventCategoryPage, ev.Category)
+		assert.Equal(t, events.Page, ev.Category)
 	})
 
 	t.Run("layout_shift_before_page_load_ignored", func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestNavigationSettled(t *testing.T) {
 		cs.onPageLoad()
 
 		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryPage, ev.Category)
+		assert.Equal(t, events.Page, ev.Category)
 	})
 
 	t.Run("not_blocked_by_pending_network_request", func(t *testing.T) {
@@ -148,7 +148,7 @@ func TestNavDataMetadata(t *testing.T) {
 		cs.onPageLoad()
 
 		ev := ec.waitFor(t, "page_layout_settled", 3*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryPage, ev.Category)
+		assert.Equal(t, events.Page, ev.Category)
 		assert.Equal(t, "s1", (*ev.Source.Metadata)[MetadataKeyCDPSessionID])
 		assert.Equal(t, "t1", (*ev.Source.Metadata)[MetadataKeyTargetID])
 		assert.Equal(t, "page", (*ev.Source.Metadata)[MetadataKeyTargetType])
@@ -167,7 +167,7 @@ func TestNavDataMetadata(t *testing.T) {
 		cs.onPageLoad()
 
 		ev := ec.waitFor(t, "page_navigation_settled", 3*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategoryPage, ev.Category)
+		assert.Equal(t, events.Page, ev.Category)
 		assert.Equal(t, "s1", (*ev.Source.Metadata)[MetadataKeyCDPSessionID])
 		assert.Equal(t, "t1", (*ev.Source.Metadata)[MetadataKeyTargetID])
 		var data map[string]any

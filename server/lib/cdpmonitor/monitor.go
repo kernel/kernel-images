@@ -384,19 +384,22 @@ func (m *Monitor) initSession(ctx context.Context) {
 		return
 	}
 
-	if _, err := m.send(ctx, "Target.setAutoAttach", map[string]any{
+	if _, err := m.send(ctx, cdpMethodSetAutoAttach, map[string]any{
 		"autoAttach":             true,
 		"waitForDebuggerOnStart": false,
 		"flatten":                true,
 	}, ""); err != nil && ctx.Err() == nil {
 		// Without auto-attach the monitor will never see new targets: treat as fatal.
 		m.log.Error("cdpmonitor: Target.setAutoAttach failed — monitor will not observe new targets", "err", err)
+		initFailedData, _ := json.Marshal(oapi.BrowserMonitorInitFailedEventData{
+			Step: cdpMethodSetAutoAttach,
+		})
 		m.publish(events.Event{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventMonitorInitFailed,
-			Category: oapi.TelemetryEventCategorySystem,
+			Category: events.System,
 			Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
-			Data:     json.RawMessage(`{"step":"Target.setAutoAttach"}`),
+			Data:     initFailedData,
 		})
 		return
 	}
@@ -489,12 +492,15 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	if ctx.Err() != nil {
 		return
 	}
+	disconnectedData, _ := json.Marshal(oapi.BrowserMonitorDisconnectedEventData{
+		Reason: oapi.ChromeRestarted,
+	})
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorDisconnected,
-		Category: oapi.TelemetryEventCategorySystem,
+		Category: events.System,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
-		Data:     json.RawMessage(`{"reason":"` + ReasonChromeRestarted + `"}`),
+		Data:     disconnectedData,
 	})
 
 	startReconnect := time.Now()
@@ -520,12 +526,15 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 			m.lifeMu.Unlock()
 			m.clearState()
 			m.running.Store(false)
+			reconnectFailedData, _ := json.Marshal(oapi.BrowserMonitorReconnectFailedEventData{
+				Reason: oapi.ReconnectExhausted,
+			})
 			m.publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
 				Type:     EventMonitorReconnectFailed,
-				Category: oapi.TelemetryEventCategorySystem,
+				Category: events.System,
 				Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
-				Data:     json.RawMessage(`{"reason":"` + ReasonReconnectExhausted + `"}`),
+				Data:     reconnectFailedData,
 			})
 		}
 		return
@@ -542,12 +551,15 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	reconnectDurationMs := time.Since(startReconnect).Milliseconds()
 	m.log.Info("cdpmonitor: reconnected", "url", newURL, "duration_ms", reconnectDurationMs)
 
+	reconnectedData, _ := json.Marshal(oapi.BrowserMonitorReconnectedEventData{
+		ReconnectDurationMs: reconnectDurationMs,
+	})
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorReconnected,
-		Category: oapi.TelemetryEventCategorySystem,
+		Category: events.System,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
-		Data:     json.RawMessage(fmt.Sprintf(`{"reconnect_duration_ms":%d}`, reconnectDurationMs)),
+		Data:     reconnectedData,
 	})
 }
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -87,7 +88,7 @@ func TestScreenshot(t *testing.T) {
 		require.Eventually(t, func() bool { return captureCount.Load() == 1 }, 2*time.Second, 20*time.Millisecond)
 
 		ev := ec.waitFor(t, "monitor_screenshot", 2*time.Second)
-		assert.Equal(t, oapi.TelemetryEventCategorySystem, ev.Category)
+		assert.Equal(t, events.System, ev.Category)
 		assert.Equal(t, oapi.LocalProcess, ev.Source.Kind)
 		require.NotNil(t, ev.Source.Event)
 		assert.Equal(t, "Page.loadEventFired", *ev.Source.Event)

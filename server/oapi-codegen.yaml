@@ -6,4 +6,7 @@ generate:
   models: true
   embedded-spec: true
   chi-server: true
-output: lib/oapi/oapi.go 
+output: lib/oapi/oapi.go
+output-options:
+  # Emit schemas not reachable from any operation (e.g. documented event taxonomy).
+  skip-prune: true

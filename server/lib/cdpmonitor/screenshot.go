@@ -3,10 +3,8 @@ package cdpmonitor
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"maps"
 	"os/exec"
 	"time"
 
@@ -77,20 +75,14 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent strin
 		}
 	}
 
-	encoded := base64.StdEncoding.EncodeToString(pngBytes)
-	payload := map[string]any{screenshotDataKey: encoded}
-	if navData != nil {
-		var nav map[string]any
-		if json.Unmarshal(navData, &nav) == nil {
-			maps.Copy(payload, nav)
-		}
-	}
-	data, _ := json.Marshal(payload)
+	data, _ := json.Marshal(oapi.BrowserMonitorScreenshotEventData{
+		Png: pngBytes,
+	})
 
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventScreenshot,
-		Category: oapi.TelemetryEventCategorySystem,
+		Category: events.System,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess, Event: &sourceEvent, Metadata: &navMeta},
 		Data:     data,
 	})

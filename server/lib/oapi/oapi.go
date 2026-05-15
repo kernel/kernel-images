@@ -26,6 +26,117 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for BrowserConsoleErrorEventType.
+const (
+	ConsoleError BrowserConsoleErrorEventType = "console_error"
+)
+
+// Valid indicates whether the value is a known member of the BrowserConsoleErrorEventType enum.
+func (e BrowserConsoleErrorEventType) Valid() bool {
+	switch e {
+	case ConsoleError:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserConsoleErrorEventDataTargetType.
+const (
+	BrowserConsoleErrorEventDataTargetTypeBackgroundPage BrowserConsoleErrorEventDataTargetType = "background_page"
+	BrowserConsoleErrorEventDataTargetTypeOther          BrowserConsoleErrorEventDataTargetType = "other"
+	BrowserConsoleErrorEventDataTargetTypePage           BrowserConsoleErrorEventDataTargetType = "page"
+	BrowserConsoleErrorEventDataTargetTypeServiceWorker  BrowserConsoleErrorEventDataTargetType = "service_worker"
+	BrowserConsoleErrorEventDataTargetTypeSharedWorker   BrowserConsoleErrorEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserConsoleErrorEventDataTargetType enum.
+func (e BrowserConsoleErrorEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserConsoleErrorEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserConsoleErrorEventDataTargetTypeOther:
+		return true
+	case BrowserConsoleErrorEventDataTargetTypePage:
+		return true
+	case BrowserConsoleErrorEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserConsoleErrorEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserConsoleLogEventType.
+const (
+	ConsoleLog BrowserConsoleLogEventType = "console_log"
+)
+
+// Valid indicates whether the value is a known member of the BrowserConsoleLogEventType enum.
+func (e BrowserConsoleLogEventType) Valid() bool {
+	switch e {
+	case ConsoleLog:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserConsoleLogEventDataTargetType.
+const (
+	BrowserConsoleLogEventDataTargetTypeBackgroundPage BrowserConsoleLogEventDataTargetType = "background_page"
+	BrowserConsoleLogEventDataTargetTypeOther          BrowserConsoleLogEventDataTargetType = "other"
+	BrowserConsoleLogEventDataTargetTypePage           BrowserConsoleLogEventDataTargetType = "page"
+	BrowserConsoleLogEventDataTargetTypeServiceWorker  BrowserConsoleLogEventDataTargetType = "service_worker"
+	BrowserConsoleLogEventDataTargetTypeSharedWorker   BrowserConsoleLogEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserConsoleLogEventDataTargetType enum.
+func (e BrowserConsoleLogEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserConsoleLogEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserConsoleLogEventDataTargetTypeOther:
+		return true
+	case BrowserConsoleLogEventDataTargetTypePage:
+		return true
+	case BrowserConsoleLogEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserConsoleLogEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserEventContextTargetType.
+const (
+	BrowserEventContextTargetTypeBackgroundPage BrowserEventContextTargetType = "background_page"
+	BrowserEventContextTargetTypeOther          BrowserEventContextTargetType = "other"
+	BrowserEventContextTargetTypePage           BrowserEventContextTargetType = "page"
+	BrowserEventContextTargetTypeServiceWorker  BrowserEventContextTargetType = "service_worker"
+	BrowserEventContextTargetTypeSharedWorker   BrowserEventContextTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserEventContextTargetType enum.
+func (e BrowserEventContextTargetType) Valid() bool {
+	switch e {
+	case BrowserEventContextTargetTypeBackgroundPage:
+		return true
+	case BrowserEventContextTargetTypeOther:
+		return true
+	case BrowserEventContextTargetTypePage:
+		return true
+	case BrowserEventContextTargetTypeServiceWorker:
+		return true
+	case BrowserEventContextTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BrowserEventSourceKind.
 const (
 	Cdp          BrowserEventSourceKind = "cdp"
@@ -44,6 +155,660 @@ func (e BrowserEventSourceKind) Valid() bool {
 	case KernelApi:
 		return true
 	case LocalProcess:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserInteractionClickEventType.
+const (
+	InteractionClick BrowserInteractionClickEventType = "interaction_click"
+)
+
+// Valid indicates whether the value is a known member of the BrowserInteractionClickEventType enum.
+func (e BrowserInteractionClickEventType) Valid() bool {
+	switch e {
+	case InteractionClick:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserInteractionClickEventDataTargetType.
+const (
+	BrowserInteractionClickEventDataTargetTypeBackgroundPage BrowserInteractionClickEventDataTargetType = "background_page"
+	BrowserInteractionClickEventDataTargetTypeOther          BrowserInteractionClickEventDataTargetType = "other"
+	BrowserInteractionClickEventDataTargetTypePage           BrowserInteractionClickEventDataTargetType = "page"
+	BrowserInteractionClickEventDataTargetTypeServiceWorker  BrowserInteractionClickEventDataTargetType = "service_worker"
+	BrowserInteractionClickEventDataTargetTypeSharedWorker   BrowserInteractionClickEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserInteractionClickEventDataTargetType enum.
+func (e BrowserInteractionClickEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserInteractionClickEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserInteractionClickEventDataTargetTypeOther:
+		return true
+	case BrowserInteractionClickEventDataTargetTypePage:
+		return true
+	case BrowserInteractionClickEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserInteractionClickEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserInteractionKeyEventType.
+const (
+	InteractionKey BrowserInteractionKeyEventType = "interaction_key"
+)
+
+// Valid indicates whether the value is a known member of the BrowserInteractionKeyEventType enum.
+func (e BrowserInteractionKeyEventType) Valid() bool {
+	switch e {
+	case InteractionKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserInteractionKeyEventDataTargetType.
+const (
+	BrowserInteractionKeyEventDataTargetTypeBackgroundPage BrowserInteractionKeyEventDataTargetType = "background_page"
+	BrowserInteractionKeyEventDataTargetTypeOther          BrowserInteractionKeyEventDataTargetType = "other"
+	BrowserInteractionKeyEventDataTargetTypePage           BrowserInteractionKeyEventDataTargetType = "page"
+	BrowserInteractionKeyEventDataTargetTypeServiceWorker  BrowserInteractionKeyEventDataTargetType = "service_worker"
+	BrowserInteractionKeyEventDataTargetTypeSharedWorker   BrowserInteractionKeyEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserInteractionKeyEventDataTargetType enum.
+func (e BrowserInteractionKeyEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserInteractionKeyEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserInteractionKeyEventDataTargetTypeOther:
+		return true
+	case BrowserInteractionKeyEventDataTargetTypePage:
+		return true
+	case BrowserInteractionKeyEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserInteractionKeyEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserInteractionScrollSettledEventType.
+const (
+	InteractionScrollSettled BrowserInteractionScrollSettledEventType = "interaction_scroll_settled"
+)
+
+// Valid indicates whether the value is a known member of the BrowserInteractionScrollSettledEventType enum.
+func (e BrowserInteractionScrollSettledEventType) Valid() bool {
+	switch e {
+	case InteractionScrollSettled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserInteractionScrollSettledEventDataTargetType.
+const (
+	BrowserInteractionScrollSettledEventDataTargetTypeBackgroundPage BrowserInteractionScrollSettledEventDataTargetType = "background_page"
+	BrowserInteractionScrollSettledEventDataTargetTypeOther          BrowserInteractionScrollSettledEventDataTargetType = "other"
+	BrowserInteractionScrollSettledEventDataTargetTypePage           BrowserInteractionScrollSettledEventDataTargetType = "page"
+	BrowserInteractionScrollSettledEventDataTargetTypeServiceWorker  BrowserInteractionScrollSettledEventDataTargetType = "service_worker"
+	BrowserInteractionScrollSettledEventDataTargetTypeSharedWorker   BrowserInteractionScrollSettledEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserInteractionScrollSettledEventDataTargetType enum.
+func (e BrowserInteractionScrollSettledEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserInteractionScrollSettledEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserInteractionScrollSettledEventDataTargetTypeOther:
+		return true
+	case BrowserInteractionScrollSettledEventDataTargetTypePage:
+		return true
+	case BrowserInteractionScrollSettledEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserInteractionScrollSettledEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserMonitorDisconnectedEventType.
+const (
+	MonitorDisconnected BrowserMonitorDisconnectedEventType = "monitor_disconnected"
+)
+
+// Valid indicates whether the value is a known member of the BrowserMonitorDisconnectedEventType enum.
+func (e BrowserMonitorDisconnectedEventType) Valid() bool {
+	switch e {
+	case MonitorDisconnected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserMonitorDisconnectedEventDataReason.
+const (
+	ChromeRestarted BrowserMonitorDisconnectedEventDataReason = "chrome_restarted"
+)
+
+// Valid indicates whether the value is a known member of the BrowserMonitorDisconnectedEventDataReason enum.
+func (e BrowserMonitorDisconnectedEventDataReason) Valid() bool {
+	switch e {
+	case ChromeRestarted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserMonitorInitFailedEventType.
+const (
+	MonitorInitFailed BrowserMonitorInitFailedEventType = "monitor_init_failed"
+)
+
+// Valid indicates whether the value is a known member of the BrowserMonitorInitFailedEventType enum.
+func (e BrowserMonitorInitFailedEventType) Valid() bool {
+	switch e {
+	case MonitorInitFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserMonitorReconnectFailedEventType.
+const (
+	MonitorReconnectFailed BrowserMonitorReconnectFailedEventType = "monitor_reconnect_failed"
+)
+
+// Valid indicates whether the value is a known member of the BrowserMonitorReconnectFailedEventType enum.
+func (e BrowserMonitorReconnectFailedEventType) Valid() bool {
+	switch e {
+	case MonitorReconnectFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserMonitorReconnectFailedEventDataReason.
+const (
+	ReconnectExhausted BrowserMonitorReconnectFailedEventDataReason = "reconnect_exhausted"
+)
+
+// Valid indicates whether the value is a known member of the BrowserMonitorReconnectFailedEventDataReason enum.
+func (e BrowserMonitorReconnectFailedEventDataReason) Valid() bool {
+	switch e {
+	case ReconnectExhausted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserMonitorReconnectedEventType.
+const (
+	MonitorReconnected BrowserMonitorReconnectedEventType = "monitor_reconnected"
+)
+
+// Valid indicates whether the value is a known member of the BrowserMonitorReconnectedEventType enum.
+func (e BrowserMonitorReconnectedEventType) Valid() bool {
+	switch e {
+	case MonitorReconnected:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserMonitorScreenshotEventType.
+const (
+	MonitorScreenshot BrowserMonitorScreenshotEventType = "monitor_screenshot"
+)
+
+// Valid indicates whether the value is a known member of the BrowserMonitorScreenshotEventType enum.
+func (e BrowserMonitorScreenshotEventType) Valid() bool {
+	switch e {
+	case MonitorScreenshot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserNetworkIdleEventType.
+const (
+	NetworkIdle BrowserNetworkIdleEventType = "network_idle"
+)
+
+// Valid indicates whether the value is a known member of the BrowserNetworkIdleEventType enum.
+func (e BrowserNetworkIdleEventType) Valid() bool {
+	switch e {
+	case NetworkIdle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserNetworkLoadingFailedEventType.
+const (
+	NetworkLoadingFailed BrowserNetworkLoadingFailedEventType = "network_loading_failed"
+)
+
+// Valid indicates whether the value is a known member of the BrowserNetworkLoadingFailedEventType enum.
+func (e BrowserNetworkLoadingFailedEventType) Valid() bool {
+	switch e {
+	case NetworkLoadingFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserNetworkLoadingFailedEventDataTargetType.
+const (
+	BrowserNetworkLoadingFailedEventDataTargetTypeBackgroundPage BrowserNetworkLoadingFailedEventDataTargetType = "background_page"
+	BrowserNetworkLoadingFailedEventDataTargetTypeOther          BrowserNetworkLoadingFailedEventDataTargetType = "other"
+	BrowserNetworkLoadingFailedEventDataTargetTypePage           BrowserNetworkLoadingFailedEventDataTargetType = "page"
+	BrowserNetworkLoadingFailedEventDataTargetTypeServiceWorker  BrowserNetworkLoadingFailedEventDataTargetType = "service_worker"
+	BrowserNetworkLoadingFailedEventDataTargetTypeSharedWorker   BrowserNetworkLoadingFailedEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserNetworkLoadingFailedEventDataTargetType enum.
+func (e BrowserNetworkLoadingFailedEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserNetworkLoadingFailedEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserNetworkLoadingFailedEventDataTargetTypeOther:
+		return true
+	case BrowserNetworkLoadingFailedEventDataTargetTypePage:
+		return true
+	case BrowserNetworkLoadingFailedEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserNetworkLoadingFailedEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserNetworkRequestEventType.
+const (
+	NetworkRequest BrowserNetworkRequestEventType = "network_request"
+)
+
+// Valid indicates whether the value is a known member of the BrowserNetworkRequestEventType enum.
+func (e BrowserNetworkRequestEventType) Valid() bool {
+	switch e {
+	case NetworkRequest:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserNetworkRequestEventDataTargetType.
+const (
+	BrowserNetworkRequestEventDataTargetTypeBackgroundPage BrowserNetworkRequestEventDataTargetType = "background_page"
+	BrowserNetworkRequestEventDataTargetTypeOther          BrowserNetworkRequestEventDataTargetType = "other"
+	BrowserNetworkRequestEventDataTargetTypePage           BrowserNetworkRequestEventDataTargetType = "page"
+	BrowserNetworkRequestEventDataTargetTypeServiceWorker  BrowserNetworkRequestEventDataTargetType = "service_worker"
+	BrowserNetworkRequestEventDataTargetTypeSharedWorker   BrowserNetworkRequestEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserNetworkRequestEventDataTargetType enum.
+func (e BrowserNetworkRequestEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserNetworkRequestEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserNetworkRequestEventDataTargetTypeOther:
+		return true
+	case BrowserNetworkRequestEventDataTargetTypePage:
+		return true
+	case BrowserNetworkRequestEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserNetworkRequestEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserNetworkResponseEventType.
+const (
+	NetworkResponse BrowserNetworkResponseEventType = "network_response"
+)
+
+// Valid indicates whether the value is a known member of the BrowserNetworkResponseEventType enum.
+func (e BrowserNetworkResponseEventType) Valid() bool {
+	switch e {
+	case NetworkResponse:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserNetworkResponseEventDataTargetType.
+const (
+	BrowserNetworkResponseEventDataTargetTypeBackgroundPage BrowserNetworkResponseEventDataTargetType = "background_page"
+	BrowserNetworkResponseEventDataTargetTypeOther          BrowserNetworkResponseEventDataTargetType = "other"
+	BrowserNetworkResponseEventDataTargetTypePage           BrowserNetworkResponseEventDataTargetType = "page"
+	BrowserNetworkResponseEventDataTargetTypeServiceWorker  BrowserNetworkResponseEventDataTargetType = "service_worker"
+	BrowserNetworkResponseEventDataTargetTypeSharedWorker   BrowserNetworkResponseEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserNetworkResponseEventDataTargetType enum.
+func (e BrowserNetworkResponseEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserNetworkResponseEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserNetworkResponseEventDataTargetTypeOther:
+		return true
+	case BrowserNetworkResponseEventDataTargetTypePage:
+		return true
+	case BrowserNetworkResponseEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserNetworkResponseEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageDomContentLoadedEventType.
+const (
+	PageDomContentLoaded BrowserPageDomContentLoadedEventType = "page_dom_content_loaded"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageDomContentLoadedEventType enum.
+func (e BrowserPageDomContentLoadedEventType) Valid() bool {
+	switch e {
+	case PageDomContentLoaded:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageDomContentLoadedEventDataTargetType.
+const (
+	BrowserPageDomContentLoadedEventDataTargetTypeBackgroundPage BrowserPageDomContentLoadedEventDataTargetType = "background_page"
+	BrowserPageDomContentLoadedEventDataTargetTypeOther          BrowserPageDomContentLoadedEventDataTargetType = "other"
+	BrowserPageDomContentLoadedEventDataTargetTypePage           BrowserPageDomContentLoadedEventDataTargetType = "page"
+	BrowserPageDomContentLoadedEventDataTargetTypeServiceWorker  BrowserPageDomContentLoadedEventDataTargetType = "service_worker"
+	BrowserPageDomContentLoadedEventDataTargetTypeSharedWorker   BrowserPageDomContentLoadedEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageDomContentLoadedEventDataTargetType enum.
+func (e BrowserPageDomContentLoadedEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserPageDomContentLoadedEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserPageDomContentLoadedEventDataTargetTypeOther:
+		return true
+	case BrowserPageDomContentLoadedEventDataTargetTypePage:
+		return true
+	case BrowserPageDomContentLoadedEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserPageDomContentLoadedEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageLayoutSettledEventType.
+const (
+	PageLayoutSettled BrowserPageLayoutSettledEventType = "page_layout_settled"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageLayoutSettledEventType enum.
+func (e BrowserPageLayoutSettledEventType) Valid() bool {
+	switch e {
+	case PageLayoutSettled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageLayoutShiftEventType.
+const (
+	PageLayoutShift BrowserPageLayoutShiftEventType = "page_layout_shift"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageLayoutShiftEventType enum.
+func (e BrowserPageLayoutShiftEventType) Valid() bool {
+	switch e {
+	case PageLayoutShift:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageLayoutShiftEventDataTargetType.
+const (
+	BrowserPageLayoutShiftEventDataTargetTypeBackgroundPage BrowserPageLayoutShiftEventDataTargetType = "background_page"
+	BrowserPageLayoutShiftEventDataTargetTypeOther          BrowserPageLayoutShiftEventDataTargetType = "other"
+	BrowserPageLayoutShiftEventDataTargetTypePage           BrowserPageLayoutShiftEventDataTargetType = "page"
+	BrowserPageLayoutShiftEventDataTargetTypeServiceWorker  BrowserPageLayoutShiftEventDataTargetType = "service_worker"
+	BrowserPageLayoutShiftEventDataTargetTypeSharedWorker   BrowserPageLayoutShiftEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageLayoutShiftEventDataTargetType enum.
+func (e BrowserPageLayoutShiftEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserPageLayoutShiftEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserPageLayoutShiftEventDataTargetTypeOther:
+		return true
+	case BrowserPageLayoutShiftEventDataTargetTypePage:
+		return true
+	case BrowserPageLayoutShiftEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserPageLayoutShiftEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageLcpEventType.
+const (
+	PageLcp BrowserPageLcpEventType = "page_lcp"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageLcpEventType enum.
+func (e BrowserPageLcpEventType) Valid() bool {
+	switch e {
+	case PageLcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageLcpEventDataTargetType.
+const (
+	BrowserPageLcpEventDataTargetTypeBackgroundPage BrowserPageLcpEventDataTargetType = "background_page"
+	BrowserPageLcpEventDataTargetTypeOther          BrowserPageLcpEventDataTargetType = "other"
+	BrowserPageLcpEventDataTargetTypePage           BrowserPageLcpEventDataTargetType = "page"
+	BrowserPageLcpEventDataTargetTypeServiceWorker  BrowserPageLcpEventDataTargetType = "service_worker"
+	BrowserPageLcpEventDataTargetTypeSharedWorker   BrowserPageLcpEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageLcpEventDataTargetType enum.
+func (e BrowserPageLcpEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserPageLcpEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserPageLcpEventDataTargetTypeOther:
+		return true
+	case BrowserPageLcpEventDataTargetTypePage:
+		return true
+	case BrowserPageLcpEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserPageLcpEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageLoadEventType.
+const (
+	PageLoad BrowserPageLoadEventType = "page_load"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageLoadEventType enum.
+func (e BrowserPageLoadEventType) Valid() bool {
+	switch e {
+	case PageLoad:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageLoadEventDataTargetType.
+const (
+	BrowserPageLoadEventDataTargetTypeBackgroundPage BrowserPageLoadEventDataTargetType = "background_page"
+	BrowserPageLoadEventDataTargetTypeOther          BrowserPageLoadEventDataTargetType = "other"
+	BrowserPageLoadEventDataTargetTypePage           BrowserPageLoadEventDataTargetType = "page"
+	BrowserPageLoadEventDataTargetTypeServiceWorker  BrowserPageLoadEventDataTargetType = "service_worker"
+	BrowserPageLoadEventDataTargetTypeSharedWorker   BrowserPageLoadEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageLoadEventDataTargetType enum.
+func (e BrowserPageLoadEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserPageLoadEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserPageLoadEventDataTargetTypeOther:
+		return true
+	case BrowserPageLoadEventDataTargetTypePage:
+		return true
+	case BrowserPageLoadEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserPageLoadEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageNavigationEventType.
+const (
+	PageNavigation BrowserPageNavigationEventType = "page_navigation"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageNavigationEventType enum.
+func (e BrowserPageNavigationEventType) Valid() bool {
+	switch e {
+	case PageNavigation:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageNavigationEventDataTargetType.
+const (
+	BrowserPageNavigationEventDataTargetTypeBackgroundPage BrowserPageNavigationEventDataTargetType = "background_page"
+	BrowserPageNavigationEventDataTargetTypeOther          BrowserPageNavigationEventDataTargetType = "other"
+	BrowserPageNavigationEventDataTargetTypePage           BrowserPageNavigationEventDataTargetType = "page"
+	BrowserPageNavigationEventDataTargetTypeServiceWorker  BrowserPageNavigationEventDataTargetType = "service_worker"
+	BrowserPageNavigationEventDataTargetTypeSharedWorker   BrowserPageNavigationEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageNavigationEventDataTargetType enum.
+func (e BrowserPageNavigationEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserPageNavigationEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserPageNavigationEventDataTargetTypeOther:
+		return true
+	case BrowserPageNavigationEventDataTargetTypePage:
+		return true
+	case BrowserPageNavigationEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserPageNavigationEventDataTargetTypeSharedWorker:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageNavigationSettledEventType.
+const (
+	PageNavigationSettled BrowserPageNavigationSettledEventType = "page_navigation_settled"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageNavigationSettledEventType enum.
+func (e BrowserPageNavigationSettledEventType) Valid() bool {
+	switch e {
+	case PageNavigationSettled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageTabOpenedEventType.
+const (
+	PageTabOpened BrowserPageTabOpenedEventType = "page_tab_opened"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageTabOpenedEventType enum.
+func (e BrowserPageTabOpenedEventType) Valid() bool {
+	switch e {
+	case PageTabOpened:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserPageTabOpenedEventDataTargetType.
+const (
+	BrowserPageTabOpenedEventDataTargetTypeBackgroundPage BrowserPageTabOpenedEventDataTargetType = "background_page"
+	BrowserPageTabOpenedEventDataTargetTypeOther          BrowserPageTabOpenedEventDataTargetType = "other"
+	BrowserPageTabOpenedEventDataTargetTypePage           BrowserPageTabOpenedEventDataTargetType = "page"
+	BrowserPageTabOpenedEventDataTargetTypeServiceWorker  BrowserPageTabOpenedEventDataTargetType = "service_worker"
+	BrowserPageTabOpenedEventDataTargetTypeSharedWorker   BrowserPageTabOpenedEventDataTargetType = "shared_worker"
+)
+
+// Valid indicates whether the value is a known member of the BrowserPageTabOpenedEventDataTargetType enum.
+func (e BrowserPageTabOpenedEventDataTargetType) Valid() bool {
+	switch e {
+	case BrowserPageTabOpenedEventDataTargetTypeBackgroundPage:
+		return true
+	case BrowserPageTabOpenedEventDataTargetTypeOther:
+		return true
+	case BrowserPageTabOpenedEventDataTargetTypePage:
+		return true
+	case BrowserPageTabOpenedEventDataTargetTypeServiceWorker:
+		return true
+	case BrowserPageTabOpenedEventDataTargetTypeSharedWorker:
 		return true
 	default:
 		return false
@@ -307,25 +1072,25 @@ func (e PublishEventRequestCategory) Valid() bool {
 
 // Defines values for TelemetryEventCategory.
 const (
-	TelemetryEventCategoryConsole     TelemetryEventCategory = "console"
-	TelemetryEventCategoryInteraction TelemetryEventCategory = "interaction"
-	TelemetryEventCategoryNetwork     TelemetryEventCategory = "network"
-	TelemetryEventCategoryPage        TelemetryEventCategory = "page"
-	TelemetryEventCategorySystem      TelemetryEventCategory = "system"
+	Console     TelemetryEventCategory = "console"
+	Interaction TelemetryEventCategory = "interaction"
+	Network     TelemetryEventCategory = "network"
+	Page        TelemetryEventCategory = "page"
+	System      TelemetryEventCategory = "system"
 )
 
 // Valid indicates whether the value is a known member of the TelemetryEventCategory enum.
 func (e TelemetryEventCategory) Valid() bool {
 	switch e {
-	case TelemetryEventCategoryConsole:
+	case Console:
 		return true
-	case TelemetryEventCategoryInteraction:
+	case Interaction:
 		return true
-	case TelemetryEventCategoryNetwork:
+	case Network:
 		return true
-	case TelemetryEventCategoryPage:
+	case Page:
 		return true
-	case TelemetryEventCategorySystem:
+	case System:
 		return true
 	default:
 		return false
@@ -425,6 +1190,156 @@ type BrowserCallStack struct {
 	Parent *BrowserCallStack `json:"parent,omitempty"`
 }
 
+// BrowserConsoleErrorEvent A browser console error or uncaught JavaScript exception event. Emitted from two distinct CDP sources with different data shapes. Runtime.consoleAPICalled (console.error calls) produces level, text, args, and stack_trace. Runtime.exceptionThrown (uncaught exceptions) produces text, line, column, source_url, and stack_trace. Fields not applicable to the source are absent.
+type BrowserConsoleErrorEvent struct {
+	Data *BrowserConsoleErrorEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                        `json:"ts"`
+	Type BrowserConsoleErrorEventType `json:"type"`
+}
+
+// BrowserConsoleErrorEventType defines model for BrowserConsoleErrorEvent.Type.
+type BrowserConsoleErrorEventType string
+
+// BrowserConsoleErrorEventData defines model for BrowserConsoleErrorEventData.
+type BrowserConsoleErrorEventData struct {
+	// Args All console arguments coerced to strings. Present only when sourced from Runtime.consoleAPICalled.
+	Args *[]string `json:"args,omitempty"`
+
+	// Column Column number in the script where the exception was thrown. Present only when sourced from Runtime.exceptionThrown.
+	Column *int `json:"column,omitempty"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// Level CDP console type value, always "error". Present only when sourced from Runtime.consoleAPICalled.
+	Level *string `json:"level,omitempty"`
+
+	// Line Line number in the script where the exception was thrown. Present only when sourced from Runtime.exceptionThrown.
+	Line *int `json:"line,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// SourceUrl URL of the script file that threw the exception. Present only when sourced from Runtime.exceptionThrown.
+	SourceUrl *string `json:"source_url,omitempty"`
+
+	// StackTrace CDP Runtime.StackTrace representing the JavaScript call stack at the time of an event. Fields use CDP naming conventions rather than snake_case to match the Chrome DevTools Protocol wire format.
+	StackTrace *BrowserCallStack `json:"stack_trace,omitempty"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserConsoleErrorEventDataTargetType `json:"target_type"`
+
+	// Text Error message text. Present in both source paths.
+	Text string `json:"text"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserConsoleErrorEventDataTargetType CDP target type of the page that produced the event.
+type BrowserConsoleErrorEventDataTargetType string
+
+// BrowserConsoleLogEvent A browser console log event (console.log, console.info, console.warn, etc.).
+type BrowserConsoleLogEvent struct {
+	Data *BrowserConsoleLogEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                      `json:"ts"`
+	Type BrowserConsoleLogEventType `json:"type"`
+}
+
+// BrowserConsoleLogEventType defines model for BrowserConsoleLogEvent.Type.
+type BrowserConsoleLogEventType string
+
+// BrowserConsoleLogEventData defines model for BrowserConsoleLogEventData.
+type BrowserConsoleLogEventData struct {
+	// Args All console arguments coerced to strings.
+	Args *[]string `json:"args,omitempty"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// Level CDP Runtime.consoleAPICalled type, passed through unfiltered from Chrome. `error` is routed to console_error events instead; all other CDP console types appear here. See CDP spec for the full enum.
+	Level string `json:"level"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// StackTrace CDP Runtime.StackTrace representing the JavaScript call stack at the time of an event. Fields use CDP naming conventions rather than snake_case to match the Chrome DevTools Protocol wire format.
+	StackTrace *BrowserCallStack `json:"stack_trace,omitempty"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserConsoleLogEventDataTargetType `json:"target_type"`
+
+	// Text First console argument coerced to string.
+	Text string `json:"text"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserConsoleLogEventDataTargetType CDP target type of the page that produced the event.
+type BrowserConsoleLogEventDataTargetType string
+
+// BrowserEventContext Browser event context stamped by the browser monitor onto all CDP-sourced events. Identifies the target, frame, and navigation epoch in which the event occurred.
+type BrowserEventContext struct {
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserEventContextTargetType `json:"target_type"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserEventContextTargetType CDP target type of the page that produced the event.
+type BrowserEventContextTargetType string
+
 // BrowserEventSource Provenance metadata identifying which producer emitted the event.
 type BrowserEventSource struct {
 	// Event Producer-specific event name (e.g. `Runtime.consoleAPICalled` for CDP-sourced console events).
@@ -439,6 +1354,879 @@ type BrowserEventSource struct {
 
 // BrowserEventSourceKind Event producer. `cdp`: Chrome DevTools Protocol events from the browser. `kernel_api`: Kernel API server (reserved for server-generated events). `extension`: injected Chrome extension. `local_process`: system process running alongside the browser.
 type BrowserEventSourceKind string
+
+// BrowserHttpHeaders HTTP headers map forwarded as-is from CDP without normalization. Values are typically strings but may be any JSON type.
+type BrowserHttpHeaders map[string]interface{}
+
+// BrowserInteractionClickEvent A browser user click event captured via injected page script.
+type BrowserInteractionClickEvent struct {
+	Data *BrowserInteractionClickEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                            `json:"ts"`
+	Type BrowserInteractionClickEventType `json:"type"`
+}
+
+// BrowserInteractionClickEventType defines model for BrowserInteractionClickEvent.Type.
+type BrowserInteractionClickEventType string
+
+// BrowserInteractionClickEventData defines model for BrowserInteractionClickEventData.
+type BrowserInteractionClickEventData struct {
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// Selector CSS selector path to the clicked element.
+	Selector string `json:"selector"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// Tag HTML tag name of the clicked element in uppercase (e.g. BUTTON, A, DIV).
+	Tag string `json:"tag"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserInteractionClickEventDataTargetType `json:"target_type"`
+
+	// Text Visible text content of the clicked element, trimmed.
+	Text *string `json:"text,omitempty"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+
+	// X Viewport x-coordinate of the click in CSS pixels.
+	X int `json:"x"`
+
+	// Y Viewport y-coordinate of the click in CSS pixels.
+	Y int `json:"y"`
+}
+
+// BrowserInteractionClickEventDataTargetType CDP target type of the page that produced the event.
+type BrowserInteractionClickEventDataTargetType string
+
+// BrowserInteractionKeyEvent A browser keyboard event captured via injected page script.
+type BrowserInteractionKeyEvent struct {
+	Data *BrowserInteractionKeyEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                          `json:"ts"`
+	Type BrowserInteractionKeyEventType `json:"type"`
+}
+
+// BrowserInteractionKeyEventType defines model for BrowserInteractionKeyEvent.Type.
+type BrowserInteractionKeyEventType string
+
+// BrowserInteractionKeyEventData defines model for BrowserInteractionKeyEventData.
+type BrowserInteractionKeyEventData struct {
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// Key Key value from the KeyboardEvent (e.g. Enter, Backspace, a).
+	Key string `json:"key"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// Selector CSS selector path to the element that had focus when the key was pressed.
+	Selector string `json:"selector"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// Tag HTML tag name of the focused element in uppercase (e.g. INPUT, TEXTAREA, DIV).
+	Tag string `json:"tag"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserInteractionKeyEventDataTargetType `json:"target_type"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserInteractionKeyEventDataTargetType CDP target type of the page that produced the event.
+type BrowserInteractionKeyEventDataTargetType string
+
+// BrowserInteractionScrollSettledEvent A browser scroll settled event emitted after scroll position stops changing, captured via injected page script.
+type BrowserInteractionScrollSettledEvent struct {
+	Data *BrowserInteractionScrollSettledEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                                    `json:"ts"`
+	Type BrowserInteractionScrollSettledEventType `json:"type"`
+}
+
+// BrowserInteractionScrollSettledEventType defines model for BrowserInteractionScrollSettledEvent.Type.
+type BrowserInteractionScrollSettledEventType string
+
+// BrowserInteractionScrollSettledEventData defines model for BrowserInteractionScrollSettledEventData.
+type BrowserInteractionScrollSettledEventData struct {
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// FromX Scroll x-position at the start of the scroll gesture in CSS pixels.
+	FromX int `json:"from_x"`
+
+	// FromY Scroll y-position at the start of the scroll gesture in CSS pixels.
+	FromY int `json:"from_y"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetSelector CSS selector path to the scrolled element.
+	TargetSelector string `json:"target_selector"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserInteractionScrollSettledEventDataTargetType `json:"target_type"`
+
+	// ToX Final scroll x-position after the gesture settled in CSS pixels.
+	ToX int `json:"to_x"`
+
+	// ToY Final scroll y-position after the gesture settled in CSS pixels.
+	ToY int `json:"to_y"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserInteractionScrollSettledEventDataTargetType CDP target type of the page that produced the event.
+type BrowserInteractionScrollSettledEventDataTargetType string
+
+// BrowserMonitorDisconnectedEvent The CDP connection to Chrome was lost. Telemetry events may be dropped until monitor_reconnected arrives. Treat any in-progress computed state (network_idle, page_layout_settled) as unreliable until then.
+type BrowserMonitorDisconnectedEvent struct {
+	Data *BrowserMonitorDisconnectedEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                               `json:"ts"`
+	Type BrowserMonitorDisconnectedEventType `json:"type"`
+}
+
+// BrowserMonitorDisconnectedEventType defines model for BrowserMonitorDisconnectedEvent.Type.
+type BrowserMonitorDisconnectedEventType string
+
+// BrowserMonitorDisconnectedEventData defines model for BrowserMonitorDisconnectedEventData.
+type BrowserMonitorDisconnectedEventData struct {
+	// Reason Reason for the disconnection. chrome_restarted: Chrome process restarted.
+	Reason BrowserMonitorDisconnectedEventDataReason `json:"reason"`
+}
+
+// BrowserMonitorDisconnectedEventDataReason Reason for the disconnection. chrome_restarted: Chrome process restarted.
+type BrowserMonitorDisconnectedEventDataReason string
+
+// BrowserMonitorInitFailedEvent The CDP session could not be initialized.
+type BrowserMonitorInitFailedEvent struct {
+	Data *BrowserMonitorInitFailedEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                             `json:"ts"`
+	Type BrowserMonitorInitFailedEventType `json:"type"`
+}
+
+// BrowserMonitorInitFailedEventType defines model for BrowserMonitorInitFailedEvent.Type.
+type BrowserMonitorInitFailedEventType string
+
+// BrowserMonitorInitFailedEventData defines model for BrowserMonitorInitFailedEventData.
+type BrowserMonitorInitFailedEventData struct {
+	// Step The CDP method or initialization step that failed (e.g. Target.setAutoAttach).
+	Step string `json:"step"`
+}
+
+// BrowserMonitorReconnectFailedEvent The CDP connection to Chrome could not be re-established after exhausting all reconnection attempts. No further telemetry events will arrive on this session.
+type BrowserMonitorReconnectFailedEvent struct {
+	Data *BrowserMonitorReconnectFailedEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                                  `json:"ts"`
+	Type BrowserMonitorReconnectFailedEventType `json:"type"`
+}
+
+// BrowserMonitorReconnectFailedEventType defines model for BrowserMonitorReconnectFailedEvent.Type.
+type BrowserMonitorReconnectFailedEventType string
+
+// BrowserMonitorReconnectFailedEventData defines model for BrowserMonitorReconnectFailedEventData.
+type BrowserMonitorReconnectFailedEventData struct {
+	// Reason Reason for the reconnection failure. reconnect_exhausted: all retry attempts were used up without successfully restoring the CDP connection.
+	Reason BrowserMonitorReconnectFailedEventDataReason `json:"reason"`
+}
+
+// BrowserMonitorReconnectFailedEventDataReason Reason for the reconnection failure. reconnect_exhausted: all retry attempts were used up without successfully restoring the CDP connection.
+type BrowserMonitorReconnectFailedEventDataReason string
+
+// BrowserMonitorReconnectedEvent The CDP connection to Chrome was successfully re-established after a disconnection. Events emitted during the gap are lost. Computed state is reset, so navigation and network tracking restart fresh from this point.
+type BrowserMonitorReconnectedEvent struct {
+	Data *BrowserMonitorReconnectedEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                              `json:"ts"`
+	Type BrowserMonitorReconnectedEventType `json:"type"`
+}
+
+// BrowserMonitorReconnectedEventType defines model for BrowserMonitorReconnectedEvent.Type.
+type BrowserMonitorReconnectedEventType string
+
+// BrowserMonitorReconnectedEventData defines model for BrowserMonitorReconnectedEventData.
+type BrowserMonitorReconnectedEventData struct {
+	// ReconnectDurationMs Wall-clock time in milliseconds taken to reconnect after the disconnection.
+	ReconnectDurationMs int64 `json:"reconnect_duration_ms"`
+}
+
+// BrowserMonitorScreenshotEvent A periodic screenshot of the browser viewport.
+type BrowserMonitorScreenshotEvent struct {
+	Data *BrowserMonitorScreenshotEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                             `json:"ts"`
+	Type BrowserMonitorScreenshotEventType `json:"type"`
+}
+
+// BrowserMonitorScreenshotEventType defines model for BrowserMonitorScreenshotEvent.Type.
+type BrowserMonitorScreenshotEventType string
+
+// BrowserMonitorScreenshotEventData defines model for BrowserMonitorScreenshotEventData.
+type BrowserMonitorScreenshotEventData struct {
+	// Png Base64-encoded PNG screenshot of the browser viewport.
+	Png []byte `json:"png"`
+}
+
+// BrowserNetworkIdleEvent A browser network idle event emitted after a 500ms quiet period with no in-flight HTTP requests.
+type BrowserNetworkIdleEvent struct {
+	// Data Browser event context stamped by the browser monitor onto all CDP-sourced events. Identifies the target, frame, and navigation epoch in which the event occurred.
+	Data *BrowserEventContext `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                       `json:"ts"`
+	Type BrowserNetworkIdleEventType `json:"type"`
+}
+
+// BrowserNetworkIdleEventType defines model for BrowserNetworkIdleEvent.Type.
+type BrowserNetworkIdleEventType string
+
+// BrowserNetworkLoadingFailedEvent A browser network loading failed event.
+type BrowserNetworkLoadingFailedEvent struct {
+	Data *BrowserNetworkLoadingFailedEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                                `json:"ts"`
+	Type BrowserNetworkLoadingFailedEventType `json:"type"`
+}
+
+// BrowserNetworkLoadingFailedEventType defines model for BrowserNetworkLoadingFailedEvent.Type.
+type BrowserNetworkLoadingFailedEventType string
+
+// BrowserNetworkLoadingFailedEventData defines model for BrowserNetworkLoadingFailedEventData.
+type BrowserNetworkLoadingFailedEventData struct {
+	// Canceled True if the request was canceled by the browser or page script.
+	Canceled bool `json:"canceled"`
+
+	// ErrorText Network error description (e.g. net::ERR_CONNECTION_REFUSED).
+	ErrorText string `json:"error_text"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// RequestId CDP request identifier matching the originating network_request event.
+	RequestId string `json:"request_id"`
+
+	// ResourceType CDP Network.ResourceType for the request, passed through as-is from Chrome. Known values include Document, Fetch, XHR, Script, Stylesheet, Image, Media, Font, TextTrack, EventSource, WebSocket, Manifest, Prefetch, Other, and more.
+	ResourceType *string `json:"resource_type,omitempty"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserNetworkLoadingFailedEventDataTargetType `json:"target_type"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserNetworkLoadingFailedEventDataTargetType CDP target type of the page that produced the event.
+type BrowserNetworkLoadingFailedEventDataTargetType string
+
+// BrowserNetworkRequestEvent A browser network request sent event.
+type BrowserNetworkRequestEvent struct {
+	Data *BrowserNetworkRequestEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                          `json:"ts"`
+	Type BrowserNetworkRequestEventType `json:"type"`
+}
+
+// BrowserNetworkRequestEventType defines model for BrowserNetworkRequestEvent.Type.
+type BrowserNetworkRequestEventType string
+
+// BrowserNetworkRequestEventData defines model for BrowserNetworkRequestEventData.
+type BrowserNetworkRequestEventData struct {
+	// DocumentUrl URL of the document that initiated the request.
+	DocumentUrl string `json:"document_url"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// Headers Request headers.
+	Headers BrowserHttpHeaders `json:"headers"`
+
+	// InitiatorType CDP Initiator.type indicating what caused the request, passed through as-is from Chrome. Known values include script, parser, preload, and other.
+	InitiatorType string `json:"initiator_type"`
+
+	// IsRedirect True if this request is the result of a redirect.
+	IsRedirect *bool `json:"is_redirect,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// Method HTTP method as sent on the wire (e.g. GET, POST).
+	Method string `json:"method"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// PostData Request body for POST/PUT requests, if available.
+	PostData *string `json:"post_data,omitempty"`
+
+	// RedirectUrl Original URL before the redirect, present when is_redirect is true.
+	RedirectUrl *string `json:"redirect_url,omitempty"`
+
+	// RequestId CDP request identifier, unique within the session.
+	RequestId string `json:"request_id"`
+
+	// ResourceType CDP Network.ResourceType for the request, passed through as-is from Chrome. Known values include Document, Fetch, XHR, Script, Stylesheet, Image, Media, Font, TextTrack, EventSource, WebSocket, Manifest, Prefetch, Other, and more.
+	ResourceType *string `json:"resource_type,omitempty"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserNetworkRequestEventDataTargetType `json:"target_type"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserNetworkRequestEventDataTargetType CDP target type of the page that produced the event.
+type BrowserNetworkRequestEventDataTargetType string
+
+// BrowserNetworkResponseEvent A browser network response received event. Fired after the response body is fully received, not when headers arrive.
+type BrowserNetworkResponseEvent struct {
+	Data *BrowserNetworkResponseEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                           `json:"ts"`
+	Type BrowserNetworkResponseEventType `json:"type"`
+}
+
+// BrowserNetworkResponseEventType defines model for BrowserNetworkResponseEvent.Type.
+type BrowserNetworkResponseEventType string
+
+// BrowserNetworkResponseEventData defines model for BrowserNetworkResponseEventData.
+type BrowserNetworkResponseEventData struct {
+	// Body Truncated response body, present only for text MIME types.
+	Body *string `json:"body,omitempty"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// Headers Response headers.
+	Headers BrowserHttpHeaders `json:"headers"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// Method HTTP method of the original request.
+	Method string `json:"method"`
+
+	// MimeType MIME type of the response (e.g. text/html, application/json).
+	MimeType *string `json:"mime_type,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// RequestId CDP request identifier matching the originating network_request event.
+	RequestId string `json:"request_id"`
+
+	// ResourceType CDP Network.ResourceType for the request, passed through as-is from Chrome. Known values include Document, Fetch, XHR, Script, Stylesheet, Image, Media, Font, TextTrack, EventSource, WebSocket, Manifest, Prefetch, Other, and more.
+	ResourceType *string `json:"resource_type,omitempty"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// Status HTTP response status code.
+	Status int `json:"status"`
+
+	// StatusText HTTP response status text (e.g. OK, Not Found).
+	StatusText *string `json:"status_text,omitempty"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserNetworkResponseEventDataTargetType `json:"target_type"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserNetworkResponseEventDataTargetType CDP target type of the page that produced the event.
+type BrowserNetworkResponseEventDataTargetType string
+
+// BrowserPageDomContentLoadedEvent A browser DOMContentLoaded event (CDP Page.domContentEventFired).
+type BrowserPageDomContentLoadedEvent struct {
+	Data *BrowserPageDomContentLoadedEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                                `json:"ts"`
+	Type BrowserPageDomContentLoadedEventType `json:"type"`
+}
+
+// BrowserPageDomContentLoadedEventType defines model for BrowserPageDomContentLoadedEvent.Type.
+type BrowserPageDomContentLoadedEventType string
+
+// BrowserPageDomContentLoadedEventData defines model for BrowserPageDomContentLoadedEventData.
+type BrowserPageDomContentLoadedEventData struct {
+	// CdpTimestamp Chrome monotonic clock value in seconds at which DOMContentLoaded fired, relative to browser process start (not Unix epoch). Use `ts` for wall-clock time.
+	CdpTimestamp float32 `json:"cdp_timestamp"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserPageDomContentLoadedEventDataTargetType `json:"target_type"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserPageDomContentLoadedEventDataTargetType CDP target type of the page that produced the event.
+type BrowserPageDomContentLoadedEventDataTargetType string
+
+// BrowserPageLayoutSettledEvent A browser layout settled event emitted 1 second after page load with no intervening layout shifts, indicating visual stability. Each layout shift resets the 1-second timer.
+type BrowserPageLayoutSettledEvent struct {
+	// Data Browser event context stamped by the browser monitor onto all CDP-sourced events. Identifies the target, frame, and navigation epoch in which the event occurred.
+	Data *BrowserEventContext `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                             `json:"ts"`
+	Type BrowserPageLayoutSettledEventType `json:"type"`
+}
+
+// BrowserPageLayoutSettledEventType defines model for BrowserPageLayoutSettledEvent.Type.
+type BrowserPageLayoutSettledEventType string
+
+// BrowserPageLayoutShiftEvent A browser cumulative layout shift (CLS) event from the Performance Timeline API.
+type BrowserPageLayoutShiftEvent struct {
+	Data *BrowserPageLayoutShiftEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                           `json:"ts"`
+	Type BrowserPageLayoutShiftEventType `json:"type"`
+}
+
+// BrowserPageLayoutShiftEventType defines model for BrowserPageLayoutShiftEvent.Type.
+type BrowserPageLayoutShiftEventType string
+
+// BrowserPageLayoutShiftEventData defines model for BrowserPageLayoutShiftEventData.
+type BrowserPageLayoutShiftEventData struct {
+	// Duration Duration of the layout shift entry in milliseconds (always 0 for layout shifts per spec).
+	Duration float32 `json:"duration"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// LayoutShiftDetails PerformanceLayoutShift attributes from the Performance Timeline entry.
+	LayoutShiftDetails *struct {
+		// HadRecentInput True if the layout shift was preceded by user input within 500ms, excluding it from CLS.
+		HadRecentInput *bool `json:"had_recent_input,omitempty"`
+
+		// Value Layout shift score for this entry (contribution to CLS).
+		Value *float32 `json:"value,omitempty"`
+	} `json:"layout_shift_details,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// SourceFrameId CDP frame identifier of the frame where the layout shift occurred.
+	SourceFrameId string `json:"source_frame_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserPageLayoutShiftEventDataTargetType `json:"target_type"`
+
+	// Time Performance Timeline timestamp of the layout shift in milliseconds.
+	Time float32 `json:"time"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserPageLayoutShiftEventDataTargetType CDP target type of the page that produced the event.
+type BrowserPageLayoutShiftEventDataTargetType string
+
+// BrowserPageLcpEvent A browser Largest Contentful Paint (LCP) event from the Performance Timeline API.
+type BrowserPageLcpEvent struct {
+	Data *BrowserPageLcpEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                   `json:"ts"`
+	Type BrowserPageLcpEventType `json:"type"`
+}
+
+// BrowserPageLcpEventType defines model for BrowserPageLcpEvent.Type.
+type BrowserPageLcpEventType string
+
+// BrowserPageLcpEventData defines model for BrowserPageLcpEventData.
+type BrowserPageLcpEventData struct {
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// LcpDetails LargestContentfulPaint attributes from the Performance Timeline entry.
+	LcpDetails *struct {
+		// ElementId id attribute of the LCP element, if present.
+		ElementId *string `json:"element_id,omitempty"`
+
+		// LoadTime Load time of the LCP element in milliseconds.
+		LoadTime *float32 `json:"load_time,omitempty"`
+
+		// NodeId CDP DOM node identifier of the LCP element.
+		NodeId *int `json:"node_id,omitempty"`
+
+		// RenderTime Render time of the LCP element in milliseconds; 0 for cross-origin images without Timing-Allow-Origin.
+		RenderTime *float32 `json:"render_time,omitempty"`
+
+		// Size Visible area of the LCP element in pixels squared.
+		Size *float32 `json:"size,omitempty"`
+
+		// Url URL of the LCP element for image or video elements.
+		Url *string `json:"url,omitempty"`
+	} `json:"lcp_details,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// SourceFrameId CDP frame identifier of the frame where the LCP element was rendered.
+	SourceFrameId string `json:"source_frame_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserPageLcpEventDataTargetType `json:"target_type"`
+
+	// Time Performance Timeline timestamp of the LCP entry in milliseconds.
+	Time float32 `json:"time"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserPageLcpEventDataTargetType CDP target type of the page that produced the event.
+type BrowserPageLcpEventDataTargetType string
+
+// BrowserPageLoadEvent A browser page load event (CDP Page.loadEventFired).
+type BrowserPageLoadEvent struct {
+	Data *BrowserPageLoadEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                    `json:"ts"`
+	Type BrowserPageLoadEventType `json:"type"`
+}
+
+// BrowserPageLoadEventType defines model for BrowserPageLoadEvent.Type.
+type BrowserPageLoadEventType string
+
+// BrowserPageLoadEventData defines model for BrowserPageLoadEventData.
+type BrowserPageLoadEventData struct {
+	// CdpTimestamp Chrome monotonic clock value in seconds at which the load event fired, relative to browser process start (not Unix epoch). Use `ts` for wall-clock time.
+	CdpTimestamp float32 `json:"cdp_timestamp"`
+
+	// FrameId CDP frame identifier within the target.
+	FrameId *string `json:"frame_id,omitempty"`
+
+	// LoaderId CDP document loader identifier, reset on each navigation.
+	LoaderId *string `json:"loader_id,omitempty"`
+
+	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
+	NavSeq int64 `json:"nav_seq"`
+
+	// SessionId CDP session identifier for the target connection.
+	SessionId string `json:"session_id"`
+
+	// TargetId Browser target identifier (stable across navigations within a tab).
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the page that produced the event.
+	TargetType BrowserPageLoadEventDataTargetType `json:"target_type"`
+
+	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
+	Url *string `json:"url,omitempty"`
+}
+
+// BrowserPageLoadEventDataTargetType CDP target type of the page that produced the event.
+type BrowserPageLoadEventDataTargetType string
+
+// BrowserPageNavigationEvent A browser page navigation started event (CDP Page.frameNavigated). Carries nav context fields inline but not nav_seq, as this event resets the navigation epoch.
+type BrowserPageNavigationEvent struct {
+	Data *BrowserPageNavigationEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                          `json:"ts"`
+	Type BrowserPageNavigationEventType `json:"type"`
+}
+
+// BrowserPageNavigationEventType defines model for BrowserPageNavigationEvent.Type.
+type BrowserPageNavigationEventType string
+
+// BrowserPageNavigationEventData defines model for BrowserPageNavigationEventData.
+type BrowserPageNavigationEventData struct {
+	// FrameId CDP frame identifier of the navigated frame.
+	FrameId string `json:"frame_id"`
+
+	// LoaderId New CDP document loader identifier assigned for this navigation.
+	LoaderId string `json:"loader_id"`
+
+	// ParentFrameId Parent frame identifier for subframe navigations; absent for top-level navigations.
+	ParentFrameId *string `json:"parent_frame_id,omitempty"`
+
+	// SessionId CDP session identifier.
+	SessionId string `json:"session_id"`
+
+	// TargetId Browser target identifier.
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the navigated frame.
+	TargetType BrowserPageNavigationEventDataTargetType `json:"target_type"`
+
+	// Url URL navigated to.
+	Url string `json:"url"`
+}
+
+// BrowserPageNavigationEventDataTargetType CDP target type of the navigated frame.
+type BrowserPageNavigationEventDataTargetType string
+
+// BrowserPageNavigationSettledEvent Emitted when page_dom_content_loaded and page_layout_settled have both fired for the same navigation, indicating the page is loaded and visually stable. Independent of network_idle; a single pending request does not block it.
+type BrowserPageNavigationSettledEvent struct {
+	// Data Browser event context stamped by the browser monitor onto all CDP-sourced events. Identifies the target, frame, and navigation epoch in which the event occurred.
+	Data *BrowserEventContext `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                                 `json:"ts"`
+	Type BrowserPageNavigationSettledEventType `json:"type"`
+}
+
+// BrowserPageNavigationSettledEventType defines model for BrowserPageNavigationSettledEvent.Type.
+type BrowserPageNavigationSettledEventType string
+
+// BrowserPageTabOpenedEvent A new browser tab or target was opened (CDP Target.attachedToTarget for page targets).
+type BrowserPageTabOpenedEvent struct {
+	Data *BrowserPageTabOpenedEventData `json:"data,omitempty"`
+
+	// Source Provenance metadata identifying which producer emitted the event.
+	Source BrowserEventSource `json:"source"`
+
+	// Truncated True if the data field was truncated due to size limits.
+	Truncated *bool `json:"truncated,omitempty"`
+
+	// Ts Event timestamp in Unix microseconds.
+	Ts   int64                         `json:"ts"`
+	Type BrowserPageTabOpenedEventType `json:"type"`
+}
+
+// BrowserPageTabOpenedEventType defines model for BrowserPageTabOpenedEvent.Type.
+type BrowserPageTabOpenedEventType string
+
+// BrowserPageTabOpenedEventData defines model for BrowserPageTabOpenedEventData.
+type BrowserPageTabOpenedEventData struct {
+	// OpenerId Target identifier of the tab that opened this one, if any.
+	OpenerId *string `json:"opener_id,omitempty"`
+
+	// TargetId CDP target identifier for the newly opened tab.
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type of the new tab.
+	TargetType BrowserPageTabOpenedEventDataTargetType `json:"target_type"`
+
+	// Title Initial page title of the new tab.
+	Title *string `json:"title,omitempty"`
+
+	// Url Initial URL of the new tab.
+	Url string `json:"url"`
+}
+
+// BrowserPageTabOpenedEventDataTargetType CDP target type of the new tab.
+type BrowserPageTabOpenedEventDataTargetType string
 
 // BrowserTelemetryCategoriesConfig Per-category telemetry capture settings for browser events.
 type BrowserTelemetryCategoriesConfig struct {
@@ -656,6 +2444,11 @@ type FileSystemEvent struct {
 
 // FileSystemEventType Event type.
 type FileSystemEventType string
+
+// KnownBrowserTelemetryEvent Discriminated union of browser telemetry events emitted by the Kernel image. This is a structural taxonomy: any event on the telemetry stream whose `data` conforms to one of the variants below (selected by `type`) is a `KnownBrowserTelemetryEvent`, regardless of who published it. Caller-published events via POST /telemetry/events are not constrained to this union; see `TelemetryEvent` for the wire shape. Validation of caller payloads against this taxonomy is the consumer's responsibility.
+type KnownBrowserTelemetryEvent struct {
+	union json.RawMessage
+}
 
 // ListFiles Array of file or directory information entries.
 type ListFiles = []FileInfo
@@ -1040,7 +2833,7 @@ type TelemetryEvent struct {
 	// Category Event category.
 	Category *TelemetryEventCategory `json:"category,omitempty"`
 
-	// Data Arbitrary JSON payload. For Kernel-emitted browser events, the payload conforms to the corresponding `Browser*EventData` schema indicated by `type`.
+	// Data Arbitrary JSON payload. For browser events listed in `KnownBrowserTelemetryEvent`, the payload conforms to the corresponding `Browser*EventData` schema.
 	Data interface{} `json:"data,omitempty"`
 
 	// Source Provenance metadata identifying which producer emitted the event.
@@ -1348,6 +3141,695 @@ type PutTelemetryJSONRequestBody = BrowserTelemetryConfig
 
 // PublishTelemetryEventJSONRequestBody defines body for PublishTelemetryEvent for application/json ContentType.
 type PublishTelemetryEventJSONRequestBody = PublishEventRequest
+
+// AsBrowserConsoleLogEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserConsoleLogEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserConsoleLogEvent() (BrowserConsoleLogEvent, error) {
+	var body BrowserConsoleLogEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserConsoleLogEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserConsoleLogEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserConsoleLogEvent(v BrowserConsoleLogEvent) error {
+	v.Type = "console_log"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserConsoleLogEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserConsoleLogEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserConsoleLogEvent(v BrowserConsoleLogEvent) error {
+	v.Type = "console_log"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserConsoleErrorEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserConsoleErrorEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserConsoleErrorEvent() (BrowserConsoleErrorEvent, error) {
+	var body BrowserConsoleErrorEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserConsoleErrorEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserConsoleErrorEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserConsoleErrorEvent(v BrowserConsoleErrorEvent) error {
+	v.Type = "console_error"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserConsoleErrorEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserConsoleErrorEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserConsoleErrorEvent(v BrowserConsoleErrorEvent) error {
+	v.Type = "console_error"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserNetworkRequestEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserNetworkRequestEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserNetworkRequestEvent() (BrowserNetworkRequestEvent, error) {
+	var body BrowserNetworkRequestEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserNetworkRequestEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserNetworkRequestEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserNetworkRequestEvent(v BrowserNetworkRequestEvent) error {
+	v.Type = "network_request"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserNetworkRequestEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserNetworkRequestEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserNetworkRequestEvent(v BrowserNetworkRequestEvent) error {
+	v.Type = "network_request"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserNetworkResponseEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserNetworkResponseEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserNetworkResponseEvent() (BrowserNetworkResponseEvent, error) {
+	var body BrowserNetworkResponseEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserNetworkResponseEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserNetworkResponseEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserNetworkResponseEvent(v BrowserNetworkResponseEvent) error {
+	v.Type = "network_response"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserNetworkResponseEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserNetworkResponseEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserNetworkResponseEvent(v BrowserNetworkResponseEvent) error {
+	v.Type = "network_response"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserNetworkLoadingFailedEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserNetworkLoadingFailedEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserNetworkLoadingFailedEvent() (BrowserNetworkLoadingFailedEvent, error) {
+	var body BrowserNetworkLoadingFailedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserNetworkLoadingFailedEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserNetworkLoadingFailedEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserNetworkLoadingFailedEvent(v BrowserNetworkLoadingFailedEvent) error {
+	v.Type = "network_loading_failed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserNetworkLoadingFailedEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserNetworkLoadingFailedEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserNetworkLoadingFailedEvent(v BrowserNetworkLoadingFailedEvent) error {
+	v.Type = "network_loading_failed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserNetworkIdleEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserNetworkIdleEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserNetworkIdleEvent() (BrowserNetworkIdleEvent, error) {
+	var body BrowserNetworkIdleEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserNetworkIdleEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserNetworkIdleEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserNetworkIdleEvent(v BrowserNetworkIdleEvent) error {
+	v.Type = "network_idle"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserNetworkIdleEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserNetworkIdleEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserNetworkIdleEvent(v BrowserNetworkIdleEvent) error {
+	v.Type = "network_idle"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageNavigationEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageNavigationEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageNavigationEvent() (BrowserPageNavigationEvent, error) {
+	var body BrowserPageNavigationEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageNavigationEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageNavigationEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageNavigationEvent(v BrowserPageNavigationEvent) error {
+	v.Type = "page_navigation"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageNavigationEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageNavigationEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageNavigationEvent(v BrowserPageNavigationEvent) error {
+	v.Type = "page_navigation"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageDomContentLoadedEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageDomContentLoadedEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageDomContentLoadedEvent() (BrowserPageDomContentLoadedEvent, error) {
+	var body BrowserPageDomContentLoadedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageDomContentLoadedEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageDomContentLoadedEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageDomContentLoadedEvent(v BrowserPageDomContentLoadedEvent) error {
+	v.Type = "page_dom_content_loaded"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageDomContentLoadedEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageDomContentLoadedEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageDomContentLoadedEvent(v BrowserPageDomContentLoadedEvent) error {
+	v.Type = "page_dom_content_loaded"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageLoadEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageLoadEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageLoadEvent() (BrowserPageLoadEvent, error) {
+	var body BrowserPageLoadEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageLoadEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageLoadEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageLoadEvent(v BrowserPageLoadEvent) error {
+	v.Type = "page_load"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageLoadEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageLoadEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageLoadEvent(v BrowserPageLoadEvent) error {
+	v.Type = "page_load"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageTabOpenedEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageTabOpenedEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageTabOpenedEvent() (BrowserPageTabOpenedEvent, error) {
+	var body BrowserPageTabOpenedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageTabOpenedEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageTabOpenedEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageTabOpenedEvent(v BrowserPageTabOpenedEvent) error {
+	v.Type = "page_tab_opened"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageTabOpenedEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageTabOpenedEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageTabOpenedEvent(v BrowserPageTabOpenedEvent) error {
+	v.Type = "page_tab_opened"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageLayoutShiftEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageLayoutShiftEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageLayoutShiftEvent() (BrowserPageLayoutShiftEvent, error) {
+	var body BrowserPageLayoutShiftEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageLayoutShiftEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageLayoutShiftEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageLayoutShiftEvent(v BrowserPageLayoutShiftEvent) error {
+	v.Type = "page_layout_shift"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageLayoutShiftEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageLayoutShiftEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageLayoutShiftEvent(v BrowserPageLayoutShiftEvent) error {
+	v.Type = "page_layout_shift"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageLcpEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageLcpEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageLcpEvent() (BrowserPageLcpEvent, error) {
+	var body BrowserPageLcpEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageLcpEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageLcpEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageLcpEvent(v BrowserPageLcpEvent) error {
+	v.Type = "page_lcp"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageLcpEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageLcpEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageLcpEvent(v BrowserPageLcpEvent) error {
+	v.Type = "page_lcp"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageLayoutSettledEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageLayoutSettledEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageLayoutSettledEvent() (BrowserPageLayoutSettledEvent, error) {
+	var body BrowserPageLayoutSettledEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageLayoutSettledEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageLayoutSettledEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageLayoutSettledEvent(v BrowserPageLayoutSettledEvent) error {
+	v.Type = "page_layout_settled"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageLayoutSettledEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageLayoutSettledEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageLayoutSettledEvent(v BrowserPageLayoutSettledEvent) error {
+	v.Type = "page_layout_settled"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserPageNavigationSettledEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserPageNavigationSettledEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserPageNavigationSettledEvent() (BrowserPageNavigationSettledEvent, error) {
+	var body BrowserPageNavigationSettledEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserPageNavigationSettledEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserPageNavigationSettledEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserPageNavigationSettledEvent(v BrowserPageNavigationSettledEvent) error {
+	v.Type = "page_navigation_settled"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserPageNavigationSettledEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserPageNavigationSettledEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserPageNavigationSettledEvent(v BrowserPageNavigationSettledEvent) error {
+	v.Type = "page_navigation_settled"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserInteractionClickEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserInteractionClickEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserInteractionClickEvent() (BrowserInteractionClickEvent, error) {
+	var body BrowserInteractionClickEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserInteractionClickEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserInteractionClickEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserInteractionClickEvent(v BrowserInteractionClickEvent) error {
+	v.Type = "interaction_click"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserInteractionClickEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserInteractionClickEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserInteractionClickEvent(v BrowserInteractionClickEvent) error {
+	v.Type = "interaction_click"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserInteractionKeyEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserInteractionKeyEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserInteractionKeyEvent() (BrowserInteractionKeyEvent, error) {
+	var body BrowserInteractionKeyEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserInteractionKeyEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserInteractionKeyEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserInteractionKeyEvent(v BrowserInteractionKeyEvent) error {
+	v.Type = "interaction_key"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserInteractionKeyEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserInteractionKeyEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserInteractionKeyEvent(v BrowserInteractionKeyEvent) error {
+	v.Type = "interaction_key"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserInteractionScrollSettledEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserInteractionScrollSettledEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserInteractionScrollSettledEvent() (BrowserInteractionScrollSettledEvent, error) {
+	var body BrowserInteractionScrollSettledEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserInteractionScrollSettledEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserInteractionScrollSettledEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserInteractionScrollSettledEvent(v BrowserInteractionScrollSettledEvent) error {
+	v.Type = "interaction_scroll_settled"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserInteractionScrollSettledEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserInteractionScrollSettledEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserInteractionScrollSettledEvent(v BrowserInteractionScrollSettledEvent) error {
+	v.Type = "interaction_scroll_settled"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserMonitorScreenshotEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserMonitorScreenshotEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserMonitorScreenshotEvent() (BrowserMonitorScreenshotEvent, error) {
+	var body BrowserMonitorScreenshotEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserMonitorScreenshotEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserMonitorScreenshotEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserMonitorScreenshotEvent(v BrowserMonitorScreenshotEvent) error {
+	v.Type = "monitor_screenshot"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserMonitorScreenshotEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserMonitorScreenshotEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserMonitorScreenshotEvent(v BrowserMonitorScreenshotEvent) error {
+	v.Type = "monitor_screenshot"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserMonitorDisconnectedEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserMonitorDisconnectedEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserMonitorDisconnectedEvent() (BrowserMonitorDisconnectedEvent, error) {
+	var body BrowserMonitorDisconnectedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserMonitorDisconnectedEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserMonitorDisconnectedEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserMonitorDisconnectedEvent(v BrowserMonitorDisconnectedEvent) error {
+	v.Type = "monitor_disconnected"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserMonitorDisconnectedEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserMonitorDisconnectedEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserMonitorDisconnectedEvent(v BrowserMonitorDisconnectedEvent) error {
+	v.Type = "monitor_disconnected"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserMonitorReconnectedEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserMonitorReconnectedEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserMonitorReconnectedEvent() (BrowserMonitorReconnectedEvent, error) {
+	var body BrowserMonitorReconnectedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserMonitorReconnectedEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserMonitorReconnectedEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserMonitorReconnectedEvent(v BrowserMonitorReconnectedEvent) error {
+	v.Type = "monitor_reconnected"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserMonitorReconnectedEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserMonitorReconnectedEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserMonitorReconnectedEvent(v BrowserMonitorReconnectedEvent) error {
+	v.Type = "monitor_reconnected"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserMonitorReconnectFailedEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserMonitorReconnectFailedEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserMonitorReconnectFailedEvent() (BrowserMonitorReconnectFailedEvent, error) {
+	var body BrowserMonitorReconnectFailedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserMonitorReconnectFailedEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserMonitorReconnectFailedEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserMonitorReconnectFailedEvent(v BrowserMonitorReconnectFailedEvent) error {
+	v.Type = "monitor_reconnect_failed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserMonitorReconnectFailedEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserMonitorReconnectFailedEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserMonitorReconnectFailedEvent(v BrowserMonitorReconnectFailedEvent) error {
+	v.Type = "monitor_reconnect_failed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBrowserMonitorInitFailedEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserMonitorInitFailedEvent
+func (t KnownBrowserTelemetryEvent) AsBrowserMonitorInitFailedEvent() (BrowserMonitorInitFailedEvent, error) {
+	var body BrowserMonitorInitFailedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBrowserMonitorInitFailedEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserMonitorInitFailedEvent
+func (t *KnownBrowserTelemetryEvent) FromBrowserMonitorInitFailedEvent(v BrowserMonitorInitFailedEvent) error {
+	v.Type = "monitor_init_failed"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBrowserMonitorInitFailedEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserMonitorInitFailedEvent
+func (t *KnownBrowserTelemetryEvent) MergeBrowserMonitorInitFailedEvent(v BrowserMonitorInitFailedEvent) error {
+	v.Type = "monitor_init_failed"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t KnownBrowserTelemetryEvent) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"type"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t KnownBrowserTelemetryEvent) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "console_error":
+		return t.AsBrowserConsoleErrorEvent()
+	case "console_log":
+		return t.AsBrowserConsoleLogEvent()
+	case "interaction_click":
+		return t.AsBrowserInteractionClickEvent()
+	case "interaction_key":
+		return t.AsBrowserInteractionKeyEvent()
+	case "interaction_scroll_settled":
+		return t.AsBrowserInteractionScrollSettledEvent()
+	case "monitor_disconnected":
+		return t.AsBrowserMonitorDisconnectedEvent()
+	case "monitor_init_failed":
+		return t.AsBrowserMonitorInitFailedEvent()
+	case "monitor_reconnect_failed":
+		return t.AsBrowserMonitorReconnectFailedEvent()
+	case "monitor_reconnected":
+		return t.AsBrowserMonitorReconnectedEvent()
+	case "monitor_screenshot":
+		return t.AsBrowserMonitorScreenshotEvent()
+	case "network_idle":
+		return t.AsBrowserNetworkIdleEvent()
+	case "network_loading_failed":
+		return t.AsBrowserNetworkLoadingFailedEvent()
+	case "network_request":
+		return t.AsBrowserNetworkRequestEvent()
+	case "network_response":
+		return t.AsBrowserNetworkResponseEvent()
+	case "page_dom_content_loaded":
+		return t.AsBrowserPageDomContentLoadedEvent()
+	case "page_layout_settled":
+		return t.AsBrowserPageLayoutSettledEvent()
+	case "page_layout_shift":
+		return t.AsBrowserPageLayoutShiftEvent()
+	case "page_lcp":
+		return t.AsBrowserPageLcpEvent()
+	case "page_load":
+		return t.AsBrowserPageLoadEvent()
+	case "page_navigation":
+		return t.AsBrowserPageNavigationEvent()
+	case "page_navigation_settled":
+		return t.AsBrowserPageNavigationSettledEvent()
+	case "page_tab_opened":
+		return t.AsBrowserPageTabOpenedEvent()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t KnownBrowserTelemetryEvent) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *KnownBrowserTelemetryEvent) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
 
 // RequestEditorFn  is the function signature for the RequestEditor callback function
 type RequestEditorFn func(ctx context.Context, req *http.Request) error
@@ -15007,205 +17489,280 @@ func (sh *strictHandler) StreamTelemetryEvents(w http.ResponseWriter, r *http.Re
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

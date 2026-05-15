@@ -100,6 +100,20 @@ func (s *computedState) navDataWith(extra map[string]any) json.RawMessage {
 	return out
 }
 
+
+// currentNavCtxFields returns the current nav context fields for constructing typed event payloads.
+// Returns zero values if s is nil (before first navigation).
+func (s *computedState) currentNavCtxFields() (sessionID, targetID, targetType, frameID, loaderID, url string, navSeq int64) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	ctx := s.navCtx
+	seq := int64(s.navSeq)
+	s.mu.Unlock()
+	return ctx.sessionID, ctx.targetID, ctx.targetType, ctx.frameID, ctx.loaderID, ctx.url, seq
+}
+
 func stopTimer(t *time.Timer) {
 	if t == nil {
 		return
@@ -211,7 +225,6 @@ func (s *computedState) startNetIdleTimer() {
 	}
 	stopTimer(s.netTimer)
 	navSeq := s.navSeq
-	navData := s.navData
 	navMeta := s.navMeta
 	s.netTimer = time.AfterFunc(networkIdleDebounce, func() {
 		s.mu.Lock()
@@ -220,13 +233,15 @@ func (s *computedState) startNetIdleTimer() {
 			return
 		}
 		s.netFired = true
+		ctx := s.navCtx
+		seq := s.navSeq
 		s.mu.Unlock()
 		s.publish(events.Event{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventNetworkIdle,
-			Category: oapi.TelemetryEventCategoryNetwork,
+			Category: events.Network,
 			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &navMeta},
-			Data:     navData,
+			Data:     marshalNavEventContext(ctx, seq),
 		})
 	})
 }
@@ -270,14 +285,15 @@ func (s *computedState) emitLayoutSettled(navSeq int) {
 	}
 	s.layoutFired = true
 	s.navLayoutSettled = true
-	navData := s.navData
+	ctx := s.navCtx
+	seq := s.navSeq
 	navMeta := s.navMeta
 	evs := []events.Event{{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventLayoutSettled,
-		Category: oapi.TelemetryEventCategoryPage,
+		Category: events.Page,
 		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &navMeta},
-		Data:     navData,
+		Data:     marshalNavEventContext(ctx, seq),
 	}}
 	evs = append(evs, s.pendingNavigationSettled()...)
 	s.mu.Unlock()
@@ -305,12 +321,15 @@ func (s *computedState) pendingNavigationSettled() []events.Event {
 	}
 	if s.navDOMLoaded && s.navLayoutSettled && !s.navFired {
 		s.navFired = true
+		ctx := s.navCtx
+		seq := s.navSeq
+		navMeta := s.navMeta
 		return []events.Event{{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventNavigationSettled,
-			Category: oapi.TelemetryEventCategoryPage,
-			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &s.navMeta},
-			Data:     s.navData,
+			Category: events.Page,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &navMeta},
+			Data:     marshalNavEventContext(ctx, seq),
 		}}
 	}
 	return nil
