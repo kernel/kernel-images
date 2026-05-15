@@ -76,6 +76,8 @@ func TestPutTelemetry(t *testing.T) {
 		r201, ok := resp.(oapi.PutTelemetry201JSONResponse)
 		require.True(t, ok, "expected 201, got %T", resp)
 		require.NotNil(t, r201.Config.Browser)
+		require.NotNil(t, r201.AppliedAt)
+		assert.False(t, r201.AppliedAt.IsZero())
 	})
 
 	t.Run("creates session with config (201)", func(t *testing.T) {
@@ -136,6 +138,7 @@ func TestPutTelemetry(t *testing.T) {
 		assert.False(t, *r200.Config.Browser.Network.Enabled)
 		assert.False(t, *r200.Config.Browser.Page.Enabled)
 		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
+		assert.Nil(t, r200.AppliedAt, "applied_at must be omitted when telemetry is unconfigured")
 	})
 }
 

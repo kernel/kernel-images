@@ -27,7 +27,7 @@ type TelemetrySession struct {
 	id              string
 	sessionStartSeq uint64
 	categories      map[oapi.TelemetryEventCategory]struct{}
-	createdAt       time.Time
+	appliedAt       time.Time
 }
 
 func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
@@ -46,7 +46,7 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	defer s.mu.Unlock()
 	s.id = telemetrySessionID
 	s.sessionStartSeq = s.es.Seq()
-	s.createdAt = time.Now()
+	s.appliedAt = time.Now()
 
 	// Build the category filter. CategorySystem is always included so
 	// kernel_api events (e.g. monitor_disconnected) are never dropped.
@@ -124,11 +124,12 @@ func (s *TelemetrySession) Config() TelemetryConfig {
 	return TelemetryConfig{Categories: cats}
 }
 
-// CreatedAt returns when the current session was started.
-func (s *TelemetrySession) CreatedAt() time.Time {
+// AppliedAt returns when the current configuration was applied, or the zero
+// time if telemetry is not configured.
+func (s *TelemetrySession) AppliedAt() time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.createdAt
+	return s.appliedAt
 }
 
 // UpdateConfig applies a new TelemetryConfig to the running session.
@@ -160,4 +161,5 @@ func (s *TelemetrySession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.id = ""
+	s.appliedAt = time.Time{}
 }

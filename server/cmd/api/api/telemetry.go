@@ -98,10 +98,14 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 
 // buildTelemetryResponse constructs a TelemetryState response from the current configuration.
 func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
-	return oapi.TelemetryState{
+	resp := oapi.TelemetryState{
 		Config: telemetryConfigToOAPI(s.telemetrySession.Config()),
 		Seq:    int64(s.telemetrySession.Seq()),
 	}
+	if appliedAt := s.telemetrySession.AppliedAt(); !appliedAt.IsZero() {
+		resp.AppliedAt = &appliedAt
+	}
+	return resp
 }
 
 // telemetryConfigFromOAPI converts an *oapi.BrowserTelemetryConfig to a telemetry.TelemetryConfig.

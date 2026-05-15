@@ -2437,6 +2437,12 @@ components:
             Process-monotonic sequence number of the last published event.
             Does not reset across configuration changes.
           minimum: 0
+        applied_at:
+          type: string
+          format: date-time
+          description: >-
+            Wall-clock time at which the current configuration was applied.
+            Omitted when telemetry is not configured.
       additionalProperties: false
     StartRecordingRequest:
       type: object

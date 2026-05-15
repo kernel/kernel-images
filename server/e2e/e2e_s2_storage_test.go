@@ -80,7 +80,7 @@ func TestS2StorageWriter(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, stopResp.StatusCode(), "patch telemetry: %s", string(stopResp.Body))
-	t.Log("telemetry session stopped")
+	t.Log("telemetry configuration cleared")
 
 	// Give the storage writer time to flush to S2 (batcher linger + network).
 	time.Sleep(2 * time.Second)
