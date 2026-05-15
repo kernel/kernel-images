@@ -1304,8 +1304,8 @@ paths:
         and only see new events.
         The wire shape is the generic `TelemetryEvent`. For browser events
         emitted by the Kernel image (or by callers using a documented `type`),
-        the event's `data` conforms to one of the variants of
-        `KnownBrowserTelemetryEvent`, selected by `type`.
+        the event's `data` conforms to the matching `Browser*EventData`
+        schema, selected by `type`.
       operationId: streamTelemetryEvents
       parameters:
         - in: header

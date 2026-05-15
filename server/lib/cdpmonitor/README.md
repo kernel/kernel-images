@@ -112,7 +112,7 @@ Every event arrives as an `Envelope`:
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `seq` | uint64 | Monotonically increasing per-telemetry-session sequence number. |
+| `seq` | uint64 | Process-monotonic sequence number; does not reset across telemetry config changes. |
 | `event.ts` | int64 | Wall-clock time the monitor emitted the event, as **Unix microseconds** (µs since epoch). |
 | `event.type` | string | See [Event taxonomy](#event-taxonomy). |
 | `event.category` | string | One of: `console`, `network`, `page`, `interaction`, `system`. |
