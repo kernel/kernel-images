@@ -6,6 +6,7 @@ import (
 	"github.com/nrednav/cuid2"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
 )
@@ -140,16 +141,16 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 
 	cats := make([]oapi.TelemetryEventCategory, 0, 5)
 	if consoleOn {
-		cats = append(cats, oapi.TelemetryEventCategoryConsole)
+		cats = append(cats, events.Console)
 	}
 	if networkOn {
-		cats = append(cats, oapi.TelemetryEventCategoryNetwork)
+		cats = append(cats, events.Network)
 	}
 	if pageOn {
-		cats = append(cats, oapi.TelemetryEventCategoryPage)
+		cats = append(cats, events.Page)
 	}
 	if interactionOn {
-		cats = append(cats, oapi.TelemetryEventCategoryInteraction)
+		cats = append(cats, events.Interaction)
 	}
 	// CategorySystem is always appended by TelemetrySession.Start/UpdateConfig;
 	// no need to include it here.
@@ -162,7 +163,7 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.BrowserTelemetryCategoriesConfig) (telemetry.TelemetryConfig, bool) {
 	active := make(map[oapi.TelemetryEventCategory]struct{}, len(current.Categories))
 	for _, c := range current.Categories {
-		if c != oapi.TelemetryEventCategorySystem { // system is managed internally by TelemetrySession
+		if c != events.System { // system is managed internally by TelemetrySession
 			active[c] = struct{}{}
 		}
 	}
@@ -178,18 +179,18 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		}
 	}
 
-	override(oapi.TelemetryEventCategoryConsole, patch.Console)
-	override(oapi.TelemetryEventCategoryNetwork, patch.Network)
-	override(oapi.TelemetryEventCategoryPage, patch.Page)
-	override(oapi.TelemetryEventCategoryInteraction, patch.Interaction)
+	override(events.Console, patch.Console)
+	override(events.Network, patch.Network)
+	override(events.Page, patch.Page)
+	override(events.Interaction, patch.Interaction)
 
 	// CategorySystem is managed internally by TelemetrySession; exclude from the
 	// user-facing allDisabled check.
 	userCats := []oapi.TelemetryEventCategory{
-		oapi.TelemetryEventCategoryConsole,
-		oapi.TelemetryEventCategoryNetwork,
-		oapi.TelemetryEventCategoryPage,
-		oapi.TelemetryEventCategoryInteraction,
+		events.Console,
+		events.Network,
+		events.Page,
+		events.Interaction,
 	}
 	allDisabled := true
 	for _, c := range userCats {
@@ -239,10 +240,10 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 
 	return oapi.BrowserTelemetryConfig{
 		Browser: &oapi.BrowserTelemetryCategoriesConfig{
-			Console:     enabled(oapi.TelemetryEventCategoryConsole),
-			Network:     enabled(oapi.TelemetryEventCategoryNetwork),
-			Page:        enabled(oapi.TelemetryEventCategoryPage),
-			Interaction: enabled(oapi.TelemetryEventCategoryInteraction),
+			Console:     enabled(events.Console),
+			Network:     enabled(events.Network),
+			Page:        enabled(events.Page),
+			Interaction: enabled(events.Interaction),
 		},
 	}
 }

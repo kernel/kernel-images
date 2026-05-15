@@ -33,7 +33,7 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 		}
 		ev.Category = cat
 	} else {
-		ev.Category = oapi.TelemetryEventCategorySystem
+		ev.Category = events.System
 	}
 
 	if body.Source != nil {

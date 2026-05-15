@@ -58,7 +58,7 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	for _, c := range cats {
 		s.categories[c] = struct{}{}
 	}
-	s.categories[oapi.TelemetryEventCategorySystem] = struct{}{}
+	s.categories[events.System] = struct{}{}
 }
 
 // publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
@@ -144,7 +144,7 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	for _, c := range cats {
 		s.categories[c] = struct{}{}
 	}
-	s.categories[oapi.TelemetryEventCategorySystem] = struct{}{}
+	s.categories[events.System] = struct{}{}
 }
 
 // Active reports whether a telemetry session is currently running.

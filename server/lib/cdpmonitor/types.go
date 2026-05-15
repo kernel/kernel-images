@@ -68,17 +68,14 @@ const (
 	timelineEventLCP         = "largest-contentful-paint"
 )
 
+const cdpMethodSetAutoAttach = "Target.setAutoAttach"
+
 // CDP target type for browser pages (as opposed to workers, iframes, etc.).
 const targetTypePage = "page"
 
 // screenshot event payload key for the base64-encoded PNG data.
 const screenshotDataKey = "png"
 
-// Reason values carried in monitor lifecycle event payloads.
-const (
-	ReasonChromeRestarted    = "chrome_restarted"
-	ReasonReconnectExhausted = "reconnect_exhausted"
-)
 
 // targetInfo holds metadata about an attached CDP target/session.
 type targetInfo struct {

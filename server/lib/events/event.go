@@ -10,14 +10,22 @@ import (
 // maxS2RecordBytes is the maximum record size for the S2 event pipeline (1 MB).
 const maxS2RecordBytes = 1_000_000
 
+const (
+	Console     = oapi.TelemetryEventCategory("console")
+	Network     = oapi.TelemetryEventCategory("network")
+	Page        = oapi.TelemetryEventCategory("page")
+	Interaction = oapi.TelemetryEventCategory("interaction")
+	System      = oapi.TelemetryEventCategory("system")
+)
+
 // AllCategories is the canonical list of all configurable event categories.
-// CategorySystem events are always captured regardless of telemetry config.
+// System events are always captured regardless of telemetry config.
 var AllCategories = []oapi.TelemetryEventCategory{
-	oapi.TelemetryEventCategoryConsole,
-	oapi.TelemetryEventCategoryNetwork,
-	oapi.TelemetryEventCategoryPage,
-	oapi.TelemetryEventCategoryInteraction,
-	oapi.TelemetryEventCategorySystem,
+	Console,
+	Network,
+	Page,
+	Interaction,
+	System,
 }
 
 // Event is the portable event schema. It contains only producer-emitted content;

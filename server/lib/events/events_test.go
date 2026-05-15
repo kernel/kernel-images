@@ -25,7 +25,7 @@ func TestEventSerialization(t *testing.T) {
 	ev := Event{
 		Ts:       1234567890000,
 		Type:     "console.log",
-		Category: oapi.TelemetryEventCategoryConsole,
+		Category: Console,
 		Source: oapi.BrowserEventSource{
 			Kind:  oapi.Cdp,
 			Event: func() *string { s := "Runtime.consoleAPICalled"; return &s }(),
@@ -67,7 +67,7 @@ func TestEnvelopeSerialization(t *testing.T) {
 		Event: Event{
 			Ts:       1000,
 			Type:     "console.log",
-			Category: oapi.TelemetryEventCategoryConsole,
+			Category: Console,
 			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 		},
 	}
@@ -90,7 +90,7 @@ func TestEventData(t *testing.T) {
 	ev := Event{
 		Ts:       1000,
 		Type:     "page.navigation",
-		Category: oapi.TelemetryEventCategoryPage,
+		Category: Page,
 		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 		Data:     rawData,
 	}
@@ -107,7 +107,7 @@ func TestEventOmitEmpty(t *testing.T) {
 	ev := Event{
 		Ts:       1000,
 		Type:     "console.log",
-		Category: oapi.TelemetryEventCategoryConsole,
+		Category: Console,
 		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 	}
 
@@ -139,9 +139,9 @@ func TestRingBuffer(t *testing.T) {
 	reader := rb.newReader(0)
 
 	envelopes := []Envelope{
-		mkEnv(1, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)),
-		mkEnv(2, cdpEvent("network.request", oapi.TelemetryEventCategoryNetwork)),
-		mkEnv(3, cdpEvent("page.navigation", oapi.TelemetryEventCategoryPage)),
+		mkEnv(1, cdpEvent("console.log", Console)),
+		mkEnv(2, cdpEvent("network.request", Network)),
+		mkEnv(3, cdpEvent("page.navigation", Page)),
 	}
 
 	for _, env := range envelopes {
@@ -164,9 +164,9 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		rb.publish(mkEnv(1, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
-		rb.publish(mkEnv(2, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
-		rb.publish(mkEnv(3, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
+		rb.publish(mkEnv(1, cdpEvent("console.log", Console)))
+		rb.publish(mkEnv(2, cdpEvent("console.log", Console)))
+		rb.publish(mkEnv(3, cdpEvent("console.log", Console)))
 		close(done)
 	}()
 
@@ -190,9 +190,9 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 	rb := newTestRingBuffer(t,2)
 	reader := rb.newReader(0)
 
-	rb.publish(mkEnv(1, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
-	rb.publish(mkEnv(2, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
-	rb.publish(mkEnv(3, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
+	rb.publish(mkEnv(1, cdpEvent("console.log", Console)))
+	rb.publish(mkEnv(2, cdpEvent("console.log", Console)))
+	rb.publish(mkEnv(3, cdpEvent("console.log", Console)))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -214,7 +214,7 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 func TestNewReaderResume(t *testing.T) {
 	rb := newTestRingBuffer(t,10)
 	for i := uint64(1); i <= 5; i++ {
-		rb.publish(mkEnv(i, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
+		rb.publish(mkEnv(i, cdpEvent("console.log", Console)))
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -238,7 +238,7 @@ func TestNewReaderResume(t *testing.T) {
 	t.Run("resume_before_oldest_triggers_drop", func(t *testing.T) {
 		small := newTestRingBuffer(t, 3)
 		for i := uint64(1); i <= 5; i++ {
-			small.publish(mkEnv(i, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
+			small.publish(mkEnv(i, cdpEvent("console.log", Console)))
 		}
 		// oldest in ring is seq 3, requesting resume after seq 1
 		reader := small.newReader(1)
@@ -278,7 +278,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for i := 1; i <= numEvents; i++ {
-			rb.publish(mkEnv(uint64(i), cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
+			rb.publish(mkEnv(uint64(i), cdpEvent("console.log", Console)))
 		}
 	}()
 
@@ -297,7 +297,7 @@ func TestConcurrentReaders(t *testing.T) {
 	}
 
 	for i := 0; i < numEvents; i++ {
-		rb.publish(mkEnv(uint64(i+1), cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
+		rb.publish(mkEnv(uint64(i+1), cdpEvent("console.log", Console)))
 	}
 
 	var wg sync.WaitGroup
@@ -336,7 +336,7 @@ func TestRingBufferResetWithActiveReader(t *testing.T) {
 
 	// Publish some events so the reader advances.
 	for i := uint64(1); i <= 5; i++ {
-		rb.publish(mkEnv(i, cdpEvent("console.log", oapi.TelemetryEventCategoryConsole)))
+		rb.publish(mkEnv(i, cdpEvent("console.log", Console)))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -354,7 +354,7 @@ func TestRingBufferResetWithActiveReader(t *testing.T) {
 	assert.ErrorIs(t, err, context.DeadlineExceeded, "reader should block after reset")
 
 	// Publish new events; reader should resume from seq 1.
-	rb.publish(mkEnv(1, cdpEvent("page.navigation", oapi.TelemetryEventCategoryPage)))
+	rb.publish(mkEnv(1, cdpEvent("page.navigation", Page)))
 	env := readEnvelope(t, reader, ctx)
 	assert.Equal(t, uint64(1), env.Seq)
 	assert.Equal(t, "page.navigation", env.Event.Type)
