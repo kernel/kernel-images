@@ -12,20 +12,20 @@ import (
 )
 
 // GetTelemetry handles GET /telemetry.
-// Returns the current telemetry state. Returns 404 if telemetry is not active.
+// Returns the current telemetry configuration. Returns 404 if telemetry is not configured.
 func (s *ApiService) GetTelemetry(_ context.Context, _ oapi.GetTelemetryRequestObject) (oapi.GetTelemetryResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
 	if !s.telemetrySession.Active() {
-		return oapi.GetTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not active"}}, nil
+		return oapi.GetTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not configured"}}, nil
 	}
 	return oapi.GetTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
 
 // PutTelemetry handles PUT /telemetry.
-// Creates (201) or replaces (200) the telemetry session with the given config.
-// Setting all four categories to enabled:false stops an active session (200, status stopped).
+// Sets the telemetry configuration. Returns 201 if not previously configured, 200 if it was.
+// Setting all four categories to enabled:false clears the configuration (200).
 func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequestObject) (oapi.PutTelemetryResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
@@ -39,13 +39,13 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 
 	if allDisabled {
 		if !wasActive {
-			// Already stopped; all-disabled is idempotent.
-			return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped, Config: disabledConfig()}), nil
+			// Already cleared; all-disabled is idempotent.
+			return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 		}
-		// All categories disabled: stop the running session.
+		// All categories disabled: clear the configuration.
 		s.cdpMonitor.Stop()
 		s.telemetrySession.Stop()
-		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped, Config: disabledConfig()}), nil
+		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
 	if wasActive {
@@ -69,14 +69,14 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 }
 
 // PatchTelemetry handles PATCH /telemetry.
-// Updates the configuration of the active telemetry session. Returns 404 if not active.
-// Setting all four categories to enabled:false stops the session (200, status stopped).
+// Partially updates the telemetry configuration. Returns 404 if not configured.
+// Setting all four categories to enabled:false clears the configuration (200).
 func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRequestObject) (oapi.PatchTelemetryResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
 	if !s.telemetrySession.Active() {
-		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not active"}}, nil
+		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not configured"}}, nil
 	}
 
 	if req.Body != nil && req.Body.Browser != nil {
@@ -85,10 +85,10 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 		current := s.telemetrySession.Config()
 		cfg, allDisabled := mergeTelemetryConfig(current, req.Body.Browser)
 		if allDisabled {
-			// All categories disabled: stop the session.
+			// All categories disabled: clear the configuration.
 			s.cdpMonitor.Stop()
 			s.telemetrySession.Stop()
-			return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Status: oapi.TelemetryStateStatusStopped, Config: disabledConfig()}), nil
+			return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 		}
 		s.telemetrySession.UpdateConfig(cfg)
 	}
@@ -96,21 +96,11 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
 
-// buildTelemetryResponse constructs a TelemetryState response from the current session state.
+// buildTelemetryResponse constructs a TelemetryState response from the current configuration.
 func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
-	cfg := s.telemetrySession.Config()
-
-	status := oapi.TelemetryStateStatusStopped
-	if s.cdpMonitor.IsRunning() {
-		status = oapi.TelemetryStateStatusRunning
-	}
-
 	return oapi.TelemetryState{
-		Id:        s.telemetrySession.ID(),
-		Status:    status,
-		Config:    telemetryConfigToOAPI(cfg),
-		Seq:       int64(s.telemetrySession.Seq()),
-		CreatedAt: s.telemetrySession.CreatedAt(),
+		Config: telemetryConfigToOAPI(s.telemetrySession.Config()),
+		Seq:    int64(s.telemetrySession.Seq()),
 	}
 }
 

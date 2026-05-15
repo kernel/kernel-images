@@ -63,8 +63,7 @@ func TestS2StorageWriter(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, startResp.StatusCode(), "put telemetry: %s", string(startResp.Body))
 	require.NotNil(t, startResp.JSON201)
-	sessionID := startResp.JSON201.Id
-	t.Logf("telemetry session started: %s", sessionID)
+	t.Log("telemetry configured")
 
 	// Let the session run briefly so at least one event is published.
 	time.Sleep(500 * time.Millisecond)

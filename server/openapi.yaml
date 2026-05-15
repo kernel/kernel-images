@@ -1215,8 +1215,8 @@ paths:
       description: >
         Sets the telemetry configuration. Returns 201 if telemetry was not
         previously configured; returns 200 if it was. Setting all four categories
-        to enabled: false clears the configuration (returns 200 with
-        status: stopped); this is idempotent when telemetry is not configured.
+        to enabled: false clears the configuration; this is idempotent when
+        telemetry is not configured.
       operationId: putTelemetry
       requestBody:
         required: false
@@ -1247,8 +1247,7 @@ paths:
         Partially updates the telemetry configuration. Only categories explicitly
         set in the request body are changed; omitted categories retain their
         current settings. Returns 404 if telemetry is not configured. Setting
-        all four categories to enabled: false clears the configuration (returns
-        200 with status: stopped).
+        all four categories to enabled: false clears the configuration.
       operationId: patchTelemetry
       requestBody:
         required: true
@@ -2424,23 +2423,11 @@ components:
           monitor_init_failed: "#/components/schemas/BrowserMonitorInitFailedEvent"
     TelemetryState:
       type: object
-      description: Current telemetry configuration and status.
+      description: Current telemetry configuration.
       required:
-        - id
-        - status
         - config
         - seq
-        - created_at
       properties:
-        id:
-          type: string
-          description: Unique identifier for the current telemetry configuration.
-        status:
-          type: string
-          description: Current telemetry status.
-          enum:
-            - running
-            - stopped
         config:
           $ref: "#/components/schemas/BrowserTelemetryConfig"
         seq:
@@ -2450,10 +2437,6 @@ components:
             Process-monotonic sequence number of the last published event.
             Does not reset across configuration changes.
           minimum: 0
-        created_at:
-          type: string
-          format: date-time
-          description: When the current telemetry configuration was applied.
       additionalProperties: false
     StartRecordingRequest:
       type: object

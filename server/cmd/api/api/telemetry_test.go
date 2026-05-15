@@ -75,9 +75,7 @@ func TestPutTelemetry(t *testing.T) {
 		require.NoError(t, err)
 		r201, ok := resp.(oapi.PutTelemetry201JSONResponse)
 		require.True(t, ok, "expected 201, got %T", resp)
-		assert.NotEmpty(t, r201.Id)
-		assert.NotZero(t, r201.CreatedAt)
-		assert.NotEmpty(t, r201.Status)
+		require.NotNil(t, r201.Config.Browser)
 	})
 
 	t.Run("creates session with config (201)", func(t *testing.T) {
@@ -113,7 +111,7 @@ func TestPutTelemetry(t *testing.T) {
 		assert.True(t, ok, "expected 200 on replace, got %T", resp)
 	})
 
-	t.Run("all-false stops active session (200, status stopped)", func(t *testing.T) {
+	t.Run("all-false clears active configuration (200, all-disabled config)", func(t *testing.T) {
 		svc := newTestService(t, newMockRecordManager())
 		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
 		require.NoError(t, err)
@@ -132,7 +130,12 @@ func TestPutTelemetry(t *testing.T) {
 		require.NoError(t, err)
 		r200, ok := resp.(oapi.PutTelemetry200JSONResponse)
 		require.True(t, ok, "expected 200, got %T", resp)
-		assert.Equal(t, oapi.TelemetryStateStatusStopped, r200.Status)
+		require.NotNil(t, r200.Config.Browser)
+		require.NotNil(t, r200.Config.Browser.Console)
+		assert.False(t, *r200.Config.Browser.Console.Enabled)
+		assert.False(t, *r200.Config.Browser.Network.Enabled)
+		assert.False(t, *r200.Config.Browser.Page.Enabled)
+		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
 	})
 }
 
@@ -156,8 +159,7 @@ func TestGetTelemetry(t *testing.T) {
 		require.NoError(t, err)
 		r200, ok := resp.(oapi.GetTelemetry200JSONResponse)
 		require.True(t, ok)
-		assert.Equal(t, started.Id, r200.Id)
-		assert.Equal(t, started.CreatedAt, r200.CreatedAt)
+		assert.Equal(t, started.Config, r200.Config)
 	})
 }
 
@@ -207,10 +209,10 @@ func TestPatchTelemetry(t *testing.T) {
 		require.NoError(t, err)
 		r200, ok := resp.(oapi.PatchTelemetry200JSONResponse)
 		require.True(t, ok)
-		assert.Equal(t, started.Id, r200.Id)
+		assert.Equal(t, started.Config, r200.Config)
 	})
 
-	t.Run("all-false stops session", func(t *testing.T) {
+	t.Run("all-false clears configuration", func(t *testing.T) {
 		svc := newTestService(t, newMockRecordManager())
 		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
 		require.NoError(t, err)
@@ -229,14 +231,18 @@ func TestPatchTelemetry(t *testing.T) {
 		require.NoError(t, err)
 		r200, ok := resp.(oapi.PatchTelemetry200JSONResponse)
 		require.True(t, ok, "expected 200, got %T", resp)
-		assert.Equal(t, oapi.TelemetryStateStatusStopped, r200.Status)
+		require.NotNil(t, r200.Config.Browser)
+		require.NotNil(t, r200.Config.Browser.Console)
+		assert.False(t, *r200.Config.Browser.Console.Enabled)
+		assert.False(t, *r200.Config.Browser.Network.Enabled)
+		assert.False(t, *r200.Config.Browser.Page.Enabled)
+		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
 	})
 
-	t.Run("put succeeds after patch-stop", func(t *testing.T) {
+	t.Run("put returns 201 after patch clears configuration", func(t *testing.T) {
 		svc := newTestService(t, newMockRecordManager())
-		startResp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
 		require.NoError(t, err)
-		firstID := startResp.(oapi.PutTelemetry201JSONResponse).Id
 
 		f := false
 		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
@@ -253,9 +259,8 @@ func TestPatchTelemetry(t *testing.T) {
 
 		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
 		require.NoError(t, err)
-		r201, ok := resp.(oapi.PutTelemetry201JSONResponse)
-		require.True(t, ok)
-		assert.NotEqual(t, firstID, r201.Id)
+		_, ok := resp.(oapi.PutTelemetry201JSONResponse)
+		assert.True(t, ok, "expected 201 after clear, got %T", resp)
 	})
 }
 
