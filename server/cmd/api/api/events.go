@@ -27,13 +27,13 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 
 	ev.Ts = time.Now().UnixMicro()
 	if body.Category != nil {
-		cat := events.EventCategory(*body.Category)
-		if !events.ValidCategory(cat) {
+		cat := oapi.TelemetryEventCategory(*body.Category)
+		if !cat.Valid() {
 			return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid category"}}, nil
 		}
 		ev.Category = cat
 	} else {
-		ev.Category = events.CategorySystem
+		ev.Category = oapi.TelemetryEventCategorySystem
 	}
 
 	if body.Source != nil {

@@ -90,7 +90,7 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent strin
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventScreenshot,
-		Category: events.CategorySystem,
+		Category: oapi.TelemetryEventCategorySystem,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess, Event: &sourceEvent, Metadata: &navMeta},
 		Data:     data,
 	})

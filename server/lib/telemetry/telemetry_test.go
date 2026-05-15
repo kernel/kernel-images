@@ -36,7 +36,7 @@ func readEnvelope(t *testing.T, r *events.Reader, ctx context.Context) events.En
 	return *res.Envelope
 }
 
-func cdpEvent(typ string, cat events.EventCategory) events.Event {
+func cdpEvent(typ string, cat oapi.TelemetryEventCategory) events.Event {
 	return events.Event{Type: typ, Category: cat, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}}
 }
 
@@ -64,7 +64,7 @@ func TestTelemetrySession(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				for j := 0; j < eventsEach; j++ {
-					ts.Publish(cdpEvent("console.log", events.CategoryConsole))
+					ts.Publish(cdpEvent("console.log", oapi.TelemetryEventCategoryConsole))
 				}
 			}()
 		}
@@ -82,11 +82,11 @@ func TestTelemetrySession(t *testing.T) {
 	t.Run("seq_continues_across_sessions", func(t *testing.T) {
 		ts := NewTelemetrySession(newTestEventStream(t, 100))
 		ts.Start("session-1", TelemetryConfig{})
-		ts.Publish(cdpEvent("ev.one", events.CategorySystem))
-		ts.Publish(cdpEvent("ev.two", events.CategorySystem))
+		ts.Publish(cdpEvent("ev.one", oapi.TelemetryEventCategorySystem))
+		ts.Publish(cdpEvent("ev.two", oapi.TelemetryEventCategorySystem))
 
 		ts.Start("session-2", TelemetryConfig{})
-		ts.Publish(cdpEvent("ev.three", events.CategorySystem))
+		ts.Publish(cdpEvent("ev.three", oapi.TelemetryEventCategorySystem))
 
 		assert.Equal(t, uint64(2), ts.SessionStartSeq(), "session-2 starts after seq 2")
 
@@ -105,7 +105,7 @@ func TestTelemetrySession(t *testing.T) {
 		reader := ts.NewReader(0)
 
 		for i := 0; i < 3; i++ {
-			ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
+			ts.Publish(events.Event{Type: "page.navigation", Category: oapi.TelemetryEventCategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -122,7 +122,7 @@ func TestTelemetrySession(t *testing.T) {
 		reader := ts.NewReader(0)
 
 		before := time.Now().UnixMicro()
-		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}})
+		ts.Publish(events.Event{Type: "page.navigation", Category: oapi.TelemetryEventCategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}})
 		after := time.Now().UnixMicro()
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -137,14 +137,14 @@ func TestTelemetrySession(t *testing.T) {
 		ts := newTestTelemetrySession(t)
 
 		reader := ts.NewReader(0)
-		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
+		ts.Publish(events.Event{Type: "page.navigation", Category: oapi.TelemetryEventCategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		env := readEnvelope(t, reader, ctx)
 		assert.Equal(t, "page.navigation", env.Event.Type)
-		assert.Equal(t, events.CategoryPage, env.Event.Category)
+		assert.Equal(t, oapi.TelemetryEventCategoryPage, env.Event.Category)
 	})
 
 	t.Run("start_sets_telemetry_session_id_in_source_metadata", func(t *testing.T) {
@@ -152,7 +152,7 @@ func TestTelemetrySession(t *testing.T) {
 		ts.Start("test-uuid", TelemetryConfig{})
 
 		reader := ts.NewReader(0)
-		ts.Publish(events.Event{Type: "page.navigation", Category: events.CategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
+		ts.Publish(events.Event{Type: "page.navigation", Category: oapi.TelemetryEventCategoryPage, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
@@ -168,7 +168,7 @@ func TestTelemetrySession(t *testing.T) {
 		reader := ts.NewReader(0)
 		ts.Publish(events.Event{
 			Type:     "page.navigation",
-			Category: events.CategoryPage,
+			Category: oapi.TelemetryEventCategoryPage,
 			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 			Ts:       1,
 			Data:     json.RawMessage(`{"url":"https://example.com"}`),
@@ -185,16 +185,16 @@ func TestTelemetrySession(t *testing.T) {
 	t.Run("system_events_always_captured_regardless_of_config", func(t *testing.T) {
 		ts := NewTelemetrySession(newTestEventStream(t, 10))
 		// Start with only console category — system should still pass through.
-		ts.Start("sys-test", TelemetryConfig{Categories: []events.EventCategory{events.CategoryConsole}})
+		ts.Start("sys-test", TelemetryConfig{Categories: []oapi.TelemetryEventCategory{oapi.TelemetryEventCategoryConsole}})
 		reader := ts.NewReader(0)
 
-		ts.Publish(events.Event{Type: "monitor.disconnected", Category: events.CategorySystem, Source: oapi.BrowserEventSource{Kind: oapi.KernelApi}, Ts: 1})
+		ts.Publish(events.Event{Type: "monitor.disconnected", Category: oapi.TelemetryEventCategorySystem, Source: oapi.BrowserEventSource{Kind: oapi.KernelApi}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, events.CategorySystem, env.Event.Category)
+		assert.Equal(t, oapi.TelemetryEventCategorySystem, env.Event.Category)
 	})
 
 	t.Run("truncation_applied", func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestTelemetrySession(t *testing.T) {
 
 		ts.Publish(events.Event{
 			Type:     "page.navigation",
-			Category: events.CategoryPage,
+			Category: oapi.TelemetryEventCategoryPage,
 			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
 			Ts:       1,
 			Data:     json.RawMessage(rawData),

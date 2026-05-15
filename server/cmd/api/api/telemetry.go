@@ -6,7 +6,6 @@ import (
 	"github.com/nrednav/cuid2"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 
-	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
 )
@@ -139,18 +138,18 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 		return telemetry.TelemetryConfig{}, true, nil
 	}
 
-	cats := make([]events.EventCategory, 0, 5)
+	cats := make([]oapi.TelemetryEventCategory, 0, 5)
 	if consoleOn {
-		cats = append(cats, events.CategoryConsole)
+		cats = append(cats, oapi.TelemetryEventCategoryConsole)
 	}
 	if networkOn {
-		cats = append(cats, events.CategoryNetwork)
+		cats = append(cats, oapi.TelemetryEventCategoryNetwork)
 	}
 	if pageOn {
-		cats = append(cats, events.CategoryPage)
+		cats = append(cats, oapi.TelemetryEventCategoryPage)
 	}
 	if interactionOn {
-		cats = append(cats, events.CategoryInteraction)
+		cats = append(cats, oapi.TelemetryEventCategoryInteraction)
 	}
 	// CategorySystem is always appended by TelemetrySession.Start/UpdateConfig;
 	// no need to include it here.
@@ -161,14 +160,14 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 // whether all user-facing categories ended up disabled (stop signal). Only categories with an
 // explicit Enabled field in patch are changed; omitted categories keep their current state.
 func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.BrowserTelemetryCategoriesConfig) (telemetry.TelemetryConfig, bool) {
-	active := make(map[events.EventCategory]struct{}, len(current.Categories))
+	active := make(map[oapi.TelemetryEventCategory]struct{}, len(current.Categories))
 	for _, c := range current.Categories {
-		if c != events.CategorySystem { // system is managed internally by TelemetrySession
+		if c != oapi.TelemetryEventCategorySystem { // system is managed internally by TelemetrySession
 			active[c] = struct{}{}
 		}
 	}
 
-	override := func(cat events.EventCategory, field *oapi.BrowserTelemetryCategoryConfig) {
+	override := func(cat oapi.TelemetryEventCategory, field *oapi.BrowserTelemetryCategoryConfig) {
 		if field == nil || field.Enabled == nil {
 			return // not mentioned in patch — keep current state
 		}
@@ -179,18 +178,18 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		}
 	}
 
-	override(events.CategoryConsole, patch.Console)
-	override(events.CategoryNetwork, patch.Network)
-	override(events.CategoryPage, patch.Page)
-	override(events.CategoryInteraction, patch.Interaction)
+	override(oapi.TelemetryEventCategoryConsole, patch.Console)
+	override(oapi.TelemetryEventCategoryNetwork, patch.Network)
+	override(oapi.TelemetryEventCategoryPage, patch.Page)
+	override(oapi.TelemetryEventCategoryInteraction, patch.Interaction)
 
 	// CategorySystem is managed internally by TelemetrySession; exclude from the
 	// user-facing allDisabled check.
-	userCats := []events.EventCategory{
-		events.CategoryConsole,
-		events.CategoryNetwork,
-		events.CategoryPage,
-		events.CategoryInteraction,
+	userCats := []oapi.TelemetryEventCategory{
+		oapi.TelemetryEventCategoryConsole,
+		oapi.TelemetryEventCategoryNetwork,
+		oapi.TelemetryEventCategoryPage,
+		oapi.TelemetryEventCategoryInteraction,
 	}
 	allDisabled := true
 	for _, c := range userCats {
@@ -203,7 +202,7 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		return telemetry.TelemetryConfig{}, true
 	}
 
-	cats := make([]events.EventCategory, 0, len(active))
+	cats := make([]oapi.TelemetryEventCategory, 0, len(active))
 	for c := range active {
 		cats = append(cats, c)
 	}
@@ -228,22 +227,22 @@ func disabledConfig() oapi.BrowserTelemetryConfig {
 // suitable for API responses.
 func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryConfig {
 	// Build a set of active categories for O(1) lookup.
-	active := make(map[events.EventCategory]struct{}, len(cfg.Categories))
+	active := make(map[oapi.TelemetryEventCategory]struct{}, len(cfg.Categories))
 	for _, c := range cfg.Categories {
 		active[c] = struct{}{}
 	}
 
-	enabled := func(cat events.EventCategory) *oapi.BrowserTelemetryCategoryConfig {
+	enabled := func(cat oapi.TelemetryEventCategory) *oapi.BrowserTelemetryCategoryConfig {
 		_, on := active[cat]
 		return &oapi.BrowserTelemetryCategoryConfig{Enabled: &on}
 	}
 
 	return oapi.BrowserTelemetryConfig{
 		Browser: &oapi.BrowserTelemetryCategoriesConfig{
-			Console:     enabled(events.CategoryConsole),
-			Network:     enabled(events.CategoryNetwork),
-			Page:        enabled(events.CategoryPage),
-			Interaction: enabled(events.CategoryInteraction),
+			Console:     enabled(oapi.TelemetryEventCategoryConsole),
+			Network:     enabled(oapi.TelemetryEventCategoryNetwork),
+			Page:        enabled(oapi.TelemetryEventCategoryPage),
+			Interaction: enabled(oapi.TelemetryEventCategoryInteraction),
 		},
 	}
 }

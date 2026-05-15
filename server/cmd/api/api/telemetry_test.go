@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
@@ -35,7 +34,7 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
-		assert.Contains(t, cfg.Categories, events.CategoryConsole)
+		assert.Contains(t, cfg.Categories, oapi.TelemetryEventCategoryConsole)
 	})
 
 	t.Run("all false returns allDisabled=true", func(t *testing.T) {

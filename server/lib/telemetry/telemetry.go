@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 // TelemetryConfig holds caller-supplied telemetry preferences. All fields are
@@ -13,7 +14,7 @@ import (
 type TelemetryConfig struct {
 	// Categories limits which event categories are captured.
 	// nil or empty captures all user-facing categories plus system events.
-	Categories []events.EventCategory
+	Categories []oapi.TelemetryEventCategory
 }
 
 // TelemetrySession manages a telemetry session against a shared EventStream.
@@ -25,12 +26,12 @@ type TelemetrySession struct {
 	mu              sync.Mutex
 	id              string
 	sessionStartSeq uint64
-	categories      map[events.EventCategory]struct{}
+	categories      map[oapi.TelemetryEventCategory]struct{}
 	createdAt       time.Time
 }
 
 func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
-	cats := make(map[events.EventCategory]struct{}, len(events.AllCategories))
+	cats := make(map[oapi.TelemetryEventCategory]struct{}, len(events.AllCategories))
 	for _, c := range events.AllCategories {
 		cats[c] = struct{}{}
 	}
@@ -53,11 +54,11 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	if len(cats) == 0 {
 		cats = events.AllCategories
 	}
-	s.categories = make(map[events.EventCategory]struct{}, len(cats)+1)
+	s.categories = make(map[oapi.TelemetryEventCategory]struct{}, len(cats)+1)
 	for _, c := range cats {
 		s.categories[c] = struct{}{}
 	}
-	s.categories[events.CategorySystem] = struct{}{}
+	s.categories[oapi.TelemetryEventCategorySystem] = struct{}{}
 }
 
 // publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
@@ -116,7 +117,7 @@ func (s *TelemetrySession) SessionStartSeq() uint64 {
 func (s *TelemetrySession) Config() TelemetryConfig {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cats := make([]events.EventCategory, 0, len(s.categories))
+	cats := make([]oapi.TelemetryEventCategory, 0, len(s.categories))
 	for c := range s.categories {
 		cats = append(cats, c)
 	}
@@ -139,11 +140,11 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	if len(cats) == 0 {
 		cats = events.AllCategories
 	}
-	s.categories = make(map[events.EventCategory]struct{}, len(cats)+1)
+	s.categories = make(map[oapi.TelemetryEventCategory]struct{}, len(cats)+1)
 	for _, c := range cats {
 		s.categories[c] = struct{}{}
 	}
-	s.categories[events.CategorySystem] = struct{}{}
+	s.categories[oapi.TelemetryEventCategorySystem] = struct{}{}
 }
 
 // Active reports whether a telemetry session is currently running.

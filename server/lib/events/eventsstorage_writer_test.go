@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -60,7 +61,7 @@ func newTestStream(t *testing.T, capacity int) *EventStream {
 }
 
 func makeEvent(typ string) Event {
-	return Event{Type: typ, Category: CategorySystem}
+	return Event{Type: typ, Category: oapi.TelemetryEventCategorySystem}
 }
 
 func TestStorageWriter_NormalAppend(t *testing.T) {

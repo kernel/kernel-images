@@ -394,7 +394,7 @@ func (m *Monitor) initSession(ctx context.Context) {
 		m.publish(events.Event{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventMonitorInitFailed,
-			Category: events.CategorySystem,
+			Category: oapi.TelemetryEventCategorySystem,
 			Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 			Data:     json.RawMessage(`{"step":"Target.setAutoAttach"}`),
 		})
@@ -492,7 +492,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorDisconnected,
-		Category: events.CategorySystem,
+		Category: oapi.TelemetryEventCategorySystem,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 		Data:     json.RawMessage(`{"reason":"` + ReasonChromeRestarted + `"}`),
 	})
@@ -523,7 +523,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 			m.publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
 				Type:     EventMonitorReconnectFailed,
-				Category: events.CategorySystem,
+				Category: oapi.TelemetryEventCategorySystem,
 				Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 				Data:     json.RawMessage(`{"reason":"` + ReasonReconnectExhausted + `"}`),
 			})
@@ -545,7 +545,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorReconnected,
-		Category: events.CategorySystem,
+		Category: oapi.TelemetryEventCategorySystem,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 		Data:     json.RawMessage(fmt.Sprintf(`{"reconnect_duration_ms":%d}`, reconnectDurationMs)),
 	})

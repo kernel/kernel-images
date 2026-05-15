@@ -224,7 +224,7 @@ func (s *computedState) startNetIdleTimer() {
 		s.publish(events.Event{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventNetworkIdle,
-			Category: events.CategoryNetwork,
+			Category: oapi.TelemetryEventCategoryNetwork,
 			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &navMeta},
 			Data:     navData,
 		})
@@ -275,7 +275,7 @@ func (s *computedState) emitLayoutSettled(navSeq int) {
 	evs := []events.Event{{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventLayoutSettled,
-		Category: events.CategoryPage,
+		Category: oapi.TelemetryEventCategoryPage,
 		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &navMeta},
 		Data:     navData,
 	}}
@@ -308,7 +308,7 @@ func (s *computedState) pendingNavigationSettled() []events.Event {
 		return []events.Event{{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventNavigationSettled,
-			Category: events.CategoryPage,
+			Category: oapi.TelemetryEventCategoryPage,
 			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &s.navMeta},
 			Data:     s.navData,
 		}}
