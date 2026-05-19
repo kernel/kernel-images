@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -95,6 +96,131 @@ func (c *Client) send(ctx context.Context, method string, params any, sessionID 
 			return nil, resp.Error
 		}
 		return resp.Result, nil
+	}
+}
+
+// NavigateWaitUntil controls how long NavigateFirstPage waits after Page.navigate.
+type NavigateWaitUntil string
+
+const (
+	NavigateWaitLoad             NavigateWaitUntil = "load"
+	NavigateWaitDOMContentLoaded NavigateWaitUntil = "domcontentloaded"
+)
+
+// NavigateFirstPage attaches to the first page target, navigates to url, and optionally
+// waits for load or DOMContentLoaded. Uses a browser-level WebSocket (flattened session).
+func NavigateFirstPage(ctx context.Context, devtoolsURL, url string, waitUntil NavigateWaitUntil) error {
+	c, err := Dial(ctx, devtoolsURL)
+	if err != nil {
+		return fmt.Errorf("dial devtools: %w", err)
+	}
+	defer c.Close()
+
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return fmt.Errorf("Target.getTargets: %w", err)
+	}
+
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return fmt.Errorf("unmarshal targets: %w", err)
+	}
+
+	var pageTargetID string
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			pageTargetID = t.TargetID
+			break
+		}
+	}
+	if pageTargetID == "" {
+		return fmt.Errorf("no page target found")
+	}
+
+	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": pageTargetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Target.attachToTarget: %w", err)
+	}
+
+	var attach struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(attachResult, &attach); err != nil {
+		return fmt.Errorf("unmarshal attach: %w", err)
+	}
+	sess := attach.SessionID
+	defer func() {
+		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = c.send(detachCtx, "Target.detachFromTarget", map[string]any{
+			"sessionId": sess,
+		}, "")
+	}()
+
+	if _, err := c.send(ctx, "Page.enable", map[string]any{}, sess); err != nil {
+		return fmt.Errorf("Page.enable: %w", err)
+	}
+
+	wantEvents := map[string]struct{}{}
+	switch waitUntil {
+	case NavigateWaitDOMContentLoaded:
+		wantEvents["Page.domContentEventFired"] = struct{}{}
+	case NavigateWaitLoad, "":
+		wantEvents["Page.loadEventFired"] = struct{}{}
+	default:
+		return fmt.Errorf("unsupported wait_until: %q", waitUntil)
+	}
+
+	// Only one goroutine may read from the WebSocket — never overlap send()'s Read
+	// loop with waitForPageEvents.
+	if _, err := c.send(ctx, "Page.navigate", map[string]any{"url": url}, sess); err != nil {
+		return fmt.Errorf("Page.navigate: %w", err)
+	}
+	if err := c.waitForPageEvents(ctx, sess, wantEvents); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Client) waitForPageEvents(ctx context.Context, sessionID string, want map[string]struct{}) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for navigation event: %w", ctx.Err())
+		default:
+		}
+
+		_, msg, err := c.conn.Read(ctx)
+		if err != nil {
+			return fmt.Errorf("read cdp: %w", err)
+		}
+
+		var envelope struct {
+			Method    string          `json:"method"`
+			SessionID string          `json:"sessionId"`
+			Params    json.RawMessage `json:"params"`
+		}
+		if err := json.Unmarshal(msg, &envelope); err != nil {
+			continue
+		}
+		if envelope.Method == "" {
+			continue
+		}
+		if envelope.SessionID != sessionID {
+			continue
+		}
+		if _, ok := want[envelope.Method]; ok {
+			return nil
+		}
 	}
 }
 
