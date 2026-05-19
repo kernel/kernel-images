@@ -298,6 +298,10 @@
       return this.$accessor.video.muted
     }
 
+    get playbackRate() {
+      return this.$accessor.video.playbackRate
+    }
+
     get stream() {
       return this.$accessor.video.stream
     }
@@ -409,6 +413,13 @@
       }
     }
 
+    @Watch('playbackRate')
+    onPlaybackRateChanged(rate: number) {
+      if (this._video && this._video.playbackRate !== rate) {
+        this._video.playbackRate = rate
+      }
+    }
+
     @Watch('muted')
     onMutedChanged(muted: boolean) {
       if (this._video && this._video.muted != muted) {
@@ -485,6 +496,7 @@
       this._container.addEventListener('resize', this.onResize)
       this.onVolumeChanged(this.volume)
       this.onMutedChanged(this.muted)
+      this.onPlaybackRateChanged(this.playbackRate)
       this.onStreamChanged(this.stream)
       this.onResize()
 

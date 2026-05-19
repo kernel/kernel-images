@@ -18,6 +18,7 @@ export const state = () => ({
   vertical: 9,
   volume: get<number>('volume', 100),
   muted: get<boolean>('muted', false),
+  playbackRate: 1,
   playing: false,
   playable: false,
 })
@@ -137,6 +138,11 @@ export const mutations = mutationTree(state, {
     set('volume', volume)
   },
 
+  setPlaybackRate(state, rate: number) {
+    const int = Math.floor(rate)
+    state.playbackRate = int >= 1 ? int : 1
+  },
+
   setStream(state, index: number) {
     state.index = index
   },
@@ -161,6 +167,7 @@ export const mutations = mutationTree(state, {
     state.rate = 30
     state.horizontal = 16
     state.vertical = 9
+    state.playbackRate = 1
     state.playing = false
     state.playable = false
   },

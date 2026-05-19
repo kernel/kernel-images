@@ -53,6 +53,23 @@
         @click.stop.prevent="toggleMedia"
       />
     </li>
+    <li class="playback-speed">
+      <input
+        type="number"
+        min="1"
+        step="1"
+        v-model.number="playbackRate"
+        @keydown.stop
+        v-tooltip="{
+          content: 'Playback speed (integer)',
+          placement: 'top',
+          offset: 5,
+          boundariesElement: 'body',
+          delay: { show: 300, hide: 100 },
+        }"
+      />
+      <span class="x">x</span>
+    </li>
     <!--KERNEL
     <li>
       <div class="volume">
@@ -187,6 +204,36 @@
         }
       }
 
+      &.playback-speed {
+        display: flex;
+        align-items: center;
+        font-size: 14px;
+        margin: 0 5px;
+        color: rgba($color: $text-normal, $alpha: 0.8);
+
+        input[type='number'] {
+          width: 40px;
+          padding: 2px 4px;
+          border: 1px solid rgba($color: #fff, $alpha: 0.2);
+          border-radius: 4px;
+          background: rgba($color: #000, $alpha: 0.3);
+          color: $text-normal;
+          font-size: 14px;
+          text-align: right;
+          -moz-appearance: textfield;
+
+          &::-webkit-outer-spin-button,
+          &::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+          }
+        }
+
+        .x {
+          margin-left: 2px;
+        }
+      }
+
       .switch {
         margin: 0 5px;
         display: block;
@@ -286,6 +333,15 @@
 
     get muted() {
       return this.$accessor.video.muted || this.volume === 0
+    }
+
+    get playbackRate() {
+      return this.$accessor.video.playbackRate
+    }
+
+    set playbackRate(rate: number) {
+      const int = Math.floor(Number(rate))
+      this.$accessor.video.setPlaybackRate(Number.isFinite(int) && int >= 1 ? int : 1)
     }
 
     get playing() {
