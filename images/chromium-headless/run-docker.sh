@@ -10,12 +10,6 @@ source ../../shared/ensure-common-build-run-vars.sh chromium-headless
 HOST_RECORDINGS_DIR="$SCRIPT_DIR/recordings"
 mkdir -p "$HOST_RECORDINGS_DIR"
 
-# DETACHED=1 runs in background (--rm cleans up container on stop/failure teardown without -it)
-DOCKER_RUN_FRONT=(-it --rm)
-if [[ "${DETACHED:-}" == "1" ]]; then
-  DOCKER_RUN_FRONT=(-d --rm)
-fi
-
 RUN_ARGS=(
   --name "$NAME"
   --privileged
@@ -48,15 +42,4 @@ if [[ $# -ge 1 && -n "$1" ]]; then
 fi
 
 docker rm -f "$NAME" 2>/dev/null || true
-
-if [[ "${DETACHED:-}" == "1" ]]; then
-  echo "Detached mode: Kernel HTTP API mapped to http://127.0.0.1:444 (container port 10001)"
-  echo "CDP WS proxy http://127.0.0.1:9222  ChromeDriver proxy http://127.0.0.1:9224"
-fi
-
-docker run "${DOCKER_RUN_FRONT[@]}" "${ENTRYPOINT_ARG[@]}" "${RUN_ARGS[@]}" "$IMAGE"
-
-if [[ "${DETACHED:-}" == "1" ]]; then
-  echo "Container id/name: $NAME"
-  echo "Stop with: docker stop $NAME"
-fi
+docker run -it --rm "${ENTRYPOINT_ARG[@]}" "${RUN_ARGS[@]}" "$IMAGE"

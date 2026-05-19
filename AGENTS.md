@@ -14,8 +14,6 @@ Kernel Images is a sandboxed cloud browser infrastructure platform. The Go serve
 - **Build server**: `cd server && make build`
 - **Build headless image**: `cd /workspace && DOCKER_BUILDKIT=1 docker build -f images/chromium-headless/image/Dockerfile -t kernel-headless-test .`
 - **Run headless container**: `docker run -d --name kernel-headless -p 10001:10001 -p 9222:9222 --shm-size=2g kernel-headless-test`
-- **Run headless (repo scripts)** — foreground: `./images/chromium-headless/run-docker.sh` maps API to host **`:444`**; background: `DETACHED=1 ./images/chromium-headless/run-docker.sh`
-- **Chromium configure multipart permutation e2e** (31 part combinations — rebuild image first): `./scripts/run-local-chromium-configure-powerset.sh`
 - See `server/README.md` and `server/Makefile` for additional commands and configuration.
 
 ### Docker in Cloud VM
