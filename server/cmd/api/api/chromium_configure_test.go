@@ -39,6 +39,19 @@ func TestChromiumConfigureActionableFlags(t *testing.T) {
 	require.True(t, chromiumNeedsStopCycle(st))
 }
 
+func TestChromiumConfigureActionablePolicies(t *testing.T) {
+	emptyPolicies := `{}`
+	realPolicies := `{"QuicAllowed":false}`
+
+	st := &chromiumConfigureState{chromePoliciesJSON: &emptyPolicies}
+	require.Equal(t, 0, cfgActionables(st))
+	require.False(t, chromiumNeedsStopCycle(st))
+
+	st = &chromiumConfigureState{chromePoliciesJSON: &realPolicies}
+	require.Equal(t, 1, cfgActionables(st))
+	require.True(t, chromiumNeedsStopCycle(st))
+}
+
 func TestChromiumStartURLSpec(t *testing.T) {
 	bareHost := "roblox.com"
 	out, errs := chromiumStartURLSpec(&bareHost)

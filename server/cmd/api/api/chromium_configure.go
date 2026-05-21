@@ -269,7 +269,7 @@ type chromiumDisplayPlan struct {
 func chromiumNeedsStopCycle(st *chromiumConfigureState) bool {
 	return st.hasProfile ||
 		len(st.extItems) > 0 ||
-		policiesNonEmpty(st.chromePoliciesJSON) ||
+		policiesContentNonEmpty(st.chromePoliciesJSON) ||
 		flagsContentNonEmpty(st.chromiumFlagsJSON)
 }
 
