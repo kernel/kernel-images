@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -345,43 +346,58 @@ func (s *ApiService) restartChromiumAndWait(ctx context.Context, operation strin
 	log := logger.FromContext(ctx)
 	start := time.Now()
 
-	// Begin listening for devtools URL updates, since we are about to restart Chromium
-	updates, cancelSub := s.upstreamMgr.Subscribe()
-	defer cancelSub()
-
-	// Run supervisorctl restart with a new context to let it run beyond the lifetime of the http request.
-	// This lets us return as soon as the DevTools URL is updated.
-	errCh := make(chan error, 1)
 	log.Info("restarting chromium via supervisorctl", "operation", operation)
-	go func() {
-		cmdCtx, cancelCmd := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Minute)
-		defer cancelCmd()
-		out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("restart", "chromium")...).CombinedOutput()
-		if err != nil {
-			log.Error("failed to restart chromium", "error", err, "out", string(out))
-			errCh <- fmt.Errorf("supervisorctl restart failed: %w", err)
-		}
-	}()
-
-	// Wait for either a new upstream, a restart error, or timeout
-	timeout := time.NewTimer(15 * time.Second)
-	defer timeout.Stop()
-	select {
-	case <-updates:
-		log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-		return nil
-	case err := <-errCh:
+	if err := s.stopChromium(ctx); err != nil {
 		return err
-	case <-timeout.C:
-		log.Info("devtools not ready in time", "operation", operation, "elapsed", time.Since(start).String())
-		return fmt.Errorf("devtools not ready in time")
 	}
+	if err := s.startChromiumAndWait(ctx, operation); err != nil {
+		return err
+	}
+	log.Info("chromium restart complete", "operation", operation, "elapsed", time.Since(start).String())
+	return nil
 }
 
 const supervisorCtlConf = "/etc/supervisor/supervisord.conf"
+const chromiumDevToolsReadyTimeout = 90 * time.Second
 
 func supervisorctlArgv(verb string, prog string) []string {
 	return []string{"-c", supervisorCtlConf, verb, prog}
+}
+
+func chromiumSupervisorStatus(ctx context.Context) (string, string, error) {
+	cmdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("status", "chromium")...).CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	fields := strings.Fields(text)
+	if len(fields) >= 2 {
+		return fields[1], text, nil
+	}
+	if err != nil {
+		return "", text, err
+	}
+	return "", text, fmt.Errorf("unexpected supervisorctl status output: %q", text)
+}
+
+func waitChromiumSupervisorStatus(ctx context.Context, want string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		status, out, err := chromiumSupervisorStatus(ctx)
+		if err == nil && status == want {
+			return out, nil
+		}
+		if out != "" {
+			last = out
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return last, err
+			}
+			return last, fmt.Errorf("chromium did not reach %s within %s (last status: %s)", want, timeout, last)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 // stopChromium runs supervisorctl stop chromium and waits for the command to complete.
@@ -393,7 +409,23 @@ func (s *ApiService) stopChromium(ctx context.Context) error {
 	out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("stop", "chromium")...).CombinedOutput()
 	if err != nil {
 		log.Error("failed to stop chromium", "error", err, "out", string(out))
+		status, statusOut, statusErr := chromiumSupervisorStatus(ctx)
+		if statusErr == nil {
+			switch status {
+			case "STOPPED":
+				log.Info("chromium already stopped after supervisorctl stop error", "status", statusOut)
+				return nil
+			case "STOPPING":
+				if stoppedOut, waitErr := waitChromiumSupervisorStatus(ctx, "STOPPED", 30*time.Second); waitErr == nil {
+					log.Info("chromium reached stopped after supervisorctl stop error", "status", stoppedOut)
+					return nil
+				}
+			}
+		}
 		return fmt.Errorf("supervisorctl stop chromium failed: %w", err)
+	}
+	if stoppedOut, waitErr := waitChromiumSupervisorStatus(ctx, "STOPPED", 30*time.Second); waitErr != nil {
+		log.Warn("chromium stop command completed but stopped status was not confirmed", "error", waitErr, "status", stoppedOut)
 	}
 	return nil
 }
@@ -403,12 +435,15 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 	log := logger.FromContext(ctx)
 	start := time.Now()
 
+	prevUpstream := s.upstreamMgr.Current()
 	updates, cancelSub := s.upstreamMgr.Subscribe()
 	defer cancelSub()
 
 	errCh := make(chan error, 1)
+	doneCh := make(chan struct{})
 	log.Info("starting chromium via supervisorctl", "operation", operation)
 	go func() {
+		defer close(doneCh)
 		cmdCtx, cancelCmd := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancelCmd()
 		out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("start", "chromium")...).CombinedOutput()
@@ -418,17 +453,55 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		}
 	}()
 
-	timeout := time.NewTimer(15 * time.Second)
+	timeout := time.NewTimer(chromiumDevToolsReadyTimeout)
 	defer timeout.Stop()
-	select {
-	case <-updates:
-		log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-		return nil
-	case err := <-errCh:
-		return err
-	case <-timeout.C:
-		log.Info("devtools not ready in time", "operation", operation, "elapsed", time.Since(start).String())
-		return fmt.Errorf("devtools not ready in time")
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	commandDone := false
+	tryReady := func(upstream string, allowCurrent bool) bool {
+		if upstream == "" {
+			return false
+		}
+		if !allowCurrent && upstream == prevUpstream {
+			return false
+		}
+		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		c, err := cdpclient.Dial(dialCtx, upstream)
+		if err != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}
+
+	for {
+		select {
+		case upstream, ok := <-updates:
+			if ok && tryReady(upstream, false) {
+				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				return nil
+			}
+		case err := <-errCh:
+			return err
+		case <-doneCh:
+			commandDone = true
+			doneCh = nil
+			if tryReady(s.upstreamMgr.Current(), true) {
+				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				return nil
+			}
+		case <-ticker.C:
+			if commandDone && tryReady(s.upstreamMgr.Current(), true) {
+				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				return nil
+			}
+		case <-timeout.C:
+			status, statusOut, _ := chromiumSupervisorStatus(ctx)
+			log.Info("devtools not ready in time", "operation", operation, "elapsed", time.Since(start).String(), "supervisor_status", statusOut)
+			return fmt.Errorf("devtools not ready in time (chromium status: %s)", status)
+		}
 	}
 }
 
