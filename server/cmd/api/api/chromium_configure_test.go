@@ -26,6 +26,19 @@ func TestPoliciesContentNonEmpty(t *testing.T) {
 	require.True(t, policiesContentNonEmpty(&real))
 }
 
+func TestChromiumConfigureActionableFlags(t *testing.T) {
+	emptyFlags := `{"flags":[]}`
+	realFlags := `{"flags":["--kiosk"]}`
+
+	st := &chromiumConfigureState{chromiumFlagsJSON: &emptyFlags}
+	require.Equal(t, 0, cfgActionables(st))
+	require.False(t, chromiumNeedsStopCycle(st))
+
+	st = &chromiumConfigureState{chromiumFlagsJSON: &realFlags}
+	require.Equal(t, 1, cfgActionables(st))
+	require.True(t, chromiumNeedsStopCycle(st))
+}
+
 func TestChromiumStartURLSpec(t *testing.T) {
 	bareHost := "roblox.com"
 	out, errs := chromiumStartURLSpec(&bareHost)

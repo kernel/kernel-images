@@ -270,7 +270,7 @@ func chromiumNeedsStopCycle(st *chromiumConfigureState) bool {
 	return st.hasProfile ||
 		len(st.extItems) > 0 ||
 		policiesNonEmpty(st.chromePoliciesJSON) ||
-		flagsNonEmpty(st.chromiumFlagsJSON)
+		flagsContentNonEmpty(st.chromiumFlagsJSON)
 }
 
 func policiesContentNonEmpty(s *string) bool {
@@ -305,40 +305,10 @@ func flagsNonEmpty(s *string) bool {
 	return s != nil && strings.TrimSpace(*s) != ""
 }
 
-func chromiumDisplayHasSizedRequest(displayJSON *string) bool {
-	if displayJSON == nil {
-		return false
-	}
-	var raw map[string]interface{}
-	if err := json.Unmarshal([]byte(*displayJSON), &raw); err != nil {
-		return false
-	}
-	w, ow := raw["width"]
-	h, oh := raw["height"]
-	if !ow || !oh {
-		return false
-	}
-	fw, wok := w.(float64)
-	fh, hok := h.(float64)
-	if wok && hok && fw > 0 && fh > 0 {
-		return true
-	}
-	iw, wok := w.(int)
-	ih, hok := h.(int)
-	return wok && hok && iw > 0 && ih > 0
-}
-
 func cfg400(msg string) oapi.ChromiumConfigure400JSONResponse {
 	return oapi.ChromiumConfigure400JSONResponse{
 		BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: msg},
 	}
-}
-
-func cfg500Configure(msg string) oapi.ChromiumConfigure500JSONResponse {
-	return oapi.ChromiumConfigure500JSONResponse(oapi.ChromiumConfigureError{
-		Phase:   oapi.ConfigurePhase,
-		Message: msg,
-	})
 }
 
 func cfg500ConfigureStep(step chromiumConfigureStep, msg string) oapi.ChromiumConfigure500JSONResponse {
@@ -350,19 +320,12 @@ func cfg500ConfigureStep(step chromiumConfigureStep, msg string) oapi.ChromiumCo
 	})
 }
 
-func cfg500Navigate(msg string) oapi.ChromiumConfigure500JSONResponse {
-	return oapi.ChromiumConfigure500JSONResponse(oapi.ChromiumConfigureError{
-		Phase:   oapi.NavigatePhase,
-		Message: msg,
-	})
-}
-
 func cfgActionables(st *chromiumConfigureState) int {
 	n := 0
 	if policiesContentNonEmpty(st.chromePoliciesJSON) {
 		n++
 	}
-	if flagsNonEmpty(st.chromiumFlagsJSON) {
+	if flagsContentNonEmpty(st.chromiumFlagsJSON) {
 		n++
 	}
 	if len(st.extItems) > 0 {
