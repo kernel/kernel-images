@@ -165,8 +165,10 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 			if displayResp != nil {
 				return displayResp, nil
 			}
-			if rr := chromiumRunPatchDisplay(ctx, s, displayPlan.body); rr != nil {
-				return rr, nil
+			if displayPlan != nil {
+				if rr := chromiumRunPatchDisplay(ctx, s, displayPlan.body); rr != nil {
+					return rr, nil
+				}
 			}
 		}
 	}
