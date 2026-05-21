@@ -1841,6 +1841,9 @@ type ChromiumConfigureError struct {
 
 	// Phase configure_phase maps to restart/filesystem/policy/extension/profile/display work; navigate_phase maps to Page.navigate after readiness.
 	Phase ChromiumConfigureErrorPhase `json:"phase"`
+
+	// Step Optional configure step that failed.
+	Step *string `json:"step,omitempty"`
 }
 
 // ChromiumConfigureErrorPhase configure_phase maps to restart/filesystem/policy/extension/profile/display work; navigate_phase maps to Page.navigate after readiness.
@@ -2514,7 +2517,7 @@ type ChromiumConfigureMultipartBody struct {
 	// ProfileArchive tar.zst of `/home/kernel/user-data` (V2 profiles). Stripped paths use strip_components optional part.
 	ProfileArchive *openapi_types.File `json:"profile_archive,omitempty"`
 
-	// StartUrl Bare https? URL text, OR UTF-8 JSON `{"url":"...", "wait_until":"load"|"domcontentloaded"}`.
+	// StartUrl URL text to navigate after configure. Bare hosts are normalized to https://, length is capped at 2048 bytes, and Chrome decides which schemes are navigable.
 	StartUrl *string `json:"start_url,omitempty"`
 
 	// StripComponents Leading path components to strip when extracting profile_archive (non-negative integer as text).

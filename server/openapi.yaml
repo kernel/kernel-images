@@ -1176,8 +1176,13 @@ paths:
       description: |
         Optional multipart parts apply configuration while Chromium stays stopped once (policy,
         flags, extensions, profile archive, optional display sizing), then Chromium is started exactly
-        once and DevTools readiness is awaited. Optional `start_url` applies a Page.navigate via CDP
-        after readiness. Omit any part you do not need. At least one actionable part must be present.
+        once and DevTools readiness is awaited. Optional `start_url` dispatches a best-effort
+        navigation after readiness without waiting for page load. Bare hosts are normalized to
+        `https://`. Omit any part you do not need. At least one actionable part must be present.
+        Required configuration steps run in the same logical order as the control-plane sync path
+        (policies, extensions, display, flags/kiosk, profile), but Chromium is started only once
+        at the end. The endpoint is not transactional: if a later required step fails, earlier
+        successful side effects may remain on the instance while the non-2xx error propagates.
         Prefer this over separate `/chromium/*` and `/display` calls when multiple restart-triggering
         steps apply in one session configure.
       operationId: chromiumConfigure
@@ -1191,6 +1196,8 @@ paths:
                 display:
                   description: >-
                     UTF-8 JSON object matching `#/components/schemas/PatchDisplayRequest` (width/height/etc.).
+                    When combined with restart-triggering fields, the resize is applied while Chromium
+                    is stopped and Chromium is started once at the end.
                   type: string
                 chromium_flags:
                   description: >-
@@ -1209,7 +1216,8 @@ paths:
                   type: string
                 start_url:
                   description: >-
-                    Bare https? URL text, OR UTF-8 JSON `{"url":"...", "wait_until":"load"|"domcontentloaded"}`.
+                    URL text to navigate after configure. Bare hosts are normalized to https://,
+                    length is capped at 2048 bytes, and Chrome decides which schemes are navigable.
                   type: string
                 extensions:
                   type: array
@@ -1236,7 +1244,7 @@ paths:
         "409":
           $ref: "#/components/responses/ConflictError"
         "500":
-          description: Configure or navigate failure with structured phase
+          description: Configure failure with structured phase
           content:
             application/json:
               schema:
@@ -2564,6 +2572,17 @@ components:
       properties:
         message:
           type: string
+        step:
+          type: string
+          description: Optional configure step that failed.
+          enum:
+            - stop_chromium
+            - start_chromium
+            - chrome_policies
+            - extensions
+            - display
+            - chromium_flags
+            - profile
     ChromiumConfigureError:
       type: object
       description: Failure from batched chromium configure — includes which phase failed.
@@ -2575,7 +2594,7 @@ components:
           enum:
             - configure_phase
             - navigate_phase
-          description: configure_phase maps to restart/filesystem/policy/extension/profile/display work; navigate_phase maps to Page.navigate after readiness.
+          description: configure_phase maps to restart/filesystem/policy/extension/profile/display work; navigate_phase is retained for compatibility.
         message:
           type: string
     RecorderInfo:

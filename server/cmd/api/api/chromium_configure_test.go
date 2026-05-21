@@ -2,12 +2,11 @@ package api
 
 import (
 	"bytes"
+	"io"
 	"mime/multipart"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,30 +26,57 @@ func TestPoliciesContentNonEmpty(t *testing.T) {
 	require.True(t, policiesContentNonEmpty(&real))
 }
 
-func TestChromiumStartURLSpec_plainAndJSON(t *testing.T) {
+func TestChromiumStartURLSpec(t *testing.T) {
+	bareHost := "roblox.com"
+	out, errs := chromiumStartURLSpec(&bareHost)
+	require.Empty(t, errs)
+	require.True(t, out.needsNav)
+	require.Equal(t, "https://roblox.com", out.url)
+
 	plain := "https://example.com/"
-	out, errs := chromiumStartURLSpec(&plain)
+	out, errs = chromiumStartURLSpec(&plain)
 	require.Empty(t, errs)
 	require.True(t, out.needsNav)
 	require.Equal(t, plain, out.url)
-	require.Equal(t, 45*time.Second, out.timeout)
-	require.Equal(t, cdpclient.NavigateWaitLoad, out.wait)
 
-	raw := `{"url":"https://a.test/x","wait_until":"domcontentloaded","timeout_sec":12}`
-	out, errs = chromiumStartURLSpec(&raw)
+	fileURL := "file:///etc/passwd"
+	out, errs = chromiumStartURLSpec(&fileURL)
 	require.Empty(t, errs)
-	require.True(t, out.needsNav)
-	require.Equal(t, "https://a.test/x", out.url)
-	require.Equal(t, 12*time.Second, out.timeout)
-	require.Equal(t, cdpclient.NavigateWaitDOMContentLoaded, out.wait)
+	require.Equal(t, fileURL, out.url)
 
-	badScheme := "file:///etc/passwd"
-	_, errs = chromiumStartURLSpec(&badScheme)
+	longURL := strings.Repeat("a", maxStartURLLen+1)
+	_, errs = chromiumStartURLSpec(&longURL)
 	require.NotEmpty(t, errs)
+}
 
-	badWait := `{"url":"https://x.example","wait_until":"networkidle"}`
-	_, errs = chromiumStartURLSpec(&badWait)
-	require.NotEmpty(t, errs)
+func TestChromiumValidateFlags(t *testing.T) {
+	valid := `{"flags":["--kiosk"]}`
+	plan, err := chromiumValidateFlags(&valid)
+	require.NoError(t, err)
+	require.Equal(t, []string{"--kiosk"}, plan.flags)
+
+	cases := []string{
+		`{bad-json`,
+		`{"flags":[]}`,
+		`{"flags":[""]}`,
+		`{"flags":["kiosk"]}`,
+	}
+	for _, tc := range cases {
+		_, err := chromiumValidateFlags(&tc)
+		require.Error(t, err, "case %s", tc)
+		var bad cfgBadRequestError
+		require.ErrorAs(t, err, &bad)
+	}
+}
+
+func TestChromiumParseDisplayPartsValidation(t *testing.T) {
+	badJSON := `{bad-json`
+	_, msg := chromiumParseDisplayParts(&badJSON)
+	require.Equal(t, "invalid display JSON", msg)
+
+	empty := `{}`
+	_, msg = chromiumParseDisplayParts(&empty)
+	require.Equal(t, "display payload empty", msg)
 }
 
 func TestChromiumCfgParseMultipart(t *testing.T) {
@@ -73,4 +99,78 @@ func TestChromiumCfgParseMultipart(t *testing.T) {
 	require.Equal(t, 2, st.stripComponents)
 	require.NotNil(t, st.startURLRaw)
 	require.Equal(t, "https://kernel.example/route", strings.TrimSpace(*st.startURLRaw))
+}
+
+func TestChromiumCfgParseMultipartValidation(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func(*testing.T, *multipart.Writer)
+		want  string
+	}{
+		{
+			name: "invalid strip_components",
+			build: func(t *testing.T, w *multipart.Writer) {
+				t.Helper()
+				require.NoError(t, w.WriteField("strip_components", "-1"))
+			},
+			want: "strip_components must be a non-negative integer",
+		},
+		{
+			name: "duplicate scalar",
+			build: func(t *testing.T, w *multipart.Writer) {
+				t.Helper()
+				require.NoError(t, w.WriteField("start_url", "https://a.example"))
+				require.NoError(t, w.WriteField("start_url", "https://b.example"))
+			},
+			want: "duplicate start_url field",
+		},
+		{
+			name: "incomplete extension pair",
+			build: func(t *testing.T, w *multipart.Writer) {
+				t.Helper()
+				require.NoError(t, w.WriteField("extensions.name", "missingzip"))
+			},
+			want: "each extension pair needs extensions.zip_file plus extensions.name",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := bytes.NewBuffer(nil)
+			w := multipart.NewWriter(buf)
+			tc.build(t, w)
+			require.NoError(t, w.Close())
+
+			st := &chromiumConfigureState{}
+			msg := chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+			defer st.cleanup()
+			require.Equal(t, tc.want, msg)
+		})
+	}
+}
+
+func TestChromiumCfgParseMultipartMultipleExtensionPairs(t *testing.T) {
+	buf := bytes.NewBuffer(nil)
+	w := multipart.NewWriter(buf)
+
+	part, err := w.CreateFormFile("extensions.zip_file", "one.zip")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "not validated by parser")
+	require.NoError(t, err)
+	require.NoError(t, w.WriteField("extensions.name", "one"))
+
+	require.NoError(t, w.WriteField("extensions.name", "two"))
+	part, err = w.CreateFormFile("extensions.zip_file", "two.zip")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "not validated by parser")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	st := &chromiumConfigureState{}
+	msg := chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+	defer st.cleanup()
+	require.Empty(t, msg)
+	require.Len(t, st.extItems, 2)
+	require.Equal(t, "one", st.extItems[0].name)
+	require.Equal(t, "two", st.extItems[1].name)
 }

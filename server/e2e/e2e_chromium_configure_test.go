@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +40,8 @@ func TestChromiumConfigureStartURLBare(t *testing.T) {
 
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	require.NoError(t, w.WriteField("start_url", `https://example.com/`))
+	startURL := `data:text/html,<title>kernel-configure</title>`
+	require.NoError(t, w.WriteField("start_url", startURL))
 	require.NoError(t, w.Close())
 
 	rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, w.FormDataContentType(), io.NopCloser(&buf))
@@ -48,4 +50,17 @@ func TestChromiumConfigureStartURLBare(t *testing.T) {
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "unexpected status=%s body=%s", rsp.Status(), string(rsp.Body))
 	require.NotNil(t, rsp.JSON200, "want ok json")
 	require.True(t, rsp.JSON200.Ok)
+
+	require.Eventually(t, func() bool {
+		timeoutSec := 3
+		pwResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
+			Code:       "return page.url();",
+			TimeoutSec: &timeoutSec,
+		})
+		if err != nil || pwResp.JSON200 == nil || !pwResp.JSON200.Success {
+			return false
+		}
+		got, ok := pwResp.JSON200.Result.(string)
+		return ok && got == startURL
+	}, 10*time.Second, 250*time.Millisecond)
 }

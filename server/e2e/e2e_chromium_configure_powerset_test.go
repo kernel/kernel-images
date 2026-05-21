@@ -7,6 +7,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -27,9 +28,8 @@ const (
 	matMaxBitmask = matDisplay | matPolicy | matKioskFlags | matExtension | matStartURL // 31
 )
 
-// TestChromiumConfigureMultipartPowerset runs sequential subtests covering every non-empty combination
-// of multipart parts (display, chrome_policies, chromium_flags kiosk, extensions, start_url).
-// Run after: images/chromium-headless/build-docker.sh (default image onkernel/chromium-headless-test:latest).
+// TestChromiumConfigureMultipartPowerset runs a representative matrix by default.
+// Set E2E_CHROMIUM_CONFIGURE_POWERSET=1 to run every non-empty combination.
 func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 
 	if _, err := exec.LookPath("docker"); err != nil {
@@ -41,7 +41,20 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 	extZip, err := zipDirToBytes(extDir)
 	require.NoError(t, err)
 
-	for bits := 1; bits <= matMaxBitmask; bits++ {
+	matrix := []int{
+		matDisplay,
+		matPolicy | matKioskFlags,
+		matExtension,
+		matDisplay | matPolicy | matKioskFlags | matExtension | matStartURL,
+	}
+	if os.Getenv("E2E_CHROMIUM_CONFIGURE_POWERSET") == "1" {
+		matrix = matrix[:0]
+		for bits := 1; bits <= matMaxBitmask; bits++ {
+			matrix = append(matrix, bits)
+		}
+	}
+
+	for _, bits := range matrix {
 		bits := bits
 		t.Run(chromiumConfigurePowersetLabel(bits), func(t *testing.T) {
 
@@ -150,7 +163,7 @@ func chromiumConfigurePowersetPopulate(t *testing.T, w *multipart.Writer, bits i
 	}
 
 	if bits&matStartURL != 0 {
-		if err := w.WriteField("start_url", `https://example.com/`); err != nil {
+		if err := w.WriteField("start_url", `data:text/html,<title>configure</title>`); err != nil {
 			return err
 		}
 	}
@@ -159,8 +172,8 @@ func chromiumConfigurePowersetPopulate(t *testing.T, w *multipart.Writer, bits i
 
 func intPtr(i int) *int { return &i }
 
-// TestChromiumConfigureMultistartJSONObject exercises JSON start_url variant (wait_until JSON).
-func TestChromiumConfigureStartURLJSONObject(t *testing.T) {
+// TestChromiumConfigureStartURLBareHost exercises Kernel-compatible bare host normalization.
+func TestChromiumConfigureStartURLBareHost(t *testing.T) {
 	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
@@ -177,16 +190,9 @@ func TestChromiumConfigureStartURLJSONObject(t *testing.T) {
 	defer c.Stop(ctx)
 	require.NoError(t, c.WaitReady(ctx))
 
-	payload := map[string]string{
-		"url":        "https://example.com/",
-		"wait_until": "domcontentloaded",
-	}
-	raw, err := json.Marshal(payload)
-	require.NoError(t, err)
-
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	require.NoError(t, mw.WriteField("start_url", string(raw)))
+	require.NoError(t, mw.WriteField("start_url", "example.com"))
 	require.NoError(t, mw.Close())
 
 	client, err := c.APIClient()

@@ -3,12 +3,14 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -21,10 +23,12 @@ import (
 )
 
 const userDataProfileDir = "/home/kernel/user-data"
+const maxStartURLLen = 2048
+const startURLDispatchTimeout = 3 * time.Second
 
 type chromiumConfigureState struct {
-	displayJSON       *string
-	chromiumFlagsJSON *string
+	displayJSON        *string
+	chromiumFlagsJSON  *string
 	chromePoliciesJSON *string
 
 	stripComponents int
@@ -46,7 +50,7 @@ func (st *chromiumConfigureState) cleanup() {
 }
 
 // ChromiumConfigure batched Chromium/session configuration plus optional navigation.
-func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.ChromiumConfigureRequestObject) (oapi.ChromiumConfigureResponseObject, error) {
+func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.ChromiumConfigureRequestObject) (resp oapi.ChromiumConfigureResponseObject, err error) {
 	start := time.Now()
 
 	if request.Body == nil {
@@ -60,87 +64,116 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 	}
 	defer st.cleanup()
 
-	if cfgActionables(st)+cfgHasStartURL(st.startURLRaw) == 0 {
+	spec, msgs := chromiumStartURLSpec(st.startURLRaw)
+	if msgs != "" {
+		return cfg400(msgs), nil
+	}
+
+	if cfgActionables(st)+cfgHasStartURLSpec(spec) == 0 {
 		return cfg400("no configuration fields provided"), nil
 	}
 
 	needsStop := chromiumNeedsStopCycle(st)
+	chromiumStopped := false
+	restartAfterStop := func() error {
+		if !chromiumStopped {
+			return nil
+		}
+		chromiumStopped = false
+		return s.startChromiumAndWait(ctx, "batched chromium configure")
+	}
+	defer func() {
+		if restartErr := restartAfterStop(); restartErr != nil {
+			if resp != nil {
+				logger.FromContext(ctx).Error("failed to restart chromium after configure error", "error", restartErr)
+				return
+			}
+			resp = cfg500ConfigureStep(chromiumConfigureStepStart, restartErr.Error())
+			err = nil
+		}
+	}()
 
 	if needsStop {
-		if chromiumDisplayHasSizedRequest(st.displayJSON) {
-			stopped, stopErr := s.stopActiveRecordings(ctx)
-			if stopErr != nil {
-				return cfg500Configure(fmt.Sprintf("failed to stop recordings: %v", stopErr)), nil
-			}
-			if len(stopped) > 0 {
-				defer func() {
-					go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
-				}()
-			}
-		}
-
 		logger.FromContext(ctx).Info("chromium configure (stop/start path)")
 		if err := s.stopChromium(ctx); err != nil {
-			return cfg500Configure(err.Error()), nil
+			return cfg500ConfigureStep(chromiumConfigureStepStop, err.Error()), nil
+		}
+		chromiumStopped = true
+
+		policyOverrides, err := chromiumValidatePolicies(st.chromePoliciesJSON)
+		if err != nil {
+			return cfgResponseFromStepError(chromiumConfigureStepPolicies, err), nil
+		}
+		if err := chromiumApplyPolicies(ctx, s, policyOverrides); err != nil {
+			return cfgResponseFromStepError(chromiumConfigureStepPolicies, err), nil
 		}
 
-		if st.hasProfile {
-			if err := chromiumApplyProfileArchive(st.profileTemp, st.stripComponents); err != nil {
-				return cfg500Configure(err.Error()), nil
-			}
+		if reqMsgs, ierr := chromiumApplyExtensions(ctx, s, st.extItems); reqMsgs != "" {
+			return cfg400(fmt.Sprintf("%s: %s", chromiumConfigureStepExtensions, reqMsgs)), nil
+		} else if ierr != nil {
+			return cfg500ConfigureStep(chromiumConfigureStepExtensions, ierr.Error()), nil
 		}
 
-		if chromiumDisplayHasSizedRequest(st.displayJSON) {
-			b, msgs := chromiumParseDisplayParts(st.displayJSON)
-			if msgs != "" {
-				return cfg400(msgs), nil
+		if st.displayJSON != nil && strings.TrimSpace(*st.displayJSON) != "" {
+			displayPlan, displayResp := chromiumPrepareDisplay(ctx, s, st.displayJSON)
+			if displayResp != nil {
+				return displayResp, nil
 			}
-			if b != nil {
-				if rr := chromiumDisplayApplyWhileStopped(ctx, s, b); rr != nil {
+			if displayPlan != nil {
+				stopped, stopErr := s.stopActiveRecordings(ctx)
+				if stopErr != nil {
+					return cfg500ConfigureStep(chromiumConfigureStepDisplay, fmt.Sprintf("failed to stop recordings: %v", stopErr)), nil
+				}
+				if len(stopped) > 0 {
+					defer func() {
+						go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
+					}()
+				}
+				if rr := chromiumDisplayApplyWhileStopped(ctx, s, displayPlan); rr != nil {
 					return rr, nil
 				}
 			}
 		}
 
-		if msgs := chromiumApplyPolicies(ctx, s, st.chromePoliciesJSON); msgs != "" {
-			return policyDisposition(msgs), nil
+		flagsPlan, err := chromiumValidateFlags(st.chromiumFlagsJSON)
+		if err != nil {
+			return cfgResponseFromStepError(chromiumConfigureStepFlags, err), nil
+		}
+		if err := chromiumMergeFlags(ctx, s, flagsPlan); err != nil {
+			return cfgResponseFromStepError(chromiumConfigureStepFlags, err), nil
 		}
 
-		if reqMsgs, ierr := chromiumApplyExtensions(ctx, s, st.extItems); reqMsgs != "" {
-			return cfg400(reqMsgs), nil
-		} else if ierr != nil {
-			return cfg500Configure(ierr.Error()), nil
-		}
-
-		if msgs := chromiumMergeFlagsRaw(ctx, s, st.chromiumFlagsJSON); msgs != "" {
-			if strings.HasPrefix(msgs, "bad:") {
-				return cfg400(strings.TrimPrefix(msgs, "bad:")), nil
+		if st.hasProfile {
+			preparedProfile, cleanupProfile, err := chromiumPrepareProfileArchive(st.profileTemp, st.stripComponents)
+			if cleanupProfile != nil {
+				defer cleanupProfile()
 			}
-			return cfg500Configure(strings.TrimPrefix(msgs, "int:")), nil
+			if err != nil {
+				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), nil
+			}
+			if err := chromiumInstallPreparedProfile(preparedProfile); err != nil {
+				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), nil
+			}
 		}
 
-		if err := s.startChromiumAndWait(ctx, "batched chromium configure"); err != nil {
-			return cfg500Configure(err.Error()), nil
+		if err := restartAfterStop(); err != nil {
+			return cfg500ConfigureStep(chromiumConfigureStepStart, err.Error()), nil
 		}
 	} else {
 		if st.displayJSON != nil && strings.TrimSpace(*st.displayJSON) != "" {
-			body, msgs := chromiumParseDisplayParts(st.displayJSON)
-			if msgs != "" {
-				return cfg400(msgs), nil
+			displayPlan, displayResp := chromiumPrepareDisplay(ctx, s, st.displayJSON)
+			if displayResp != nil {
+				return displayResp, nil
 			}
-			if rr := chromiumRunPatchDisplay(ctx, s, body); rr != nil {
+			if rr := chromiumRunPatchDisplay(ctx, s, displayPlan.body); rr != nil {
 				return rr, nil
 			}
 		}
 	}
 
-	spec, msgs := chromiumStartURLSpec(st.startURLRaw)
-	if msgs != "" {
-		return cfg400(msgs), nil
-	}
 	if spec.needsNav {
 		if err := chromiumDoNavigate(ctx, s, spec); err != nil {
-			return cfg500Navigate(err.Error()), nil
+			logger.FromContext(ctx).Warn("start_url dispatch failed", "error", err)
 		}
 	}
 
@@ -151,63 +184,45 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 type startURLParsed struct {
 	needsNav bool
 	url      string
-	wait     cdpclient.NavigateWaitUntil
-	timeout  time.Duration
 }
+
+type chromiumConfigureStep string
+
+const (
+	chromiumConfigureStepStop       chromiumConfigureStep = "stop_chromium"
+	chromiumConfigureStepStart      chromiumConfigureStep = "start_chromium"
+	chromiumConfigureStepPolicies   chromiumConfigureStep = "chrome_policies"
+	chromiumConfigureStepExtensions chromiumConfigureStep = "extensions"
+	chromiumConfigureStepDisplay    chromiumConfigureStep = "display"
+	chromiumConfigureStepFlags      chromiumConfigureStep = "chromium_flags"
+	chromiumConfigureStepProfile    chromiumConfigureStep = "profile"
+)
 
 func chromiumStartURLSpec(raw *string) (startURLParsed, string) {
 	var out startURLParsed
-	out.timeout = 45 * time.Second
-	out.wait = cdpclient.NavigateWaitLoad
 	if raw == nil || strings.TrimSpace(*raw) == "" {
 		return out, ""
 	}
-	s := strings.TrimSpace(*raw)
-	if strings.HasPrefix(s, "{") {
-		var v struct {
-			URL       string `json:"url"`
-			WaitUntil string `json:"wait_until"`
-			Timeout   *int   `json:"timeout_sec,omitempty"`
-		}
-		if err := json.Unmarshal([]byte(s), &v); err != nil {
-			return out, "invalid start_url JSON"
-		}
-		if strings.TrimSpace(v.URL) == "" {
-			return out, "start_url JSON requires url"
-		}
-		switch strings.TrimSpace(strings.ToLower(v.WaitUntil)) {
-		case "", "load":
-			out.wait = cdpclient.NavigateWaitLoad
-		case "domcontentloaded":
-			out.wait = cdpclient.NavigateWaitDOMContentLoaded
-		default:
-			return out, "wait_until must be load or domcontentloaded"
-		}
-		out.url = strings.TrimSpace(v.URL)
-		if v.Timeout != nil && *v.Timeout > 0 {
-			out.timeout = time.Duration(*v.Timeout) * time.Second
-		}
-	} else {
-		out.url = s
+	if len(*raw) > maxStartURLLen {
+		return out, fmt.Sprintf("start_url exceeds max length of %d bytes", maxStartURLLen)
 	}
-	if errMsgs := chromiumValidateNavigateURL(out.url); errMsgs != "" {
-		return out, errMsgs
-	}
+	out.url = normalizeStartURL(*raw)
 	out.needsNav = true
 	return out, ""
 }
 
-func chromiumValidateNavigateURL(u string) string {
-	parsed, err := url.Parse(u)
-	if err != nil {
-		return "invalid start URL"
+func normalizeStartURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return rawURL
 	}
-	switch strings.ToLower(parsed.Scheme) {
-	case "https", "http", "about", "data", "chrome", "devtools":
-	default:
-		return fmt.Sprintf("unsupported URL scheme %q", parsed.Scheme)
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme == "" ||
+		strings.Contains(parsed.Scheme, ".") ||
+		strings.EqualFold(parsed.Scheme, "localhost") {
+		return "https://" + rawURL
 	}
-	return ""
+	return rawURL
 }
 
 func chromiumDoNavigate(ctx context.Context, s *ApiService, spec startURLParsed) error {
@@ -215,16 +230,47 @@ func chromiumDoNavigate(ctx context.Context, s *ApiService, spec startURLParsed)
 	if upstream == "" {
 		return fmt.Errorf("devtools upstream not available")
 	}
-	navCtx, cancel := context.WithTimeout(ctx, spec.timeout)
+	navCtx, cancel := context.WithTimeout(ctx, startURLDispatchTimeout)
 	defer cancel()
-	return cdpclient.NavigateFirstPage(navCtx, upstream, spec.url, spec.wait)
+	return cdpclient.DispatchStartURL(navCtx, upstream, spec.url)
+}
+
+type cfgBadRequestError struct {
+	message string
+}
+
+func (e cfgBadRequestError) Error() string {
+	return e.message
+}
+
+func cfgBadRequest(msg string) error {
+	return cfgBadRequestError{message: msg}
+}
+
+func cfgResponseFromStepError(step chromiumConfigureStep, err error) oapi.ChromiumConfigureResponseObject {
+	var bad cfgBadRequestError
+	if errors.As(err, &bad) {
+		return cfg400(fmt.Sprintf("%s: %s", step, bad.message))
+	}
+	return cfg500ConfigureStep(step, err.Error())
+}
+
+type chromiumFlagsPlan struct {
+	flags []string
+}
+
+type chromiumDisplayPlan struct {
+	body        *oapi.PatchDisplayJSONRequestBody
+	width       int
+	height      int
+	refreshRate int
 }
 
 func chromiumNeedsStopCycle(st *chromiumConfigureState) bool {
 	return st.hasProfile ||
 		len(st.extItems) > 0 ||
-		policiesContentNonEmpty(st.chromePoliciesJSON) ||
-		flagsContentNonEmpty(st.chromiumFlagsJSON)
+		policiesNonEmpty(st.chromePoliciesJSON) ||
+		flagsNonEmpty(st.chromiumFlagsJSON)
 }
 
 func policiesContentNonEmpty(s *string) bool {
@@ -295,6 +341,15 @@ func cfg500Configure(msg string) oapi.ChromiumConfigure500JSONResponse {
 	})
 }
 
+func cfg500ConfigureStep(step chromiumConfigureStep, msg string) oapi.ChromiumConfigure500JSONResponse {
+	stepValue := string(step)
+	return oapi.ChromiumConfigure500JSONResponse(oapi.ChromiumConfigureError{
+		Phase:   oapi.ConfigurePhase,
+		Step:    &stepValue,
+		Message: msg,
+	})
+}
+
 func cfg500Navigate(msg string) oapi.ChromiumConfigure500JSONResponse {
 	return oapi.ChromiumConfigure500JSONResponse(oapi.ChromiumConfigureError{
 		Phase:   oapi.NavigatePhase,
@@ -307,7 +362,7 @@ func cfgActionables(st *chromiumConfigureState) int {
 	if policiesContentNonEmpty(st.chromePoliciesJSON) {
 		n++
 	}
-	if flagsContentNonEmpty(st.chromiumFlagsJSON) {
+	if flagsNonEmpty(st.chromiumFlagsJSON) {
 		n++
 	}
 	if len(st.extItems) > 0 {
@@ -316,14 +371,14 @@ func cfgActionables(st *chromiumConfigureState) int {
 	if st.hasProfile {
 		n++
 	}
-	if chromiumDisplayHasSizedRequest(st.displayJSON) {
+	if st.displayJSON != nil && strings.TrimSpace(*st.displayJSON) != "" {
 		n++
 	}
 	return n
 }
 
-func cfgHasStartURL(s *string) int {
-	if s == nil || strings.TrimSpace(*s) == "" {
+func cfgHasStartURLSpec(spec startURLParsed) int {
+	if !spec.needsNav {
 		return 0
 	}
 	return 1
@@ -343,6 +398,7 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 		gotZip bool
 	}
 	var cur *pend
+	var gotDisplay, gotChromiumFlags, gotChromePolicies, gotStripComponents, gotProfileArchive, gotStartURL bool
 
 	for {
 		part, err := mr.NextPart()
@@ -354,6 +410,10 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 		}
 		switch name := part.FormName(); name {
 		case "display":
+			if gotDisplay {
+				return "duplicate display field"
+			}
+			gotDisplay = true
 			b, err := io.ReadAll(part)
 			if err != nil {
 				return "read display field"
@@ -361,6 +421,10 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			v := strings.TrimSpace(string(b))
 			st.displayJSON = &v
 		case "chromium_flags":
+			if gotChromiumFlags {
+				return "duplicate chromium_flags field"
+			}
+			gotChromiumFlags = true
 			b, err := io.ReadAll(part)
 			if err != nil {
 				return "read chromium_flags field"
@@ -368,6 +432,10 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			v := string(b)
 			st.chromiumFlagsJSON = &v
 		case "chrome_policies":
+			if gotChromePolicies {
+				return "duplicate chrome_policies field"
+			}
+			gotChromePolicies = true
 			b, err := io.ReadAll(part)
 			if err != nil {
 				return "read chrome_policies field"
@@ -375,14 +443,24 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			v := string(b)
 			st.chromePoliciesJSON = &v
 		case "strip_components":
+			if gotStripComponents {
+				return "duplicate strip_components field"
+			}
+			gotStripComponents = true
 			b, err := io.ReadAll(part)
 			if err != nil {
 				return "read strip_components"
 			}
-			if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && n >= 0 {
-				st.stripComponents = n
+			n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+			if err != nil || n < 0 {
+				return "strip_components must be a non-negative integer"
 			}
+			st.stripComponents = n
 		case "profile_archive":
+			if gotProfileArchive {
+				return "duplicate profile_archive field"
+			}
+			gotProfileArchive = true
 			tmp, err := os.CreateTemp("", "bcc-prof-*.tar.zst")
 			if err != nil {
 				return "temp profile_archive"
@@ -398,6 +476,10 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			st.profileTemp = tmp.Name()
 			st.hasProfile = true
 		case "start_url":
+			if gotStartURL {
+				return "duplicate start_url field"
+			}
+			gotStartURL = true
 			b, err := io.ReadAll(part)
 			if err != nil {
 				return "read start_url"
@@ -455,24 +537,62 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 	return ""
 }
 
-func chromiumApplyProfileArchive(profilePath string, strip int) error {
-	if err := os.RemoveAll(userDataProfileDir); err != nil {
-		return fmt.Errorf("clear user-data: %w", err)
+func chromiumPrepareProfileArchive(profilePath string, strip int) (preparedDir string, cleanup func(), err error) {
+	parent := filepath.Dir(userDataProfileDir)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return "", nil, fmt.Errorf("mkdir user-data parent: %w", err)
 	}
-	if err := os.MkdirAll(userDataProfileDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir user-data: %w", err)
+	preparedDir, err = os.MkdirTemp(parent, ".user-data-new-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp user-data dir: %w", err)
 	}
+	cleanup = func() {
+		_ = os.RemoveAll(preparedDir)
+	}
+
 	f, err := os.Open(profilePath)
 	if err != nil {
-		return err
+		cleanup()
+		return "", nil, err
 	}
 	defer f.Close()
-	if err := zstdutil.UntarZstd(f, userDataProfileDir, strip); err != nil {
-		return fmt.Errorf("extract profile archive: %w", err)
+	if err := zstdutil.UntarZstd(f, preparedDir, strip); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("extract profile archive: %w", err)
 	}
-	out, err := exec.Command("chown", "-R", "kernel:kernel", userDataProfileDir).CombinedOutput()
+	out, err := exec.Command("chown", "-R", "kernel:kernel", preparedDir).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("chown user-data: %w (%s)", err, string(out))
+		cleanup()
+		return "", nil, fmt.Errorf("chown user-data: %w (%s)", err, string(out))
+	}
+	return preparedDir, cleanup, nil
+}
+
+func chromiumInstallPreparedProfile(preparedDir string) error {
+	if preparedDir == "" {
+		return nil
+	}
+	parent := filepath.Dir(userDataProfileDir)
+	backupDir := filepath.Join(parent, fmt.Sprintf(".user-data-old-%d", time.Now().UnixNano()))
+	hadExisting := false
+
+	if _, err := os.Stat(userDataProfileDir); err == nil {
+		hadExisting = true
+		if err := os.Rename(userDataProfileDir, backupDir); err != nil {
+			return fmt.Errorf("backup user-data: %w", err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat user-data: %w", err)
+	}
+
+	if err := os.Rename(preparedDir, userDataProfileDir); err != nil {
+		if hadExisting {
+			_ = os.Rename(backupDir, userDataProfileDir)
+		}
+		return fmt.Errorf("replace user-data: %w", err)
+	}
+	if hadExisting {
+		_ = os.RemoveAll(backupDir)
 	}
 	return nil
 }
@@ -499,25 +619,75 @@ func chromiumParseDisplayParts(displayJSON *string) (*oapi.PatchDisplayJSONReque
 	return &body, ""
 }
 
-func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, body *oapi.PatchDisplayRequest) oapi.ChromiumConfigureResponseObject {
-	if body.Width == nil || body.Height == nil {
-		return nil
+func chromiumPrepareDisplay(ctx context.Context, s *ApiService, displayJSON *string) (*chromiumDisplayPlan, oapi.ChromiumConfigureResponseObject) {
+	if displayJSON == nil {
+		return nil, nil
 	}
-	w, h := *body.Width, *body.Height
+	body, msgs := chromiumParseDisplayParts(displayJSON)
+	if msgs != "" {
+		return nil, cfg400(msgs)
+	}
+	if body.Width == nil && body.Height == nil {
+		return nil, cfg400("no display parameters to update")
+	}
+
+	currentWidth, currentHeight, currentRefreshRate, err := s.getCurrentResolution(ctx)
+	if err != nil {
+		logger.FromContext(ctx).Error("failed to get current resolution", "error", err)
+		return nil, cfg500ConfigureStep(chromiumConfigureStepDisplay, "failed to get current display resolution")
+	}
+	width, height, refreshRate := currentWidth, currentHeight, currentRefreshRate
+	if body.Width != nil {
+		width = *body.Width
+	}
+	if body.Height != nil {
+		height = *body.Height
+	}
+	if body.RefreshRate != nil {
+		refreshRate = int(*body.RefreshRate)
+	}
+
+	if width <= 0 || height <= 0 {
+		return nil, cfg400("invalid width/height")
+	}
+
+	requireIdle := true
+	if body.RequireIdle != nil {
+		requireIdle = *body.RequireIdle
+	}
+	if requireIdle {
+		live := s.getActiveNekoSessions(ctx)
+		isRecording := s.anyRecordingActive(ctx)
+		if live != 0 || isRecording {
+			return nil, oapi.ChromiumConfigure409JSONResponse{
+				ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{
+					Message: "resize refused: live view or recording/replay active",
+				},
+			}
+		}
+	}
+
+	return &chromiumDisplayPlan{
+		body:        body,
+		width:       width,
+		height:      height,
+		refreshRate: refreshRate,
+	}, nil
+}
+
+func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *chromiumDisplayPlan) oapi.ChromiumConfigureResponseObject {
+	w, h := plan.width, plan.height
 	if w <= 0 || h <= 0 {
 		return cfg400("display width and height must be positive")
 	}
 	mode := s.detectDisplayMode(ctx)
-	rr := 60
-	if body.RefreshRate != nil {
-		rr = int(*body.RefreshRate)
-	}
+	rr := plan.refreshRate
 	if mode == "xvfb" {
 		s.xvfbResizeMu.Lock()
 		err := s.resizeXvfb(ctx, w, h)
 		s.xvfbResizeMu.Unlock()
 		if err != nil {
-			return cfg500Configure(err.Error())
+			return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 		}
 		s.clearViewportOverride()
 		return nil
@@ -529,7 +699,7 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, body *
 		err = s.setResolutionXorgViaXrandr(ctx, w, h, rr, false)
 	}
 	if err != nil {
-		return cfg500Configure(err.Error())
+		return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 	}
 	return nil
 }
@@ -537,7 +707,7 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, body *
 func chromiumRunPatchDisplay(ctx context.Context, s *ApiService, body *oapi.PatchDisplayJSONRequestBody) oapi.ChromiumConfigureResponseObject {
 	resp, err := s.PatchDisplay(ctx, oapi.PatchDisplayRequestObject{Body: body})
 	if err != nil {
-		return cfg500Configure(err.Error())
+		return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 	}
 	switch r := resp.(type) {
 	case oapi.PatchDisplay200JSONResponse:
@@ -547,44 +717,44 @@ func chromiumRunPatchDisplay(ctx context.Context, s *ApiService, body *oapi.Patc
 	case oapi.PatchDisplay409JSONResponse:
 		return oapi.ChromiumConfigure409JSONResponse{ConflictErrorJSONResponse: r.ConflictErrorJSONResponse}
 	case oapi.PatchDisplay500JSONResponse:
-		return cfg500Configure(r.Message)
+		return cfg500ConfigureStep(chromiumConfigureStepDisplay, r.Message)
 	default:
-		return cfg500Configure("unexpected PatchDisplay response")
+		return cfg500ConfigureStep(chromiumConfigureStepDisplay, "unexpected PatchDisplay response")
 	}
 }
 
-func chromiumApplyPolicies(ctx context.Context, s *ApiService, raw *string) string {
+func chromiumValidatePolicies(raw *string) (policy.ChromiumPolicyOverrides, error) {
 	if raw == nil || strings.TrimSpace(*raw) == "" {
-		return ""
+		return nil, nil
 	}
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(*raw), &m); err != nil {
-		return "bad:invalid chrome_policies JSON"
+		return nil, cfgBadRequest("invalid chrome_policies JSON")
 	}
 	if len(m) == 0 {
-		return ""
+		return nil, nil
 	}
 	overrides, err := policy.NewChromiumPolicyOverrides(m)
 	if err != nil {
-		if strings.Contains(err.Error(), "cannot be overridden") || strings.Contains(err.Error(), "invalid chromium policy overrides") {
-			return "bad:" + err.Error()
-		}
-		return "int:" + err.Error()
+		return nil, err
+	}
+	if err := overrides.Validate(); err != nil {
+		return nil, cfgBadRequest(err.Error())
+	}
+	return overrides, nil
+}
+
+func chromiumApplyPolicies(ctx context.Context, s *ApiService, overrides policy.ChromiumPolicyOverrides) error {
+	if len(overrides) == 0 {
+		return nil
 	}
 	if err := s.policy.ApplyOverrides(overrides); err != nil {
 		if strings.Contains(err.Error(), "cannot be overridden") || strings.Contains(err.Error(), "invalid chromium policy overrides") {
-			return "bad:" + err.Error()
+			return cfgBadRequest(err.Error())
 		}
-		return "int:" + err.Error()
+		return err
 	}
-	return ""
-}
-
-func policyDisposition(msgs string) oapi.ChromiumConfigureResponseObject {
-	if strings.HasPrefix(msgs, "bad:") {
-		return cfg400(strings.TrimPrefix(msgs, "bad:"))
-	}
-	return cfg500Configure(strings.TrimPrefix(msgs, "int:"))
+	return nil
 }
 
 func chromiumApplyExtensions(ctx context.Context, s *ApiService, items []extensionZipItem) (string, error) {
@@ -594,30 +764,35 @@ func chromiumApplyExtensions(ctx context.Context, s *ApiService, items []extensi
 	return s.applyExtensionZipItems(ctx, items)
 }
 
-func chromiumMergeFlagsRaw(ctx context.Context, s *ApiService, raw *string) string {
+func chromiumValidateFlags(raw *string) (*chromiumFlagsPlan, error) {
 	if raw == nil || strings.TrimSpace(*raw) == "" {
-		return ""
+		return nil, nil
 	}
 	var body struct {
 		Flags []string `json:"flags"`
 	}
 	if err := json.Unmarshal([]byte(*raw), &body); err != nil {
-		return "bad:invalid chromium_flags JSON"
+		return nil, cfgBadRequest("invalid chromium_flags JSON")
 	}
 	if len(body.Flags) == 0 {
-		return "bad:chromium_flags requires at least one flag"
+		return nil, cfgBadRequest("chromium_flags requires at least one flag")
 	}
 	for _, flag := range body.Flags {
 		t := strings.TrimSpace(flag)
 		if t == "" {
-			return "bad:empty flag in chromium_flags"
+			return nil, cfgBadRequest("empty flag in chromium_flags")
 		}
 		if !strings.HasPrefix(t, "--") {
-			return fmt.Sprintf("bad:invalid flag format: %s (must start with --)", flag)
+			return nil, cfgBadRequest(fmt.Sprintf("invalid flag format: %s (must start with --)", flag))
 		}
 	}
-	if _, err := s.mergeAndWriteChromiumFlags(ctx, body.Flags); err != nil {
-		return "int:" + err.Error()
+	return &chromiumFlagsPlan{flags: body.Flags}, nil
+}
+
+func chromiumMergeFlags(ctx context.Context, s *ApiService, plan *chromiumFlagsPlan) error {
+	if plan == nil {
+		return nil
 	}
-	return ""
+	_, err := s.mergeAndWriteChromiumFlags(ctx, plan.flags)
+	return err
 }

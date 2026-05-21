@@ -168,6 +168,9 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensionZipItem) (reqMsg string, err error) {
 	log := logger.FromContext(ctx)
 	extBase := "/home/kernel/extensions"
+	if err := os.MkdirAll(extBase, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create extension base dir: %w", err)
+	}
 
 	for _, p := range items {
 		dest := filepath.Join(extBase, p.name)
@@ -179,12 +182,26 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 		}
 	}
 
+	var createdDests []string
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		for _, dest := range createdDests {
+			if removeErr := os.RemoveAll(dest); removeErr != nil {
+				log.Warn("failed to clean up partial extension dir", "error", removeErr, "dest", dest)
+			}
+		}
+	}()
+
 	for _, p := range items {
 		dest := filepath.Join(extBase, p.name)
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			log.Error("failed to create extension dir", "error", err)
 			return "", fmt.Errorf("failed to create extension dir: %w", err)
 		}
+		createdDests = append(createdDests, dest)
 		if err := ziputil.Unzip(p.zipTemp, dest); err != nil {
 			log.Error("failed to unzip zip file", "error", err)
 			return "invalid zip file", nil
@@ -280,6 +297,7 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 		return "", err
 	}
 
+	success = true
 	return "", nil
 }
 
@@ -338,7 +356,7 @@ func (s *ApiService) restartChromiumAndWait(ctx context.Context, operation strin
 	go func() {
 		cmdCtx, cancelCmd := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Minute)
 		defer cancelCmd()
-		out, err := exec.CommandContext(cmdCtx, "supervisorctl", "-c", "/etc/supervisor/supervisord.conf", "restart", "chromium").CombinedOutput()
+		out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("restart", "chromium")...).CombinedOutput()
 		if err != nil {
 			log.Error("failed to restart chromium", "error", err, "out", string(out))
 			errCh <- fmt.Errorf("supervisorctl restart failed: %w", err)
