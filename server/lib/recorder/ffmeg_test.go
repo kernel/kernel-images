@@ -68,6 +68,21 @@ func TestFFmpegRecorder_Params(t *testing.T) {
 	assert.Equal(t, *params.OutputDir, *got.OutputDir)
 }
 
+func TestFFmpegArgs_PadsOddDimensions(t *testing.T) {
+	tempDir := t.TempDir()
+	args, err := ffmpegArgs(defaultParams(tempDir), filepath.Join(tempDir, "out.mp4"))
+	require.NoError(t, err)
+
+	var vf string
+	for i, a := range args {
+		if a == "-vf" && i+1 < len(args) {
+			vf = args[i+1]
+			break
+		}
+	}
+	assert.Equal(t, "pad=ceil(iw/2)*2:ceil(ih/2)*2", vf)
+}
+
 func TestFFmpegRecorder_ForceStop(t *testing.T) {
 	tempDir := t.TempDir()
 	rec := &FFmpegRecorder{
