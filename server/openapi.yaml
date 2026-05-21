@@ -2546,15 +2546,17 @@ components:
       properties:
         captcha_type:
           type: string
-          description: Captcha vendor / variant.
+          description: >
+            Captcha vendor family. Producers normalize provider-specific task
+            names into this set: enterprise variants of recaptcha collapse into
+            their version bucket (v2 / v3), and anything not covered (e.g.
+            DataDome, MtCaptcha, plain OCR) is reported as `other`.
           enum:
             - hcaptcha
             - recaptcha_v2
             - recaptcha_v3
-            - recaptcha_enterprise
             - turnstile
             - geetest
-            - image_to_text
             - other
         status:
           type: string

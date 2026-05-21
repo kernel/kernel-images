@@ -15,6 +15,7 @@ const (
 	Network     = oapi.TelemetryEventCategory("network")
 	Page        = oapi.TelemetryEventCategory("page")
 	Interaction = oapi.TelemetryEventCategory("interaction")
+	Api         = oapi.TelemetryEventCategory("api")
 	System      = oapi.TelemetryEventCategory("system")
 )
 
@@ -25,6 +26,7 @@ var AllCategories = []oapi.TelemetryEventCategory{
 	Network,
 	Page,
 	Interaction,
+	Api,
 	System,
 }
 

@@ -23,7 +23,6 @@ import (
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
-	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -31,6 +30,7 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/telemetry"
 )
 
 func main() {
@@ -54,6 +54,7 @@ func main() {
 	stz := scaletozero.NewDebouncedControllerWithCooldown(scaletozero.NewUnikraftCloudController(), config.ScaleToZeroCooldown)
 	r := chi.NewRouter()
 	r.Use(
+		chiMiddleware.RequestID,
 		chiMiddleware.Logger,
 		chiMiddleware.Recoverer,
 		func(next http.Handler) http.Handler {
@@ -128,7 +129,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	strictHandler := oapi.NewStrictHandler(apiService, nil)
+	// api_call event emission. Off until the telemetry handlers flip it on.
+	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
+	strictHandler := oapi.NewStrictHandler(apiService, []oapi.StrictMiddlewareFunc{
+		api.TelemetryStrictMiddleware(),
+	})
 	oapi.HandlerFromMux(strictHandler, r)
 
 	// endpoints to expose the spec
@@ -198,7 +203,7 @@ func main() {
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
