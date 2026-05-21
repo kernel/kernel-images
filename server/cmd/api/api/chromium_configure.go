@@ -58,9 +58,13 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 	}
 
 	st := &chromiumConfigureState{}
-	if msg := chromiumCfgParseMultipart(request.Body, st); msg != "" {
+	if parseErr := chromiumCfgParseMultipart(request.Body, st); parseErr != nil {
 		st.cleanup()
-		return cfg400(msg), nil
+		var cfgErr chromiumCfgParseError
+		if errors.As(parseErr, &cfgErr) && cfgErr.internal {
+			return cfg500Configure(parseErr.Error()), nil
+		}
+		return cfg400(parseErr.Error()), nil
 	}
 	defer st.cleanup()
 
@@ -249,6 +253,23 @@ func cfgBadRequest(msg string) error {
 	return cfgBadRequestError{message: msg}
 }
 
+type chromiumCfgParseError struct {
+	message  string
+	internal bool
+}
+
+func (e chromiumCfgParseError) Error() string {
+	return e.message
+}
+
+func cfgParseBadRequest(msg string) error {
+	return chromiumCfgParseError{message: msg}
+}
+
+func cfgParseInternal(msg string) error {
+	return chromiumCfgParseError{message: msg, internal: true}
+}
+
 func cfgResponseFromStepError(step chromiumConfigureStep, err error) oapi.ChromiumConfigureResponseObject {
 	var bad cfgBadRequestError
 	if errors.As(err, &bad) {
@@ -313,6 +334,13 @@ func cfg400(msg string) oapi.ChromiumConfigure400JSONResponse {
 	}
 }
 
+func cfg500Configure(msg string) oapi.ChromiumConfigure500JSONResponse {
+	return oapi.ChromiumConfigure500JSONResponse(oapi.ChromiumConfigureError{
+		Phase:   oapi.ConfigurePhase,
+		Message: msg,
+	})
+}
+
 func cfg500ConfigureStep(step chromiumConfigureStep, msg string) oapi.ChromiumConfigure500JSONResponse {
 	stepValue := oapi.ChromiumConfigureErrorStep(step)
 	return oapi.ChromiumConfigure500JSONResponse(oapi.ChromiumConfigureError{
@@ -349,12 +377,12 @@ func cfgHasStartURLSpec(spec startURLParsed) int {
 	return 1
 }
 
-func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) string {
+func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) error {
 	mr, ok := any(body).(interface {
 		NextPart() (*multipart.Part, error)
 	})
 	if !ok {
-		return "multipart reader not available"
+		return cfgParseInternal("multipart reader not available")
 	}
 
 	type pend struct {
@@ -371,83 +399,83 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			break
 		}
 		if err != nil {
-			return "failed reading multipart"
+			return cfgParseBadRequest("failed reading multipart")
 		}
 		switch name := part.FormName(); name {
 		case "display":
 			if gotDisplay {
-				return "duplicate display field"
+				return cfgParseBadRequest("duplicate display field")
 			}
 			gotDisplay = true
 			b, err := io.ReadAll(part)
 			if err != nil {
-				return "read display field"
+				return cfgParseInternal("read display field")
 			}
 			v := strings.TrimSpace(string(b))
 			st.displayJSON = &v
 		case "chromium_flags":
 			if gotChromiumFlags {
-				return "duplicate chromium_flags field"
+				return cfgParseBadRequest("duplicate chromium_flags field")
 			}
 			gotChromiumFlags = true
 			b, err := io.ReadAll(part)
 			if err != nil {
-				return "read chromium_flags field"
+				return cfgParseInternal("read chromium_flags field")
 			}
 			v := string(b)
 			st.chromiumFlagsJSON = &v
 		case "chrome_policies":
 			if gotChromePolicies {
-				return "duplicate chrome_policies field"
+				return cfgParseBadRequest("duplicate chrome_policies field")
 			}
 			gotChromePolicies = true
 			b, err := io.ReadAll(part)
 			if err != nil {
-				return "read chrome_policies field"
+				return cfgParseInternal("read chrome_policies field")
 			}
 			v := string(b)
 			st.chromePoliciesJSON = &v
 		case "strip_components":
 			if gotStripComponents {
-				return "duplicate strip_components field"
+				return cfgParseBadRequest("duplicate strip_components field")
 			}
 			gotStripComponents = true
 			b, err := io.ReadAll(part)
 			if err != nil {
-				return "read strip_components"
+				return cfgParseInternal("read strip_components")
 			}
 			n, err := strconv.Atoi(strings.TrimSpace(string(b)))
 			if err != nil || n < 0 {
-				return "strip_components must be a non-negative integer"
+				return cfgParseBadRequest("strip_components must be a non-negative integer")
 			}
 			st.stripComponents = n
 		case "profile_archive":
 			if gotProfileArchive {
-				return "duplicate profile_archive field"
+				return cfgParseBadRequest("duplicate profile_archive field")
 			}
 			gotProfileArchive = true
 			tmp, err := os.CreateTemp("", "bcc-prof-*.tar.zst")
 			if err != nil {
-				return "temp profile_archive"
+				return cfgParseInternal("temp profile_archive")
 			}
 			st.allTemps = append(st.allTemps, tmp.Name())
 			if _, err := io.Copy(tmp, part); err != nil {
 				tmp.Close()
-				return "read profile_archive"
+				return cfgParseInternal("read profile_archive")
 			}
 			if err := tmp.Close(); err != nil {
-				return "finalize profile_archive"
+				return cfgParseInternal("finalize profile_archive")
 			}
 			st.profileTemp = tmp.Name()
 			st.hasProfile = true
 		case "start_url":
 			if gotStartURL {
-				return "duplicate start_url field"
+				return cfgParseBadRequest("duplicate start_url field")
 			}
 			gotStartURL = true
 			b, err := io.ReadAll(part)
 			if err != nil {
-				return "read start_url"
+				return cfgParseInternal("read start_url")
 			}
 			v := string(b)
 			st.startURLRaw = &v
@@ -456,19 +484,19 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 				cur = &pend{}
 			}
 			if cur.gotZip {
-				return "duplicate extensions.zip_file pair"
+				return cfgParseBadRequest("duplicate extensions.zip_file pair")
 			}
 			tmp, err := os.CreateTemp("", "bcc-ext-*.zip")
 			if err != nil {
-				return "temp extensions.zip_file"
+				return cfgParseInternal("temp extensions.zip_file")
 			}
 			st.allTemps = append(st.allTemps, tmp.Name())
 			if _, err := io.Copy(tmp, part); err != nil {
 				tmp.Close()
-				return "read extensions.zip_file"
+				return cfgParseInternal("read extensions.zip_file")
 			}
 			if err := tmp.Close(); err != nil {
-				return "close extensions.zip_file"
+				return cfgParseInternal("close extensions.zip_file")
 			}
 			cur.zipTmp = tmp.Name()
 			cur.gotZip = true
@@ -478,18 +506,18 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			}
 			b, err := io.ReadAll(part)
 			if err != nil {
-				return "read extensions.name"
+				return cfgParseInternal("read extensions.name")
 			}
 			nm := strings.TrimSpace(string(b))
 			if nm == "" || !nameRegex.MatchString(nm) {
-				return "invalid extensions.name"
+				return cfgParseBadRequest("invalid extensions.name")
 			}
 			if cur.name != "" {
-				return "duplicate extensions.name in pair"
+				return cfgParseBadRequest("duplicate extensions.name in pair")
 			}
 			cur.name = nm
 		default:
-			return fmt.Sprintf("unknown form field %q", name)
+			return cfgParseBadRequest(fmt.Sprintf("unknown form field %q", name))
 		}
 		if cur != nil && cur.gotZip && cur.name != "" {
 			st.extItems = append(st.extItems, extensionZipItem{zipTemp: cur.zipTmp, name: cur.name})
@@ -497,9 +525,9 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 		}
 	}
 	if cur != nil && (!cur.gotZip || cur.name == "") {
-		return "each extension pair needs extensions.zip_file plus extensions.name"
+		return cfgParseBadRequest("each extension pair needs extensions.zip_file plus extensions.name")
 	}
-	return ""
+	return nil
 }
 
 func chromiumPrepareProfileArchive(profilePath string, strip int) (preparedDir string, cleanup func(), err error) {
@@ -650,11 +678,13 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *
 	if mode == "xvfb" {
 		s.xvfbResizeMu.Lock()
 		err := s.resizeXvfb(ctx, w, h)
+		if err == nil {
+			s.clearViewportOverride()
+		}
 		s.xvfbResizeMu.Unlock()
 		if err != nil {
 			return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 		}
-		s.clearViewportOverride()
 		return nil
 	}
 	var err error
@@ -701,7 +731,7 @@ func chromiumValidatePolicies(raw *string) (policy.ChromiumPolicyOverrides, erro
 	}
 	overrides, err := policy.NewChromiumPolicyOverrides(m)
 	if err != nil {
-		return nil, err
+		return nil, cfgBadRequest(err.Error())
 	}
 	if err := overrides.Validate(); err != nil {
 		return nil, cfgBadRequest(err.Error())

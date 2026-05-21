@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"mime/multipart"
 	"strings"
@@ -99,6 +100,14 @@ func TestChromiumValidateFlags(t *testing.T) {
 	}
 }
 
+func TestChromiumValidatePoliciesBadRequest(t *testing.T) {
+	blocked := `{"ExtensionSettings":{}}`
+	_, err := chromiumValidatePolicies(&blocked)
+	require.Error(t, err)
+	var bad cfgBadRequestError
+	require.ErrorAs(t, err, &bad)
+}
+
 func TestChromiumParseDisplayPartsValidation(t *testing.T) {
 	badJSON := `{bad-json`
 	_, msg := chromiumParseDisplayParts(&badJSON)
@@ -121,9 +130,9 @@ func TestChromiumCfgParseMultipart(t *testing.T) {
 
 	br := multipart.NewReader(buf, w.Boundary())
 	st := &chromiumConfigureState{}
-	msg := chromiumCfgParseMultipart(br, st)
+	err := chromiumCfgParseMultipart(br, st)
 	defer st.cleanup()
-	require.Empty(t, msg)
+	require.NoError(t, err)
 
 	require.True(t, policiesContentNonEmpty(st.chromePoliciesJSON))
 	require.Equal(t, 2, st.stripComponents)
@@ -187,9 +196,12 @@ func TestChromiumCfgParseMultipartValidation(t *testing.T) {
 			require.NoError(t, w.Close())
 
 			st := &chromiumConfigureState{}
-			msg := chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+			err := chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
 			defer st.cleanup()
-			require.Equal(t, tc.want, msg)
+			require.EqualError(t, err, tc.want)
+			var parseErr chromiumCfgParseError
+			require.True(t, errors.As(err, &parseErr))
+			require.False(t, parseErr.internal)
 		})
 	}
 }
@@ -212,9 +224,9 @@ func TestChromiumCfgParseMultipartMultipleExtensionPairs(t *testing.T) {
 	require.NoError(t, w.Close())
 
 	st := &chromiumConfigureState{}
-	msg := chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+	err = chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
 	defer st.cleanup()
-	require.Empty(t, msg)
+	require.NoError(t, err)
 	require.Len(t, st.extItems, 2)
 	require.Equal(t, "one", st.extItems[0].name)
 	require.Equal(t, "two", st.extItems[1].name)
