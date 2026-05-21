@@ -314,7 +314,7 @@ func cfg400(msg string) oapi.ChromiumConfigure400JSONResponse {
 }
 
 func cfg500ConfigureStep(step chromiumConfigureStep, msg string) oapi.ChromiumConfigure500JSONResponse {
-	stepValue := string(step)
+	stepValue := oapi.ChromiumConfigureErrorStep(step)
 	return oapi.ChromiumConfigure500JSONResponse(oapi.ChromiumConfigureError{
 		Phase:   oapi.ConfigurePhase,
 		Step:    &stepValue,
