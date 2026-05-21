@@ -83,8 +83,11 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 		if !chromiumStopped {
 			return nil
 		}
+		if err := s.startChromiumAndWait(ctx, "batched chromium configure"); err != nil {
+			return err
+		}
 		chromiumStopped = false
-		return s.startChromiumAndWait(ctx, "batched chromium configure")
+		return nil
 	}
 	defer func() {
 		if restartErr := restartAfterStop(); restartErr != nil {
