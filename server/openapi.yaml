@@ -1170,19 +1170,19 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /chromium/configure:
+  /configure:
     post:
-      summary: Apply batched Chromium filesystem and launch configuration plus optional navigation
+      summary: Apply batched session and browser configuration plus optional navigation
       description: |
         Optional multipart parts apply configuration while Chromium stays stopped once (policy,
         flags, extensions, profile archive, optional display sizing), then Chromium is started exactly
         once and DevTools readiness is awaited. Optional `start_url` dispatches a best-effort
         navigation after readiness without waiting for page load. Bare hosts are normalized to
         `https://`. Omit any part you do not need. At least one actionable part must be present.
-        Required configuration steps run in the same logical order as the control-plane sync path
-        (policies, extensions, display, flags/kiosk, profile), but Chromium is started only once
-        at the end. The endpoint is not transactional: if a later required step fails, earlier
-        successful side effects may remain on the instance while the non-2xx error propagates.
+        Required configuration steps run in this order: policies, extensions, display, flags,
+        then profile archive. Chromium is started only once at the end. The endpoint is not
+        transactional: if a later required step fails, earlier successful side effects may remain
+        on the instance while the non-2xx error propagates.
         Prefer this over separate `/chromium/*` and `/display` calls when multiple restart-triggering
         steps apply in one session configure.
       operationId: chromiumConfigure
@@ -1208,11 +1208,14 @@ paths:
                   type: string
                 profile_archive:
                   description: >-
-                    tar.zst of `/home/kernel/user-data` (V2 profiles). Stripped paths use strip_components optional part.
+                    tar.zst archive containing the desired `/home/kernel/user-data` profile contents.
+                    Prefer archives whose root entries are the profile files/directories themselves
+                    (for example `Default/Preferences`). Use `strip_components` only when uploading
+                    an archive that includes leading wrapper directories.
                   type: string
                   format: binary
                 strip_components:
-                  description: Leading path components to strip when extracting profile_archive (non-negative integer as text).
+                  description: Optional number of leading path components to strip from profile_archive entries (non-negative integer as text).
                   type: string
                 start_url:
                   description: >-
