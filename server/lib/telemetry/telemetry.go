@@ -10,11 +10,16 @@ import (
 
 // TelemetryConfig holds caller-supplied telemetry preferences. All fields are
 // optional; zero values mean "use server defaults" (all user-facing categories
-// plus system events).
+// plus system events, no caller-supplied attributes).
 type TelemetryConfig struct {
 	// Categories limits which event categories are captured.
 	// nil or empty captures all user-facing categories plus system events.
 	Categories []oapi.TelemetryEventCategory
+
+	// Attributes are key/value pairs merged into every captured event's
+	// source metadata before publish. Event-level metadata wins on key
+	// conflict.
+	Attributes map[string]string
 }
 
 // TelemetrySession manages a telemetry session against a shared EventStream.
@@ -27,6 +32,7 @@ type TelemetrySession struct {
 	id              string
 	sessionStartSeq uint64
 	categories      map[oapi.TelemetryEventCategory]struct{}
+	attributes      map[string]string
 	appliedAt       time.Time
 }
 
@@ -47,21 +53,13 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.id = telemetrySessionID
 	s.sessionStartSeq = s.es.Seq()
 	s.appliedAt = time.Now()
-
-	// Build the category filter. CategorySystem is always included so
-	// kernel_api events (e.g. monitor_disconnected) are never dropped.
-	cats := cfg.Categories
-	if len(cats) == 0 {
-		cats = events.AllCategories
-	}
-	s.categories = make(map[oapi.TelemetryEventCategory]struct{}, len(cats)+1)
-	for _, c := range cats {
-		s.categories[c] = struct{}{}
-	}
-	s.categories[events.System] = struct{}{}
+	s.applyCategoriesLocked(cfg.Categories)
+	s.attributes = cloneAttributes(cfg.Attributes)
 }
 
-// publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
+// publishLocked stamps telemetry_session_id and any session attributes
+// into ev.Source.Metadata and forwards to the bus. Event-level metadata
+// wins on key conflict.
 // Requires s.mu to be held.
 func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 	if ev.Ts == 0 {
@@ -71,7 +69,13 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 		m := make(map[string]string)
 		ev.Source.Metadata = &m
 	}
-	(*ev.Source.Metadata)["telemetry_session_id"] = s.id
+	md := *ev.Source.Metadata
+	for k, v := range s.attributes {
+		if _, exists := md[k]; !exists {
+			md[k] = v
+		}
+	}
+	md["telemetry_session_id"] = s.id
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 
@@ -113,7 +117,7 @@ func (s *TelemetrySession) SessionStartSeq() uint64 {
 	return s.sessionStartSeq
 }
 
-// Config returns the current telemetry configuration.
+// Config returns a snapshot of the current telemetry configuration.
 func (s *TelemetrySession) Config() TelemetryConfig {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -121,7 +125,18 @@ func (s *TelemetrySession) Config() TelemetryConfig {
 	for c := range s.categories {
 		cats = append(cats, c)
 	}
-	return TelemetryConfig{Categories: cats}
+	return TelemetryConfig{
+		Categories: cats,
+		Attributes: cloneAttributes(s.attributes),
+	}
+}
+
+// Attributes returns a snapshot of the session's attribute map, or nil
+// if none are configured.
+func (s *TelemetrySession) Attributes() map[string]string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return cloneAttributes(s.attributes)
 }
 
 // AppliedAt returns when the current configuration was applied, or the zero
@@ -132,12 +147,19 @@ func (s *TelemetrySession) AppliedAt() time.Time {
 	return s.appliedAt
 }
 
-// UpdateConfig applies a new TelemetryConfig to the running session.
+// UpdateConfig applies a new TelemetryConfig to the running session. The
+// caller is responsible for resolving any PATCH-style merge before calling.
 func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// CategorySystem is always included so kernel_api events are never dropped.
-	cats := cfg.Categories
+	s.applyCategoriesLocked(cfg.Categories)
+	s.attributes = cloneAttributes(cfg.Attributes)
+}
+
+// applyCategoriesLocked rebuilds the category filter. An empty slice means
+// "all user-facing categories"; CategorySystem is always included so
+// kernel_api events are never dropped. Requires s.mu to be held.
+func (s *TelemetrySession) applyCategoriesLocked(cats []oapi.TelemetryEventCategory) {
 	if len(cats) == 0 {
 		cats = events.AllCategories
 	}
@@ -146,6 +168,18 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 		s.categories[c] = struct{}{}
 	}
 	s.categories[events.System] = struct{}{}
+}
+
+// cloneAttributes returns a defensive copy of src, or nil if src is empty.
+func cloneAttributes(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // Active reports whether a telemetry session is currently running.
@@ -162,4 +196,5 @@ func (s *TelemetrySession) Stop() {
 	defer s.mu.Unlock()
 	s.id = ""
 	s.appliedAt = time.Time{}
+	s.attributes = nil
 }

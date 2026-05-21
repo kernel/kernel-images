@@ -71,6 +71,8 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 // PatchTelemetry handles PATCH /telemetry.
 // Partially updates the telemetry configuration. Returns 404 if not configured.
 // Setting all four categories to enabled:false clears the configuration (200).
+// Browser categories merge per-key; attributes is a whole-map field that
+// replaces current when present and is a no-op when omitted.
 func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRequestObject) (oapi.PatchTelemetryResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
@@ -79,19 +81,19 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not configured"}}, nil
 	}
 
-	if req.Body != nil && req.Body.Browser != nil {
-		// PATCH merges: only categories explicitly set in the request are updated;
-		// omitted categories retain their current enabled/disabled state.
-		current := s.telemetrySession.Config()
-		cfg, allDisabled := mergeTelemetryConfig(current, req.Body.Browser)
-		if allDisabled {
-			// All categories disabled: clear the configuration.
-			s.cdpMonitor.Stop()
-			s.telemetrySession.Stop()
-			return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
-		}
-		s.telemetrySession.UpdateConfig(cfg)
+	if req.Body == nil {
+		return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
+
+	current := s.telemetrySession.Config()
+	cfg, allDisabled := mergeTelemetryConfig(current, req.Body)
+	if allDisabled {
+		// All categories disabled: clear the configuration.
+		s.cdpMonitor.Stop()
+		s.telemetrySession.Stop()
+		return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
+	}
+	s.telemetrySession.UpdateConfig(cfg)
 
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
@@ -112,9 +114,15 @@ func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
 // Returns the config, a boolean indicating whether all user-facing categories are explicitly
 // disabled (stop signal), and any validation error.
 func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool, error) {
-	if cfg == nil || cfg.Browser == nil {
-		// No config provided: capture all categories.
+	if cfg == nil {
+		// No config provided: capture all categories, no attributes.
 		return telemetry.TelemetryConfig{}, false, nil
+	}
+
+	attrs := attributesFromOAPI(cfg.Attributes)
+
+	if cfg.Browser == nil {
+		return telemetry.TelemetryConfig{Attributes: attrs}, false, nil
 	}
 
 	b := cfg.Browser
@@ -148,13 +156,14 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 	}
 	// CategorySystem is always appended by TelemetrySession.Start/UpdateConfig;
 	// no need to include it here.
-	return telemetry.TelemetryConfig{Categories: cats}, false, nil
+	return telemetry.TelemetryConfig{Categories: cats, Attributes: attrs}, false, nil
 }
 
-// mergeTelemetryConfig applies patch overrides onto current, returning the merged config and
-// whether all user-facing categories ended up disabled (stop signal). Only categories with an
-// explicit Enabled field in patch are changed; omitted categories keep their current state.
-func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.BrowserTelemetryCategoriesConfig) (telemetry.TelemetryConfig, bool) {
+// mergeTelemetryConfig applies a PATCH body onto current. Categories merge
+// per-key; attributes is whole-map (replace when non-nil, preserve when nil).
+// Returns the merged config and an allDisabled stop signal indicating the
+// caller should tear down the session.
+func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool) {
 	active := make(map[oapi.TelemetryEventCategory]struct{}, len(current.Categories))
 	for _, c := range current.Categories {
 		if c != events.System { // system is managed internally by TelemetrySession
@@ -162,21 +171,23 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		}
 	}
 
-	override := func(cat oapi.TelemetryEventCategory, field *oapi.BrowserTelemetryCategoryConfig) {
-		if field == nil || field.Enabled == nil {
-			return // not mentioned in patch — keep current state
+	if patch.Browser != nil {
+		override := func(cat oapi.TelemetryEventCategory, field *oapi.BrowserTelemetryCategoryConfig) {
+			if field == nil || field.Enabled == nil {
+				return // not mentioned in patch — keep current state
+			}
+			if *field.Enabled {
+				active[cat] = struct{}{}
+			} else {
+				delete(active, cat)
+			}
 		}
-		if *field.Enabled {
-			active[cat] = struct{}{}
-		} else {
-			delete(active, cat)
-		}
-	}
 
-	override(events.Console, patch.Console)
-	override(events.Network, patch.Network)
-	override(events.Page, patch.Page)
-	override(events.Interaction, patch.Interaction)
+		override(events.Console, patch.Browser.Console)
+		override(events.Network, patch.Browser.Network)
+		override(events.Page, patch.Browser.Page)
+		override(events.Interaction, patch.Browser.Interaction)
+	}
 
 	// CategorySystem is managed internally by TelemetrySession; exclude from the
 	// user-facing allDisabled check.
@@ -201,7 +212,12 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	for c := range active {
 		cats = append(cats, c)
 	}
-	return telemetry.TelemetryConfig{Categories: cats}, false
+
+	attrs := current.Attributes
+	if patch.Attributes != nil {
+		attrs = attributesFromOAPI(patch.Attributes)
+	}
+	return telemetry.TelemetryConfig{Categories: cats, Attributes: attrs}, false
 }
 
 // disabledConfig returns a BrowserTelemetryConfig with all four user-facing categories explicitly disabled.
@@ -239,6 +255,32 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 			Page:        enabled(events.Page),
 			Interaction: enabled(events.Interaction),
 		},
+		Attributes: attributesToOAPI(cfg.Attributes),
 	}
+}
+
+// attributesFromOAPI returns a defensive copy of in, or nil for nil/empty.
+func attributesFromOAPI(in *map[string]string) map[string]string {
+	if in == nil || len(*in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(*in))
+	for k, v := range *in {
+		out[k] = v
+	}
+	return out
+}
+
+// attributesToOAPI converts in to the OAPI pointer shape, returning nil
+// when empty so the field is omitted from JSON responses.
+func attributesToOAPI(in map[string]string) *map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return &out
 }
 

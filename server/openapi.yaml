@@ -1464,7 +1464,8 @@ components:
     BrowserTelemetryConfig:
       type: object
       description: >
-        Telemetry configuration for a browser. Per-category capture settings.
+        Telemetry configuration for a browser. Per-category capture settings
+        and optional caller-supplied attributes.
         Omit a category or set enabled: true to capture it.
         Set enabled: false to exclude it.
         Omit the browser key entirely to capture all categories.
@@ -1472,6 +1473,15 @@ components:
       properties:
         browser:
           $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
+        attributes:
+          type: object
+          additionalProperties:
+            type: string
+          description: >
+            Key/value pairs merged into every captured event's
+            `source.metadata` before publish. Event-level metadata wins on
+            key conflict. PUT replaces the full map (omit to clear); PATCH
+            replaces when present and is a no-op when omitted.
       additionalProperties: false
     BrowserTelemetryCategoriesConfig:
       type: object

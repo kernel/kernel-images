@@ -64,6 +64,46 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		assert.False(t, allDisabled)
 		assert.Len(t, cfg.Categories, 3) // console + page + interaction (network=false, others default true)
 	})
+
+	t.Run("attributes carried through with no browser key", func(t *testing.T) {
+		attrs := map[string]string{"kernel.session.id": "sess-1"}
+		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{Attributes: &attrs})
+		require.NoError(t, err)
+		assert.False(t, allDisabled)
+		assert.Equal(t, "sess-1", cfg.Attributes["kernel.session.id"])
+	})
+
+	t.Run("attributes carried through alongside categories", func(t *testing.T) {
+		tr := true
+		attrs := map[string]string{"kernel.session.id": "sess-2"}
+		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+			},
+			Attributes: &attrs,
+		})
+		require.NoError(t, err)
+		assert.False(t, allDisabled)
+		assert.Contains(t, cfg.Categories, events.Console)
+		assert.Equal(t, "sess-2", cfg.Attributes["kernel.session.id"])
+	})
+
+	t.Run("attributes dropped when all categories disabled", func(t *testing.T) {
+		f := false
+		attrs := map[string]string{"kernel.session.id": "sess-3"}
+		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+			Attributes: &attrs,
+		})
+		require.NoError(t, err)
+		assert.True(t, allDisabled)
+		assert.Empty(t, cfg.Attributes, "stop signal must trump attributes (session is torn down)")
+	})
 }
 
 func TestPutTelemetry(t *testing.T) {
@@ -240,6 +280,63 @@ func TestPatchTelemetry(t *testing.T) {
 		assert.False(t, *r200.Config.Browser.Network.Enabled)
 		assert.False(t, *r200.Config.Browser.Page.Enabled)
 		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
+	})
+
+	t.Run("attributes patched in echo back on GET", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+		require.NoError(t, err)
+
+		attrs := map[string]string{"kernel.session.id": "sess-patch"}
+		resp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{Attributes: &attrs},
+		})
+		require.NoError(t, err)
+		r200, ok := resp.(oapi.PatchTelemetry200JSONResponse)
+		require.True(t, ok)
+		require.NotNil(t, r200.Config.Attributes)
+		assert.Equal(t, "sess-patch", (*r200.Config.Attributes)["kernel.session.id"])
+	})
+
+	t.Run("nil attributes in patch preserves existing", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		attrs := map[string]string{"kernel.session.id": "sess-pre"}
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{Attributes: &attrs},
+		})
+		require.NoError(t, err)
+
+		tr := true
+		resp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{
+				Browser: &oapi.BrowserTelemetryCategoriesConfig{
+					Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				},
+			},
+		})
+		require.NoError(t, err)
+		r200, ok := resp.(oapi.PatchTelemetry200JSONResponse)
+		require.True(t, ok)
+		require.NotNil(t, r200.Config.Attributes, "attributes must be preserved across a category-only patch")
+		assert.Equal(t, "sess-pre", (*r200.Config.Attributes)["kernel.session.id"])
+	})
+
+	t.Run("empty attributes map in patch clears attributes", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		attrs := map[string]string{"kernel.session.id": "sess-pre"}
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{Attributes: &attrs},
+		})
+		require.NoError(t, err)
+
+		empty := map[string]string{}
+		resp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{Attributes: &empty},
+		})
+		require.NoError(t, err)
+		r200, ok := resp.(oapi.PatchTelemetry200JSONResponse)
+		require.True(t, ok)
+		assert.Nil(t, r200.Config.Attributes, "explicit empty map must clear attributes")
 	})
 
 	t.Run("put returns 201 after patch clears configuration", func(t *testing.T) {

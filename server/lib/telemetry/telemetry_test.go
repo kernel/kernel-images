@@ -197,6 +197,104 @@ func TestTelemetrySession(t *testing.T) {
 		assert.Equal(t, events.System, env.Event.Category)
 	})
 
+	t.Run("attributes_merged_into_source_metadata", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("attrs-session", TelemetryConfig{
+			Attributes: map[string]string{
+				"kernel.session.id": "sess-123",
+				"kernel.org.id":     "org-abc",
+			},
+		})
+		reader := ts.NewReader(0)
+
+		ts.Publish(events.Event{Type: "page.navigation", Category: events.Page, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		require.NotNil(t, env.Event.Source.Metadata)
+		md := *env.Event.Source.Metadata
+		assert.Equal(t, "sess-123", md["kernel.session.id"])
+		assert.Equal(t, "org-abc", md["kernel.org.id"])
+		assert.Equal(t, "attrs-session", md["telemetry_session_id"], "telemetry_session_id is always stamped")
+	})
+
+	t.Run("event_metadata_wins_over_session_attributes", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("collision-session", TelemetryConfig{
+			Attributes: map[string]string{
+				"shared.key": "session-value",
+			},
+		})
+		reader := ts.NewReader(0)
+
+		producerMd := map[string]string{"shared.key": "event-value"}
+		ts.Publish(events.Event{
+			Type:     "page.navigation",
+			Category: events.Page,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &producerMd},
+			Ts:       1,
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		require.NotNil(t, env.Event.Source.Metadata)
+		md := *env.Event.Source.Metadata
+		assert.Equal(t, "event-value", md["shared.key"], "event-level metadata must take precedence")
+	})
+
+	t.Run("update_config_replaces_attributes", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("update-session", TelemetryConfig{
+			Attributes: map[string]string{"old.key": "old"},
+		})
+		ts.UpdateConfig(TelemetryConfig{
+			Attributes: map[string]string{"new.key": "new"},
+		})
+		reader := ts.NewReader(0)
+
+		ts.Publish(events.Event{Type: "page.navigation", Category: events.Page, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		env := readEnvelope(t, reader, ctx)
+		require.NotNil(t, env.Event.Source.Metadata)
+		md := *env.Event.Source.Metadata
+		_, oldPresent := md["old.key"]
+		assert.False(t, oldPresent, "previous attributes must be dropped on UpdateConfig")
+		assert.Equal(t, "new", md["new.key"])
+	})
+
+	t.Run("stop_clears_attributes", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("stop-session", TelemetryConfig{
+			Attributes: map[string]string{"key": "val"},
+		})
+		require.Equal(t, "val", ts.Attributes()["key"])
+		ts.Stop()
+		assert.Empty(t, ts.Attributes(), "Stop must clear caller-supplied attributes")
+	})
+
+	t.Run("config_returns_attribute_snapshot", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("snap-session", TelemetryConfig{
+			Attributes: map[string]string{"k": "v"},
+		})
+
+		snap := ts.Config().Attributes
+		snap["k"] = "mutated"
+		snap["extra"] = "added"
+
+		got := ts.Attributes()
+		assert.Equal(t, "v", got["k"], "session attributes must not be mutated via Config() snapshot")
+		_, extra := got["extra"]
+		assert.False(t, extra)
+	})
+
 	t.Run("truncation_applied", func(t *testing.T) {
 		ts := newTestTelemetrySession(t)
 		reader := ts.NewReader(0)
