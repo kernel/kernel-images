@@ -81,9 +81,13 @@ func TestChromiumValidateFlags(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"--kiosk"}, plan.flags)
 
+	empty := `{"flags":[]}`
+	plan, err = chromiumValidateFlags(&empty)
+	require.NoError(t, err)
+	require.Nil(t, plan)
+
 	cases := []string{
 		`{bad-json`,
-		`{"flags":[]}`,
 		`{"flags":[""]}`,
 		`{"flags":["kiosk"]}`,
 	}
@@ -157,6 +161,21 @@ func TestChromiumCfgParseMultipartValidation(t *testing.T) {
 				require.NoError(t, w.WriteField("extensions.name", "missingzip"))
 			},
 			want: "each extension pair needs extensions.zip_file plus extensions.name",
+		},
+		{
+			name: "duplicate extension zip",
+			build: func(t *testing.T, w *multipart.Writer) {
+				t.Helper()
+				part, err := w.CreateFormFile("extensions.zip_file", "one.zip")
+				require.NoError(t, err)
+				_, err = io.WriteString(part, "first")
+				require.NoError(t, err)
+				part, err = w.CreateFormFile("extensions.zip_file", "two.zip")
+				require.NoError(t, err)
+				_, err = io.WriteString(part, "second")
+				require.NoError(t, err)
+			},
+			want: "duplicate extensions.zip_file pair",
 		},
 	}
 

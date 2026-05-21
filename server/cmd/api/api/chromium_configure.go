@@ -455,6 +455,9 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			if cur == nil {
 				cur = &pend{}
 			}
+			if cur.gotZip {
+				return "duplicate extensions.zip_file pair"
+			}
 			tmp, err := os.CreateTemp("", "bcc-ext-*.zip")
 			if err != nil {
 				return "temp extensions.zip_file"
@@ -466,9 +469,6 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) str
 			}
 			if err := tmp.Close(); err != nil {
 				return "close extensions.zip_file"
-			}
-			if cur.gotZip {
-				return "duplicate extensions.zip_file pair"
 			}
 			cur.zipTmp = tmp.Name()
 			cur.gotZip = true
@@ -740,7 +740,7 @@ func chromiumValidateFlags(raw *string) (*chromiumFlagsPlan, error) {
 		return nil, cfgBadRequest("invalid chromium_flags JSON")
 	}
 	if len(body.Flags) == 0 {
-		return nil, cfgBadRequest("chromium_flags requires at least one flag")
+		return nil, nil
 	}
 	for _, flag := range body.Flags {
 		t := strings.TrimSpace(flag)
