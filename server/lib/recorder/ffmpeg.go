@@ -498,6 +498,10 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 
 	// Output options next
 	args = append(args, []string{
+		// yuv420p requires even width and height; pad odd source dimensions by one pixel
+		// so libx264 doesn't fail to open the encoder.
+		"-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+
 		// Video encoding
 		"-c:v", "libx264",
 		"-profile:v", "high", // Explicit web-compatible profile
