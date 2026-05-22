@@ -3,7 +3,7 @@
     <div class="window">
       <div class="loading" v-if="loading">
         <div class="loader">
-          <img src="../assets/images/logo.svg" alt="loading" aria-hidden="true" class="kernel-logo" />
+          <img src="../assets/images/logo-white.svg" alt="loading" aria-hidden="true" class="kernel-logo" />
           <div class="loading-bar">
             <div class="loading-bar-fill"></div>
           </div>
