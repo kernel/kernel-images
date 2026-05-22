@@ -1298,7 +1298,7 @@ paths:
       summary: Set telemetry configuration
       description: >
         Sets the telemetry configuration. Returns 201 if telemetry was not
-        previously configured; returns 200 if it was. Setting all four categories
+        previously configured; returns 200 if it was. Setting all five categories
         to enabled: false clears the configuration; this is idempotent when
         telemetry is not configured.
       operationId: putTelemetry
@@ -1331,7 +1331,7 @@ paths:
         Partially updates the telemetry configuration. Only categories explicitly
         set in the request body are changed; omitted categories retain their
         current settings. Returns 404 if telemetry is not configured. Setting
-        all four categories to enabled: false clears the configuration.
+        all five categories to enabled: false clears the configuration.
       operationId: patchTelemetry
       requestBody:
         required: true
@@ -1466,6 +1466,7 @@ components:
             - network
             - page
             - interaction
+            - api
             - system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
@@ -1520,6 +1521,7 @@ components:
             - network
             - page
             - interaction
+            - api
             - system
           default: system
         source:
@@ -1552,7 +1554,7 @@ components:
         Omit a category or set enabled: true to capture it.
         Set enabled: false to exclude it.
         Omit the browser key entirely to capture all categories.
-        Set all four categories to enabled: false to clear the telemetry configuration.
+        Set all five categories to enabled: false to clear the telemetry configuration.
       properties:
         browser:
           $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
@@ -1573,6 +1575,14 @@ components:
         network:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: HTTP request/response metadata.
+        api:
+          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          description: >
+            Kernel-image-layer activity that the customer drives: inbound
+            API calls to the kernel-images-api server and
+            extension-mediated captcha solve attempts. CDP proxy and live
+            view session lifecycle events are infrastructure and live in
+            the always-on `system` category.
       additionalProperties: false
     BrowserTelemetryCategoryConfig:
       type: object
@@ -2455,6 +2465,229 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserApiCallEventData:
+      type: object
+      description: Per-call payload for `api_call` events.
+      additionalProperties: false
+      required: [request_id, operation_id, status, duration_ms]
+      properties:
+        request_id:
+          type: string
+          description: Per-request identifier from the kernel-images-api request middleware.
+        operation_id:
+          type: string
+          description: OpenAPI operationId of the matched route (e.g. `processExec`, `takeScreenshot`).
+        status:
+          type: integer
+          description: HTTP response status code.
+        duration_ms:
+          type: number
+          description: Wall-clock duration of the handler in milliseconds.
+    BrowserApiCallEvent:
+      type: object
+      description: An HTTP call handled by the kernel-images-api server.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: api_call
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserApiCallEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserCdpConnectEvent:
+      type: object
+      description: An external client (e.g. customer SDK, Playwright, Puppeteer) connected to the CDP WebSocket proxy on this VM.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: cdp_connect
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserCdpDisconnectEventData:
+      type: object
+      description: Per-disconnect payload for `cdp_disconnect` events.
+      additionalProperties: false
+      required: [duration_ms, message_count, reason]
+      properties:
+        duration_ms:
+          type: number
+          description: Wall-clock duration of the connection in milliseconds.
+        message_count:
+          type: integer
+          description: Number of CDP messages relayed across the connection in either direction.
+        reason:
+          type: string
+          description: >
+            Why the connection ended. `client_close`: the client initiated the close.
+            `upstream_changed`: Chromium restarted mid-session and the proxy tore down
+            so the client could reconnect against the new upstream. `upstream_error`:
+            upstream dial or message pump errored. `context_cancelled`: the request
+            context was cancelled (typically server shutdown).
+          enum:
+            - client_close
+            - upstream_changed
+            - upstream_error
+            - context_cancelled
+    BrowserCdpDisconnectEvent:
+      type: object
+      description: An external client disconnected from the CDP WebSocket proxy on this VM. Pair with the immediately preceding `cdp_connect` on the same stream.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: cdp_disconnect
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCdpDisconnectEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserLiveViewConnectEventData:
+      type: object
+      description: Per-session payload for `live_view_connect` events.
+      additionalProperties: false
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
+          description: Live view session identifier. Stable across reconnects, so a transient network blip can emit two events with the same `session_id`.
+    BrowserLiveViewConnectEvent:
+      type: object
+      description: A live view client connected to the headful browser's WebRTC server (Neko). Headful only; not emitted for headless images.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: live_view_connect
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserLiveViewConnectEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserLiveViewDisconnectEventData:
+      type: object
+      description: Per-session payload for `live_view_disconnect` events.
+      additionalProperties: false
+      required: [session_id, duration_ms]
+      properties:
+        session_id:
+          type: string
+          description: Live view session identifier; matches the corresponding `live_view_connect` event.
+        duration_ms:
+          type: number
+          description: Wall-clock duration of the connection in milliseconds.
+    BrowserLiveViewDisconnectEvent:
+      type: object
+      description: A live view client disconnected from the headful browser's WebRTC server (Neko). Pair with `live_view_connect` by `session_id`.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: live_view_disconnect
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserLiveViewDisconnectEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserCaptchaSolveResultEventData:
+      type: object
+      description: Per-attempt payload for `captcha_solve_result` events.
+      additionalProperties: false
+      required: [captcha_type, status, duration_ms]
+      properties:
+        captcha_type:
+          type: string
+          description: >
+            Captcha vendor family. Producers normalize provider-specific task
+            names into this set: enterprise variants of recaptcha collapse into
+            their version bucket (v2 / v3), and anything not covered (e.g.
+            DataDome, MtCaptcha, plain OCR) is reported as `other`.
+          enum:
+            - hcaptcha
+            - recaptcha_v2
+            - recaptcha_v3
+            - turnstile
+            - geetest
+            - other
+        status:
+          type: string
+          description: >
+            Terminal outcome. `success`: solver returned a usable solution.
+            `failure`: solver returned an error (see `error_code`).
+            `timeout`: solver did not return within the caller's wait budget.
+            `abandoned`: caller cancelled or the page navigated away mid-solve.
+          enum:
+            - success
+            - failure
+            - timeout
+            - abandoned
+        duration_ms:
+          type: number
+          description: Wall-clock duration from solve start to terminal outcome.
+        task_id:
+          type: string
+          description: Solver-assigned identifier. Opaque, useful for support cross-references.
+        website_host:
+          type: string
+          description: Host of the page where the captcha was solved.
+        website_path:
+          type: string
+          description: Path of the page where the captcha was solved. Query string excluded.
+        error_code:
+          type: string
+          description: Solver-specific error code on failure (e.g. `ERROR_CAPTCHA_UNSOLVABLE`). Absent on success.
+    BrowserCaptchaSolveResultEvent:
+      type: object
+      description: A captcha solve attempt reached a terminal outcome.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: captcha_solve_result
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCaptchaSolveResultEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     KnownBrowserTelemetryEvent:
       description: >
         Discriminated union of browser telemetry events emitted by the Kernel
@@ -2487,6 +2720,12 @@ components:
         - $ref: "#/components/schemas/BrowserMonitorReconnectedEvent"
         - $ref: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
         - $ref: "#/components/schemas/BrowserMonitorInitFailedEvent"
+        - $ref: "#/components/schemas/BrowserApiCallEvent"
+        - $ref: "#/components/schemas/BrowserCdpConnectEvent"
+        - $ref: "#/components/schemas/BrowserCdpDisconnectEvent"
+        - $ref: "#/components/schemas/BrowserLiveViewConnectEvent"
+        - $ref: "#/components/schemas/BrowserLiveViewDisconnectEvent"
+        - $ref: "#/components/schemas/BrowserCaptchaSolveResultEvent"
       discriminator:
         propertyName: type
         mapping:
@@ -2512,6 +2751,12 @@ components:
           monitor_reconnected: "#/components/schemas/BrowserMonitorReconnectedEvent"
           monitor_reconnect_failed: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
           monitor_init_failed: "#/components/schemas/BrowserMonitorInitFailedEvent"
+          api_call: "#/components/schemas/BrowserApiCallEvent"
+          cdp_connect: "#/components/schemas/BrowserCdpConnectEvent"
+          cdp_disconnect: "#/components/schemas/BrowserCdpDisconnectEvent"
+          live_view_connect: "#/components/schemas/BrowserLiveViewConnectEvent"
+          live_view_disconnect: "#/components/schemas/BrowserLiveViewDisconnectEvent"
+          captcha_solve_result: "#/components/schemas/BrowserCaptchaSolveResultEvent"
     TelemetryState:
       type: object
       description: Current telemetry configuration.

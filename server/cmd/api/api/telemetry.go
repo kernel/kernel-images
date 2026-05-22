@@ -3,8 +3,9 @@ package api
 import (
 	"context"
 
-	"github.com/nrednav/cuid2"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/nrednav/cuid2"
+	"github.com/samber/lo"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -25,7 +26,7 @@ func (s *ApiService) GetTelemetry(_ context.Context, _ oapi.GetTelemetryRequestO
 
 // PutTelemetry handles PUT /telemetry.
 // Sets the telemetry configuration. Returns 201 if not previously configured, 200 if it was.
-// Setting all four categories to enabled:false clears the configuration (200).
+// Setting all five categories to enabled:false clears the configuration (200).
 func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequestObject) (oapi.PutTelemetryResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
@@ -45,12 +46,14 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 		// All categories disabled: clear the configuration.
 		s.cdpMonitor.Stop()
 		s.telemetrySession.Stop()
+		s.applyTelemetryMiddlewareState()
 		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
 	if wasActive {
 		// Replace config on the running session.
 		s.telemetrySession.UpdateConfig(cfg)
+		s.applyTelemetryMiddlewareState()
 		return oapi.PutTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
 
@@ -61,16 +64,18 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
 		// Roll back: clear the session so a retry can succeed.
 		s.telemetrySession.Stop()
+		s.applyTelemetryMiddlewareState()
 		logger.FromContext(ctx).Error("failed to start telemetry monitor", "err", err)
 		return oapi.PutTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start telemetry"}}, nil
 	}
 
+	s.applyTelemetryMiddlewareState()
 	return oapi.PutTelemetry201JSONResponse(s.buildTelemetryResponse()), nil
 }
 
 // PatchTelemetry handles PATCH /telemetry.
 // Partially updates the telemetry configuration. Returns 404 if not configured.
-// Setting all four categories to enabled:false clears the configuration (200).
+// Setting all five categories to enabled:false clears the configuration (200).
 func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRequestObject) (oapi.PatchTelemetryResponseObject, error) {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
@@ -88,12 +93,31 @@ func (s *ApiService) PatchTelemetry(_ context.Context, req oapi.PatchTelemetryRe
 			// All categories disabled: clear the configuration.
 			s.cdpMonitor.Stop()
 			s.telemetrySession.Stop()
+			s.applyTelemetryMiddlewareState()
 			return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 		}
 		s.telemetrySession.UpdateConfig(cfg)
+		s.applyTelemetryMiddlewareState()
 	}
 
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
+}
+
+// applyTelemetryMiddlewareState turns the api_call middleware on iff the
+// session is active and the api category is enabled. Call after any config
+// change.
+func (s *ApiService) applyTelemetryMiddlewareState() {
+	if !s.telemetrySession.Active() {
+		DisableTelemetryMiddleware()
+		return
+	}
+	for _, c := range s.telemetrySession.Config().Categories {
+		if c == events.Api {
+			EnableTelemetryMiddleware()
+			return
+		}
+	}
+	DisableTelemetryMiddleware()
 }
 
 // buildTelemetryResponse constructs a TelemetryState response from the current configuration.
@@ -127,13 +151,14 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 	networkOn := isEnabled(b.Network)
 	pageOn := isEnabled(b.Page)
 	interactionOn := isEnabled(b.Interaction)
+	apiOn := isEnabled(b.Api)
 
-	allDisabled := !consoleOn && !networkOn && !pageOn && !interactionOn
+	allDisabled := !consoleOn && !networkOn && !pageOn && !interactionOn && !apiOn
 	if allDisabled {
 		return telemetry.TelemetryConfig{}, true, nil
 	}
 
-	cats := make([]oapi.TelemetryEventCategory, 0, 5)
+	cats := make([]oapi.TelemetryEventCategory, 0, 6)
 	if consoleOn {
 		cats = append(cats, events.Console)
 	}
@@ -145,6 +170,9 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 	}
 	if interactionOn {
 		cats = append(cats, events.Interaction)
+	}
+	if apiOn {
+		cats = append(cats, events.Api)
 	}
 	// CategorySystem is always appended by TelemetrySession.Start/UpdateConfig;
 	// no need to include it here.
@@ -177,6 +205,7 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	override(events.Network, patch.Network)
 	override(events.Page, patch.Page)
 	override(events.Interaction, patch.Interaction)
+	override(events.Api, patch.Api)
 
 	// CategorySystem is managed internally by TelemetrySession; exclude from the
 	// user-facing allDisabled check.
@@ -185,6 +214,7 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		events.Network,
 		events.Page,
 		events.Interaction,
+		events.Api,
 	}
 	allDisabled := true
 	for _, c := range userCats {
@@ -204,16 +234,15 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	return telemetry.TelemetryConfig{Categories: cats}, false
 }
 
-// disabledConfig returns a BrowserTelemetryConfig with all four user-facing categories explicitly disabled.
+// disabledConfig returns a BrowserTelemetryConfig with all five user-facing categories explicitly disabled.
 func disabledConfig() oapi.BrowserTelemetryConfig {
-	f := false
-	cat := &oapi.BrowserTelemetryCategoryConfig{Enabled: &f}
 	return oapi.BrowserTelemetryConfig{
 		Browser: &oapi.BrowserTelemetryCategoriesConfig{
-			Console:     cat,
-			Network:     cat,
-			Page:        cat,
-			Interaction: cat,
+			Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
 		},
 	}
 }
@@ -238,7 +267,7 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 			Network:     enabled(events.Network),
 			Page:        enabled(events.Page),
 			Interaction: enabled(events.Interaction),
+			Api:         enabled(events.Api),
 		},
 	}
 }
-

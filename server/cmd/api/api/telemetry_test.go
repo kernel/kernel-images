@@ -46,6 +46,7 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 			},
 		})
 		require.NoError(t, err)
@@ -62,7 +63,7 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
-		assert.Len(t, cfg.Categories, 3) // console + page + interaction (network=false, others default true)
+		assert.Len(t, cfg.Categories, 4) // console + page + interaction + api (network=false, others default true)
 	})
 }
 
@@ -126,6 +127,7 @@ func TestPutTelemetry(t *testing.T) {
 					Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 					Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 					Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+					Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 				},
 			},
 		})
@@ -138,8 +140,52 @@ func TestPutTelemetry(t *testing.T) {
 		assert.False(t, *r200.Config.Browser.Network.Enabled)
 		assert.False(t, *r200.Config.Browser.Page.Enabled)
 		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
+		assert.False(t, *r200.Config.Browser.Api.Enabled)
 		assert.Nil(t, r200.AppliedAt, "applied_at must be omitted when telemetry is unconfigured")
 	})
+}
+
+func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(DisableTelemetryMiddleware)
+
+	svc := newTestService(t, newMockRecordManager())
+
+	DisableTelemetryMiddleware()
+	tr, f := true, false
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Api: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, TelemetryMiddlewareEnabled(), "PUT with api=true should enable middleware")
+
+	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Api: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, TelemetryMiddlewareEnabled(), "PATCH api=false should disable middleware (other categories still active)")
+
+	_, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, TelemetryMiddlewareEnabled(), "all-disabled PUT should leave middleware off")
 }
 
 func TestGetTelemetry(t *testing.T) {
@@ -228,6 +274,7 @@ func TestPatchTelemetry(t *testing.T) {
 					Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 					Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 					Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+					Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 				},
 			},
 		})
@@ -240,6 +287,7 @@ func TestPatchTelemetry(t *testing.T) {
 		assert.False(t, *r200.Config.Browser.Network.Enabled)
 		assert.False(t, *r200.Config.Browser.Page.Enabled)
 		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
+		assert.False(t, *r200.Config.Browser.Api.Enabled)
 	})
 
 	t.Run("put returns 201 after patch clears configuration", func(t *testing.T) {
@@ -255,6 +303,7 @@ func TestPatchTelemetry(t *testing.T) {
 					Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 					Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 					Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+					Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 				},
 			},
 		})
@@ -275,11 +324,13 @@ func newMockRecordManager() *mockRecordManager {
 
 type mockRecordManager struct{}
 
-func (m *mockRecordManager) RegisterRecorder(_ context.Context, _ recorder.Recorder) error { return nil }
+func (m *mockRecordManager) RegisterRecorder(_ context.Context, _ recorder.Recorder) error {
+	return nil
+}
 func (m *mockRecordManager) DeregisterRecorder(_ context.Context, _ recorder.Recorder) error {
 	return nil
 }
-func (m *mockRecordManager) GetRecorder(_ string) (recorder.Recorder, bool) { return nil, false }
+func (m *mockRecordManager) GetRecorder(_ string) (recorder.Recorder, bool)            { return nil, false }
 func (m *mockRecordManager) ListActiveRecorders(_ context.Context) []recorder.Recorder { return nil }
 func (m *mockRecordManager) StopAll(_ context.Context) error                           { return nil }
 
