@@ -3,6 +3,9 @@
     <div class="window">
       <div class="loader" v-if="connecting">
         <img src="../assets/images/logo.svg" alt="loading" aria-hidden="true" class="kernel-logo" />
+        <div class="loading-bar">
+          <div class="loading-bar-fill"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -46,32 +49,42 @@
       }
 
       .loader {
-        width: 90px;
-        height: 90px;
         position: relative;
         margin: 0 auto;
         display: flex;
+        flex-direction: column;
         justify-content: center;
         align-items: center;
+        gap: 20px;
 
         .kernel-logo {
-          width: 100%;
+          width: 90px;
+          height: 90px;
+        }
+
+        .loading-bar {
+          width: 128px;
+          height: 1px;
+          background: rgba(255, 255, 255, 0.12);
+          overflow: hidden;
+        }
+
+        .loading-bar-fill {
+          width: 40%;
           height: 100%;
-          animation: kernel-logo-pulse 1.5s ease-in-out infinite;
+          background: rgba(255, 255, 255, 0.85);
+          animation: kernel-bar-slide 1.2s ease-in-out infinite;
         }
       }
     }
   }
 
-  @keyframes kernel-logo-pulse {
-    0%,
-    100% {
-      transform: scale(0.85);
-      opacity: 0.7;
+  @keyframes kernel-bar-slide {
+    0% {
+      transform: translateX(-100%);
     }
-    50% {
-      transform: scale(1);
-      opacity: 1;
+    100% {
+      transform: translateX(350%);
     }
   }
 </style>
