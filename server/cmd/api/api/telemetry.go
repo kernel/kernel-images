@@ -5,6 +5,7 @@ import (
 
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/nrednav/cuid2"
+	"github.com/samber/lo"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -235,15 +236,13 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 
 // disabledConfig returns a BrowserTelemetryConfig with all five user-facing categories explicitly disabled.
 func disabledConfig() oapi.BrowserTelemetryConfig {
-	f := false
-	cat := &oapi.BrowserTelemetryCategoryConfig{Enabled: &f}
 	return oapi.BrowserTelemetryConfig{
 		Browser: &oapi.BrowserTelemetryCategoriesConfig{
-			Console:     cat,
-			Network:     cat,
-			Page:        cat,
-			Interaction: cat,
-			Api:         cat,
+			Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
+			Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)},
 		},
 	}
 }
