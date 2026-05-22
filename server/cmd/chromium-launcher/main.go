@@ -135,7 +135,6 @@ func main() {
 	}
 }
 
-
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.
 func execLookPath(file string) (string, error) {
 	if strings.ContainsRune(file, os.PathSeparator) {

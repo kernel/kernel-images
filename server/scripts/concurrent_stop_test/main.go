@@ -15,8 +15,8 @@ import (
 	"time"
 
 	retry "github.com/avast/retry-go/v5"
-	"github.com/nrednav/cuid2"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/nrednav/cuid2"
 )
 
 func main() {

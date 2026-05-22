@@ -243,9 +243,9 @@ func main() {
 
 // waitAllReady gates on all caller-visible ready signals concurrently:
 //   - cdp          : HTTP /json/version on the public CDP port (proves api proxy is
-//                    wired through to chromium's DevTools server)
+//     wired through to chromium's DevTools server)
 //   - chromedriver : TCP on chromedriver's internal port 9225 (api on 9224 is bound
-//                    when api itself is up, which CDP readiness already implies)
+//     when api itself is up, which CDP readiness already implies)
 //   - neko         : TCP on neko's HTTP port (8080), only when ENABLE_WEBRTC=true
 //   - envoy        : TCP on envoy's listener (3128), only when envoy is enabled
 func waitAllReady(t0 time.Time, webrtc bool) map[string]time.Duration {

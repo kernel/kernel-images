@@ -12,7 +12,6 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
-	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
@@ -20,6 +19,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/policy"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/telemetry"
 )
 
 type cdpMonitorController interface {
@@ -99,7 +99,7 @@ func New(
 	stz scaletozero.PinnedController,
 	nekoAuthClient *nekoclient.AuthClient,
 	telemetrySession *telemetry.TelemetrySession,
-	eventStream      *events.EventStream,
+	eventStream *events.EventStream,
 	displayNum int,
 ) (*ApiService, error) {
 	switch {

@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
+	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
 )
 
 // PatchDisplay updates the display configuration. When require_idle
@@ -655,4 +655,3 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 	log.Info("successfully changed resolution via Neko API", "width", width, "height", height, "refresh_rate", refreshRate)
 	return nil
 }
-

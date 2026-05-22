@@ -17,17 +17,17 @@ import (
 // SetDeviceMetricsOverride: Target.getTargets, Target.attachToTarget,
 // Emulation.setDeviceMetricsOverride, and Target.detachFromTarget.
 type fakeCDP struct {
-	getTargetsCalled     bool
-	attachCalled         bool
-	setMetricsCalled     bool
-	setMetricsWidth      int
-	setMetricsHeight     int
-	detachCalled         bool
-	pageTargetID         string
-	sessionID            string
-	failGetTargets       bool
-	failSetMetrics       bool
-	returnNoPageTargets  bool
+	getTargetsCalled    bool
+	attachCalled        bool
+	setMetricsCalled    bool
+	setMetricsWidth     int
+	setMetricsHeight    int
+	detachCalled        bool
+	pageTargetID        string
+	sessionID           string
+	failGetTargets      bool
+	failSetMetrics      bool
+	returnNoPageTargets bool
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
