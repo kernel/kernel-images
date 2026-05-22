@@ -52,6 +52,7 @@ cat "$FLAGS_FILE"
 # Build docker run argument list
 RUN_ARGS=(
   --name "$NAME"
+  --platform "$DOCKER_PLATFORM"
   --privileged
   --tmpfs /dev/shm:size=2g
   -v "$HOST_RECORDINGS_DIR:/recordings"

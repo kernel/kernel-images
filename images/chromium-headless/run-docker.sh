@@ -12,6 +12,7 @@ mkdir -p "$HOST_RECORDINGS_DIR"
 
 RUN_ARGS=(
   --name "$NAME"
+  --platform "$DOCKER_PLATFORM"
   --privileged
   --tmpfs /dev/shm:size=2g
   -p 9222:9222

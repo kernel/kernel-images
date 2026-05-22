@@ -16,6 +16,12 @@ NAME="${NAME:-${IMAGE_TYPE}-test}"
 
 UKC_INDEX="${UKC_INDEX:-index.unikraft.io}"
 
+# Chrome-for-Testing only ships linux/amd64 binaries, so both images must be
+# built and run for amd64 even on arm64 hosts (Apple Silicon). Docker Desktop
+# will emulate via Rosetta. Override with DOCKER_PLATFORM=linux/arm64 only if
+# you have a compatible chromium baked into a custom Dockerfile.
+DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
+
 # Only require UKC_TOKEN and UKC_METRO when explicitly requested
 # Pass "require-ukc-vars" as second argument to enable this check
 REQUIRE_UKC_VARS="${2:-}"
