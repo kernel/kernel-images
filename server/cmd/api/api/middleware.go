@@ -54,15 +54,12 @@ func TelemetryHTTPMiddleware(publish func(events.Event)) func(http.Handler) http
 			if tc.operationID == "" {
 				return
 			}
-			data, err := json.Marshal(map[string]any{
-				"request_id":   chiMiddleware.GetReqID(ctx),
-				"operation_id": tc.operationID,
-				"status":       ww.Status(),
-				"duration_ms":  float64(time.Since(start).Microseconds()) / 1000.0,
+			data, _ := json.Marshal(oapi.BrowserApiCallEventData{
+				RequestId:   chiMiddleware.GetReqID(ctx),
+				OperationId: tc.operationID,
+				Status:      ww.Status(),
+				DurationMs:  float32(time.Since(start).Microseconds()) / 1000.0,
 			})
-			if err != nil {
-				return
-			}
 			publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
 				Type:     "api_call",

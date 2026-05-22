@@ -21,6 +21,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
@@ -489,15 +490,15 @@ func TestWebSocketProxyHandler_EmitsConnectAndDisconnect(t *testing.T) {
 		t.Fatalf("second event type = %q, want cdp_disconnect", got)
 	}
 	var disconnect struct {
-		DurationMs   float64 `json:"duration_ms"`
-		MessageCount int64   `json:"message_count"`
-		Reason       string  `json:"reason"`
+		DurationMs   float64                                  `json:"duration_ms"`
+		MessageCount int64                                    `json:"message_count"`
+		Reason       oapi.BrowserCdpDisconnectEventDataReason `json:"reason"`
 	}
 	if err := json.Unmarshal(captured[1].Data, &disconnect); err != nil {
 		t.Fatalf("unmarshal disconnect data: %v", err)
 	}
-	if disconnect.Reason != cdpReasonClientClose {
-		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, cdpReasonClientClose)
+	if disconnect.Reason != oapi.ClientClose {
+		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, oapi.ClientClose)
 	}
 	if disconnect.MessageCount < 6 {
 		t.Fatalf("disconnect message_count = %d, want >= 6", disconnect.MessageCount)
@@ -542,12 +543,12 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 		t.Fatalf("second event type = %q, want cdp_disconnect", captured[1].Type)
 	}
 	var disconnect struct {
-		Reason string `json:"reason"`
+		Reason oapi.BrowserCdpDisconnectEventDataReason `json:"reason"`
 	}
 	if err := json.Unmarshal(captured[1].Data, &disconnect); err != nil {
 		t.Fatalf("unmarshal disconnect data: %v", err)
 	}
-	if disconnect.Reason != cdpReasonUpstreamError {
-		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, cdpReasonUpstreamError)
+	if disconnect.Reason != oapi.UpstreamError {
+		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, oapi.UpstreamError)
 	}
 }
