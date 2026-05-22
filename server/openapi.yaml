@@ -2688,6 +2688,99 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserSystemOomKillEventData:
+      type: object
+      description: Per-kill payload for `system_oom_kill` events.
+      additionalProperties: false
+      required: [process_name, pid, rss_kb]
+      properties:
+        process_name:
+          type: string
+          description: Comm of the killed process as reported by the kernel (max 15 chars, truncated by the kernel).
+        pid:
+          type: integer
+          description: PID of the killed process.
+        total_vm_kb:
+          type: integer
+          description: Total virtual memory of the killed process in KiB.
+        rss_kb:
+          type: integer
+          description: Resident set size of the killed process in KiB (sum of anon-rss, file-rss, and shmem-rss).
+        oom_score_adj:
+          type: integer
+          description: oom_score_adj of the killed process at the time of kill.
+    BrowserSystemOomKillEvent:
+      type: object
+      description: >
+        The Linux kernel OOM-killer terminated a process inside the VM. Sourced from
+        `/dev/kmsg`. Fires for any process killed by the kernel due to memory
+        exhaustion, including Chrome renderer subprocesses that are not supervised.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: system_oom_kill
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserSystemOomKillEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserServiceCrashedEventData:
+      type: object
+      description: >
+        Per-crash payload for `service_crashed` events. Fields are derived
+        from the supervisord eventlistener wire protocol, which exposes the
+        process name, the state the process exited from, and (for EXITED but
+        not FATAL transitions) the PID. Exit code and signal are not surfaced
+        by supervisord on this channel.
+      additionalProperties: false
+      required: [service_name, from_state]
+      properties:
+        service_name:
+          type: string
+          description: Supervisord program name (e.g. `chromium`, `mutter`, `kernel-images-api`).
+        pid:
+          type: integer
+          description: PID of the crashed process. Absent for PROCESS_STATE_FATAL transitions, which fire after all start attempts are exhausted.
+        from_state:
+          type: string
+          description: >
+            Supervisord state the process was in before the unexpected exit.
+            `RUNNING` means a healthy process died; `STARTING` means it died
+            during startup; `BACKOFF` is paired with FATAL and means
+            supervisord gave up restarting it.
+          enum:
+            - RUNNING
+            - STARTING
+            - BACKOFF
+    BrowserServiceCrashedEvent:
+      type: object
+      description: >
+        A supervisord-managed service exited unexpectedly. Only fires when supervisord
+        reports the exit as unexpected (`expected=0`); intentional stops via
+        `supervisorctl stop` do not produce this event.
+      required: [ts, type, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: service_crashed
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserServiceCrashedEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     KnownBrowserTelemetryEvent:
       description: >
         Discriminated union of browser telemetry events emitted by the Kernel
@@ -2726,6 +2819,8 @@ components:
         - $ref: "#/components/schemas/BrowserLiveViewConnectEvent"
         - $ref: "#/components/schemas/BrowserLiveViewDisconnectEvent"
         - $ref: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+        - $ref: "#/components/schemas/BrowserSystemOomKillEvent"
+        - $ref: "#/components/schemas/BrowserServiceCrashedEvent"
       discriminator:
         propertyName: type
         mapping:
@@ -2757,6 +2852,8 @@ components:
           live_view_connect: "#/components/schemas/BrowserLiveViewConnectEvent"
           live_view_disconnect: "#/components/schemas/BrowserLiveViewDisconnectEvent"
           captcha_solve_result: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+          system_oom_kill: "#/components/schemas/BrowserSystemOomKillEvent"
+          service_crashed: "#/components/schemas/BrowserServiceCrashedEvent"
     TelemetryState:
       type: object
       description: Current telemetry configuration.

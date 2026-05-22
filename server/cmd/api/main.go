@@ -30,6 +30,7 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/sysmon"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
 )
 
@@ -102,6 +103,11 @@ func main() {
 		os.Exit(1)
 	}
 	telemetrySession := telemetry.NewTelemetrySession(eventStream)
+
+	// VM-internal failure telemetry (OOM kills via /dev/kmsg).
+	// service_crashed events arrive via POST /telemetry/events from the
+	// supervisord-shim child process, not through this monitor.
+	sysmon.New(eventStream, slogger).Start(ctx)
 
 	// Optional S2 storage sink.
 	var s2Writer *events.S2StorageWriter

@@ -33,6 +33,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/wrapper ./cmd/wrapper
 
+# Build supervisord eventlistener shim
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/kernel-images-supervisord-shim ./cmd/supervisord-shim
+
 # webrtc client
 FROM node:22-bullseye-slim AS client
 WORKDIR /src
@@ -378,6 +384,7 @@ RUN chmod +x /usr/local/bin/init-envoy.sh
 # copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
 COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launcher
+COPY --from=server-builder /out/kernel-images-supervisord-shim /usr/local/bin/kernel-images-supervisord-shim
 COPY --from=server-builder /out/wrapper /wrapper
 
 # Copy and compile the Playwright daemon
