@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 )
@@ -34,7 +35,7 @@ func (e *cdpError) Error() string {
 // Client is a minimal CDP client that communicates over a browser-level
 // DevTools WebSocket connection.
 type Client struct {
-	conn  *websocket.Conn
+	conn   *websocket.Conn
 	nextID atomic.Int64
 }
 
@@ -98,6 +99,88 @@ func (c *Client) send(ctx context.Context, method string, params any, sessionID 
 	}
 }
 
+// DispatchStartURL closes extra page targets and dispatches a navigation on the
+// first page target. It does not wait for lifecycle events; Chrome owns the
+// eventual navigation result.
+func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
+	c, err := Dial(ctx, devtoolsURL)
+	if err != nil {
+		return fmt.Errorf("dial devtools: %w", err)
+	}
+	defer c.Close()
+
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return fmt.Errorf("Target.getTargets: %w", err)
+	}
+
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return fmt.Errorf("unmarshal targets: %w", err)
+	}
+
+	var pageTargetID string
+	for _, t := range targets.TargetInfos {
+		if t.Type != "page" {
+			continue
+		}
+		if pageTargetID == "" {
+			pageTargetID = t.TargetID
+			continue
+		}
+		_, _ = c.send(ctx, "Target.closeTarget", map[string]any{
+			"targetId": t.TargetID,
+		}, "")
+	}
+	if pageTargetID == "" {
+		createResult, err := c.send(ctx, "Target.createTarget", map[string]any{
+			"url": "about:blank",
+		}, "")
+		if err != nil {
+			return fmt.Errorf("Target.createTarget: %w", err)
+		}
+		var created struct {
+			TargetID string `json:"targetId"`
+		}
+		if err := json.Unmarshal(createResult, &created); err != nil {
+			return fmt.Errorf("unmarshal create target: %w", err)
+		}
+		pageTargetID = created.TargetID
+	}
+
+	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": pageTargetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Target.attachToTarget: %w", err)
+	}
+
+	var attach struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(attachResult, &attach); err != nil {
+		return fmt.Errorf("unmarshal attach: %w", err)
+	}
+	defer func() {
+		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = c.send(detachCtx, "Target.detachFromTarget", map[string]any{
+			"sessionId": attach.SessionID,
+		}, "")
+	}()
+
+	if _, err := c.send(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID); err != nil {
+		return fmt.Errorf("Page.navigate: %w", err)
+	}
+	return nil
+}
+
 // SetDeviceMetricsOverride sets the viewport dimensions on the first page
 // target found in the browser. It attaches to the target with a flattened
 // session, sends Emulation.setDeviceMetricsOverride, then detaches.
@@ -144,10 +227,10 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 	}
 
 	_, err = c.send(ctx, "Emulation.setDeviceMetricsOverride", map[string]any{
-		"width":            width,
-		"height":           height,
+		"width":             width,
+		"height":            height,
 		"deviceScaleFactor": 1,
-		"mobile":           false,
+		"mobile":            false,
 	}, attach.SessionID)
 	if err != nil {
 		return fmt.Errorf("Emulation.setDeviceMetricsOverride: %w", err)

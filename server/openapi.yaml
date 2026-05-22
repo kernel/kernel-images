@@ -1169,6 +1169,90 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+
+  /configure:
+    post:
+      summary: Apply batched session and browser configuration plus optional navigation
+      description: |
+        Optional multipart parts apply configuration while Chromium stays stopped once (policy,
+        flags, extensions, profile archive, optional display sizing), then Chromium is started exactly
+        once and DevTools readiness is awaited. Optional `start_url` dispatches a best-effort
+        navigation after readiness without waiting for page load. Bare hosts are normalized to
+        `https://`. Omit any part you do not need. At least one actionable part must be present.
+        Required configuration steps run in this order: policies, extensions, display, flags,
+        then profile archive. Chromium is started only once at the end. The endpoint is not
+        transactional: if a later required step fails, earlier successful side effects may remain
+        on the instance while the non-2xx error propagates.
+        Prefer this over separate `/chromium/*` and `/display` calls when multiple restart-triggering
+        steps apply in one session configure.
+      operationId: chromiumConfigure
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                display:
+                  description: >-
+                    UTF-8 JSON object matching `#/components/schemas/PatchDisplayRequest` (width/height/etc.).
+                    When combined with restart-triggering fields, the resize is applied while Chromium
+                    is stopped and Chromium is started once at the end.
+                  type: string
+                chromium_flags:
+                  description: >-
+                    UTF-8 JSON object `{"flags":["--kiosk"]}` — same semantics as PATCH /chromium/flags.
+                  type: string
+                chrome_policies:
+                  description: UTF-8 JSON policy override map — same semantics as PATCH /chromium/policies.
+                  type: string
+                profile_archive:
+                  description: >-
+                    tar.zst archive containing the desired `/home/kernel/user-data` profile contents.
+                    Prefer archives whose root entries are the profile files/directories themselves
+                    (for example `Default/Preferences`). Use `strip_components` only when uploading
+                    an archive that includes leading wrapper directories.
+                  type: string
+                  format: binary
+                strip_components:
+                  description: Optional number of leading path components to strip from profile_archive entries (non-negative integer as text).
+                  type: string
+                start_url:
+                  description: >-
+                    URL text to navigate after configure. Bare hosts are normalized to https://,
+                    length is capped at 2048 bytes, and Chrome decides which schemes are navigable.
+                  type: string
+                extensions:
+                  type: array
+                  description: Extension zips paired with consecutive extensions.name fields (same as upload-extensions-and-restart).
+                  items:
+                    type: object
+                    properties:
+                      zip_file:
+                        type: string
+                        format: binary
+                      name:
+                        type: string
+                        pattern: "^[A-Za-z0-9._-]{1,255}$"
+                    required: [zip_file, name]
+      responses:
+        "200":
+          description: Configuration applied; optional navigate completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          description: Configure failure with structured phase
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChromiumConfigureError"
+
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
@@ -2736,6 +2820,31 @@ components:
       properties:
         message:
           type: string
+    ChromiumConfigureError:
+      type: object
+      description: Failure from batched chromium configure — includes which phase failed.
+      required: [phase, message]
+      additionalProperties: false
+      properties:
+        phase:
+          type: string
+          enum:
+            - configure_phase
+            - navigate_phase
+          description: configure_phase maps to restart/filesystem/policy/extension/profile/display work; navigate_phase is retained for compatibility.
+        message:
+          type: string
+        step:
+          type: string
+          description: Optional configure step that failed.
+          enum:
+            - stop_chromium
+            - start_chromium
+            - chrome_policies
+            - extensions
+            - display
+            - chromium_flags
+            - profile
     RecorderInfo:
       type: object
       required: [id, isRecording]

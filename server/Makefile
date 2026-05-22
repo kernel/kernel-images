@@ -36,7 +36,7 @@ test:
 	@echo ""
 	@echo "=== Running e2e tests (testcontainers — this may take a few minutes) ==="
 	@echo ""
-	go test -v -race ./e2e/
+	go test -v -race -timeout 120m ./e2e/
 
 clean:
 	@rm -rf $(BIN_DIR)

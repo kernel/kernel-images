@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -20,6 +21,12 @@ import (
 )
 
 var nameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,255}$`)
+
+// extensionZipItem is a finalized name + temp zip path (caller removes temps).
+type extensionZipItem struct {
+	zipTemp string
+	name    string
+}
 
 // chromiumFlagsPath is the runtime flags file read by the chromium-launcher at startup.
 const chromiumFlagsPath = "/chromium/flags"
@@ -130,52 +137,90 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no extensions provided"}}, nil
 	}
 
-	// Materialize uploads
-	extBase := "/home/kernel/extensions"
-
-	// Fail early if any destination already exists
-	for _, p := range items {
-		dest := filepath.Join(extBase, p.name)
-		if _, err := os.Stat(dest); err == nil {
-			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: fmt.Sprintf("extension name already exists: %s", p.name)}}, nil
-		} else if !os.IsNotExist(err) {
-			log.Error("failed to check extension dir", "error", err)
-			return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to check extension dir"}}, nil
-		}
-	}
-
+	extItems := make([]extensionZipItem, 0, len(items))
 	for _, p := range items {
 		if !p.zipReceived || p.name == "" {
 			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "each item must include zip_file and name"}}, nil
 		}
+		extItems = append(extItems, extensionZipItem{zipTemp: p.zipTemp, name: p.name})
+	}
+
+	reqMsg, err := s.applyExtensionZipItems(ctx, extItems)
+	if reqMsg != "" {
+		return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: reqMsg}}, nil
+	}
+	if err != nil {
+		return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
+	}
+
+	// Restart Chromium and wait for DevTools to be ready
+	if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
+		return oapi.UploadExtensionsAndRestart500JSONResponse{
+			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
+		}, nil
+	}
+
+	log.Info("devtools ready", "elapsed", time.Since(start).String())
+	return oapi.UploadExtensionsAndRestart201Response{}, nil
+}
+
+// applyExtensionZipItems applies name+zipTemp extension pairs (merge flags for --load-extension).
+// On validation errors returns (reqMsg, nil); on internal errors returns ("", err).
+func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensionZipItem) (reqMsg string, err error) {
+	log := logger.FromContext(ctx)
+	extBase := "/home/kernel/extensions"
+	if err := os.MkdirAll(extBase, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create extension base dir: %w", err)
+	}
+
+	for _, p := range items {
+		dest := filepath.Join(extBase, p.name)
+		if _, err := os.Stat(dest); err == nil {
+			return fmt.Sprintf("extension name already exists: %s", p.name), nil
+		} else if !os.IsNotExist(err) {
+			log.Error("failed to check extension dir", "error", err)
+			return "", fmt.Errorf("failed to check extension dir: %w", err)
+		}
+	}
+
+	var createdDests []string
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		for _, dest := range createdDests {
+			if removeErr := os.RemoveAll(dest); removeErr != nil {
+				log.Warn("failed to clean up partial extension dir", "error", removeErr, "dest", dest)
+			}
+		}
+	}()
+
+	for _, p := range items {
 		dest := filepath.Join(extBase, p.name)
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			log.Error("failed to create extension dir", "error", err)
-			return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to create extension dir"}}, nil
+			return "", fmt.Errorf("failed to create extension dir: %w", err)
 		}
+		createdDests = append(createdDests, dest)
 		if err := ziputil.Unzip(p.zipTemp, dest); err != nil {
 			log.Error("failed to unzip zip file", "error", err)
-			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid zip file"}}, nil
+			return "invalid zip file", nil
 		}
 
-		// Rewrite update.xml URLs to match the extension name (directory name)
-		// This ensures URLs like /extensions/web-bot-auth/ become /extensions/<actual-name>/
 		updateXMLPath := filepath.Join(dest, "update.xml")
 		if err := policy.RewriteUpdateXMLUrls(updateXMLPath, p.name); err != nil {
 			log.Warn("failed to rewrite update.xml URLs", "error", err, "extension", p.name)
-			// continue since not all extensions require update.xml
 		}
 
 		if err := exec.Command("chown", "-R", "kernel:kernel", dest).Run(); err != nil {
 			log.Error("failed to chown extension dir", "error", err)
-			return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to chown extension dir"}}, nil
+			return "", fmt.Errorf("failed to chown extension dir: %w", err)
 		}
 
 		log.Info("installed extension", "name", p.name)
 	}
 
-	// Update enterprise policy for extensions that require it
-	// Track which extensions need --load-extension flags (those NOT using policy installation)
 	var pathsNeedingFlags []string
 
 	for _, p := range items {
@@ -184,14 +229,11 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		manifestPath := filepath.Join(extensionPath, "manifest.json")
 		updateXMLPath := filepath.Join(extensionPath, "update.xml")
 
-		// Check if this extension requires enterprise policy
 		requiresEntPolicy, err := s.policy.RequiresEnterprisePolicy(manifestPath)
 		if err != nil {
 			log.Warn("failed to read manifest for policy check", "error", err, "extension", extensionName)
-			// Continue with requiresEntPolicy = false
 		}
 
-		// Try to extract Chrome extension ID from update.xml
 		chromeExtensionID := extensionName
 		var extractionErr error
 		if extractedID, err := policy.ExtractExtensionIDFromUpdateXML(updateXMLPath); err == nil {
@@ -205,25 +247,17 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		if requiresEntPolicy {
 			log.Info("extension requires enterprise policy", "name", extensionName)
 
-			// Validate that update.xml and .crx files are present for policy-installed extensions
-			// These files are required for ExtensionInstallForcelist to work
 			hasUpdateXML := false
 			hasCRX := false
 
 			if _, err := os.Stat(updateXMLPath); err == nil {
-				// For policy extensions, update.xml must exist AND be parseable
 				if extractionErr != nil {
-					return oapi.UploadExtensionsAndRestart400JSONResponse{
-						BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
-							Message: fmt.Sprintf("extension %s requires enterprise policy but update.xml is invalid: %v", extensionName, extractionErr),
-						},
-					}, nil
+					return fmt.Sprintf("extension %s requires enterprise policy but update.xml is invalid: %v", extensionName, extractionErr), nil
 				}
 				hasUpdateXML = true
 				log.Info("found update.xml in extension zip", "name", extensionName)
 			}
 
-			// Look for any .crx file in the directory
 			entries, err := os.ReadDir(extensionPath)
 			if err == nil {
 				for _, entry := range entries {
@@ -235,7 +269,6 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 				}
 			}
 
-			// If missing required files for ExtensionInstallForcelist, fall back to --load-extension
 			if !hasUpdateXML || !hasCRX {
 				log.Info("extension missing policy files, falling back to --load-extension",
 					"name", extensionName, "hasUpdateXML", hasUpdateXML, "hasCRX", hasCRX)
@@ -243,31 +276,17 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 				pathsNeedingFlags = append(pathsNeedingFlags, extensionPath)
 			}
 		} else {
-			// Only add --load-extension flags for non-policy extensions
 			pathsNeedingFlags = append(pathsNeedingFlags, extensionPath)
 		}
 
-		// Add to enterprise policy
-		// Pass both extensionName (for URL paths) and chromeExtensionID (for policy entries)
 		if err := s.policy.AddExtension(extensionName, chromeExtensionID, extensionPath, requiresEntPolicy); err != nil {
 			log.Error("failed to update enterprise policy", "error", err, "extension", extensionName)
-			return oapi.UploadExtensionsAndRestart500JSONResponse{
-				InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
-					Message: fmt.Sprintf("failed to update enterprise policy for %s: %v", extensionName, err),
-				},
-			}, nil
+			return "", fmt.Errorf("failed to update enterprise policy for %s: %w", extensionName, err)
 		}
 
 		log.Info("updated enterprise policy", "extension", extensionName, "chromeExtensionID", chromeExtensionID, "requiresEnterprisePolicy", requiresEntPolicy)
 	}
 
-	// Build flags overlay file in /chromium/flags, merging with existing flags
-	// Only add --load-extension flags for extensions that don't use policy installation
-	// NOTE: We intentionally do NOT use --disable-extensions-except here because it causes
-	// Chrome to disable external providers (including the policy loader), which prevents
-	// enterprise policy extensions (ExtensionInstallForcelist) from being fetched and installed.
-	// See Chromium source: extension_service.cc - external providers are only created when
-	// extensions_enabled() returns true, which is false when --disable-extensions-except is used.
 	var newTokens []string
 	if len(pathsNeedingFlags) > 0 {
 		newTokens = []string{
@@ -275,22 +294,12 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		}
 	}
 
-	// Merge and write flags
 	if _, err := s.mergeAndWriteChromiumFlags(ctx, newTokens); err != nil {
-		return oapi.UploadExtensionsAndRestart500JSONResponse{
-			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
-		}, nil
+		return "", err
 	}
 
-	// Restart Chromium and wait for DevTools to be ready
-	if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
-		return oapi.UploadExtensionsAndRestart500JSONResponse{
-			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
-		}, nil
-	}
-
-	log.Info("devtools ready", "elapsed", time.Since(start).String())
-	return oapi.UploadExtensionsAndRestart201Response{}, nil
+	success = true
+	return "", nil
 }
 
 // mergeAndWriteChromiumFlags reads existing flags, merges them with new flags,
@@ -337,36 +346,162 @@ func (s *ApiService) restartChromiumAndWait(ctx context.Context, operation strin
 	log := logger.FromContext(ctx)
 	start := time.Now()
 
-	// Begin listening for devtools URL updates, since we are about to restart Chromium
+	log.Info("restarting chromium via supervisorctl", "operation", operation)
+	if err := s.stopChromium(ctx); err != nil {
+		return err
+	}
+	if err := s.startChromiumAndWait(ctx, operation); err != nil {
+		return err
+	}
+	log.Info("chromium restart complete", "operation", operation, "elapsed", time.Since(start).String())
+	return nil
+}
+
+const supervisorCtlConf = "/etc/supervisor/supervisord.conf"
+const chromiumDevToolsReadyTimeout = 90 * time.Second
+
+func supervisorctlArgv(verb string, prog string) []string {
+	return []string{"-c", supervisorCtlConf, verb, prog}
+}
+
+func chromiumSupervisorStatus(ctx context.Context) (string, string, error) {
+	cmdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("status", "chromium")...).CombinedOutput()
+	text := strings.TrimSpace(string(out))
+	fields := strings.Fields(text)
+	if len(fields) >= 2 {
+		return fields[1], text, nil
+	}
+	if err != nil {
+		return "", text, err
+	}
+	return "", text, fmt.Errorf("unexpected supervisorctl status output: %q", text)
+}
+
+func waitChromiumSupervisorStatus(ctx context.Context, want string, timeout time.Duration) (string, error) {
+	deadline := time.Now().Add(timeout)
+	var last string
+	for {
+		status, out, err := chromiumSupervisorStatus(ctx)
+		if err == nil && status == want {
+			return out, nil
+		}
+		if out != "" {
+			last = out
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return last, err
+			}
+			return last, fmt.Errorf("chromium did not reach %s within %s (last status: %s)", want, timeout, last)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// stopChromium runs supervisorctl stop chromium and waits for the command to complete.
+func (s *ApiService) stopChromium(ctx context.Context) error {
+	log := logger.FromContext(ctx)
+	cmdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+	defer cancel()
+	log.Info("stopping chromium via supervisorctl")
+	out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("stop", "chromium")...).CombinedOutput()
+	if err != nil {
+		log.Error("failed to stop chromium", "error", err, "out", string(out))
+		status, statusOut, statusErr := chromiumSupervisorStatus(ctx)
+		if statusErr == nil {
+			switch status {
+			case "STOPPED":
+				log.Info("chromium already stopped after supervisorctl stop error", "status", statusOut)
+				return nil
+			case "STOPPING":
+				if stoppedOut, waitErr := waitChromiumSupervisorStatus(ctx, "STOPPED", 30*time.Second); waitErr == nil {
+					log.Info("chromium reached stopped after supervisorctl stop error", "status", stoppedOut)
+					return nil
+				}
+			}
+		}
+		return fmt.Errorf("supervisorctl stop chromium failed: %w", err)
+	}
+	if stoppedOut, waitErr := waitChromiumSupervisorStatus(ctx, "STOPPED", 30*time.Second); waitErr != nil {
+		log.Warn("chromium stop command completed but stopped status was not confirmed", "error", waitErr, "status", stoppedOut)
+	}
+	return nil
+}
+
+// startChromiumAndWait launches chromium via supervisorctl start and waits for DevTools readiness.
+func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string) error {
+	log := logger.FromContext(ctx)
+	start := time.Now()
+
+	prevUpstream := s.upstreamMgr.Current()
 	updates, cancelSub := s.upstreamMgr.Subscribe()
 	defer cancelSub()
 
-	// Run supervisorctl restart with a new context to let it run beyond the lifetime of the http request.
-	// This lets us return as soon as the DevTools URL is updated.
 	errCh := make(chan error, 1)
-	log.Info("restarting chromium via supervisorctl", "operation", operation)
+	doneCh := make(chan struct{})
+	log.Info("starting chromium via supervisorctl", "operation", operation)
 	go func() {
-		cmdCtx, cancelCmd := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Minute)
+		defer close(doneCh)
+		cmdCtx, cancelCmd := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 		defer cancelCmd()
-		out, err := exec.CommandContext(cmdCtx, "supervisorctl", "-c", "/etc/supervisor/supervisord.conf", "restart", "chromium").CombinedOutput()
+		out, err := exec.CommandContext(cmdCtx, "supervisorctl", supervisorctlArgv("start", "chromium")...).CombinedOutput()
 		if err != nil {
-			log.Error("failed to restart chromium", "error", err, "out", string(out))
-			errCh <- fmt.Errorf("supervisorctl restart failed: %w", err)
+			log.Error("failed to start chromium", "error", err, "out", string(out))
+			errCh <- fmt.Errorf("supervisorctl start chromium failed: %w", err)
 		}
 	}()
 
-	// Wait for either a new upstream, a restart error, or timeout
-	timeout := time.NewTimer(15 * time.Second)
+	timeout := time.NewTimer(chromiumDevToolsReadyTimeout)
 	defer timeout.Stop()
-	select {
-	case <-updates:
-		log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-		return nil
-	case err := <-errCh:
-		return err
-	case <-timeout.C:
-		log.Info("devtools not ready in time", "operation", operation, "elapsed", time.Since(start).String())
-		return fmt.Errorf("devtools not ready in time")
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	commandDone := false
+	tryReady := func(upstream string, allowCurrent bool) bool {
+		if upstream == "" {
+			return false
+		}
+		if !allowCurrent && upstream == prevUpstream {
+			return false
+		}
+		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		c, err := cdpclient.Dial(dialCtx, upstream)
+		if err != nil {
+			return false
+		}
+		_ = c.Close()
+		return true
+	}
+
+	for {
+		select {
+		case upstream, ok := <-updates:
+			if ok && tryReady(upstream, false) {
+				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				return nil
+			}
+		case err := <-errCh:
+			return err
+		case <-doneCh:
+			commandDone = true
+			doneCh = nil
+			if tryReady(s.upstreamMgr.Current(), true) {
+				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				return nil
+			}
+		case <-ticker.C:
+			if commandDone && tryReady(s.upstreamMgr.Current(), true) {
+				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				return nil
+			}
+		case <-timeout.C:
+			status, statusOut, _ := chromiumSupervisorStatus(ctx)
+			log.Info("devtools not ready in time", "operation", operation, "elapsed", time.Since(start).String(), "supervisor_status", statusOut)
+			return fmt.Errorf("devtools not ready in time (chromium status: %s)", status)
+		}
 	}
 }
 
