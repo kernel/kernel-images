@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"testing"
 	"time"
 
@@ -66,7 +68,7 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 		await page.goto(%q, { waitUntil: 'load' });
 		await page.click('#start');
 		await page.waitForFunction(() => window.audioStarted === true);
-		await page.waitForTimeout(3000);
+		await page.waitForTimeout(8000);
 		return await page.title();
 	`, audioSite.ContainerURL())
 	runResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
@@ -93,6 +95,7 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 	}
 
 	require.True(t, mp4HasAudioTrack(downloadResp.Body), "downloaded recording does not contain an audio track")
+	require.Greater(t, mp4AudioPeakLevel(t, downloadResp.Body), 0.1, "downloaded recording audio track is silent")
 }
 
 type audioTestSite struct {
@@ -118,11 +121,11 @@ document.getElementById('start').addEventListener('click', async () => {
   await ctx.resume();
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
-  gain.gain.value = 0.2;
+  gain.gain.value = 0.8;
   osc.frequency.value = 440;
   osc.connect(gain).connect(ctx.destination);
   osc.start();
-  window.audioContext = ctx;
+  window.audioGraph = { ctx, osc, gain };
   window.audioStarted = true;
 });
 </script>
@@ -158,4 +161,32 @@ func mp4HasAudioTrack(data []byte) bool {
 		}
 	}
 	return false
+}
+
+func mp4AudioPeakLevel(t *testing.T, data []byte) float64 {
+	t.Helper()
+
+	recordingPath := filepath.Join(t.TempDir(), "recording.mp4")
+	require.NoError(t, os.WriteFile(recordingPath, data, 0o644), "failed to write recording for audio analysis")
+
+	out, err := exec.Command(
+		"docker", "run", "--rm",
+		"-v", recordingPath+":/tmp/recording.mp4:ro",
+		"--entrypoint", "ffmpeg",
+		headfulImage,
+		"-hide_banner",
+		"-i", "/tmp/recording.mp4",
+		"-map", "0:a:0",
+		"-af", "astats=metadata=1:reset=0",
+		"-f", "null",
+		"-",
+	).CombinedOutput()
+	require.NoError(t, err, "failed to analyze recording audio: %s", string(out))
+
+	matches := regexp.MustCompile(`Max level: ([0-9.]+)`).FindStringSubmatch(string(out))
+	require.Len(t, matches, 2, "failed to find audio peak level in ffmpeg output: %s", string(out))
+
+	peak, err := strconv.ParseFloat(matches[1], 64)
+	require.NoError(t, err, "failed to parse audio peak level")
+	return peak
 }
