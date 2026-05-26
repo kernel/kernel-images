@@ -44,10 +44,104 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
 
+	playwrightCode := fmt.Sprintf(`
+		await page.goto(%q, { waitUntil: 'load' });
+		await page.click('#start');
+		await page.waitForFunction(() => window.audioStarted === true);
+		await page.waitForTimeout(8000);
+		return await page.title();
+	`, audioSite.ContainerURL())
+
+	recordReplayAudio(t, ctx, c, playwrightCode, os.Getenv("RECORDING_AUDIO_OUTPUT_PATH"), 0.1)
+}
+
+func TestReplayRecordingZombocomArchiveAudio(t *testing.T) {
+	outputPath := os.Getenv("RECORDING_ZOMBO_OUTPUT_PATH")
+	if outputPath == "" {
+		t.Skip("set RECORDING_ZOMBO_OUTPUT_PATH to write a Zombocom archive recording")
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headfulImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{
+		Env: map[string]string{
+			"WIDTH":        "1280",
+			"HEIGHT":       "720",
+			"RECORD_AUDIO": "true",
+		},
+	}), "failed to start container")
+	defer c.Stop(ctx)
+
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	playwrightCode := `
+		await page.goto('https://archive.org/embed/ZombocomAkaZombo.com', { waitUntil: 'domcontentloaded' });
+		await page.waitForSelector('play-av', { timeout: 30000 });
+
+		const playbackState = () => page.evaluate(() => {
+			const mediaElements = [];
+			const collect = (root) => {
+				mediaElements.push(...root.querySelectorAll('audio,video'));
+				for (const el of root.querySelectorAll('*')) {
+					if (el.shadowRoot) {
+						collect(el.shadowRoot);
+					}
+				}
+			};
+			collect(document);
+			return mediaElements.map((el) => ({
+				currentTime: el.currentTime,
+				paused: el.paused,
+				readyState: el.readyState,
+				src: el.currentSrc || el.src,
+			}));
+		});
+		const isPlaying = async () => {
+			const playback = await playbackState();
+			return playback.some((media) => media.currentTime > 0.2 && !media.paused);
+		};
+
+		await page.waitForTimeout(2000);
+		const playButton = await page.locator('play-av').evaluate((player) => {
+			const button = player.shadowRoot?.querySelector('.jw-icon-playback');
+			if (!button) {
+				throw new Error('archive play button not found');
+			}
+			const rect = button.getBoundingClientRect();
+			return {
+				x: rect.left + rect.width / 2,
+				y: rect.top + rect.height / 2,
+			};
+		});
+		await page.mouse.click(playButton.x, playButton.y);
+		await page.waitForTimeout(2000);
+		if (!(await isPlaying())) {
+			throw new Error('archive audio did not start after clicking play: ' + JSON.stringify(await playbackState()));
+		}
+
+		await page.waitForTimeout(16000);
+		const playback = await playbackState();
+		if (!playback.some((media) => media.currentTime > 8 && !media.paused)) {
+			throw new Error('archive audio did not start: ' + JSON.stringify(playback));
+		}
+		return playback;
+	`
+
+	recordReplayAudio(t, ctx, c, playwrightCode, outputPath, 0.01)
+}
+
+func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, playwrightCode string, outputPath string, minPeakLevel float64) {
+	t.Helper()
+
 	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
-	maxDuration := 20
+	maxDuration := 35
 	maxFileSize := 100
 	startResp, err := client.StartRecordingWithResponse(ctx, instanceoapi.StartRecordingJSONRequestBody{
 		MaxDurationInSeconds: &maxDuration,
@@ -64,20 +158,15 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 		}
 	}()
 
-	playwrightCode := fmt.Sprintf(`
-		await page.goto(%q, { waitUntil: 'load' });
-		await page.click('#start');
-		await page.waitForFunction(() => window.audioStarted === true);
-		await page.waitForTimeout(8000);
-		return await page.title();
-	`, audioSite.ContainerURL())
 	runResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: playwrightCode,
 	})
 	require.NoError(t, err, "playwright request failed")
 	require.Equal(t, http.StatusOK, runResp.StatusCode(), "unexpected playwright status: %s body=%s", runResp.Status(), string(runResp.Body))
 	require.NotNil(t, runResp.JSON200, "expected playwright JSON response")
-	require.True(t, runResp.JSON200.Success, "playwright execution failed: %#v", runResp.JSON200)
+	if !runResp.JSON200.Success {
+		t.Fatalf("playwright execution failed: error=%s stderr=%s result=%#v", stringValue(runResp.JSON200.Error), stringValue(runResp.JSON200.Stderr), runResp.JSON200.Result)
+	}
 
 	stopResp, err := client.StopRecordingWithResponse(ctx, instanceoapi.StopRecordingJSONRequestBody{})
 	stopped = true
@@ -89,13 +178,13 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 	require.Equal(t, http.StatusOK, downloadResp.StatusCode(), "unexpected download status: %s body=%s", downloadResp.Status(), string(downloadResp.Body))
 	require.NotEmpty(t, downloadResp.Body, "downloaded recording is empty")
 
-	if outputPath := os.Getenv("RECORDING_AUDIO_OUTPUT_PATH"); outputPath != "" {
+	if outputPath != "" {
 		require.NoError(t, os.MkdirAll(filepath.Dir(outputPath), 0o755), "failed to create recording output directory")
 		require.NoError(t, os.WriteFile(outputPath, downloadResp.Body, 0o644), "failed to write downloaded recording")
 	}
 
 	require.True(t, mp4HasAudioTrack(downloadResp.Body), "downloaded recording does not contain an audio track")
-	require.Greater(t, mp4AudioPeakLevel(t, downloadResp.Body), 0.1, "downloaded recording audio track is silent")
+	require.Greater(t, mp4AudioPeakLevel(t, downloadResp.Body), minPeakLevel, "downloaded recording audio track is silent")
 }
 
 type audioTestSite struct {
@@ -161,6 +250,13 @@ func mp4HasAudioTrack(data []byte) bool {
 		}
 	}
 	return false
+}
+
+func stringValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 func mp4AudioPeakLevel(t *testing.T, data []byte) float64 {
