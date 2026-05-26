@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -84,6 +86,12 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 	require.NoError(t, err, "GET /recording/download failed")
 	require.Equal(t, http.StatusOK, downloadResp.StatusCode(), "unexpected download status: %s body=%s", downloadResp.Status(), string(downloadResp.Body))
 	require.NotEmpty(t, downloadResp.Body, "downloaded recording is empty")
+
+	if outputPath := os.Getenv("RECORDING_AUDIO_OUTPUT_PATH"); outputPath != "" {
+		require.NoError(t, os.MkdirAll(filepath.Dir(outputPath), 0o755), "failed to create recording output directory")
+		require.NoError(t, os.WriteFile(outputPath, downloadResp.Body, 0o644), "failed to write downloaded recording")
+	}
+
 	require.True(t, mp4HasAudioTrack(downloadResp.Body), "downloaded recording does not contain an audio track")
 }
 
