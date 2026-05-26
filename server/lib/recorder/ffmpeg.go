@@ -69,6 +69,8 @@ type FFmpegRecordingParams struct {
 	// MaxDurationInSeconds optionally limits the total recording time. If nil there is no duration limit.
 	MaxDurationInSeconds *int
 	OutputDir            *string
+	RecordAudio          *bool
+	AudioSource          *string
 }
 
 func (p FFmpegRecordingParams) Validate() error {
@@ -87,8 +89,22 @@ func (p FFmpegRecordingParams) Validate() error {
 	if p.MaxDurationInSeconds != nil && *p.MaxDurationInSeconds <= 0 {
 		return fmt.Errorf("max duration must be greater than 0 seconds")
 	}
+	if p.recordAudio() && strings.TrimSpace(p.audioSource()) == "" {
+		return fmt.Errorf("audio source is required when recording audio")
+	}
 
 	return nil
+}
+
+func (p FFmpegRecordingParams) recordAudio() bool {
+	return p.RecordAudio != nil && *p.RecordAudio
+}
+
+func (p FFmpegRecordingParams) audioSource() string {
+	if p.AudioSource == nil {
+		return ""
+	}
+	return *p.AudioSource
 }
 
 type FFmpegRecorderFactory func(id string, overrides FFmpegRecordingParams) (Recorder, error)
@@ -116,6 +132,8 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 		MaxSizeInMB:          config.MaxSizeInMB,
 		MaxDurationInSeconds: config.MaxDurationInSeconds,
 		OutputDir:            config.OutputDir,
+		RecordAudio:          config.RecordAudio,
+		AudioSource:          config.AudioSource,
 	}
 	if overrides.FrameRate != nil {
 		merged.FrameRate = overrides.FrameRate
@@ -131,6 +149,12 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 	}
 	if overrides.OutputDir != nil {
 		merged.OutputDir = overrides.OutputDir
+	}
+	if overrides.RecordAudio != nil {
+		merged.RecordAudio = overrides.RecordAudio
+	}
+	if overrides.AudioSource != nil {
+		merged.AudioSource = overrides.AudioSource
 	}
 
 	return merged
@@ -169,6 +193,14 @@ func (p FFmpegRecordingParams) clone() FFmpegRecordingParams {
 	if p.OutputDir != nil {
 		v := *p.OutputDir
 		c.OutputDir = &v
+	}
+	if p.RecordAudio != nil {
+		v := *p.RecordAudio
+		c.RecordAudio = &v
+	}
+	if p.AudioSource != nil {
+		v := *p.AudioSource
+		c.AudioSource = &v
 	}
 	return c
 }
@@ -472,31 +504,58 @@ func (fr *FFmpegRecorder) Delete(ctx context.Context) error {
 // ffmpegArgs generates platform-specific ffmpeg command line arguments. Allegedly order matters.
 func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, error) {
 	var args []string
+	recordAudio := params.recordAudio()
 
 	// Input options first
 	switch runtime.GOOS {
 	case "darwin":
+		audioDevice := "none"
+		if recordAudio {
+			audioDevice = params.audioSource()
+			if strings.TrimSpace(audioDevice) == "" {
+				return nil, fmt.Errorf("audio source is required when recording audio")
+			}
+		}
 		args = []string{
 			// Input options for AVFoundation
 			"-f", "avfoundation",
 			"-framerate", strconv.Itoa(*params.FrameRate),
 			"-pixel_format", "nv12",
 			// Input file
-			"-i", fmt.Sprintf("%d:none", *params.DisplayNum), // Screen capture, no audio
+			"-i", fmt.Sprintf("%d:%s", *params.DisplayNum, audioDevice),
 		}
 	case "linux":
 		args = []string{
 			// Input options for X11
+			"-thread_queue_size", "512",
 			"-f", "x11grab",
 			"-framerate", strconv.Itoa(*params.FrameRate),
 			// Input file
 			"-i", fmt.Sprintf(":%d", *params.DisplayNum), // X11 display
+		}
+		if recordAudio {
+			audioSource := params.audioSource()
+			if strings.TrimSpace(audioSource) == "" {
+				return nil, fmt.Errorf("audio source is required when recording audio")
+			}
+			args = append(args,
+				"-thread_queue_size", "512",
+				"-f", "pulse",
+				"-i", audioSource,
+			)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 
 	// Output options next
+	if recordAudio {
+		audioMap := "1:a:0"
+		if runtime.GOOS == "darwin" {
+			audioMap = "0:a:0"
+		}
+		args = append(args, "-map", "0:v:0", "-map", audioMap)
+	}
 	args = append(args, []string{
 		// yuv420p requires even width and height; pad odd source dimensions by one pixel
 		// so libx264 doesn't fail to open the encoder.
@@ -506,7 +565,19 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 		"-c:v", "libx264",
 		"-profile:v", "high", // Explicit web-compatible profile
 		"-pix_fmt", "yuv420p", // Web-standard pixel format
+	}...)
 
+	if recordAudio {
+		args = append(args, []string{
+			"-c:a", "aac",
+			"-b:a", "128k",
+			"-ar", "48000",
+			"-ac", "2",
+			"-af", "aresample=async=1:first_pts=0",
+		}...)
+	}
+
+	args = append(args, []string{
 		// Timestamp handling for reliable playback
 		"-use_wallclock_as_timestamps", "1", // Use system time instead of input stream time
 		"-reset_timestamps", "1", // Reset timestamps to start from zero

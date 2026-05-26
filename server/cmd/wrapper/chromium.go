@@ -47,7 +47,6 @@ func applyHeadlessDefaultFlags() {
 		"--hide-crash-restore-bubble",
 		"--hide-scrollbars",
 		"--metrics-recording-only",
-		"--mute-audio",
 		"--no-default-browser-check",
 		"--no-first-run",
 		"--no-sandbox",

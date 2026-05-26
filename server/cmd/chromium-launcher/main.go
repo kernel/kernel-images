@@ -122,6 +122,8 @@ func main() {
 		"env",
 		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
+		"PULSE_SERVER=" + os.Getenv("PULSE_SERVER"),
+		"PULSE_SINK=" + os.Getenv("PULSE_SINK"),
 		"XDG_CONFIG_HOME=/home/kernel/.config",
 		"XDG_CACHE_HOME=/home/kernel/.cache",
 		"HOME=/home/kernel",

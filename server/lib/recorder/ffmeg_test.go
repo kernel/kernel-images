@@ -18,11 +18,15 @@ func defaultParams(tempDir string) FFmpegRecordingParams {
 	fr := 5
 	disp := 0
 	size := 1
+	recordAudio := false
+	audioSource := "KernelOutput.monitor"
 	return FFmpegRecordingParams{
 		FrameRate:   &fr,
 		DisplayNum:  &disp,
 		MaxSizeInMB: &size,
 		OutputDir:   &tempDir,
+		RecordAudio: &recordAudio,
+		AudioSource: &audioSource,
 	}
 }
 
@@ -66,6 +70,8 @@ func TestFFmpegRecorder_Params(t *testing.T) {
 	assert.Equal(t, *params.DisplayNum, *got.DisplayNum)
 	assert.Equal(t, *params.MaxSizeInMB, *got.MaxSizeInMB)
 	assert.Equal(t, *params.OutputDir, *got.OutputDir)
+	assert.Equal(t, *params.RecordAudio, *got.RecordAudio)
+	assert.Equal(t, *params.AudioSource, *got.AudioSource)
 }
 
 func TestFFmpegArgs_PadsOddDimensions(t *testing.T) {
@@ -81,6 +87,24 @@ func TestFFmpegArgs_PadsOddDimensions(t *testing.T) {
 		}
 	}
 	assert.Equal(t, "pad=ceil(iw/2)*2:ceil(ih/2)*2", vf)
+}
+
+func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
+	tempDir := t.TempDir()
+	params := defaultParams(tempDir)
+	recordAudio := true
+	params.RecordAudio = &recordAudio
+
+	args, err := ffmpegArgs(params, filepath.Join(tempDir, "out.mp4"))
+	require.NoError(t, err)
+
+	assert.Contains(t, args, "-f")
+	assert.Contains(t, args, "pulse")
+	assert.Contains(t, args, "KernelOutput.monitor")
+	assert.Contains(t, args, "-map")
+	assert.Contains(t, args, "1:a:0")
+	assert.Contains(t, args, "-c:a")
+	assert.Contains(t, args, "aac")
 }
 
 func TestFFmpegRecorder_ForceStop(t *testing.T) {

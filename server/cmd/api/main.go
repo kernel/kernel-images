@@ -72,6 +72,8 @@ func main() {
 		FrameRate:   &config.FrameRate,
 		MaxSizeInMB: &config.MaxSizeInMB,
 		OutputDir:   &config.OutputDir,
+		RecordAudio: &config.RecordAudio,
+		AudioSource: &config.AudioSource,
 	}
 	if err := defaultParams.Validate(); err != nil {
 		slogger.Error("invalid default recording parameters", "err", err)

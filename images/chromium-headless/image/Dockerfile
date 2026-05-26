@@ -149,6 +149,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     gpg-agent \
     dbus \
     dbus-x11 \
+    pulseaudio \
     xvfb \
     x11-utils \
     x11-xserver-utils \
@@ -235,6 +236,8 @@ RUN useradd -m -s /bin/bash kernel
 # supervisor  start scripts
 COPY images/chromium-headless/image/start-xvfb.sh /images/chromium-headless/image/start-xvfb.sh
 RUN chmod +x /images/chromium-headless/image/start-xvfb.sh
+COPY shared/start-pulseaudio.sh /usr/local/bin/start-pulseaudio.sh
+RUN chmod +x /usr/local/bin/start-pulseaudio.sh
 
 # Container entrypoint wrapper (Go binary, replaces wrapper.sh)
 COPY --from=server-builder /out/wrapper /wrapper

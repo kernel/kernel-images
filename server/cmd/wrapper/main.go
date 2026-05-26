@@ -27,6 +27,7 @@ const (
 	dbusSocket     = "/run/dbus/system_bus_socket"
 	defaultDisplay = ":1"
 	defaultIntPort = "9223"
+	pulseSocket    = "/tmp/pulse/native"
 )
 
 type profile int
@@ -119,6 +120,15 @@ func main() {
 	// starts so it captures the env for child services (notably chromium,
 	// which would otherwise spam autolaunch errors).
 	_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+dbusSocket)
+	if os.Getenv("PULSE_SERVER") == "" {
+		_ = os.Setenv("PULSE_SERVER", "unix:"+pulseSocket)
+	}
+	if os.Getenv("PULSE_SINK") == "" {
+		_ = os.Setenv("PULSE_SINK", "KernelOutput")
+	}
+	if os.Getenv("AUDIO_SOURCE") == "" {
+		_ = os.Setenv("AUDIO_SOURCE", "KernelOutput.monitor")
+	}
 
 	// Stale X locks from prior runs.
 	_ = os.Remove("/tmp/.X1-lock")
@@ -172,11 +182,13 @@ func main() {
 	_ = os.WriteFile(filepath.Join(supervisordLogD, "chromium"), nil, 0o644)
 
 	browserStart := time.Now()
-	startAll(xServer, "dbus", "chromedriver", "chromium")
+	startAll(xServer, "dbus", "chromedriver", "pulseaudio")
 	waitForX(defaultDisplay, 20*time.Second)
 	if prof == profileHeadful {
 		startAll("mutter")
 	}
+	waitForSocket(pulseSocket, 10*time.Second)
+	startAll("chromium")
 	waitForSocket(dbusSocket, 10*time.Second)
 	if prof == profileHeadful && webrtc {
 		startAll("neko")
@@ -222,12 +234,6 @@ func main() {
 		browserDone.Sub(browserStart).Truncate(time.Millisecond),
 		identityDone.Sub(identityStart).Truncate(time.Millisecond),
 		formatProbeDurations(probeDurations))
-
-	// Cosmetic + non-critical services come up off the hot path. Headless has
-	// no audio stack.
-	if prof == profileHeadful {
-		go startAll("pulseaudio")
-	}
 
 	// Re-enable scale-to-zero now that the hot path is up — unless the caller
 	// asked to keep it disabled via ENABLE_STZ=false/0.

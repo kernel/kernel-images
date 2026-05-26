@@ -18,6 +18,8 @@ type Config struct {
 	DisplayNum  int    `envconfig:"DISPLAY_NUM" default:"1"`
 	MaxSizeInMB int    `envconfig:"MAX_SIZE_MB" default:"500"`
 	OutputDir   string `envconfig:"OUTPUT_DIR" default:"."`
+	RecordAudio bool   `envconfig:"RECORD_AUDIO" default:"false"`
+	AudioSource string `envconfig:"AUDIO_SOURCE" default:"KernelOutput.monitor"`
 
 	// Absolute or relative path to the ffmpeg binary. If empty the code falls back to "ffmpeg" on $PATH.
 	PathToFFmpeg string `envconfig:"FFMPEG_PATH" default:"ffmpeg"`
@@ -55,6 +57,8 @@ func (c *Config) LogValue() slog.Value {
 		slog.Int("display_num", c.DisplayNum),
 		slog.Int("max_size_mb", c.MaxSizeInMB),
 		slog.String("output_dir", c.OutputDir),
+		slog.Bool("record_audio", c.RecordAudio),
+		slog.String("audio_source", c.AudioSource),
 		slog.String("ffmpeg_path", c.PathToFFmpeg),
 		slog.Int("devtools_proxy_port", c.DevToolsProxyPort),
 		slog.Bool("log_cdp_messages", c.LogCDPMessages),
@@ -99,6 +103,9 @@ func validate(config *Config) error {
 	}
 	if config.PathToFFmpeg == "" {
 		return fmt.Errorf("FFMPEG_PATH is required")
+	}
+	if config.RecordAudio && config.AudioSource == "" {
+		return fmt.Errorf("AUDIO_SOURCE is required when RECORD_AUDIO is true")
 	}
 	if config.ChromeDriverUpstreamAddr == "" {
 		return fmt.Errorf("CHROMEDRIVER_UPSTREAM_ADDR is required")
