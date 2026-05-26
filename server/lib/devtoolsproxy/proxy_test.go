@@ -595,7 +595,7 @@ func TestResolveDisconnectReason(t *testing.T) {
 func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing.T) {
 	// Shorten the resolve wait so the test doesn't pay the production 10s.
 	prev := restartConfirmWait
-	restartConfirmWait = 500 * time.Millisecond
+	restartConfirmWait = 1 * time.Second
 	defer func() { restartConfirmWait = prev }()
 
 	// Upstream A: echoes once, then closes (simulates Chromium dying mid-session).
@@ -646,9 +646,11 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 		t.Fatalf("read failed: %v", err)
 	}
 
-	// Publish the new upstream URL during cleanup's restartConfirmWait window.
+	// Publish the new URL deliberately late so duration_ms would clearly be
+	// inflated if it were computed at publish time instead of disconnect time.
+	urlChangeAt := 700 * time.Millisecond
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(urlChangeAt)
 		mgr.setCurrent(urlB)
 	}()
 
@@ -661,13 +663,18 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 		t.Fatalf("second event type = %q, want cdp_disconnect", captured[1].Type)
 	}
 	var disconnect struct {
-		Reason oapi.BrowserCdpDisconnectEventDataReason `json:"reason"`
+		Reason     oapi.BrowserCdpDisconnectEventDataReason `json:"reason"`
+		DurationMs float64                                  `json:"duration_ms"`
 	}
 	if err := json.Unmarshal(captured[1].Data, &disconnect); err != nil {
 		t.Fatalf("unmarshal disconnect data: %v", err)
 	}
 	if disconnect.Reason != oapi.UpstreamChanged {
 		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, oapi.UpstreamChanged)
+	}
+	// duration_ms must reflect actual session length, not the resolver poll wait.
+	if maxMs := float64(urlChangeAt / time.Millisecond); disconnect.DurationMs >= maxMs {
+		t.Fatalf("disconnect duration_ms = %f, want < %f", disconnect.DurationMs, maxMs)
 	}
 }
 

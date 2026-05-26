@@ -359,11 +359,11 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			switch {
 			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(r.Context().Err(), context.Canceled), errors.Is(r.Context().Err(), context.DeadlineExceeded):
 				clientConn.Close(websocket.StatusGoingAway, "request cancelled")
-				publishCdpDisconnect(publish, oapi.ContextCancelled, connectedAt, msgCount.Load())
+				publishCdpDisconnect(publish, oapi.ContextCancelled, connectedAt, time.Now(), msgCount.Load())
 			default:
 				logger.Error("failed to connect to upstream", slog.String("err", err.Error()))
 				clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
-				publishCdpDisconnect(publish, oapi.UpstreamError, connectedAt, msgCount.Load())
+				publishCdpDisconnect(publish, oapi.UpstreamError, connectedAt, time.Now(), msgCount.Load())
 			}
 			return
 		}
@@ -402,11 +402,17 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		var once sync.Once
 		cleanup := func(cause wsproxy.PumpExitCause) {
 			once.Do(func() {
+				// Pin disconnectedAt before resolveDisconnectReason so duration_ms
+				// reflects actual session length, not the up-to-restartConfirmWait
+				// poll. Close conns explicitly before resolving as defense in
+				// depth — coder/websocket already closes the client conn as a
+				// side effect of pumpCancel, but we shouldn't rely on that.
+				disconnectedAt := time.Now()
 				pumpCancel()
-				reason := resolveDisconnectReason(cause, r.Context(), mgr, upstreamURL, restartConfirmWait, logger)
 				upstreamConn.Close(websocket.StatusNormalClosure, "")
 				clientConn.Close(websocket.StatusNormalClosure, "")
-				publishCdpDisconnect(publish, reason, connectedAt, msgCount.Load())
+				reason := resolveDisconnectReason(cause, r.Context(), mgr, upstreamURL, restartConfirmWait, logger)
+				publishCdpDisconnect(publish, reason, connectedAt, disconnectedAt, msgCount.Load())
 			})
 		}
 
@@ -469,17 +475,17 @@ func publishCdpConnect(publish EventPublisher) {
 	})
 }
 
-func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt time.Time, msgCount int64) {
+func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt, disconnectedAt time.Time, msgCount int64) {
 	if publish == nil {
 		return
 	}
 	data, _ := json.Marshal(oapi.BrowserCdpDisconnectEventData{
-		DurationMs:   float32(time.Since(connectedAt).Microseconds()) / 1000.0,
+		DurationMs:   float32(disconnectedAt.Sub(connectedAt).Microseconds()) / 1000.0,
 		MessageCount: int(msgCount),
 		Reason:       reason,
 	})
 	publish(events.Event{
-		Ts:       time.Now().UnixMicro(),
+		Ts:       disconnectedAt.UnixMicro(),
 		Type:     "cdp_disconnect",
 		Category: events.System,
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
