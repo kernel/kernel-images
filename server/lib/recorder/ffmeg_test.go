@@ -103,8 +103,13 @@ func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	assert.Contains(t, args, "KernelOutput.monitor")
 	assert.Contains(t, args, "-map")
 	assert.Contains(t, args, "1:a:0")
+	assert.Contains(t, args, "-preset")
+	assert.Contains(t, args, "veryfast")
+	assert.Contains(t, args, "-tune")
+	assert.Contains(t, args, "zerolatency")
 	assert.Contains(t, args, "-c:a")
 	assert.Contains(t, args, "aac")
+	assert.NotContains(t, args, "aresample=async=1:first_pts=0")
 }
 
 func TestFFmpegRecorder_ForceStop(t *testing.T) {

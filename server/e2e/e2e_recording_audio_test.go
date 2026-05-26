@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -107,6 +108,11 @@ func TestReplayRecordingZombocomArchiveAudio(t *testing.T) {
 		};
 
 		await page.waitForTimeout(2000);
+		await page.waitForFunction(async () => {
+			const player = document.querySelector('play-av');
+			const video = player?.shadowRoot?.querySelector('video');
+			return video && video.readyState >= 2;
+		}, null, { timeout: 30000 });
 		const playButton = await page.locator('play-av').evaluate((player) => {
 			const button = player.shadowRoot?.querySelector('.jw-icon-playback');
 			if (!button) {
@@ -185,6 +191,8 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 
 	require.True(t, mp4HasAudioTrack(downloadResp.Body), "downloaded recording does not contain an audio track")
 	require.Greater(t, mp4AudioPeakLevel(t, downloadResp.Body), minPeakLevel, "downloaded recording audio track is silent")
+	formatDuration, audioDuration := mp4Durations(t, downloadResp.Body)
+	require.GreaterOrEqual(t, audioDuration, formatDuration-2, "downloaded recording audio track ends before the recording does")
 }
 
 type audioTestSite struct {
@@ -285,4 +293,49 @@ func mp4AudioPeakLevel(t *testing.T, data []byte) float64 {
 	peak, err := strconv.ParseFloat(matches[1], 64)
 	require.NoError(t, err, "failed to parse audio peak level")
 	return peak
+}
+
+func mp4Durations(t *testing.T, data []byte) (float64, float64) {
+	t.Helper()
+
+	recordingPath := filepath.Join(t.TempDir(), "recording.mp4")
+	require.NoError(t, os.WriteFile(recordingPath, data, 0o644), "failed to write recording for duration analysis")
+
+	out, err := exec.Command(
+		"docker", "run", "--rm",
+		"-v", recordingPath+":/tmp/recording.mp4:ro",
+		"--entrypoint", "ffprobe",
+		headfulImage,
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-show_entries", "stream=codec_type,duration",
+		"-of", "json",
+		"/tmp/recording.mp4",
+	).CombinedOutput()
+	require.NoError(t, err, "failed to probe recording durations: %s", string(out))
+
+	var probe struct {
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+			Duration  string `json:"duration"`
+		} `json:"streams"`
+		Format struct {
+			Duration string `json:"duration"`
+		} `json:"format"`
+	}
+	require.NoError(t, json.Unmarshal(out, &probe), "failed to parse ffprobe output")
+
+	formatDuration, err := strconv.ParseFloat(probe.Format.Duration, 64)
+	require.NoError(t, err, "failed to parse format duration")
+
+	for _, stream := range probe.Streams {
+		if stream.CodecType != "audio" {
+			continue
+		}
+		audioDuration, err := strconv.ParseFloat(stream.Duration, 64)
+		require.NoError(t, err, "failed to parse audio duration")
+		return formatDuration, audioDuration
+	}
+	t.Fatal("ffprobe did not report an audio stream")
+	return 0, 0
 }

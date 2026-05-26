@@ -563,6 +563,8 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 
 		// Video encoding
 		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-tune", "zerolatency",
 		"-profile:v", "high", // Explicit web-compatible profile
 		"-pix_fmt", "yuv420p", // Web-standard pixel format
 	}...)
@@ -573,14 +575,13 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 			"-b:a", "128k",
 			"-ar", "48000",
 			"-ac", "2",
-			"-af", "aresample=async=1:first_pts=0",
+			"-af", "aresample=async=1",
 		}...)
 	}
 
 	args = append(args, []string{
 		// Timestamp handling for reliable playback
-		"-use_wallclock_as_timestamps", "1", // Use system time instead of input stream time
-		"-reset_timestamps", "1", // Reset timestamps to start from zero
+		"-reset_timestamps", "1",
 		"-avoid_negative_ts", "make_zero", // Convert negative timestamps to zero
 
 		// Data safety
