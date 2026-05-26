@@ -373,11 +373,37 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 
 		pumpCtx, pumpCancel := context.WithCancel(r.Context())
 
+		// Force clients off a stale upstream as soon as UpstreamManager
+		// publishes a different DevTools URL. Closing upstreamConn (rather
+		// than cancelling pumpCtx) makes the pump exit PumpExitUpstream so
+		// resolveDisconnectReason classifies the disconnect via mgr.Current().
+		go func(currentUpstreamURL string) {
+			for {
+				select {
+				case newURL, ok := <-urlCh:
+					if !ok {
+						return
+					}
+					newURL = normalizeUpstreamURL(newURL)
+					if newURL == "" || newURL == currentUpstreamURL {
+						continue
+					}
+					logger.Info("upstream URL changed, closing stale proxy session",
+						slog.String("old_url", currentUpstreamURL),
+						slog.String("new_url", newURL))
+					upstreamConn.Close(websocket.StatusGoingAway, "upstream changed")
+					return
+				case <-pumpCtx.Done():
+					return
+				}
+			}
+		}(upstreamURL)
+
 		var once sync.Once
 		cleanup := func(cause wsproxy.PumpExitCause) {
 			once.Do(func() {
-				reason := resolveDisconnectReason(cause, r.Context(), mgr, urlCh, upstreamURL, restartConfirmWait, logger)
 				pumpCancel()
+				reason := resolveDisconnectReason(cause, r.Context(), mgr, upstreamURL, restartConfirmWait, logger)
 				upstreamConn.Close(websocket.StatusNormalClosure, "")
 				clientConn.Close(websocket.StatusNormalClosure, "")
 				publishCdpDisconnect(publish, reason, connectedAt, msgCount.Load())
@@ -396,42 +422,35 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 var restartConfirmWait = 10 * time.Second
 
 // resolveDisconnectReason picks the cdp_disconnect reason from which side
-// caused the pump to exit. When the upstream side errored, it waits briefly
-// on urlCh for a new Chromium URL: a new URL means Chromium restarted
-// (upstream_changed); no URL within the window means the upstream broke
-// without a restart (upstream_error).
-func resolveDisconnectReason(cause wsproxy.PumpExitCause, reqCtx context.Context, mgr *UpstreamManager, urlCh <-chan string, dialedURL string, restartWait time.Duration, logger *slog.Logger) oapi.BrowserCdpDisconnectEventDataReason {
-	if reqCtx.Err() != nil || cause == wsproxy.PumpExitContext {
+// caused the pump to exit. On upstream cause it polls mgr.Current() for up
+// to restartWait: a different URL within the window means Chromium restarted
+// (upstream_changed); timeout means the upstream broke without a restart
+// (upstream_error). Polling rather than reading urlCh avoids competing with
+// the URL watcher and works because setCurrent updates Current() before
+// broadcasting.
+func resolveDisconnectReason(cause wsproxy.PumpExitCause, reqCtx context.Context, mgr *UpstreamManager, dialedURL string, restartWait time.Duration, logger *slog.Logger) oapi.BrowserCdpDisconnectEventDataReason {
+	if reqCtx.Err() != nil {
 		return oapi.ContextCancelled
 	}
-	if cause == wsproxy.PumpExitClient {
+	switch cause {
+	case wsproxy.PumpExitClient:
 		return oapi.ClientClose
+	case wsproxy.PumpExitContext:
+		return oapi.ContextCancelled
 	}
 
-	if newest := normalizeUpstreamURL(mgr.Current()); newest != "" && newest != dialedURL {
-		logger.Info("upstream changed before disconnect resolution",
-			slog.String("old_url", dialedURL), slog.String("new_url", newest))
-		return oapi.UpstreamChanged
-	}
-	// Stale or duplicate URL broadcasts don't reset the timer; total wait
-	// is bounded by restartWait regardless of how many we see.
-	timer := time.NewTimer(restartWait)
-	defer timer.Stop()
+	deadline := time.Now().Add(restartWait)
 	for {
-		select {
-		case newURL, ok := <-urlCh:
-			if !ok {
-				return oapi.UpstreamError
-			}
-			newURL = normalizeUpstreamURL(newURL)
-			if newURL == "" || newURL == dialedURL {
-				continue
-			}
-			logger.Info("upstream restart confirmed after disconnect",
-				slog.String("old_url", dialedURL), slog.String("new_url", newURL))
+		if newest := normalizeUpstreamURL(mgr.Current()); newest != "" && newest != dialedURL {
+			logger.Info("upstream restart detected after disconnect",
+				slog.String("old_url", dialedURL), slog.String("new_url", newest))
 			return oapi.UpstreamChanged
-		case <-timer.C:
+		}
+		if !time.Now().Before(deadline) {
 			return oapi.UpstreamError
+		}
+		select {
+		case <-time.After(100 * time.Millisecond):
 		case <-reqCtx.Done():
 			return oapi.ContextCancelled
 		}
