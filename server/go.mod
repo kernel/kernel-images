@@ -10,6 +10,7 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/docker/docker v28.5.1+incompatible
 	github.com/docker/go-connections v0.6.0
+	github.com/euank/go-kmsg-parser/v2 v2.1.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/ghodss/yaml v1.0.0
