@@ -2700,15 +2700,63 @@ components:
         pid:
           type: integer
           description: PID of the killed process.
-        total_vm_kb:
-          type: integer
-          description: Total virtual memory of the killed process in KiB.
         rss_kb:
           type: integer
-          description: Resident set size of the killed process in KiB (sum of anon-rss, file-rss, and shmem-rss).
-        oom_score_adj:
+          description: Resident set size of the killed process in KiB (sum of anon-rss, file-rss, and shmem-rss). This is the physical memory the process was using at the time of the kill.
+        constraint:
+          type: string
+          description: >
+            Why the kernel decided to OOM-kill. `none` means global memory
+            exhaustion; `memcg` means a cgroup memory limit was hit;
+            `cpuset` / `memory_policy` are NUMA/policy-driven kills.
+            Absent on kernels older than 5.0 which did not emit the
+            structured `oom-kill:` line.
+          enum:
+            - none
+            - memcg
+            - cpuset
+            - memory_policy
+        mem_total_kb:
           type: integer
-          description: oom_score_adj of the killed process at the time of kill.
+          description: >
+            Total system memory in KiB at the time of the kill, derived
+            from the `N pages RAM` line in the kernel's Mem-Info dump.
+            Assumes a 4 KiB page size. Absent if the kernel did not
+            emit a parseable Mem-Info section.
+        mem_free_kb:
+          type: integer
+          description: >
+            Free system memory in KiB at the time of the kill, derived
+            from the `free:N` field in the kernel's Mem-Info dump.
+            Assumes a 4 KiB page size. Does not include reclaimable
+            caches, so a small value with a large `mem_total_kb` may
+            still mean the system was not under hard pressure. Absent
+            if the kernel did not emit a parseable Mem-Info section.
+        top_tasks:
+          type: array
+          maxItems: 5
+          description: >
+            Top processes by resident-set-size at the moment of the
+            kill, sorted descending. Sourced from the kernel's
+            `Tasks state` table. Empty if the kernel did not emit the
+            table. Capped at 5 entries to bound payload size.
+          items:
+            $ref: "#/components/schemas/BrowserSystemOomKillTask"
+    BrowserSystemOomKillTask:
+      type: object
+      description: A single process entry from the kernel's `Tasks state` dump.
+      additionalProperties: false
+      required: [pid, name, rss_kb]
+      properties:
+        pid:
+          type: integer
+          description: PID of the process.
+        name:
+          type: string
+          description: Comm of the process (max 15 chars, truncated by the kernel).
+        rss_kb:
+          type: integer
+          description: Resident set size in KiB at the moment of the kill.
     BrowserSystemOomKillEvent:
       type: object
       description: >
@@ -2734,37 +2782,39 @@ components:
     BrowserServiceCrashedEventData:
       type: object
       description: >
-        Per-crash payload for `service_crashed` events. Fields are derived
-        from the supervisord eventlistener wire protocol, which exposes the
-        process name, the state the process exited from, and (for EXITED but
-        not FATAL transitions) the PID. Exit code and signal are not surfaced
-        by supervisord on this channel.
+        Per-crash payload for `service_crashed` events. Exit code and
+        signal are not exposed by the underlying process manager on this
+        channel, so only the service identity, the lifecycle phase the
+        crash occurred in, and (when available) the PID are reported.
       additionalProperties: false
-      required: [service_name, from_state]
+      required: [service_name, phase]
       properties:
         service_name:
           type: string
-          description: Supervisord program name (e.g. `chromium`, `mutter`, `kernel-images-api`).
+          description: Program name of the crashed service (e.g. `chromium`, `mutter`, `kernel-images-api`).
         pid:
           type: integer
-          description: PID of the crashed process. Absent for PROCESS_STATE_FATAL transitions, which fire after all start attempts are exhausted.
-        from_state:
+          description: PID of the crashed process. Absent when the process manager gave up after exhausting restart attempts and is no longer tracking a live PID.
+        phase:
           type: string
           description: >
-            Supervisord state the process was in before the unexpected exit.
-            `RUNNING` means a healthy process died; `STARTING` means it died
-            during startup; `BACKOFF` is paired with FATAL and means
-            supervisord gave up restarting it.
+            Lifecycle phase the crash occurred in.
+            `startup` means the process died before it ever reached a
+            healthy running state. `running` means a previously healthy
+            process died unexpectedly. `gave_up` means the process
+            manager exhausted its restart attempts and stopped trying;
+            no further `service_crashed` events will fire for this
+            service until something restarts it.
           enum:
-            - RUNNING
-            - STARTING
-            - BACKOFF
+            - startup
+            - running
+            - gave_up
     BrowserServiceCrashedEvent:
       type: object
       description: >
-        A supervisord-managed service exited unexpectedly. Only fires when supervisord
-        reports the exit as unexpected (`expected=0`); intentional stops via
-        `supervisorctl stop` do not produce this event.
+        A managed service exited unexpectedly. Intentional stops (e.g.
+        operator-initiated shutdown) do not produce this event — only
+        unexpected exits and terminal restart-give-up transitions do.
       required: [ts, type, source]
       properties:
         ts:
