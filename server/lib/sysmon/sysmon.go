@@ -1,55 +1,175 @@
-// Package sysmon emits VM-internal failure telemetry — OOM kills surfaced
-// through /dev/kmsg, and (via the supervisord-shim binary POSTing to the
-// telemetry HTTP endpoint) supervised-service crashes.
+// Package sysmon emits VM-internal failure telemetry — OOM kills
+// surfaced through /dev/kmsg, and (via the supervisord-shim binary
+// POSTing to the telemetry HTTP endpoint) supervised-service crashes.
 //
 // The package only owns the in-process kmsg reader; service crashes are
-// delivered as ordinary caller-published events via POST /telemetry/events
-// from the shim. Both paths terminate in the same EventStream.
+// delivered as ordinary caller-published events via POST
+// /telemetry/events from the shim. Both paths terminate in the same
+// EventStream.
 package sysmon
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"sync"
 
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
-// DefaultKmsgPath is the standard kernel log device.
-const DefaultKmsgPath = "/dev/kmsg"
+// kmsgSource abstracts a /dev/kmsg-shaped stream of kernel ring buffer
+// messages. The production implementation lives in kmsg_linux.go; tests
+// supply a stub via Monitor.kmsgSource.
+type kmsgSource interface {
+	Messages() <-chan KmsgMessage
+	Close() error
+}
 
-// Monitor runs the in-process sysmon goroutines and publishes events directly
-// to the EventStream. System-category events are always captured regardless
-// of any active TelemetrySession config, so we deliberately bypass
-// TelemetrySession here.
+// Monitor runs the in-process sysmon goroutine and publishes events
+// directly to the EventStream. System-category events are always
+// captured regardless of any active TelemetrySession config, so we
+// deliberately bypass TelemetrySession here.
 type Monitor struct {
-	es        *events.EventStream
-	logger    *slog.Logger
-	kmsgPath  string
+	es     *events.EventStream
+	logger *slog.Logger
+
+	// kmsgSource lets tests inject a stub stream of kmsg messages.
+	// Production callers leave this nil; Start() then opens /dev/kmsg.
+	kmsgSource kmsgSource
+
+	wg sync.WaitGroup
 }
 
-// Option configures a Monitor.
-type Option func(*Monitor)
+// option configures a Monitor.
+type option func(*Monitor)
 
-// WithKmsgPath overrides the default /dev/kmsg path. Intended for tests.
-func WithKmsgPath(path string) Option {
-	return func(m *Monitor) { m.kmsgPath = path }
+// withKmsgSource overrides the kmsg source. Test-only.
+func withKmsgSource(src kmsgSource) option {
+	return func(m *Monitor) { m.kmsgSource = src }
 }
 
-// New constructs a Monitor. The Monitor does nothing until Start is called.
-func New(es *events.EventStream, logger *slog.Logger, opts ...Option) *Monitor {
-	m := &Monitor{
-		es:       es,
-		logger:   logger,
-		kmsgPath: DefaultKmsgPath,
-	}
+// New constructs a Monitor. The Monitor does nothing until Start is
+// called.
+func New(es *events.EventStream, logger *slog.Logger, opts ...option) *Monitor {
+	m := &Monitor{es: es, logger: logger}
 	for _, opt := range opts {
 		opt(m)
 	}
 	return m
 }
 
-// Start launches background goroutines. It returns immediately; goroutines
-// shut down when ctx is cancelled.
-func (m *Monitor) Start(ctx context.Context) {
-	go m.runKmsg(ctx)
+// Start opens the kmsg source (validating that it is usable) and
+// launches the background OOM reader goroutine. It returns an error if
+// the kmsg source cannot be opened; the goroutine then never starts and
+// the caller can decide whether the failure is fatal.
+//
+// Start must be called at most once per Monitor. Calling it twice would
+// spawn two readers racing on the same kmsg channel and corrupt the OOM
+// state machine. Callers needing a restart should construct a new
+// Monitor.
+//
+// The goroutine shuts down when ctx is cancelled; Wait blocks until it
+// returns.
+func (m *Monitor) Start(ctx context.Context) error {
+	if m.kmsgSource == nil {
+		src, err := openKmsgSource(m.logger)
+		if err != nil {
+			return err
+		}
+		m.kmsgSource = src
+	}
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.runOomLoop(ctx)
+	}()
+	return nil
+}
+
+// Wait blocks until all goroutines launched by Start have returned. Safe
+// to call from tests after cancelling the Start context.
+func (m *Monitor) Wait() { m.wg.Wait() }
+
+// runOomLoop consumes the kmsg stream, drives the OOM state machine, and
+// publishes a system_oom_kill event for each completed instance.
+func (m *Monitor) runOomLoop(ctx context.Context) {
+	src := m.kmsgSource
+	// Closing the source unblocks any read in Messages() so the range
+	// terminates cleanly on shutdown.
+	go func() {
+		<-ctx.Done()
+		_ = src.Close()
+	}()
+
+	m.logger.Info("sysmon: kmsg OOM reader started")
+
+	var s oomScanner
+	for msg := range src.Messages() {
+		oom := s.feed(msg.Body, msg.Timestamp)
+		if oom == nil {
+			continue
+		}
+		m.publishOomKill(*oom)
+	}
+
+	m.logger.Info("sysmon: kmsg OOM reader stopped")
+}
+
+func (m *Monitor) publishOomKill(oom OomInstance) {
+	data := oapi.BrowserSystemOomKillEventData{
+		ProcessName: oom.ProcessName,
+		Pid:         oom.Pid,
+		RssKb:       oom.RssKb,
+	}
+	if oom.Constraint != "" {
+		c := oapi.BrowserSystemOomKillEventDataConstraint(oom.Constraint)
+		data.Constraint = &c
+	}
+	if oom.MemTotalKb > 0 {
+		v := oom.MemTotalKb
+		data.MemTotalKb = &v
+	}
+	if oom.MemFreeKb > 0 {
+		v := oom.MemFreeKb
+		data.MemFreeKb = &v
+	}
+	if len(oom.TopTasks) > 0 {
+		tasks := make([]oapi.BrowserSystemOomKillTask, len(oom.TopTasks))
+		for i, t := range oom.TopTasks {
+			tasks[i] = oapi.BrowserSystemOomKillTask{
+				Pid:   t.Pid,
+				Name:  t.Name,
+				RssKb: t.RssKb,
+			}
+		}
+		data.TopTasks = &tasks
+	}
+
+	payload, err := json.Marshal(data)
+	if err != nil {
+		m.logger.Warn("sysmon: marshal oom kill payload", "err", err)
+		return
+	}
+	srcEvent := "linux.oom_kill"
+	ev := events.Event{
+		Ts:       oom.TimeOfDeath.UnixMicro(),
+		Type:     string(oapi.SystemOomKill),
+		Category: events.System,
+		Source: oapi.BrowserEventSource{
+			Kind:  oapi.LocalProcess,
+			Event: &srcEvent,
+		},
+		Data: json.RawMessage(payload),
+	}
+	m.es.Publish(events.Envelope{Event: ev})
+	m.logger.Info("sysmon: oom kill",
+		"process", oom.ProcessName,
+		"pid", oom.Pid,
+		"rss_kb", oom.RssKb,
+		"constraint", oom.Constraint,
+		"mem_total_kb", oom.MemTotalKb,
+		"mem_free_kb", oom.MemFreeKb,
+		"top_tasks", len(oom.TopTasks),
+	)
 }

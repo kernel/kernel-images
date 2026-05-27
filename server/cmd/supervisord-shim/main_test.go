@@ -2,127 +2,142 @@ package main
 
 import (
 	"bufio"
-	"reflect"
+	"bytes"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
+func TestWriteResultOKHasNoTrailingNewline(t *testing.T) {
+	// Regression: supervisord's eventlistener protocol reads exactly the
+	// declared byte count after the header newline. A trailing newline
+	// here misaligns the following READY frame and deadlocks the
+	// listener after the first event.
+	var buf bytes.Buffer
+	bw := bufio.NewWriter(&buf)
+	require.NoError(t, writeResultOK(bw))
+	assert.Equal(t, "RESULT 2\nOK", buf.String())
+}
+
 func TestParseFields(t *testing.T) {
-	in := "processname:mutter groupname:mutter from_state:RUNNING expected:0 pid:1234"
-	got := parseFields(in)
-	want := map[string]string{
+	got := parseFields("processname:mutter groupname:mutter from_state:RUNNING expected:0 pid:1234")
+	assert.Equal(t, map[string]string{
 		"processname": "mutter",
 		"groupname":   "mutter",
 		"from_state":  "RUNNING",
 		"expected":    "0",
 		"pid":         "1234",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseFields = %v, want %v", got, want)
-	}
+	}, got)
 }
 
 func TestReadEvent(t *testing.T) {
 	payload := "processname:cat groupname:cat from_state:RUNNING expected:0 pid:2766"
 	header := "ver:3.0 server:supervisor serial:21 pool:listener poolserial:10 eventname:PROCESS_STATE_EXITED len:" +
-		itoa(len(payload)) + "\n"
+		strconv.Itoa(len(payload)) + "\n"
 	in := bufio.NewReader(strings.NewReader(header + payload))
 
 	hdr, pl, err := readEvent(in)
-	if err != nil {
-		t.Fatalf("readEvent: %v", err)
-	}
-	if hdr["eventname"] != "PROCESS_STATE_EXITED" {
-		t.Errorf("eventname = %q", hdr["eventname"])
-	}
-	if pl["pid"] != "2766" || pl["processname"] != "cat" || pl["expected"] != "0" {
-		t.Errorf("payload = %v", pl)
-	}
+	require.NoError(t, err)
+	assert.Equal(t, "PROCESS_STATE_EXITED", hdr["eventname"])
+	assert.Equal(t, "2766", pl["pid"])
+	assert.Equal(t, "cat", pl["processname"])
+	assert.Equal(t, "0", pl["expected"])
 }
 
-func TestMapEventExitedUnexpected(t *testing.T) {
-	hdr := map[string]string{"eventname": "PROCESS_STATE_EXITED"}
-	pl := map[string]string{
-		"processname": "mutter",
-		"from_state":  "RUNNING",
-		"expected":    "0",
-		"pid":         "1234",
-	}
-	body, ok := mapEvent(hdr, pl)
-	if !ok {
-		t.Fatal("expected publish")
-	}
-	if body.Type != "service_crashed" {
-		t.Errorf("Type = %q", body.Type)
-	}
-	if body.Category != "system" {
-		t.Errorf("Category = %q", body.Category)
-	}
-	if body.Source.Kind != "local_process" {
-		t.Errorf("Source.Kind = %q", body.Source.Kind)
-	}
-	if body.Source.Event != "supervisord.process_exited" {
-		t.Errorf("Source.Event = %q", body.Source.Event)
-	}
-	if body.Data.ServiceName != "mutter" || body.Data.FromState != "RUNNING" {
-		t.Errorf("Data = %+v", body.Data)
-	}
-	if body.Data.Pid == nil || *body.Data.Pid != 1234 {
-		t.Errorf("Pid = %v", body.Data.Pid)
-	}
+func TestMapEventExitedUnexpectedFromRunning(t *testing.T) {
+	body, ok := mapEvent(
+		map[string]string{"eventname": "PROCESS_STATE_EXITED"},
+		map[string]string{
+			"processname": "mutter",
+			"from_state":  "RUNNING",
+			"expected":    "0",
+			"pid":         "1234",
+		},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "service_crashed", body.Type)
+	assert.Equal(t, "system", body.Category)
+	assert.Equal(t, "local_process", body.Source.Kind)
+	assert.Equal(t, "service.crashed", body.Source.Event)
+	assert.Equal(t, "mutter", body.Data.ServiceName)
+	assert.Equal(t, "running", body.Data.Phase)
+	require.NotNil(t, body.Data.Pid)
+	assert.Equal(t, 1234, *body.Data.Pid)
+}
+
+func TestMapEventExitedUnexpectedFromStarting(t *testing.T) {
+	// A crash during startup must surface as the "startup" phase, not
+	// "running" — operators triage these differently (config bug vs
+	// runtime bug).
+	body, ok := mapEvent(
+		map[string]string{"eventname": "PROCESS_STATE_EXITED"},
+		map[string]string{
+			"processname": "envoy",
+			"from_state":  "STARTING",
+			"expected":    "0",
+			"pid":         "55",
+		},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "startup", body.Data.Phase)
 }
 
 func TestMapEventExitedExpectedSkipped(t *testing.T) {
-	hdr := map[string]string{"eventname": "PROCESS_STATE_EXITED"}
-	pl := map[string]string{
-		"processname": "mutter",
-		"from_state":  "RUNNING",
-		"expected":    "1",
-		"pid":         "1234",
-	}
-	if _, ok := mapEvent(hdr, pl); ok {
-		t.Fatal("expected skip for expected=1")
-	}
+	_, ok := mapEvent(
+		map[string]string{"eventname": "PROCESS_STATE_EXITED"},
+		map[string]string{
+			"processname": "mutter",
+			"from_state":  "RUNNING",
+			"expected":    "1",
+			"pid":         "1234",
+		},
+	)
+	assert.False(t, ok, "expected=1 (clean exit) must not produce an event")
 }
 
-func TestMapEventFatal(t *testing.T) {
-	hdr := map[string]string{"eventname": "PROCESS_STATE_FATAL"}
-	pl := map[string]string{
-		"processname": "chromium",
-		"from_state":  "BACKOFF",
-	}
-	body, ok := mapEvent(hdr, pl)
-	if !ok {
-		t.Fatal("expected publish")
-	}
-	if body.Source.Event != "supervisord.process_fatal" {
-		t.Errorf("Source.Event = %q", body.Source.Event)
-	}
-	if body.Data.ServiceName != "chromium" || body.Data.FromState != "BACKOFF" {
-		t.Errorf("Data = %+v", body.Data)
-	}
-	if body.Data.Pid != nil {
-		t.Errorf("Pid should be nil for FATAL, got %v", *body.Data.Pid)
-	}
+func TestMapEventFatalFromBackoff(t *testing.T) {
+	body, ok := mapEvent(
+		map[string]string{"eventname": "PROCESS_STATE_FATAL"},
+		map[string]string{
+			"processname": "chromium",
+			"from_state":  "BACKOFF",
+		},
+	)
+	require.True(t, ok)
+	assert.Equal(t, "gave_up", body.Data.Phase)
+	assert.Nil(t, body.Data.Pid, "FATAL transitions do not carry a live PID")
 }
 
 func TestMapEventUnrelatedSkipped(t *testing.T) {
-	hdr := map[string]string{"eventname": "PROCESS_STATE_STARTING"}
-	if _, ok := mapEvent(hdr, map[string]string{"processname": "x", "from_state": "STOPPED"}); ok {
-		t.Fatal("expected skip for non-crash event")
-	}
+	_, ok := mapEvent(
+		map[string]string{"eventname": "PROCESS_STATE_STARTING"},
+		map[string]string{"processname": "x", "from_state": "STOPPED"},
+	)
+	assert.False(t, ok)
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
+func TestIsCrashEvent(t *testing.T) {
+	assert.True(t, isCrashEvent("PROCESS_STATE_EXITED"))
+	assert.True(t, isCrashEvent("PROCESS_STATE_FATAL"))
+	assert.False(t, isCrashEvent("PROCESS_STATE_STARTING"))
+	assert.False(t, isCrashEvent("PROCESS_STATE_RUNNING"))
+	assert.False(t, isCrashEvent(""))
+}
+
+func TestMapEventUnknownFromStateSkipped(t *testing.T) {
+	// If supervisord emits a crash transition out of a state we have no
+	// public mapping for (e.g. STOPPED, which shouldn't happen with the
+	// events we subscribe to), drop the event rather than invent a phase.
+	_, ok := mapEvent(
+		map[string]string{"eventname": "PROCESS_STATE_EXITED"},
+		map[string]string{
+			"processname": "x",
+			"from_state":  "STOPPED",
+			"expected":    "0",
+		},
+	)
+	assert.False(t, ok)
 }

@@ -1,18 +1,24 @@
 // Command supervisord-shim is a tiny supervisord eventlistener that
-// translates PROCESS_STATE_EXITED (expected=0) and PROCESS_STATE_FATAL events
-// into BrowserServiceCrashedEvent payloads and POSTs them to the local
-// kernel-images-api telemetry endpoint.
+// translates PROCESS_STATE_EXITED (expected=0) and PROCESS_STATE_FATAL
+// events into BrowserServiceCrashedEvent payloads and POSTs them to the
+// local kernel-images-api telemetry endpoint.
 //
-// All schema-mapping and event publishing logic lives here; lib/sysmon does
-// not handle supervisord events. Keeping the shim as the sole owner of the
-// supervisord protocol means lib/sysmon stays single-purpose (kmsg only).
+// All schema-mapping and event publishing logic lives here; lib/sysmon
+// does not handle supervisord events. Keeping the shim as the sole owner
+// of the supervisord protocol means lib/sysmon stays single-purpose
+// (kmsg only).
 //
-// Wire protocol per supervisord docs:
+// Wire protocol per supervisord docs (http://supervisord.org/events.html):
 //
 //	stdout: "READY\n"
 //	stdin:  header line ("ver:3.0 ... eventname:PROCESS_STATE_EXITED len:54\n")
 //	stdin:  payload of `len` bytes (no trailing newline)
-//	stdout: "RESULT 2\nOK\n"  (always; ACK regardless of downstream success)
+//	stdout: "RESULT 2\nOK"          (always; ACK regardless of downstream success)
+//
+// The result frame intentionally has NO trailing newline: supervisord
+// reads exactly the declared number of bytes after the header newline,
+// and a trailing newline would leak into the buffer and corrupt the
+// subsequent READY token, deadlocking the listener after one event.
 //
 // We always ACK with OK so supervisord doesn't quarantine us when the
 // downstream HTTP target is briefly unavailable. The events are
@@ -75,23 +81,42 @@ func main() {
 		}
 
 		// Try to publish but always ACK supervisord.
-		if ev, ok := mapEvent(header, payload); ok {
+		ev, ok := mapEvent(header, payload)
+		switch {
+		case ok:
 			if perr := pub.publish(context.Background(), ev); perr != nil {
 				log.Printf("publish telemetry event: %v", perr)
 			}
+		case isCrashEvent(header["eventname"]):
+			// We subscribed to this event type but couldn't map it.
+			// Most likely cause: supervisord emitted a from_state we
+			// don't have a public phase for. Logging means a future
+			// supervisord behavior change shows up in stderr instead
+			// of silent telemetry loss.
+			log.Printf("skipped crash event: eventname=%q from_state=%q processname=%q expected=%q",
+				header["eventname"], payload["from_state"], payload["processname"], payload["expected"])
 		}
 
-		if _, err := out.WriteString("RESULT 2\nOK\n"); err != nil {
+		if err := writeResultOK(out); err != nil {
 			log.Fatalf("write RESULT: %v", err)
-		}
-		if err := out.Flush(); err != nil {
-			log.Fatalf("flush RESULT: %v", err)
 		}
 	}
 }
 
-// readEvent reads one supervisord event: a header line followed by a payload
-// of declared length.
+// writeResultOK writes the supervisord eventlistener "RESULT" frame
+// indicating success. The body is exactly "OK" (2 bytes) with NO trailing
+// newline — supervisord reads exactly `len` bytes after the header
+// newline, and a trailing newline would leak into the buffer and corrupt
+// the subsequent READY token.
+func writeResultOK(out *bufio.Writer) error {
+	if _, err := out.WriteString("RESULT 2\nOK"); err != nil {
+		return err
+	}
+	return out.Flush()
+}
+
+// readEvent reads one supervisord event: a header line followed by a
+// payload of declared length.
 func readEvent(in *bufio.Reader) (map[string]string, map[string]string, error) {
 	headerLine, err := in.ReadString('\n')
 	if err != nil {
@@ -117,9 +142,9 @@ func readEvent(in *bufio.Reader) (map[string]string, map[string]string, error) {
 }
 
 // parseFields parses supervisord's "key:value key:value" tokenization.
-// Values are split on the first colon; supervisord does not escape colons in
-// values, but in practice the values we care about (process names, states,
-// ints) never contain them.
+// Values are split on the first colon; supervisord does not escape colons
+// in values, but in practice the values we care about (process names,
+// states, ints) never contain them.
 func parseFields(s string) map[string]string {
 	out := make(map[string]string)
 	for _, tok := range strings.Fields(s) {
@@ -132,8 +157,9 @@ func parseFields(s string) map[string]string {
 	return out
 }
 
-// telemetryEventBody mirrors oapi.TelemetryEvent but is duplicated here so the
-// shim does not pull in the entire server module — keeps the binary tiny.
+// telemetryEventBody mirrors oapi.TelemetryEvent but is duplicated here
+// so the shim does not pull in the entire server module — keeps the
+// binary tiny. Field names track openapi.yaml by convention.
 type telemetryEventBody struct {
 	Type     string                `json:"type"`
 	Category string                `json:"category"`
@@ -148,25 +174,51 @@ type telemetryEventSource struct {
 
 type serviceCrashedPayload struct {
 	ServiceName string `json:"service_name"`
-	FromState   string `json:"from_state"`
+	Phase       string `json:"phase"`
 	Pid         *int   `json:"pid,omitempty"`
+}
+
+// phaseFromSupervisordState maps the process manager's pre-exit state to
+// the neutral lifecycle phase exposed in the public event schema. The
+// goal is to keep the supervisord vocabulary out of the API contract.
+func phaseFromSupervisordState(fromState string) string {
+	switch fromState {
+	case "RUNNING":
+		return "running"
+	case "STARTING":
+		return "startup"
+	case "BACKOFF":
+		// PROCESS_STATE_FATAL transitions out of BACKOFF after the
+		// process manager exhausts its restart attempts.
+		return "gave_up"
+	default:
+		return ""
+	}
+}
+
+// isCrashEvent reports whether the supervisord eventname is one we
+// subscribed to. Used by the main loop to log when a target event was
+// dropped instead of silently skipping it.
+func isCrashEvent(eventName string) bool {
+	return eventName == "PROCESS_STATE_EXITED" || eventName == "PROCESS_STATE_FATAL"
 }
 
 // mapEvent decides whether to publish and constructs the event payload.
 // Returns ok=false for events we deliberately skip (intentional stops,
-// non-crash event types).
+// non-crash event types, or unknown lifecycle transitions).
 func mapEvent(header, payload map[string]string) (telemetryEventBody, bool) {
 	eventName := header["eventname"]
 	switch eventName {
 	case "PROCESS_STATE_EXITED":
-		// expected=0 means the exit was not in `exitcodes` — i.e. a crash.
-		// expected=1 means clean shutdown (supervisorctl stop, or a configured
-		// exitcode). Skip the latter.
+		// expected=0 means the exit was not in `exitcodes` — i.e. a
+		// crash. expected=1 means clean shutdown (operator-initiated
+		// stop, or a configured exit code). Skip the latter.
 		if payload["expected"] != "0" {
 			return telemetryEventBody{}, false
 		}
 	case "PROCESS_STATE_FATAL":
-		// FATAL: supervisord exhausted startretries. Always a crash.
+		// FATAL: the process manager exhausted startretries. Always a
+		// crash from the user's perspective.
 	default:
 		return telemetryEventBody{}, false
 	}
@@ -175,8 +227,8 @@ func mapEvent(header, payload map[string]string) (telemetryEventBody, bool) {
 	if name == "" {
 		return telemetryEventBody{}, false
 	}
-	fromState := payload["from_state"]
-	if fromState == "" {
+	phase := phaseFromSupervisordState(payload["from_state"])
+	if phase == "" {
 		return telemetryEventBody{}, false
 	}
 
@@ -185,11 +237,11 @@ func mapEvent(header, payload map[string]string) (telemetryEventBody, bool) {
 		Category: "system",
 		Source: telemetryEventSource{
 			Kind:  "local_process",
-			Event: "supervisord.process_" + strings.ToLower(strings.TrimPrefix(eventName, "PROCESS_STATE_")),
+			Event: "service.crashed",
 		},
 		Data: serviceCrashedPayload{
 			ServiceName: name,
-			FromState:   fromState,
+			Phase:       phase,
 		},
 	}
 	if pidStr := payload["pid"]; pidStr != "" {

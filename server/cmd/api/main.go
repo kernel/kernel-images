@@ -104,10 +104,13 @@ func main() {
 	}
 	telemetrySession := telemetry.NewTelemetrySession(eventStream)
 
-	// VM-internal failure telemetry (OOM kills via /dev/kmsg).
+	// VM-internal failure telemetry. OOM kills come from /dev/kmsg here;
 	// service_crashed events arrive via POST /telemetry/events from the
-	// supervisord-shim child process, not through this monitor.
-	sysmon.New(eventStream, slogger).Start(ctx)
+	// supervisord-shim child process. Failure to open /dev/kmsg is not
+	// fatal — the rest of the API should stay usable without CAP_SYSLOG.
+	if err := sysmon.New(eventStream, slogger).Start(ctx); err != nil {
+		slogger.Error("sysmon: kmsg OOM monitor disabled", "err", err)
+	}
 
 	// Optional S2 storage sink.
 	var s2Writer *events.S2StorageWriter
