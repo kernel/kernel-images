@@ -103,6 +103,44 @@ func TestMonitorPublishesOomKillEnd2End(t *testing.T) {
 	assert.Equal(t, 1234, *data.TriggerPid)
 }
 
+func TestMonitorOmitsUnknownConstraint(t *testing.T) {
+	// constraintFromKernel passes through unknown labels lowercased so
+	// they reach logs, but they would violate the openapi enum if
+	// emitted on the wire. The publisher must drop them rather than
+	// produce a non-enum value that SDKs may reject.
+	dump := []string{
+		`x invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`,
+		`oom-kill:constraint=CONSTRAINT_FUTURE_THING,task=x,pid=1,uid=0`,
+		`Out of memory: Killed process 1 (x) total-vm:0kB, anon-rss:1kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`,
+	}
+
+	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 4})
+	require.NoError(t, err)
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	src := newStubKmsgSource()
+	mon := New(es, logger, withKmsgSource(src))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, mon.Start(ctx))
+
+	ts := time.Unix(1_700_000_000, 0)
+	for _, line := range dump {
+		src.send(line, ts)
+	}
+
+	reader := es.NewReader(0)
+	readCtx, readCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer readCancel()
+	res, err := reader.Read(readCtx)
+	require.NoError(t, err)
+
+	var data oapi.BrowserSystemOomKillEventData
+	require.NoError(t, json.Unmarshal(res.Envelope.Event.Data, &data))
+	assert.Nil(t, data.Constraint, "unknown constraint must be omitted from the payload")
+}
+
 func TestMonitorShutsDownOnContextCancel(t *testing.T) {
 	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 4})
 	require.NoError(t, err)

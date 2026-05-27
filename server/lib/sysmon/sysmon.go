@@ -96,10 +96,17 @@ func (m *Monitor) Wait() { m.wg.Wait() }
 func (m *Monitor) runOomLoop(ctx context.Context) {
 	src := m.kmsgSource
 	// Closing the source unblocks any read in Messages() so the range
-	// terminates cleanly on shutdown.
+	// terminates cleanly on shutdown. The done channel lets the
+	// watcher exit if the source closes on its own (e.g. /dev/kmsg fd
+	// dropped) so we don't leak the goroutine past loop exit.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		_ = src.Close()
+		select {
+		case <-ctx.Done():
+			_ = src.Close()
+		case <-done:
+		}
 	}()
 
 	m.logger.Info("sysmon: kmsg OOM reader started")
@@ -124,7 +131,14 @@ func (m *Monitor) publishOomKill(oom OomInstance) {
 	}
 	if oom.Constraint != "" {
 		c := oapi.BrowserSystemOomKillEventDataConstraint(oom.Constraint)
-		data.Constraint = &c
+		// Drop unknown constraint values from the payload rather than
+		// emitting a non-enum string that SDKs may reject. The raw
+		// kernel label still reaches structured logs below.
+		if c.Valid() {
+			data.Constraint = &c
+		} else {
+			m.logger.Warn("sysmon: unknown OOM constraint, omitting from payload", "constraint", oom.Constraint)
+		}
 	}
 	if oom.MemTotalKb > 0 {
 		v := oom.MemTotalKb

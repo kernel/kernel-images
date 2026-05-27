@@ -1,6 +1,7 @@
 package sysmon
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -113,8 +114,9 @@ func TestOomScannerTasksTableCappedAtTopN(t *testing.T) {
 	dump := []string{`chromium invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`}
 	rssVals := []int{100, 900, 50, 800, 700, 200, 600, 300, 400, 500} // 10 procs
 	for i, rss := range rssVals {
+		pid := strconv.Itoa(i + 1)
 		dump = append(dump,
-			"[   "+itoa(i+1)+"]     0   "+itoa(i+1)+"    1000      "+itoa(rss)+"     1024        0             0 proc"+itoa(i+1))
+			"[   "+pid+"]     0   "+pid+"    1000      "+strconv.Itoa(rss)+"     1024        0             0 proc"+pid)
 	}
 	dump = append(dump,
 		`Out of memory: Killed process 1 (proc1) total-vm:0kB, anon-rss:0kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`,
@@ -255,8 +257,9 @@ func TestOomScannerRecognisedLinesDoNotErodeWatchdog(t *testing.T) {
 	// watchdog — recognised lines are productive parsing, not noise.
 	dump := []string{`chromium invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`}
 	for i := 0; i < oomScannerWatchdog+100; i++ {
+		pid := strconv.Itoa(i)
 		dump = append(dump,
-			"[   "+itoa(i)+"]     0   "+itoa(i)+"     1234      567      45056        0             0 proc"+itoa(i))
+			"[   "+pid+"]     0   "+pid+"     1234      567      45056        0             0 proc"+pid)
 	}
 	dump = append(dump,
 		`Out of memory: Killed process 1 (x) total-vm:0kB, anon-rss:0kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`,
@@ -280,18 +283,3 @@ func TestConstraintFromKernel(t *testing.T) {
 	}
 }
 
-// itoa is a tiny test helper so the fixture builders don't pull in
-// strconv noise. Bounded to non-negative ints.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(b[i:])
-}

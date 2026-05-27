@@ -40,6 +40,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 const (
@@ -157,42 +159,21 @@ func parseFields(s string) map[string]string {
 	return out
 }
 
-// telemetryEventBody mirrors oapi.TelemetryEvent but is duplicated here
-// so the shim does not pull in the entire server module — keeps the
-// binary tiny. Field names track openapi.yaml by convention.
-type telemetryEventBody struct {
-	Type     string                `json:"type"`
-	Category string                `json:"category"`
-	Source   telemetryEventSource  `json:"source"`
-	Data     serviceCrashedPayload `json:"data"`
-}
-
-type telemetryEventSource struct {
-	Kind  string `json:"kind"`
-	Event string `json:"event"`
-}
-
-type serviceCrashedPayload struct {
-	ServiceName string `json:"service_name"`
-	Phase       string `json:"phase"`
-	Pid         *int   `json:"pid,omitempty"`
-}
-
-// phaseFromSupervisordState maps the process manager's pre-exit state to
-// the neutral lifecycle phase exposed in the public event schema. The
-// goal is to keep the supervisord vocabulary out of the API contract.
-func phaseFromSupervisordState(fromState string) string {
+// phaseForExited maps the supervisord state a process exited from to the
+// public lifecycle phase. EXITED in supervisord always originates from
+// RUNNING (post-startsecs); STARTING-during-startsecs-violation routes
+// through BACKOFF→FATAL, not EXITED. We still defend against STARTING
+// here in case a future supervisord version changes the state machine,
+// and we treat anything else as "unknown" so the caller logs and skips
+// rather than inventing a phase.
+func phaseForExited(fromState string) (oapi.BrowserServiceCrashedEventDataPhase, bool) {
 	switch fromState {
 	case "RUNNING":
-		return "running"
+		return oapi.BrowserServiceCrashedEventDataPhaseRunning, true
 	case "STARTING":
-		return "startup"
-	case "BACKOFF":
-		// PROCESS_STATE_FATAL transitions out of BACKOFF after the
-		// process manager exhausts its restart attempts.
-		return "gave_up"
+		return oapi.BrowserServiceCrashedEventDataPhaseStartup, true
 	default:
-		return ""
+		return "", false
 	}
 }
 
@@ -206,50 +187,56 @@ func isCrashEvent(eventName string) bool {
 // mapEvent decides whether to publish and constructs the event payload.
 // Returns ok=false for events we deliberately skip (intentional stops,
 // non-crash event types, or unknown lifecycle transitions).
-func mapEvent(header, payload map[string]string) (telemetryEventBody, bool) {
-	eventName := header["eventname"]
-	switch eventName {
+func mapEvent(header, payload map[string]string) (oapi.PublishEventRequest, bool) {
+	var phase oapi.BrowserServiceCrashedEventDataPhase
+	switch header["eventname"] {
 	case "PROCESS_STATE_EXITED":
 		// expected=0 means the exit was not in `exitcodes` — i.e. a
 		// crash. expected=1 means clean shutdown (operator-initiated
 		// stop, or a configured exit code). Skip the latter.
 		if payload["expected"] != "0" {
-			return telemetryEventBody{}, false
+			return oapi.PublishEventRequest{}, false
 		}
+		p, ok := phaseForExited(payload["from_state"])
+		if !ok {
+			return oapi.PublishEventRequest{}, false
+		}
+		phase = p
 	case "PROCESS_STATE_FATAL":
-		// FATAL: the process manager exhausted startretries. Always a
-		// crash from the user's perspective.
+		// FATAL is reached exclusively by the BACKOFF→FATAL edge after
+		// supervisord exhausts startretries. The from_state is always
+		// BACKOFF here, and the semantic is "gave up trying to start".
+		phase = oapi.BrowserServiceCrashedEventDataPhaseGaveUp
 	default:
-		return telemetryEventBody{}, false
+		return oapi.PublishEventRequest{}, false
 	}
 
 	name := payload["processname"]
 	if name == "" {
-		return telemetryEventBody{}, false
-	}
-	phase := phaseFromSupervisordState(payload["from_state"])
-	if phase == "" {
-		return telemetryEventBody{}, false
+		return oapi.PublishEventRequest{}, false
 	}
 
-	body := telemetryEventBody{
-		Type:     "service_crashed",
-		Category: "system",
-		Source: telemetryEventSource{
-			Kind:  "local_process",
-			Event: "service.crashed",
-		},
-		Data: serviceCrashedPayload{
-			ServiceName: name,
-			Phase:       phase,
-		},
+	data := oapi.BrowserServiceCrashedEventData{
+		ServiceName: name,
+		Phase:       phase,
 	}
 	if pidStr := payload["pid"]; pidStr != "" {
 		if pid, err := strconv.Atoi(pidStr); err == nil {
-			body.Data.Pid = &pid
+			data.Pid = &pid
 		}
 	}
-	return body, true
+
+	category := oapi.PublishEventRequestCategory(oapi.TelemetryEventCategorySystem)
+	sourceEvent := "service.crashed"
+	return oapi.PublishEventRequest{
+		Type:     string(oapi.ServiceCrashed),
+		Category: &category,
+		Source: &oapi.BrowserEventSource{
+			Kind:  oapi.LocalProcess,
+			Event: &sourceEvent,
+		},
+		Data: data,
+	}, true
 }
 
 type publisher struct {
@@ -257,7 +244,7 @@ type publisher struct {
 	client *http.Client
 }
 
-func (p *publisher) publish(ctx context.Context, body telemetryEventBody) error {
+func (p *publisher) publish(ctx context.Context, body oapi.PublishEventRequest) error {
 	buf, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
