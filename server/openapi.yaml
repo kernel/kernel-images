@@ -2703,6 +2703,19 @@ components:
         rss_kb:
           type: integer
           description: Resident set size of the killed process in KiB (sum of anon-rss, file-rss, and shmem-rss). This is the physical memory the process was using at the time of the kill.
+        trigger_process_name:
+          type: string
+          description: >
+            Comm of the process whose allocation request caused the
+            kernel to invoke the OOM-killer. Often the same as
+            `process_name` (the kernel killed the requester) but can
+            differ when the kernel chose a different victim. Max 15
+            chars, truncated by the kernel.
+        trigger_pid:
+          type: integer
+          description: >
+            PID of the triggering process. Absent if the kernel did
+            not emit the standard `CPU: N PID: N Comm:` header line.
         constraint:
           type: string
           description: >

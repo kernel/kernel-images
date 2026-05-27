@@ -64,6 +64,11 @@ func TestOomScannerCanonicalDump(t *testing.T) {
 	assert.Equal(t, 4823900+100+200, oom.RssKb)
 	assert.Equal(t, "none", oom.Constraint)
 
+	// Trigger comes from the opening line + the CPU/PID header. In this
+	// canonical case the trigger and the victim are the same process.
+	assert.Equal(t, "chromium", oom.TriggerProcessName)
+	assert.Equal(t, 1234, oom.TriggerPid)
+
 	// 524288 pages * 4 KiB = 2 GiB total
 	assert.Equal(t, 524288*4, oom.MemTotalKb)
 	// 4560 pages * 4 KiB = ~17.8 MiB free
@@ -127,12 +132,15 @@ func TestOomScannerTasksTableCappedAtTopN(t *testing.T) {
 }
 
 func TestOomScannerCommWithInternalSpace(t *testing.T) {
+	// Kernel comms with internal spaces (e.g. kworker threads) must
+	// survive both the start-line capture and the killed-line capture.
 	var s oomScanner
-	s.feed("invoked oom-killer:", time.Now())
+	s.feed(`kworker u4:1 invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`, time.Now())
 	got := s.feed(`Out of memory: Killed process 42 (kworker u4:1) total-vm:0kB, anon-rss:0kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`, time.Now())
 	require.NotNil(t, got)
 	assert.Equal(t, "kworker u4:1", got.ProcessName)
 	assert.Equal(t, 42, got.Pid)
+	assert.Equal(t, "kworker u4:1", got.TriggerProcessName)
 }
 
 func TestOomScannerIgnoresPreambleWhenIdle(t *testing.T) {
@@ -157,16 +165,56 @@ func TestOomScannerSecondStartAbandonsFirst(t *testing.T) {
 	// If a section never completes and a new one starts, the new section
 	// must not inherit state from the abandoned one.
 	var s oomScanner
-	s.feed("invoked oom-killer:", time.Now())
+	s.feed(`stale-proc invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`, time.Now())
+	s.feed(`CPU: 1 PID: 999 Comm: stale-proc`, time.Now())
 	s.feed("oom-kill:constraint=CONSTRAINT_MEMCG,task=stale,pid=1,uid=0", time.Now())
 	s.feed("[   1]     0     1     100     900     1024        0             0 stale", time.Now())
-	s.feed("invoked oom-killer:", time.Now())
+	s.feed(`fresh-proc invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`, time.Now())
 	got := s.feed(`Out of memory: Killed process 7 (real) total-vm:0kB, anon-rss:10kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`, time.Now())
 	require.NotNil(t, got)
 	assert.Equal(t, "real", got.ProcessName)
 	assert.Equal(t, 7, got.Pid)
 	assert.Empty(t, got.Constraint, "stale section's constraint must not leak")
 	assert.Empty(t, got.TopTasks, "stale section's tasks must not leak")
+	assert.Equal(t, "fresh-proc", got.TriggerProcessName, "trigger from abandoned section must not leak")
+	assert.Zero(t, got.TriggerPid, "trigger PID from abandoned section must not leak")
+}
+
+func TestOomScannerTriggerDiffersFromKilled(t *testing.T) {
+	// A chrome renderer allocates and trips the OOM-killer; the kernel
+	// chooses mutter (the largest non-essential victim) to kill. The
+	// event must surface both the trigger AND the killed process so the
+	// customer can distinguish "the process that consumed memory" from
+	// "the process the kernel decided to sacrifice".
+	dump := []string{
+		`chromium-render invoked oom-killer: gfp_mask=0x100cca, order=0, oom_score_adj=0`,
+		`CPU: 2 PID: 9999 Comm: chromium-render`,
+		`Mem-Info:`,
+		`oom-kill:constraint=CONSTRAINT_NONE,task=mutter,pid=5678,uid=0`,
+		`Out of memory: Killed process 5678 (mutter) total-vm:1234kB, anon-rss:50kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`,
+	}
+	var s oomScanner
+	got := feedAll(&s, dump, time.Now())
+	require.Len(t, got, 1)
+	assert.Equal(t, "mutter", got[0].ProcessName)
+	assert.Equal(t, 5678, got[0].Pid)
+	assert.Equal(t, "chromium-render", got[0].TriggerProcessName)
+	assert.Equal(t, 9999, got[0].TriggerPid)
+}
+
+func TestOomScannerTriggerHeaderAbsentLeavesPidZero(t *testing.T) {
+	// On kernels (or kmsg-drop scenarios) where the CPU/PID header is
+	// missing, the trigger NAME still comes from the opening line, but
+	// the trigger PID stays zero — the publisher then omits it.
+	dump := []string{
+		`firefox invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`,
+		`Out of memory: Killed process 42 (firefox) total-vm:0kB, anon-rss:10kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`,
+	}
+	var s oomScanner
+	got := feedAll(&s, dump, time.Now())
+	require.Len(t, got, 1)
+	assert.Equal(t, "firefox", got[0].TriggerProcessName)
+	assert.Zero(t, got[0].TriggerPid)
 }
 
 func TestOomScannerSequentialKills(t *testing.T) {
@@ -192,7 +240,7 @@ func TestOomScannerSequentialKills(t *testing.T) {
 
 func TestOomScannerNoiseWatchdogReleasesStuckSection(t *testing.T) {
 	var s oomScanner
-	s.feed("invoked oom-killer:", time.Now())
+	s.feed(`x invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`, time.Now())
 	for i := 0; i < oomScannerWatchdog+10; i++ {
 		s.feed("filler line that matches no pattern", time.Now())
 	}

@@ -145,6 +145,14 @@ func (m *Monitor) publishOomKill(oom OomInstance) {
 		}
 		data.TopTasks = &tasks
 	}
+	if oom.TriggerProcessName != "" {
+		v := oom.TriggerProcessName
+		data.TriggerProcessName = &v
+	}
+	if oom.TriggerPid > 0 {
+		v := oom.TriggerPid
+		data.TriggerPid = &v
+	}
 
 	payload, err := json.Marshal(data)
 	if err != nil {

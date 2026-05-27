@@ -56,6 +56,15 @@ type OomInstance struct {
 	// TopTasks is up to topTasksN processes from the Tasks state table,
 	// sorted by RSS descending. Nil if the kernel did not emit the table.
 	TopTasks []TaskMemSnapshot
+	// TriggerProcessName is the comm of the process whose allocation
+	// failed and caused the OOM-killer to run. Captured from the prefix
+	// of the "invoked oom-killer:" line. Often equal to ProcessName but
+	// can differ when the kernel selected a different victim.
+	TriggerProcessName string
+	// TriggerPid is the PID of the triggering process, captured from
+	// the standard "CPU: N PID: N Comm: ..." header line. Zero if the
+	// kernel did not emit that header.
+	TriggerPid int
 	// TimeOfDeath is the timestamp of the closing "Killed process" line
 	// as reported by the kmsg envelope.
 	TimeOfDeath time.Time
@@ -80,7 +89,15 @@ type KmsgMessage struct {
 }
 
 var (
-	oomStartRe = regexp.MustCompile(`invoked oom-killer:`)
+	// Opening line. Captures the triggering process's comm (the prefix).
+	// Example: `chromium invoked oom-killer: gfp_mask=0x100cca, order=0, oom_score_adj=0`.
+	// Comm can contain spaces (e.g. `kworker u4:1`), so the lazy match
+	// keeps the entire prefix up to the literal `invoked oom-killer:`.
+	oomStartRe = regexp.MustCompile(`^(.+?)\s+invoked oom-killer:`)
+	// Standard kernel printk header that immediately follows the opening
+	// line. Source of the triggering PID. Example:
+	//   `CPU: 2 PID: 1234 Comm: chromium Not tainted 5.15.0-1-amd64 #1`
+	oomTriggerPidRe = regexp.MustCompile(`^CPU:\s+\d+\s+PID:\s+(\d+)\s+Comm:`)
 	// Modern (Linux >= 5.0) structured constraint+task line.
 	// Example:
 	//   oom-kill:constraint=CONSTRAINT_NONE,nodemask=(null),cpuset=/,mems_allowed=0,global_oom,task_memcg=/,task=chromium,pid=1234,uid=0
@@ -123,11 +140,14 @@ type oomScanner struct {
 // line. All other inputs return nil; the scanner accumulates partial
 // state internally.
 func (s *oomScanner) feed(body string, ts time.Time) *OomInstance {
-	if oomStartRe.MatchString(body) {
+	if m := oomStartRe.FindStringSubmatch(body); m != nil {
 		// New section. If a previous section is still pending, the
 		// kernel either failed to emit the closing line or the kmsg
 		// ring buffer dropped it; abandon and start fresh.
-		s.pending = &OomInstance{TimeOfDeath: ts}
+		s.pending = &OomInstance{
+			TimeOfDeath:        ts,
+			TriggerProcessName: m[1],
+		}
 		s.noiseBuf = 0
 		return nil
 	}
@@ -152,6 +172,17 @@ func (s *oomScanner) feed(body string, ts time.Time) *OomInstance {
 	// Each recognised line resets the noise watchdog; only unparseable
 	// intermediate lines erode the budget.
 	matched := false
+	if m := oomTriggerPidRe.FindStringSubmatch(body); m != nil {
+		// Only set on first match — a kernel oops can include multiple
+		// CPU/PID lines in stack traces and we want the one that opened
+		// the section, which is always emitted first.
+		if s.pending.TriggerPid == 0 {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				s.pending.TriggerPid = n
+			}
+		}
+		matched = true
+	}
 	if m := oomConstraintRe.FindStringSubmatch(body); m != nil {
 		s.pending.Constraint = constraintFromKernel(m[1])
 		matched = true

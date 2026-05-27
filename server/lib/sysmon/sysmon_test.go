@@ -94,6 +94,13 @@ func TestMonitorPublishesOomKillEnd2End(t *testing.T) {
 	require.NotNil(t, data.TopTasks)
 	require.Len(t, *data.TopTasks, 4)
 	assert.Equal(t, "chromium", (*data.TopTasks)[0].Name)
+
+	// Trigger fields round-trip too. In the canonical dump the trigger
+	// and the victim are the same process.
+	require.NotNil(t, data.TriggerProcessName)
+	assert.Equal(t, "chromium", *data.TriggerProcessName)
+	require.NotNil(t, data.TriggerPid)
+	assert.Equal(t, 1234, *data.TriggerPid)
 }
 
 func TestMonitorShutsDownOnContextCancel(t *testing.T) {
