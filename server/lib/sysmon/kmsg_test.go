@@ -10,9 +10,10 @@ import (
 )
 
 // canonicalOomDump is a representative slice of the kmsg lines the kernel
-// emits during a global OOM kill on Linux 5.x. The Mem-Info and Tasks
+// emits during a global OOM kill, using the pre-5.14 Tasks-state layout
+// (9 columns, no rss_anon/rss_file/rss_shmem). The Mem-Info and Tasks
 // state sections are abbreviated but preserve the field layout the
-// parser depends on.
+// parser depends on. See modernKernelOomDump for the post-5.14 shape.
 var canonicalOomDump = []string{
 	`chromium invoked oom-killer: gfp_mask=0x100cca(GFP_HIGHUSER_MOVABLE), order=0, oom_score_adj=0`,
 	`CPU: 2 PID: 1234 Comm: chromium Not tainted 5.15.0-1-amd64 #1`,
@@ -130,6 +131,53 @@ func TestOomScannerTasksTableCappedAtTopN(t *testing.T) {
 	wantRss := []int{900 * pageSizeKB, 800 * pageSizeKB, 700 * pageSizeKB, 600 * pageSizeKB, 500 * pageSizeKB}
 	for i, w := range wantRss {
 		assert.Equal(t, w, got[0].TopTasks[i].RssKb, "position %d", i)
+	}
+}
+
+// modernKernelOomDump represents the Tasks-state format emitted by
+// any Linux 5.14+ kernel — including Docker Desktop's bundled
+// LinuxKit (6.10 at time of writing) and production VMs (6.12). The
+// kernel added rss_anon/rss_file/rss_shmem columns between rss and
+// pgtables_bytes, giving 12 numeric+name columns vs. 9 in the
+// pre-5.14 layout. The parser must handle both shapes.
+var modernKernelOomDump = []string{
+	`chromium invoked oom-killer: gfp_mask=0x100cca, order=0, oom_score_adj=0`,
+	`Mem-Info:`,
+	`Tasks state (memory values in pages):`,
+	`[  pid  ]   uid  tgid total_vm      rss rss_anon rss_file rss_shmem pgtables_bytes swapents oom_score_adj name`,
+	`[  34512]     0 34512   379985     4730     3330     1400         0   188416        0             0 wrapper`,
+	`[  34556]     0 34556   126162    23649    11063    12586         0   462848        0             0 Xvfb`,
+	`[  34560]   103 34560    73393     1872      819     1053         0   110592        0             0 dbus-daemon`,
+	`[  34561]     0 34561 12670355     5635     1775     3860         0   208896        0             0 chromedriver`,
+	`[  36183]  1000 36183   302080    72705    71925      780         0  1208320        0             0 chromium`,
+	`oom-kill:constraint=CONSTRAINT_MEMCG,task=chromium,pid=36183,uid=1000`,
+	`Out of memory: Killed process 36183 (chromium) total-vm:1208320kB, anon-rss:287700kB, file-rss:3120kB, shmem-rss:0kB, UID:1000 pgtables:1208320kB oom_score_adj:0`,
+}
+
+func TestOomScannerModernKernelTaskColumns(t *testing.T) {
+	// Regression: real Linux 5.14+ kmsg dumps have 3 extra columns
+	// (rss_anon, rss_file, rss_shmem) compared to the legacy layout.
+	// An overly-rigid regex captures those trailing numeric columns as
+	// part of the `name` field, producing top_tasks entries like
+	// "1208320        0             0 chromium" instead of "chromium".
+	var s oomScanner
+	got := feedAll(&s, modernKernelOomDump, time.Now())
+	require.Len(t, got, 1)
+	oom := got[0]
+
+	assert.Equal(t, "chromium", oom.ProcessName)
+	assert.Equal(t, 36183, oom.Pid)
+	assert.Equal(t, "memcg", oom.Constraint)
+
+	require.Len(t, oom.TopTasks, 5)
+	// Top task by RSS is chromium (72705 pages). Name must be just
+	// "chromium", not the leading-pgtables-padded "1208320 ... chromium".
+	assert.Equal(t, "chromium", oom.TopTasks[0].Name)
+	assert.Equal(t, 36183, oom.TopTasks[0].Pid)
+	assert.Equal(t, 72705*pageSizeKB, oom.TopTasks[0].RssKb)
+
+	for _, task := range oom.TopTasks {
+		assert.NotContains(t, task.Name, " ", "task name must be a single token, got %q", task.Name)
 	}
 }
 
@@ -252,9 +300,28 @@ func TestOomScannerNoiseWatchdogReleasesStuckSection(t *testing.T) {
 	assert.Nil(t, got)
 }
 
-func TestOomScannerRecognisedLinesDoNotErodeWatchdog(t *testing.T) {
+func TestOomScannerNoiseBudgetIsTotalNotConsecutive(t *testing.T) {
+	// The watchdog budget is a per-section TOTAL, not "consecutive
+	// noise since the last recognized line". A section that interleaves
+	// noise with sporadic productive matches still trips once cumulative
+	// noise exceeds the budget.
+	var s oomScanner
+	s.feed(`chromium invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`, time.Now())
+	// Alternate: 1 recognized task entry, then 1001 noise lines, repeat.
+	// Two cycles -> 2002 noise > oomScannerWatchdog -> abandoned.
+	for cycle := 0; cycle < 2; cycle++ {
+		s.feed("[   1]     0     1     100     200     1024        0             0 proc1", time.Now())
+		for i := 0; i < oomScannerWatchdog/2+1; i++ {
+			s.feed("filler line that matches no pattern", time.Now())
+		}
+	}
+	got := s.feed(`Out of memory: Killed process 1 (x) total-vm:0kB, anon-rss:0kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`, time.Now())
+	assert.Nil(t, got, "interleaved noise must accumulate toward the watchdog total")
+}
+
+func TestOomScannerRecognizedLinesDoNotErodeWatchdog(t *testing.T) {
 	// A Tasks state table with hundreds of entries should not trip the
-	// watchdog — recognised lines are productive parsing, not noise.
+	// watchdog — recognized lines are productive parsing, not noise.
 	dump := []string{`chromium invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`}
 	for i := 0; i < oomScannerWatchdog+100; i++ {
 		pid := strconv.Itoa(i)
@@ -267,7 +334,7 @@ func TestOomScannerRecognisedLinesDoNotErodeWatchdog(t *testing.T) {
 
 	var s oomScanner
 	got := feedAll(&s, dump, time.Now())
-	require.Len(t, got, 1, "watchdog must not abandon a section composed only of recognised lines")
+	require.Len(t, got, 1, "watchdog must not abandon a section composed only of recognized lines")
 }
 
 func TestConstraintFromKernel(t *testing.T) {

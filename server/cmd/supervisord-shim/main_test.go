@@ -150,7 +150,7 @@ func TestMapEventFatalFromBackoff(t *testing.T) {
 func TestMapEventFatalIgnoresFromState(t *testing.T) {
 	// FATAL is reached exclusively via the BACKOFF→FATAL edge per
 	// supervisord docs, so the from_state lookup is intentionally not
-	// consulted for FATAL events. This test pins that behaviour so a
+	// consulted for FATAL events. This test pins that behavior so a
 	// future refactor doesn't reintroduce a silent drop if supervisord
 	// ever omits from_state.
 	body, ok := mapEvent(

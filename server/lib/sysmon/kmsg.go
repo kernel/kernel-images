@@ -1,3 +1,21 @@
+// kmsg.go parses the kernel OOM-dump text inside /dev/kmsg messages.
+// The wire envelope is handled by euank/go-kmsg-parser; body text
+// parsing is ours.
+//
+// Format stability across kernel versions:
+//   - "Killed process N (name) anon-rss:... file-rss:... shmem-rss:..."
+//     is unchanged since 2.6.x.
+//   - "oom-kill:constraint=CONSTRAINT_X" appeared in 5.0 and is
+//     stable since. Absent on older kernels; Constraint is omitted.
+//   - "N pages RAM" and "free:N free_pcp:N free_cma:N" are stable.
+//   - Tasks-state row gained rss_anon/rss_file/rss_shmem in 5.14
+//     (9-col → 12-col). We anchor on bracketed pid + rss-as-5th-col
+//     + trailing-token name so both layouts parse. Production is
+//     Linux 6.12; the older layout is kept for dev environments.
+//
+// On format breakage the failure mode is graceful: missing fields
+// are omitted from the published event, and oomScannerWatchdog
+// abandons a stuck section without leaking memory.
 package sysmon
 
 import (
@@ -22,7 +40,7 @@ const topTasksN = 5
 
 // oomScannerWatchdog bounds the number of UNRECOGNIZED kmsg messages we
 // will tolerate inside a single OOM section before abandoning it.
-// Recognised lines (Mem-Info, Tasks state, constraint, killed) don't
+// Recognized lines (Mem-Info, Tasks state, constraint, killed) don't
 // count toward the budget, so the watchdog only trips when the section
 // diverges from the expected kernel format. A busy VM can emit several
 // hundred Tasks state rows during a single dump; this budget leaves
@@ -117,11 +135,12 @@ var (
 	// lines like `Node 0 DMA free:11264kB boost:0kB`, which carry kB
 	// units rather than raw page counts.
 	oomFreePagesRe = regexp.MustCompile(`(?:^|\s)free:(\d+)\s+free_pcp:`)
-	// Tasks state row. Columns (post-bracket): uid tgid total_vm rss
-	// pgtables_bytes swapents oom_score_adj name. RSS is in pages.
-	// Example:
-	//   [   1234]   1000  1234  1308611  1205975    9678848        0             0 chromium
-	oomTaskEntryRe = regexp.MustCompile(`^\[\s*(\d+)\]\s+\d+\s+\d+\s+\d+\s+(\d+)\s+\d+\s+\d+\s+-?\d+\s+(\S.*?)\s*$`)
+	// Tasks state row. The column count varies across kernel versions
+	// (see the file header) so we anchor on the three invariants:
+	// bracketed pid, rss as the 5th numeric column, and name as the
+	// trailing token. Example (Linux 5.14+):
+	//   [   1234]   1000  1234  1308611  1205975  1205675   200   100   9678848   0   0 chromium
+	oomTaskEntryRe = regexp.MustCompile(`^\[\s*(\d+)\]\s+\d+\s+\d+\s+\d+\s+(\d+)\s+.+\s+(\S+)\s*$`)
 )
 
 // oomScanner is a state machine that turns a stream of kmsg message
@@ -169,8 +188,10 @@ func (s *oomScanner) feed(body string, ts time.Time) *OomInstance {
 		return out
 	}
 
-	// Each recognised line resets the noise watchdog; only unparseable
-	// intermediate lines erode the budget.
+	// Only unparseable intermediate lines erode the watchdog budget;
+	// recognized lines are free. The budget is a per-section total
+	// (see oomScannerWatchdog) — it does not reset on productive
+	// matches.
 	matched := false
 	if m := oomTriggerPidRe.FindStringSubmatch(body); m != nil {
 		// Only set on first match — a kernel oops can include multiple
