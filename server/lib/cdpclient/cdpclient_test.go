@@ -13,9 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeCDP is a minimal CDP server that responds to the three commands used by
-// SetDeviceMetricsOverride: Target.getTargets, Target.attachToTarget,
-// Emulation.setDeviceMetricsOverride, and Target.detachFromTarget.
+// fakeCDP is a minimal CDP server that responds to the commands used by
+// SetDeviceMetricsOverride and GetBrowserVersion.
 type fakeCDP struct {
 	getTargetsCalled     bool
 	attachCalled         bool
@@ -28,6 +27,9 @@ type fakeCDP struct {
 	failGetTargets       bool
 	failSetMetrics       bool
 	returnNoPageTargets  bool
+	getVersionCalled     bool
+	failGetVersion       bool
+	productResponse      string
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -84,6 +86,23 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 		case "Target.detachFromTarget":
 			f.detachCalled = true
 			result = map[string]any{}
+		case "Browser.getVersion":
+			f.getVersionCalled = true
+			if f.failGetVersion {
+				cdpErr = &cdpError{Code: -3, Message: "version error"}
+			} else {
+				product := f.productResponse
+				if product == "" {
+					product = "HeadlessChrome/test"
+				}
+				result = map[string]any{
+					"protocolVersion": "1.3",
+					"product":         product,
+					"revision":        "@deadbeef",
+					"userAgent":       "Mozilla/5.0 fake",
+					"jsVersion":       "1.2.3",
+				}
+			}
 		}
 
 		resp := map[string]any{"id": req.ID}
@@ -199,5 +218,38 @@ func TestDial(t *testing.T) {
 		ctx := context.Background()
 		_, err := Dial(ctx, "ws://127.0.0.1:0/invalid")
 		require.Error(t, err)
+	})
+}
+
+func TestGetBrowserVersion(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		f := &fakeCDP{productResponse: "HeadlessChrome/145.0.0.0"}
+		url := startFakeCDP(t, f)
+
+		ctx := context.Background()
+		client, err := Dial(ctx, url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		v, err := client.GetBrowserVersion(ctx)
+		require.NoError(t, err)
+		require.NotNil(t, v)
+		assert.True(t, f.getVersionCalled)
+		assert.Equal(t, "HeadlessChrome/145.0.0.0", v.Product)
+		assert.Equal(t, "1.3", v.ProtocolVersion)
+	})
+
+	t.Run("CDP error from chromium", func(t *testing.T) {
+		f := &fakeCDP{failGetVersion: true}
+		url := startFakeCDP(t, f)
+
+		ctx := context.Background()
+		client, err := Dial(ctx, url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		_, err = client.GetBrowserVersion(ctx)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Browser.getVersion")
 	})
 }
