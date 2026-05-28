@@ -23,10 +23,10 @@ import (
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
 	"github.com/google/uuid"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/ptyio"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 type processHandle struct {

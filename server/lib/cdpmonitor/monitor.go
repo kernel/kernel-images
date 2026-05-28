@@ -20,8 +20,9 @@ type UpstreamProvider interface {
 	Subscribe() (<-chan string, func())
 }
 
-// PublishFunc publishes an Event to the pipeline.
-type PublishFunc func(ev events.Event)
+// PublishFunc publishes an Event to the pipeline. Production callers wire
+// this to TelemetrySession.Publish; cdpmonitor itself ignores the returns.
+type PublishFunc func(ev events.Event) (events.Envelope, bool)
 
 const wsReadLimit = 8 * 1024 * 1024
 

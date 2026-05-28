@@ -4,8 +4,7 @@
 //
 // The package only owns the in-process kmsg reader; service crashes are
 // delivered as ordinary caller-published events via POST
-// /telemetry/events from the shim. Both paths publish through the active
-// TelemetrySession so they obey the telemetry config gating.
+// /telemetry/events from the shim.
 package sysmon
 
 import (
@@ -28,8 +27,8 @@ type kmsgSource interface {
 
 // PublishFunc receives events emitted by the Monitor. Production callers
 // wire this to TelemetrySession.Publish so events are gated by the active
-// telemetry config.
-type PublishFunc func(events.Event)
+// telemetry config; the Monitor itself ignores the returns.
+type PublishFunc func(events.Event) (events.Envelope, bool)
 
 // Monitor runs the in-process sysmon goroutine and hands each event off to
 // the configured publish func.

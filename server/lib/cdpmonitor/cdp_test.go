@@ -169,7 +169,7 @@ func newEventCollector() *eventCollector {
 }
 
 func (c *eventCollector) publishFn() PublishFunc {
-	return func(ev events.Event) {
+	return func(ev events.Event) (events.Envelope, bool) {
 		c.mu.Lock()
 		c.events = append(c.events, ev)
 		c.mu.Unlock()
@@ -177,6 +177,7 @@ func (c *eventCollector) publishFn() PublishFunc {
 		case c.notify <- struct{}{}:
 		default:
 		}
+		return events.Envelope{Event: ev}, true
 	}
 }
 

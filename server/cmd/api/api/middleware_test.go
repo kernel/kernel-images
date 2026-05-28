@@ -22,10 +22,11 @@ type recordingPublisher struct {
 	events []events.Event
 }
 
-func (rp *recordingPublisher) publish(ev events.Event) {
+func (rp *recordingPublisher) publish(ev events.Event) (events.Envelope, bool) {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	rp.events = append(rp.events, ev)
+	return events.Envelope{Event: ev}, true
 }
 
 func (rp *recordingPublisher) snapshot() []events.Event {
@@ -141,7 +142,7 @@ func TestTelemetryMiddleware_ShortCircuitsWhenDisabled(t *testing.T) {
 
 // Builds the same middleware stack as main.go: RequestID -> HTTP middleware ->
 // strict dispatch -> inner handler.
-func chiHandler(t *testing.T, publish func(events.Event), operationID string, status int) http.Handler {
+func chiHandler(t *testing.T, publish func(events.Event) (events.Envelope, bool), operationID string, status int) http.Handler {
 	t.Helper()
 	inner := fakeStrictHandler(operationID, status, []oapi.StrictMiddlewareFunc{TelemetryStrictMiddleware()})
 	telemetry := TelemetryHTTPMiddleware(publish)(inner)

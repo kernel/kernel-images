@@ -61,4 +61,3 @@ func applyHeadlessDefaultFlags() {
 	}, " ")
 	_ = os.Setenv("CHROMIUM_FLAGS", flags)
 }
-

@@ -46,3 +46,5 @@ The Cloud VM runs inside a Firecracker microVM. Docker requires:
 10. **Build headful image**: `cd /workspace && DOCKER_BUILDKIT=1 docker build -f images/chromium-headful/Dockerfile -t kernel-headful-test .` — this takes significantly longer than headless (~10 min) due to Xorg dependencies, Mutter, and the WebRTC client build. The headful `run-docker.sh` runs interactively (`-it`); for background use, run with `-d` instead.
 
 11. **`/process/exec` API schema**: The `command` field is a single string (the binary name), not an array. Arguments go in the separate `args` array field. Response `stdout_b64` / `stderr_b64` are base64-encoded.
+
+12. **All telemetry producers must publish through `TelemetrySession`, never directly to the raw `EventStream`.** Producers take a `func(events.Event) (events.Envelope, bool)` callback wired to `telemetrySession.Publish` in `cmd/api/main.go`; this is what enforces category gating from `PUT /telemetry`. Publishing straight to `EventStream` bypasses the customer's telemetry config. The only legitimate `EventStream.Publish` callers are `TelemetrySession` itself and tests.

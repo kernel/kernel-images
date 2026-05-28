@@ -10,7 +10,7 @@
 //   - "N pages RAM" and "free:N free_pcp:N free_cma:N" are stable.
 //   - Tasks-state row gained rss_anon/rss_file/rss_shmem in 5.14
 //     (9-col → 12-col). We anchor on bracketed pid + rss-as-5th-col
-//     + trailing-token name so both layouts parse. Production is
+//   - trailing-token name so both layouts parse. Production is
 //     Linux 6.12; the older layout is kept for dev environments.
 //
 // On format breakage the failure mode is graceful: missing fields

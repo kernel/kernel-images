@@ -89,9 +89,6 @@ func TestEventLifecycle(t *testing.T) {
 	assert.IsType(t, oapi.PatchTelemetry200JSONResponse{}, stopResp)
 }
 
-// TestPublishDroppedWhenTelemetryInactive verifies that POST /telemetry/events
-// returns a zero-seq envelope when no telemetry session is active, instead of
-// publishing the event to the underlying stream.
 func TestPublishDroppedWhenTelemetryInactive(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -101,8 +98,33 @@ func TestPublishDroppedWhenTelemetryInactive(t *testing.T) {
 		Body: &oapi.PublishEventRequest{Type: "test.event"},
 	})
 	require.NoError(t, err)
-	r, ok := resp.(publishTelemetryEventOKResponse)
-	require.True(t, ok, "expected 200 response")
-	assert.Equal(t, "test.event", r.env.Event.Type)
-	assert.Equal(t, uint64(0), r.env.Seq, "dropped events must carry seq=0")
+	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "filtered events should return 204")
+}
+
+func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+
+	// Start a session that only enables the console category. A page event
+	// should be filtered out and return 204.
+	tr, f := true, false
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	page := oapi.PublishEventRequestCategoryPage
+	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+		Body: &oapi.PublishEventRequest{Type: "test.page", Category: &page},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "events in disabled categories should return 204")
 }

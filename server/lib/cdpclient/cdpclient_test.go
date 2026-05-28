@@ -16,20 +16,20 @@ import (
 // fakeCDP is a minimal CDP server that responds to the commands used by
 // SetDeviceMetricsOverride and GetBrowserVersion.
 type fakeCDP struct {
-	getTargetsCalled     bool
-	attachCalled         bool
-	setMetricsCalled     bool
-	setMetricsWidth      int
-	setMetricsHeight     int
-	detachCalled         bool
-	pageTargetID         string
-	sessionID            string
-	failGetTargets       bool
-	failSetMetrics       bool
-	returnNoPageTargets  bool
-	getVersionCalled     bool
-	failGetVersion       bool
-	productResponse      string
+	getTargetsCalled    bool
+	attachCalled        bool
+	setMetricsCalled    bool
+	setMetricsWidth     int
+	setMetricsHeight    int
+	detachCalled        bool
+	pageTargetID        string
+	sessionID           string
+	failGetTargets      bool
+	failSetMetrics      bool
+	returnNoPageTargets bool
+	getVersionCalled    bool
+	failGetVersion      bool
+	productResponse     string
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {

@@ -406,10 +406,11 @@ type recordingPublisher struct {
 	events []events.Event
 }
 
-func (rp *recordingPublisher) publish(ev events.Event) {
+func (rp *recordingPublisher) publish(ev events.Event) (events.Envelope, bool) {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	rp.events = append(rp.events, ev)
+	return events.Envelope{Event: ev}, true
 }
 
 func (rp *recordingPublisher) snapshot() []events.Event {

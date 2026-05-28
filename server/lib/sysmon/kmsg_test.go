@@ -355,4 +355,3 @@ func TestConstraintFromKernel(t *testing.T) {
 		assert.Equal(t, want, constraintFromKernel(raw), raw)
 	}
 }
-

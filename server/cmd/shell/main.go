@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 	"golang.org/x/term"
 )
 

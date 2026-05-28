@@ -300,8 +300,9 @@ func maybePauseAfterCurrentRead(ctx context.Context, logger *slog.Logger, r *htt
 }
 
 // EventPublisher publishes a telemetry event onto the in-VM events
-// pipeline. nil disables emission.
-type EventPublisher func(ev events.Event)
+// pipeline. nil disables emission. Signature matches TelemetrySession.Publish
+// so it can be wired directly; the proxy ignores the returns.
+type EventPublisher func(ev events.Event) (events.Envelope, bool)
 
 // WebSocketProxyHandler returns an http.Handler that upgrades incoming connections and
 // proxies them to the current upstream websocket URL. It expects only websocket requests.

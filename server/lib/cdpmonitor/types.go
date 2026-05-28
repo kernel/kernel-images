@@ -16,12 +16,12 @@ const mainSessionUnset = "\x00unset"
 // Each maps 1-to-1 with a specific CDP domain event (Runtime.*, Network.*,
 // Page.*, PerformanceTimeline.*) received from Chrome.
 const (
-	EventConsoleLog           = "console_log"            // Runtime.consoleAPICalled (non-error types)
-	EventConsoleError         = "console_error"          // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
-	EventNetworkRequest       = "network_request"        // Network.requestWillBeSent
-	EventNetworkResponse      = "network_response"       // Network.loadingFinished (with prior responseReceived)
-	EventNetworkLoadingFailed = "network_loading_failed" // Network.loadingFailed
-	EventNavigation           = "page_navigation"        // Page.frameNavigated
+	EventConsoleLog           = "console_log"             // Runtime.consoleAPICalled (non-error types)
+	EventConsoleError         = "console_error"           // Runtime.consoleAPICalled (type=error) or Runtime.exceptionThrown
+	EventNetworkRequest       = "network_request"         // Network.requestWillBeSent
+	EventNetworkResponse      = "network_response"        // Network.loadingFinished (with prior responseReceived)
+	EventNetworkLoadingFailed = "network_loading_failed"  // Network.loadingFailed
+	EventNavigation           = "page_navigation"         // Page.frameNavigated
 	EventDOMContentLoaded     = "page_dom_content_loaded" // Page.domContentEventFired
 	EventPageLoad             = "page_load"               // Page.loadEventFired
 	EventLayoutShift          = "page_layout_shift"       // PerformanceTimeline event of type "layout-shift"
@@ -33,8 +33,8 @@ const (
 // None of these correspond to a single CDP notification; they are inferred from
 // sequences of CDP events and debounce timers.
 const (
-	EventNetworkIdle       = "network_idle"           // 500 ms after all in-flight requests finish
-	EventLayoutSettled     = "page_layout_settled"    // 1 s after page_load with no intervening layout shifts
+	EventNetworkIdle       = "network_idle"            // 500 ms after all in-flight requests finish
+	EventLayoutSettled     = "page_layout_settled"     // 1 s after page_load with no intervening layout shifts
 	EventNavigationSettled = "page_navigation_settled" // fires once page_dom_content_loaded and page_layout_settled both hold
 )
 
@@ -42,18 +42,18 @@ const (
 // Runtime.bindingCalled mechanism. They originate in the browser's renderer
 // process, not from Chrome's network or page domains.
 const (
-	EventInteractionClick = "interaction_click"         // document click (target selector, coords, text)
-	EventInteractionKey   = "interaction_key"           // keydown (key name, target selector)
+	EventInteractionClick = "interaction_click"          // document click (target selector, coords, text)
+	EventInteractionKey   = "interaction_key"            // keydown (key name, target selector)
 	EventScrollSettled    = "interaction_scroll_settled" // 300 ms after the last scroll event on a target
 )
 
 // Monitor lifecycle and internal events — emitted by the monitor itself, not by Chrome.
 const (
-	EventScreenshot             = "monitor_screenshot"    // ffmpeg frame capture on page load or JS exception
-	EventMonitorDisconnected    = "monitor_disconnected"    // WebSocket to Chrome closed unexpectedly
-	EventMonitorReconnected     = "monitor_reconnected"     // successfully reconnected after a disconnect
+	EventScreenshot             = "monitor_screenshot"       // ffmpeg frame capture on page load or JS exception
+	EventMonitorDisconnected    = "monitor_disconnected"     // WebSocket to Chrome closed unexpectedly
+	EventMonitorReconnected     = "monitor_reconnected"      // successfully reconnected after a disconnect
 	EventMonitorReconnectFailed = "monitor_reconnect_failed" // reconnect attempts exhausted
-	EventMonitorInitFailed      = "monitor_init_failed"     // could not initialise the CDP session
+	EventMonitorInitFailed      = "monitor_init_failed"      // could not initialise the CDP session
 )
 
 // Metadata keys written into events.Source.Metadata for CDP-sourced events.
