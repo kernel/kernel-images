@@ -632,19 +632,16 @@ func chromiumPrepareDisplay(ctx context.Context, s *ApiService, displayJSON *str
 		logger.FromContext(ctx).Error("failed to get current resolution", "error", err)
 		return nil, cfg500ConfigureStep(chromiumConfigureStepDisplay, "failed to get current display resolution")
 	}
-	width, height, refreshRate := currentWidth, currentHeight, currentRefreshRate
-	if body.Width != nil {
-		width = *body.Width
-	}
-	if body.Height != nil {
-		height = *body.Height
-	}
-	if body.RefreshRate != nil {
-		refreshRate = int(*body.RefreshRate)
-	}
+	width, height, refreshRate, changed := resolveDisplayParams(body, currentWidth, currentHeight, currentRefreshRate)
 
 	if width <= 0 || height <= 0 {
 		return nil, cfg400("invalid width/height")
+	}
+
+	// Display already matches — return a nil plan so the caller skips the apply step.
+	if !changed {
+		logger.FromContext(ctx).Info("display already at requested resolution, skipping resize", "width", width, "height", height, "refreshRate", refreshRate)
+		return nil, nil
 	}
 
 	requireIdle := true

@@ -41,22 +41,22 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		log.Error("failed to get current resolution", "error", err)
 		return oapi.PatchDisplay500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to get current display resolution"}}, nil
 	}
-	width := currentWidth
-	height := currentHeight
-	refreshRate := currentRefreshRate
-
-	if req.Body.Width != nil {
-		width = *req.Body.Width
-	}
-	if req.Body.Height != nil {
-		height = *req.Body.Height
-	}
-	if req.Body.RefreshRate != nil {
-		refreshRate = int(*req.Body.RefreshRate)
-	}
+	width, height, refreshRate, changed := resolveDisplayParams(req.Body, currentWidth, currentHeight, currentRefreshRate)
 
 	if width <= 0 || height <= 0 {
 		return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid width/height"}}, nil
+	}
+
+	// Display already matches the requested state. Skip the idle check,
+	// recording stop, resize, and chromium restart — all of which would be
+	// no-ops at the existing resolution.
+	if !changed {
+		log.Info("display already at requested resolution, skipping resize", "width", width, "height", height, "refreshRate", refreshRate)
+		return oapi.PatchDisplay200JSONResponse{
+			Width:       &width,
+			Height:      &height,
+			RefreshRate: &refreshRate,
+		}, nil
 	}
 
 	log.Info(fmt.Sprintf("resolution change requested from %dx%d@%d to %dx%d@%d", currentWidth, currentHeight, currentRefreshRate, width, height, refreshRate))
@@ -175,6 +175,28 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		Height:      &height,
 		RefreshRate: &refreshRate,
 	}, nil
+}
+
+// resolveDisplayParams merges the request body with the current display
+// state, returning the final width, height, and refresh rate plus whether
+// any field would actually change. Callers use the changed flag to skip
+// the resize path when the request is a no-op.
+func resolveDisplayParams(body *oapi.PatchDisplayJSONRequestBody, currentWidth, currentHeight, currentRefreshRate int) (width, height, refreshRate int, changed bool) {
+	width, height, refreshRate = currentWidth, currentHeight, currentRefreshRate
+	if body == nil {
+		return
+	}
+	if body.Width != nil {
+		width = *body.Width
+	}
+	if body.Height != nil {
+		height = *body.Height
+	}
+	if body.RefreshRate != nil {
+		refreshRate = int(*body.RefreshRate)
+	}
+	changed = width != currentWidth || height != currentHeight || refreshRate != currentRefreshRate
+	return
 }
 
 // detectDisplayMode detects whether we're running Xorg (headful) or Xvfb
