@@ -31,36 +31,44 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 const (
-	defaultTelemetryURL = "http://127.0.0.1:10001/telemetry/events"
-	httpTimeout         = 2 * time.Second
+	defaultAPIBaseURL = "http://127.0.0.1:10001"
+	httpTimeout       = 2 * time.Second
 )
 
 func main() {
 	log.SetOutput(os.Stderr)
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	telemetryURL := os.Getenv("KERNEL_IMAGES_TELEMETRY_URL")
-	if telemetryURL == "" {
-		telemetryURL = defaultTelemetryURL
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		_ = os.Stdin.Close()
+	}()
+
+	baseURL := os.Getenv("KERNEL_IMAGES_API_BASE_URL")
+	if baseURL == "" {
+		baseURL = defaultAPIBaseURL
 	}
 
-	pub := &publisher{
-		url:    telemetryURL,
-		client: &http.Client{Timeout: httpTimeout},
+	client, err := oapi.NewClientWithResponses(baseURL, oapi.WithHTTPClient(&http.Client{Timeout: httpTimeout}))
+	if err != nil {
+		log.Fatalf("init oapi client: %v", err)
 	}
 
 	in := bufio.NewReader(os.Stdin)
@@ -86,7 +94,7 @@ func main() {
 		ev, ok := mapEvent(header, payload)
 		switch {
 		case ok:
-			if perr := pub.publish(context.Background(), ev); perr != nil {
+			if perr := publish(ctx, client, ev); perr != nil {
 				log.Printf("publish telemetry event: %v", perr)
 			}
 		case isCrashEvent(header["eventname"]):
@@ -105,11 +113,8 @@ func main() {
 	}
 }
 
-// writeResultOK writes the supervisord eventlistener "RESULT" frame
-// indicating success. The body is exactly "OK" (2 bytes) with NO trailing
-// newline — supervisord reads exactly `len` bytes after the header
-// newline, and a trailing newline would leak into the buffer and corrupt
-// the subsequent READY token.
+// writeResultOK ACKs a single event. See the file header for why the
+// frame body has no trailing newline.
 func writeResultOK(out *bufio.Writer) error {
 	if _, err := out.WriteString("RESULT 2\nOK"); err != nil {
 		return err
@@ -239,29 +244,13 @@ func mapEvent(header, payload map[string]string) (oapi.PublishEventRequest, bool
 	}, true
 }
 
-type publisher struct {
-	url    string
-	client *http.Client
-}
-
-func (p *publisher) publish(ctx context.Context, body oapi.PublishEventRequest) error {
-	buf, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url, bytes.NewReader(buf))
-	if err != nil {
-		return fmt.Errorf("new request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := p.client.Do(req)
+func publish(ctx context.Context, client *oapi.ClientWithResponses, body oapi.PublishEventRequest) error {
+	resp, err := client.PublishTelemetryEventWithResponse(ctx, body)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("status %d: %s", resp.StatusCode, bytes.TrimSpace(b))
+	if resp.StatusCode() >= 300 {
+		return fmt.Errorf("status %d: %s", resp.StatusCode(), bytes.TrimSpace(resp.Body))
 	}
 	return nil
 }

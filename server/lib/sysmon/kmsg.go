@@ -136,11 +136,15 @@ var (
 	// units rather than raw page counts.
 	oomFreePagesRe = regexp.MustCompile(`(?:^|\s)free:(\d+)\s+free_pcp:`)
 	// Tasks state row. The column count varies across kernel versions
-	// (see the file header) so we anchor on the three invariants:
-	// bracketed pid, rss as the 5th numeric column, and name as the
-	// trailing token. Example (Linux 5.14+):
+	// (see the file header) so we anchor on the invariants: bracketed
+	// pid, rss as the 5th numeric column, oom_score_adj as the last
+	// numeric column (always present, possibly negative), and the
+	// remainder of the line as the comm. Capturing the trailing comm
+	// lazily (rather than as a single \S+ token) preserves names with
+	// internal whitespace; this matches the behavior of the kill-line
+	// and trigger-line parsers. Example (Linux 5.14+):
 	//   [   1234]   1000  1234  1308611  1205975  1205675   200   100   9678848   0   0 chromium
-	oomTaskEntryRe = regexp.MustCompile(`^\[\s*(\d+)\]\s+\d+\s+\d+\s+\d+\s+(\d+)\s+.+\s+(\S+)\s*$`)
+	oomTaskEntryRe = regexp.MustCompile(`^\[\s*(\d+)\]\s+\d+\s+\d+\s+\d+\s+(\d+)\s+.+\s+-?\d+\s+(.+?)\s*$`)
 )
 
 // oomScanner is a state machine that turns a stream of kmsg message

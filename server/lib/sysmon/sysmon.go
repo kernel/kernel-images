@@ -41,7 +41,6 @@ type Monitor struct {
 	wg sync.WaitGroup
 }
 
-// option configures a Monitor.
 type option func(*Monitor)
 
 // withKmsgSource overrides the kmsg source. Test-only.
@@ -87,8 +86,7 @@ func (m *Monitor) Start(ctx context.Context) error {
 	return nil
 }
 
-// Wait blocks until all goroutines launched by Start have returned. Safe
-// to call from tests after cancelling the Start context.
+// Wait blocks until all goroutines launched by Start have returned.
 func (m *Monitor) Wait() { m.wg.Wait() }
 
 // runOomLoop consumes the kmsg stream, drives the OOM state machine, and
@@ -109,7 +107,7 @@ func (m *Monitor) runOomLoop(ctx context.Context) {
 		}
 	}()
 
-	m.logger.Info("sysmon: kmsg OOM reader started")
+	m.logger.Debug("sysmon: kmsg OOM reader started")
 
 	var s oomScanner
 	for msg := range src.Messages() {
@@ -120,7 +118,7 @@ func (m *Monitor) runOomLoop(ctx context.Context) {
 		m.publishOomKill(*oom)
 	}
 
-	m.logger.Info("sysmon: kmsg OOM reader stopped")
+	m.logger.Debug("sysmon: kmsg OOM reader stopped")
 }
 
 func (m *Monitor) publishOomKill(oom OomInstance) {
@@ -185,13 +183,8 @@ func (m *Monitor) publishOomKill(oom OomInstance) {
 		Data: json.RawMessage(payload),
 	}
 	m.es.Publish(events.Envelope{Event: ev})
-	m.logger.Info("sysmon: oom kill",
+	m.logger.Debug("sysmon: emitted system_oom_kill",
 		"process", oom.ProcessName,
 		"pid", oom.Pid,
-		"rss_kb", oom.RssKb,
-		"constraint", oom.Constraint,
-		"mem_total_kb", oom.MemTotalKb,
-		"mem_free_kb", oom.MemFreeKb,
-		"top_tasks", len(oom.TopTasks),
 	)
 }

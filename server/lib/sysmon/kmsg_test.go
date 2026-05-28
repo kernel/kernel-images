@@ -183,14 +183,20 @@ func TestOomScannerModernKernelTaskColumns(t *testing.T) {
 
 func TestOomScannerCommWithInternalSpace(t *testing.T) {
 	// Kernel comms with internal spaces (e.g. kworker threads) must
-	// survive both the start-line capture and the killed-line capture.
+	// survive every capture path: the start line, the killed line, and
+	// the Tasks state row that feeds top_tasks.
 	var s oomScanner
 	s.feed(`kworker u4:1 invoked oom-killer: gfp_mask=0, order=0, oom_score_adj=0`, time.Now())
+	s.feed(`[    42]     0    42      100      100     1024        0             0 kworker u4:1`, time.Now())
 	got := s.feed(`Out of memory: Killed process 42 (kworker u4:1) total-vm:0kB, anon-rss:0kB, file-rss:0kB, shmem-rss:0kB, UID:0 pgtables:0kB oom_score_adj:0`, time.Now())
 	require.NotNil(t, got)
 	assert.Equal(t, "kworker u4:1", got.ProcessName)
 	assert.Equal(t, 42, got.Pid)
 	assert.Equal(t, "kworker u4:1", got.TriggerProcessName)
+	require.Len(t, got.TopTasks, 1)
+	assert.Equal(t, "kworker u4:1", got.TopTasks[0].Name)
+	assert.Equal(t, 42, got.TopTasks[0].Pid)
+	assert.Equal(t, 100*pageSizeKB, got.TopTasks[0].RssKb)
 }
 
 func TestOomScannerIgnoresPreambleWhenIdle(t *testing.T) {

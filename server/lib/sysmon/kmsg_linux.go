@@ -54,7 +54,10 @@ type kmsgLogger struct {
 }
 
 func (l kmsgLogger) Infof(format string, args ...any) {
-	l.logger.Info(fmt.Sprintf("sysmon/kmsg: "+format, args...))
+	// The library only logs Info on graceful shutdown ("kmsg reader
+	// closed, shutting down"). Treat it like sysmon.go's own
+	// start/stop signals: useful for debugging but not Info-worthy.
+	l.logger.Debug(fmt.Sprintf("sysmon/kmsg: "+format, args...))
 }
 
 func (l kmsgLogger) Warningf(format string, args ...any) {
