@@ -322,10 +322,10 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 
 		acceptOpts := &websocket.AcceptOptions{
 			OriginPatterns:  []string{"*"},
-			CompressionMode: websocket.CompressionContextTakeover,
+			CompressionMode: websocket.CompressionDisabled,
 		}
 		dialOpts := &websocket.DialOptions{
-			CompressionMode: websocket.CompressionContextTakeover,
+			CompressionMode: websocket.CompressionDisabled,
 		}
 
 		// Subscribe to upstream URL changes so we can tear down stale sessions
