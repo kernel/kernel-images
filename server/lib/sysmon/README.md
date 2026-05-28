@@ -83,7 +83,7 @@ curl -sN http://localhost:444/telemetry/stream
 
 ```bash
 # Kill the chromium browser process the launcher actually spawned.
-docker exec chromium-headless-test bash -c 'kill -KILL $(pgrep -f /opt/chrome-for-testing/chromium | head -1)'
+docker exec chromium-headless-test supervisorctl signal KILL chromium
 # Expect one service_crashed event with phase=running.
 ```
 
