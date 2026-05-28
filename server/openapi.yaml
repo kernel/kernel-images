@@ -1354,9 +1354,13 @@ paths:
     post:
       summary: Publish an event into the telemetry stream
       description: >
-        Injects an event into the telemetry stream.
-        The event is assigned a monotonically increasing sequence number and
-        fanned out to all open stream connections.
+        Injects an event into the telemetry stream. The event is gated by
+        the active telemetry config: if no session is configured or the
+        event's category is disabled, the response still returns 200 but
+        the envelope carries `seq: 0` to signal the event was dropped
+        before reaching the stream. Otherwise the event is assigned a
+        monotonically increasing sequence number and fanned out to all
+        open stream connections.
       operationId: publishTelemetryEvent
       requestBody:
         required: true
@@ -1366,7 +1370,10 @@ paths:
               $ref: "#/components/schemas/PublishEventRequest"
       responses:
         "200":
-          description: Event accepted and published
+          description: >
+            Event accepted. Published with the assigned sequence number when
+            the active telemetry config admits it; otherwise echoed back with
+            `seq: 0` to signal the event was filtered.
           content:
             application/json:
               schema:

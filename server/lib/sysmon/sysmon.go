@@ -4,8 +4,8 @@
 //
 // The package only owns the in-process kmsg reader; service crashes are
 // delivered as ordinary caller-published events via POST
-// /telemetry/events from the shim. Both paths terminate in the same
-// EventStream.
+// /telemetry/events from the shim. Both paths publish through the active
+// TelemetrySession so they obey the telemetry config gating.
 package sysmon
 
 import (
@@ -26,13 +26,16 @@ type kmsgSource interface {
 	Close() error
 }
 
-// Monitor runs the in-process sysmon goroutine and publishes events
-// directly to the EventStream. System-category events are always
-// captured regardless of any active TelemetrySession config, so we
-// deliberately bypass TelemetrySession here.
+// PublishFunc receives events emitted by the Monitor. Production callers
+// wire this to TelemetrySession.Publish so events are gated by the active
+// telemetry config.
+type PublishFunc func(events.Event)
+
+// Monitor runs the in-process sysmon goroutine and hands each event off to
+// the configured publish func.
 type Monitor struct {
-	es     *events.EventStream
-	logger *slog.Logger
+	publish PublishFunc
+	logger  *slog.Logger
 
 	// kmsgSource lets tests inject a stub stream of kmsg messages.
 	// Production callers leave this nil; Start() then opens /dev/kmsg.
@@ -50,8 +53,8 @@ func withKmsgSource(src kmsgSource) option {
 
 // New constructs a Monitor. The Monitor does nothing until Start is
 // called.
-func New(es *events.EventStream, logger *slog.Logger, opts ...option) *Monitor {
-	m := &Monitor{es: es, logger: logger}
+func New(publish PublishFunc, logger *slog.Logger, opts ...option) *Monitor {
+	m := &Monitor{publish: publish, logger: logger}
 	for _, opt := range opts {
 		opt(m)
 	}
@@ -182,7 +185,7 @@ func (m *Monitor) publishOomKill(oom OomInstance) {
 		},
 		Data: json.RawMessage(payload),
 	}
-	m.es.Publish(events.Envelope{Event: ev})
+	m.publish(ev)
 	m.logger.Debug("sysmon: emitted system_oom_kill",
 		"process", oom.ProcessName,
 		"pid", oom.Pid,

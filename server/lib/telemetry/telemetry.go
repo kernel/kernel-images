@@ -75,17 +75,25 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 
-// Publish applies the category filter then forwards ev to the EventStream.
-func (s *TelemetrySession) Publish(ev events.Event) {
+// TryPublish applies the category filter then forwards ev to the EventStream.
+// Returns the published envelope and true on success, or a zero envelope and
+// false when the event was dropped (session inactive or category disabled).
+func (s *TelemetrySession) TryPublish(ev events.Event) (events.Envelope, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.id == "" {
-		return
+		return events.Envelope{}, false
 	}
 	if _, ok := s.categories[ev.Category]; !ok {
-		return
+		return events.Envelope{}, false
 	}
-	s.publishLocked(ev)
+	return s.publishLocked(ev), true
+}
+
+// Publish is the fire-and-forget form of TryPublish for callers that don't
+// care whether the event was actually accepted by the active config.
+func (s *TelemetrySession) Publish(ev events.Event) {
+	_, _ = s.TryPublish(ev)
 }
 
 // NewReader returns a Reader from the EventStream positioned after afterSeq.

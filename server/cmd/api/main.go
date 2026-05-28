@@ -108,7 +108,7 @@ func main() {
 	// service_crashed events arrive via POST /telemetry/events from the
 	// supervisord-shim child process. Failure to open /dev/kmsg is not
 	// fatal — the rest of the API should stay usable without CAP_SYSLOG.
-	if err := sysmon.New(eventStream, slogger).Start(ctx); err != nil {
+	if err := sysmon.New(telemetrySession.Publish, slogger).Start(ctx); err != nil {
 		slogger.Error("sysmon: kmsg OOM monitor disabled", "err", err)
 	}
 

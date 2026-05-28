@@ -88,3 +88,21 @@ func TestEventLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.IsType(t, oapi.PatchTelemetry200JSONResponse{}, stopResp)
 }
+
+// TestPublishDroppedWhenTelemetryInactive verifies that POST /telemetry/events
+// returns a zero-seq envelope when no telemetry session is active, instead of
+// publishing the event to the underlying stream.
+func TestPublishDroppedWhenTelemetryInactive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+
+	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+		Body: &oapi.PublishEventRequest{Type: "test.event"},
+	})
+	require.NoError(t, err)
+	r, ok := resp.(publishTelemetryEventOKResponse)
+	require.True(t, ok, "expected 200 response")
+	assert.Equal(t, "test.event", r.env.Event.Type)
+	assert.Equal(t, uint64(0), r.env.Seq, "dropped events must carry seq=0")
+}
