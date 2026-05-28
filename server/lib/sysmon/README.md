@@ -7,7 +7,7 @@ VM-internal failure telemetry for the kernel-images browser VM. Surfaces two eve
 | `system_oom_kill`  | Linux kernel OOM-killer via `/dev/kmsg`    | `lib/sysmon` (in-process goroutine) |
 | `service_crashed`  | supervisord eventlistener protocol         | `cmd/supervisord-shim` (separate binary, POSTs to `/telemetry/events`) |
 
-Both paths terminate in the same `events.EventStream` so downstream consumers (SSE clients, the S2 sink) see them like any other browser telemetry event.
+Both paths funnel through the active `TelemetrySession`, which gates on the live telemetry config before forwarding to `events.EventStream`. Events fired while no telemetry session is active (or whose category is disabled) are dropped before reaching the stream.
 
 ## Why two binaries
 
@@ -15,8 +15,8 @@ Both paths terminate in the same `events.EventStream` so downstream consumers (S
 | --- | --- | --- |
 | Why separate | n/a | supervisord's eventlistener protocol requires a separate process talking over stdin/stdout |
 | Triggers | kernel OOM-killer writes to `/dev/kmsg` | supervised service exits unexpectedly or FATALs |
-| Transport | direct call to `EventStream.Publish` | `POST /telemetry/events` over localhost HTTP |
-| Failure mode | open of `/dev/kmsg` may fail (no CAP_SYSLOG); API logs and continues without OOM telemetry | API may be down during shim's POST; shim logs the failure, always ACKs supervisord, and the event is lost |
+| Transport | in-process `PublishFunc` wired to `TelemetrySession.Publish` | `POST /telemetry/events` over localhost HTTP |
+| Failure mode | open of `/dev/kmsg` may fail (no CAP_SYSLOG); API logs and continues without OOM telemetry | API may be down during shim's POST (shim logs and always ACKs supervisord; event lost); or API returns `204` because telemetry is unconfigured / `service_crashed` is filtered (shim treats as success; event dropped on purpose) |
 
 ## Event taxonomy
 
@@ -65,6 +65,8 @@ The supervisord-shim lives at `cmd/supervisord-shim/`. Its configuration is dupl
 
 These steps reproduce the smoke matrix from PR #254. Container image is built with `cd images/chromium-headless && ./build-docker.sh`.
 
+> **Heads up:** every test below assumes telemetry is configured. `TelemetrySession.Publish` drops every event when no session is active, so without the `PUT /telemetry` step you'll see nothing on the SSE stream and silently get false negatives. The shared setup block does this once.
+
 ```bash
 # Start the container detached (the script's run-docker.sh hardcodes -it).
 docker run -d --rm --name chromium-headless-test \
@@ -74,6 +76,13 @@ docker run -d --rm --name chromium-headless-test \
 
 # Wait for the API.
 sleep 10 && curl -sf http://localhost:444/spec.json >/dev/null && echo "API up"
+
+# Configure telemetry so a session is active. The empty body captures every
+# browser category — system events flow regardless because Start force-includes
+# them. (Setting all browser categories to enabled:false is treated as
+# "clear the configuration" and tears the session down — don't do that here.)
+curl -sf -X PUT http://localhost:444/telemetry \
+  -H 'content-type: application/json' -d '{}'
 
 # Open the SSE stream in another shell to watch events in real time.
 curl -sN http://localhost:444/telemetry/stream
@@ -147,6 +156,10 @@ docker run -d --rm --name chromium-headless-test \
   -p 9222:9222 -p 444:10001 \
   onkernel/chromium-headless-test:latest
 
+# Re-apply the telemetry PUT — the respawn dropped the previous session.
+sleep 10 && curl -sf -X PUT http://localhost:444/telemetry \
+  -H 'content-type: application/json' -d '{}'
+
 # Run a memory hog inside.
 docker exec chromium-headless-test python3 -c '
 import sys, time
@@ -163,6 +176,8 @@ while True:
 
 ## How to verify in production (real Linux 6.x VM)
 
+This procedure asserts on sysmon's internal log lines, which fire regardless of telemetry config. To also see the event reach a downstream consumer, configure telemetry on the session first (same `PUT /telemetry` body as the local-Docker setup, against the session's metro-api telemetry endpoint).
+
 ```bash
 # Spin up a browser session.
 kernel browsers create
@@ -177,9 +192,9 @@ kernel browsers process exec <session_id> -- /bin/bash -c \
 kernel browsers process exec <session_id> -- /bin/bash -c \
   'echo 1 > /proc/sys/kernel/sysrq; echo f > /proc/sysrq-trigger'
 
-# Verify the event hit the API stream.
+# Verify sysmon parsed and emitted the event.
 kernel browsers process exec <session_id> -- /bin/bash -c \
-  'tail -50 /var/log/supervisord/kernel-images-api | grep "sysmon: oom kill"'
+  'tail -50 /var/log/supervisord/kernel-images-api | grep "sysmon: emitted system_oom_kill"'
 
 # Clean up.
 kernel browsers delete <session_id>
@@ -203,4 +218,5 @@ kernel browsers delete <session_id>
 | `system_oom_kill` events missing fields after a kernel upgrade | each `oom*Re` regex in `kmsg.go` — sections may have been renamed in the kernel |
 | No `service_crashed` events | `cat /var/log/supervisord/supervisord-shim` inside the container; check for `connection refused` to the API |
 | Shim looping (supervisord shows repeated spawn) | the shim should never enter FATAL because `startretries=999999`; if it does, check `/var/log/supervisord.log` for spawn errors |
-| Events fire locally but don't reach downstream consumers | check the SSE / S2 pipeline (`POST /telemetry/events` → `EventStream.Publish` → SSE / S2) — that's `lib/events` territory, not sysmon |
+| sysmon log says "emitted system_oom_kill" but no SSE event | check `GET /telemetry` — without an active session both producers are dropped at `TelemetrySession.Publish`. Issue a `PUT /telemetry` and re-trigger. |
+| Events admitted by `TelemetrySession` but don't reach downstream consumers | check the SSE / S2 pipeline (`POST /telemetry/events` → `TelemetrySession.Publish` → `EventStream.Publish` → SSE / S2) — that's `lib/events` territory, not sysmon |
