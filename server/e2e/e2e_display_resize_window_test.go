@@ -185,69 +185,6 @@ func getChromiumWindowBoundsCDP(ctx context.Context, c *TestContainer) (chromium
 	}, nil
 }
 
-// setChromiumWindowStateCDP forces the OS window to the given windowState
-// ("normal" | "minimized" | "maximized" | "fullscreen") via Browser.setWindowBounds.
-// Per CDP semantics: width/height/left/top fields must be omitted when
-// windowState != "normal".
-func setChromiumWindowStateCDP(ctx context.Context, c *TestContainer, state string) error {
-	cdp, err := newCDPClient(ctx, c.CDPURL())
-	if err != nil {
-		return fmt.Errorf("dial cdp: %w", err)
-	}
-	defer cdp.Close()
-
-	cur, err := getChromiumWindowBoundsCDP(ctx, c)
-	if err != nil {
-		return fmt.Errorf("get current window: %w", err)
-	}
-
-	// CDP rejects state transitions like maximized → fullscreen directly;
-	// go through "normal" first when changing between non-normal states.
-	if cur.WindowState != "normal" && cur.WindowState != state {
-		if _, err := cdp.Call(ctx, "Browser.setWindowBounds", map[string]any{
-			"windowId": cur.WindowID,
-			"bounds":   map[string]any{"windowState": "normal"},
-		}, ""); err != nil {
-			return fmt.Errorf("Browser.setWindowBounds normal: %w", err)
-		}
-	}
-
-	if _, err := cdp.Call(ctx, "Browser.setWindowBounds", map[string]any{
-		"windowId": cur.WindowID,
-		"bounds":   map[string]any{"windowState": state},
-	}, ""); err != nil {
-		return fmt.Errorf("Browser.setWindowBounds %s: %w", state, err)
-	}
-	return nil
-}
-
-// waitForWindowState polls the chromium window state until it matches want
-// or the timeout expires. Returns the final bounds.
-func waitForWindowState(t *testing.T, ctx context.Context, c *TestContainer, want string, timeout time.Duration) chromiumWindowBounds {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var last chromiumWindowBounds
-	var lastErr error
-	for {
-		b, err := getChromiumWindowBoundsCDP(ctx, c)
-		lastErr = err
-		if err == nil {
-			last = b
-			if b.WindowState == want {
-				return b
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("window state never reached %q: last=%+v lastErr=%v", want, last, lastErr)
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("context cancelled waiting for window state %q: %v", want, ctx.Err())
-		case <-time.After(200 * time.Millisecond):
-		}
-	}
-}
-
 // viewportPredicate decides when a rendererViewport reading is "close enough"
 // to the requested size. The headless and headful paths use different
 // predicates because --headless=new uses Chrome's internal window size
@@ -307,16 +244,6 @@ func makeHeadfulMaximizedPredicate(tolerance int) viewportPredicate {
 	}
 }
 
-// baselineOrForcedState returns the windowState the test expects the window
-// to be in after baseline setup. When forceMaximizeAtBaseline is set, we
-// re-query CDP rather than trust the pre-force reading.
-func baselineOrForcedState(sc resizeScenario, base chromiumWindowBounds) string {
-	if sc.forceMaximizeAtBaseline {
-		return "maximized"
-	}
-	return base.WindowState
-}
-
 func abs(x int) int {
 	if x < 0 {
 		return -x
@@ -341,19 +268,6 @@ type resizeScenario struct {
 	// pick a different size to actually exercise the screen change.
 	up   [2]int
 	down [2]int
-	// restartChromium is the value passed to PATCH /display. The default
-	// (false zero value when restartChromiumSet is true) exercises the
-	// no-restart path; setting restartChromium=true forces the current
-	// behaviour. restartChromiumSet must be true for the test to send the
-	// field; otherwise the request omits it entirely.
-	restartChromium    bool
-	restartChromiumSet bool
-	// forceMaximizeAtBaseline calls Browser.setWindowBounds{windowState:"maximized"}
-	// before the first resize. Used to test whether mutter's "maximized
-	// window reflows on RANDR" invariant holds once we put the window in
-	// that state — bypasses the docker-specific question of whether
-	// --start-maximized actually produces a maximized window.
-	forceMaximizeAtBaseline bool
 	// requireBaselineState asserts the window's CDP windowState at startup
 	// equals this value before any resize. Empty = no assertion.
 	requireBaselineState string
@@ -415,51 +329,17 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			requireBaselineState: "maximized",
 		},
 		{
-			name:     "headful_kiosk",
-			image:    headfulImage,
-			extraEnv: map[string]string{"ENABLE_WEBRTC": "true", "NEKO_ADMIN_PASSWORD": "admin", "CHROMIUM_FLAGS": "--kiosk --start-maximized"},
-			// --kiosk runs the window in fullscreen state, which auto-tracks
-			// the screen size on every resize (verified: outer == screen
-			// after both up- and down-resize). Strict predicate works today.
-			predicate:           makeHeadfulMaximizedPredicate(0),
-			assertXRoot:         true,
-			up:                  [2]int{2560, 1440},
-			down:                [2]int{1280, 720},
+			// --kiosk runs the window in fullscreen state. mutter reflows
+			// the window to fill the new screen on every RANDR — verified
+			// here on both up- and down-resize.
+			name:                 "headful_kiosk",
+			image:                headfulImage,
+			extraEnv:             map[string]string{"ENABLE_WEBRTC": "true", "NEKO_ADMIN_PASSWORD": "admin", "CHROMIUM_FLAGS": "--kiosk --start-maximized"},
+			predicate:            makeHeadfulMaximizedPredicate(0),
+			assertXRoot:          true,
+			up:                   [2]int{2560, 1440},
+			down:                 [2]int{1280, 720},
 			requireBaselineState: "fullscreen",
-		},
-		{
-			// Direct test of the live-VM theory: kiosk's fullscreen window
-			// already auto-tracks RANDR resizes without any restart. Same
-			// scenario as headful_kiosk but with restart_chromium=false to
-			// confirm the restart is dead weight.
-			name:                "headful_kiosk_no_restart",
-			image:               headfulImage,
-			extraEnv:            map[string]string{"ENABLE_WEBRTC": "true", "NEKO_ADMIN_PASSWORD": "admin", "CHROMIUM_FLAGS": "--kiosk --start-maximized"},
-			predicate:           makeHeadfulMaximizedPredicate(0),
-			assertXRoot:         true,
-			up:                  [2]int{2560, 1440},
-			down:                [2]int{1280, 720},
-			restartChromium:     false,
-			restartChromiumSet:  true,
-			requireBaselineState: "fullscreen",
-		},
-		{
-			// Test the live-VM theory's central claim: if the chromium
-			// window is in windowState=maximized, mutter reflows it on
-			// RANDR — no Chromium restart needed. Bypasses the docker-only
-			// quirk where --start-maximized comes up in 'normal' state by
-			// forcing the window state via CDP at baseline.
-			name:                    "headful_force_maximized_no_restart",
-			image:                   headfulImage,
-			extraEnv:                map[string]string{"ENABLE_WEBRTC": "true", "NEKO_ADMIN_PASSWORD": "admin"},
-			predicate:               makeHeadfulMaximizedPredicate(0),
-			assertXRoot:             true,
-			up:                      [2]int{2560, 1440},
-			down:                    [2]int{1280, 720},
-			restartChromium:         false,
-			restartChromiumSet:      true,
-			forceMaximizeAtBaseline: true,
-			requireBaselineState:    "maximized",
 		},
 	}
 
@@ -513,18 +393,8 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			require.NoError(t, err, "baseline cdp window")
 			t.Logf("[%s] baseline cdp=%+v", sc.name, baseCDP)
 
-			// Optionally force the window into the maximized state at
-			// baseline. Tests the live-VM theory's invariant in
-			// environments where --start-maximized somehow doesn't produce
-			// a windowState=maximized window at startup (observed: docker).
-			if sc.forceMaximizeAtBaseline {
-				require.NoError(t, setChromiumWindowStateCDP(ctx, c, "maximized"), "force maximized via CDP")
-				forced := waitForWindowState(t, ctx, c, "maximized", 5*time.Second)
-				t.Logf("[%s] after force-maximize cdp=%+v", sc.name, forced)
-			}
-
 			if sc.requireBaselineState != "" {
-				require.Equal(t, sc.requireBaselineState, baselineOrForcedState(sc, baseCDP),
+				require.Equal(t, sc.requireBaselineState, baseCDP.WindowState,
 					"baseline windowState mismatch: chromium did not come up in the expected state — production behaviour relies on this invariant")
 			}
 
@@ -532,7 +402,7 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			// actually changes. Headful starts at Neko's default 1920x1080;
 			// headless starts at the WIDTH/HEIGHT env (1024x768).
 			upW, upH := sc.upSize()
-			patchDisplayExpectingOK(t, ctx, c, upW, upH, 60, sc.restartChromium, sc.restartChromiumSet)
+			patchDisplayExpectingOK(t, ctx, c, upW, upH, 60)
 			if sc.assertXRoot {
 				waitForXRootResolution(t, ctx, c, upW, upH, 30*time.Second)
 			}
@@ -544,7 +414,7 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 
 			// Resize back down to a smaller size, also a real delta.
 			dnW, dnH := sc.downSize()
-			patchDisplayExpectingOK(t, ctx, c, dnW, dnH, 60, sc.restartChromium, sc.restartChromiumSet)
+			patchDisplayExpectingOK(t, ctx, c, dnW, dnH, 60)
 			if sc.assertXRoot {
 				waitForXRootResolution(t, ctx, c, dnW, dnH, 30*time.Second)
 			}
@@ -574,15 +444,14 @@ func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
 	require.True(t, rsp.JSON200.Success, "playwright navigate to about:blank failed: %s", string(rsp.Body))
 }
 
-// patchDisplayExpectingOK issues PATCH /display and requires a 200.
+// patchDisplayExpectingOK issues PATCH /display and requires a 200. The
+// request omits restart_chromium so the server picks its own default — the
+// CDP re-assert-maximized path on the Xorg branch.
+//
 // refreshRate is required for headful: the dummy Xorg DDX only has modelines
 // named "WxH_RR.00", and the server's xrandr fallback (`xrandr -s WxH`)
 // silently no-ops when refresh rate is omitted.
-//
-// restartChromiumSet=false leaves the field out of the request entirely so
-// the server picks its own default (which after the no-restart change means
-// the CDP re-assert-maximized path).
-func patchDisplayExpectingOK(t *testing.T, ctx context.Context, c *TestContainer, width, height, refreshRate int, restartChromium, restartChromiumSet bool) {
+func patchDisplayExpectingOK(t *testing.T, ctx context.Context, c *TestContainer, width, height, refreshRate int) {
 	t.Helper()
 	client, err := c.APIClient()
 	require.NoError(t, err)
@@ -591,9 +460,6 @@ func patchDisplayExpectingOK(t *testing.T, ctx context.Context, c *TestContainer
 		Width:       &width,
 		Height:      &height,
 		RefreshRate: &rate,
-	}
-	if restartChromiumSet {
-		req.RestartChromium = &restartChromium
 	}
 	rsp, err := client.PatchDisplayWithResponse(ctx, req)
 	require.NoError(t, err)
