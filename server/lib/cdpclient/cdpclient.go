@@ -215,6 +215,74 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 	return nil
 }
 
+// SetWindowBoundsMaximized puts the OS window backing the first page target
+// into the maximized state via Browser.setWindowBounds. It is idempotent —
+// invoking it on a window already in maximized state is a no-op.
+//
+// A mutter-managed window in maximized state auto-tracks RANDR resizes
+// (the WM reflows it to fill the new root). So after a display resize the
+// server only has to make sure the window is in maximized state; mutter
+// does the rest. This replaces the prior approach of restarting chromium
+// so it could re-apply --start-maximized.
+//
+// We intentionally avoid the explicit-bounds form of setWindowBounds
+// ({left, top, width, height} with windowState:"normal"): once a window is
+// in normal state it stops auto-tracking subsequent RANDR events.
+func (c *Client) SetWindowBoundsMaximized(ctx context.Context) error {
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return fmt.Errorf("Target.getTargets: %w", err)
+	}
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return fmt.Errorf("unmarshal targets: %w", err)
+	}
+	var pageTargetID string
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			pageTargetID = t.TargetID
+			break
+		}
+	}
+	if pageTargetID == "" {
+		return fmt.Errorf("no page target found")
+	}
+
+	winRaw, err := c.send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": pageTargetID}, "")
+	if err != nil {
+		return fmt.Errorf("Browser.getWindowForTarget: %w", err)
+	}
+	var winResp struct {
+		WindowID int `json:"windowId"`
+		Bounds   struct {
+			WindowState string `json:"windowState"`
+		} `json:"bounds"`
+	}
+	if err := json.Unmarshal(winRaw, &winResp); err != nil {
+		return fmt.Errorf("unmarshal window: %w", err)
+	}
+	// Both "maximized" and "fullscreen" cause mutter to reflow the window
+	// to fill the new X root on RANDR — that's the only invariant we
+	// need. Demoting a kiosk fullscreen window to maximized would break
+	// kiosk mode, so leave fullscreen alone.
+	if winResp.Bounds.WindowState == "maximized" || winResp.Bounds.WindowState == "fullscreen" {
+		return nil
+	}
+
+	if _, err := c.send(ctx, "Browser.setWindowBounds", map[string]any{
+		"windowId": winResp.WindowID,
+		"bounds":   map[string]any{"windowState": "maximized"},
+	}, ""); err != nil {
+		return fmt.Errorf("Browser.setWindowBounds maximized: %w", err)
+	}
+	return nil
+}
+
 // SetDeviceMetricsOverride sets the viewport dimensions on the first page
 // target found in the browser. It attaches to the target with a flattened
 // session, sends Emulation.setDeviceMetricsOverride, then detaches.
