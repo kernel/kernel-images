@@ -168,14 +168,15 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 		}
 	} else {
 		if st.displayJSON != nil && strings.TrimSpace(*st.displayJSON) != "" {
-			displayPlan, displayResp := chromiumPrepareDisplay(ctx, s, st.displayJSON)
-			if displayResp != nil {
-				return displayResp, nil
+			body, msgs := chromiumParseDisplayParts(st.displayJSON)
+			if msgs != "" {
+				return cfg400(msgs), nil
 			}
-			if displayPlan != nil {
-				if rr := chromiumRunPatchDisplay(ctx, s, displayPlan.body); rr != nil {
-					return rr, nil
-				}
+			if body == nil || (body.Width == nil && body.Height == nil) {
+				return cfg400("no display parameters to update"), nil
+			}
+			if rr := chromiumRunPatchDisplay(ctx, s, body); rr != nil {
+				return rr, nil
 			}
 		}
 	}

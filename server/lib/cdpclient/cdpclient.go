@@ -133,6 +133,84 @@ func (c *Client) GetBrowserVersion(ctx context.Context) (*BrowserVersion, error)
 	return &v, nil
 }
 
+type browserWindowBounds struct {
+	Left        int    `json:"left,omitempty"`
+	Top         int    `json:"top,omitempty"`
+	Width       int    `json:"width,omitempty"`
+	Height      int    `json:"height,omitempty"`
+	WindowState string `json:"windowState,omitempty"`
+}
+
+func (c *Client) firstPageTargetID(ctx context.Context) (string, error) {
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return "", fmt.Errorf("Target.getTargets: %w", err)
+	}
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return "", fmt.Errorf("unmarshal targets: %w", err)
+	}
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			return t.TargetID, nil
+		}
+	}
+	return "", fmt.Errorf("no page target found")
+}
+
+// SetFirstPageWindowBoundsAndMaximize resizes the top-level OS window for the
+// first page target, then asks the window manager to maximize it. This is
+// browser-level CDP, so it changes the real X11 window seen in the headful
+// framebuffer/live view rather than only the renderer viewport.
+func (c *Client) SetFirstPageWindowBoundsAndMaximize(ctx context.Context, width, height int) error {
+	targetID, err := c.firstPageTargetID(ctx)
+	if err != nil {
+		return err
+	}
+	windowResult, err := c.send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": targetID}, "")
+	if err != nil {
+		return fmt.Errorf("Browser.getWindowForTarget: %w", err)
+	}
+	var window struct {
+		WindowID int                 `json:"windowId"`
+		Bounds   browserWindowBounds `json:"bounds"`
+	}
+	if err := json.Unmarshal(windowResult, &window); err != nil {
+		return fmt.Errorf("unmarshal Browser.getWindowForTarget: %w", err)
+	}
+	if window.Bounds.WindowState != "normal" {
+		if _, err := c.send(ctx, "Browser.setWindowBounds", map[string]any{
+			"windowId": window.WindowID,
+			"bounds":   browserWindowBounds{WindowState: "normal"},
+		}, ""); err != nil {
+			return fmt.Errorf("Browser.setWindowBounds normal: %w", err)
+		}
+	}
+	if _, err := c.send(ctx, "Browser.setWindowBounds", map[string]any{
+		"windowId": window.WindowID,
+		"bounds": browserWindowBounds{
+			Left:   0,
+			Top:    0,
+			Width:  width,
+			Height: height,
+		},
+	}, ""); err != nil {
+		return fmt.Errorf("Browser.setWindowBounds size: %w", err)
+	}
+	if _, err := c.send(ctx, "Browser.setWindowBounds", map[string]any{
+		"windowId": window.WindowID,
+		"bounds":   browserWindowBounds{WindowState: "maximized"},
+	}, ""); err != nil {
+		return fmt.Errorf("Browser.setWindowBounds maximized: %w", err)
+	}
+	return nil
+}
+
 // DispatchStartURL closes extra page targets and dispatches a navigation on the
 // first page target. It does not wait for lifecycle events; Chrome owns the
 // eventual navigation result.

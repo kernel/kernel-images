@@ -266,7 +266,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     wget ca-certificates python2 supervisor xclip xdotool unclutter \
     pulseaudio dbus-x11 xserver-xorg-video-dummy \
     libcairo2 libxcb1 libxrandr2 libxv1 libopus0 libvpx7 \
-    x11-xserver-utils \
+    x11-xserver-utils x11-utils \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
     gstreamer1.0-pulseaudio gstreamer1.0-omx; \

@@ -35,16 +35,20 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no display parameters to update"}}, nil
 	}
 
-	// Get current resolution with refresh rate
-	currentWidth, currentHeight, currentRefreshRate, err := s.getCurrentResolution(ctx)
-	if err != nil {
-		log.Error("failed to get current resolution", "error", err)
-		return oapi.PatchDisplay500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to get current display resolution"}}, nil
+	var err error
+	currentWidth, currentHeight, currentRefreshRate := 0, 0, 0
+	needCurrent := req.Body.Width == nil || req.Body.Height == nil || req.Body.RefreshRate == nil
+	if needCurrent {
+		currentWidth, currentHeight, currentRefreshRate, err = s.getCurrentResolution(ctx)
+		if err != nil {
+			log.Error("failed to get current resolution", "error", err)
+			return oapi.PatchDisplay500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to get current display resolution"}}, nil
+		}
 	}
+
 	width := currentWidth
 	height := currentHeight
 	refreshRate := currentRefreshRate
-
 	if req.Body.Width != nil {
 		width = *req.Body.Width
 	}
@@ -59,7 +63,11 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid width/height"}}, nil
 	}
 
-	log.Info(fmt.Sprintf("resolution change requested from %dx%d@%d to %dx%d@%d", currentWidth, currentHeight, currentRefreshRate, width, height, refreshRate))
+	if needCurrent {
+		log.Info(fmt.Sprintf("resolution change requested from %dx%d@%d to %dx%d@%d", currentWidth, currentHeight, currentRefreshRate, width, height, refreshRate))
+	} else {
+		log.Info(fmt.Sprintf("resolution change requested to %dx%d@%d", width, height, refreshRate))
+	}
 
 	// Parse requireIdle flag (default true)
 	requireIdle := true
@@ -69,7 +77,10 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 
 	// Check if resize is safe (no active sessions or recordings)
 	if requireIdle {
-		live := s.getActiveNekoSessions(ctx)
+		live := 0
+		if s.isNekoEnabled() {
+			live = s.getActiveNekoSessions(ctx)
+		}
 		isRecording := s.anyRecordingActive(ctx)
 		resizableNow := (live == 0) && !isRecording
 
@@ -118,13 +129,22 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		if s.isNekoEnabled() {
 			log.Info("using Neko API for Xorg resolution change")
 			err = s.setResolutionViaNeko(ctx, width, height, refreshRate)
+			if err == nil && restartChrome {
+				if windowErr := s.verifyMaximizedChromiumWindow(ctx, width, height); windowErr != nil {
+					log.Error("chromium window was not ready after Neko resolution change", "error", windowErr)
+					err = windowErr
+				} else if cdpErr := s.verifyCurrentCDP(ctx); cdpErr != nil {
+					log.Error("CDP was not ready after Neko resolution change", "error", cdpErr)
+					err = cdpErr
+				} else {
+					log.Info("restart_chromium requested for Neko resize; skipped because the maximized Chromium window and CDP stayed ready")
+				}
+			}
 		} else {
 			log.Info("using xrandr for Xorg resolution change (Neko disabled)")
 			err = s.setResolutionXorgViaXrandr(ctx, width, height, refreshRate, restartChrome)
-		}
-		if err == nil && restartChrome {
-			if restartErr := s.restartChromiumAndWait(ctx, "resolution change"); restartErr != nil {
-				log.Error("failed to restart chromium after resolution change", "error", restartErr)
+			if err == nil && restartChrome {
+				log.Info("restart_chromium requested for Xorg resize; skipped because RandR synchronously resized the running Chromium window")
 			}
 		}
 	} else if len(stopped) > 0 {
@@ -200,24 +220,116 @@ func (s *ApiService) probeDisplayMode(ctx context.Context) string {
 	return "xorg"
 }
 
-// setResolutionXorgViaXrandr changes resolution for Xorg using xrandr (fallback when Neko is disabled)
+// setResolutionXorgViaXrandr changes resolution for Xorg using xrandr (fallback when Neko is disabled).
 func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, height, refreshRate int, restartChrome bool) error {
 	log := logger.FromContext(ctx)
 	display := s.resolveDisplayFromEnv()
-
-	// Build xrandr command - if refresh rate is specified, use the specific modeline
-	var xrandrCmd string
-	if refreshRate > 0 {
-		modeName := fmt.Sprintf("%dx%d_%d.00", width, height, refreshRate)
-		xrandrCmd = fmt.Sprintf("xrandr --output default --mode %s", modeName)
-		log.Info("using specific modeline", "mode", modeName)
-	} else {
-		xrandrCmd = fmt.Sprintf("xrandr -s %dx%d", width, height)
+	if refreshRate <= 0 {
+		refreshRate = 60
+	}
+	modeName := fmt.Sprintf("%dx%d_%d.00", width, height, refreshRate)
+	want := fmt.Sprintf("%dx%d", width, height)
+	enforceChromiumWindow := "false"
+	if restartChrome {
+		enforceChromiumWindow = "true"
 	}
 
-	args := []string{"-lc", xrandrCmd}
-	env := map[string]string{"DISPLAY": display}
-	execReq := oapi.ProcessExecRequest{Command: "bash", Args: &args, Env: &env}
+	// The headful Xorg dummy driver exposes DUMMY0, not "default". `xrandr
+	// --output default ...` exits successfully while doing nothing, so always
+	// discover the connected output and verify the final screen size. The
+	// control plane can request non-standard widths such as 1365px; generate a
+	// runtime modeline when xorg.conf does not already contain the exact mode.
+	xrandrScript := fmt.Sprintf(`set -euo pipefail
+export DISPLAY=%q
+output="${KERNEL_IMAGES_XRANDR_OUTPUT:-DUMMY0}"
+mode=%q
+if ! xrandr --output "$output" --mode "$mode" 2>/dev/null; then
+  modeline="$(gtf %d %d %d | awk -v w=%d '/Modeline/ { for (i=3; i<=NF; i++) { if (i == 4) $i = w; printf "%%s%%s", $i, (i < NF ? " " : "") } }')"
+  if [ -z "$modeline" ]; then
+    echo "failed to generate modeline for $mode" >&2
+    exit 1
+  fi
+  xrandr --newmode "$mode" $modeline 2>/dev/null || true
+  xrandr --addmode "$output" "$mode" 2>/dev/null || true
+  xrandr --output "$output" --mode "$mode"
+fi
+# xrandr exits non-zero if DUMMY0 cannot enter the requested mode; the
+# Chromium window check below gates the WM/browser adaptation before returning.
+if [ %q = "true" ] && command -v xdotool >/dev/null 2>&1; then
+  best_id="$(xdotool getactivewindow 2>/dev/null || true)"
+  WIDTH=0
+  HEIGHT=0
+  if [ -n "$best_id" ]; then
+    geom="$(xdotool getwindowgeometry --shell "$best_id" 2>/dev/null || true)"
+    eval "$geom"
+  fi
+  if [ "${WIDTH}x${HEIGHT}" != %q ] && [ -n "$best_id" ]; then
+    active_id="$best_id"
+    class="$(xdotool getwindowclassname "$active_id" 2>/dev/null || true)"
+    case "$class" in
+      *[Cc]hrom*)
+        xdotool windowmove "$active_id" 0 0 >/dev/null 2>&1 || true
+        xdotool windowsize "$active_id" %d %d >/dev/null 2>&1 || true
+        for _ in $(seq 1 25); do
+          geom="$(xdotool getwindowgeometry --shell "$active_id" 2>/dev/null || true)"
+          WIDTH=0
+          HEIGHT=0
+          eval "$geom"
+          if [ "${WIDTH}x${HEIGHT}" = %q ]; then
+            break
+          fi
+          sleep 0.02
+        done
+        best_id="$active_id"
+        ;;
+    esac
+  fi
+  if [ "${WIDTH}x${HEIGHT}" != %q ]; then
+    best_id=""
+    best_w=0
+    best_h=0
+    best_area=-1
+    for wid in $(xdotool search --class chromium 2>/dev/null || true); do
+      geom="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null || true)"
+      WIDTH=0
+      HEIGHT=0
+      eval "$geom"
+      area=$((WIDTH * HEIGHT))
+      if [ "$area" -gt "$best_area" ]; then
+        best_area=$area
+        best_id=$wid
+        best_w=$WIDTH
+        best_h=$HEIGHT
+      fi
+    done
+    WIDTH=$best_w
+    HEIGHT=$best_h
+  fi
+  if [ -n "$best_id" ]; then
+    if [ "${WIDTH}x${HEIGHT}" != %q ]; then
+      xdotool windowmove "$best_id" 0 0 >/dev/null 2>&1 || true
+      xdotool windowsize "$best_id" %d %d >/dev/null 2>&1 || true
+      for _ in $(seq 1 25); do
+        geom="$(xdotool getwindowgeometry --shell "$best_id" 2>/dev/null || true)"
+        WIDTH=0
+        HEIGHT=0
+        eval "$geom"
+        if [ "${WIDTH}x${HEIGHT}" = %q ]; then
+          break
+        fi
+        sleep 0.02
+      done
+    fi
+    if [ "${WIDTH}x${HEIGHT}" != %q ]; then
+      echo "Chromium window is ${WIDTH}x${HEIGHT} after xrandr; want %s" >&2
+      exit 1
+    fi
+  fi
+fi
+`, display, modeName, width, height, refreshRate, width, enforceChromiumWindow, want, width, height, want, want, want, width, height, want, want, want)
+
+	args := []string{"-c", xrandrScript}
+	execReq := oapi.ProcessExecRequest{Command: "bash", Args: &args}
 	resp, err := s.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: &execReq})
 	if err != nil {
 		return fmt.Errorf("failed to execute xrandr: %w", err)
@@ -226,18 +338,16 @@ func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, heig
 	switch r := resp.(type) {
 	case oapi.ProcessExec200JSONResponse:
 		if r.ExitCode != nil && *r.ExitCode != 0 {
-			var stderr string
-			if r.StderrB64 != nil {
-				if b, decErr := base64.StdEncoding.DecodeString(*r.StderrB64); decErr == nil {
-					stderr = strings.TrimSpace(string(b))
-				}
+			stderr := decodeProcessOutput(r.StderrB64)
+			if stderr == "" {
+				stderr = decodeProcessOutput(r.StdoutB64)
 			}
 			if stderr == "" {
 				stderr = "xrandr returned non-zero exit code"
 			}
 			return fmt.Errorf("xrandr failed: %s", stderr)
 		}
-		log.Info("resolution updated via xrandr", "display", display, "width", width, "height", height)
+		log.Info("resolution updated via xrandr", "display", display, "mode", modeName, "width", width, "height", height, "restart_chromium", restartChrome)
 		return nil
 	case oapi.ProcessExec400JSONResponse:
 		return fmt.Errorf("bad request: %s", r.Message)
@@ -246,6 +356,17 @@ func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, heig
 	default:
 		return fmt.Errorf("unexpected response from process exec")
 	}
+}
+
+func decodeProcessOutput(encoded *string) string {
+	if encoded == nil {
+		return ""
+	}
+	b, err := base64.StdEncoding.DecodeString(*encoded)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // resizeXvfb updates the Xvfb supervisor config and restarts the Xvfb process
@@ -370,6 +491,141 @@ func (s *ApiService) setViewportViaCDP(ctx context.Context, width, height int) e
 
 	log.Info("viewport resized via CDP", "width", width, "height", height)
 	return nil
+}
+
+func (s *ApiService) setMaximizedWindowViaCDP(ctx context.Context, width, height int) error {
+	log := logger.FromContext(ctx)
+
+	upstreamURL := s.upstreamMgr.Current()
+	if upstreamURL == "" {
+		return fmt.Errorf("devtools upstream not available")
+	}
+
+	cdpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to devtools: %w", err)
+	}
+	defer client.Close()
+
+	if err := client.SetFirstPageWindowBoundsAndMaximize(cdpCtx, width, height); err != nil {
+		return fmt.Errorf("CDP setWindowBounds: %w", err)
+	}
+	if err := s.verifyMaximizedChromiumWindow(ctx, width, height); err != nil {
+		return err
+	}
+
+	log.Info("chromium window resized and maximized via CDP", "width", width, "height", height)
+	return nil
+}
+
+func (s *ApiService) verifyCurrentCDP(ctx context.Context) error {
+	upstreamURL := s.upstreamMgr.Current()
+	if upstreamURL == "" {
+		return fmt.Errorf("devtools upstream not available")
+	}
+	cdpCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
+	if err != nil {
+		return fmt.Errorf("failed to connect to devtools: %w", err)
+	}
+	defer client.Close()
+	if _, err := client.GetBrowserVersion(cdpCtx); err != nil {
+		return fmt.Errorf("Browser.getVersion: %w", err)
+	}
+	return nil
+}
+
+func (s *ApiService) verifyMaximizedChromiumWindow(ctx context.Context, width, height int) error {
+	display := s.resolveDisplayFromEnv()
+	script := fmt.Sprintf(`set -euo pipefail
+export DISPLAY=%q
+command -v xprop >/dev/null 2>&1 || { echo "xprop not found" >&2; exit 1; }
+want=%q
+check_window() {
+  wid="$1"
+  geom="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null || true)"
+  WIDTH=0
+  HEIGHT=0
+  eval "$geom"
+  state="$(xprop -id "$wid" _NET_WM_STATE 2>/dev/null || true)"
+  case "$state" in
+    *_NET_WM_STATE_MAXIMIZED_VERT*_NET_WM_STATE_MAXIMIZED_HORZ*|*_NET_WM_STATE_MAXIMIZED_HORZ*_NET_WM_STATE_MAXIMIZED_VERT*) maximized=1 ;;
+    *) maximized=0 ;;
+  esac
+  [ "${WIDTH}x${HEIGHT}" = "$want" ] && [ "$maximized" = 1 ]
+}
+active_id="$(xdotool getactivewindow 2>/dev/null || true)"
+if [ -n "$active_id" ]; then
+  active_class="$(xprop -id "$active_id" WM_CLASS 2>/dev/null || true)"
+  case "$active_class" in
+    *[Cc]hrom*)
+      if check_window "$active_id"; then
+        exit 0
+      fi
+      ;;
+  esac
+fi
+best_id=""
+best_w=0
+best_h=0
+best_area=-1
+for wid in $(xdotool search --class chromium 2>/dev/null || true); do
+  geom="$(xdotool getwindowgeometry --shell "$wid" 2>/dev/null || true)"
+  WIDTH=0
+  HEIGHT=0
+  eval "$geom"
+  area=$((WIDTH * HEIGHT))
+  if [ "$area" -gt "$best_area" ]; then
+    best_area=$area
+    best_id=$wid
+    best_w=$WIDTH
+    best_h=$HEIGHT
+  fi
+done
+if [ -z "$best_id" ]; then
+  echo "no Chromium window found" >&2
+  exit 1
+fi
+last="unknown"
+for _ in $(seq 1 50); do
+  if check_window "$best_id"; then
+    exit 0
+  fi
+  last="${WIDTH}x${HEIGHT} maximized=${maximized:-0}"
+  sleep 0.02
+done
+echo "Chromium window is $last; want $want maximized=1" >&2
+exit 1
+`, display, fmt.Sprintf("%dx%d", width, height))
+	args := []string{"-c", script}
+	execReq := oapi.ProcessExecRequest{Command: "bash", Args: &args}
+	resp, err := s.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: &execReq})
+	if err != nil {
+		return fmt.Errorf("failed to verify Chromium window: %w", err)
+	}
+	switch r := resp.(type) {
+	case oapi.ProcessExec200JSONResponse:
+		if r.ExitCode != nil && *r.ExitCode != 0 {
+			stderr := "Chromium window verification returned non-zero exit code"
+			if r.StderrB64 != nil {
+				if b, decErr := base64.StdEncoding.DecodeString(*r.StderrB64); decErr == nil && strings.TrimSpace(string(b)) != "" {
+					stderr = strings.TrimSpace(string(b))
+				}
+			}
+			return fmt.Errorf("verify Chromium window: %s", stderr)
+		}
+		return nil
+	case oapi.ProcessExec400JSONResponse:
+		return fmt.Errorf("bad request: %s", r.Message)
+	case oapi.ProcessExec500JSONResponse:
+		return fmt.Errorf("internal error: %s", r.Message)
+	default:
+		return fmt.Errorf("unexpected response from process exec")
+	}
 }
 
 // anyRecordingActive returns true if any registered recorder is currently recording.
