@@ -1701,7 +1701,7 @@ components:
     BrowserConsoleLogEvent:
       type: object
       description: A browser console log event (console.log, console.info, console.warn, etc.).
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1710,6 +1710,9 @@ components:
         type:
           type: string
           const: console_log
+        category:
+          type: string
+          const: console
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1754,7 +1757,7 @@ components:
         args, and stack_trace. Runtime.exceptionThrown (uncaught exceptions)
         produces text, line, column, source_url, and stack_trace. Fields not
         applicable to the source are absent.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1763,6 +1766,9 @@ components:
         type:
           type: string
           const: console_error
+        category:
+          type: string
+          const: console
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1806,7 +1812,7 @@ components:
     BrowserNetworkRequestEvent:
       type: object
       description: A browser network request sent event.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1815,6 +1821,9 @@ components:
         type:
           type: string
           const: network_request
+        category:
+          type: string
+          const: network
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1855,7 +1864,7 @@ components:
     BrowserNetworkResponseEvent:
       type: object
       description: A browser network response received event. Fired after the response body is fully received, not when headers arrive.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1864,6 +1873,9 @@ components:
         type:
           type: string
           const: network_response
+        category:
+          type: string
+          const: network
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1896,7 +1908,7 @@ components:
         flight when CDP attached (no prior `network_request` was emitted for
         it), `url`, `frame_id`, `loader_id`, and `resource_type` are absent;
         `BrowserEventContext` is partially populated in that case.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1905,6 +1917,9 @@ components:
         type:
           type: string
           const: network_loading_failed
+        category:
+          type: string
+          const: network
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1915,7 +1930,7 @@ components:
     BrowserNetworkIdleEvent:
       type: object
       description: A browser network idle event emitted after a 500ms quiet period with no in-flight HTTP requests.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1924,6 +1939,9 @@ components:
         type:
           type: string
           const: network_idle
+        category:
+          type: string
+          const: network
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1959,7 +1977,7 @@ components:
     BrowserPageNavigationEvent:
       type: object
       description: A browser page navigation started event (CDP Page.frameNavigated). Carries nav context fields inline but not nav_seq, as this event resets the navigation epoch.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1968,6 +1986,9 @@ components:
         type:
           type: string
           const: page_navigation
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1987,7 +2008,7 @@ components:
     BrowserPageDomContentLoadedEvent:
       type: object
       description: A browser DOMContentLoaded event (CDP Page.domContentEventFired).
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -1996,6 +2017,9 @@ components:
         type:
           type: string
           const: page_dom_content_loaded
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2015,7 +2039,7 @@ components:
     BrowserPageLoadEvent:
       type: object
       description: A browser page load event (CDP Page.loadEventFired).
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2024,6 +2048,9 @@ components:
         type:
           type: string
           const: page_load
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2058,7 +2085,7 @@ components:
         target, so `session_id`, `frame_id`, `loader_id`, and `nav_seq` are
         absent; this event does not compose `BrowserEventContext`. Consumers
         reading context fields generically should treat it as a special case.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2067,6 +2094,9 @@ components:
         type:
           type: string
           const: page_tab_opened
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2103,7 +2133,7 @@ components:
     BrowserPageLayoutShiftEvent:
       type: object
       description: A browser cumulative layout shift (CLS) event from the Performance Timeline API.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2112,6 +2142,9 @@ components:
         type:
           type: string
           const: page_layout_shift
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2157,7 +2190,7 @@ components:
     BrowserPageLcpEvent:
       type: object
       description: A browser Largest Contentful Paint (LCP) event from the Performance Timeline API.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2166,6 +2199,9 @@ components:
         type:
           type: string
           const: page_lcp
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2176,7 +2212,7 @@ components:
     BrowserPageLayoutSettledEvent:
       type: object
       description: A browser layout settled event emitted 1 second after page load with no intervening layout shifts, indicating visual stability. Each layout shift resets the 1-second timer.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2185,6 +2221,9 @@ components:
         type:
           type: string
           const: page_layout_settled
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2199,7 +2238,7 @@ components:
         fired for the same navigation, indicating the page is loaded and
         visually stable. Independent of network_idle; a single pending request
         does not block it.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2208,6 +2247,9 @@ components:
         type:
           type: string
           const: page_navigation_settled
+        category:
+          type: string
+          const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2239,7 +2281,7 @@ components:
     BrowserInteractionClickEvent:
       type: object
       description: A browser user click event captured via injected page script.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2248,6 +2290,9 @@ components:
         type:
           type: string
           const: interaction_click
+        category:
+          type: string
+          const: interaction
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2273,7 +2318,7 @@ components:
     BrowserInteractionKeyEvent:
       type: object
       description: A browser keyboard event captured via injected page script.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2282,6 +2327,9 @@ components:
         type:
           type: string
           const: interaction_key
+        category:
+          type: string
+          const: interaction
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2313,7 +2361,7 @@ components:
     BrowserInteractionScrollSettledEvent:
       type: object
       description: A browser scroll settled event emitted after scroll position stops changing, captured via injected page script.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2322,6 +2370,9 @@ components:
         type:
           type: string
           const: interaction_scroll_settled
+        category:
+          type: string
+          const: interaction
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2341,7 +2392,7 @@ components:
     BrowserMonitorScreenshotEvent:
       type: object
       description: A periodic screenshot of the browser viewport.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2350,6 +2401,9 @@ components:
         type:
           type: string
           const: monitor_screenshot
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2369,7 +2423,7 @@ components:
     BrowserMonitorDisconnectedEvent:
       type: object
       description: The CDP connection to Chrome was lost. Telemetry events may be dropped until monitor_reconnected arrives. Treat any in-progress computed state (network_idle, page_layout_settled) as unreliable until then.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2378,6 +2432,9 @@ components:
         type:
           type: string
           const: monitor_disconnected
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2397,7 +2454,7 @@ components:
     BrowserMonitorReconnectedEvent:
       type: object
       description: The CDP connection to Chrome was successfully re-established after a disconnection. Events emitted during the gap are lost. Computed state is reset, so navigation and network tracking restart fresh from this point.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2406,6 +2463,9 @@ components:
         type:
           type: string
           const: monitor_reconnected
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2425,7 +2485,7 @@ components:
     BrowserMonitorReconnectFailedEvent:
       type: object
       description: The CDP connection to Chrome could not be re-established after exhausting all reconnection attempts. No further telemetry events will arrive on this session.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2434,6 +2494,9 @@ components:
         type:
           type: string
           const: monitor_reconnect_failed
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2452,7 +2515,7 @@ components:
     BrowserMonitorInitFailedEvent:
       type: object
       description: The CDP session could not be initialized.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2461,6 +2524,9 @@ components:
         type:
           type: string
           const: monitor_init_failed
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2489,7 +2555,7 @@ components:
     BrowserApiCallEvent:
       type: object
       description: An HTTP call handled by the kernel-images-api server.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2498,6 +2564,9 @@ components:
         type:
           type: string
           const: api_call
+        category:
+          type: string
+          const: api
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2508,7 +2577,7 @@ components:
     BrowserCdpConnectEvent:
       type: object
       description: An external client (e.g. customer SDK, Playwright, Puppeteer) connected to the CDP WebSocket proxy on this VM.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2517,6 +2586,9 @@ components:
         type:
           type: string
           const: cdp_connect
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         truncated:
@@ -2550,7 +2622,7 @@ components:
     BrowserCdpDisconnectEvent:
       type: object
       description: An external client disconnected from the CDP WebSocket proxy on this VM. Pair with the immediately preceding `cdp_connect` on the same stream.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2559,6 +2631,9 @@ components:
         type:
           type: string
           const: cdp_disconnect
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2779,7 +2854,7 @@ components:
         The Linux kernel OOM-killer terminated a process inside the VM. Sourced from
         `/dev/kmsg`. Fires for any process killed by the kernel due to memory
         exhaustion, including Chrome renderer subprocesses that are not supervised.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2788,6 +2863,9 @@ components:
         type:
           type: string
           const: system_oom_kill
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -2831,7 +2909,7 @@ components:
         A managed service exited unexpectedly. Intentional stops (e.g.
         operator-initiated shutdown) do not produce this event — only
         unexpected exits and terminal restart-give-up transitions do.
-      required: [ts, type, source]
+      required: [ts, type, category, source]
       properties:
         ts:
           type: integer
@@ -2840,6 +2918,9 @@ components:
         type:
           type: string
           const: service_crashed
+        category:
+          type: string
+          const: system
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
