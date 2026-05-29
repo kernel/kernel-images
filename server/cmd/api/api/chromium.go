@@ -401,8 +401,16 @@ func waitChromiumSupervisorStatus(ctx context.Context, want string, timeout time
 }
 
 // stopChromium runs supervisorctl stop chromium and waits for the command to complete.
+//
+// On success it emits a "chromium stopped" info log with both string (`elapsed`)
+// and numeric (`elapsed_ms`) duration attributes, plus an `outcome` field that
+// distinguishes the success-after-error recovery paths from the canonical
+// success path. The numeric attribute is what aggregations like
+// p99(elapsed_ms) in SigNoz key off; the string is kept for parity with the
+// existing `startChromiumAndWait` "devtools ready" log shape.
 func (s *ApiService) stopChromium(ctx context.Context) error {
 	log := logger.FromContext(ctx)
+	start := time.Now()
 	cmdCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
 	log.Info("stopping chromium via supervisorctl")
@@ -413,24 +421,69 @@ func (s *ApiService) stopChromium(ctx context.Context) error {
 		if statusErr == nil {
 			switch status {
 			case "STOPPED":
-				log.Info("chromium already stopped after supervisorctl stop error", "status", statusOut)
+				elapsed := time.Since(start)
+				log.Info("chromium stopped",
+					"outcome", "already_stopped",
+					"elapsed", elapsed.String(),
+					"elapsed_ms", elapsed.Milliseconds(),
+					"status", statusOut,
+				)
 				return nil
 			case "STOPPING":
 				if stoppedOut, waitErr := waitChromiumSupervisorStatus(ctx, "STOPPED", 30*time.Second); waitErr == nil {
-					log.Info("chromium reached stopped after supervisorctl stop error", "status", stoppedOut)
+					elapsed := time.Since(start)
+					log.Info("chromium stopped",
+						"outcome", "stopping_then_stopped",
+						"elapsed", elapsed.String(),
+						"elapsed_ms", elapsed.Milliseconds(),
+						"status", stoppedOut,
+					)
 					return nil
 				}
 			}
 		}
 		return fmt.Errorf("supervisorctl stop chromium failed: %w", err)
 	}
+	confirmed := true
 	if stoppedOut, waitErr := waitChromiumSupervisorStatus(ctx, "STOPPED", 30*time.Second); waitErr != nil {
+		confirmed = false
 		log.Warn("chromium stop command completed but stopped status was not confirmed", "error", waitErr, "status", stoppedOut)
 	}
+	elapsed := time.Since(start)
+	outcome := "success"
+	if !confirmed {
+		outcome = "success_unconfirmed"
+	}
+	log.Info("chromium stopped",
+		"outcome", outcome,
+		"elapsed", elapsed.String(),
+		"elapsed_ms", elapsed.Milliseconds(),
+	)
 	return nil
 }
 
-// startChromiumAndWait launches chromium via supervisorctl start and waits for DevTools readiness.
+// startChromiumAndWait launches chromium via supervisorctl start and waits
+// for DevTools to actually serve the new Chromium browser.
+//
+// Readiness is gated on two independent signals being satisfied together:
+//
+//  1. The UpstreamManager has observed a "DevTools listening on ws://..." log
+//     line whose URL differs from the URL we saw on entry (prevUpstream).
+//     UpstreamManager only updates its current URL after the new Chromium
+//     prints that line, so a new URL is the earliest reliable evidence that
+//     the new Chromium has bound its DevTools listener.
+//  2. After dialing that new URL, a Browser.getVersion CDP round-trip
+//     succeeds. This rules out two failure modes that a bare websocket.Dial
+//     does not: a dial completing against a half-closed socket from the
+//     just-killed previous Chromium, or against a freshly bound TCP
+//     listener that has not yet wired up CDP routes. Either case can
+//     otherwise produce a false "ready" return, after which the new
+//     Chromium can take several more seconds to actually serve requests
+//     (and live view will appear blank during that window).
+//
+// We intentionally do NOT short-circuit on the supervisorctl start command
+// returning ("doneCh") -- that command returns as soon as supervisord ack's
+// the fork, long before the new Chromium has bound any ports.
 func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string) error {
 	log := logger.FromContext(ctx)
 	start := time.Now()
@@ -458,12 +511,8 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 
-	commandDone := false
-	tryReady := func(upstream string, allowCurrent bool) bool {
-		if upstream == "" {
-			return false
-		}
-		if !allowCurrent && upstream == prevUpstream {
+	tryReady := func(upstream string) bool {
+		if upstream == "" || upstream == prevUpstream {
 			return false
 		}
 		dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
@@ -472,28 +521,32 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		if err != nil {
 			return false
 		}
-		_ = c.Close()
+		defer c.Close()
+		if _, err := c.GetBrowserVersion(dialCtx); err != nil {
+			log.Debug("dial succeeded but Browser.getVersion failed; ignoring", "operation", operation, "url", upstream, "err", err)
+			return false
+		}
 		return true
 	}
 
 	for {
 		select {
 		case upstream, ok := <-updates:
-			if ok && tryReady(upstream, false) {
+			if ok && tryReady(upstream) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
 				return nil
 			}
 		case err := <-errCh:
 			return err
 		case <-doneCh:
-			commandDone = true
+			// supervisorctl start returned; the new chromium has been forked
+			// but its DevTools listener may not be bound yet. Do not try
+			// ready against the current upstream here -- it may still be the
+			// previous chromium's URL. Continue waiting for either the
+			// updates channel or the ticker to pick up the new URL.
 			doneCh = nil
-			if tryReady(s.upstreamMgr.Current(), true) {
-				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-				return nil
-			}
 		case <-ticker.C:
-			if commandDone && tryReady(s.upstreamMgr.Current(), true) {
+			if tryReady(s.upstreamMgr.Current()) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
 				return nil
 			}

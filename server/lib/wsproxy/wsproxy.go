@@ -30,19 +30,36 @@ type ProxyOptions struct {
 	Transform     MessageTransform
 }
 
+// PumpExitCause names which side caused Pump to return. Callers use this to
+// distinguish a clean client close from an upstream failure or context
+// cancellation when deciding telemetry attribution and reconnect policy.
+type PumpExitCause string
+
+const (
+	// PumpExitClient indicates the client-side read or upstream-side write
+	// returned an error first (typically: client closed the WS).
+	PumpExitClient PumpExitCause = "client"
+	// PumpExitUpstream indicates the upstream-side read or client-side write
+	// returned an error first (typically: upstream died or restarted).
+	PumpExitUpstream PumpExitCause = "upstream"
+	// PumpExitContext indicates the pump's context was cancelled before
+	// either side errored (typically: server shutdown).
+	PumpExitContext PumpExitCause = "context"
+)
+
 // Pump bidirectionally copies messages between client and upstream until
-// either side errors or ctx is cancelled, then calls onClose.
+// either side errors or ctx is cancelled, then calls onClose with the cause.
 // If transform is non-nil it is called for every message; the returned bytes
 // are forwarded to the other side.
-func Pump(ctx context.Context, client, upstream Conn, onClose func(), logger *slog.Logger, transform MessageTransform) {
-	errChan := make(chan error, 2)
+func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExitCause), logger *slog.Logger, transform MessageTransform) {
+	causeChan := make(chan PumpExitCause, 2)
 
 	go func() {
 		for {
 			mt, msg, err := client.Read(ctx)
 			if err != nil {
 				logger.Error("client read error", slog.String("err", err.Error()))
-				errChan <- err
+				causeChan <- PumpExitClient
 				return
 			}
 			if transform != nil {
@@ -50,7 +67,7 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(), logger *sl
 			}
 			if err := upstream.Write(ctx, mt, msg); err != nil {
 				logger.Error("upstream write error", slog.String("err", err.Error()))
-				errChan <- err
+				causeChan <- PumpExitUpstream
 				return
 			}
 		}
@@ -61,7 +78,7 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(), logger *sl
 			mt, msg, err := upstream.Read(ctx)
 			if err != nil {
 				logger.Error("upstream read error", slog.String("err", err.Error()))
-				errChan <- err
+				causeChan <- PumpExitUpstream
 				return
 			}
 			if transform != nil {
@@ -69,17 +86,19 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(), logger *sl
 			}
 			if err := client.Write(ctx, mt, msg); err != nil {
 				logger.Error("client write error", slog.String("err", err.Error()))
-				errChan <- err
+				causeChan <- PumpExitClient
 				return
 			}
 		}
 	}()
 
+	var cause PumpExitCause
 	select {
 	case <-ctx.Done():
-	case <-errChan:
+		cause = PumpExitContext
+	case cause = <-causeChan:
 	}
-	onClose()
+	onClose(cause)
 }
 
 // Proxy accepts a client WebSocket upgrade, dials the upstream URL, and pumps
@@ -113,7 +132,7 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts Prox
 	logger.Debug("proxying websocket", slog.String("url", upstreamURL))
 
 	var once sync.Once
-	cleanup := func() {
+	cleanup := func(_ PumpExitCause) {
 		once.Do(func() {
 			upstreamConn.Close(websocket.StatusNormalClosure, "")
 			clientConn.Close(websocket.StatusNormalClosure, "")

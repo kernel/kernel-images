@@ -178,7 +178,7 @@ func (c *TestContainer) ExitCh() <-chan error {
 // WaitDevTools waits for the CDP WebSocket endpoint to be ready.
 func (c *TestContainer) WaitDevTools(ctx context.Context) error {
 	return wait.ForListeningPort(nat.Port("9222/tcp")).
-		WithStartupTimeout(2 * time.Minute).
+		WithStartupTimeout(2*time.Minute).
 		WaitUntilReady(ctx, c.ctr)
 }
 

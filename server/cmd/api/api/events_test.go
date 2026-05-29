@@ -88,3 +88,43 @@ func TestEventLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.IsType(t, oapi.PatchTelemetry200JSONResponse{}, stopResp)
 }
+
+func TestPublishDroppedWhenTelemetryInactive(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+
+	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+		Body: &oapi.PublishEventRequest{Type: "test.event"},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "filtered events should return 204")
+}
+
+func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+
+	// Start a session that only enables the console category. A page event
+	// should be filtered out and return 204.
+	tr, f := true, false
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	page := oapi.PublishEventRequestCategoryPage
+	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+		Body: &oapi.PublishEventRequest{Type: "test.page", Category: &page},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "events in disabled categories should return 204")
+}

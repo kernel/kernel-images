@@ -262,7 +262,7 @@ func TestGaussianDelay_WelfordVelocityVariance(t *testing.T) {
 	for i := range distances {
 		t_norm := float64(i) / float64(steps)
 		base := 5.0 + 15.0*math.Sin(t_norm*math.Pi) // 5-20px, peaked in middle
-		distances[i] = base + rng.Float64()*3.0       // small random variation
+		distances[i] = base + rng.Float64()*3.0     // small random variation
 	}
 
 	// Gaussian delays → velocity variance
@@ -302,27 +302,27 @@ func TestClampPoints(t *testing.T) {
 		expected [][2]int
 	}{
 		{
-			name:     "no clamping needed",
-			points:   [][2]int{{10, 20}, {50, 50}, {100, 80}},
-			w:        200, h: 200,
+			name:   "no clamping needed",
+			points: [][2]int{{10, 20}, {50, 50}, {100, 80}},
+			w:      200, h: 200,
 			expected: [][2]int{{10, 20}, {50, 50}, {100, 80}},
 		},
 		{
-			name:     "clamp negative x and y",
-			points:   [][2]int{{-10, -20}, {50, 50}},
-			w:        200, h: 200,
+			name:   "clamp negative x and y",
+			points: [][2]int{{-10, -20}, {50, 50}},
+			w:      200, h: 200,
 			expected: [][2]int{{0, 0}, {50, 50}},
 		},
 		{
-			name:     "clamp exceeding screen bounds",
-			points:   [][2]int{{50, 50}, {250, 300}},
-			w:        200, h: 200,
+			name:   "clamp exceeding screen bounds",
+			points: [][2]int{{50, 50}, {250, 300}},
+			w:      200, h: 200,
 			expected: [][2]int{{50, 50}, {199, 199}},
 		},
 		{
-			name:     "clamp both directions",
-			points:   [][2]int{{-5, 250}, {300, -10}, {100, 100}},
-			w:        200, h: 200,
+			name:   "clamp both directions",
+			points: [][2]int{{-5, 250}, {300, -10}, {100, 100}},
+			w:      200, h: 200,
 			expected: [][2]int{{0, 199}, {199, 0}, {100, 100}},
 		},
 	}

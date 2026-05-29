@@ -12,8 +12,8 @@ type ringBuffer struct {
 	mu         sync.RWMutex
 	buf        []Envelope
 	cap        uint64
-	latestSeq  uint64         // highest envelope.Seq published
-	readerWake chan struct{}   // closed-and-replaced on each Publish to wake blocked readers
+	latestSeq  uint64        // highest envelope.Seq published
+	readerWake chan struct{} // closed-and-replaced on each Publish to wake blocked readers
 }
 
 func newRingBuffer(capacity int) (*ringBuffer, error) {

@@ -16,8 +16,11 @@ import (
 )
 
 // PublishTelemetryEvent handles POST /telemetry/events.
-// Injects a caller-supplied event into the telemetry stream. Returns 400 if the event
-// fails validation.
+// Routes a caller-supplied event through the active telemetry session so it
+// picks up category filtering and the telemetry_session_id metadata stamp.
+// Returns 200 with the assigned envelope when the event is admitted, 204
+// when filtered (no active session or the category is disabled), or 400 on
+// validation failure.
 func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTelemetryEventRequestObject) (oapi.PublishTelemetryEventResponseObject, error) {
 	body := req.Body
 	if body == nil || body.Type == "" {
@@ -54,7 +57,10 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 		ev.Data = json.RawMessage(data)
 	}
 
-	env := s.eventStream.Publish(events.Envelope{Event: ev})
+	env, ok := s.telemetrySession.Publish(ev)
+	if !ok {
+		return oapi.PublishTelemetryEvent204Response{}, nil
+	}
 	return publishTelemetryEventOKResponse{env}, nil
 }
 

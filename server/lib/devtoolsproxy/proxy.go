@@ -300,8 +300,9 @@ func maybePauseAfterCurrentRead(ctx context.Context, logger *slog.Logger, r *htt
 }
 
 // EventPublisher publishes a telemetry event onto the in-VM events
-// pipeline. nil disables emission.
-type EventPublisher func(ev events.Event)
+// pipeline. nil disables emission. Signature matches TelemetrySession.Publish
+// so it can be wired directly; the proxy ignores the returns.
+type EventPublisher func(ev events.Event) (events.Envelope, bool)
 
 // WebSocketProxyHandler returns an http.Handler that upgrades incoming connections and
 // proxies them to the current upstream websocket URL. It expects only websocket requests.
@@ -359,11 +360,11 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			switch {
 			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(r.Context().Err(), context.Canceled), errors.Is(r.Context().Err(), context.DeadlineExceeded):
 				clientConn.Close(websocket.StatusGoingAway, "request cancelled")
-				publishCdpDisconnect(publish, oapi.ContextCancelled, connectedAt, msgCount.Load())
+				publishCdpDisconnect(publish, oapi.ContextCancelled, connectedAt, time.Now(), msgCount.Load())
 			default:
 				logger.Error("failed to connect to upstream", slog.String("err", err.Error()))
 				clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
-				publishCdpDisconnect(publish, oapi.UpstreamError, connectedAt, msgCount.Load())
+				publishCdpDisconnect(publish, oapi.UpstreamError, connectedAt, time.Now(), msgCount.Load())
 			}
 			return
 		}
@@ -371,14 +372,12 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 
 		logger.Debug("proxying websocket", slog.String("url", upstreamURL))
 
-		// Cancel the pump when the upstream URL changes (Chromium restarted),
-		// forcing the client to reconnect with the new upstream.
 		pumpCtx, pumpCancel := context.WithCancel(r.Context())
 
-		// Set by the URL-watcher when it tears down the pump; cleanup falls
-		// back to client_close otherwise.
-		var reasonOverride atomic.Pointer[oapi.BrowserCdpDisconnectEventDataReason]
-
+		// Force clients off a stale upstream as soon as UpstreamManager
+		// publishes a different DevTools URL. Closing upstreamConn (rather
+		// than cancelling pumpCtx) makes the pump exit PumpExitUpstream so
+		// resolveDisconnectReason classifies the disconnect via mgr.Current().
 		go func(currentUpstreamURL string) {
 			for {
 				select {
@@ -393,9 +392,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 					logger.Info("upstream URL changed, closing stale proxy session",
 						slog.String("old_url", currentUpstreamURL),
 						slog.String("new_url", newURL))
-					reason := oapi.UpstreamChanged
-					reasonOverride.CompareAndSwap(nil, &reason)
-					pumpCancel()
+					upstreamConn.Close(websocket.StatusGoingAway, "upstream changed")
 					return
 				case <-pumpCtx.Done():
 					return
@@ -404,23 +401,67 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		}(upstreamURL)
 
 		var once sync.Once
-		cleanup := func() {
+		cleanup := func(cause wsproxy.PumpExitCause) {
 			once.Do(func() {
-				reason := oapi.ClientClose
-				if rp := reasonOverride.Load(); rp != nil {
-					reason = *rp
-				} else if r.Context().Err() != nil {
-					reason = oapi.ContextCancelled
-				}
+				// Pin disconnectedAt before resolveDisconnectReason so duration_ms
+				// reflects actual session length, not the up-to-restartConfirmWait
+				// poll. Close conns explicitly before resolving as defense in
+				// depth — coder/websocket already closes the client conn as a
+				// side effect of pumpCancel, but we shouldn't rely on that.
+				disconnectedAt := time.Now()
 				pumpCancel()
 				upstreamConn.Close(websocket.StatusNormalClosure, "")
 				clientConn.Close(websocket.StatusNormalClosure, "")
-				publishCdpDisconnect(publish, reason, connectedAt, msgCount.Load())
+				reason := resolveDisconnectReason(cause, r.Context(), mgr, upstreamURL, restartConfirmWait, logger)
+				publishCdpDisconnect(publish, reason, connectedAt, disconnectedAt, msgCount.Load())
 			})
 		}
 
 		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform)
 	})
+}
+
+// restartConfirmWait is how long cleanup waits for a new upstream URL after
+// the upstream side of the pump dies before classifying the disconnect as
+// upstream_error vs upstream_changed. Sized for Chromium's typical cold
+// restart (~5-8s on Unikraft Cloud) with headroom. var (not const) so tests
+// can temporarily shrink it.
+var restartConfirmWait = 10 * time.Second
+
+// resolveDisconnectReason picks the cdp_disconnect reason from which side
+// caused the pump to exit. On upstream cause it polls mgr.Current() for up
+// to restartWait: a different URL within the window means Chromium restarted
+// (upstream_changed); timeout means the upstream broke without a restart
+// (upstream_error). Polling rather than reading urlCh avoids competing with
+// the URL watcher and works because setCurrent updates Current() before
+// broadcasting.
+func resolveDisconnectReason(cause wsproxy.PumpExitCause, reqCtx context.Context, mgr *UpstreamManager, dialedURL string, restartWait time.Duration, logger *slog.Logger) oapi.BrowserCdpDisconnectEventDataReason {
+	if reqCtx.Err() != nil {
+		return oapi.ContextCancelled
+	}
+	switch cause {
+	case wsproxy.PumpExitClient:
+		return oapi.ClientClose
+	case wsproxy.PumpExitContext:
+		return oapi.ContextCancelled
+	}
+
+	deadline := time.Now().Add(restartWait)
+	for {
+		if newest := normalizeUpstreamURL(mgr.Current()); newest != "" && newest != dialedURL {
+			logger.Info("upstream restart detected after disconnect",
+				slog.String("old_url", dialedURL), slog.String("new_url", newest))
+			return oapi.UpstreamChanged
+		}
+		if !time.Now().Before(deadline) {
+			return oapi.UpstreamError
+		}
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-reqCtx.Done():
+			return oapi.ContextCancelled
+		}
+	}
 }
 
 func publishCdpConnect(publish EventPublisher) {
@@ -435,17 +476,17 @@ func publishCdpConnect(publish EventPublisher) {
 	})
 }
 
-func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt time.Time, msgCount int64) {
+func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt, disconnectedAt time.Time, msgCount int64) {
 	if publish == nil {
 		return
 	}
 	data, _ := json.Marshal(oapi.BrowserCdpDisconnectEventData{
-		DurationMs:   float32(time.Since(connectedAt).Microseconds()) / 1000.0,
+		DurationMs:   float32(disconnectedAt.Sub(connectedAt).Microseconds()) / 1000.0,
 		MessageCount: int(msgCount),
 		Reason:       reason,
 	})
 	publish(events.Event{
-		Ts:       time.Now().UnixMicro(),
+		Ts:       disconnectedAt.UnixMicro(),
 		Type:     "cdp_disconnect",
 		Category: events.System,
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},

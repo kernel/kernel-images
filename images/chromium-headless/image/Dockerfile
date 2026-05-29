@@ -34,6 +34,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/wrapper ./cmd/wrapper
 
+# Build supervisord eventlistener shim
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/kernel-images-supervisord-shim ./cmd/supervisord-shim
+
 FROM docker.io/ubuntu:22.04 AS ffmpeg-downloader
 
 # Allow cross-compilation when building with BuildKit platforms
@@ -256,6 +262,7 @@ RUN chmod +x /usr/local/bin/bake-certs.sh && /usr/local/bin/bake-certs.sh && rm 
 # Copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
 COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launcher
+COPY --from=server-builder /out/kernel-images-supervisord-shim /usr/local/bin/kernel-images-supervisord-shim
 
 # Copy and compile the Playwright daemon
 COPY server/runtime/playwright-daemon.ts /tmp/playwright-daemon.ts

@@ -100,7 +100,6 @@ func (s *computedState) navDataWith(extra map[string]any) json.RawMessage {
 	return out
 }
 
-
 // currentNavCtxFields returns the current nav context fields for constructing typed event payloads.
 // Returns zero values if s is nil (before first navigation).
 func (s *computedState) currentNavCtxFields() (sessionID, targetID, targetType, frameID, loaderID, url string, navSeq int64) {

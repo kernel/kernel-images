@@ -36,8 +36,9 @@ func DisableTelemetryMiddleware() { telemetryMiddlewareEnabled.Store(false) }
 func TelemetryMiddlewareEnabled() bool { return telemetryMiddlewareEnabled.Load() }
 
 // TelemetryHTTPMiddleware emits a BrowserApiCallEvent per documented operation,
-// capturing the final status and wall-clock duration.
-func TelemetryHTTPMiddleware(publish func(events.Event)) func(http.Handler) http.Handler {
+// capturing the final status and wall-clock duration. publish is wired to
+// TelemetrySession.Publish; the middleware ignores the returns.
+func TelemetryHTTPMiddleware(publish func(events.Event) (events.Envelope, bool)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if !telemetryMiddlewareEnabled.Load() {

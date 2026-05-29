@@ -23,6 +23,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/wsproxy"
 )
 
 func silentLogger() *slog.Logger {
@@ -406,10 +407,11 @@ type recordingPublisher struct {
 	events []events.Event
 }
 
-func (rp *recordingPublisher) publish(ev events.Event) {
+func (rp *recordingPublisher) publish(ev events.Event) (events.Envelope, bool) {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	rp.events = append(rp.events, ev)
+	return events.Envelope{Event: ev}, true
 }
 
 func (rp *recordingPublisher) snapshot() []events.Event {
@@ -505,6 +507,246 @@ func TestWebSocketProxyHandler_EmitsConnectAndDisconnect(t *testing.T) {
 	}
 	if disconnect.DurationMs <= 0 {
 		t.Fatalf("disconnect duration_ms = %f, want > 0", disconnect.DurationMs)
+	}
+}
+
+func TestResolveDisconnectReason(t *testing.T) {
+	logger := silentLogger()
+	const dialed = "ws://127.0.0.1:1234/devtools/browser/dialed"
+
+	cases := []struct {
+		name      string
+		cause     wsproxy.PumpExitCause
+		reqCtxErr bool
+		setCurr   string
+		pushURL   string
+		wait      time.Duration
+		want      oapi.BrowserCdpDisconnectEventDataReason
+	}{
+		{
+			name:  "client cause -> client_close",
+			cause: wsproxy.PumpExitClient,
+			wait:  10 * time.Millisecond,
+			want:  oapi.ClientClose,
+		},
+		{
+			name:  "context cause -> context_cancelled",
+			cause: wsproxy.PumpExitContext,
+			wait:  10 * time.Millisecond,
+			want:  oapi.ContextCancelled,
+		},
+		{
+			name:      "request context cancelled wins over upstream cause",
+			cause:     wsproxy.PumpExitUpstream,
+			reqCtxErr: true,
+			wait:      10 * time.Millisecond,
+			want:      oapi.ContextCancelled,
+		},
+		{
+			name:    "upstream cause + Current already changed -> upstream_changed",
+			cause:   wsproxy.PumpExitUpstream,
+			setCurr: "ws://127.0.0.1:1234/devtools/browser/fresh",
+			wait:    10 * time.Millisecond,
+			want:    oapi.UpstreamChanged,
+		},
+		{
+			name:    "upstream cause + new URL arrives during wait -> upstream_changed",
+			cause:   wsproxy.PumpExitUpstream,
+			pushURL: "ws://127.0.0.1:1234/devtools/browser/fresh",
+			wait:    500 * time.Millisecond,
+			want:    oapi.UpstreamChanged,
+		},
+		{
+			name:  "upstream cause + no new URL -> upstream_error",
+			cause: wsproxy.PumpExitUpstream,
+			wait:  50 * time.Millisecond,
+			want:  oapi.UpstreamError,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr := NewUpstreamManager("/dev/null", logger)
+			mgr.setCurrent(dialed)
+			if tc.setCurr != "" {
+				mgr.setCurrent(tc.setCurr)
+			}
+
+			reqCtx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.reqCtxErr {
+				cancel()
+			}
+
+			if tc.pushURL != "" {
+				go func() {
+					time.Sleep(20 * time.Millisecond)
+					mgr.setCurrent(tc.pushURL)
+				}()
+			}
+
+			got := resolveDisconnectReason(tc.cause, reqCtx, mgr, dialed, tc.wait, logger)
+			if got != tc.want {
+				t.Fatalf("reason = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing.T) {
+	// Shorten the resolve wait so the test doesn't pay the production 10s.
+	prev := restartConfirmWait
+	restartConfirmWait = 1 * time.Second
+	defer func() { restartConfirmWait = prev }()
+
+	// Upstream A: echoes once, then closes (simulates Chromium dying mid-session).
+	upstreamA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+		if err != nil {
+			t.Errorf("accept failed: %v", err)
+			return
+		}
+		mt, msg, err := c.Read(r.Context())
+		if err != nil {
+			c.Close(websocket.StatusInternalError, "")
+			return
+		}
+		_ = c.Write(r.Context(), mt, msg)
+		c.Close(websocket.StatusGoingAway, "chromium-died")
+	}))
+	defer upstreamA.Close()
+
+	urlA, _ := url.Parse(upstreamA.URL)
+	urlA.Scheme = "ws"
+	urlA.Path = "/devtools/browser/a"
+	urlB := "ws://127.0.0.1:1/devtools/browser/b-replacement"
+
+	logger := silentLogger()
+	mgr := NewUpstreamManager("/dev/null", logger)
+	mgr.setCurrent(urlA.String())
+
+	rp := &recordingPublisher{}
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish))
+	defer proxySrv.Close()
+
+	pu, _ := url.Parse(proxySrv.URL)
+	pu.Scheme = "ws"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, pu.String(), nil)
+	if err != nil {
+		t.Fatalf("dial proxy failed: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte("hello")); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	// Publish the new URL deliberately late so duration_ms would clearly be
+	// inflated if it were computed at publish time instead of disconnect time.
+	urlChangeAt := 700 * time.Millisecond
+	go func() {
+		time.Sleep(urlChangeAt)
+		mgr.setCurrent(urlB)
+	}()
+
+	if !waitForCondition(2*time.Second, func() bool { return len(rp.snapshot()) >= 2 }) {
+		t.Fatalf("expected 2 events, got %d: %+v", len(rp.snapshot()), rp.snapshot())
+	}
+
+	captured := rp.snapshot()
+	if captured[1].Type != "cdp_disconnect" {
+		t.Fatalf("second event type = %q, want cdp_disconnect", captured[1].Type)
+	}
+	var disconnect struct {
+		Reason     oapi.BrowserCdpDisconnectEventDataReason `json:"reason"`
+		DurationMs float64                                  `json:"duration_ms"`
+	}
+	if err := json.Unmarshal(captured[1].Data, &disconnect); err != nil {
+		t.Fatalf("unmarshal disconnect data: %v", err)
+	}
+	if disconnect.Reason != oapi.UpstreamChanged {
+		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, oapi.UpstreamChanged)
+	}
+	// duration_ms must reflect actual session length, not the resolver poll wait.
+	if maxMs := float64(urlChangeAt / time.Millisecond); disconnect.DurationMs >= maxMs {
+		t.Fatalf("disconnect duration_ms = %f, want < %f", disconnect.DurationMs, maxMs)
+	}
+}
+
+func TestWebSocketProxyHandler_KicksClientOffStaleUpstreamOnURLChange(t *testing.T) {
+	prev := restartConfirmWait
+	restartConfirmWait = 500 * time.Millisecond
+	defer func() { restartConfirmWait = prev }()
+
+	// Upstream stays alive until the proxy closes it from the watcher path.
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+		if err != nil {
+			t.Errorf("accept failed: %v", err)
+			return
+		}
+		defer c.Close(websocket.StatusNormalClosure, "")
+		for {
+			if _, _, err := c.Read(r.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	defer upstreamSrv.Close()
+
+	urlA, _ := url.Parse(upstreamSrv.URL)
+	urlA.Scheme = "ws"
+	urlA.Path = "/devtools/browser/a"
+	urlB := "ws://127.0.0.1:1/devtools/browser/b-replacement"
+
+	logger := silentLogger()
+	mgr := NewUpstreamManager("/dev/null", logger)
+	mgr.setCurrent(urlA.String())
+
+	rp := &recordingPublisher{}
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish))
+	defer proxySrv.Close()
+
+	pu, _ := url.Parse(proxySrv.URL)
+	pu.Scheme = "ws"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, pu.String(), nil)
+	if err != nil {
+		t.Fatalf("dial proxy failed: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	if !waitForCondition(2*time.Second, func() bool { return len(rp.snapshot()) >= 1 }) {
+		t.Fatalf("expected cdp_connect, got %d events", len(rp.snapshot()))
+	}
+
+	mgr.setCurrent(urlB)
+
+	if !waitForCondition(2*time.Second, func() bool { return len(rp.snapshot()) >= 2 }) {
+		t.Fatalf("expected cdp_disconnect after URL change, got %d events: %+v",
+			len(rp.snapshot()), rp.snapshot())
+	}
+
+	captured := rp.snapshot()
+	if captured[1].Type != "cdp_disconnect" {
+		t.Fatalf("second event type = %q, want cdp_disconnect", captured[1].Type)
+	}
+	var disconnect struct {
+		Reason oapi.BrowserCdpDisconnectEventDataReason `json:"reason"`
+	}
+	if err := json.Unmarshal(captured[1].Data, &disconnect); err != nil {
+		t.Fatalf("unmarshal disconnect data: %v", err)
+	}
+	if disconnect.Reason != oapi.UpstreamChanged {
+		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, oapi.UpstreamChanged)
 	}
 }
 

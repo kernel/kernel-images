@@ -99,6 +99,40 @@ func (c *Client) send(ctx context.Context, method string, params any, sessionID 
 	}
 }
 
+// BrowserVersion is the result of a Browser.getVersion CDP call.
+//
+// We use this struct only to confirm a successful round-trip; callers that
+// just need a liveness probe can ignore the fields. The protocol-version
+// fields are populated for convenience.
+type BrowserVersion struct {
+	ProtocolVersion string `json:"protocolVersion"`
+	Product         string `json:"product"`
+	Revision        string `json:"revision"`
+	UserAgent       string `json:"userAgent"`
+	JsVersion       string `json:"jsVersion"`
+}
+
+// GetBrowserVersion sends Browser.getVersion on the browser-level DevTools
+// endpoint. It is a cheap CDP round-trip that proves the WebSocket is
+// connected to a live, CDP-responsive Chromium browser process.
+//
+// Callers should use this after Dial as a readiness gate: a successful
+// websocket.Dial alone is not enough because a dial can complete against
+// a half-open socket of a killed Chromium, or against a freshly bound TCP
+// listener of a Chromium that has not yet wired up its CDP routes. A
+// Browser.getVersion round-trip rules out both cases.
+func (c *Client) GetBrowserVersion(ctx context.Context) (*BrowserVersion, error) {
+	raw, err := c.send(ctx, "Browser.getVersion", nil, "")
+	if err != nil {
+		return nil, fmt.Errorf("Browser.getVersion: %w", err)
+	}
+	var v BrowserVersion
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, fmt.Errorf("unmarshal Browser.getVersion: %w", err)
+	}
+	return &v, nil
+}
+
 // DispatchStartURL closes extra page targets and dispatches a navigation on the
 // first page target. It does not wait for lifecycle events; Chrome owns the
 // eventual navigation result.

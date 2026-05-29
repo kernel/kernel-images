@@ -10,12 +10,12 @@ import (
 
 func TestChromiumPolicyOverrides_Validate_ValidPolicies(t *testing.T) {
 	overrides := ChromiumPolicyOverrides{
-		"DefaultCookiesSetting":  json.RawMessage(`1`),
+		"DefaultCookiesSetting":    json.RawMessage(`1`),
 		"BasicAuthOverHttpEnabled": json.RawMessage(`true`),
-		"HttpsUpgradesEnabled":   json.RawMessage(`false`),
-		"NewTabPageLocation":     json.RawMessage(`"https://example.com"`),
-		"PopupsAllowedForUrls":   json.RawMessage(`["https://example.com", "https://test.com"]`),
-		"MaxConnectionsPerProxy": json.RawMessage(`32`),
+		"HttpsUpgradesEnabled":     json.RawMessage(`false`),
+		"NewTabPageLocation":       json.RawMessage(`"https://example.com"`),
+		"PopupsAllowedForUrls":     json.RawMessage(`["https://example.com", "https://test.com"]`),
+		"MaxConnectionsPerProxy":   json.RawMessage(`32`),
 	}
 
 	err := overrides.Validate()
@@ -49,10 +49,10 @@ func TestChromiumPolicyOverrides_Validate_BlockedPolicies(t *testing.T) {
 
 func TestChromiumPolicyOverrides_Validate_WrongTypes(t *testing.T) {
 	tests := []struct {
-		name     string
-		policy   string
-		value    string
-		wantErr  string
+		name    string
+		policy  string
+		value   string
+		wantErr string
 	}{
 		{
 			name:    "bool expected, got string",
@@ -181,8 +181,8 @@ func TestChromiumPolicyOverrides_Validate_DictPolicy(t *testing.T) {
 
 func TestChromiumPolicyOverrides_Validate_MultipleErrors(t *testing.T) {
 	overrides := ChromiumPolicyOverrides{
-		"ExtensionSettings":    json.RawMessage(`{}`),
-		"DefaultCookiesSetting": json.RawMessage(`"wrong"`),
+		"ExtensionSettings":      json.RawMessage(`{}`),
+		"DefaultCookiesSetting":  json.RawMessage(`"wrong"`),
 		"PasswordManagerEnabled": json.RawMessage(`1`),
 	}
 

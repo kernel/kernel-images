@@ -49,13 +49,13 @@ func (sp *s2Producer) close(ctx context.Context) error {
 
 // s2Storage appends all events to a single fixed stream set at construction time.
 type s2Storage struct {
-	producer        s2Producer
-	sessionCancel   context.CancelFunc
-	shutdownCtx     context.Context
-	shutdownCancel  context.CancelFunc
-	closeOnce       sync.Once
-	ackErrors       atomic.Uint64
-	log             *slog.Logger
+	producer       s2Producer
+	sessionCancel  context.CancelFunc
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	closeOnce      sync.Once
+	ackErrors      atomic.Uint64
+	log            *slog.Logger
 }
 
 // newS2Storage opens an AppendSession that runs under an independent context so

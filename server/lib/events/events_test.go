@@ -135,7 +135,7 @@ func newTestRingBuffer(t *testing.T, capacity int) *ringBuffer {
 
 // TestRingBuffer: publish 3 envelopes; reader reads all 3 in order
 func TestRingBuffer(t *testing.T) {
-	rb := newTestRingBuffer(t,10)
+	rb := newTestRingBuffer(t, 10)
 	reader := rb.newReader(0)
 
 	envelopes := []Envelope{
@@ -160,7 +160,7 @@ func TestRingBuffer(t *testing.T) {
 
 // TestRingBufferOverflowNoBlock: writer never blocks even with no readers
 func TestRingBufferOverflowNoBlock(t *testing.T) {
-	rb := newTestRingBuffer(t,2)
+	rb := newTestRingBuffer(t, 2)
 
 	done := make(chan struct{})
 	go func() {
@@ -187,7 +187,7 @@ func TestRingBufferOverflowNoBlock(t *testing.T) {
 }
 
 func TestRingBufferOverflowExistingReader(t *testing.T) {
-	rb := newTestRingBuffer(t,2)
+	rb := newTestRingBuffer(t, 2)
 	reader := rb.newReader(0)
 
 	rb.publish(mkEnv(1, cdpEvent("console.log", Console)))
@@ -212,7 +212,7 @@ func TestRingBufferOverflowExistingReader(t *testing.T) {
 }
 
 func TestNewReaderResume(t *testing.T) {
-	rb := newTestRingBuffer(t,10)
+	rb := newTestRingBuffer(t, 10)
 	for i := uint64(1); i <= 5; i++ {
 		rb.publish(mkEnv(i, cdpEvent("console.log", Console)))
 	}
@@ -254,7 +254,7 @@ func TestNewReaderResume(t *testing.T) {
 
 func TestConcurrentPublishRead(t *testing.T) {
 	const numEvents = 20
-	rb := newTestRingBuffer(t,32)
+	rb := newTestRingBuffer(t, 32)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -286,7 +286,7 @@ func TestConcurrentPublishRead(t *testing.T) {
 }
 
 func TestConcurrentReaders(t *testing.T) {
-	rb := newTestRingBuffer(t,20)
+	rb := newTestRingBuffer(t, 20)
 
 	numReaders := 3
 	numEvents := 5
@@ -329,9 +329,8 @@ func TestConcurrentReaders(t *testing.T) {
 	}
 }
 
-
 func TestRingBufferResetWithActiveReader(t *testing.T) {
-	rb := newTestRingBuffer(t,10)
+	rb := newTestRingBuffer(t, 10)
 	reader := rb.newReader(0)
 
 	// Publish some events so the reader advances.
@@ -368,4 +367,3 @@ func TestNewRingBufferRejectsNonPositiveCapacity(t *testing.T) {
 		assert.Contains(t, err.Error(), "capacity must be > 0")
 	}
 }
-

@@ -48,30 +48,30 @@ var blockedPolicies = map[string]string{
 	"ExtensionInstallForcelist": "managed by kernel extension system",
 
 	// Could disable kernel's own extensions
-	"ExtensionInstallBlocklist":  "could interfere with kernel extensions",
-	"ExtensionInstallBlacklist":  "could interfere with kernel extensions",
-	"ExtensionInstallAllowlist":  "could interfere with kernel extensions",
-	"ExtensionInstallWhitelist":  "could interfere with kernel extensions",
-	"BlockExternalExtensions":    "could interfere with kernel extensions",
-	"ExtensionAllowedTypes":      "could interfere with kernel extensions",
-	"ExtensionInstallSources":    "could interfere with kernel extensions",
+	"ExtensionInstallBlocklist":       "could interfere with kernel extensions",
+	"ExtensionInstallBlacklist":       "could interfere with kernel extensions",
+	"ExtensionInstallAllowlist":       "could interfere with kernel extensions",
+	"ExtensionInstallWhitelist":       "could interfere with kernel extensions",
+	"BlockExternalExtensions":         "could interfere with kernel extensions",
+	"ExtensionAllowedTypes":           "could interfere with kernel extensions",
+	"ExtensionInstallSources":         "could interfere with kernel extensions",
 	"ExtensionManifestV2Availability": "could interfere with kernel extensions",
 
 	// Required for CDP / automation
-	"RemoteDebuggingAllowed":                "required for CDP connectivity",
-	"DeveloperToolsAvailability":            "required for CDP connectivity",
-	"DeveloperToolsDisabled":                "required for CDP connectivity",
-	"DeveloperToolsAvailabilityAllowlist":   "required for CDP connectivity",
-	"DeveloperToolsAvailabilityBlocklist":   "required for CDP connectivity",
-	"ChromeForTestingAllowed":               "required for automation",
+	"RemoteDebuggingAllowed":                 "required for CDP connectivity",
+	"DeveloperToolsAvailability":             "required for CDP connectivity",
+	"DeveloperToolsDisabled":                 "required for CDP connectivity",
+	"DeveloperToolsAvailabilityAllowlist":    "required for CDP connectivity",
+	"DeveloperToolsAvailabilityBlocklist":    "required for CDP connectivity",
+	"ChromeForTestingAllowed":                "required for automation",
 	"WebDriverOverridesIncompatiblePolicies": "required for automation",
 
 	// Proxy is managed via kernel's proxy feature
-	"ProxySettings":  "use kernel's proxy API instead",
-	"ProxyMode":      "use kernel's proxy API instead",
-	"ProxyServer":    "use kernel's proxy API instead",
+	"ProxySettings":   "use kernel's proxy API instead",
+	"ProxyMode":       "use kernel's proxy API instead",
+	"ProxyServer":     "use kernel's proxy API instead",
 	"ProxyBypassList": "use kernel's proxy API instead",
-	"ProxyPacUrl":    "use kernel's proxy API instead",
+	"ProxyPacUrl":     "use kernel's proxy API instead",
 }
 
 // policyRegistry maps all Chromium enterprise policies supported on Linux

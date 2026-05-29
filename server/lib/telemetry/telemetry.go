@@ -18,9 +18,13 @@ type TelemetryConfig struct {
 }
 
 // TelemetrySession manages a telemetry session against a shared EventStream.
-// It is responsible for (a) category-filtering Publish calls, (b) tracking
-// session-scoped metadata (ID, config, timestamps), and (c) embedding
-// telemetry_session_id into Event.Source.Metadata before forwarding to the bus.
+// It category-filters Publish calls, tracks session-scoped metadata (ID,
+// config, timestamps), and embeds telemetry_session_id into
+// Event.Source.Metadata before forwarding to the bus.
+//
+// A *TelemetrySession is required to be non-nil: NewTelemetrySession panics
+// on a nil EventStream and ApiService construction rejects a nil session.
+// Callers should not nil-check.
 type TelemetrySession struct {
 	es              *events.EventStream
 	mu              sync.Mutex
@@ -31,6 +35,9 @@ type TelemetrySession struct {
 }
 
 func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
+	if es == nil {
+		panic("telemetry: NewTelemetrySession requires a non-nil EventStream")
+	}
 	cats := make(map[oapi.TelemetryEventCategory]struct{}, len(events.AllCategories))
 	for _, c := range events.AllCategories {
 		cats[c] = struct{}{}
@@ -75,17 +82,20 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 
-// Publish applies the category filter then forwards ev to the EventStream.
-func (s *TelemetrySession) Publish(ev events.Event) {
+// Publish applies the telemetry config filter and forwards ev to the
+// EventStream. Returns the assigned envelope and true on success, or a zero
+// envelope and false when the event was dropped (session inactive or
+// category disabled). Fire-and-forget callers can ignore the returns.
+func (s *TelemetrySession) Publish(ev events.Event) (events.Envelope, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.id == "" {
-		return
+		return events.Envelope{}, false
 	}
 	if _, ok := s.categories[ev.Category]; !ok {
-		return
+		return events.Envelope{}, false
 	}
-	s.publishLocked(ev)
+	return s.publishLocked(ev), true
 }
 
 // NewReader returns a Reader from the EventStream positioned after afterSeq.

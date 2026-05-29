@@ -13,10 +13,10 @@ import (
 )
 
 type mockBackend struct {
-	mu        sync.Mutex
-	appended  []Envelope
-	err       error
-	errCount  int
+	mu       sync.Mutex
+	appended []Envelope
+	err      error
+	errCount int
 }
 
 func (m *mockBackend) Append(_ context.Context, env Envelope) error {
