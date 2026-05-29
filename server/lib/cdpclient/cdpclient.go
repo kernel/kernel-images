@@ -193,11 +193,11 @@ func (c *Client) SetFirstPageWindowBoundsAndMaximize(ctx context.Context, width,
 	}
 	if _, err := c.send(ctx, "Browser.setWindowBounds", map[string]any{
 		"windowId": window.WindowID,
-		"bounds": browserWindowBounds{
-			Left:   0,
-			Top:    0,
-			Width:  width,
-			Height: height,
+		"bounds": map[string]any{
+			"left":   0,
+			"top":    0,
+			"width":  width,
+			"height": height,
 		},
 	}, ""); err != nil {
 		return fmt.Errorf("Browser.setWindowBounds size: %w", err)

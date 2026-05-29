@@ -493,34 +493,6 @@ func (s *ApiService) setViewportViaCDP(ctx context.Context, width, height int) e
 	return nil
 }
 
-func (s *ApiService) setMaximizedWindowViaCDP(ctx context.Context, width, height int) error {
-	log := logger.FromContext(ctx)
-
-	upstreamURL := s.upstreamMgr.Current()
-	if upstreamURL == "" {
-		return fmt.Errorf("devtools upstream not available")
-	}
-
-	cdpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
-	if err != nil {
-		return fmt.Errorf("failed to connect to devtools: %w", err)
-	}
-	defer client.Close()
-
-	if err := client.SetFirstPageWindowBoundsAndMaximize(cdpCtx, width, height); err != nil {
-		return fmt.Errorf("CDP setWindowBounds: %w", err)
-	}
-	if err := s.verifyMaximizedChromiumWindow(ctx, width, height); err != nil {
-		return err
-	}
-
-	log.Info("chromium window resized and maximized via CDP", "width", width, "height", height)
-	return nil
-}
-
 func (s *ApiService) verifyCurrentCDP(ctx context.Context) error {
 	upstreamURL := s.upstreamMgr.Current()
 	if upstreamURL == "" {
