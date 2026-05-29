@@ -120,23 +120,20 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 			err = s.setResolutionViaNeko(ctx, width, height, refreshRate)
 		} else {
 			log.Info("using xrandr for Xorg resolution change (Neko disabled)")
-			err = s.setResolutionXorgViaXrandr(ctx, width, height, refreshRate, restartChrome)
+			err = s.setResolutionXorgViaXrandr(ctx, width, height, refreshRate)
 		}
-		// Headful default path: skip the chromium restart and re-assert
-		// the maximized window state via CDP instead. Mutter reflows a
-		// maximized window to fill the new X root automatically, so this
-		// is all that's needed — and it costs ~50ms vs ~9s for a restart.
-		// Callers can still opt into the legacy restart with
-		// restart_chromium=true (rare; preserved for compatibility).
+		// Re-assert the maximized window state via CDP after the X root
+		// resize. Mutter reflows a window in windowState=maximized (or
+		// fullscreen) to fill the new root automatically, so this single
+		// idempotent call is all we need post-resize. The previous
+		// approach of restarting chromium so it could re-apply
+		// --start-maximized cost ~9s per resize and also wiped browser-
+		// side state (Emulation.* overrides, devtools sessions). The
+		// restart_chromium request field is still accepted for API
+		// compatibility but no longer triggers a restart on this path.
 		if err == nil {
-			if restartChrome {
-				if restartErr := s.restartChromiumAndWait(ctx, "resolution change"); restartErr != nil {
-					log.Error("failed to restart chromium after resolution change", "error", restartErr)
-				}
-			} else {
-				if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
-					log.Warn("CDP maximize re-assert failed after Xorg resolution change (non-fatal)", "error", cdpErr)
-				}
+			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
+				log.Warn("CDP maximize re-assert failed after Xorg resolution change (non-fatal)", "error", cdpErr)
 			}
 		}
 	} else if len(stopped) > 0 {
@@ -236,7 +233,7 @@ func (s *ApiService) probeDisplayMode(ctx context.Context) string {
 }
 
 // setResolutionXorgViaXrandr changes resolution for Xorg using xrandr (fallback when Neko is disabled)
-func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, height, refreshRate int, restartChrome bool) error {
+func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, height, refreshRate int) error {
 	log := logger.FromContext(ctx)
 	display := s.resolveDisplayFromEnv()
 
