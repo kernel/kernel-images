@@ -131,9 +131,16 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		// side state (Emulation.* overrides, devtools sessions). The
 		// restart_chromium request field is still accepted for API
 		// compatibility but no longer triggers a restart on this path.
+		//
+		// The CDP call is the only thing that recovers a window already
+		// in the "normal" state, so its failure is fatal: returning 200
+		// after a CDP error could leave the browser window stuck at the
+		// old size while the X root is at the new size, and the caller
+		// would have no signal of the mismatch.
 		if err == nil {
 			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
-				log.Warn("CDP maximize re-assert failed after Xorg resolution change (non-fatal)", "error", cdpErr)
+				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
+				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
 			}
 		}
 	} else if len(stopped) > 0 {
@@ -237,14 +244,23 @@ func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, heig
 	log := logger.FromContext(ctx)
 	display := s.resolveDisplayFromEnv()
 
+	// The headful Xorg dummy driver exposes DUMMY0, not "default". The
+	// historical `xrandr --output default --mode ...` command exits 0 while
+	// silently doing nothing on this driver. Default to DUMMY0 and let an
+	// env var override it for any non-standard image layout.
+	output := strings.TrimSpace(os.Getenv("KERNEL_IMAGES_XRANDR_OUTPUT"))
+	if output == "" {
+		output = "DUMMY0"
+	}
+
 	// Build xrandr command - if refresh rate is specified, use the specific modeline
 	var xrandrCmd string
 	if refreshRate > 0 {
 		modeName := fmt.Sprintf("%dx%d_%d.00", width, height, refreshRate)
-		xrandrCmd = fmt.Sprintf("xrandr --output default --mode %s", modeName)
-		log.Info("using specific modeline", "mode", modeName)
+		xrandrCmd = fmt.Sprintf("xrandr --output %s --mode %s", output, modeName)
+		log.Info("using specific modeline", "output", output, "mode", modeName)
 	} else {
-		xrandrCmd = fmt.Sprintf("xrandr -s %dx%d", width, height)
+		xrandrCmd = fmt.Sprintf("xrandr --output %s --size %dx%d", output, width, height)
 	}
 
 	args := []string{"-lc", xrandrCmd}

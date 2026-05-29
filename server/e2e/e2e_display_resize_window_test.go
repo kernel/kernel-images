@@ -411,6 +411,10 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			cdpAfterUp, err := getChromiumWindowBoundsCDP(ctx, c)
 			require.NoError(t, err, "cdp window after up-resize")
 			t.Logf("[%s] after-up cdp=%+v", sc.name, cdpAfterUp)
+			require.Equal(t, baseCDP.WindowID, cdpAfterUp.WindowID,
+				"windowID changed after up-resize — chromium was restarted (windowID is monotonic per-process; a new one signals a relaunch)")
+			require.Equal(t, baseCDP.WindowState, cdpAfterUp.WindowState,
+				"windowState changed after up-resize — the WM-tracking invariant the no-restart path relies on was broken")
 
 			// Resize back down to a smaller size, also a real delta.
 			dnW, dnH := sc.downSize()
@@ -423,6 +427,10 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			cdpAfterDown, err := getChromiumWindowBoundsCDP(ctx, c)
 			require.NoError(t, err, "cdp window after down-resize")
 			t.Logf("[%s] after-down cdp=%+v", sc.name, cdpAfterDown)
+			require.Equal(t, baseCDP.WindowID, cdpAfterDown.WindowID,
+				"windowID changed after down-resize — chromium was restarted between resizes")
+			require.Equal(t, baseCDP.WindowState, cdpAfterDown.WindowState,
+				"windowState changed after down-resize")
 		})
 	}
 }
