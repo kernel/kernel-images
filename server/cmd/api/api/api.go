@@ -68,9 +68,13 @@ type ApiService struct {
 
 	// viewportOverride stores the last viewport dimensions set via CDP so
 	// that getCurrentResolution can return consistent values even while
-	// Xvfb is restarting in the background.
-	viewportMu       sync.RWMutex
-	viewportOverride *[3]int // [width, height, refreshRate] or nil
+	// Xvfb is restarting in the background. lastHeadlessRefreshRate
+	// persists across override clears because Xvfb does not surface the
+	// refresh rate via xrandr — without it, repeat requests at the same
+	// non-default rate would not be detected as no-ops.
+	viewportMu              sync.RWMutex
+	viewportOverride        *[3]int // [width, height, refreshRate] or nil
+	lastHeadlessRefreshRate int
 
 	// cachedDisplayMode caches the result of detectDisplayMode since the
 	// display server type (xorg vs xvfb) does not change at runtime.

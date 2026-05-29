@@ -680,6 +680,7 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *
 		err := s.resizeXvfb(ctx, w, h)
 		if err == nil {
 			s.clearViewportOverride()
+			s.recordHeadlessRefreshRate(rr)
 		}
 		s.xvfbResizeMu.Unlock()
 		if err != nil {

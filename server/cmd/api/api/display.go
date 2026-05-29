@@ -137,6 +137,7 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		err = s.resizeXvfb(ctx, width, height)
 		if err == nil {
 			s.clearViewportOverride()
+			s.recordHeadlessRefreshRate(refreshRate)
 		}
 		s.xvfbResizeMu.Unlock()
 		if err == nil {
@@ -446,37 +447,70 @@ func (s *ApiService) resolveDisplayFromEnv() string {
 
 // setViewportOverride stores the last-known viewport dimensions so
 // getCurrentResolution can return them even while Xvfb is restarting.
+// It also records the refresh rate as the sticky headless value.
 func (s *ApiService) setViewportOverride(width, height, refreshRate int) {
 	s.viewportMu.Lock()
 	s.viewportOverride = &[3]int{width, height, refreshRate}
+	if refreshRate > 0 {
+		s.lastHeadlessRefreshRate = refreshRate
+	}
 	s.viewportMu.Unlock()
 }
 
 // clearViewportOverride removes the viewport override (e.g. after Xvfb
-// finishes restarting and xrandr is reliable again).
+// finishes restarting and xrandr is reliable again). The sticky
+// lastHeadlessRefreshRate is intentionally preserved so that
+// getCurrentResolution can still return the requested refresh rate after
+// xrandr stops surfacing it.
 func (s *ApiService) clearViewportOverride() {
 	s.viewportMu.Lock()
 	s.viewportOverride = nil
 	s.viewportMu.Unlock()
 }
 
+// recordHeadlessRefreshRate stores the last refresh rate applied via a
+// headless path so identical follow-up requests are detected as no-ops.
+// Zero values are ignored — they signal "rate not specified".
+func (s *ApiService) recordHeadlessRefreshRate(refreshRate int) {
+	if refreshRate <= 0 {
+		return
+	}
+	s.viewportMu.Lock()
+	s.lastHeadlessRefreshRate = refreshRate
+	s.viewportMu.Unlock()
+}
+
 // getCurrentResolution returns the current display resolution and refresh
 // rate. If a viewport override is set (from a recent CDP resize while Xvfb
 // restarts in the background), it returns the override instead of querying
-// xrandr, which may fail during Xvfb restarts.
+// xrandr, which may fail during Xvfb restarts. When xrandr does not surface
+// a refresh rate (Xvfb), the last-applied headless rate is used so repeat
+// requests at the same rate are detected as no-ops.
 func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, error) {
 	s.viewportMu.RLock()
 	override := s.viewportOverride
+	stickyRate := s.lastHeadlessRefreshRate
 	s.viewportMu.RUnlock()
 	if override != nil {
 		return override[0], override[1], override[2], nil
 	}
 
-	return s.getCurrentResolutionFromXrandr(ctx)
+	w, h, rr, rateFromXrandr, err := s.getCurrentResolutionFromXrandr(ctx)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if !rateFromXrandr && stickyRate > 0 {
+		rr = stickyRate
+	}
+	return w, h, rr, nil
 }
 
-// getCurrentResolutionFromXrandr queries xrandr for the current display resolution.
-func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, int, int, error) {
+// getCurrentResolutionFromXrandr queries xrandr for the current display
+// resolution. The fourth return value reports whether the refresh rate was
+// parsed from xrandr output (true) or is the synthesized fallback (false);
+// callers can use it to prefer a previously-recorded rate when xrandr is
+// silent, as Xvfb is.
+func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, int, int, bool, error) {
 	log := logger.FromContext(ctx)
 	display := s.resolveDisplayFromEnv()
 
@@ -488,41 +522,43 @@ func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, i
 	out, err := cmd.Output()
 	if err != nil {
 		log.Error("failed to get current resolution", "error", err)
-		return 0, 0, 0, fmt.Errorf("failed to execute xrandr command: %w", err)
+		return 0, 0, 0, false, fmt.Errorf("failed to execute xrandr command: %w", err)
 	}
 
 	resStr := strings.TrimSpace(string(out))
 	parts := strings.Split(resStr, "x")
 	if len(parts) != 2 {
 		log.Error("unexpected xrandr output format", "output", resStr)
-		return 0, 0, 0, fmt.Errorf("unexpected xrandr output format: %s", resStr)
+		return 0, 0, 0, false, fmt.Errorf("unexpected xrandr output format: %s", resStr)
 	}
 
 	width, err := strconv.Atoi(parts[0])
 	if err != nil {
 		log.Error("failed to parse width", "error", err, "value", parts[0])
-		return 0, 0, 0, fmt.Errorf("failed to parse width '%s': %w", parts[0], err)
+		return 0, 0, 0, false, fmt.Errorf("failed to parse width '%s': %w", parts[0], err)
 	}
 
 	// Parse height and refresh rate (e.g., "1080_60.00" -> height=1080, rate=60)
 	heightStr := parts[1]
-	refreshRate := 60 // default
+	refreshRate := 60 // default when xrandr omits the _rate suffix (e.g. Xvfb)
+	rateFromXrandr := false
 	if idx := strings.Index(heightStr, "_"); idx != -1 {
 		rateStr := heightStr[idx+1:]
 		heightStr = heightStr[:idx]
 		// Parse the refresh rate (e.g., "60.00" -> 60)
 		if rateFloat, err := strconv.ParseFloat(rateStr, 64); err == nil {
 			refreshRate = int(rateFloat)
+			rateFromXrandr = true
 		}
 	}
 
 	height, err := strconv.Atoi(heightStr)
 	if err != nil {
 		log.Error("failed to parse height", "error", err, "value", heightStr)
-		return 0, 0, 0, fmt.Errorf("failed to parse height '%s': %w", heightStr, err)
+		return 0, 0, 0, false, fmt.Errorf("failed to parse height '%s': %w", heightStr, err)
 	}
 
-	return width, height, refreshRate, nil
+	return width, height, refreshRate, rateFromXrandr, nil
 }
 
 // stoppedRecordingInfo holds state captured from a recording that was stopped
