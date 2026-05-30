@@ -109,6 +109,7 @@ func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	assert.Contains(t, args, "zerolatency")
 	assert.Contains(t, args, "-c:a")
 	assert.Contains(t, args, "aac")
+	assert.NotContains(t, args, "aresample=async=1")
 	assert.NotContains(t, args, "aresample=async=1:first_pts=0")
 }
 

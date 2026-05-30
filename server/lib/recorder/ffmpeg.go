@@ -575,7 +575,6 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 			"-b:a", "128k",
 			"-ar", "48000",
 			"-ac", "2",
-			"-af", "aresample=async=1",
 		}...)
 	}
 

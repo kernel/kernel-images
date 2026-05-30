@@ -31,7 +31,14 @@ Options:
   --out-dir <path>          Output directory for replay + reports (default: ${DEFAULT_OUT_DIR})
   --app-port <port>         Port for the in-container static app (default: 4173)
   --recording-framerate <n> Recording framerate to request from /recording/start (default: 10)
-  --duration-tolerance <s>  Max absolute duration delta in seconds. Defaults to max(2.5, golden*0.08)
+  --ffmpeg-wrapper <name>  Local debug wrapper variant: pulse-fragment-4096, pulse-fragment-38400, probe-zero, low-latency, aresample-firstpts, no-aresample
+  --chromium-flag <flag>   Extra Chromium runtime flag (repeatable)
+  --capture-seconds <s>    Stop app playback after this many seconds instead of waiting for the full video
+  --audio-warmup-ms <n>    Delay after audio is ready, before starting recorder/app playback (default: 0)
+  --pulse-sidecar          Also capture KernelOutput.monitor with parec to localize Pulse vs recorder issues
+  --wait-ffmpeg-ready      Local debug: wait for ffmpeg to log Output #0 before starting app playback
+  --allow-audio-fail       Write report even if audio comparison detects dropouts/correlation failure
+  --duration-tolerance <s>  Max absolute duration delta in seconds. Defaults to max(2.5, golden*0.08), or shorter in --capture-seconds mode
   --min-ssim <value>        Optional average SSIM threshold for sampled frame comparison
   --min-audio-correlation <value>
                             Minimum Pearson correlation for audio RMS-envelope comparison (default: 0.45)
@@ -51,6 +58,14 @@ function parseArgs(argv) {
     outDir: DEFAULT_OUT_DIR,
     appPort: 4173,
     recordingFramerate: 10,
+    ffmpegWrapper: null,
+    ffmpegWrapperHostPath: null,
+    chromiumFlags: [],
+    captureSeconds: null,
+    audioWarmupMs: null,
+    pulseSidecar: false,
+    waitFfmpegReady: false,
+    allowAudioFail: false,
     durationTolerance: null,
     minSsim: null,
     minAudioCorrelation: 0.45,
@@ -88,6 +103,30 @@ function parseArgs(argv) {
       case '--recording-framerate':
         opts.recordingFramerate = Number(next());
         if (!Number.isInteger(opts.recordingFramerate) || opts.recordingFramerate < 1 || opts.recordingFramerate > 20) throw new Error('invalid --recording-framerate');
+        break;
+      case '--ffmpeg-wrapper':
+        opts.ffmpegWrapper = next();
+        if (!['pulse-fragment-4096', 'pulse-fragment-38400', 'probe-zero', 'low-latency', 'aresample-firstpts', 'no-aresample'].includes(opts.ffmpegWrapper)) throw new Error('invalid --ffmpeg-wrapper');
+        break;
+      case '--chromium-flag':
+        opts.chromiumFlags.push(next());
+        break;
+      case '--capture-seconds':
+        opts.captureSeconds = Number(next());
+        if (!Number.isFinite(opts.captureSeconds) || opts.captureSeconds <= 0) throw new Error('invalid --capture-seconds');
+        break;
+      case '--audio-warmup-ms':
+        opts.audioWarmupMs = Number(next());
+        if (!Number.isInteger(opts.audioWarmupMs) || opts.audioWarmupMs < 0) throw new Error('invalid --audio-warmup-ms');
+        break;
+      case '--pulse-sidecar':
+        opts.pulseSidecar = true;
+        break;
+      case '--wait-ffmpeg-ready':
+        opts.waitFfmpegReady = true;
+        break;
+      case '--allow-audio-fail':
+        opts.allowAudioFail = true;
         break;
       case '--duration-tolerance':
         opts.durationTolerance = Number(next());
@@ -316,6 +355,17 @@ function dockerLogs(containerName, tail = 300) {
   }
 }
 
+async function waitForDockerLog(containerName, needle, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  let logs = '';
+  while (Date.now() < deadline) {
+    logs = dockerLogs(containerName, 200);
+    if (logs.includes(needle)) return;
+    await sleep(50);
+  }
+  throw new Error(`timed out waiting for ${label} in docker logs; wanted ${JSON.stringify(needle)}\n${logs}`);
+}
+
 function startContainer(opts, golden) {
   const name = `replay-pipeline-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
   const env = {
@@ -326,6 +376,10 @@ function startContainer(opts, golden) {
     AUDIO_SOURCE: 'KernelOutput.monitor',
     CHROMIUM_FLAGS: '--no-sandbox',
   };
+  if (opts.ffmpegWrapperHostPath) {
+    env.FFMPEG_PATH = '/usr/local/bin/ffmpeg-wrapper';
+    env.FFMPEG_WRAPPER_VARIANT = opts.ffmpegWrapper;
+  }
 
   const args = [
     'run', '-d',
@@ -337,13 +391,69 @@ function startContainer(opts, golden) {
     '-p', '127.0.0.1::9224',
   ];
   for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`);
+  if (opts.ffmpegWrapperHostPath) {
+    args.push('-v', `${opts.ffmpegWrapperHostPath}:/usr/local/bin/ffmpeg-wrapper:ro`);
+  }
   args.push(opts.image);
 
   const id = run('docker', args, { timeout: 30_000 }).trim();
   return { id, name };
 }
 
-async function configureBrowser(apiBase, golden) {
+function writeFFmpegWrapper(tmpRoot, variant) {
+  const wrapperPath = path.join(tmpRoot, 'ffmpeg-wrapper.py');
+  const source = `#!/usr/bin/env python3
+import os
+import sys
+
+variant = os.environ.get('FFMPEG_WRAPPER_VARIANT', '')
+frag = None
+if variant == 'pulse-fragment-4096':
+    frag = '4096'
+elif variant == 'pulse-fragment-38400':
+    frag = '38400'
+elif variant == 'low-latency':
+    frag = '4096'
+probe_zero = variant in ('probe-zero', 'low-latency')
+aresample_firstpts = variant in ('aresample-firstpts', 'low-latency')
+no_aresample = variant == 'no-aresample'
+
+args = sys.argv[1:]
+out = []
+i = 0
+while i < len(args):
+    if no_aresample and i + 1 < len(args) and args[i] == '-af' and args[i + 1] == 'aresample=async=1':
+        i += 2
+        continue
+
+    if aresample_firstpts and i + 1 < len(args) and args[i] == '-af' and args[i + 1] == 'aresample=async=1':
+        out.extend(['-af', 'aresample=async=1000:first_pts=0'])
+        i += 2
+        continue
+
+    if probe_zero and i + 1 < len(args) and args[i] == '-f' and args[i + 1] in ('x11grab', 'pulse'):
+        out.extend(['-probesize', '32', '-analyzeduration', '0'])
+
+    if frag and i + 1 < len(args) and args[i] == '-f' and args[i + 1] == 'pulse':
+        out.extend(['-f', 'pulse', '-sample_rate', '48000', '-channels', '2', '-fragment_size', frag])
+        i += 2
+        continue
+
+    if frag and i + 3 < len(args) and args[i] == '-thread_queue_size' and args[i + 2] == '-f' and args[i + 3] == 'pulse':
+        out.extend(['-thread_queue_size', '4096'])
+        i += 2
+        continue
+
+    out.append(args[i])
+    i += 1
+
+os.execvp('ffmpeg', ['ffmpeg'] + out)
+`;
+  writeFileSync(wrapperPath, source, { mode: 0o755 });
+  return wrapperPath;
+}
+
+async function configureBrowser(apiBase, golden, opts) {
   const form = new FormData();
   form.append('display', JSON.stringify({
     width: golden.width,
@@ -359,6 +469,7 @@ async function configureBrowser(apiBase, golden) {
       `--window-size=${golden.width},${golden.height}`,
       '--force-device-scale-factor=1',
       '--autoplay-policy=no-user-gesture-required',
+      ...opts.chromiumFlags,
     ],
   }));
 
@@ -488,17 +599,27 @@ async function writeFileViaAPI(apiBase, remotePath, data, mode = '644') {
   });
 }
 
-async function spawnApp(apiBase, appPort) {
-  await writeFileViaAPI(apiBase, '/tmp/kernel-replay-server.mjs', staticServerSource(appPort));
+async function readFileViaAPI(apiBase, remotePath) {
+  return fetchBinary(`${apiBase}/fs/read_file?path=${encodeURIComponent(remotePath)}`, {
+    signal: AbortSignal.timeout(120_000),
+  });
+}
+
+async function spawnProcess(apiBase, command, args) {
   const result = await fetchJSON(`${apiBase}/process/spawn`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command: 'node', args: ['/tmp/kernel-replay-server.mjs'] }),
+    body: JSON.stringify({ command, args }),
     signal: AbortSignal.timeout(30_000),
   });
   const processId = result?.process_id;
   if (!processId) throw new Error(`process/spawn response missing process_id: ${JSON.stringify(result)}`);
   return processId;
+}
+
+async function spawnApp(apiBase, appPort) {
+  await writeFileViaAPI(apiBase, '/tmp/kernel-replay-server.mjs', staticServerSource(appPort));
+  return spawnProcess(apiBase, 'node', ['/tmp/kernel-replay-server.mjs']);
 }
 
 async function waitForAppInContainer(apiBase, appPort) {
@@ -513,6 +634,42 @@ async function waitForAppInContainer(apiBase, appPort) {
     const stderr = Buffer.from(result?.stderr_b64 ?? '', 'base64').toString('utf8');
     throw new Error(`app did not become reachable in container: ${stderr}`);
   }
+}
+
+async function startPulseSidecar(apiBase, expectedDurationSeconds) {
+  const remotePath = '/tmp/kernel-pulse-sidecar.s16le';
+  const duration = Math.max(1, expectedDurationSeconds + 0.5);
+  const script = `set -euo pipefail
+rm -f ${remotePath}
+timeout ${duration.toFixed(3)}s parec --raw --rate=48000 --channels=2 --format=s16le --device=KernelOutput.monitor > ${remotePath}`;
+  const processId = await spawnProcess(apiBase, 'bash', ['-lc', script]);
+  return { processId, remotePath, duration, sampleRate: 48000, channels: 2, format: 's16le' };
+}
+
+async function waitForPulseSidecar(apiBase, sidecar) {
+  const script = `set -euo pipefail
+for _ in $(seq 1 100); do
+  if [ -s ${sidecar.remotePath} ] && ! pgrep -af '${sidecar.remotePath}' >/dev/null; then
+    exit 0
+  fi
+  sleep 0.1
+done
+if [ -s ${sidecar.remotePath} ]; then exit 0; fi
+echo 'pulse sidecar file did not appear' >&2
+exit 1`;
+  requireExecOK(await processExec(apiBase, { command: 'bash', args: ['-lc', script], timeout_sec: 15 }, 20_000), 'waiting for pulse sidecar');
+}
+
+function rawPulseToWav(rawPath, wavPath, sidecar) {
+  run('ffmpeg', [
+    '-v', 'error',
+    '-f', sidecar.format,
+    '-ar', String(sidecar.sampleRate),
+    '-ac', String(sidecar.channels),
+    '-i', rawPath,
+    '-c:a', 'pcm_s16le',
+    '-y', wavPath,
+  ], { timeout: 60_000 });
 }
 
 async function killProcess(apiBase, processId) {
@@ -687,8 +844,53 @@ async function setupCDP(cdpBase, appURL, golden) {
   };
 }
 
-async function startRecording(apiBase, golden, opts) {
-  const maxDuration = Math.ceil(golden.duration + 30);
+async function evaluatePageValue(cdpSession, expression) {
+  const result = await cdpSession.cdp.send('Runtime.evaluate', {
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+  }, cdpSession.sessionId);
+  if (result.exceptionDetails) {
+    throw new Error(`page evaluation failed: ${JSON.stringify(result.exceptionDetails)}`);
+  }
+  return result.result?.value;
+}
+
+async function waitForAudioReady(cdpSession, { required = false, timeoutMs = 15_000 } = {}) {
+  await evaluatePageValue(cdpSession, `(() => {
+    for (const audio of document.querySelectorAll('audio')) audio.load();
+    return true;
+  })()`);
+
+  const deadline = Date.now() + timeoutMs;
+  let lastState;
+  while (Date.now() < deadline) {
+    lastState = await evaluatePageValue(cdpSession, `(() => {
+      const audios = [...document.querySelectorAll('audio')];
+      return {
+        ok: (${required ? 'true' : 'false'} ? audios.length > 0 : true) && audios.every((audio) =>
+          audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA &&
+          Number.isFinite(audio.duration) &&
+          audio.duration > 0
+        ),
+        count: audios.length,
+        audios: audios.map((audio) => ({
+          currentSrc: audio.currentSrc,
+          duration: Number.isFinite(audio.duration) ? audio.duration : null,
+          networkState: audio.networkState,
+          paused: audio.paused,
+          readyState: audio.readyState,
+        })),
+      };
+    })()`);
+    if (lastState?.ok) return lastState;
+    await sleep(250);
+  }
+  throw new Error(`timed out waiting for audio readiness: ${JSON.stringify(lastState)}`);
+}
+
+async function startRecording(apiBase, expectedDurationSeconds, opts) {
+  const maxDuration = Math.ceil(expectedDurationSeconds + 15);
   const fps = opts.recordingFramerate;
   await fetchText(`${apiBase}/recording/start`, {
     method: 'POST',
@@ -850,6 +1052,48 @@ function bestEnvelopeCorrelation(reference, candidate, maxLagWindows) {
   return best;
 }
 
+function earlyAudioDropouts(referenceEnvelope, replayEnvelope, referenceRms, replayRms, windowMs, lagWindows = 0) {
+  const analysisSeconds = 2;
+  const ignoreInitialSeconds = 0.25;
+  const analysisWindows = Math.min(
+    referenceEnvelope.length,
+    replayEnvelope.length,
+    Math.floor((analysisSeconds * 1000) / windowMs),
+  );
+  const ignoreWindows = Math.ceil((ignoreInitialSeconds * 1000) / windowMs);
+  const replaySilenceThreshold = Math.max(0.002, replayRms * 0.08);
+  const referenceActiveThreshold = Math.max(0.01, referenceRms * 0.15);
+  const windows = [];
+
+  for (let i = ignoreWindows; i < analysisWindows; i++) {
+    const referenceIndex = lagWindows < 0 ? i - lagWindows : i;
+    const replayIndex = lagWindows > 0 ? i + lagWindows : i;
+    const referenceValue = referenceEnvelope[referenceIndex] ?? 0;
+    const replayValue = replayEnvelope[replayIndex] ?? 0;
+    if (referenceValue >= referenceActiveThreshold && replayValue <= replaySilenceThreshold) {
+      windows.push({
+        startSeconds: (i * windowMs) / 1000,
+        referenceIndex,
+        replayIndex,
+        referenceRms: referenceValue,
+        replayRms: replayValue,
+      });
+    }
+  }
+
+  return {
+    analysisSeconds,
+    ignoreInitialSeconds,
+    windowMs,
+    lagWindows,
+    replaySilenceThreshold,
+    referenceActiveThreshold,
+    dropoutWindowCount: windows.length,
+    dropoutSeconds: (windows.length * windowMs) / 1000,
+    windows,
+  };
+}
+
 function compareAudio(referencePath, replayPath, opts) {
   if (!commandExists('ffmpeg')) return null;
   const reference = audioInfo(referencePath);
@@ -857,7 +1101,8 @@ function compareAudio(referencePath, replayPath, opts) {
   if (!reference) throw new Error(`audio reference has no audio stream: ${referencePath}`);
   if (!replay) throw new Error(`replay has no audio stream; expected audio similar to ${referencePath}`);
 
-  const compareDuration = Math.min(reference.duration, replay.duration, 90);
+  const expectedAudioDuration = opts.captureSeconds ?? reference.duration;
+  const compareDuration = Math.min(reference.duration, replay.duration, opts.captureSeconds ?? 90);
   const referencePCM = extractMonoPCM(referencePath, compareDuration);
   const replayPCM = extractMonoPCM(replayPath, compareDuration);
   const envelopeWindowMs = 50;
@@ -870,16 +1115,25 @@ function compareAudio(referencePath, replayPath, opts) {
   const referenceRms = rms(referenceEnvelope);
   const replayRms = rms(replayEnvelope);
   const rmsRatio = referenceRms > 0 ? replayRms / referenceRms : null;
-  const durationDelta = Math.abs(replay.duration - reference.duration);
-  const durationTolerance = Math.max(2.5, reference.duration * 0.08);
+  const durationDelta = Math.abs(replay.duration - expectedAudioDuration);
+  const durationTolerance = opts.captureSeconds == null
+    ? Math.max(2.5, reference.duration * 0.08)
+    : Math.max(1.0, opts.captureSeconds * 0.25);
+  const earlyDropouts = earlyAudioDropouts(referenceEnvelope, replayEnvelope, referenceRms, replayRms, envelopeWindowMs);
+  const alignedEarlyDropouts = earlyAudioDropouts(referenceEnvelope, replayEnvelope, referenceRms, replayRms, envelopeWindowMs, best.lagWindows);
 
-  assert(durationDelta <= durationTolerance, `replay audio duration ${replay.duration.toFixed(3)}s differs from reference ${reference.duration.toFixed(3)}s by ${durationDelta.toFixed(3)}s (tolerance ${durationTolerance.toFixed(3)}s)`);
-  assert(replayRms > Math.max(0.0005, referenceRms * 0.03), `replay audio RMS ${replayRms.toFixed(6)} is too low compared to reference ${referenceRms.toFixed(6)}`);
-  assert(best.correlation >= opts.minAudioCorrelation, `audio envelope correlation ${best.correlation.toFixed(4)} < threshold ${opts.minAudioCorrelation}`);
+  const issues = [];
+  if (durationDelta > durationTolerance) issues.push(`replay audio duration ${replay.duration.toFixed(3)}s differs from expected ${expectedAudioDuration.toFixed(3)}s by ${durationDelta.toFixed(3)}s (tolerance ${durationTolerance.toFixed(3)}s)`);
+  if (replayRms <= Math.max(0.0005, referenceRms * 0.03)) issues.push(`replay audio RMS ${replayRms.toFixed(6)} is too low compared to reference ${referenceRms.toFixed(6)}`);
+  if (best.correlation < opts.minAudioCorrelation) issues.push(`audio envelope correlation ${best.correlation.toFixed(4)} < threshold ${opts.minAudioCorrelation}`);
+  if (earlyDropouts.dropoutWindowCount > 1) issues.push(`detected ${earlyDropouts.dropoutWindowCount} early audio dropout windows after the initial ${earlyDropouts.ignoreInitialSeconds}s grace period`);
 
-  return {
+  const result = {
+    ok: issues.length === 0,
+    issues,
     reference,
     replay,
+    expectedAudioDuration,
     durationDelta,
     durationTolerance,
     compareDuration,
@@ -890,7 +1144,14 @@ function compareAudio(referencePath, replayPath, opts) {
     referenceRms,
     replayRms,
     rmsRatio,
+    earlyDropouts,
+    alignedEarlyDropouts,
   };
+
+  if (!opts.allowAudioFail && issues.length > 0) {
+    throw new Error(issues.join('; '));
+  }
+  return result;
 }
 
 async function main() {
@@ -909,7 +1170,10 @@ async function main() {
 
   const golden = videoInfo(goldenPath);
   const goldenAudioPath = resolveGoldenAudio(opts, goldenPath, appDist, golden);
-  const durationTolerance = opts.durationTolerance ?? Math.max(2.5, golden.duration * 0.08);
+  const expectedDuration = opts.captureSeconds ?? golden.duration;
+  const durationTolerance = opts.durationTolerance ?? (opts.captureSeconds == null
+    ? Math.max(2.5, golden.duration * 0.08)
+    : Math.max(1.5, opts.captureSeconds * 0.25));
   log('golden', 'probed golden MP4', golden);
   let goldenAudio = null;
   if (goldenAudioPath) {
@@ -922,9 +1186,14 @@ async function main() {
   }
 
   const tmpRoot = mkdtempSync(path.join(tmpdir(), 'replay-pipeline-'));
+  if (opts.ffmpegWrapper) {
+    opts.ffmpegWrapperHostPath = writeFFmpegWrapper(tmpRoot, opts.ffmpegWrapper);
+    log('debug', 'using ffmpeg wrapper', { variant: opts.ffmpegWrapper, path: opts.ffmpegWrapperHostPath });
+  }
   let container;
   let apiBase;
   let appProcessId;
+  let pulseSidecar;
   let cdpSession;
   let recordingStarted = false;
 
@@ -945,7 +1214,7 @@ async function main() {
     log('api', 'API and CDP are ready');
 
     log('configure', 'applying display size and kiosk flags', { width: golden.width, height: golden.height });
-    await configureBrowser(apiBase, golden);
+    await configureBrowser(apiBase, golden, opts);
     await waitForHTTP(`${cdpBase}/json/version`, 60_000, 'CDP proxy after configure');
     const framebuffer = await ensureXFramebuffer(apiBase, golden);
     log('configure', 'configure completed', { framebuffer });
@@ -960,22 +1229,42 @@ async function main() {
     log('cdp', 'attaching to browser and waiting for manual replay ready');
     cdpSession = await setupCDP(cdpBase, appURL, golden);
     log('cdp', 'page ready with expected viewport', { ready: cdpSession.ready, viewport: cdpSession.viewport });
+    const audioExpected = Boolean(goldenAudioPath);
+    const audioReady = await waitForAudioReady(cdpSession, { required: audioExpected });
+    log('cdp', 'audio elements are ready before recorder start', audioReady);
+    const audioWarmupMs = opts.audioWarmupMs ?? 0;
+    if (audioWarmupMs > 0) {
+      log('cdp', 'warming browser audio pipeline before recorder start', { delayMs: audioWarmupMs });
+      await sleep(audioWarmupMs);
+    }
 
     log('recording', 'starting server replay recorder');
-    const recordingConfig = await startRecording(apiBase, golden, opts);
+    const recordingConfig = await startRecording(apiBase, expectedDuration, opts);
     recordingStarted = true;
     log('recording', 'recorder started', recordingConfig);
 
+    if (opts.pulseSidecar) {
+      pulseSidecar = await startPulseSidecar(apiBase, expectedDuration);
+      log('pulse', 'started raw Pulse sidecar capture', pulseSidecar);
+    }
+    if (opts.waitFfmpegReady) {
+      log('recording', 'waiting for ffmpeg output initialization before app playback');
+      await waitForDockerLog(container.name, 'Output #0, mp4', 10_000, 'ffmpeg output initialization');
+    }
+
     const startSeen = cdpSession.waitReplayEvent('start', 5_000);
+    const startExpression = opts.captureSeconds == null
+      ? 'window.startRecording() === undefined ? null : undefined'
+      : `(() => { window.startRecording(); setTimeout(() => window.stopRecording?.(), ${Math.round(opts.captureSeconds * 1000)}); return null; })()`;
     await cdpSession.cdp.send('Runtime.evaluate', {
-      expression: 'window.startRecording() === undefined ? null : undefined',
+      expression: startExpression,
       awaitPromise: true,
       returnByValue: true,
     }, cdpSession.sessionId);
     const startMsg = await startSeen;
     log('cdp', 'observed app start event', JSON.parse(startMsg.params.payload));
 
-    const stopTimeoutMs = Math.ceil((golden.duration + 15) * 1000);
+    const stopTimeoutMs = Math.ceil((expectedDuration + 15) * 1000);
     const stopMsg = await cdpSession.waitReplayEvent('stop', stopTimeoutMs);
     log('cdp', 'observed app stop event', JSON.parse(stopMsg.params.payload));
 
@@ -992,15 +1281,28 @@ async function main() {
     const replay = videoInfo(replayPath);
     log('replay', 'probed replay MP4', replay);
 
+    let pulse = null;
+    if (pulseSidecar) {
+      await waitForPulseSidecar(apiBase, pulseSidecar);
+      const rawPath = path.join(outDir, `pulse-sidecar-${stamp}.s16le`);
+      const wavPath = path.join(outDir, `pulse-sidecar-${stamp}.wav`);
+      writeFileSync(rawPath, await readFileViaAPI(apiBase, pulseSidecar.remotePath));
+      rawPulseToWav(rawPath, wavPath, pulseSidecar);
+      pulse = { ...pulseSidecar, rawPath, wavPath, bytes: statSync(rawPath).size };
+      log('pulse', 'saved raw Pulse sidecar capture', pulse);
+    }
+
     assert(replay.width === golden.width, `replay width ${replay.width} != golden width ${golden.width}`);
     assert(replay.height === golden.height, `replay height ${replay.height} != golden height ${golden.height}`);
     assert(replay.sizeBytes > 100_000, `replay file unexpectedly small: ${replay.sizeBytes} bytes`);
 
-    const durationDelta = Math.abs(replay.duration - golden.duration);
-    assert(durationDelta <= durationTolerance, `replay duration ${replay.duration.toFixed(3)}s differs from golden ${golden.duration.toFixed(3)}s by ${durationDelta.toFixed(3)}s (tolerance ${durationTolerance.toFixed(3)}s)`);
+    const durationDelta = Math.abs(replay.duration - expectedDuration);
+    assert(durationDelta <= durationTolerance, `replay duration ${replay.duration.toFixed(3)}s differs from expected ${expectedDuration.toFixed(3)}s by ${durationDelta.toFixed(3)}s (tolerance ${durationTolerance.toFixed(3)}s)`);
 
     let visual = null;
-    if (!opts.skipVisualCompare) {
+    if (opts.captureSeconds != null && !opts.skipVisualCompare) {
+      log('compare', 'skipping visual SSIM in short capture mode; use full-duration mode for visual comparison');
+    } else if (!opts.skipVisualCompare) {
       try {
         visual = computeSampleSSIM(goldenPath, replayPath, golden, replay);
         if (visual) {
@@ -1022,6 +1324,10 @@ async function main() {
       audio = compareAudio(goldenAudioPath, replayPath, opts);
       assert(audio, 'audio comparison unavailable; ffmpeg is required when an audio reference is present');
       log('compare', 'audio envelope correlation', audio);
+      if (pulse?.wavPath) {
+        pulse.audio = compareAudio(goldenAudioPath, pulse.wavPath, { ...opts, allowAudioFail: true });
+        log('compare', 'raw Pulse sidecar audio correlation', pulse.audio);
+      }
     }
 
     const report = {
@@ -1030,6 +1336,7 @@ async function main() {
       golden,
       goldenAudio,
       replay,
+      expectedDuration,
       durationDelta,
       durationTolerance,
       viewport: cdpSession.viewport,
@@ -1037,6 +1344,7 @@ async function main() {
       replayEvents: cdpSession.replayEvents,
       visual,
       audio,
+      pulse,
       replayPath,
     };
     const reportPath = path.join(outDir, `report-${stamp}.json`);
@@ -1051,6 +1359,7 @@ async function main() {
     throw err;
   } finally {
     if (recordingStarted && apiBase) await forceStopRecording(apiBase);
+    if (pulseSidecar?.processId && apiBase) await killProcess(apiBase, pulseSidecar.processId);
     if (appProcessId && apiBase) await killProcess(apiBase, appProcessId);
     if (cdpSession) cdpSession.cdp.close();
     rmSync(tmpRoot, { recursive: true, force: true });
