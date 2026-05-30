@@ -3,11 +3,14 @@ package api
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"strings"
 	"testing"
 
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -116,6 +119,24 @@ func TestChromiumParseDisplayPartsValidation(t *testing.T) {
 	empty := `{}`
 	_, msg = chromiumParseDisplayParts(&empty)
 	require.Equal(t, "display payload empty", msg)
+}
+
+func TestChromiumDisplayConfigureFailureResponse(t *testing.T) {
+	clientErr := fmt.Errorf("failed to change screen configuration: %w", &nekoclient.StatusError{
+		StatusCode: 422,
+		Body:       `{"code":422,"message":"cannot set screen size"}`,
+	})
+	resp := chromiumDisplayConfigureFailureResponse(clientErr)
+
+	badReq, ok := resp.(oapi.ChromiumConfigure400JSONResponse)
+	require.True(t, ok)
+	require.Contains(t, badReq.Message, "display:")
+	require.Contains(t, badReq.Message, "cannot set screen size")
+
+	serverErr := errors.New("xrandr failed")
+	resp = chromiumDisplayConfigureFailureResponse(serverErr)
+	_, ok = resp.(oapi.ChromiumConfigure500JSONResponse)
+	require.True(t, ok)
 }
 
 func TestChromiumCfgParseMultipart(t *testing.T) {

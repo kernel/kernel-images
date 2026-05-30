@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
@@ -162,7 +164,12 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 	}
 
 	if err != nil {
-		log.Error("failed to change resolution", "error", err)
+		s.logDisplayConfigureFailure(ctx, "failed to change resolution", width, height, refreshRate, displayMode, err)
+		if msg, ok := displayClientErrorMessage(err); ok {
+			return oapi.PatchDisplay400JSONResponse{
+				BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: msg},
+			}, nil
+		}
 		return oapi.PatchDisplay500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
 				Message: fmt.Sprintf("failed to change resolution: %s", err.Error()),
@@ -712,4 +719,49 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 
 	log.Info("successfully changed resolution via Neko API", "width", width, "height", height, "refresh_rate", refreshRate)
 	return nil
+}
+
+func displayClientErrorMessage(err error) (string, bool) {
+	var statusErr *nekoclient.StatusError
+	if errors.As(err, &statusErr) && statusErr.IsClientError() {
+		return err.Error(), true
+	}
+	return "", false
+}
+
+func (s *ApiService) logDisplayConfigureFailure(ctx context.Context, msg string, width, height, refreshRate int, displayMode string, err error) {
+	attrs := []any{
+		"error", err,
+		"requested_width", width,
+		"requested_height", height,
+		"requested_refresh_rate", refreshRate,
+		"display_mode", displayMode,
+		"neko_enabled", s.isNekoEnabled(),
+	}
+	attrs = append(attrs, runtimeMetadataAttrs()...)
+	logger.FromContext(ctx).Error(msg, attrs...)
+}
+
+func runtimeMetadataAttrs() []any {
+	attrs := make([]any, 0, 16)
+	if hostname, err := os.Hostname(); err == nil && strings.TrimSpace(hostname) != "" {
+		attrs = append(attrs, "hostname", hostname)
+	}
+	for _, env := range []struct {
+		attr string
+		key  string
+	}{
+		{"instance_name", "INST_NAME"},
+		{"metro", "METRO_NAME"},
+		{"image", "IMAGE"},
+		{"image_name", "KERNEL_IMAGE"},
+		{"image_tag", "KERNEL_IMAGE_TAG"},
+		{"image_sha", "KERNEL_IMAGE_SHA"},
+		{"s2_stream", "S2_STREAM"},
+	} {
+		if value := strings.TrimSpace(os.Getenv(env.key)); value != "" {
+			attrs = append(attrs, env.attr, value)
+		}
+	}
+	return attrs
 }

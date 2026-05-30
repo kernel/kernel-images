@@ -695,9 +695,17 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *
 		err = s.setResolutionXorgViaXrandr(ctx, w, h, rr, false)
 	}
 	if err != nil {
-		return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
+		s.logDisplayConfigureFailure(ctx, "chromium configure display step failed", w, h, rr, mode, err)
+		return chromiumDisplayConfigureFailureResponse(err)
 	}
 	return nil
+}
+
+func chromiumDisplayConfigureFailureResponse(err error) oapi.ChromiumConfigureResponseObject {
+	if msg, ok := displayClientErrorMessage(err); ok {
+		return cfg400(fmt.Sprintf("%s: %s", chromiumConfigureStepDisplay, msg))
+	}
+	return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 }
 
 func chromiumRunPatchDisplay(ctx context.Context, s *ApiService, body *oapi.PatchDisplayJSONRequestBody) oapi.ChromiumConfigureResponseObject {

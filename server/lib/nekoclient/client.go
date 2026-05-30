@@ -19,6 +19,19 @@ type AuthClient struct {
 	password string
 }
 
+type StatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("screen configuration API returned status %d: %s", e.StatusCode, e.Body)
+}
+
+func (e *StatusError) IsClientError() bool {
+	return e.StatusCode >= http.StatusBadRequest && e.StatusCode < http.StatusInternalServerError
+}
+
 // NewAuthClient creates a new authenticated Neko client.
 func NewAuthClient(baseURL, username, password string) (*AuthClient, error) {
 	client, err := nekooapi.NewClientWithResponses(baseURL)
@@ -154,7 +167,7 @@ func (c *AuthClient) ScreenConfigurationChange(ctx context.Context, config nekoo
 	}
 
 	if resp.StatusCode() != http.StatusOK && resp.StatusCode() != http.StatusNoContent {
-		return fmt.Errorf("screen configuration API returned status %d: %s", resp.StatusCode(), string(resp.Body))
+		return &StatusError{StatusCode: resp.StatusCode(), Body: string(resp.Body)}
 	}
 
 	return nil
