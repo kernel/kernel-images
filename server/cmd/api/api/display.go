@@ -253,15 +253,17 @@ func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, heig
 		output = "DUMMY0"
 	}
 
-	// Build xrandr command - if refresh rate is specified, use the specific modeline
-	var xrandrCmd string
-	if refreshRate > 0 {
-		modeName := fmt.Sprintf("%dx%d_%d.00", width, height, refreshRate)
-		xrandrCmd = fmt.Sprintf("xrandr --output %s --mode %s", output, modeName)
-		log.Info("using specific modeline", "output", output, "mode", modeName)
-	} else {
-		xrandrCmd = fmt.Sprintf("xrandr --output %s --size %dx%d", output, width, height)
+	// Per-output resizing requires --mode <name>; --size is a legacy global
+	// screen option that cannot be combined with --output. Always go through
+	// a named modeline. The schema enum prevents callers from sending zero,
+	// and getCurrentResolution falls back to 60 when xrandr is silent
+	// (Xvfb), but normalize defensively in case either guarantee changes.
+	if refreshRate <= 0 {
+		refreshRate = 60
 	}
+	modeName := fmt.Sprintf("%dx%d_%d.00", width, height, refreshRate)
+	xrandrCmd := fmt.Sprintf("xrandr --output %s --mode %s", output, modeName)
+	log.Info("using specific modeline", "output", output, "mode", modeName)
 
 	args := []string{"-lc", xrandrCmd}
 	env := map[string]string{"DISPLAY": display}
