@@ -39,14 +39,18 @@ exec runuser -u kernel -- env \
   # zero audioinput devices and antibot scripts could flag the missing mic.
   # module-null-source rejects source_properties in this PulseAudio version, so
   # it keeps the default description.
+  # Modules load in order, and the unix socket only starts accepting connections
+  # once its module loads. Load the sink and source first so that by the time the
+  # socket exists (which is all the container wrapper waits for before starting
+  # chromium), KernelOutput is already registered and ready to route playback.
   pulseaudio \
     -n \
     --daemonize=no \
     --log-target=stderr \
     --exit-idle-time=-1 \
-    --load="module-native-protocol-unix socket=$PULSE_SOCKET auth-anonymous=1" \
     --load="module-null-sink sink_name=$KERNEL_SINK rate=48000 channels=2 sink_properties=device.description=$KERNEL_SINK" \
-    --load="module-null-source source_name=$KERNEL_SOURCE format=s16le rate=48000 channels=2" &
+    --load="module-null-source source_name=$KERNEL_SOURCE format=s16le rate=48000 channels=2" \
+    --load="module-native-protocol-unix socket=$PULSE_SOCKET auth-anonymous=1" &
 
   pulse_pid=$!
   keepalive_pid=""
@@ -67,10 +71,17 @@ exec runuser -u kernel -- env \
     sleep 0.1
   done
 
+  # Keep a silent stream open on the sink so its monitor always produces data for
+  # the recorder. Self-heal if pacat dies: a keepalive hiccup should not tear down
+  # the whole audio stack, so restart it as long as the daemon is alive and only
+  # let the script exit when pulseaudio itself does.
   (
-    pacat --raw --rate=48000 --channels=2 --format=s16le --device="$KERNEL_SINK" /dev/zero
+    while kill -0 "$pulse_pid" 2>/dev/null; do
+      pacat --raw --rate=48000 --channels=2 --format=s16le --device="$KERNEL_SINK" /dev/zero || true
+      sleep 0.5
+    done
   ) &
   keepalive_pid=$!
 
-  wait -n "$pulse_pid" "$keepalive_pid"
+  wait "$pulse_pid"
   '

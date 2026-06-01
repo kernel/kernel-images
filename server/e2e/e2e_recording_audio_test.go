@@ -152,7 +152,10 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
-	maxDuration := 35
+	// Safety backstop only: each caller stops the recording explicitly once its
+	// Playwright script finishes. Keep this above the longest script (the Zombocom
+	// capture can run ~50s) so the cap never truncates the intended recording.
+	maxDuration := 120
 	maxFileSize := 100
 	startResp, err := client.StartRecordingWithResponse(ctx, instanceoapi.StartRecordingJSONRequestBody{
 		MaxDurationInSeconds: &maxDuration,
