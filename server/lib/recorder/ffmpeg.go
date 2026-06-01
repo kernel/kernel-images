@@ -89,11 +89,11 @@ func (p FFmpegRecordingParams) Validate() error {
 	if p.MaxDurationInSeconds != nil && *p.MaxDurationInSeconds <= 0 {
 		return fmt.Errorf("max duration must be greater than 0 seconds")
 	}
-	if p.recordAudio() && strings.TrimSpace(p.audioSource()) == "" {
-		return fmt.Errorf("audio source is required when recording audio")
-	}
-	if p.recordAudio() && strings.TrimSpace(p.pulseServer()) == "" {
-		return fmt.Errorf("pulse server is required when recording audio")
+	// Audio capture needs both the pulse source to read and the daemon socket to
+	// reach it. Both set means record audio; neither means video-only. Exactly one
+	// is a misconfiguration that would otherwise silently drop audio.
+	if (strings.TrimSpace(p.audioSource()) == "") != (strings.TrimSpace(p.pulseServer()) == "") {
+		return fmt.Errorf("audio recording requires both audio source and pulse server to be set, or neither")
 	}
 
 	return nil
@@ -519,12 +519,12 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 	// Input options first
 	switch runtime.GOOS {
 	case "darwin":
+		// AVFoundation captures video and audio through a single combined input
+		// spec ("<video>:<audio>"), so the audio device is folded in here rather
+		// than added as a separate input.
 		audioDevice := "none"
 		if recordAudio {
 			audioDevice = params.audioSource()
-			if strings.TrimSpace(audioDevice) == "" {
-				return nil, fmt.Errorf("audio source is required when recording audio")
-			}
 		}
 		args = []string{
 			// Input options for AVFoundation
@@ -544,27 +544,15 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 			"-i", fmt.Sprintf(":%d", *params.DisplayNum), // X11 display
 		}
 		if recordAudio {
-			audioSource := params.audioSource()
-			if strings.TrimSpace(audioSource) == "" {
-				return nil, fmt.Errorf("audio source is required when recording audio")
-			}
-			args = append(args,
-				"-thread_queue_size", "512",
-				"-f", "pulse",
-				"-i", audioSource,
-			)
+			args = append(args, audioInputArgs(params)...)
 		}
 	default:
 		return nil, fmt.Errorf("unsupported platform: %s", runtime.GOOS)
 	}
 
-	// Output options next
+	// Output options next: stream mapping and audio codec when recording audio.
 	if recordAudio {
-		audioMap := "1:a:0"
-		if runtime.GOOS == "darwin" {
-			audioMap = "0:a:0"
-		}
-		args = append(args, "-map", "0:v:0", "-map", audioMap)
+		args = append(args, audioOutputArgs()...)
 	}
 	args = append(args, []string{
 		// yuv420p requires even width and height; pad odd source dimensions by one pixel
@@ -578,15 +566,6 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 		"-profile:v", "high", // Explicit web-compatible profile
 		"-pix_fmt", "yuv420p", // Web-standard pixel format
 	}...)
-
-	if recordAudio {
-		args = append(args, []string{
-			"-c:a", "aac",
-			"-b:a", "128k",
-			"-ar", "48000",
-			"-ac", "2",
-		}...)
-	}
 
 	args = append(args, []string{
 		// Timestamp handling for reliable playback
@@ -609,6 +588,34 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 	args = append(args, outputPath)
 
 	return args, nil
+}
+
+// audioInputArgs returns the ffmpeg input arguments for capturing audio. It is
+// only used on Linux, where audio is a separate PulseAudio input; on darwin the
+// audio device is folded into the avfoundation video input instead.
+func audioInputArgs(params FFmpegRecordingParams) []string {
+	return []string{
+		"-thread_queue_size", "512",
+		"-f", "pulse",
+		"-i", params.audioSource(),
+	}
+}
+
+// audioOutputArgs returns the stream-mapping and audio-codec arguments. The
+// audio stream index differs by platform: darwin folds audio into input 0, while
+// Linux adds it as a second input (index 1).
+func audioOutputArgs() []string {
+	audioMap := "1:a:0"
+	if runtime.GOOS == "darwin" {
+		audioMap = "0:a:0"
+	}
+	return []string{
+		"-map", "0:v:0", "-map", audioMap,
+		"-c:a", "aac",
+		"-b:a", "128k",
+		"-ar", "48000",
+		"-ac", "2",
+	}
 }
 
 // waitForCommand should be run in the background to wait for the ffmpeg process to complete and

@@ -86,6 +86,36 @@ func TestFFmpegArgs_PadsOddDimensions(t *testing.T) {
 	assert.Equal(t, "pad=ceil(iw/2)*2:ceil(ih/2)*2", vf)
 }
 
+func TestFFmpegRecordingParams_ValidateAudioConfig(t *testing.T) {
+	base := func() FFmpegRecordingParams {
+		fr, disp, size := 5, 0, 1
+		dir := t.TempDir()
+		return FFmpegRecordingParams{FrameRate: &fr, DisplayNum: &disp, MaxSizeInMB: &size, OutputDir: &dir}
+	}
+	src := "KernelOutput.monitor"
+	server := "unix:/tmp/pulse/native"
+
+	t.Run("neither set is video-only", func(t *testing.T) {
+		require.NoError(t, base().Validate())
+	})
+	t.Run("both set records audio", func(t *testing.T) {
+		p := base()
+		p.AudioSource = &src
+		p.PulseServer = &server
+		require.NoError(t, p.Validate())
+	})
+	t.Run("only audio source is a misconfig", func(t *testing.T) {
+		p := base()
+		p.AudioSource = &src
+		require.Error(t, p.Validate())
+	})
+	t.Run("only pulse server is a misconfig", func(t *testing.T) {
+		p := base()
+		p.PulseServer = &server
+		require.Error(t, p.Validate())
+	})
+}
+
 func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	tempDir := t.TempDir()
 	params := defaultParams(tempDir)

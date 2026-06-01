@@ -18,9 +18,11 @@ type Config struct {
 	DisplayNum  int    `envconfig:"DISPLAY_NUM" default:"1"`
 	MaxSizeInMB int    `envconfig:"MAX_SIZE_MB" default:"500"`
 	OutputDir   string `envconfig:"OUTPUT_DIR" default:"."`
-	// AudioSource and PulseServer must match the topology defined in
-	// shared/start-pulseaudio.sh (the authority for the sink/source/socket).
-	AudioSource string `envconfig:"AUDIO_SOURCE" default:"KernelOutput.monitor"`
+	// AudioSource and PulseServer default to empty, i.e. video-only. Setting both
+	// enables audio capture; their values must match the topology defined in
+	// shared/start-pulseaudio.sh (the authority for the sink/source/socket). The
+	// image's supervisor conf sets both.
+	AudioSource string `envconfig:"AUDIO_SOURCE" default:""`
 	PulseServer string `envconfig:"PULSE_SERVER" default:""`
 
 	// Absolute or relative path to the ffmpeg binary. If empty the code falls back to "ffmpeg" on $PATH.
