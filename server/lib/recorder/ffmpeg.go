@@ -36,6 +36,11 @@ const (
 // currently being finalized (remuxed to add duration metadata).
 var ErrRecordingFinalizing = errors.New("recording is being finalized")
 
+// ErrInvalidParams indicates the requested recording parameters are invalid for
+// this server (e.g. audio requested without a configured source/socket). Callers
+// can use errors.Is to surface a client-facing error instead of a 500.
+var ErrInvalidParams = errors.New("invalid recording parameters")
+
 // FFmpegRecorder encapsulates an FFmpeg recording session with platform-specific screen capture.
 // It manages the lifecycle of a single FFmpeg process and provides thread-safe operations.
 type FFmpegRecorder struct {
@@ -132,7 +137,7 @@ func NewFFmpegRecorderFactory(pathToFFmpeg string, config FFmpegRecordingParams,
 	return func(id string, overrides FFmpegRecordingParams) (Recorder, error) {
 		mergedParams := mergeFFmpegRecordingParams(config, overrides)
 		if err := mergedParams.Validate(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", ErrInvalidParams, err)
 		}
 		return &FFmpegRecorder{
 			id:         id,

@@ -17,6 +17,11 @@ chown -R kernel:kernel /tmp/pulse /tmp/runtime-kernel /home/kernel/.config/pulse
 chmod 1777 /tmp/pulse
 chmod 700 /tmp/runtime-kernel
 
+# Remove any stale socket from a previous unclean exit (autorestart=true). Otherwise
+# module-native-protocol-unix may fail to bind, and the container wrapper's socket
+# wait could pass on the dead socket and start chromium before the daemon is back.
+rm -f "$PULSE_SOCKET"
+
 # Constants are passed into the inner (single-quoted) script via env so the
 # topology is defined once at the top of this file.
 exec runuser -u kernel -- env \

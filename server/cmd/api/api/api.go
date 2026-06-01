@@ -162,6 +162,10 @@ func (s *ApiService) StartRecording(ctx context.Context, req oapi.StartRecording
 	// Create, register, and start a new recorder
 	rec, err := s.factory(recorderID, params)
 	if err != nil {
+		if errors.Is(err, recorder.ErrInvalidParams) {
+			log.Warn("invalid recording parameters", "err", err, "recorder_id", recorderID)
+			return oapi.StartRecording400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+		}
 		log.Error("failed to create recorder", "err", err, "recorder_id", recorderID)
 		return oapi.StartRecording500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to create recording"}}, nil
 	}
