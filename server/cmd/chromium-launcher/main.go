@@ -101,11 +101,15 @@ func main() {
 
 	runAsRoot := strings.EqualFold(strings.TrimSpace(os.Getenv("RUN_AS_ROOT")), "true")
 
-	// Prepare environment
+	// Prepare environment. PULSE_SERVER/PULSE_SINK route chromium's audio into the
+	// recorder's sink; the root path below relies on this inherited env, while the
+	// non-root path re-asserts them in its runuser env allowlist.
 	env := os.Environ()
 	env = append(env,
 		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
+		"PULSE_SERVER="+pulseServer,
+		"PULSE_SINK="+pulseSink,
 	)
 
 	if runAsRoot {
