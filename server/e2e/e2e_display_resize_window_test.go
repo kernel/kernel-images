@@ -341,6 +341,25 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			down:                 [2]int{1280, 720},
 			requireBaselineState: "fullscreen",
 		},
+		{
+			// Non-Neko Xorg path: ENABLE_WEBRTC is unset, so the server
+			// falls through to setResolutionXorgViaXrandr instead of
+			// nekoAuthClient.ScreenConfigurationChange. Exercises the
+			// `xrandr --output DUMMY0 --mode WxH_RR.00` path. Mode targets
+			// must be ones xrandr has actually attached to DUMMY0 at the
+			// requested refresh rate (`xrandr -q` on this image shows
+			// 1920x1080_60.00 and 1280x720_60.00 but NOT 2560x1440_60.00).
+			name:  "headful_xorg_no_neko",
+			image: headfulImage,
+			extraEnv: map[string]string{
+				"CHROMIUM_FLAGS": "--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*",
+			},
+			predicate:            makeHeadfulMaximizedPredicate(20),
+			assertXRoot:          true,
+			up:                   [2]int{1920, 1080},
+			down:                 [2]int{1280, 720},
+			requireBaselineState: "maximized",
+		},
 	}
 
 	// Subtests run serially: two of the three boot the heavy headful image

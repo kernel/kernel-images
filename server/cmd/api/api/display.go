@@ -138,7 +138,7 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		// old size while the X root is at the new size, and the caller
 		// would have no signal of the mismatch.
 		if err == nil {
-			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
+			if cdpErr := s.setWindowMaximizedViaCDP(ctx, width, height); cdpErr != nil {
 				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
 				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
 			}
@@ -395,17 +395,21 @@ func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int
 }
 
 // setWindowMaximizedViaCDP re-asserts that the chromium OS window is in
-// the "maximized" state via Browser.setWindowBounds. After a successful
-// xrandr/Neko resize on the headful path, mutter will reflow a maximized
-// window to fill the new X root — so this call is the entirety of what
-// the server needs to do post-resize. It replaces the previous approach
-// of restarting chromium so it could re-apply --start-maximized, which
-// cost a multi-second restart and also reset other browser-side state
-// (notably Emulation.* overrides).
+// the "maximized" state via Browser.setWindowBounds, then waits until the
+// window manager has actually reflowed the window onto the new X root.
+// After a successful xrandr/Neko resize, mutter reflows a maximized
+// (or fullscreen) window to fill the new root automatically — but that
+// reflow is asynchronous to the CDP setWindowBounds acknowledgement, so
+// the handler polls Browser.getWindowForTarget until the live bounds
+// match the requested width/height before returning.
 //
-// The call is idempotent and cheap: when the window is already maximized
-// the helper returns immediately without sending any CDP commands.
-func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
+// This makes PATCH /display a synchronous contract: the API returns only
+// once the window is at the new size, not just once the resize has been
+// initiated. The previous approach of restarting chromium so it could
+// re-apply --start-maximized had the same effective contract (the restart
+// blocked the response) but cost ~9s per resize and wiped browser-side
+// state (Emulation.* overrides, devtools sessions).
+func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context, width, height int) error {
 	log := logger.FromContext(ctx)
 
 	upstreamURL := s.upstreamMgr.Current()
@@ -426,8 +430,43 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 		return fmt.Errorf("CDP setWindowBoundsMaximized: %w", err)
 	}
 
-	log.Info("re-asserted maximized window state via CDP")
+	if err := waitForWindowSize(cdpCtx, client, width, height, 3*time.Second); err != nil {
+		return fmt.Errorf("window did not reach %dx%d after CDP maximize: %w", width, height, err)
+	}
+
+	log.Info("re-asserted maximized window state via CDP", "width", width, "height", height)
 	return nil
+}
+
+// waitForWindowSize polls Browser.getWindowForTarget until the live OS
+// window's width/height match the requested size, or the deadline expires.
+// Typical convergence on docker+mutter is 20–50ms; pick a deadline that
+// comfortably covers WM scheduling jitter without masking real bugs.
+func waitForWindowSize(ctx context.Context, client *cdpclient.Client, width, height int, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	var last cdpclient.WindowBounds
+	var lastErr error
+	for {
+		b, err := client.GetWindowBounds(ctx)
+		lastErr = err
+		if err == nil {
+			last = b
+			if b.Width == width && b.Height == height {
+				return nil
+			}
+		}
+		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return fmt.Errorf("last getWindowBounds error: %w", lastErr)
+			}
+			return fmt.Errorf("window is %dx%d state=%q", last.Width, last.Height, last.WindowState)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP

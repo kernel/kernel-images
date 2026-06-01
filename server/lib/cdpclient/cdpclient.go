@@ -283,6 +283,68 @@ func (c *Client) SetWindowBoundsMaximized(ctx context.Context) error {
 	return nil
 }
 
+// WindowBounds is the subset of Browser.getWindowBounds CDP returns that
+// callers care about. For maximized/fullscreen windows the width/height
+// fields reflect the live window size (which the WM aligns with the X
+// root); for normal-state windows they reflect the saved-restore bounds.
+type WindowBounds struct {
+	WindowID    int
+	Width       int
+	Height      int
+	WindowState string
+}
+
+// GetWindowBounds queries the OS window bounds for the first page target
+// via Browser.getWindowForTarget. It's a one-shot read; callers that need
+// to wait for the WM to settle should poll this.
+func (c *Client) GetWindowBounds(ctx context.Context) (WindowBounds, error) {
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return WindowBounds{}, fmt.Errorf("Target.getTargets: %w", err)
+	}
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return WindowBounds{}, fmt.Errorf("unmarshal targets: %w", err)
+	}
+	var pageTargetID string
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			pageTargetID = t.TargetID
+			break
+		}
+	}
+	if pageTargetID == "" {
+		return WindowBounds{}, fmt.Errorf("no page target found")
+	}
+
+	winRaw, err := c.send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": pageTargetID}, "")
+	if err != nil {
+		return WindowBounds{}, fmt.Errorf("Browser.getWindowForTarget: %w", err)
+	}
+	var winResp struct {
+		WindowID int `json:"windowId"`
+		Bounds   struct {
+			Width       int    `json:"width"`
+			Height      int    `json:"height"`
+			WindowState string `json:"windowState"`
+		} `json:"bounds"`
+	}
+	if err := json.Unmarshal(winRaw, &winResp); err != nil {
+		return WindowBounds{}, fmt.Errorf("unmarshal window: %w", err)
+	}
+	return WindowBounds{
+		WindowID:    winResp.WindowID,
+		Width:       winResp.Bounds.Width,
+		Height:      winResp.Bounds.Height,
+		WindowState: winResp.Bounds.WindowState,
+	}, nil
+}
+
 // SetDeviceMetricsOverride sets the viewport dimensions on the first page
 // target found in the browser. It attaches to the target with a flattened
 // session, sends Emulation.setDeviceMetricsOverride, then detaches.
