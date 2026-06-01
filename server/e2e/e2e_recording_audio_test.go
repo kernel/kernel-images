@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,6 +45,14 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+
+	// Verify the browser sees a real sound card over pure CDP/websocket. Chromium
+	// excludes PulseAudio monitor sources from enumerateDevices(), so the
+	// recorder's capture sink alone is invisible as an input. The standalone
+	// null-source (KernelInput) is what makes a non-monitor microphone show up,
+	// which antibot fingerprinting checks for.
+	assertBrowserSeesAudioDevices(t, ctx, c)
 
 	playwrightCode := fmt.Sprintf(`
 		await page.goto(%q, { waitUntil: 'load' });
@@ -193,6 +202,141 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 	require.Greater(t, mp4AudioPeakLevel(t, downloadResp.Body), minPeakLevel, "downloaded recording audio track is silent")
 	formatDuration, audioDuration := mp4Durations(t, downloadResp.Body)
 	require.GreaterOrEqual(t, audioDuration, formatDuration-2, "downloaded recording audio track ends before the recording does")
+}
+
+type mediaDeviceInfo struct {
+	Kind     string `json:"kind"`
+	Label    string `json:"label"`
+	DeviceID string `json:"deviceId"`
+}
+
+// assertBrowserSeesAudioDevices connects to the browser over a raw CDP websocket
+// and asserts navigator.mediaDevices.enumerateDevices() reports both an audio
+// output and a non-monitor audio input. Chromium drops monitor sources from the
+// input list, so a passing audioinput assertion confirms the KernelInput
+// null-source (not just the KernelOutput sink monitor) is present.
+func assertBrowserSeesAudioDevices(t *testing.T, ctx context.Context, c *TestContainer) {
+	t.Helper()
+
+	devices, err := enumerateMediaDevicesViaCDP(ctx, c.CDPURL())
+	require.NoError(t, err, "failed to enumerate media devices via CDP")
+	t.Logf("enumerateDevices reported %d devices: %+v", len(devices), devices)
+
+	audioInputs := make([]mediaDeviceInfo, 0)
+	audioOutputs := make([]mediaDeviceInfo, 0)
+	for _, d := range devices {
+		switch d.Kind {
+		case "audioinput":
+			audioInputs = append(audioInputs, d)
+		case "audiooutput":
+			audioOutputs = append(audioOutputs, d)
+		}
+	}
+
+	require.NotEmpty(t, audioInputs, "expected at least one audioinput device; Chromium filters monitor sources, so the KernelInput null-source must exist")
+	require.NotEmpty(t, audioOutputs, "expected at least one audiooutput device (KernelOutput)")
+
+	// When permissions reveal labels, confirm the input is our dedicated null
+	// source rather than a leaked monitor.
+	for _, d := range audioInputs {
+		if strings.Contains(d.Label, "KernelInput") {
+			return
+		}
+	}
+	for _, d := range audioInputs {
+		if d.Label != "" {
+			t.Fatalf("expected a KernelInput audioinput device, got labeled inputs: %+v", audioInputs)
+		}
+	}
+}
+
+// enumerateMediaDevicesViaCDP opens a CDP target over the websocket proxy and
+// evaluates navigator.mediaDevices.enumerateDevices() inside the page.
+func enumerateMediaDevicesViaCDP(ctx context.Context, wsURL string) ([]mediaDeviceInfo, error) {
+	client, err := newCDPClient(ctx, wsURL)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+
+	// Grant mic/camera access at the browser level so device labels are exposed.
+	if _, err := client.Call(ctx, "Browser.grantPermissions", map[string]any{
+		"permissions": []string{"audioCapture", "videoCapture"},
+	}, ""); err != nil {
+		return nil, fmt.Errorf("Browser.grantPermissions: %w", err)
+	}
+
+	targetRaw, err := client.Call(ctx, "Target.createTarget", map[string]any{"url": "about:blank"}, "")
+	if err != nil {
+		return nil, fmt.Errorf("Target.createTarget: %w", err)
+	}
+	targetID, err := decodeJSONStringField(targetRaw, "targetId")
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_, _ = client.Call(ctx, "Target.closeTarget", map[string]any{"targetId": targetID}, "")
+	}()
+
+	attachRaw, err := client.Call(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": targetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return nil, fmt.Errorf("Target.attachToTarget: %w", err)
+	}
+	sessionID, err := decodeJSONStringField(attachRaw, "sessionId")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := client.Call(ctx, "Runtime.enable", map[string]any{}, sessionID); err != nil {
+		return nil, fmt.Errorf("Runtime.enable: %w", err)
+	}
+
+	const expression = `(async () => {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    return JSON.stringify({ error: 'mediaDevices unavailable', secureContext: window.isSecureContext });
+  }
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  return JSON.stringify({ devices: devices.map((d) => ({ kind: d.kind, label: d.label, deviceId: d.deviceId })) });
+})()`
+
+	evalRaw, err := client.Call(ctx, "Runtime.evaluate", map[string]any{
+		"expression":    expression,
+		"returnByValue": true,
+		"awaitPromise":  true,
+	}, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("Runtime.evaluate: %w", err)
+	}
+
+	var evalEnvelope struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+		ExceptionDetails json.RawMessage `json:"exceptionDetails"`
+	}
+	if err := json.Unmarshal(evalRaw, &evalEnvelope); err != nil {
+		return nil, fmt.Errorf("decode Runtime.evaluate result: %w", err)
+	}
+	if len(evalEnvelope.ExceptionDetails) > 0 {
+		return nil, fmt.Errorf("enumerateDevices raised an exception: %s", string(evalEnvelope.ExceptionDetails))
+	}
+
+	var payload struct {
+		Error         string            `json:"error"`
+		SecureContext bool              `json:"secureContext"`
+		Devices       []mediaDeviceInfo `json:"devices"`
+	}
+	if err := json.Unmarshal([]byte(evalEnvelope.Result.Value), &payload); err != nil {
+		return nil, fmt.Errorf("decode enumerateDevices payload %q: %w", evalEnvelope.Result.Value, err)
+	}
+	if payload.Error != "" {
+		return nil, fmt.Errorf("enumerateDevices failed: %s (secureContext=%t)", payload.Error, payload.SecureContext)
+	}
+
+	return payload.Devices, nil
 }
 
 type audioTestSite struct {
