@@ -3,12 +3,10 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,15 +24,11 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 		t.Skipf("docker not available: %v", err)
 	}
 
-	audioSite := newAudioTestSite(t)
-	defer audioSite.Close()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
 	c := NewTestContainer(t, headfulImage)
 	require.NoError(t, c.Start(ctx, ContainerConfig{
-		HostAccess: true,
 		Env: map[string]string{
 			"WIDTH":        "1280",
 			"HEIGHT":       "720",
@@ -53,13 +47,18 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 	// which antibot fingerprinting checks for.
 	assertBrowserSeesAudioDevices(t, ctx, c)
 
+	// Serve the tone fixture from inside the container as a file:// page. This
+	// keeps the test self-contained instead of relying on host.docker.internal,
+	// which is not routable in every sandbox.
+	fixtureURL := writeContainerAudioFixture(t, ctx, c)
+
 	playwrightCode := fmt.Sprintf(`
 		await page.goto(%q, { waitUntil: 'load' });
 		await page.click('#start');
 		await page.waitForFunction(() => window.audioStarted === true);
 		await page.waitForTimeout(8000);
 		return await page.title();
-	`, audioSite.ContainerURL())
+	`, fixtureURL)
 
 	recordReplayAudio(t, ctx, c, playwrightCode, os.Getenv("RECORDING_AUDIO_OUTPUT_PATH"), 0.1)
 }
@@ -354,19 +353,7 @@ func enumerateMediaDevicesViaCDP(ctx context.Context, wsURL, pageURL string) ([]
 	return payload.Devices, nil
 }
 
-type audioTestSite struct {
-	*httptest.Server
-}
-
-func newAudioTestSite(t *testing.T) *audioTestSite {
-	t.Helper()
-
-	ln, err := net.Listen("tcp4", "0.0.0.0:0")
-	require.NoError(t, err, "failed to listen for audio test site")
-
-	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html>
+const audioFixtureHTML = `<!doctype html>
 <html>
 <head><title>audio replay fixture</title></head>
 <body>
@@ -386,21 +373,20 @@ document.getElementById('start').addEventListener('click', async () => {
 });
 </script>
 </body>
-</html>`))
-	}))
-	srv.Listener = ln
-	srv.Start()
+</html>`
 
-	return &audioTestSite{Server: srv}
-}
+// writeContainerAudioFixture writes the tone-playing HTML fixture into the
+// container and returns a file:// URL for it. A file:// page is a secure
+// context (AudioContext works) and avoids depending on host networking.
+func writeContainerAudioFixture(t *testing.T, ctx context.Context, c *TestContainer) string {
+	t.Helper()
 
-func (s *audioTestSite) ContainerURL() string {
-	u, err := url.Parse(s.URL)
-	if err != nil {
-		panic(err)
-	}
-	u.Host = net.JoinHostPort("host.docker.internal", u.Port())
-	return u.String()
+	const fixturePath = "/tmp/audio-fixture.html"
+	enc := base64.StdEncoding.EncodeToString([]byte(audioFixtureHTML))
+	exitCode, out, err := c.Exec(ctx, []string{"sh", "-lc", fmt.Sprintf("echo %s | base64 -d > %s", enc, fixturePath)})
+	require.NoError(t, err, "failed to write audio fixture")
+	require.Zero(t, exitCode, "failed to write audio fixture: %s", out)
+	return "file://" + fixturePath
 }
 
 func mp4HasAudioTrack(data []byte) bool {
