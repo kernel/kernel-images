@@ -17,13 +17,19 @@ exec runuser -u kernel -- env \
   bash -lc '
   set -o errexit -o nounset -o pipefail
 
+  # KernelOutput is the playback sink the recorder captures from (via its
+  # .monitor source). KernelInput is a standalone null-source so the browser
+  # sees a real, non-monitor microphone: Chromium excludes monitor sources from
+  # navigator.mediaDevices.enumerateDevices(), so without this there would be
+  # zero audioinput devices and antibot scripts could flag the missing mic.
   pulseaudio \
     -n \
     --daemonize=no \
     --log-target=stderr \
     --exit-idle-time=-1 \
     --load="module-native-protocol-unix socket=/tmp/pulse/native auth-anonymous=1" \
-    --load="module-null-sink sink_name=KernelOutput rate=48000 channels=2 sink_properties=device.description=KernelOutput" &
+    --load="module-null-sink sink_name=KernelOutput rate=48000 channels=2 sink_properties=device.description=KernelOutput" \
+    --load="module-null-source source_name=KernelInput rate=48000 channels=2 source_properties=device.description=KernelInput" &
 
   pulse_pid=$!
   keepalive_pid=""

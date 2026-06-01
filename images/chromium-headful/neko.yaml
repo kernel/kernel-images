@@ -42,6 +42,14 @@ session:
     # needed for legacy API
     enabled: false
 
+capture:
+  audio:
+    # Capture from the monitor of the recorder's playback sink so live view
+    # streams the same browser audio that gets recorded. Neko defaults to
+    # "audio_output.monitor", which does not exist here (our sink is
+    # KernelOutput), so without this override live view has no audio.
+    device: "KernelOutput.monitor"
+
 plugins:
   enabled: false
 
