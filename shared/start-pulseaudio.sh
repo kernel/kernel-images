@@ -22,6 +22,8 @@ exec runuser -u kernel -- env \
   # sees a real, non-monitor microphone: Chromium excludes monitor sources from
   # navigator.mediaDevices.enumerateDevices(), so without this there would be
   # zero audioinput devices and antibot scripts could flag the missing mic.
+  # module-null-source rejects source_properties in this PulseAudio version, so
+  # it keeps the default description.
   pulseaudio \
     -n \
     --daemonize=no \
@@ -29,7 +31,7 @@ exec runuser -u kernel -- env \
     --exit-idle-time=-1 \
     --load="module-native-protocol-unix socket=/tmp/pulse/native auth-anonymous=1" \
     --load="module-null-sink sink_name=KernelOutput rate=48000 channels=2 sink_properties=device.description=KernelOutput" \
-    --load="module-null-source source_name=KernelInput rate=48000 channels=2 source_properties=device.description=KernelInput" &
+    --load="module-null-source source_name=KernelInput format=s16le rate=48000 channels=2" &
 
   pulse_pid=$!
   keepalive_pid=""

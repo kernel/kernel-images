@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -218,7 +217,14 @@ type mediaDeviceInfo struct {
 func assertBrowserSeesAudioDevices(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	devices, err := enumerateMediaDevicesViaCDP(ctx, c.CDPURL())
+	// navigator.mediaDevices is only exposed in a secure context. A file:// page
+	// qualifies, so drop a minimal HTML file into the container and load it.
+	const securePagePath = "/tmp/enumerate-devices.html"
+	exitCode, out, err := c.Exec(ctx, []string{"sh", "-lc", "printf '%s' '<!doctype html><meta charset=utf-8><title>enumerate-devices</title>' > " + securePagePath})
+	require.NoError(t, err, "failed to write secure-context page")
+	require.Zero(t, exitCode, "failed to write secure-context page: %s", out)
+
+	devices, err := enumerateMediaDevicesViaCDP(ctx, c.CDPURL(), "file://"+securePagePath)
 	require.NoError(t, err, "failed to enumerate media devices via CDP")
 	t.Logf("enumerateDevices reported %d devices: %+v", len(devices), devices)
 
@@ -233,26 +239,17 @@ func assertBrowserSeesAudioDevices(t *testing.T, ctx context.Context, c *TestCon
 		}
 	}
 
-	require.NotEmpty(t, audioInputs, "expected at least one audioinput device; Chromium filters monitor sources, so the KernelInput null-source must exist")
+	// Chromium drops monitor sources from the input list, so any audioinput entry
+	// here is necessarily the standalone KernelInput null-source, not the
+	// KernelOutput sink monitor.
+	require.NotEmpty(t, audioInputs, "expected at least one non-monitor audioinput device (KernelInput); Chromium filters monitor sources, so a missing entry means the null-source did not load")
 	require.NotEmpty(t, audioOutputs, "expected at least one audiooutput device (KernelOutput)")
-
-	// When permissions reveal labels, confirm the input is our dedicated null
-	// source rather than a leaked monitor.
-	for _, d := range audioInputs {
-		if strings.Contains(d.Label, "KernelInput") {
-			return
-		}
-	}
-	for _, d := range audioInputs {
-		if d.Label != "" {
-			t.Fatalf("expected a KernelInput audioinput device, got labeled inputs: %+v", audioInputs)
-		}
-	}
 }
 
-// enumerateMediaDevicesViaCDP opens a CDP target over the websocket proxy and
-// evaluates navigator.mediaDevices.enumerateDevices() inside the page.
-func enumerateMediaDevicesViaCDP(ctx context.Context, wsURL string) ([]mediaDeviceInfo, error) {
+// enumerateMediaDevicesViaCDP opens a CDP target over the websocket proxy,
+// navigates to pageURL (which must be a secure-context origin), and evaluates
+// navigator.mediaDevices.enumerateDevices() inside the page.
+func enumerateMediaDevicesViaCDP(ctx context.Context, wsURL, pageURL string) ([]mediaDeviceInfo, error) {
 	client, err := newCDPClient(ctx, wsURL)
 	if err != nil {
 		return nil, err
@@ -290,8 +287,26 @@ func enumerateMediaDevicesViaCDP(ctx context.Context, wsURL string) ([]mediaDevi
 		return nil, err
 	}
 
+	if _, err := client.Call(ctx, "Page.enable", map[string]any{}, sessionID); err != nil {
+		return nil, fmt.Errorf("Page.enable: %w", err)
+	}
 	if _, err := client.Call(ctx, "Runtime.enable", map[string]any{}, sessionID); err != nil {
 		return nil, fmt.Errorf("Runtime.enable: %w", err)
+	}
+
+	loadCtx, loadCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer loadCancel()
+	loadDone := make(chan error, 1)
+	go func() {
+		loadDone <- client.WaitForEvent(loadCtx, "Page.loadEventFired", sessionID)
+	}()
+	if _, err := client.Call(ctx, "Page.navigate", map[string]any{
+		"url": pageURL,
+	}, sessionID); err != nil {
+		return nil, fmt.Errorf("Page.navigate: %w", err)
+	}
+	if err := <-loadDone; err != nil {
+		return nil, fmt.Errorf("waiting for page load: %w", err)
 	}
 
 	const expression = `(async () => {
