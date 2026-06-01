@@ -146,15 +146,20 @@ func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	assert.NotContains(t, args, "aresample=async=1:first_pts=0")
 }
 
-func TestFFmpegArgs_WallclockTimestampsGatedOnVideoOnly(t *testing.T) {
+func TestFFmpegArgs_VideoOnlyKeepsLegacyFlags(t *testing.T) {
 	tempDir := t.TempDir()
 
-	// Video-only recordings keep wall-clock timestamps for stable playback.
+	// Video-only must stay identical to the pre-audio behavior: wall-clock
+	// timestamps on, and none of the audio-path-only encoder/buffer flags.
 	videoArgs, err := ffmpegArgs(defaultParams(tempDir), filepath.Join(tempDir, "v.mp4"))
 	require.NoError(t, err)
 	assert.Contains(t, videoArgs, "-use_wallclock_as_timestamps")
+	assert.NotContains(t, videoArgs, "-thread_queue_size")
+	assert.NotContains(t, videoArgs, "-preset")
+	assert.NotContains(t, videoArgs, "-tune")
 
-	// Audio recordings drop them so the separate video and audio inputs stay synced.
+	// Recording audio drops wall-clock stamping (to keep the two inputs synced) and
+	// adds the real-time encoder + buffer headroom flags.
 	p := defaultParams(tempDir)
 	recordAudio := true
 	pulseServer := "unix:/tmp/pulse/native"
@@ -163,6 +168,9 @@ func TestFFmpegArgs_WallclockTimestampsGatedOnVideoOnly(t *testing.T) {
 	audioArgs, err := ffmpegArgs(p, filepath.Join(tempDir, "a.mp4"))
 	require.NoError(t, err)
 	assert.NotContains(t, audioArgs, "-use_wallclock_as_timestamps")
+	assert.Contains(t, audioArgs, "-thread_queue_size")
+	assert.Contains(t, audioArgs, "-preset")
+	assert.Contains(t, audioArgs, "-tune")
 }
 
 func TestFFmpegRecorder_ForceStop(t *testing.T) {

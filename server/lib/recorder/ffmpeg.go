@@ -552,14 +552,20 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 			"-i", fmt.Sprintf("%d:%s", *params.DisplayNum, audioDevice),
 		}
 	case "linux":
-		args = []string{
+		// When also capturing audio, give the x11grab input a larger packet queue
+		// so the video thread doesn't drop frames while the audio thread jitters
+		// during the mux (the default queue of 8 overflows with two live inputs).
+		// Omitted for video-only to keep that path identical to the pre-audio flags.
+		if recordAudio {
+			args = append(args, "-thread_queue_size", "512")
+		}
+		args = append(args,
 			// Input options for X11
-			"-thread_queue_size", "512",
 			"-f", "x11grab",
 			"-framerate", strconv.Itoa(*params.FrameRate),
 			// Input file
 			"-i", fmt.Sprintf(":%d", *params.DisplayNum), // X11 display
-		}
+		)
 		if recordAudio {
 			args = append(args, audioInputArgs(params)...)
 		}
@@ -571,15 +577,20 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 	if recordAudio {
 		args = append(args, audioOutputArgs()...)
 	}
-	args = append(args, []string{
+	args = append(args,
 		// yuv420p requires even width and height; pad odd source dimensions by one pixel
 		// so libx264 doesn't fail to open the encoder.
 		"-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
-
 		// Video encoding
 		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-tune", "zerolatency",
+	)
+	if recordAudio {
+		// Real-time-oriented encoding so ffmpeg keeps pace with the live audio+video
+		// mux instead of falling behind and drifting out of sync. Applied only when
+		// recording audio so the video-only path keeps its original encoding.
+		args = append(args, "-preset", "veryfast", "-tune", "zerolatency")
+	}
+	args = append(args, []string{
 		"-profile:v", "high", // Explicit web-compatible profile
 		"-pix_fmt", "yuv420p", // Web-standard pixel format
 	}...)
