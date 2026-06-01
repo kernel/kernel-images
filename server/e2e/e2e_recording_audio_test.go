@@ -32,7 +32,6 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 		Env: map[string]string{
 			"WIDTH":        "1280",
 			"HEIGHT":       "720",
-			"RECORD_AUDIO": "true",
 		},
 	}), "failed to start container")
 	defer c.Stop(ctx)
@@ -80,7 +79,6 @@ func TestReplayRecordingZombocomArchiveAudio(t *testing.T) {
 		Env: map[string]string{
 			"WIDTH":        "1280",
 			"HEIGHT":       "720",
-			"RECORD_AUDIO": "true",
 		},
 	}), "failed to start container")
 	defer c.Stop(ctx)

@@ -18,14 +18,12 @@ func defaultParams(tempDir string) FFmpegRecordingParams {
 	fr := 5
 	disp := 0
 	size := 1
-	recordAudio := false
 	audioSource := "KernelOutput.monitor"
 	return FFmpegRecordingParams{
 		FrameRate:   &fr,
 		DisplayNum:  &disp,
 		MaxSizeInMB: &size,
 		OutputDir:   &tempDir,
-		RecordAudio: &recordAudio,
 		AudioSource: &audioSource,
 	}
 }
@@ -70,7 +68,6 @@ func TestFFmpegRecorder_Params(t *testing.T) {
 	assert.Equal(t, *params.DisplayNum, *got.DisplayNum)
 	assert.Equal(t, *params.MaxSizeInMB, *got.MaxSizeInMB)
 	assert.Equal(t, *params.OutputDir, *got.OutputDir)
-	assert.Equal(t, *params.RecordAudio, *got.RecordAudio)
 	assert.Equal(t, *params.AudioSource, *got.AudioSource)
 }
 
@@ -92,8 +89,8 @@ func TestFFmpegArgs_PadsOddDimensions(t *testing.T) {
 func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	tempDir := t.TempDir()
 	params := defaultParams(tempDir)
-	recordAudio := true
-	params.RecordAudio = &recordAudio
+	pulseServer := "unix:/tmp/pulse/native"
+	params.PulseServer = &pulseServer
 
 	args, err := ffmpegArgs(params, filepath.Join(tempDir, "out.mp4"))
 	require.NoError(t, err)

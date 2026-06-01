@@ -2,23 +2,38 @@
 
 set -o errexit -o nounset -o pipefail
 
+# This script is the authority for the audio topology. Consumers
+# (kernel-images-api recorder, chromium via chromium-launcher) hardcode matching
+# defaults that must stay in sync with the names defined here.
+#   PULSE_SOCKET : the unix socket clients connect to (PULSE_SERVER=unix:<path>)
+#   KERNEL_SINK  : playback sink the recorder captures from (via <sink>.monitor)
+#   KERNEL_SOURCE: standalone null-source exposed as a real microphone
+PULSE_SOCKET=/tmp/pulse/native
+KERNEL_SINK=KernelOutput
+KERNEL_SOURCE=KernelInput
+
 mkdir -p /tmp/pulse /tmp/runtime-kernel /home/kernel/.config/pulse
 chown -R kernel:kernel /tmp/pulse /tmp/runtime-kernel /home/kernel/.config/pulse
 chmod 1777 /tmp/pulse
 chmod 700 /tmp/runtime-kernel
 
+# Constants are passed into the inner (single-quoted) script via env so the
+# topology is defined once at the top of this file.
 exec runuser -u kernel -- env \
   -u DBUS_SESSION_BUS_ADDRESS \
   -u DBUS_SYSTEM_BUS_ADDRESS \
   HOME=/home/kernel \
   XDG_CONFIG_HOME=/home/kernel/.config \
   XDG_RUNTIME_DIR=/tmp/runtime-kernel \
-  PULSE_SERVER=unix:/tmp/pulse/native \
+  PULSE_SERVER="unix:$PULSE_SOCKET" \
+  PULSE_SOCKET="$PULSE_SOCKET" \
+  KERNEL_SINK="$KERNEL_SINK" \
+  KERNEL_SOURCE="$KERNEL_SOURCE" \
   bash -lc '
   set -o errexit -o nounset -o pipefail
 
-  # KernelOutput is the playback sink the recorder captures from (via its
-  # .monitor source). KernelInput is a standalone null-source so the browser
+  # KERNEL_SINK is the playback sink the recorder captures from (via its
+  # .monitor source). KERNEL_SOURCE is a standalone null-source so the browser
   # sees a real, non-monitor microphone: Chromium excludes monitor sources from
   # navigator.mediaDevices.enumerateDevices(), so without this there would be
   # zero audioinput devices and antibot scripts could flag the missing mic.
@@ -29,9 +44,9 @@ exec runuser -u kernel -- env \
     --daemonize=no \
     --log-target=stderr \
     --exit-idle-time=-1 \
-    --load="module-native-protocol-unix socket=/tmp/pulse/native auth-anonymous=1" \
-    --load="module-null-sink sink_name=KernelOutput rate=48000 channels=2 sink_properties=device.description=KernelOutput" \
-    --load="module-null-source source_name=KernelInput format=s16le rate=48000 channels=2" &
+    --load="module-native-protocol-unix socket=$PULSE_SOCKET auth-anonymous=1" \
+    --load="module-null-sink sink_name=$KERNEL_SINK rate=48000 channels=2 sink_properties=device.description=$KERNEL_SINK" \
+    --load="module-null-source source_name=$KERNEL_SOURCE format=s16le rate=48000 channels=2" &
 
   pulse_pid=$!
   keepalive_pid=""
@@ -46,14 +61,14 @@ exec runuser -u kernel -- env \
   trap cleanup EXIT INT TERM
 
   for _ in $(seq 1 100); do
-    if pactl list short sinks 2>/dev/null | grep -q "KernelOutput"; then
+    if pactl list short sinks 2>/dev/null | grep -q "$KERNEL_SINK"; then
       break
     fi
     sleep 0.1
   done
 
   (
-    pacat --raw --rate=48000 --channels=2 --format=s16le --device=KernelOutput /dev/zero
+    pacat --raw --rate=48000 --channels=2 --format=s16le --device="$KERNEL_SINK" /dev/zero
   ) &
   keepalive_pid=$!
 

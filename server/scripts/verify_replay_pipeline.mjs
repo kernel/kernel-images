@@ -371,9 +371,8 @@ function startContainer(opts, golden) {
   const env = {
     WIDTH: String(golden.width),
     HEIGHT: String(golden.height),
-    RECORD_AUDIO: 'true',
-    KERNEL_IMAGES_API_RECORD_AUDIO: 'true',
     AUDIO_SOURCE: 'KernelOutput.monitor',
+    PULSE_SERVER: 'unix:/tmp/pulse/native',
     CHROMIUM_FLAGS: '--no-sandbox',
   };
   if (opts.ffmpegWrapperHostPath) {

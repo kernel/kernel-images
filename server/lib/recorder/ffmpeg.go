@@ -69,8 +69,8 @@ type FFmpegRecordingParams struct {
 	// MaxDurationInSeconds optionally limits the total recording time. If nil there is no duration limit.
 	MaxDurationInSeconds *int
 	OutputDir            *string
-	RecordAudio          *bool
 	AudioSource          *string
+	PulseServer          *string
 }
 
 func (p FFmpegRecordingParams) Validate() error {
@@ -92,12 +92,15 @@ func (p FFmpegRecordingParams) Validate() error {
 	if p.recordAudio() && strings.TrimSpace(p.audioSource()) == "" {
 		return fmt.Errorf("audio source is required when recording audio")
 	}
+	if p.recordAudio() && strings.TrimSpace(p.pulseServer()) == "" {
+		return fmt.Errorf("pulse server is required when recording audio")
+	}
 
 	return nil
 }
 
 func (p FFmpegRecordingParams) recordAudio() bool {
-	return p.RecordAudio != nil && *p.RecordAudio
+	return strings.TrimSpace(p.audioSource()) != "" && strings.TrimSpace(p.pulseServer()) != ""
 }
 
 func (p FFmpegRecordingParams) audioSource() string {
@@ -105,6 +108,13 @@ func (p FFmpegRecordingParams) audioSource() string {
 		return ""
 	}
 	return *p.AudioSource
+}
+
+func (p FFmpegRecordingParams) pulseServer() string {
+	if p.PulseServer == nil {
+		return ""
+	}
+	return *p.PulseServer
 }
 
 type FFmpegRecorderFactory func(id string, overrides FFmpegRecordingParams) (Recorder, error)
@@ -132,8 +142,8 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 		MaxSizeInMB:          config.MaxSizeInMB,
 		MaxDurationInSeconds: config.MaxDurationInSeconds,
 		OutputDir:            config.OutputDir,
-		RecordAudio:          config.RecordAudio,
 		AudioSource:          config.AudioSource,
+		PulseServer:          config.PulseServer,
 	}
 	if overrides.FrameRate != nil {
 		merged.FrameRate = overrides.FrameRate
@@ -150,11 +160,11 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 	if overrides.OutputDir != nil {
 		merged.OutputDir = overrides.OutputDir
 	}
-	if overrides.RecordAudio != nil {
-		merged.RecordAudio = overrides.RecordAudio
-	}
 	if overrides.AudioSource != nil {
 		merged.AudioSource = overrides.AudioSource
+	}
+	if overrides.PulseServer != nil {
+		merged.PulseServer = overrides.PulseServer
 	}
 
 	return merged
@@ -194,13 +204,13 @@ func (p FFmpegRecordingParams) clone() FFmpegRecordingParams {
 		v := *p.OutputDir
 		c.OutputDir = &v
 	}
-	if p.RecordAudio != nil {
-		v := *p.RecordAudio
-		c.RecordAudio = &v
-	}
 	if p.AudioSource != nil {
 		v := *p.AudioSource
 		c.AudioSource = &v
+	}
+	if p.PulseServer != nil {
+		v := *p.PulseServer
+		c.PulseServer = &v
 	}
 	return c
 }

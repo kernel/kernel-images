@@ -16,6 +16,18 @@ import (
 	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
+// shared/start-pulseaudio.sh is the authority for the audio topology. These are
+// the fixed contract values it creates, not overridable defaults: chromium must
+// connect to the same socket and play into the same sink the daemon sets up.
+// Keep them in sync with start-pulseaudio.sh.
+const (
+	// pulseServer is the PulseAudio socket the recorder and chromium share.
+	pulseServer = "unix:/tmp/pulse/native"
+	// pulseSink is the null sink chromium plays into; the recorder captures
+	// its .monitor source.
+	pulseSink = "KernelOutput"
+)
+
 func main() {
 	headless := flag.Bool("headless", false, "Run Chromium with headless flags")
 	chromiumPath := flag.String("chromium", "chromium", "Chromium binary path (default: chromium)")
@@ -118,12 +130,18 @@ func main() {
 	}
 
 	// Build: runuser -u kernel -- env DISPLAY=... DBUS_... XDG_... HOME=... chromium <args>
+	// PULSE_SERVER tells libpulse which daemon socket to connect to; without it
+	// chromium-as-kernel-user can't reach the recorder's PulseAudio instance and
+	// has no audio output at all. PULSE_SINK then selects which sink within that
+	// daemon playback lands on: Chromium's AudioManagerPulse honors it to redirect
+	// playback into KernelOutput (see media/audio/pulse/audio_manager_pulse.cc
+	// GetDefaultOutputDeviceID), which is the sink the recorder captures.
 	inner := []string{
 		"env",
 		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
-		"PULSE_SERVER=" + os.Getenv("PULSE_SERVER"),
-		"PULSE_SINK=" + os.Getenv("PULSE_SINK"),
+		"PULSE_SERVER=" + pulseServer,
+		"PULSE_SINK=" + pulseSink,
 		"XDG_CONFIG_HOME=/home/kernel/.config",
 		"XDG_CACHE_HOME=/home/kernel/.cache",
 		"HOME=/home/kernel",

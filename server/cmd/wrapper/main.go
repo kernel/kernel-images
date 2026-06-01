@@ -27,7 +27,9 @@ const (
 	dbusSocket     = "/run/dbus/system_bus_socket"
 	defaultDisplay = ":1"
 	defaultIntPort = "9223"
-	pulseSocket    = "/tmp/pulse/native"
+	// pulseSocket must match the socket path created in shared/start-pulseaudio.sh
+	// (the authority for the audio topology); the wrapper only waits on it here.
+	pulseSocket = "/tmp/pulse/native"
 )
 
 type profile int
@@ -120,15 +122,6 @@ func main() {
 	// starts so it captures the env for child services (notably chromium,
 	// which would otherwise spam autolaunch errors).
 	_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+dbusSocket)
-	if os.Getenv("PULSE_SERVER") == "" {
-		_ = os.Setenv("PULSE_SERVER", "unix:"+pulseSocket)
-	}
-	if os.Getenv("PULSE_SINK") == "" {
-		_ = os.Setenv("PULSE_SINK", "KernelOutput")
-	}
-	if os.Getenv("AUDIO_SOURCE") == "" {
-		_ = os.Setenv("AUDIO_SOURCE", "KernelOutput.monitor")
-	}
 
 	// Stale X locks from prior runs.
 	_ = os.Remove("/tmp/.X1-lock")
