@@ -157,9 +157,11 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 	// capture can run ~50s) so the cap never truncates the intended recording.
 	maxDuration := 120
 	maxFileSize := 100
+	recordAudio := true
 	startResp, err := client.StartRecordingWithResponse(ctx, instanceoapi.StartRecordingJSONRequestBody{
 		MaxDurationInSeconds: &maxDuration,
 		MaxFileSizeInMB:      &maxFileSize,
+		RecordAudio:          &recordAudio,
 	})
 	require.NoError(t, err, "POST /recording/start failed")
 	require.Equal(t, http.StatusCreated, startResp.StatusCode(), "unexpected start status: %s body=%s", startResp.Status(), string(startResp.Body))

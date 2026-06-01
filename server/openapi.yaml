@@ -3041,6 +3041,10 @@ components:
           type: integer
           description: Maximum recording duration in seconds (overrides server default)
           minimum: 1
+        recordAudio:
+          type: boolean
+          description: Capture audio alongside video. Requires the server to have an audio source and PulseAudio socket configured (the image sets both by default). When false the recording is video-only.
+          default: false
         id:
           type: string
           description: Optional identifier for the recording session. Alphanumeric or hyphen.

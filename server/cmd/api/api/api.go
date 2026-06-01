@@ -150,6 +150,7 @@ func (s *ApiService) StartRecording(ctx context.Context, req oapi.StartRecording
 		params.FrameRate = req.Body.Framerate
 		params.MaxSizeInMB = req.Body.MaxFileSizeInMB
 		params.MaxDurationInSeconds = req.Body.MaxDurationInSeconds
+		params.RecordAudio = req.Body.RecordAudio
 	}
 
 	// Determine recorder ID (use default if none provided)

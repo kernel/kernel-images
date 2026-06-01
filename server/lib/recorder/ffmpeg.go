@@ -69,6 +69,7 @@ type FFmpegRecordingParams struct {
 	// MaxDurationInSeconds optionally limits the total recording time. If nil there is no duration limit.
 	MaxDurationInSeconds *int
 	OutputDir            *string
+	RecordAudio          *bool
 	AudioSource          *string
 	PulseServer          *string
 }
@@ -89,18 +90,23 @@ func (p FFmpegRecordingParams) Validate() error {
 	if p.MaxDurationInSeconds != nil && *p.MaxDurationInSeconds <= 0 {
 		return fmt.Errorf("max duration must be greater than 0 seconds")
 	}
-	// Audio capture needs both the pulse source to read and the daemon socket to
-	// reach it. Both set means record audio; neither means video-only. Exactly one
-	// is a misconfiguration that would otherwise silently drop audio.
-	if (strings.TrimSpace(p.audioSource()) == "") != (strings.TrimSpace(p.pulseServer()) == "") {
-		return fmt.Errorf("audio recording requires both audio source and pulse server to be set, or neither")
+	// Audio capture is opt-in per recording. When enabled, the server must have
+	// both the pulse source to read and the daemon socket to reach it (the image
+	// configures both); otherwise ffmpeg would fail at runtime.
+	if p.recordAudio() {
+		if strings.TrimSpace(p.audioSource()) == "" {
+			return fmt.Errorf("audio source is required when recording audio")
+		}
+		if strings.TrimSpace(p.pulseServer()) == "" {
+			return fmt.Errorf("pulse server is required when recording audio")
+		}
 	}
 
 	return nil
 }
 
 func (p FFmpegRecordingParams) recordAudio() bool {
-	return strings.TrimSpace(p.audioSource()) != "" && strings.TrimSpace(p.pulseServer()) != ""
+	return p.RecordAudio != nil && *p.RecordAudio
 }
 
 func (p FFmpegRecordingParams) audioSource() string {
@@ -125,6 +131,9 @@ type FFmpegRecorderFactory func(id string, overrides FFmpegRecordingParams) (Rec
 func NewFFmpegRecorderFactory(pathToFFmpeg string, config FFmpegRecordingParams, ctrl scaletozero.Controller) FFmpegRecorderFactory {
 	return func(id string, overrides FFmpegRecordingParams) (Recorder, error) {
 		mergedParams := mergeFFmpegRecordingParams(config, overrides)
+		if err := mergedParams.Validate(); err != nil {
+			return nil, err
+		}
 		return &FFmpegRecorder{
 			id:         id,
 			binaryPath: pathToFFmpeg,
@@ -142,6 +151,7 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 		MaxSizeInMB:          config.MaxSizeInMB,
 		MaxDurationInSeconds: config.MaxDurationInSeconds,
 		OutputDir:            config.OutputDir,
+		RecordAudio:          config.RecordAudio,
 		AudioSource:          config.AudioSource,
 		PulseServer:          config.PulseServer,
 	}
@@ -159,6 +169,9 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 	}
 	if overrides.OutputDir != nil {
 		merged.OutputDir = overrides.OutputDir
+	}
+	if overrides.RecordAudio != nil {
+		merged.RecordAudio = overrides.RecordAudio
 	}
 	if overrides.AudioSource != nil {
 		merged.AudioSource = overrides.AudioSource
@@ -203,6 +216,10 @@ func (p FFmpegRecordingParams) clone() FFmpegRecordingParams {
 	if p.OutputDir != nil {
 		v := *p.OutputDir
 		c.OutputDir = &v
+	}
+	if p.RecordAudio != nil {
+		v := *p.RecordAudio
+		c.RecordAudio = &v
 	}
 	if p.AudioSource != nil {
 		v := *p.AudioSource
@@ -567,8 +584,14 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 		"-pix_fmt", "yuv420p", // Web-standard pixel format
 	}...)
 
+	// Timestamp handling for reliable playback. Single-input video-only capture
+	// overwrites x11grab's timestamps with wall-clock time for stable playback.
+	// With audio we must not: it would stamp the separate video and audio inputs
+	// independently and desync them, so we keep their input PTS instead.
+	if !recordAudio {
+		args = append(args, "-use_wallclock_as_timestamps", "1")
+	}
 	args = append(args, []string{
-		// Timestamp handling for reliable playback
 		"-reset_timestamps", "1",
 		"-avoid_negative_ts", "make_zero", // Convert negative timestamps to zero
 

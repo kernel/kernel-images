@@ -92,26 +92,30 @@ func TestFFmpegRecordingParams_ValidateAudioConfig(t *testing.T) {
 		dir := t.TempDir()
 		return FFmpegRecordingParams{FrameRate: &fr, DisplayNum: &disp, MaxSizeInMB: &size, OutputDir: &dir}
 	}
+	yes := true
 	src := "KernelOutput.monitor"
 	server := "unix:/tmp/pulse/native"
 
-	t.Run("neither set is video-only", func(t *testing.T) {
+	t.Run("audio off is always valid", func(t *testing.T) {
 		require.NoError(t, base().Validate())
 	})
-	t.Run("both set records audio", func(t *testing.T) {
+	t.Run("audio on with source and server is valid", func(t *testing.T) {
 		p := base()
+		p.RecordAudio = &yes
 		p.AudioSource = &src
 		p.PulseServer = &server
 		require.NoError(t, p.Validate())
 	})
-	t.Run("only audio source is a misconfig", func(t *testing.T) {
+	t.Run("audio on without source is rejected", func(t *testing.T) {
 		p := base()
-		p.AudioSource = &src
+		p.RecordAudio = &yes
+		p.PulseServer = &server
 		require.Error(t, p.Validate())
 	})
-	t.Run("only pulse server is a misconfig", func(t *testing.T) {
+	t.Run("audio on without server is rejected", func(t *testing.T) {
 		p := base()
-		p.PulseServer = &server
+		p.RecordAudio = &yes
+		p.AudioSource = &src
 		require.Error(t, p.Validate())
 	})
 }
@@ -119,7 +123,9 @@ func TestFFmpegRecordingParams_ValidateAudioConfig(t *testing.T) {
 func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	tempDir := t.TempDir()
 	params := defaultParams(tempDir)
+	recordAudio := true
 	pulseServer := "unix:/tmp/pulse/native"
+	params.RecordAudio = &recordAudio
 	params.PulseServer = &pulseServer
 
 	args, err := ffmpegArgs(params, filepath.Join(tempDir, "out.mp4"))
@@ -138,6 +144,25 @@ func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	assert.Contains(t, args, "aac")
 	assert.NotContains(t, args, "aresample=async=1")
 	assert.NotContains(t, args, "aresample=async=1:first_pts=0")
+}
+
+func TestFFmpegArgs_WallclockTimestampsGatedOnVideoOnly(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Video-only recordings keep wall-clock timestamps for stable playback.
+	videoArgs, err := ffmpegArgs(defaultParams(tempDir), filepath.Join(tempDir, "v.mp4"))
+	require.NoError(t, err)
+	assert.Contains(t, videoArgs, "-use_wallclock_as_timestamps")
+
+	// Audio recordings drop them so the separate video and audio inputs stay synced.
+	p := defaultParams(tempDir)
+	recordAudio := true
+	pulseServer := "unix:/tmp/pulse/native"
+	p.RecordAudio = &recordAudio
+	p.PulseServer = &pulseServer
+	audioArgs, err := ffmpegArgs(p, filepath.Join(tempDir, "a.mp4"))
+	require.NoError(t, err)
+	assert.NotContains(t, audioArgs, "-use_wallclock_as_timestamps")
 }
 
 func TestFFmpegRecorder_ForceStop(t *testing.T) {
