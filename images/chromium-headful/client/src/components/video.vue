@@ -265,7 +265,6 @@
     private fullscreen = false
     private mutedOverlay = true
     private isVideoSyncing = false
-    private audioUnmuted = false
 
     get admin() {
       return this.$accessor.user.admin
@@ -542,7 +541,7 @@
 
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
-        this.autoUnmuteOnInteraction()
+        this.unmuteOnInteraction()
 
         if (!this.hosting || this.locked) {
           return true
@@ -673,15 +672,16 @@
       this.$accessor.video.setMuted(false)
     }
 
-    // The browser autoplay policy keeps the stream muted until a user gesture,
-    // and the unmute overlay is hidden in our client. Replicate the overlay's
-    // unmute() from the first real interaction with the live view (the same
-    // input handlers that drive the remote browser, so they always fire and run
-    // inside a genuine user-gesture context).
-    autoUnmuteOnInteraction() {
-      if (this.audioUnmuted) return
-      this.audioUnmuted = true
-      this.unmute()
+    // The autoplay policy only lets us unmute inside a real user gesture, and
+    // this client hides the unmute overlay. Piggyback on the existing input
+    // handlers so the first interaction with the live view unmutes. Guarded on
+    // the current state so it is a cheap no-op once unmuted, yet re-applies if a
+    // reconnect re-mutes the element. (mousemove is intentionally not used: it
+    // is not a user-activation event, so it cannot unlock audio.)
+    unmuteOnInteraction() {
+      if (this.muted) {
+        this.unmute()
+      }
     }
 
     toggleControl() {
@@ -803,7 +803,7 @@
     }
 
     onMouseDown(e: MouseEvent) {
-      this.autoUnmuteOnInteraction()
+      this.unmuteOnInteraction()
 
       if (!this.hosting) {
         this.$emit('control-attempt', e)
