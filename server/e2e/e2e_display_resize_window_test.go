@@ -112,9 +112,10 @@ func getXRootResolution(ctx context.Context, c *TestContainer) (int, int, error)
 }
 
 // chromiumWindowBounds is the subset of Browser.getWindowBounds we care
-// about. windowState distinguishes the "normal" case (where width/height are
-// the actual OS window size) from "maximized"/"fullscreen" (where width/height
-// are the saved-restore bounds and the live size matches the root).
+// about. windowState distinguishes the "maximized"/"fullscreen" case
+// (where width/height reflect the live OS window size, which the WM
+// aligns with the X root) from "normal" (where width/height reflect the
+// saved-restore bounds that would be applied on un-maximize).
 type chromiumWindowBounds struct {
 	WindowID    int    `json:"windowId"`
 	Width       int    `json:"width"`

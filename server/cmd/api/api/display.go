@@ -122,25 +122,36 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 			log.Info("using xrandr for Xorg resolution change (Neko disabled)")
 			err = s.setResolutionXorgViaXrandr(ctx, width, height, refreshRate)
 		}
-		// Re-assert the maximized window state via CDP after the X root
-		// resize. Mutter reflows a window in windowState=maximized (or
-		// fullscreen) to fill the new root automatically, so this single
-		// idempotent call is all we need post-resize. The previous
-		// approach of restarting chromium so it could re-apply
-		// --start-maximized cost ~9s per resize and also wiped browser-
-		// side state (Emulation.* overrides, devtools sessions). The
-		// restart_chromium request field is still accepted for API
-		// compatibility but no longer triggers a restart on this path.
+		// Re-assert the maximized window state via CDP, then verify the
+		// X root has reached the requested size. Mutter reflows a
+		// maximized (or fullscreen) window onto the new root
+		// automatically, so the CDP call's only job is to make sure the
+		// window is in the state that triggers the reflow. The X root
+		// poll is the authoritative post-condition: it's the value the
+		// server actually set and stays panel-robust if mutter ever
+		// gains a taskbar (a maximized window would then be smaller
+		// than the root by the panel's reserved space).
 		//
-		// The CDP call is the only thing that recovers a window already
-		// in the "normal" state, so its failure is fatal: returning 200
-		// after a CDP error could leave the browser window stuck at the
-		// old size while the X root is at the new size, and the caller
-		// would have no signal of the mismatch.
+		// Both are fatal on failure — returning 200 with the X root
+		// still at the old size, or the window stuck in normal state,
+		// would leave the caller with no signal of the mismatch. The
+		// previous approach of restarting chromium so it could re-apply
+		// --start-maximized had the same effective contract (the
+		// restart blocked the response) but cost ~9s per resize and
+		// wiped browser-side state (Emulation.* overrides, devtools
+		// sessions). The restart_chromium request field is still
+		// accepted for API compatibility but no longer triggers a
+		// restart on this path.
 		if err == nil {
-			if cdpErr := s.setWindowMaximizedViaCDP(ctx, width, height); cdpErr != nil {
+			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
 				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
 				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
+			}
+		}
+		if err == nil {
+			if waitErr := s.waitForXRootSize(ctx, width, height, 3*time.Second); waitErr != nil {
+				log.Error("X root did not reach requested size after resize", "error", waitErr)
+				err = fmt.Errorf("X root verification: %w", waitErr)
 			}
 		}
 	} else if len(stopped) > 0 {
@@ -394,72 +405,79 @@ func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int
 	s.viewportMu.Unlock()
 }
 
-// setWindowMaximizedViaCDP re-asserts that the chromium OS window is in
-// the "maximized" state via Browser.setWindowBounds, then waits until the
-// window manager has actually reflowed the window onto the new X root.
-// After a successful xrandr/Neko resize, mutter reflows a maximized
-// (or fullscreen) window to fill the new root automatically — but that
-// reflow is asynchronous to the CDP setWindowBounds acknowledgement, so
-// the handler polls Browser.getWindowForTarget until the live bounds
-// match the requested width/height before returning.
-//
-// This makes PATCH /display a synchronous contract: the API returns only
-// once the window is at the new size, not just once the resize has been
-// initiated. The previous approach of restarting chromium so it could
-// re-apply --start-maximized had the same effective contract (the restart
-// blocked the response) but cost ~9s per resize and wiped browser-side
-// state (Emulation.* overrides, devtools sessions).
-func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context, width, height int) error {
-	log := logger.FromContext(ctx)
-
+// withCDPClient dials the current devtools upstream with a 10s timeout,
+// hands the connected client to fn, and closes the connection on return.
+// Lets the small per-call CDP helpers below avoid duplicating the dial +
+// timeout + defer-close scaffolding.
+func (s *ApiService) withCDPClient(ctx context.Context, fn func(context.Context, *cdpclient.Client) error) error {
 	upstreamURL := s.upstreamMgr.Current()
 	if upstreamURL == "" {
 		return fmt.Errorf("devtools upstream not available")
 	}
-
 	cdpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-
 	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
 	if err != nil {
 		return fmt.Errorf("failed to connect to devtools: %w", err)
 	}
 	defer client.Close()
+	return fn(cdpCtx, client)
+}
 
-	if err := client.SetWindowBoundsMaximized(cdpCtx); err != nil {
+// setWindowMaximizedViaCDP re-asserts that the chromium OS window is in
+// the "maximized" state via Browser.setWindowBounds. After a successful
+// xrandr/Neko resize, mutter reflows a maximized (or fullscreen) window
+// to fill the new root automatically — this call ensures the window is
+// in the state that triggers the reflow. The CDP call is idempotent: it
+// no-ops on a window already in maximized or fullscreen state.
+//
+// The PATCH /display handler waits for the X root to reach the requested
+// size separately (waitForXRootSize) rather than reading the chromium
+// window's own bounds, so the contract stays panel-robust: if mutter
+// ever gained a taskbar/dock, a maximized window would be smaller than
+// the root by the panel's reserved space, and a window-bounds poll
+// would 3s-timeout forever.
+func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
+	log := logger.FromContext(ctx)
+	if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		return client.SetWindowBoundsMaximized(cdpCtx)
+	}); err != nil {
 		return fmt.Errorf("CDP setWindowBoundsMaximized: %w", err)
 	}
-
-	if err := waitForWindowSize(cdpCtx, client, width, height, 3*time.Second); err != nil {
-		return fmt.Errorf("window did not reach %dx%d after CDP maximize: %w", width, height, err)
-	}
-
-	log.Info("re-asserted maximized window state via CDP", "width", width, "height", height)
+	log.Info("re-asserted maximized window state via CDP")
 	return nil
 }
 
-// waitForWindowSize polls Browser.getWindowForTarget until the live OS
-// window's width/height match the requested size, or the deadline expires.
-// Typical convergence on docker+mutter is 20–50ms; pick a deadline that
-// comfortably covers WM scheduling jitter without masking real bugs.
-func waitForWindowSize(ctx context.Context, client *cdpclient.Client, width, height int, timeout time.Duration) error {
+// waitForXRootSize polls the X root resolution via xrandr until it matches
+// the requested size, or the deadline expires. This is the authoritative
+// post-condition for PATCH /display: the X root is what the server set
+// (via Neko or xrandr), and the rest of the stack — mutter, chromium —
+// follows from there. Polling the X root rather than chromium's window
+// bounds keeps the contract panel-robust: a future mutter config with a
+// taskbar/dock would shrink the maximized window below the root size,
+// but the root itself would still match what we asked for.
+//
+// Typical convergence is sub-millisecond (Neko's ScreenConfigurationChange
+// returns after the X server has applied the mode), but a small loop
+// covers any future asynchrony in the resize chain.
+func (s *ApiService) waitForXRootSize(ctx context.Context, width, height int, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
-	var last cdpclient.WindowBounds
+	var lastW, lastH int
 	var lastErr error
 	for {
-		b, err := client.GetWindowBounds(ctx)
+		w, h, _, err := s.getCurrentResolution(ctx)
 		lastErr = err
 		if err == nil {
-			last = b
-			if b.Width == width && b.Height == height {
+			lastW, lastH = w, h
+			if w == width && h == height {
 				return nil
 			}
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil {
-				return fmt.Errorf("last getWindowBounds error: %w", lastErr)
+				return fmt.Errorf("last getCurrentResolution error: %w", lastErr)
 			}
-			return fmt.Errorf("window is %dx%d state=%q", last.Width, last.Height, last.WindowState)
+			return fmt.Errorf("x root is %dx%d, want %dx%d", lastW, lastH, width, height)
 		}
 		select {
 		case <-ctx.Done():
@@ -474,25 +492,11 @@ func waitForWindowSize(ctx context.Context, client *cdpclient.Client, width, hei
 // not require restarting Chromium or Xvfb.
 func (s *ApiService) setViewportViaCDP(ctx context.Context, width, height int) error {
 	log := logger.FromContext(ctx)
-
-	upstreamURL := s.upstreamMgr.Current()
-	if upstreamURL == "" {
-		return fmt.Errorf("devtools upstream not available")
-	}
-
-	cdpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
-	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
-	if err != nil {
-		return fmt.Errorf("failed to connect to devtools: %w", err)
-	}
-	defer client.Close()
-
-	if err := client.SetDeviceMetricsOverride(cdpCtx, width, height); err != nil {
+	if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		return client.SetDeviceMetricsOverride(cdpCtx, width, height)
+	}); err != nil {
 		return fmt.Errorf("CDP setDeviceMetricsOverride: %w", err)
 	}
-
 	log.Info("viewport resized via CDP", "width", width, "height", height)
 	return nil
 }

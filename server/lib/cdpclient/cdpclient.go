@@ -254,34 +254,20 @@ func (c *Client) firstPageTargetID(ctx context.Context) (string, error) {
 // ({left, top, width, height} with windowState:"normal"): once a window is
 // in normal state it stops auto-tracking subsequent RANDR events.
 func (c *Client) SetWindowBoundsMaximized(ctx context.Context) error {
-	pageTargetID, err := c.firstPageTargetID(ctx)
+	bounds, err := c.GetWindowBounds(ctx)
 	if err != nil {
 		return err
-	}
-
-	winRaw, err := c.send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": pageTargetID}, "")
-	if err != nil {
-		return fmt.Errorf("Browser.getWindowForTarget: %w", err)
-	}
-	var winResp struct {
-		WindowID int `json:"windowId"`
-		Bounds   struct {
-			WindowState string `json:"windowState"`
-		} `json:"bounds"`
-	}
-	if err := json.Unmarshal(winRaw, &winResp); err != nil {
-		return fmt.Errorf("unmarshal window: %w", err)
 	}
 	// Both "maximized" and "fullscreen" cause mutter to reflow the window
 	// to fill the new X root on RANDR — that's the only invariant we
 	// need. Demoting a kiosk fullscreen window to maximized would break
 	// kiosk mode, so leave fullscreen alone.
-	if winResp.Bounds.WindowState == "maximized" || winResp.Bounds.WindowState == "fullscreen" {
+	if bounds.WindowState == "maximized" || bounds.WindowState == "fullscreen" {
 		return nil
 	}
 
 	if _, err := c.send(ctx, "Browser.setWindowBounds", map[string]any{
-		"windowId": winResp.WindowID,
+		"windowId": bounds.WindowID,
 		"bounds":   map[string]any{"windowState": "maximized"},
 	}, ""); err != nil {
 		return fmt.Errorf("Browser.setWindowBounds maximized: %w", err)
