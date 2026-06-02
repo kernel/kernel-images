@@ -457,6 +457,15 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 // taskbar/dock would shrink the maximized window below the root size,
 // but the root itself would still match what we asked for.
 //
+// Calls getCurrentResolutionFromXrandr directly rather than the
+// higher-level getCurrentResolution: the latter prefers a cached
+// viewportOverride when one is set, which would silently validate this
+// post-condition against the CDP viewport instead of the X root. The
+// override is only set on the headless Xvfb fast path today, so the
+// Xorg branch never reaches that case — but the invariant is non-local
+// and would silently regress this check if anyone ever sets the
+// override on the Xorg path.
+//
 // Typical convergence is sub-millisecond (Neko's ScreenConfigurationChange
 // returns after the X server has applied the mode), but a small loop
 // covers any future asynchrony in the resize chain.
@@ -465,7 +474,7 @@ func (s *ApiService) waitForXRootSize(ctx context.Context, width, height int, ti
 	var lastW, lastH int
 	var lastErr error
 	for {
-		w, h, _, err := s.getCurrentResolution(ctx)
+		w, h, _, _, err := s.getCurrentResolutionFromXrandr(ctx)
 		lastErr = err
 		if err == nil {
 			lastW, lastH = w, h
@@ -475,7 +484,7 @@ func (s *ApiService) waitForXRootSize(ctx context.Context, width, height int, ti
 		}
 		if time.Now().After(deadline) {
 			if lastErr != nil {
-				return fmt.Errorf("last getCurrentResolution error: %w", lastErr)
+				return fmt.Errorf("last getCurrentResolutionFromXrandr error: %w", lastErr)
 			}
 			return fmt.Errorf("x root is %dx%d, want %dx%d", lastW, lastH, width, height)
 		}
