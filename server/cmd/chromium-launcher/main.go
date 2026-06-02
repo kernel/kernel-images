@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"flag"
 	"fmt"
 	"net"
@@ -73,7 +74,10 @@ func main() {
 		}
 	}
 
-	baseFlags := os.Getenv("CHROMIUM_FLAGS")
+	baseFlags, decErr := resolveBaseFlags(os.Getenv("CHROMIUM_FLAGS"), os.Getenv("CHROMIUM_FLAGS_B64"))
+	if decErr != nil {
+		fmt.Fprintf(os.Stderr, "CHROMIUM_FLAGS_B64 set but failed to decode (%v); using CHROMIUM_FLAGS\n", decErr)
+	}
 	runtimeTokens, err := chromiumflags.ReadOptionalFlagFile(*runtimeFlagsPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed reading runtime flags: %v\n", err)
@@ -157,6 +161,25 @@ func main() {
 		fmt.Fprintf(os.Stderr, "exec runuser failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// resolveBaseFlags returns the Chromium base flag string. It prefers the
+// base64url-encoded value, falling back to the plain value. The API sends the
+// encoded form because some unikernel platform versions backslash-escape spaces
+// when serializing env vars into the guest kernel command line, which corrupts
+// the space-separated plain value; base64url has no characters the cmdline
+// encoder alters. A malformed encoded value falls back to the plain value and
+// returns the decode error for logging.
+func resolveBaseFlags(plain, encoded string) (string, error) {
+	encoded = strings.TrimSpace(encoded)
+	if encoded == "" {
+		return plain, nil
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return plain, err
+	}
+	return string(decoded), nil
 }
 
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.
