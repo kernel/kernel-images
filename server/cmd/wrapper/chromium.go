@@ -2,12 +2,23 @@ package main
 
 import (
 	"os"
-	"regexp"
 	"strings"
 )
 
-// cmdlineEscape matches a backslash followed by any character.
-var cmdlineEscape = regexp.MustCompile(`\\(.)`)
+// unescapeCmdline drops a backslash that escapes the following byte (`\X` -> `X`),
+// scanning left to right so a doubled backslash collapses to one (`\\` -> `\`) and
+// a lone trailing backslash is preserved.
+func unescapeCmdline(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			i++
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
 
 // normalizeChromiumFlags reverses the backslash-escaping the platform's cmdline
 // encoder inserts before special chars and the guest parser fails to strip:
@@ -16,9 +27,8 @@ var cmdlineEscape = regexp.MustCompile(`\\(.)`)
 // with "No usable sandbox". Reversing every `\X` -> `X` is safe because the
 // flag list never contains a real backslash; a no-op when none are present.
 func normalizeChromiumFlags() {
-	v := os.Getenv("CHROMIUM_FLAGS")
-	if strings.Contains(v, `\`) {
-		_ = os.Setenv("CHROMIUM_FLAGS", cmdlineEscape.ReplaceAllString(v, "$1"))
+	if v := os.Getenv("CHROMIUM_FLAGS"); strings.Contains(v, `\`) {
+		_ = os.Setenv("CHROMIUM_FLAGS", unescapeCmdline(v))
 	}
 }
 

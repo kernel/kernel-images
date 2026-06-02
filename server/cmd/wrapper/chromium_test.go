@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestNormalizeChromiumFlags(t *testing.T) {
+func TestUnescapeCmdline(t *testing.T) {
 	tests := []struct {
 		name string
 		in   string
@@ -44,11 +44,17 @@ func TestNormalizeChromiumFlags(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("CHROMIUM_FLAGS", tt.in)
-			normalizeChromiumFlags()
-			if got := os.Getenv("CHROMIUM_FLAGS"); got != tt.want {
-				t.Errorf("normalizeChromiumFlags() = %q, want %q", got, tt.want)
+			if got := unescapeCmdline(tt.in); got != tt.want {
+				t.Errorf("unescapeCmdline(%q) = %q, want %q", tt.in, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeChromiumFlags(t *testing.T) {
+	t.Setenv("CHROMIUM_FLAGS", `--no-sandbox\ --disable-gpu`)
+	normalizeChromiumFlags()
+	if got := os.Getenv("CHROMIUM_FLAGS"); got != `--no-sandbox --disable-gpu` {
+		t.Errorf("CHROMIUM_FLAGS = %q, want %q", got, `--no-sandbox --disable-gpu`)
 	}
 }
