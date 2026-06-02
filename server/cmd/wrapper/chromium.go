@@ -2,43 +2,24 @@ package main
 
 import (
 	"os"
+	"regexp"
 	"strings"
 )
 
-// normalizeChromiumFlags reverses the backslash-escaping that ukp-platform
-// 0.10.0 applies when serializing env vars into the guest kernel cmdline: it
-// prefixes special chars with a backslash that the guest cmdline parser fails
-// to strip back out, so CHROMIUM_FLAGS arrives with literal backslashes glued
-// to its tokens (e.g. `--no-sandbox\ --disable-gpu`). Chromium then sees
-// `--no-sandbox\`, doesn't recognize it, runs with the sandbox enabled, and
-// aborts with "No usable sandbox". We undo it generically (\X -> X) so the
-// exact set of escaped chars doesn't matter — the result is identical to what
-// a correctly-encoding host produces. No-op when there's no backslash, so it's
-// safe on platform versions that encode correctly.
+// cmdlineEscape matches a backslash followed by any character.
+var cmdlineEscape = regexp.MustCompile(`\\(.)`)
+
+// normalizeChromiumFlags reverses the backslash-escaping the platform's cmdline
+// encoder inserts before special chars and the guest parser fails to strip:
+// CHROMIUM_FLAGS arrives as e.g. `--no-sandbox\ --disable-gpu`, so Chromium
+// sees `--no-sandbox\`, ignores it, runs with the sandbox enabled, and aborts
+// with "No usable sandbox". Reversing every `\X` -> `X` is safe because the
+// flag list never contains a real backslash; a no-op when none are present.
 func normalizeChromiumFlags() {
 	v := os.Getenv("CHROMIUM_FLAGS")
-	if !strings.Contains(v, `\`) {
-		return
+	if strings.Contains(v, `\`) {
+		_ = os.Setenv("CHROMIUM_FLAGS", cmdlineEscape.ReplaceAllString(v, "$1"))
 	}
-	var b strings.Builder
-	b.Grow(len(v))
-	escaped := false
-	for _, r := range v {
-		if escaped {
-			b.WriteRune(r)
-			escaped = false
-			continue
-		}
-		if r == '\\' {
-			escaped = true
-			continue
-		}
-		b.WriteRune(r)
-	}
-	if escaped {
-		b.WriteByte('\\')
-	}
-	_ = os.Setenv("CHROMIUM_FLAGS", b.String())
 }
 
 // applyHeadlessDefaultFlags mirrors the legacy headless wrapper.sh: when
