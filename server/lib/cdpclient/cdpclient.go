@@ -215,6 +215,31 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 	return nil
 }
 
+// firstPageTargetID returns the targetId of the first page target reported
+// by Target.getTargets. Callers that need to operate on the user-facing
+// browser window (Emulation, Browser.* window bounds) use this to find it.
+func (c *Client) firstPageTargetID(ctx context.Context) (string, error) {
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return "", fmt.Errorf("Target.getTargets: %w", err)
+	}
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			Type     string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return "", fmt.Errorf("unmarshal targets: %w", err)
+	}
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			return t.TargetID, nil
+		}
+	}
+	return "", fmt.Errorf("no page target found")
+}
+
 // SetWindowBoundsMaximized puts the OS window backing the first page target
 // into the maximized state via Browser.setWindowBounds. It is idempotent —
 // invoking it on a window already in maximized state is a no-op.
@@ -229,28 +254,9 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 // ({left, top, width, height} with windowState:"normal"): once a window is
 // in normal state it stops auto-tracking subsequent RANDR events.
 func (c *Client) SetWindowBoundsMaximized(ctx context.Context) error {
-	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	pageTargetID, err := c.firstPageTargetID(ctx)
 	if err != nil {
-		return fmt.Errorf("Target.getTargets: %w", err)
-	}
-	var targets struct {
-		TargetInfos []struct {
-			TargetID string `json:"targetId"`
-			Type     string `json:"type"`
-		} `json:"targetInfos"`
-	}
-	if err := json.Unmarshal(targetsResult, &targets); err != nil {
-		return fmt.Errorf("unmarshal targets: %w", err)
-	}
-	var pageTargetID string
-	for _, t := range targets.TargetInfos {
-		if t.Type == "page" {
-			pageTargetID = t.TargetID
-			break
-		}
-	}
-	if pageTargetID == "" {
-		return fmt.Errorf("no page target found")
+		return err
 	}
 
 	winRaw, err := c.send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": pageTargetID}, "")
@@ -298,28 +304,9 @@ type WindowBounds struct {
 // via Browser.getWindowForTarget. It's a one-shot read; callers that need
 // to wait for the WM to settle should poll this.
 func (c *Client) GetWindowBounds(ctx context.Context) (WindowBounds, error) {
-	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	pageTargetID, err := c.firstPageTargetID(ctx)
 	if err != nil {
-		return WindowBounds{}, fmt.Errorf("Target.getTargets: %w", err)
-	}
-	var targets struct {
-		TargetInfos []struct {
-			TargetID string `json:"targetId"`
-			Type     string `json:"type"`
-		} `json:"targetInfos"`
-	}
-	if err := json.Unmarshal(targetsResult, &targets); err != nil {
-		return WindowBounds{}, fmt.Errorf("unmarshal targets: %w", err)
-	}
-	var pageTargetID string
-	for _, t := range targets.TargetInfos {
-		if t.Type == "page" {
-			pageTargetID = t.TargetID
-			break
-		}
-	}
-	if pageTargetID == "" {
-		return WindowBounds{}, fmt.Errorf("no page target found")
+		return WindowBounds{}, err
 	}
 
 	winRaw, err := c.send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": pageTargetID}, "")
@@ -349,30 +336,9 @@ func (c *Client) GetWindowBounds(ctx context.Context) (WindowBounds, error) {
 // target found in the browser. It attaches to the target with a flattened
 // session, sends Emulation.setDeviceMetricsOverride, then detaches.
 func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int) error {
-	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	pageTargetID, err := c.firstPageTargetID(ctx)
 	if err != nil {
-		return fmt.Errorf("Target.getTargets: %w", err)
-	}
-
-	var targets struct {
-		TargetInfos []struct {
-			TargetID string `json:"targetId"`
-			Type     string `json:"type"`
-		} `json:"targetInfos"`
-	}
-	if err := json.Unmarshal(targetsResult, &targets); err != nil {
-		return fmt.Errorf("unmarshal targets: %w", err)
-	}
-
-	var pageTargetID string
-	for _, t := range targets.TargetInfos {
-		if t.Type == "page" {
-			pageTargetID = t.TargetID
-			break
-		}
-	}
-	if pageTargetID == "" {
-		return fmt.Errorf("no page target found")
+		return err
 	}
 
 	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
