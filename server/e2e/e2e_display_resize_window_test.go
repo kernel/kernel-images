@@ -75,10 +75,12 @@ func getRendererViewport(ctx context.Context, c *TestContainer) (rendererViewpor
 
 // getXRootResolution reads the live X root size via xrandr inside the
 // container. Works for both Xorg (headful) and Xvfb (headless). The parse
-// pulls from xrandr's `Screen 0: ... current W x H, ...` header — which is
-// always present and reflects the live root — rather than looking for `*`
-// next to an active mode line, because Xorg-with-Neko surfaces a synthetic
-// active mode that xrandr does not mark with an asterisk.
+// pulls from xrandr's `Screen 0: ... current W x H, ...` header — a
+// direct read of the X root size that doesn't depend on which connected
+// output happens to own the active mode. The server's
+// getCurrentResolutionFromXrandr greps for `*` on a per-output mode
+// line; both approaches converge on the same value on this image, but
+// the `Screen 0: current` form is the most direct.
 func getXRootResolution(ctx context.Context, c *TestContainer) (int, int, error) {
 	out, err := execCombinedOutput(ctx, c, "bash", []string{"-c", "DISPLAY=:1 xrandr"})
 	if err != nil {
