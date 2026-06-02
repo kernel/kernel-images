@@ -5,6 +5,42 @@ import (
 	"strings"
 )
 
+// normalizeChromiumFlags reverses the backslash-escaping that ukp-platform
+// 0.10.0 applies when serializing env vars into the guest kernel cmdline: it
+// prefixes special chars with a backslash that the guest cmdline parser fails
+// to strip back out, so CHROMIUM_FLAGS arrives with literal backslashes glued
+// to its tokens (e.g. `--no-sandbox\ --disable-gpu`). Chromium then sees
+// `--no-sandbox\`, doesn't recognize it, runs with the sandbox enabled, and
+// aborts with "No usable sandbox". We undo it generically (\X -> X) so the
+// exact set of escaped chars doesn't matter — the result is identical to what
+// a correctly-encoding host produces. No-op when there's no backslash, so it's
+// safe on platform versions that encode correctly.
+func normalizeChromiumFlags() {
+	v := os.Getenv("CHROMIUM_FLAGS")
+	if !strings.Contains(v, `\`) {
+		return
+	}
+	var b strings.Builder
+	b.Grow(len(v))
+	escaped := false
+	for _, r := range v {
+		if escaped {
+			b.WriteRune(r)
+			escaped = false
+			continue
+		}
+		if r == '\\' {
+			escaped = true
+			continue
+		}
+		b.WriteRune(r)
+	}
+	if escaped {
+		b.WriteByte('\\')
+	}
+	_ = os.Setenv("CHROMIUM_FLAGS", b.String())
+}
+
 // applyHeadlessDefaultFlags mirrors the legacy headless wrapper.sh: when
 // CHROMIUM_FLAGS is unset, fill in a curated headless+stealth flag list.
 // --disable-background-networking is intentionally omitted: it prevents

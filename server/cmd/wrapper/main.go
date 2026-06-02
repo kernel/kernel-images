@@ -83,6 +83,11 @@ func main() {
 		defer enableScaleToZero()
 	}
 
+	// Undo any backslash-escaping the platform injected into CHROMIUM_FLAGS
+	// while serializing it onto the kernel cmdline. Runs for both profiles,
+	// before the headless defaults below (those are generated clean).
+	normalizeChromiumFlags()
+
 	// Headless ships a default CHROMIUM_FLAGS list (headless+stealth flags)
 	// when callers don't set one. Headful's defaults are caller-supplied.
 	if prof == profileHeadless {
