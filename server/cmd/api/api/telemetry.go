@@ -46,18 +46,26 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
-	// Reconcile the collector before committing the config so a startup failure
-	// leaves no partial state: the session keeps its prior config on error.
+	// Commit the config first so the filter is live before the collector emits,
+	// then reconcile. On collector-start failure, roll back to the prior state
+	// so a 500 never leaves telemetry half-applied.
+	var prev telemetry.TelemetryConfig
+	if wasActive {
+		prev = s.telemetrySession.Config()
+		s.telemetrySession.UpdateConfig(cfg)
+	} else {
+		s.telemetrySession.Start(cuid2.Generate(), cfg)
+	}
+
 	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
+		s.rollbackTelemetry(wasActive, prev)
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PutTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start telemetry"}}, nil
 	}
 
 	if wasActive {
-		s.telemetrySession.UpdateConfig(cfg)
 		return oapi.PutTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
-	s.telemetrySession.Start(cuid2.Generate(), cfg)
 	return oapi.PutTelemetry201JSONResponse(s.buildTelemetryResponse()), nil
 }
 
@@ -76,45 +84,59 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 		return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
 
-	cfg, allDisabled := mergeTelemetryConfig(s.telemetrySession.Config(), req.Body.Browser)
+	prev := s.telemetrySession.Config()
+	cfg, allDisabled := mergeTelemetryConfig(prev, req.Body.Browser)
 	if allDisabled {
 		s.telemetrySession.Stop()
 		s.stopTelemetryState()
 		return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
-	// Reconcile before committing so a collector startup failure leaves the
-	// session on its prior config rather than half-applied.
+	// Commit first so the filter is live before the collector emits, then
+	// reconcile and roll back on collector-start failure.
+	s.telemetrySession.UpdateConfig(cfg)
 	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
+		s.rollbackTelemetry(true, prev)
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PatchTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to apply telemetry"}}, nil
 	}
-	s.telemetrySession.UpdateConfig(cfg)
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
 
 // reconcileTelemetryState reconciles the CDP collector and the api_call
 // (control) middleware to the desired category set. The collector runs iff a
 // CDP category is captured; the middleware emits iff the control category is.
-// It returns an error only when the collector fails to start, and performs the
-// fallible collector start before any other state change so callers can invoke
-// it before committing the config and leave nothing half-applied on failure.
+// Callers commit the session config first so the filter is live before the
+// collector emits; this returns an error only when the collector fails to
+// start, leaving the caller to roll back.
 func (s *ApiService) reconcileTelemetryState(cats []oapi.TelemetryEventCategory) error {
-	switch {
-	case events.HasCDPCategory(cats) && !s.cdpMonitor.IsRunning():
-		if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
-			return err
-		}
-	case !events.HasCDPCategory(cats) && s.cdpMonitor.IsRunning():
-		s.cdpMonitor.Stop()
-	}
-
 	if containsCategory(cats, events.Control) {
 		EnableTelemetryMiddleware()
 	} else {
 		DisableTelemetryMiddleware()
 	}
+
+	switch {
+	case events.HasCDPCategory(cats) && !s.cdpMonitor.IsRunning():
+		return s.cdpMonitor.Start(s.lifecycleCtx)
+	case !events.HasCDPCategory(cats) && s.cdpMonitor.IsRunning():
+		s.cdpMonitor.Stop()
+	}
 	return nil
+}
+
+// rollbackTelemetry restores telemetry to its prior state after a failed apply.
+// A fresh session is torn down; an updated session is reverted to prev. Reverting
+// never requires a fallible collector start (the failed start left it stopped),
+// so the reconcile here cannot fail.
+func (s *ApiService) rollbackTelemetry(wasActive bool, prev telemetry.TelemetryConfig) {
+	if !wasActive {
+		s.telemetrySession.Stop()
+		s.stopTelemetryState()
+		return
+	}
+	s.telemetrySession.UpdateConfig(prev)
+	_ = s.reconcileTelemetryState(prev.Categories)
 }
 
 // stopTelemetryState tears down the collector and middleware after a session is
