@@ -448,8 +448,29 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 	return nil
 }
 
-// waitForXRootSize polls the X root resolution via xrandr until it matches
-// the requested size, or the deadline expires. This is the authoritative
+// xRootSizeSatisfied reports whether an observed X root size (gotW×gotH)
+// satisfies a resize request to wantW×wantH. The Xorg dummy driver only
+// realizes even-numbered framebuffer dimensions, so a request for an odd
+// width or height legitimately lands one pixel larger (e.g. 1365 → 1366).
+// Accepting that next-even-up value keeps the check strict enough to catch
+// a resize that never took effect, without rejecting one that succeeded at
+// the nearest size the driver can produce.
+func xRootSizeSatisfied(gotW, gotH, wantW, wantH int) bool {
+	return sizeAxisSatisfied(gotW, wantW) && sizeAxisSatisfied(gotH, wantH)
+}
+
+// sizeAxisSatisfied matches one axis exactly, or — when the requested value
+// is odd — at the next even value the dummy driver rounds up to.
+func sizeAxisSatisfied(got, want int) bool {
+	if got == want {
+		return true
+	}
+	return want%2 == 1 && got == want+1
+}
+
+// waitForXRootSize polls the X root resolution via xrandr until it reaches
+// the requested size (allowing the dummy driver's even-number rounding), or
+// the deadline expires. This is the authoritative
 // post-condition for PATCH /display: the X root is what the server set
 // (via Neko or xrandr), and the rest of the stack — mutter, chromium —
 // follows from there. Polling the X root rather than chromium's window
@@ -478,7 +499,7 @@ func (s *ApiService) waitForXRootSize(ctx context.Context, width, height int, ti
 		lastErr = err
 		if err == nil {
 			lastW, lastH = w, h
-			if w == width && h == height {
+			if xRootSizeSatisfied(w, h, width, height) {
 				return nil
 			}
 		}

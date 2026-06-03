@@ -323,6 +323,30 @@ func TestResolveDisplayParams(t *testing.T) {
 	}
 }
 
+func TestXRootSizeSatisfied(t *testing.T) {
+	cases := []struct {
+		name                     string
+		gotW, gotH, wantW, wantH int
+		want                     bool
+	}{
+		{name: "exact even match", gotW: 1366, gotH: 768, wantW: 1366, wantH: 768, want: true},
+		{name: "exact odd match", gotW: 1365, gotH: 768, wantW: 1365, wantH: 768, want: true},
+		{name: "odd width rounds up to even", gotW: 1366, gotH: 768, wantW: 1365, wantH: 768, want: true},
+		{name: "odd height rounds up to even", gotW: 1366, gotH: 770, wantW: 1366, wantH: 769, want: true},
+		{name: "both axes round up", gotW: 1366, gotH: 770, wantW: 1365, wantH: 769, want: true},
+		{name: "resize never took effect", gotW: 1280, gotH: 720, wantW: 1365, wantH: 768, want: false},
+		{name: "rounded down is not accepted", gotW: 1364, gotH: 768, wantW: 1365, wantH: 768, want: false},
+		{name: "even target stays strict", gotW: 1367, gotH: 768, wantW: 1366, wantH: 768, want: false},
+		{name: "two pixels over is not accepted", gotW: 1367, gotH: 768, wantW: 1365, wantH: 768, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, xRootSizeSatisfied(tc.gotW, tc.gotH, tc.wantW, tc.wantH))
+		})
+	}
+}
+
 func TestHeadlessRefreshRateSticky(t *testing.T) {
 	t.Run("setViewportOverride records sticky rate", func(t *testing.T) {
 		svc := &ApiService{}
