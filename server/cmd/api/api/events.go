@@ -27,16 +27,21 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 		return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "type is required"}}, nil
 	}
 	ev := events.Event{Type: body.Type}
-
 	ev.Ts = time.Now().UnixMicro()
-	if body.Category != nil {
+
+	// Category is server-authoritative. A known event type is assigned its
+	// canonical category and any caller-supplied value is ignored; an unknown
+	// custom type must carry a valid category from the caller.
+	if cat, ok := events.CategoryForType(body.Type); ok {
+		ev.Category = cat
+	} else if body.Category != nil {
 		cat := oapi.TelemetryEventCategory(*body.Category)
 		if !cat.Valid() {
 			return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid category"}}, nil
 		}
 		ev.Category = cat
 	} else {
-		ev.Category = events.System
+		return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "category is required for unknown event type"}}, nil
 	}
 
 	if body.Source != nil {

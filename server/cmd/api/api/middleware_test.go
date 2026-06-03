@@ -80,7 +80,7 @@ func TestTelemetryMiddleware_EmitsApiCallEventOnDocumentedRoute(t *testing.T) {
 	require.Len(t, captured, 1)
 	ev := captured[0]
 	assert.Equal(t, "api_call", ev.Type)
-	assert.Equal(t, events.Api, ev.Category)
+	assert.Equal(t, events.Control, ev.Category)
 	assert.Equal(t, oapi.KernelApi, ev.Source.Kind)
 
 	var data struct {

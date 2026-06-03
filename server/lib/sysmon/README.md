@@ -77,10 +77,11 @@ docker run -d --rm --name chromium-headless-test \
 # Wait for the API.
 sleep 10 && curl -sf http://localhost:444/spec.json >/dev/null && echo "API up"
 
-# Configure telemetry so a session is active. The empty body captures every
-# browser category — system events flow regardless because Start force-includes
-# them. (Setting all browser categories to enabled:false is treated as
-# "clear the configuration" and tears the session down — don't do that here.)
+# Configure telemetry so a session is active. The empty body captures the
+# default set (every category except screenshot), which includes system, so
+# OOM/crash events flow. (Setting all browser categories to enabled:false is
+# treated as "clear the configuration" and tears the session down — don't do
+# that here.)
 curl -sf -X PUT http://localhost:444/telemetry \
   -H 'content-type: application/json' -d '{}'
 

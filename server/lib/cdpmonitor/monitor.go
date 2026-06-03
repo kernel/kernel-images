@@ -398,7 +398,7 @@ func (m *Monitor) initSession(ctx context.Context) {
 		m.publish(events.Event{
 			Ts:       time.Now().UnixMicro(),
 			Type:     EventMonitorInitFailed,
-			Category: events.System,
+			Category: events.Monitor,
 			Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 			Data:     initFailedData,
 		})
@@ -499,7 +499,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorDisconnected,
-		Category: events.System,
+		Category: events.Monitor,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 		Data:     disconnectedData,
 	})
@@ -533,7 +533,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 			m.publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
 				Type:     EventMonitorReconnectFailed,
-				Category: events.System,
+				Category: events.Monitor,
 				Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 				Data:     reconnectFailedData,
 			})
@@ -558,7 +558,7 @@ func (m *Monitor) handleUpstreamRestart(ctx context.Context, newURL string) {
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventMonitorReconnected,
-		Category: events.System,
+		Category: events.Monitor,
 		Source:   oapi.BrowserEventSource{Kind: oapi.LocalProcess},
 		Data:     reconnectedData,
 	})

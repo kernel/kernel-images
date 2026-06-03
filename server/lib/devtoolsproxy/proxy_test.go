@@ -484,8 +484,8 @@ func TestWebSocketProxyHandler_EmitsConnectAndDisconnect(t *testing.T) {
 	if got := captured[0].Type; got != "cdp_connect" {
 		t.Fatalf("first event type = %q, want cdp_connect", got)
 	}
-	if got := captured[0].Category; got != events.System {
-		t.Fatalf("first event category = %q, want system", got)
+	if got := captured[0].Category; got != events.Connection {
+		t.Fatalf("first event category = %q, want connection", got)
 	}
 
 	if got := captured[1].Type; got != "cdp_disconnect" {

@@ -1,5 +1,7 @@
 package events
 
+//go:generate go run github.com/kernel/kernel-images/server/scripts/categorygen -openapi ../../openapi.yaml -out category_gen.go
+
 import (
 	"encoding/json"
 	"log/slog"
@@ -15,19 +17,63 @@ const (
 	Network     = oapi.TelemetryEventCategory("network")
 	Page        = oapi.TelemetryEventCategory("page")
 	Interaction = oapi.TelemetryEventCategory("interaction")
-	Api         = oapi.TelemetryEventCategory("api")
+	Control     = oapi.TelemetryEventCategory("control")
+	Connection  = oapi.TelemetryEventCategory("connection")
 	System      = oapi.TelemetryEventCategory("system")
+	Screenshot  = oapi.TelemetryEventCategory("screenshot")
+	Captcha     = oapi.TelemetryEventCategory("captcha")
+	Monitor     = oapi.TelemetryEventCategory("monitor")
 )
 
-// AllCategories is the canonical list of all configurable event categories.
-// System events are always captured regardless of telemetry config.
-var AllCategories = []oapi.TelemetryEventCategory{
+// UserCategories are the categories a caller can configure via the telemetry
+// config. Monitor is excluded: it is CDP-collector health metadata that flows
+// automatically whenever a CDP category is captured, not a configurable knob.
+var UserCategories = []oapi.TelemetryEventCategory{
 	Console,
 	Network,
 	Page,
 	Interaction,
-	Api,
+	Control,
+	Connection,
 	System,
+	Screenshot,
+	Captcha,
+}
+
+// DefaultCategories is captured when the caller enables telemetry without
+// per-category settings: every configurable category except Screenshot, which
+// is high-volume base64 image data and therefore opt-in.
+var DefaultCategories = []oapi.TelemetryEventCategory{
+	Console,
+	Network,
+	Page,
+	Interaction,
+	Control,
+	Connection,
+	System,
+	Captcha,
+}
+
+// cdpCategories are produced by the CDP collector. Enabling any of them starts
+// the collector, and Monitor (collector health) rides along while it runs.
+var cdpCategories = map[oapi.TelemetryEventCategory]struct{}{
+	Console:     {},
+	Network:     {},
+	Page:        {},
+	Interaction: {},
+	Screenshot:  {},
+}
+
+// HasCDPCategory reports whether the set contains any CDP-collector category.
+// It is the single predicate gating both the collector start and Monitor
+// inclusion, so the two can never diverge.
+func HasCDPCategory(cats []oapi.TelemetryEventCategory) bool {
+	for _, c := range cats {
+		if _, ok := cdpCategories[c]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // Event is the portable event schema. It contains only producer-emitted content;

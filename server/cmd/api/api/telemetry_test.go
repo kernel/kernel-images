@@ -12,8 +12,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// allCategoriesDisabled returns a config with every configurable category set
+// to enabled:false (the clear signal).
+func allCategoriesDisabled() *oapi.BrowserTelemetryCategoriesConfig {
+	off := func() *oapi.BrowserTelemetryCategoryConfig {
+		f := false
+		return &oapi.BrowserTelemetryCategoryConfig{Enabled: &f}
+	}
+	return &oapi.BrowserTelemetryCategoriesConfig{
+		Console:     off(),
+		Network:     off(),
+		Page:        off(),
+		Interaction: off(),
+		Control:     off(),
+		Connection:  off(),
+		System:      off(),
+		Screenshot:  off(),
+		Captcha:     off(),
+	}
+}
+
 func TestTelemetryConfigFromOAPI(t *testing.T) {
-	t.Run("nil body returns defaults (all categories)", func(t *testing.T) {
+	t.Run("nil body returns defaults", func(t *testing.T) {
 		cfg, allDisabled, err := telemetryConfigFromOAPI(nil)
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
@@ -27,18 +47,39 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		assert.Empty(t, cfg.Categories)
 	})
 
-	t.Run("omitted enabled defaults to true", func(t *testing.T) {
+	t.Run("omitted enabled resolves to default state", func(t *testing.T) {
 		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Console: &oapi.BrowserTelemetryCategoryConfig{}, // Enabled is nil → defaults to true
+				Console: &oapi.BrowserTelemetryCategoryConfig{}, // Enabled nil → default state (on)
 			},
 		})
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
 		assert.Contains(t, cfg.Categories, events.Console)
+		// Screenshot is off by default and must stay off when unspecified.
+		assert.NotContains(t, cfg.Categories, events.Screenshot)
 	})
 
-	t.Run("all false returns allDisabled=true", func(t *testing.T) {
+	t.Run("screenshot is opt-in", func(t *testing.T) {
+		tr := true
+		cfg, _, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Screenshot: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+			},
+		})
+		require.NoError(t, err)
+		assert.Contains(t, cfg.Categories, events.Screenshot)
+	})
+
+	t.Run("all configurable categories false returns allDisabled=true", func(t *testing.T) {
+		_, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
+			Browser: allCategoriesDisabled(),
+		})
+		require.NoError(t, err)
+		assert.True(t, allDisabled)
+	})
+
+	t.Run("disabling only the default-on categories does not clear", func(t *testing.T) {
 		f := false
 		_, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
@@ -46,14 +87,14 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 			},
 		})
 		require.NoError(t, err)
-		assert.True(t, allDisabled)
+		// control/connection/system/captcha remain at their default-on state.
+		assert.False(t, allDisabled)
 	})
 
-	t.Run("mixed enabled flags", func(t *testing.T) {
+	t.Run("mixed enabled flags resolve unspecified to default", func(t *testing.T) {
 		tr, f := true, false
 		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
@@ -63,7 +104,11 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		})
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
-		assert.Len(t, cfg.Categories, 4) // console + page + interaction + api (network=false, others default true)
+		// network off; screenshot default off; the other 7 default-on categories remain.
+		assert.Contains(t, cfg.Categories, events.Console)
+		assert.NotContains(t, cfg.Categories, events.Network)
+		assert.NotContains(t, cfg.Categories, events.Screenshot)
+		assert.Len(t, cfg.Categories, len(events.DefaultCategories)-1)
 	})
 }
 
@@ -119,17 +164,8 @@ func TestPutTelemetry(t *testing.T) {
 		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
 		require.NoError(t, err)
 
-		f := false
 		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
-			Body: &oapi.BrowserTelemetryConfig{
-				Browser: &oapi.BrowserTelemetryCategoriesConfig{
-					Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				},
-			},
+			Body: &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()},
 		})
 		require.NoError(t, err)
 		r200, ok := resp.(oapi.PutTelemetry200JSONResponse)
@@ -137,10 +173,8 @@ func TestPutTelemetry(t *testing.T) {
 		require.NotNil(t, r200.Config.Browser)
 		require.NotNil(t, r200.Config.Browser.Console)
 		assert.False(t, *r200.Config.Browser.Console.Enabled)
-		assert.False(t, *r200.Config.Browser.Network.Enabled)
-		assert.False(t, *r200.Config.Browser.Page.Enabled)
-		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
-		assert.False(t, *r200.Config.Browser.Api.Enabled)
+		assert.False(t, *r200.Config.Browser.Control.Enabled)
+		assert.False(t, *r200.Config.Browser.System.Enabled)
 		assert.Nil(t, r200.AppliedAt, "applied_at must be omitted when telemetry is unconfigured")
 	})
 }
@@ -156,33 +190,25 @@ func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
 	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
 		Body: &oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Api: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				Control: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
 			},
 		},
 	})
 	require.NoError(t, err)
-	assert.True(t, TelemetryMiddlewareEnabled(), "PUT with api=true should enable middleware")
+	assert.True(t, TelemetryMiddlewareEnabled(), "PUT with control=true should enable middleware")
 
 	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
 		Body: &oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Api: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Control: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
 			},
 		},
 	})
 	require.NoError(t, err)
-	assert.False(t, TelemetryMiddlewareEnabled(), "PATCH api=false should disable middleware (other categories still active)")
+	assert.False(t, TelemetryMiddlewareEnabled(), "PATCH control=false should disable middleware (other categories still active)")
 
 	_, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
-		Body: &oapi.BrowserTelemetryConfig{
-			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-			},
-		},
+		Body: &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()},
 	})
 	require.NoError(t, err)
 	assert.False(t, TelemetryMiddlewareEnabled(), "all-disabled PUT should leave middleware off")
@@ -266,17 +292,8 @@ func TestPatchTelemetry(t *testing.T) {
 		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
 		require.NoError(t, err)
 
-		f := false
 		resp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
-			Body: &oapi.BrowserTelemetryConfig{
-				Browser: &oapi.BrowserTelemetryCategoriesConfig{
-					Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				},
-			},
+			Body: &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()},
 		})
 		require.NoError(t, err)
 		r200, ok := resp.(oapi.PatchTelemetry200JSONResponse)
@@ -284,10 +301,8 @@ func TestPatchTelemetry(t *testing.T) {
 		require.NotNil(t, r200.Config.Browser)
 		require.NotNil(t, r200.Config.Browser.Console)
 		assert.False(t, *r200.Config.Browser.Console.Enabled)
-		assert.False(t, *r200.Config.Browser.Network.Enabled)
-		assert.False(t, *r200.Config.Browser.Page.Enabled)
-		assert.False(t, *r200.Config.Browser.Interaction.Enabled)
-		assert.False(t, *r200.Config.Browser.Api.Enabled)
+		assert.False(t, *r200.Config.Browser.Control.Enabled)
+		assert.False(t, *r200.Config.Browser.System.Enabled)
 	})
 
 	t.Run("put returns 201 after patch clears configuration", func(t *testing.T) {
@@ -295,17 +310,8 @@ func TestPatchTelemetry(t *testing.T) {
 		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
 		require.NoError(t, err)
 
-		f := false
 		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
-			Body: &oapi.BrowserTelemetryConfig{
-				Browser: &oapi.BrowserTelemetryCategoriesConfig{
-					Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-					Api:         &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				},
-			},
+			Body: &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()},
 		})
 		require.NoError(t, err)
 

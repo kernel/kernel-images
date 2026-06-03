@@ -85,7 +85,7 @@ func (m *Monitor) captureScreenshot(parentCtx context.Context, sourceEvent strin
 	m.publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     EventScreenshot,
-		Category: events.System,
+		Category: events.Screenshot,
 		Source:   src,
 		Data:     data,
 	})

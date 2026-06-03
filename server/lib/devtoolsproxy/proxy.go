@@ -471,7 +471,7 @@ func publishCdpConnect(publish EventPublisher) {
 	publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     "cdp_connect",
-		Category: events.System,
+		Category: events.Connection,
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
 	})
 }
@@ -488,7 +488,7 @@ func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconne
 	publish(events.Event{
 		Ts:       disconnectedAt.UnixMicro(),
 		Type:     "cdp_disconnect",
-		Category: events.System,
+		Category: events.Connection,
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
 		Data:     data,
 	})

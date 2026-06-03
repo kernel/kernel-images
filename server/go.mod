@@ -29,6 +29,7 @@ require (
 	golang.org/x/sync v0.17.0
 	golang.org/x/sys v0.39.0
 	golang.org/x/term v0.37.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -106,7 +107,6 @@ require (
 	golang.org/x/tools v0.37.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/gorm v1.25.7 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect

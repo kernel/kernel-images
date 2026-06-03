@@ -182,19 +182,28 @@ func TestTelemetrySession(t *testing.T) {
 		assert.JSONEq(t, `{"url":"https://example.com"}`, string(env.Event.Data))
 	})
 
-	t.Run("system_events_always_captured_regardless_of_config", func(t *testing.T) {
+	t.Run("monitor events ride along when a CDP category is enabled", func(t *testing.T) {
 		ts := NewTelemetrySession(newTestEventStream(t, 10))
-		// Start with only console category — system should still pass through.
-		ts.Start("sys-test", TelemetryConfig{Categories: []oapi.TelemetryEventCategory{events.Console}})
+		// Console is a CDP category, so collector-health (monitor) rides along.
+		ts.Start("mon-test", TelemetryConfig{Categories: []oapi.TelemetryEventCategory{events.Console}})
 		reader := ts.NewReader(0)
 
-		ts.Publish(events.Event{Type: "monitor.disconnected", Category: events.System, Source: oapi.BrowserEventSource{Kind: oapi.KernelApi}, Ts: 1})
+		ts.Publish(events.Event{Type: "monitor_disconnected", Category: events.Monitor, Source: oapi.BrowserEventSource{Kind: oapi.KernelApi}, Ts: 1})
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
 		env := readEnvelope(t, reader, ctx)
-		assert.Equal(t, events.System, env.Event.Category)
+		assert.Equal(t, events.Monitor, env.Event.Category)
+	})
+
+	t.Run("monitor events dropped without a CDP category", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		// System-only: the CDP collector never runs, so monitor must not flow.
+		ts.Start("no-cdp", TelemetryConfig{Categories: []oapi.TelemetryEventCategory{events.System}})
+
+		_, ok := ts.Publish(events.Event{Type: "monitor_disconnected", Category: events.Monitor, Source: oapi.BrowserEventSource{Kind: oapi.KernelApi}, Ts: 1})
+		assert.False(t, ok, "monitor event should be dropped when no CDP category is enabled")
 	})
 
 	t.Run("truncation_applied", func(t *testing.T) {

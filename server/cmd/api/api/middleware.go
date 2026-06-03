@@ -64,7 +64,7 @@ func TelemetryHTTPMiddleware(publish func(events.Event) (events.Envelope, bool))
 			publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
 				Type:     "api_call",
-				Category: events.Api,
+				Category: events.Control,
 				Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
 				Data:     data,
 			})

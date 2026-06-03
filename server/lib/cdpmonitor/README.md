@@ -115,7 +115,7 @@ Every event arrives as an `Envelope`:
 | `seq` | uint64 | Process-monotonic sequence number; does not reset across telemetry config changes. |
 | `event.ts` | int64 | Wall-clock time the monitor emitted the event, as **Unix microseconds** (µs since epoch). |
 | `event.type` | string | See [Event taxonomy](#event-taxonomy). |
-| `event.category` | string | One of: `console`, `network`, `page`, `interaction`, `system`. |
+| `event.category` | string | Emitted by this monitor: `console`, `network`, `page`, `interaction`, `screenshot`, `monitor` (collector health). |
 | `event.truncated` | bool | `true` if `data` was nulled to fit the 1 MB pipeline limit. |
 | `event.source.metadata.telemetry_session_id` | string | Pipeline-assigned ID for the telemetry session, stamped by the telemetry layer. |
 

@@ -9,11 +9,11 @@ import (
 )
 
 // TelemetryConfig holds caller-supplied telemetry preferences. All fields are
-// optional; zero values mean "use server defaults" (all user-facing categories
-// plus system events).
+// optional; zero values mean "use server defaults" (events.DefaultCategories).
 type TelemetryConfig struct {
-	// Categories limits which event categories are captured.
-	// nil or empty captures all user-facing categories plus system events.
+	// Categories limits which event categories are captured. nil or empty
+	// captures events.DefaultCategories. Monitor is added automatically when
+	// any CDP category is present and is not configurable here.
 	Categories []oapi.TelemetryEventCategory
 }
 
@@ -38,11 +38,24 @@ func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
 	if es == nil {
 		panic("telemetry: NewTelemetrySession requires a non-nil EventStream")
 	}
-	cats := make(map[oapi.TelemetryEventCategory]struct{}, len(events.AllCategories))
-	for _, c := range events.AllCategories {
-		cats[c] = struct{}{}
+	return &TelemetrySession{es: es, categories: categorySet(nil)}
+}
+
+// categorySet builds the active filter set from the configured categories. An
+// empty config falls back to the default set. Monitor is included whenever any
+// CDP category is present, since collector-health rides along with CDP data.
+func categorySet(cats []oapi.TelemetryEventCategory) map[oapi.TelemetryEventCategory]struct{} {
+	if len(cats) == 0 {
+		cats = events.DefaultCategories
 	}
-	return &TelemetrySession{es: es, categories: cats}
+	set := make(map[oapi.TelemetryEventCategory]struct{}, len(cats)+1)
+	for _, c := range cats {
+		set[c] = struct{}{}
+	}
+	if events.HasCDPCategory(cats) {
+		set[events.Monitor] = struct{}{}
+	}
+	return set
 }
 
 // Start begins a new telemetry session with the given ID and config. Sequence
@@ -54,18 +67,7 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.id = telemetrySessionID
 	s.sessionStartSeq = s.es.Seq()
 	s.appliedAt = time.Now()
-
-	// Build the category filter. CategorySystem is always included so
-	// kernel_api events (e.g. monitor_disconnected) are never dropped.
-	cats := cfg.Categories
-	if len(cats) == 0 {
-		cats = events.AllCategories
-	}
-	s.categories = make(map[oapi.TelemetryEventCategory]struct{}, len(cats)+1)
-	for _, c := range cats {
-		s.categories[c] = struct{}{}
-	}
-	s.categories[events.System] = struct{}{}
+	s.categories = categorySet(cfg.Categories)
 }
 
 // publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
@@ -146,16 +148,7 @@ func (s *TelemetrySession) AppliedAt() time.Time {
 func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// CategorySystem is always included so kernel_api events are never dropped.
-	cats := cfg.Categories
-	if len(cats) == 0 {
-		cats = events.AllCategories
-	}
-	s.categories = make(map[oapi.TelemetryEventCategory]struct{}, len(cats)+1)
-	for _, c := range cats {
-		s.categories[c] = struct{}{}
-	}
-	s.categories[events.System] = struct{}{}
+	s.categories = categorySet(cfg.Categories)
 }
 
 // Active reports whether a telemetry session is currently running.

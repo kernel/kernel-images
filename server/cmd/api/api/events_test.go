@@ -54,9 +54,10 @@ func TestEventLifecycle(t *testing.T) {
 		}
 	}()
 
-	// Publish an event.
+	// Publish a custom event. Unknown types must carry an explicit category.
+	sys := oapi.PublishEventRequestCategorySystem
 	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
-		Body: &oapi.PublishEventRequest{Type: "test.event"},
+		Body: &oapi.PublishEventRequest{Type: "test.event", Category: &sys},
 	})
 	require.NoError(t, err)
 	r200pub, ok := resp.(publishTelemetryEventOKResponse)
@@ -73,17 +74,9 @@ func TestEventLifecycle(t *testing.T) {
 		t.Fatal("timed out waiting for test.event")
 	}
 
-	// Stop telemetry by disabling all categories.
-	f := false
+	// Stop telemetry by disabling every category.
 	stopResp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
-		Body: &oapi.BrowserTelemetryConfig{
-			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-			},
-		},
+		Body: &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()},
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.PatchTelemetry200JSONResponse{}, stopResp)
@@ -94,11 +87,45 @@ func TestPublishDroppedWhenTelemetryInactive(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, newMockRecordManager())
 
+	sys := oapi.PublishEventRequestCategorySystem
 	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
-		Body: &oapi.PublishEventRequest{Type: "test.event"},
+		Body: &oapi.PublishEventRequest{Type: "test.event", Category: &sys},
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "filtered events should return 204")
+}
+
+func TestPublishRequiresCategoryForUnknownType(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+		Body: &oapi.PublishEventRequest{Type: "custom.unknown"},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.PublishTelemetryEvent400JSONResponse{}, resp, "unknown type without a category must 400")
+}
+
+func TestPublishKnownTypeCategoryIsServerAuthoritative(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	// api_call is a known type that maps to the control category. A caller
+	// supplying a different category must be overridden by the server.
+	console := oapi.PublishEventRequestCategoryConsole
+	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+		Body: &oapi.PublishEventRequest{Type: "api_call", Category: &console},
+	})
+	require.NoError(t, err)
+	okResp, ok := resp.(publishTelemetryEventOKResponse)
+	require.True(t, ok, "expected 200, got %T", resp)
+	assert.Equal(t, events.Control, okResp.env.Event.Category)
 }
 
 func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {

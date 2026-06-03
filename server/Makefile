@@ -21,6 +21,7 @@ oapi-generate:
 	@echo "Fixing oapi-codegen issue https://github.com/oapi-codegen/oapi-codegen/issues/1764..."
 	go run ./scripts/oapi/patch_sse_methods -file ./lib/oapi/oapi.go -expected-replacements 4
 	go fmt ./lib/oapi/oapi.go
+	go generate ./lib/events/...
 	go mod tidy
 
 build: | $(BIN_DIR)
