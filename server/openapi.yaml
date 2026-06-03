@@ -1298,9 +1298,10 @@ paths:
       summary: Set telemetry configuration
       description: >
         Sets the telemetry configuration. Returns 201 if telemetry was not
-        previously configured; returns 200 if it was. Setting every configurable
-        category to enabled: false clears the configuration; this is idempotent
-        when telemetry is not configured.
+        previously configured; returns 200 if it was. Selection is opt-in: a
+        request that enables no categories (a browser config with nothing set to
+        true, or every category disabled) clears the configuration; this is
+        idempotent when telemetry is not configured.
       operationId: putTelemetry
       requestBody:
         required: false
@@ -1565,14 +1566,16 @@ components:
     BrowserTelemetryConfig:
       type: object
       description: >
-        Telemetry configuration for a browser. Per-category capture settings.
-        Omit the browser key (or send an empty object) to capture the default
-        set: every category except `screenshot`, which is heavy and opt-in.
-        Within `browser`, omit a category to leave it at its default state, or
-        set enabled true/false to override. Set every configurable category to
-        enabled: false to clear the telemetry configuration. The `monitor`
-        category (CDP collector health) is not configurable here; it flows
-        automatically whenever a CDP category is captured.
+        Telemetry configuration for a browser. Selection is opt-in. Omit the
+        browser key (or send an empty object) to capture the default set:
+        lightweight operational signals (control, connection, system, captcha).
+        Within `browser`, only the categories you set enabled: true are
+        captured; anything omitted is off. The CDP categories (console, network,
+        page, interaction) and `screenshot` are off by default and must be
+        opted into. A `browser` config with nothing enabled clears the
+        telemetry configuration. The `monitor` category (CDP collector health)
+        is not configurable here; it flows automatically whenever a CDP category
+        is captured.
       properties:
         browser:
           $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
@@ -1616,12 +1619,12 @@ components:
         enabled:
           type: boolean
           description: >
-            Whether this category is captured. In PUT requests, omitting this field
-            leaves the category at its default state (every category on except
-            `screenshot`). In PATCH requests, omitting this field (or sending an
-            empty object `{}`) is a no-op; the category retains its current state.
-            To enable or disable a category via PATCH, you must send an explicit
-            `true` or `false`.
+            Whether this category is captured. In PUT requests selection is opt-in:
+            omitting this field (or the whole category) leaves the category off, so
+            a PUT captures exactly the categories set to true. In PATCH requests,
+            omitting this field (or sending an empty object `{}`) is a no-op; the
+            category retains its current state. To enable or disable a category via
+            PATCH, you must send an explicit `true` or `false`.
       additionalProperties: false
     BrowserCallStack:
       type: object
