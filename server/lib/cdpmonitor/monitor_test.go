@@ -21,7 +21,7 @@ func TestLifecycle(t *testing.T) {
 
 	ec := newEventCollector()
 	upstream := newTestUpstream(srv.wsURL())
-	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	m := New(upstream, ec.publishFn(), 99, discardLogger, nil)
 
 	assert.False(t, m.IsRunning(), "idle at boot")
 
@@ -48,7 +48,7 @@ func TestReconnect(t *testing.T) {
 
 	upstream := newTestUpstream(srv1.wsURL())
 	ec := newEventCollector()
-	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	m := New(upstream, ec.publishFn(), 99, discardLogger, nil)
 	require.NoError(t, m.Start(context.Background()))
 	defer m.Stop()
 
@@ -110,6 +110,16 @@ func TestScreenshot(t *testing.T) {
 		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
 		require.Eventually(t, func() bool { return captureCount.Load() > before }, 2*time.Second, 20*time.Millisecond)
 	})
+
+	t.Run("skips_capture_when_screenshot_disabled", func(t *testing.T) {
+		m.screenshotEnabled = func() bool { return false }
+		defer func() { m.screenshotEnabled = nil }()
+		m.lastScreenshotAt.Store(time.Now().Add(-3 * time.Second).UnixMilli())
+		before := captureCount.Load()
+		m.tryScreenshot(context.Background(), "Page.loadEventFired", "")
+		time.Sleep(100 * time.Millisecond)
+		assert.Equal(t, before, captureCount.Load(), "no ffmpeg capture when screenshot category is disabled")
+	})
 }
 
 // TestFailPendingCommandsUnblocksSend verifies that clearState (called during
@@ -117,7 +127,7 @@ func TestScreenshot(t *testing.T) {
 func TestFailPendingCommandsUnblocksSend(t *testing.T) {
 	ec := newEventCollector()
 	upstream := newTestUpstream("ws://127.0.0.1:0")
-	m := New(upstream, ec.publishFn(), 0, discardLogger)
+	m := New(upstream, ec.publishFn(), 0, discardLogger, nil)
 
 	// Pre-register a fake pending command channel as if send() had registered it.
 	id := int64(42)
@@ -152,7 +162,7 @@ func TestInitSessionAutoAttachFailure(t *testing.T) {
 
 	ec := newEventCollector()
 	upstream := newTestUpstream(srv.wsURL())
-	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	m := New(upstream, ec.publishFn(), 99, discardLogger, nil)
 	require.NoError(t, m.Start(context.Background()))
 	defer m.Stop()
 
@@ -178,7 +188,7 @@ func TestAutoAttach(t *testing.T) {
 
 	ec := newEventCollector()
 	upstream := newTestUpstream(srv.wsURL())
-	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	m := New(upstream, ec.publishFn(), 99, discardLogger, nil)
 	require.NoError(t, m.Start(context.Background()))
 	defer m.Stop()
 

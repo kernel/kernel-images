@@ -151,6 +151,18 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	s.categories = categorySet(cfg.Categories)
 }
 
+// CategoryEnabled reports whether events in category c are currently captured.
+// It returns false when no session is active.
+func (s *TelemetrySession) CategoryEnabled(c oapi.TelemetryEventCategory) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.id == "" {
+		return false
+	}
+	_, ok := s.categories[c]
+	return ok
+}
+
 // Active reports whether a telemetry session is currently running.
 func (s *TelemetrySession) Active() bool {
 	s.mu.Lock()

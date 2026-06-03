@@ -20,6 +20,12 @@ import (
 // sourceEvent is the CDP event that triggered the capture; sessionID is used
 // to snapshot nav context before the async goroutine fires.
 func (m *Monitor) tryScreenshot(ctx context.Context, sourceEvent, sessionID string) {
+	// Skip the ffmpeg capture entirely when the screenshot category is not
+	// captured; otherwise the frame would be taken only to be dropped at the
+	// telemetry filter.
+	if m.screenshotEnabled != nil && !m.screenshotEnabled() {
+		return
+	}
 	now := time.Now().UnixMilli()
 	last := m.lastScreenshotAt.Load()
 	if now-last < 2000 {

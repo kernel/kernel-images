@@ -121,7 +121,8 @@ func New(
 		return nil, fmt.Errorf("eventStream cannot be nil")
 	}
 
-	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default())
+	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
+	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default(), screenshotEnabled)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{

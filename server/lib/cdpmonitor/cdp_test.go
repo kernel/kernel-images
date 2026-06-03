@@ -293,7 +293,7 @@ func startMonitor(t *testing.T, srv *testServer, fn ResponderFunc) (*Monitor, *e
 	t.Helper()
 	ec := newEventCollector()
 	upstream := newTestUpstream(srv.wsURL())
-	m := New(upstream, ec.publishFn(), 99, discardLogger)
+	m := New(upstream, ec.publishFn(), 99, discardLogger, nil)
 	require.NoError(t, m.Start(context.Background()))
 
 	// Closed when Target.getTargets is responded to (last command of initSession).
@@ -341,7 +341,7 @@ func newComputedMonitor(t *testing.T) (*Monitor, *eventCollector) {
 	t.Helper()
 	ec := newEventCollector()
 	upstream := newTestUpstream("ws://127.0.0.1:0")
-	m := New(upstream, ec.publishFn(), 0, discardLogger)
+	m := New(upstream, ec.publishFn(), 0, discardLogger, nil)
 	return m, ec
 }
 
