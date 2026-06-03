@@ -457,7 +457,6 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 	}
 }
 
-
 // navigateBlank points the active page at about:blank via playwright so the
 // renderer is alive before we query window dimensions.
 func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
@@ -522,4 +521,68 @@ func waitForXRootResolution(t *testing.T, ctx context.Context, c *TestContainer,
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
+}
+
+// waitForXRootNear polls the X root until each axis is within tol pixels of the
+// requested size. The Xorg dummy driver only realizes even framebuffer
+// dimensions, so an odd request lands one pixel larger and an exact match is
+// not guaranteed.
+func waitForXRootNear(t *testing.T, ctx context.Context, c *TestContainer, wantW, wantH, tol int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		w, h, err := getXRootResolution(ctx, c)
+		if err == nil && abs(w-wantW) <= tol && abs(h-wantH) <= tol {
+			t.Logf("x_root_resolution: %dx%d (within %dpx of %dx%d)", w, h, tol, wantW, wantH)
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("x root never reached within %dpx of %dx%d: lastW=%d lastH=%d err=%v", tol, wantW, wantH, w, h, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context cancelled waiting for x root near %dx%d: %v", wantW, wantH, ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+// TestDisplayResizeOddDimensions reproduces the production failure where a
+// PATCH /display to an odd-numbered dimension returned 500 and tainted the
+// browser instance. The dummy driver rounds an odd request up to the nearest
+// even size, so the X root settles one pixel larger; the resize post-check
+// must treat that as success rather than a mismatch.
+//
+// Runs on the neko (WebRTC) path — the production configuration — which
+// creates the requested mode dynamically. The non-neko xrandr path can only
+// select pre-defined even modelines, so it can't exercise an odd request.
+func TestDisplayResizeOddDimensions(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	env := map[string]string{
+		"WIDTH":               "1024",
+		"HEIGHT":              "768",
+		"ENABLE_WEBRTC":       "true",
+		"NEKO_ADMIN_PASSWORD": "admin",
+		"CHROMIUM_FLAGS":      "--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*",
+	}
+
+	c := NewTestContainer(t, headfulImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: env}), "failed to start container")
+	defer c.Stop(ctx)
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+	navigateBlank(t, ctx, c)
+
+	// Odd width and height. Pre-fix the X-root post-check timed out (the root
+	// landed one pixel larger than requested) and PATCH returned 500, which
+	// tainted the instance. The resize must now succeed.
+	const oddW, oddH = 1365, 769
+	patchDisplayExpectingOK(t, ctx, c, oddW, oddH, 60)
+	waitForXRootNear(t, ctx, c, oddW, oddH, 1, 30*time.Second)
 }
