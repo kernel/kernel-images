@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -33,18 +34,18 @@ func allCategoriesDisabled() *oapi.BrowserTelemetryCategoriesConfig {
 }
 
 func TestTelemetryConfigFromOAPI(t *testing.T) {
-	t.Run("nil body returns defaults", func(t *testing.T) {
+	t.Run("nil body returns the default set", func(t *testing.T) {
 		cfg, allDisabled, err := telemetryConfigFromOAPI(nil)
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
-		assert.Empty(t, cfg.Categories)
+		assert.ElementsMatch(t, events.DefaultCategories, cfg.Categories)
 	})
 
-	t.Run("nil browser key returns defaults", func(t *testing.T) {
+	t.Run("nil browser key returns the default set", func(t *testing.T) {
 		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{})
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
-		assert.Empty(t, cfg.Categories)
+		assert.ElementsMatch(t, events.DefaultCategories, cfg.Categories)
 	})
 
 	t.Run("omitted enabled resolves to default state", func(t *testing.T) {
@@ -355,3 +356,53 @@ type stubCdpMonitor struct{}
 func (s *stubCdpMonitor) Start(_ context.Context) error { return nil }
 func (s *stubCdpMonitor) Stop()                         {}
 func (s *stubCdpMonitor) IsRunning() bool               { return false }
+
+// failingCdpMonitor always fails to start, to exercise the reconcile-before-commit path.
+type failingCdpMonitor struct{ running bool }
+
+func (f *failingCdpMonitor) Start(_ context.Context) error {
+	return errors.New("collector start failed")
+}
+func (f *failingCdpMonitor) Stop()           { f.running = false }
+func (f *failingCdpMonitor) IsRunning() bool { return f.running }
+
+func TestTelemetryCollectorFailureLeavesConfigUnchanged(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("fresh PUT failure starts no session", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		svc.cdpMonitor = &failingCdpMonitor{}
+
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.PutTelemetry500JSONResponse{}, resp)
+		assert.False(t, svc.telemetrySession.Active(), "failed collector start must not leave a session active")
+	})
+
+	t.Run("PATCH failure keeps the prior config", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		// Start a session that does not need the CDP collector (system only).
+		tr := true
+		start := allCategoriesDisabled()
+		start.System = &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{Browser: start},
+		})
+		require.NoError(t, err)
+		before := svc.telemetrySession.Config().Categories
+
+		// Now the collector cannot start; enabling a CDP category must fail
+		// without mutating the session config.
+		svc.cdpMonitor = &failingCdpMonitor{}
+		resp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{
+				Browser: &oapi.BrowserTelemetryCategoriesConfig{
+					Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				},
+			},
+		})
+		require.NoError(t, err)
+		assert.IsType(t, oapi.PatchTelemetry500JSONResponse{}, resp)
+		assert.ElementsMatch(t, before, svc.telemetrySession.Config().Categories, "failed PATCH must not change the persisted config")
+	})
+}

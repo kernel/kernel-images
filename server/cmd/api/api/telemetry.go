@@ -41,30 +41,23 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	if allDisabled {
 		if wasActive {
 			s.telemetrySession.Stop()
-			_ = s.applyTelemetryState()
+			s.stopTelemetryState()
 		}
 		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
-	if wasActive {
-		s.telemetrySession.UpdateConfig(cfg)
-	} else {
-		s.telemetrySession.Start(cuid2.Generate(), cfg)
-	}
-
-	if err := s.applyTelemetryState(); err != nil {
-		if !wasActive {
-			// Roll back the freshly started session so a retry can succeed.
-			s.telemetrySession.Stop()
-			_ = s.applyTelemetryState()
-		}
+	// Reconcile the collector before committing the config so a startup failure
+	// leaves no partial state: the session keeps its prior config on error.
+	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PutTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start telemetry"}}, nil
 	}
 
 	if wasActive {
+		s.telemetrySession.UpdateConfig(cfg)
 		return oapi.PutTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
+	s.telemetrySession.Start(cuid2.Generate(), cfg)
 	return oapi.PutTelemetry201JSONResponse(s.buildTelemetryResponse()), nil
 }
 
@@ -86,45 +79,51 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	cfg, allDisabled := mergeTelemetryConfig(s.telemetrySession.Config(), req.Body.Browser)
 	if allDisabled {
 		s.telemetrySession.Stop()
-		_ = s.applyTelemetryState()
+		s.stopTelemetryState()
 		return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
-	s.telemetrySession.UpdateConfig(cfg)
-	if err := s.applyTelemetryState(); err != nil {
+	// Reconcile before committing so a collector startup failure leaves the
+	// session on its prior config rather than half-applied.
+	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PatchTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to apply telemetry"}}, nil
 	}
+	s.telemetrySession.UpdateConfig(cfg)
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
 
-// applyTelemetryState reconciles the CDP collector and the api_call (control)
-// middleware with the active telemetry config. The CDP collector runs iff a CDP
-// category is captured; the middleware emits iff the control category is. Call
-// after any session change.
-func (s *ApiService) applyTelemetryState() error {
-	if !s.telemetrySession.Active() {
-		if s.cdpMonitor.IsRunning() {
-			s.cdpMonitor.Stop()
+// reconcileTelemetryState reconciles the CDP collector and the api_call
+// (control) middleware to the desired category set. The collector runs iff a
+// CDP category is captured; the middleware emits iff the control category is.
+// It returns an error only when the collector fails to start, and performs the
+// fallible collector start before any other state change so callers can invoke
+// it before committing the config and leave nothing half-applied on failure.
+func (s *ApiService) reconcileTelemetryState(cats []oapi.TelemetryEventCategory) error {
+	switch {
+	case events.HasCDPCategory(cats) && !s.cdpMonitor.IsRunning():
+		if err := s.cdpMonitor.Start(s.lifecycleCtx); err != nil {
+			return err
 		}
-		DisableTelemetryMiddleware()
-		return nil
+	case !events.HasCDPCategory(cats) && s.cdpMonitor.IsRunning():
+		s.cdpMonitor.Stop()
 	}
 
-	cats := s.telemetrySession.Config().Categories
 	if containsCategory(cats, events.Control) {
 		EnableTelemetryMiddleware()
 	} else {
 		DisableTelemetryMiddleware()
 	}
+	return nil
+}
 
-	switch {
-	case events.HasCDPCategory(cats) && !s.cdpMonitor.IsRunning():
-		return s.cdpMonitor.Start(s.lifecycleCtx)
-	case !events.HasCDPCategory(cats) && s.cdpMonitor.IsRunning():
+// stopTelemetryState tears down the collector and middleware after a session is
+// cleared.
+func (s *ApiService) stopTelemetryState() {
+	if s.cdpMonitor.IsRunning() {
 		s.cdpMonitor.Stop()
 	}
-	return nil
+	DisableTelemetryMiddleware()
 }
 
 // buildTelemetryResponse constructs a TelemetryState response from the current configuration.
@@ -182,8 +181,10 @@ func containsCategory(cats []oapi.TelemetryEventCategory, target oapi.TelemetryE
 // config, whether every configurable category ended up disabled (stop signal), and any error.
 func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool, error) {
 	if cfg == nil || cfg.Browser == nil {
-		// No config provided: the default set is applied downstream.
-		return telemetry.TelemetryConfig{}, false, nil
+		// No per-category settings: resolve to the explicit default set so the
+		// effective categories are known before the collector is reconciled.
+		cats := append([]oapi.TelemetryEventCategory(nil), events.DefaultCategories...)
+		return telemetry.TelemetryConfig{Categories: cats}, false, nil
 	}
 
 	defaultOn := categorySetOf(events.DefaultCategories)
