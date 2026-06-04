@@ -59,7 +59,64 @@ func TestNewHypemanBackendWithConfig(t *testing.T) {
 	if b == nil {
 		t.Fatal("expected non-nil backend")
 	}
-	if b.Container() != nil {
-		t.Fatal("hypeman backend Container() must be nil")
+}
+
+// TestHypemanRawIPMode verifies endpoint derivation in the default raw-IP mode
+// (no ingress domain): the private IP on the fixed guest ports.
+func TestHypemanRawIPMode(t *testing.T) {
+	b := &hypemanBackend{ip: "10.1.2.3"}
+	for _, tc := range []struct{ name, got, want string }{
+		{"api", b.APIBaseURL(), "http://10.1.2.3:10001"},
+		{"cdp", b.CDPURL(), "ws://10.1.2.3:9222/"},
+		{"cdpAddr", b.CDPAddr(), "10.1.2.3:9222"},
+		{"cd", b.ChromeDriverURL(), "http://10.1.2.3:9224"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+// TestHypemanIngressRouting verifies hostname-routed endpoints and that the
+// shared ingress params describe one wildcard rule per role on the proxy's
+// plaintext listen port. The instance name contains dashes, which must end up
+// inside the {instance} capture, not split the role suffix.
+func TestHypemanIngressRouting(t *testing.T) {
+	b := &hypemanBackend{name: "ki-e2e-abc123", ingressDomain: "e2e.hypeman.dev"}
+	for _, tc := range []struct{ name, got, want string }{
+		{"api", b.APIBaseURL(), "http://ki-e2e-abc123-api.e2e.hypeman.dev:80"},
+		{"cdp", b.CDPURL(), "ws://ki-e2e-abc123-cdp.e2e.hypeman.dev:80/"},
+		{"cdpAddr", b.CDPAddr(), "ki-e2e-abc123-cdp.e2e.hypeman.dev:80"},
+		{"cd", b.ChromeDriverURL(), "http://ki-e2e-abc123-cd.e2e.hypeman.dev:80"},
+		{"pattern", b.ingressPatternHost("api"), "{instance}-api.e2e.hypeman.dev"},
+	} {
+		if tc.got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+
+	p := b.desiredIngressParams()
+	if p.Name != ingressName {
+		t.Errorf("ingress name = %q, want %q", p.Name, ingressName)
+	}
+	if len(p.Rules) != len(ingressRoles) {
+		t.Fatalf("got %d rules, want %d", len(p.Rules), len(ingressRoles))
+	}
+	if got := p.Rules[0].Target.Instance; got != "{instance}" {
+		t.Errorf("rule[0] target instance = %q, want {instance}", got)
+	}
+	if got := p.Rules[0].Target.Port; got != hypemanAPIPort {
+		t.Errorf("rule[0] target port = %d, want %d", got, hypemanAPIPort)
+	}
+}
+
+// TestHypemanIngressTLS verifies https/wss + :443 when TLS is enabled.
+func TestHypemanIngressTLS(t *testing.T) {
+	b := &hypemanBackend{name: "x", ingressDomain: "d", ingressTLS: true}
+	if got, want := b.APIBaseURL(), "https://x-api.d:443"; got != want {
+		t.Errorf("APIBaseURL = %q, want %q", got, want)
+	}
+	if got, want := b.CDPURL(), "wss://x-cdp.d:443/"; got != want {
+		t.Errorf("CDPURL = %q, want %q", got, want)
 	}
 }

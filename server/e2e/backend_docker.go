@@ -237,8 +237,3 @@ func (c *dockerBackend) ExitCh() <-chan error {
 	ch := make(chan error, 1)
 	return ch
 }
-
-// Container returns the underlying testcontainers.Container for advanced usage.
-func (c *dockerBackend) Container() testcontainers.Container {
-	return c.ctr
-}

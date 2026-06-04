@@ -14,7 +14,6 @@ import (
 	"github.com/kernel/hypeman-go/option"
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/nrednav/cuid2"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // Container ports exposed by the kernel-images browser image. These are fixed
@@ -41,21 +40,71 @@ const (
 	envHypemanGPUDevices = "KI_E2E_HYPEMAN_GPU_DEVICES"
 	// envHypemanInstanceSize optionally overrides the VM memory size.
 	envHypemanInstanceSize = "KI_E2E_HYPEMAN_SIZE"
+	// envHypemanIngressDomain selects hostname-based ingress routing. When set,
+	// the backend ensures a single host-level wildcard ingress exists and reaches
+	// each instance through Caddy at "<instance>-<role>.<domain>" instead of the
+	// instance's private network IP. Leave unset to use the raw network IP (only
+	// works from a network with L3 reachability to the hypeman instance subnet,
+	// e.g. the API's own tailnet-tagged hosts).
+	envHypemanIngressDomain = "KI_E2E_HYPEMAN_INGRESS_DOMAIN"
+	// envHypemanIngressTLS, when truthy, serves ingress endpoints over TLS
+	// (https/wss on :443) instead of plaintext (http/ws on :80). Plaintext is the
+	// default because ACME cert issuance requires the ingress hostname to be
+	// publicly resolvable, which is not the case on an internal/tailnet domain.
+	envHypemanIngressTLS = "KI_E2E_HYPEMAN_INGRESS_TLS"
 )
+
+// Shared, host-level ingress that routes every e2e instance by hostname. It is a
+// find-or-create construct (created at most once per hypeman host) keyed by tag,
+// because ingresses are host-level — we must not create one per instance.
+const (
+	ingressName   = "ki-e2e"
+	ingressTagKey = "managed-by"
+	ingressTagVal = "ki-e2e"
+)
+
+// ingressRoles maps a logical endpoint role to the guest port it targets. The
+// public hostname for a role is "<instance>-<role>.<domain>"; the shared ingress
+// matches the pattern "{instance}-<role>.<domain>" and routes to the captured
+// instance on the guest port.
+var ingressRoles = []struct {
+	role string
+	port int64
+}{
+	{role: "api", port: hypemanAPIPort},
+	{role: "cdp", port: hypemanCDPPort},
+	{role: "cd", port: hypemanChromeDriverPort},
+}
 
 // hypemanBackend starts the image as a remote VM on a running Hypeman dev server
 // using the github.com/kernel/hypeman-go client library.
 //
-// The instance is reachable on its assigned network IP. All endpoint accessors
-// target that IP on the fixed guest ports. Command execution is performed
-// against the instance's own API server (/process/exec) so that callers get the
-// same (exitCode, combinedOutput, error) shape as the Docker backend.
+// Endpoints are reached one of two ways:
+//
+//   - Ingress (preferred): when KI_E2E_HYPEMAN_INGRESS_DOMAIN is set, a single
+//     host-level wildcard ingress (find-or-create, keyed by tag) routes
+//     "<instance>-<role>.<domain>" through the hypeman host's reverse proxy to
+//     the instance's guest ports. This works from anywhere that can resolve the
+//     domain and reach the host's :80/:443, without L3 access to the instance
+//     subnet.
+//   - Raw network IP (fallback): the instance's assigned private IP on the fixed
+//     guest ports. Only works from a network with L3 reachability to the hypeman
+//     instance subnet (e.g. the API's own tailnet-tagged hosts).
+//
+// Command execution is performed against the instance's own API server
+// (/process/exec) so that callers get the same (exitCode, combinedOutput, error)
+// shape as the Docker backend.
 type hypemanBackend struct {
 	client hypeman.Client
 	image  string
 
 	instanceID string
+	name       string
 	ip         string
+
+	// ingressDomain is empty in raw-IP mode; non-empty enables hostname routing.
+	ingressDomain string
+	ingressTLS    bool
 
 	exitCh chan error
 }
@@ -85,9 +134,11 @@ func newHypemanBackend(image string) (Backend, error) {
 	}
 
 	return &hypemanBackend{
-		client: hypeman.NewClient(opts...),
-		image:  image,
-		exitCh: make(chan error, 1),
+		client:        hypeman.NewClient(opts...),
+		image:         image,
+		ingressDomain: strings.TrimSpace(os.Getenv(envHypemanIngressDomain)),
+		ingressTLS:    isTruthy(os.Getenv(envHypemanIngressTLS)),
+		exitCh:        make(chan error, 1),
 	}, nil
 }
 
@@ -105,9 +156,10 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 		env["CHROMIUM_FLAGS"] = flags + " --no-sandbox"
 	}
 
+	c.name = hypemanInstanceName()
 	params := hypeman.InstanceNewParams{
 		Image: c.image,
-		Name:  hypemanInstanceName(),
+		Name:  c.name,
 		Env:   env,
 	}
 	if size := strings.TrimSpace(os.Getenv(envHypemanInstanceSize)); size != "" {
@@ -129,12 +181,103 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 		return err
 	}
 
+	// Hostname routing: ensure the shared host-level ingress exists, then derive
+	// endpoints from "<instance>-<role>.<domain>". No instance IP needed.
+	if c.ingressDomain != "" {
+		if err := c.ensureIngress(ctx); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Raw-IP fallback: reach the instance directly on its private network IP.
 	ip, err := c.resolveIP(ctx)
 	if err != nil {
 		return err
 	}
 	c.ip = ip
 	return nil
+}
+
+// ensureIngress finds or creates the single shared, host-level ingress that
+// routes every e2e instance by hostname. Ingresses are host-level constructs, so
+// we must not create one per instance: we look one up by tag and only create it
+// if absent (tolerating a creation race with concurrent test binaries).
+func (c *hypemanBackend) ensureIngress(ctx context.Context) error {
+	if c.ingressExists(ctx) {
+		return nil
+	}
+	_, err := c.client.Ingresses.New(ctx, c.desiredIngressParams())
+	if err != nil {
+		// Another runner may have created it concurrently; accept that.
+		if c.ingressExists(ctx) {
+			return nil
+		}
+		return fmt.Errorf("hypeman: ensure ingress %q: %w", ingressName, err)
+	}
+	return nil
+}
+
+// ingressExists reports whether a managed ingress that routes our API role
+// pattern is already present on the host.
+func (c *hypemanBackend) ingressExists(ctx context.Context) bool {
+	list, err := c.client.Ingresses.List(ctx, hypeman.IngressListParams{
+		Tags: map[string]string{ingressTagKey: ingressTagVal},
+	})
+	if err != nil || list == nil {
+		return false
+	}
+	wantAPI := c.ingressPatternHost("api")
+	for _, ing := range *list {
+		for _, rule := range ing.Rules {
+			if rule.Match.Hostname == wantAPI {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// desiredIngressParams builds the shared ingress: one rule per role, each a
+// wildcard pattern hostname "{instance}-<role>.<domain>" routed to the captured
+// instance on the corresponding guest port.
+func (c *hypemanBackend) desiredIngressParams() hypeman.IngressNewParams {
+	rules := make([]hypeman.IngressRuleParam, 0, len(ingressRoles))
+	for _, r := range ingressRoles {
+		rules = append(rules, hypeman.IngressRuleParam{
+			Match: hypeman.IngressMatchParam{
+				Hostname: c.ingressPatternHost(r.role),
+				Port:     hypeman.Int(c.ingressListenPort()),
+			},
+			Target: hypeman.IngressTargetParam{
+				Instance: "{instance}",
+				Port:     r.port,
+			},
+			Tls: hypeman.Bool(c.ingressTLS),
+		})
+	}
+	return hypeman.IngressNewParams{
+		Name:  ingressName,
+		Rules: rules,
+		Tags:  map[string]string{ingressTagKey: ingressTagVal},
+	}
+}
+
+// ingressPatternHost is the wildcard hostname pattern for a role (uses the
+// {instance} capture). ingressHost is the concrete hostname for this instance.
+func (c *hypemanBackend) ingressPatternHost(role string) string {
+	return fmt.Sprintf("{instance}-%s.%s", role, c.ingressDomain)
+}
+
+func (c *hypemanBackend) ingressHost(role string) string {
+	return fmt.Sprintf("%s-%s.%s", c.name, role, c.ingressDomain)
+}
+
+func (c *hypemanBackend) ingressListenPort() int64 {
+	if c.ingressTLS {
+		return 443
+	}
+	return 80
 }
 
 // waitForRunning polls the instance wait endpoint until the instance is Running
@@ -190,19 +333,43 @@ func (c *hypemanBackend) Stop(ctx context.Context) error {
 }
 
 func (c *hypemanBackend) APIBaseURL() string {
-	return fmt.Sprintf("http://%s:%d", c.ip, hypemanAPIPort)
+	return c.httpScheme() + "://" + c.endpointHostPort("api", hypemanAPIPort)
 }
 
 func (c *hypemanBackend) CDPURL() string {
-	return fmt.Sprintf("ws://%s:%d/", c.ip, hypemanCDPPort)
+	return c.wsScheme() + "://" + c.endpointHostPort("cdp", hypemanCDPPort) + "/"
 }
 
 func (c *hypemanBackend) CDPAddr() string {
-	return fmt.Sprintf("%s:%d", c.ip, hypemanCDPPort)
+	return c.endpointHostPort("cdp", hypemanCDPPort)
 }
 
 func (c *hypemanBackend) ChromeDriverURL() string {
-	return fmt.Sprintf("http://%s:%d", c.ip, hypemanChromeDriverPort)
+	return c.httpScheme() + "://" + c.endpointHostPort("cd", hypemanChromeDriverPort)
+}
+
+// endpointHostPort returns the host:port a caller should dial for a role: the
+// ingress hostname on the proxy's listen port when hostname routing is enabled,
+// otherwise the instance's private IP on the fixed guest port.
+func (c *hypemanBackend) endpointHostPort(role string, guestPort int) string {
+	if c.ingressDomain != "" {
+		return fmt.Sprintf("%s:%d", c.ingressHost(role), c.ingressListenPort())
+	}
+	return fmt.Sprintf("%s:%d", c.ip, guestPort)
+}
+
+func (c *hypemanBackend) httpScheme() string {
+	if c.ingressDomain != "" && c.ingressTLS {
+		return "https"
+	}
+	return "http"
+}
+
+func (c *hypemanBackend) wsScheme() string {
+	if c.ingressDomain != "" && c.ingressTLS {
+		return "wss"
+	}
+	return "ws"
 }
 
 func (c *hypemanBackend) APIClient() (*instanceoapi.ClientWithResponses, error) {
@@ -286,15 +453,20 @@ func (c *hypemanBackend) ExitCh() <-chan error {
 	return c.exitCh
 }
 
-// Container returns nil: the hypeman backend is not Docker-based.
-func (c *hypemanBackend) Container() testcontainers.Container {
-	return nil
-}
-
 // hypemanInstanceName builds a DNS-safe, unique instance name. Hypeman requires
 // lowercase letters, digits, and dashes only, not starting/ending with a dash.
 func hypemanInstanceName() string {
 	return "ki-e2e-" + strings.ToLower(cuid2.Generate())
+}
+
+// isTruthy reports whether an env value means "on" (1/true/yes, case-insensitive).
+func isTruthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseCommaList(s string) []string {

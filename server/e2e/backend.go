@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // ContainerConfig holds optional configuration for instance startup.
@@ -68,10 +67,6 @@ type Backend interface {
 
 	// ExitCh returns a channel that fires when the instance exits.
 	ExitCh() <-chan error
-
-	// Container returns the underlying testcontainers.Container for advanced
-	// Docker-only usage. It returns nil for non-Docker backends.
-	Container() testcontainers.Container
 }
 
 // BackendKind enumerates the supported e2e backends.

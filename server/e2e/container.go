@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
-	"github.com/testcontainers/testcontainers-go"
 )
 
 // TestContainer is the handle every e2e test uses to drive a browser instance.
@@ -114,10 +113,4 @@ func (c *TestContainer) Exec(ctx context.Context, cmd []string) (int, string, er
 // ExitCh returns a channel that receives when the instance exits.
 func (c *TestContainer) ExitCh() <-chan error {
 	return c.backend.ExitCh()
-}
-
-// Container returns the underlying testcontainers.Container for advanced usage.
-// It returns nil for backends that are not Docker-based.
-func (c *TestContainer) Container() testcontainers.Container {
-	return c.backend.Container()
 }
