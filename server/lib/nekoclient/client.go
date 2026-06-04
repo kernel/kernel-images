@@ -118,6 +118,10 @@ func (c *AuthClient) SessionsGet(ctx context.Context) ([]nekooapi.SessionData, e
 }
 
 // ScreenConfigurationChange changes the screen resolution via Neko API.
+// The HTTP response body echoes the request, not the realized
+// configuration (neko's screenConfigurationChange handler returns `data`,
+// not `size`), so callers that need the realized dimensions must read
+// the X root directly via xrandr.
 func (c *AuthClient) ScreenConfigurationChange(ctx context.Context, config nekooapi.ScreenConfiguration) error {
 	c.tokenMu.Lock()
 	defer c.tokenMu.Unlock()

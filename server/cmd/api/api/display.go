@@ -143,15 +143,31 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		// accepted for API compatibility but no longer triggers a
 		// restart on this path.
 		if err == nil {
-			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
-				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
-				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
+			// Read the X root immediately after neko's synchronous
+			// resize, before any window-state CDP calls. This captures
+			// libxcvt's realized size — which can differ from the
+			// request (CVT 8-pixel grid round + FWXGA bump for
+			// 1360×768 → 1366×768) — without racing the chromium
+			// maximize that follows. Returning the realized size in
+			// the response body lets callers' coordinate math line up
+			// with what the X server actually rendered.
+			realizedW, realizedH, _, _, xrErr := s.getCurrentResolutionFromXrandr(ctx)
+			if xrErr != nil {
+				log.Error("failed to read X root after resize", "error", xrErr)
+				err = fmt.Errorf("X root read: %w", xrErr)
+			} else {
+				if realizedW != width || realizedH != height {
+					log.Info("X root differs from request after resize",
+						"requested", fmt.Sprintf("%dx%d", width, height),
+						"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
+				}
+				width, height = realizedW, realizedH
 			}
 		}
 		if err == nil {
-			if waitErr := s.waitForXRootSize(ctx, width, height, 3*time.Second); waitErr != nil {
-				log.Error("X root did not reach requested size after resize", "error", waitErr)
-				err = fmt.Errorf("X root verification: %w", waitErr)
+			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
+				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
+				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
 			}
 		}
 	} else if len(stopped) > 0 {
@@ -431,12 +447,13 @@ func (s *ApiService) withCDPClient(ctx context.Context, fn func(context.Context,
 // in the state that triggers the reflow. The CDP call is idempotent: it
 // no-ops on a window already in maximized or fullscreen state.
 //
-// The PATCH /display handler waits for the X root to reach the requested
-// size separately (waitForXRootSize) rather than reading the chromium
-// window's own bounds, so the contract stays panel-robust: if mutter
-// ever gained a taskbar/dock, a maximized window would be smaller than
-// the root by the panel's reserved space, and a window-bounds poll
-// would 3s-timeout forever.
+// The PATCH /display handler reads the X root separately (via
+// getCurrentResolutionFromXrandr) to capture the realized size for the
+// response, rather than reading the chromium window's own bounds. That
+// keeps the contract panel-robust: if mutter ever gained a taskbar/dock,
+// a maximized window would be smaller than the root by the panel's
+// reserved space, and any window-bounds-based check would diverge from
+// the X root.
 func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 	if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
@@ -446,54 +463,6 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 	}
 	log.Info("re-asserted maximized window state via CDP")
 	return nil
-}
-
-// waitForXRootSize polls the X root resolution via xrandr until it matches
-// the requested size, or the deadline expires. This is the authoritative
-// post-condition for PATCH /display: the X root is what the server set
-// (via Neko or xrandr), and the rest of the stack — mutter, chromium —
-// follows from there. Polling the X root rather than chromium's window
-// bounds keeps the contract panel-robust: a future mutter config with a
-// taskbar/dock would shrink the maximized window below the root size,
-// but the root itself would still match what we asked for.
-//
-// Calls getCurrentResolutionFromXrandr directly rather than the
-// higher-level getCurrentResolution: the latter prefers a cached
-// viewportOverride when one is set, which would silently validate this
-// post-condition against the CDP viewport instead of the X root. The
-// override is only set on the headless Xvfb fast path today, so the
-// Xorg branch never reaches that case — but the invariant is non-local
-// and would silently regress this check if anyone ever sets the
-// override on the Xorg path.
-//
-// Typical convergence is sub-millisecond (Neko's ScreenConfigurationChange
-// returns after the X server has applied the mode), but a small loop
-// covers any future asynchrony in the resize chain.
-func (s *ApiService) waitForXRootSize(ctx context.Context, width, height int, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastW, lastH int
-	var lastErr error
-	for {
-		w, h, _, _, err := s.getCurrentResolutionFromXrandr(ctx)
-		lastErr = err
-		if err == nil {
-			lastW, lastH = w, h
-			if w == width && h == height {
-				return nil
-			}
-		}
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return fmt.Errorf("last getCurrentResolutionFromXrandr error: %w", lastErr)
-			}
-			return fmt.Errorf("x root is %dx%d, want %dx%d", lastW, lastH, width, height)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
-		}
-	}
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
@@ -804,7 +773,12 @@ func (s *ApiService) isNekoEnabled() bool {
 	return os.Getenv("ENABLE_WEBRTC") == "true"
 }
 
-// setResolutionViaNeko delegates resolution change to Neko API
+// setResolutionViaNeko delegates resolution change to Neko API. The
+// realized X root dimensions can differ from the request — libxcvt rounds
+// widths to the CVT 8-pixel grid and applies a FWXGA bump for
+// 1360×768 → 1366×768. Neko's HTTP response echoes the request, not the
+// realized size, so the PatchDisplay handler reads the X root via xrandr
+// after this call returns.
 func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, refreshRate int) error {
 	log := logger.FromContext(ctx)
 
