@@ -456,7 +456,7 @@ func touchContainerFile(ctx context.Context, client *instanceoapi.ClientWithResp
 }
 
 func fetchBrowserWebSocketURL(ctx context.Context, c *TestContainer) (string, error) {
-	versionURL := fmt.Sprintf("http://127.0.0.1:%d/json/version", c.CDPPort)
+	versionURL := fmt.Sprintf("http://%s/json/version", c.CDPAddr())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
 	if err != nil {
 		return "", err
