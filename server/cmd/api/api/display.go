@@ -146,18 +146,17 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 			// Wait for the X root to settle, then use it as the
 			// realized size in the response. The wait returns early
 			// when either (a) xrandr reports the requested size — the
-			// common case — or (b) consecutive reads are stable at a
-			// value that is NOT the pre-resize baseline (the resize
-			// has propagated and libxcvt's rounded size is the steady
-			// state, e.g. CVT 8-pixel grid + FWXGA bump for
-			// 1360×768 → 1366×768).
+			// common case — or (b) consecutive reads are stable for a
+			// short window, capturing libxcvt's rounded size on
+			// requests it can't honour exactly (CVT 8-pixel grid +
+			// FWXGA bump for 1360×768 → 1366×768).
 			//
-			// Excluding the baseline from the stable-match case is the
-			// guard against silently returning the pre-resize size as
-			// "realized" if the X server hasn't committed yet. The
-			// match-the-request path is unaffected and still returns
-			// immediately when the screen reaches the requested size.
-			realizedW, realizedH := s.waitForXRootRealized(ctx, width, height, currentWidth, currentHeight, 10*time.Second)
+			// The poll absorbs transient X root states — chromium
+			// running in --kiosk briefly pushes the root to the dummy
+			// DDX's max mode (3840×2160) while mutter settles on the
+			// new screen, and a single immediate read would catch that
+			// transient instead of the steady-state size.
+			realizedW, realizedH := s.waitForXRootRealized(ctx, width, height, 10*time.Second)
 			if realizedW > 0 && realizedH > 0 {
 				if realizedW != width || realizedH != height {
 					log.Info("X root differs from request after resize",
@@ -476,20 +475,18 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 //
 //  1. The reading matches the requested width/height — the common case,
 //     when libxcvt honoured the request exactly.
-//  2. The reading has been stable across stableReads consecutive samples
-//     AT A VALUE OTHER THAN the pre-resize baseline — captures libxcvt's
-//     rounded size on requests it can't honour exactly (CVT 8-pixel grid
-//     round + FWXGA bump for 1360×768 → 1366×768).
+//  2. The reading has been stable across stableReads consecutive samples —
+//     captures libxcvt's rounded size on requests it can't honour
+//     (CVT 8-pixel grid round + FWXGA bump for 1360×768 → 1366×768) and
+//     covers the idempotent re-PATCH case where the request rounds back
+//     to the current X root.
 //
-// Excluding the baseline from stable matches prevents the pathological
-// case where the X server hasn't committed the new mode yet and every
-// reading still shows the pre-resize size. Without this guard, the
-// caller would get 200 with the pre-resize dimensions echoed back as
-// "realized" — a silent failure that looks like success.
-//
-// If neither condition fires before the timeout, returns the last
-// observation. Always non-fatal — the response always echoes some size,
-// never 500s.
+// If neither happens before timeout, returns the last observation. Always
+// non-fatal — the response always echoes some size, never 500s. Since
+// XSetScreenConfiguration is a synchronous X protocol round-trip, the X
+// server has committed by the time neko's call returns, so the first
+// reading reliably reflects the realized state — no separate guard for
+// "pre-resize baseline still showing" is needed.
 //
 // Calls getCurrentResolutionFromXrandr directly rather than the higher-
 // level getCurrentResolution: the latter prefers a cached viewportOverride
@@ -498,7 +495,7 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 // today, so the Xorg branch never reaches that case — but the invariant
 // is non-local and would silently regress if anyone ever sets the
 // override on the Xorg path.
-func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH, baselineW, baselineH int, timeout time.Duration) (int, int) {
+func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int, timeout time.Duration) (int, int) {
 	const stableReads = 3
 	deadline := time.Now().Add(timeout)
 	var lastW, lastH int
@@ -509,8 +506,7 @@ func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH, bas
 			if w == wantW && h == wantH {
 				return w, h
 			}
-			isBaseline := w == baselineW && h == baselineH
-			if w == lastW && h == lastH && !isBaseline {
+			if w == lastW && h == lastH {
 				stableCount++
 				if stableCount >= stableReads {
 					return w, h
