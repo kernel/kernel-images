@@ -1,6 +1,10 @@
 package e2e
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 // TestBackendKindFromEnv verifies the KI_E2E_BACKEND selection logic. These are
 // cheap, infra-free unit tests safe to run in CI.
@@ -124,6 +128,16 @@ func TestHypemanIngressPlaintext(t *testing.T) {
 	}
 	if got, want := b.CDPURL(), "ws://x.d:9222/"; got != want {
 		t.Errorf("CDPURL = %q, want %q", got, want)
+	}
+}
+
+// TestHypemanRejectsHostAccess verifies the hypeman backend refuses HostAccess
+// (no host-loopback bridge for remote VMs) before doing any network I/O.
+func TestHypemanRejectsHostAccess(t *testing.T) {
+	b := &hypemanBackend{}
+	err := b.Start(context.Background(), ContainerConfig{HostAccess: true})
+	if err == nil || !strings.Contains(err.Error(), "HostAccess") {
+		t.Fatalf("expected HostAccess rejection, got %v", err)
 	}
 }
 

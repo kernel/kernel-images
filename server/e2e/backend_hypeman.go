@@ -175,6 +175,13 @@ func deriveIngressDomain(baseURL string) string {
 // Start creates and boots a hypeman instance for the image, waits for it to
 // reach the Running state, then prepares the chosen routing mode.
 func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
+	if cfg.HostAccess {
+		// A remote VM has no equivalent of Docker's host.docker.internal; we
+		// reject rather than silently ignore so host-fixture tests (capmonster,
+		// persisted-login) fail loudly here and stay on the Docker backend.
+		return fmt.Errorf("hypeman backend does not support ContainerConfig.HostAccess (no host loopback bridge for remote instances); run host-access tests on the docker backend")
+	}
+
 	env := make(map[string]string, len(cfg.Env)+1)
 	for k, v := range cfg.Env {
 		env[k] = v

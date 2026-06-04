@@ -15,8 +15,13 @@ import (
 // calling Start with the same shape regardless of where the browser instance
 // actually runs (a local Docker container or a remote Hypeman VM).
 type ContainerConfig struct {
-	Env        map[string]string
-	HostAccess bool // Add host.docker.internal mapping (Docker backend only)
+	Env map[string]string
+	// HostAccess requests that the browser instance be able to reach a service
+	// the test stands up on its own host (loopback) — used by tests with a local
+	// fixture server (capmonster, persisted-login). How it's provided is a
+	// backend detail (the Docker backend maps host.docker.internal); backends
+	// that cannot bridge a remote instance to the test host reject it.
+	HostAccess bool
 }
 
 // Backend is the abstraction every e2e browser-instance provider implements.
