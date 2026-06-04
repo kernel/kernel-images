@@ -475,18 +475,23 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 //
 //  1. The reading matches the requested width/height — the common case,
 //     when libxcvt honoured the request exactly.
-//  2. The reading has been stable across stableReads consecutive samples —
-//     captures libxcvt's rounded size on requests it can't honour
-//     (CVT 8-pixel grid round + FWXGA bump for 1360×768 → 1366×768) and
-//     covers the idempotent re-PATCH case where the request rounds back
-//     to the current X root.
+//  2. The reading has been stable across stableReads consecutive samples
+//     AT A VALUE CLOSE TO THE REQUEST — captures libxcvt's rounded size
+//     on requests it can't honour exactly (CVT 8-pixel grid round +
+//     FWXGA bump for 1360×768 → 1366×768) and covers the idempotent
+//     re-PATCH case.
 //
-// If neither happens before timeout, returns the last observation. Always
-// non-fatal — the response always echoes some size, never 500s. Since
-// XSetScreenConfiguration is a synchronous X protocol round-trip, the X
-// server has committed by the time neko's call returns, so the first
-// reading reliably reflects the realized state — no separate guard for
-// "pre-resize baseline still showing" is needed.
+// The "close to request" guard on the stable-N path rejects transient
+// xrandr readings far from the request — chromium running in
+// --start-maximized or --kiosk briefly drives xrandr to report the dummy
+// DDX's max mode (e.g. 3840×2160) while mode-switch propagates, and a
+// naive stable-N would echo that transient into the response body. Real
+// libxcvt rounding is <16 px; the dummy max is >1000 px off any normal
+// request — acceptableDelta=32 sits comfortably between them.
+//
+// If neither condition fires before the timeout, returns the last
+// observation. Always non-fatal — the response always echoes some size,
+// never 500s.
 //
 // Calls getCurrentResolutionFromXrandr directly rather than the higher-
 // level getCurrentResolution: the latter prefers a cached viewportOverride
@@ -497,6 +502,7 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 // override on the Xorg path.
 func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int, timeout time.Duration) (int, int) {
 	const stableReads = 3
+	const acceptableDelta = 32
 	deadline := time.Now().Add(timeout)
 	var lastW, lastH int
 	var stableCount int
@@ -508,7 +514,7 @@ func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int,
 			}
 			if w == lastW && h == lastH {
 				stableCount++
-				if stableCount >= stableReads {
+				if stableCount >= stableReads && abs(w-wantW) <= acceptableDelta && abs(h-wantH) <= acceptableDelta {
 					return w, h
 				}
 			} else {
@@ -525,6 +531,13 @@ func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int,
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
