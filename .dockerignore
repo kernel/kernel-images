@@ -15,3 +15,4 @@ Dockerfile
 .unikraft
 initrd
 .tmp
+server/api
