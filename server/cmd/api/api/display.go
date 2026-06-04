@@ -115,6 +115,14 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 
 	// Route to appropriate resolution change handler
 	if displayMode == "xorg" {
+		// The realizable X root width is quantized to a multiple of 8 by
+		// libxcvt (CVT timing), so round the request up to that grid before
+		// applying. This makes the mode neko creates match what we ask for,
+		// and the response reports the size the client actually gets.
+		if gridded := roundUpToWidthGrid(width); gridded != width {
+			log.Info("rounded width up to realizable grid", "requested", width, "applied", gridded)
+			width = gridded
+		}
 		if s.isNekoEnabled() {
 			log.Info("using Neko API for Xorg resolution change")
 			err = s.setResolutionViaNeko(ctx, width, height, refreshRate)
@@ -122,36 +130,32 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 			log.Info("using xrandr for Xorg resolution change (Neko disabled)")
 			err = s.setResolutionXorgViaXrandr(ctx, width, height, refreshRate)
 		}
-		// Re-assert the maximized window state via CDP, then verify the
-		// X root has reached the requested size. Mutter reflows a
-		// maximized (or fullscreen) window onto the new root
-		// automatically, so the CDP call's only job is to make sure the
-		// window is in the state that triggers the reflow. The X root
-		// poll is the authoritative post-condition: it's the value the
-		// server actually set and stays panel-robust if mutter ever
-		// gains a taskbar (a maximized window would then be smaller
-		// than the root by the panel's reserved space).
-		//
-		// Both are fatal on failure — returning 200 with the X root
-		// still at the old size, or the window stuck in normal state,
-		// would leave the caller with no signal of the mismatch. The
+		// Re-assert the maximized window state via CDP. Mutter reflows a
+		// maximized (or fullscreen) window onto the new root automatically,
+		// so this call's only job is to ensure the window is in the state
+		// that triggers the reflow. This stays fatal: a failure here means
+		// the devtools connection is broken, not a resolution mismatch. The
 		// previous approach of restarting chromium so it could re-apply
-		// --start-maximized had the same effective contract (the
-		// restart blocked the response) but cost ~9s per resize and
-		// wiped browser-side state (Emulation.* overrides, devtools
-		// sessions). The restart_chromium request field is still
-		// accepted for API compatibility but no longer triggers a
-		// restart on this path.
+		// --start-maximized had the same effective contract (the restart
+		// blocked the response) but cost ~9s per resize and wiped
+		// browser-side state (Emulation.* overrides, devtools sessions).
+		// The restart_chromium request field is still accepted for API
+		// compatibility but no longer triggers a restart on this path.
 		if err == nil {
 			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
 				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
 				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
 			}
 		}
+		// Poll the X root as a non-fatal guard. With width pre-rounded to the
+		// realizable grid the root normally matches exactly; if it doesn't,
+		// the resize was still applied at the driver's nearest size, so log
+		// for visibility but never fail. A display-config mismatch must not
+		// taint the instance — treating it as fatal is what turned a cosmetic
+		// pixel rounding into a fleet-wide outage.
 		if err == nil {
 			if waitErr := s.waitForXRootSize(ctx, width, height, 3*time.Second); waitErr != nil {
-				log.Error("X root did not reach requested size after resize", "error", waitErr)
-				err = fmt.Errorf("X root verification: %w", waitErr)
+				log.Warn("X root did not reach requested size after resize (non-fatal)", "error", waitErr, "requested", fmt.Sprintf("%dx%d", width, height))
 			}
 		}
 	} else if len(stopped) > 0 {
@@ -448,29 +452,19 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 	return nil
 }
 
-// xRootSizeSatisfied reports whether an observed X root size (gotW×gotH)
-// satisfies a resize request to wantW×wantH. The Xorg dummy driver only
-// realizes even-numbered framebuffer dimensions, so a request for an odd
-// width or height legitimately lands one pixel larger (e.g. 1365 → 1366).
-// Accepting that next-even-up value keeps the check strict enough to catch
-// a resize that never took effect, without rejecting one that succeeded at
-// the nearest size the driver can produce.
-func xRootSizeSatisfied(gotW, gotH, wantW, wantH int) bool {
-	return sizeAxisSatisfied(gotW, wantW) && sizeAxisSatisfied(gotH, wantH)
-}
-
-// sizeAxisSatisfied matches one axis exactly, or — when the requested value
-// is odd — at the next even value the dummy driver rounds up to.
-func sizeAxisSatisfied(got, want int) bool {
-	if got == want {
-		return true
-	}
-	return want%2 == 1 && got == want+1
+// roundUpToWidthGrid rounds a requested width up to the next multiple of 8,
+// the horizontal granularity libxcvt (CVT timing) quantizes generated modes
+// to. The Xorg dummy driver can only realize widths on this grid, so a
+// request that isn't a multiple of 8 would otherwise land at a different
+// size than asked for (e.g. libxcvt snaps 1365 down to 1360). Rounding up
+// before the resize lets neko create a mode that matches exactly. Heights
+// have no such constraint and are left untouched.
+func roundUpToWidthGrid(width int) int {
+	return (width + 7) &^ 7
 }
 
 // waitForXRootSize polls the X root resolution via xrandr until it reaches
-// the requested size (allowing the dummy driver's even-number rounding), or
-// the deadline expires. This is the authoritative
+// the requested size, or the deadline expires. This is the authoritative
 // post-condition for PATCH /display: the X root is what the server set
 // (via Neko or xrandr), and the rest of the stack — mutter, chromium —
 // follows from there. Polling the X root rather than chromium's window
@@ -499,7 +493,7 @@ func (s *ApiService) waitForXRootSize(ctx context.Context, width, height int, ti
 		lastErr = err
 		if err == nil {
 			lastW, lastH = w, h
-			if xRootSizeSatisfied(w, h, width, height) {
+			if w == width && h == height {
 				return nil
 			}
 		}

@@ -523,39 +523,16 @@ func waitForXRootResolution(t *testing.T, ctx context.Context, c *TestContainer,
 	}
 }
 
-// waitForXRootNear polls the X root until each axis is within tol pixels of the
-// requested size. The Xorg dummy driver only realizes even framebuffer
-// dimensions, so an odd request lands one pixel larger and an exact match is
-// not guaranteed.
-func waitForXRootNear(t *testing.T, ctx context.Context, c *TestContainer, wantW, wantH, tol int, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for {
-		w, h, err := getXRootResolution(ctx, c)
-		if err == nil && abs(w-wantW) <= tol && abs(h-wantH) <= tol {
-			t.Logf("x_root_resolution: %dx%d (within %dpx of %dx%d)", w, h, tol, wantW, wantH)
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("x root never reached within %dpx of %dx%d: lastW=%d lastH=%d err=%v", tol, wantW, wantH, w, h, err)
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatalf("context cancelled waiting for x root near %dx%d: %v", wantW, wantH, ctx.Err())
-		case <-time.After(250 * time.Millisecond):
-		}
-	}
-}
-
 // TestDisplayResizeOddDimensions reproduces the production failure where a
-// PATCH /display to an odd-numbered dimension returned 500 and tainted the
-// browser instance. The dummy driver rounds an odd request up to the nearest
-// even size, so the X root settles one pixel larger; the resize post-check
-// must treat that as success rather than a mismatch.
+// PATCH /display to a non-multiple-of-8 width returned 500 and tainted the
+// browser instance. libxcvt quantizes the X root width to a multiple of 8, so
+// the server rounds the request up to that grid before applying; the resize
+// must succeed, report the rounded width, and the X root must land there
+// exactly. Height is not gridded and is preserved as requested.
 //
 // Runs on the neko (WebRTC) path — the production configuration — which
 // creates the requested mode dynamically. The non-neko xrandr path can only
-// select pre-defined even modelines, so it can't exercise an odd request.
+// select pre-defined modelines, so it can't exercise an arbitrary request.
 func TestDisplayResizeOddDimensions(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
@@ -579,10 +556,27 @@ func TestDisplayResizeOddDimensions(t *testing.T) {
 	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
 	navigateBlank(t, ctx, c)
 
-	// Odd width and height. Pre-fix the X-root post-check timed out (the root
-	// landed one pixel larger than requested) and PATCH returned 500, which
-	// tainted the instance. The resize must now succeed.
-	const oddW, oddH = 1365, 769
-	patchDisplayExpectingOK(t, ctx, c, oddW, oddH, 60)
-	waitForXRootNear(t, ctx, c, oddW, oddH, 1, 30*time.Second)
+	// Width 1365 isn't on libxcvt's 8px grid, so the server rounds it up to
+	// 1368. Pre-fix this returned 500 and tainted the instance. The height
+	// (769) is odd but not gridded, so it is preserved exactly.
+	reqW, reqH := 1365, 769
+	const wantW = 1368 // roundUpToWidthGrid(1365)
+
+	client, err := c.APIClient()
+	require.NoError(t, err)
+	rate := instanceoapi.PatchDisplayRequestRefreshRate(60)
+	rsp, err := client.PatchDisplayWithResponse(ctx, instanceoapi.PatchDisplayJSONRequestBody{
+		Width:       &reqW,
+		Height:      &reqH,
+		RefreshRate: &rate,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode(), "PATCH /display: %s body=%s", rsp.Status(), string(rsp.Body))
+	require.NotNil(t, rsp.JSON200)
+	require.NotNil(t, rsp.JSON200.Width)
+	require.NotNil(t, rsp.JSON200.Height)
+	require.Equal(t, wantW, *rsp.JSON200.Width, "width should be rounded up to the 8px grid")
+	require.Equal(t, reqH, *rsp.JSON200.Height, "height should be preserved")
+
+	waitForXRootResolution(t, ctx, c, wantW, reqH, 30*time.Second)
 }
