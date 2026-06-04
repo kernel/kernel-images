@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -101,6 +102,28 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, allDisabled)
 	})
+}
+
+func TestPutTelemetryIgnoresUnknownCategory(t *testing.T) {
+	// Forward-compat: a newer control plane may send a telemetry category this
+	// image does not yet know. The strict handler decodes the body with
+	// encoding/json (no DisallowUnknownFields), so an unknown category must be
+	// ignored, not rejected, and known categories must still apply.
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+
+	var body oapi.PutTelemetryJSONRequestBody
+	raw := []byte(`{"browser":{"console":{"enabled":true},"future_category":{"enabled":true}}}`)
+	require.NoError(t, json.Unmarshal(raw, &body))
+
+	resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: &body})
+	require.NoError(t, err)
+	r201, ok := resp.(oapi.PutTelemetry201JSONResponse)
+	require.True(t, ok, "expected 201, got %T", resp)
+	require.NotNil(t, r201.Config.Browser)
+	require.NotNil(t, r201.Config.Browser.Console)
+	require.NotNil(t, r201.Config.Browser.Console.Enabled)
+	assert.True(t, *r201.Config.Browser.Console.Enabled, "known category should be captured")
 }
 
 func TestPutTelemetry(t *testing.T) {
