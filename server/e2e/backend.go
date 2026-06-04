@@ -107,7 +107,7 @@ func newBackend(tb testing.TB, image string) Backend {
 	case BackendDocker:
 		return newDockerBackend(image)
 	case BackendHypeman:
-		b, err := newHypemanBackend(image)
+		b, err := newHypemanBackend(image, hypemanConfigFromEnv())
 		if err != nil {
 			tb.Fatalf("e2e: failed to configure hypeman backend: %v", err)
 		}

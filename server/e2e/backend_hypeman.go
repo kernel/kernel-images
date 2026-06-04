@@ -44,6 +44,11 @@ const (
 	// the instance; the host assigns the backing mdev. Required to boot the vGPU
 	// browser image (chromium-headful-vgpu).
 	envHypemanGPUProfile = "KI_E2E_HYPEMAN_GPU_PROFILE"
+	// envHypemanDiskIOBps overrides the instance disk I/O rate limit. Defaults to
+	// defaultHypemanDiskIOBps; the hypeman default for ad-hoc instances is much
+	// lower (~15MB/s), which starves cold first-reads at boot (e.g. the in-guest
+	// playwright daemon's ~43MB of node_modules) and can blow its 5s start budget.
+	envHypemanDiskIOBps = "KI_E2E_HYPEMAN_DISK_IO_BPS"
 	// envHypemanInstanceSize optionally overrides the VM memory size.
 	envHypemanInstanceSize = "KI_E2E_HYPEMAN_SIZE"
 	// envHypemanIngressDomain overrides the wildcard ingress base domain. If
@@ -60,6 +65,11 @@ const (
 	// the hypeman instance subnet (e.g. the API's own tailnet-tagged hosts).
 	envHypemanRawIP = "KI_E2E_HYPEMAN_RAW_IP"
 )
+
+// defaultHypemanDiskIOBps matches what production browser instances run at, so
+// e2e instances aren't disk-throttled into spurious timeouts. Format is the
+// hypeman human-readable rate (e.g. "62MB/s"); "MiB" is not accepted.
+const defaultHypemanDiskIOBps = "62MB/s"
 
 // ingressRole maps a logical endpoint to the ingress listen port and the guest
 // target port. Hostname routing uses a single wildcard hostname
@@ -105,11 +115,13 @@ const (
 type hypemanBackend struct {
 	client hypeman.Client
 	image  string
+	cfg    hypemanConfig
 
 	instanceID string
 	name       string
 	ip         string
 
+	// Derived from cfg at construction (see newHypemanBackend).
 	useIngress    bool
 	ingressDomain string
 	ingressTLS    bool
@@ -117,47 +129,72 @@ type hypemanBackend struct {
 	exitCh chan error
 }
 
-// newHypemanBackend validates configuration and constructs a hypeman-backed
-// Backend. The hypeman SDK reads HYPEMAN_BASE_URL / HYPEMAN_API_KEY from the
-// environment; this constructor additionally wires the kernel-images-specific
-// override vars (KI_E2E_HYPEMAN_BASE_URL, HYPEMAN_AUTH_TOKEN).
-func newHypemanBackend(image string) (Backend, error) {
-	var opts []option.RequestOption
-	if base := strings.TrimSpace(os.Getenv(envHypemanBaseURL)); base != "" {
-		opts = append(opts, option.WithBaseURL(base))
-	}
-	if token := strings.TrimSpace(os.Getenv(envHypemanToken)); token != "" {
-		opts = append(opts, option.WithAPIKey(token))
-	}
+// hypemanConfig holds every option for the hypeman backend. Callers populate it
+// explicitly; the backend itself reads no environment variables. The e2e factory
+// builds it once via hypemanConfigFromEnv, but other callers can construct it
+// directly (e.g. a future programmatic harness) and decide how to source values.
+type hypemanConfig struct {
+	// BaseURL and Token authenticate against the hypeman control API. Both are
+	// required (validated by newHypemanBackend).
+	BaseURL string
+	Token   string
+	// IngressDomain is the wildcard ingress base domain. If empty (and not
+	// RawIP), it is derived from BaseURL by stripping a leading "hypeman." label.
+	IngressDomain string
+	// IngressTLS serves ingress endpoints over TLS (https/wss on :443/role port).
+	IngressTLS bool
+	// RawIP reaches the instance on its private network IP instead of via ingress
+	// (needs L3 reachability to the instance subnet).
+	RawIP bool
+	// Size overrides the VM memory size; DiskIOBps overrides the disk I/O rate
+	// limit (hypeman "62MB/s"-style format). Empty DiskIOBps => defaultHypemanDiskIOBps.
+	Size      string
+	DiskIOBps string
+	// GPUDevices attaches PCI-passthrough devices; GPUProfile requests a vGPU
+	// profile (e.g. "NVIDIA L40S-2Q"), required to boot the vGPU browser image.
+	GPUDevices []string
+	GPUProfile string
+}
 
-	baseURL := strings.TrimSpace(os.Getenv(envHypemanBaseURL))
-	if baseURL == "" {
-		baseURL = strings.TrimSpace(os.Getenv("HYPEMAN_BASE_URL"))
+// hypemanConfigFromEnv resolves a hypemanConfig from the KI_E2E_HYPEMAN_* /
+// HYPEMAN_* environment variables. This is the single place the hypeman backend's
+// configuration is read from the environment; the backend and Start do not.
+func hypemanConfigFromEnv() hypemanConfig {
+	return hypemanConfig{
+		BaseURL:       firstNonEmpty(os.Getenv(envHypemanBaseURL), os.Getenv("HYPEMAN_BASE_URL")),
+		Token:         firstNonEmpty(os.Getenv(envHypemanToken), os.Getenv("HYPEMAN_API_KEY")),
+		IngressDomain: strings.TrimSpace(os.Getenv(envHypemanIngressDomain)),
+		IngressTLS:    envBoolDefault(envHypemanIngressTLS, true),
+		RawIP:         isTruthy(os.Getenv(envHypemanRawIP)),
+		Size:          strings.TrimSpace(os.Getenv(envHypemanInstanceSize)),
+		DiskIOBps:     strings.TrimSpace(os.Getenv(envHypemanDiskIOBps)),
+		GPUDevices:    parseCommaList(os.Getenv(envHypemanGPUDevices)),
+		GPUProfile:    strings.TrimSpace(os.Getenv(envHypemanGPUProfile)),
 	}
+}
 
-	// Fail fast with an actionable message if neither this var nor the SDK's
-	// native vars provide connection details.
-	hasBase := baseURL != ""
-	hasToken := strings.TrimSpace(os.Getenv(envHypemanToken)) != "" || strings.TrimSpace(os.Getenv("HYPEMAN_API_KEY")) != ""
-	if !hasBase || !hasToken {
+// newHypemanBackend validates the config and constructs a hypeman-backed Backend.
+// It reads no environment — all options come from cfg.
+func newHypemanBackend(image string, cfg hypemanConfig) (Backend, error) {
+	if cfg.BaseURL == "" || cfg.Token == "" {
 		return nil, fmt.Errorf(
 			"hypeman backend requires a base URL (%s or HYPEMAN_BASE_URL) and a token (%s or HYPEMAN_API_KEY)",
 			envHypemanBaseURL, envHypemanToken,
 		)
 	}
 
-	domain := strings.TrimSpace(os.Getenv(envHypemanIngressDomain))
+	domain := cfg.IngressDomain
 	if domain == "" {
-		domain = deriveIngressDomain(baseURL)
+		domain = deriveIngressDomain(cfg.BaseURL)
 	}
-	rawIP := isTruthy(os.Getenv(envHypemanRawIP))
 
 	return &hypemanBackend{
-		client:        hypeman.NewClient(opts...),
+		client:        hypeman.NewClient(option.WithBaseURL(cfg.BaseURL), option.WithAPIKey(cfg.Token)),
 		image:         image,
-		useIngress:    !rawIP && domain != "",
+		cfg:           cfg,
+		useIngress:    !cfg.RawIP && domain != "",
 		ingressDomain: domain,
-		ingressTLS:    envBoolDefault(envHypemanIngressTLS, true),
+		ingressTLS:    cfg.IngressTLS,
 		exitCh:        make(chan error, 1),
 	}, nil
 }
@@ -199,15 +236,20 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 		Name:  c.name,
 		Env:   env,
 	}
-	if size := strings.TrimSpace(os.Getenv(envHypemanInstanceSize)); size != "" {
-		params.Size = hypeman.String(size)
+	if c.cfg.Size != "" {
+		params.Size = hypeman.String(c.cfg.Size)
 	}
-	if devs := parseCommaList(os.Getenv(envHypemanGPUDevices)); len(devs) > 0 {
-		params.Devices = devs
+	if len(c.cfg.GPUDevices) > 0 {
+		params.Devices = c.cfg.GPUDevices
 	}
-	if profile := strings.TrimSpace(os.Getenv(envHypemanGPUProfile)); profile != "" {
-		params.GPU = hypeman.InstanceNewParamsGPU{Profile: hypeman.String(profile)}
+	if c.cfg.GPUProfile != "" {
+		params.GPU = hypeman.InstanceNewParamsGPU{Profile: hypeman.String(c.cfg.GPUProfile)}
 	}
+	diskIO := c.cfg.DiskIOBps
+	if diskIO == "" {
+		diskIO = defaultHypemanDiskIOBps
+	}
+	params.DiskIoBps = hypeman.String(diskIO)
 
 	inst, err := c.client.Instances.New(ctx, params)
 	if err != nil {
@@ -507,6 +549,16 @@ func envBoolDefault(name string, def bool) bool {
 		return def
 	}
 	return isTruthy(v)
+}
+
+// firstNonEmpty returns the first argument that is non-empty after trimming.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 func parseCommaList(s string) []string {

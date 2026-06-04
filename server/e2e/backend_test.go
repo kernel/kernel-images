@@ -42,26 +42,55 @@ func TestBackendKindFromEnv(t *testing.T) {
 // TestNewHypemanBackendRequiresConfig ensures the hypeman backend fails fast and
 // with an actionable message when connection details are missing.
 func TestNewHypemanBackendRequiresConfig(t *testing.T) {
-	// Clear every env var the backend (and the SDK) consult.
-	for _, k := range []string{envHypemanBaseURL, "HYPEMAN_BASE_URL", envHypemanToken, "HYPEMAN_API_KEY"} {
-		t.Setenv(k, "")
+	if _, err := newHypemanBackend("some/image:tag", hypemanConfig{}); err == nil {
+		t.Fatal("expected error when base URL/token are empty, got nil")
 	}
-	if _, err := newHypemanBackend("some/image:tag"); err == nil {
-		t.Fatal("expected error when hypeman base URL/token are unset, got nil")
+	if _, err := newHypemanBackend("some/image:tag", hypemanConfig{BaseURL: "http://x"}); err == nil {
+		t.Fatal("expected error when token is empty, got nil")
 	}
 }
 
-// TestNewHypemanBackendWithConfig ensures a valid configuration constructs a
-// backend without error.
+// TestNewHypemanBackendWithConfig ensures a valid config constructs a backend
+// without error — and without reading the environment.
 func TestNewHypemanBackendWithConfig(t *testing.T) {
-	t.Setenv(envHypemanBaseURL, "http://hypeman.example.invalid:8080")
-	t.Setenv(envHypemanToken, "test-token-not-a-real-secret")
-	b, err := newHypemanBackend("some/image:tag")
+	b, err := newHypemanBackend("some/image:tag", hypemanConfig{
+		BaseURL: "http://hypeman.example.invalid:8080",
+		Token:   "test-token-not-a-real-secret",
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if b == nil {
 		t.Fatal("expected non-nil backend")
+	}
+}
+
+// TestHypemanConfigFromEnv verifies env resolution happens in one place: the
+// SDK-native fallbacks, the TLS default, and the comma-split GPU devices.
+func TestHypemanConfigFromEnv(t *testing.T) {
+	t.Setenv(envHypemanBaseURL, "")
+	t.Setenv("HYPEMAN_BASE_URL", "https://hypeman.dev-x.kernel.sh")
+	t.Setenv(envHypemanToken, "")
+	t.Setenv("HYPEMAN_API_KEY", "tok")
+	t.Setenv(envHypemanIngressTLS, "")
+	t.Setenv(envHypemanGPUDevices, "a, b ,c")
+	t.Setenv(envHypemanGPUProfile, "NVIDIA L40S-2Q")
+
+	cfg := hypemanConfigFromEnv()
+	if cfg.BaseURL != "https://hypeman.dev-x.kernel.sh" {
+		t.Errorf("BaseURL = %q (expected HYPEMAN_BASE_URL fallback)", cfg.BaseURL)
+	}
+	if cfg.Token != "tok" {
+		t.Errorf("Token = %q (expected HYPEMAN_API_KEY fallback)", cfg.Token)
+	}
+	if !cfg.IngressTLS {
+		t.Errorf("IngressTLS = false, want default true")
+	}
+	if len(cfg.GPUDevices) != 3 || cfg.GPUDevices[0] != "a" || cfg.GPUDevices[2] != "c" {
+		t.Errorf("GPUDevices = %v, want [a b c]", cfg.GPUDevices)
+	}
+	if cfg.GPUProfile != "NVIDIA L40S-2Q" {
+		t.Errorf("GPUProfile = %q", cfg.GPUProfile)
 	}
 }
 
