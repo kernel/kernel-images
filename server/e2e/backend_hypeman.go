@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -16,9 +17,10 @@ import (
 	"github.com/nrednav/cuid2"
 )
 
-// Container ports exposed by the kernel-images browser image. These are fixed
-// inside the guest; the Docker backend remaps them to random host ports, while
-// the Hypeman backend reaches them directly on the instance's network IP.
+// Guest ports exposed by the kernel-images browser image. They are fixed inside
+// the guest; the Docker backend remaps them to random host ports, while the
+// Hypeman backend reaches them either through an ingress (by listen port) or
+// directly on the instance's private network IP.
 const (
 	hypemanAPIPort          = 10001
 	hypemanCDPPort          = 9222
@@ -36,64 +38,70 @@ const (
 	// native HYPEMAN_API_KEY is also honored as a fallback.
 	envHypemanToken = "HYPEMAN_AUTH_TOKEN"
 	// envHypemanGPUDevices is an optional comma-separated list of device IDs or
-	// names to attach for GPU passthrough (used by the GPU image).
+	// names to attach for GPU/PCI passthrough.
 	envHypemanGPUDevices = "KI_E2E_HYPEMAN_GPU_DEVICES"
+	// envHypemanGPUProfile requests a vGPU profile (e.g. "NVIDIA L40S-2Q") for
+	// the instance; the host assigns the backing mdev. Required to boot the vGPU
+	// browser image (chromium-headful-vgpu).
+	envHypemanGPUProfile = "KI_E2E_HYPEMAN_GPU_PROFILE"
 	// envHypemanInstanceSize optionally overrides the VM memory size.
 	envHypemanInstanceSize = "KI_E2E_HYPEMAN_SIZE"
-	// envHypemanIngressDomain selects hostname-based ingress routing. When set,
-	// the backend ensures a single host-level wildcard ingress exists and reaches
-	// each instance through Caddy at "<instance>-<role>.<domain>" instead of the
-	// instance's private network IP. Leave unset to use the raw network IP (only
-	// works from a network with L3 reachability to the hypeman instance subnet,
-	// e.g. the API's own tailnet-tagged hosts).
+	// envHypemanIngressDomain overrides the wildcard ingress base domain. If
+	// unset it is derived from the base URL host by stripping a leading
+	// "hypeman." prefix (e.g. hypeman.dev-yul-hypeman-1.kernel.sh ->
+	// dev-yul-hypeman-1.kernel.sh), matching the host's "{instance}.<domain>"
+	// wildcard ingresses.
 	envHypemanIngressDomain = "KI_E2E_HYPEMAN_INGRESS_DOMAIN"
-	// envHypemanIngressTLS, when truthy, serves ingress endpoints over TLS
-	// (https/wss on :443) instead of plaintext (http/ws on :80). Plaintext is the
-	// default because ACME cert issuance requires the ingress hostname to be
-	// publicly resolvable, which is not the case on an internal/tailnet domain.
+	// envHypemanIngressTLS toggles TLS on ingress endpoints. Defaults to true
+	// (the host terminates TLS with a wildcard cert); set 0/false for plaintext.
 	envHypemanIngressTLS = "KI_E2E_HYPEMAN_INGRESS_TLS"
+	// envHypemanRawIP forces reaching the instance on its private network IP
+	// instead of via ingress. Only works from a network with L3 reachability to
+	// the hypeman instance subnet (e.g. the API's own tailnet-tagged hosts).
+	envHypemanRawIP = "KI_E2E_HYPEMAN_RAW_IP"
 )
 
-// Shared, host-level ingress that routes every e2e instance by hostname. It is a
-// find-or-create construct (created at most once per hypeman host) keyed by tag,
-// because ingresses are host-level — we must not create one per instance.
+// ingressRole maps a logical endpoint to the ingress listen port and the guest
+// target port. Hostname routing uses a single wildcard hostname
+// "{instance}.<domain>" and differentiates roles by listen port, matching the
+// host's existing convention (the browser API is exposed on :444 -> guest
+// :10001). cdp/cd reuse the guest port as the listen port.
+type ingressRole struct {
+	role       string
+	listenPort int64
+	targetPort int64
+}
+
+var ingressRoles = []ingressRole{
+	{role: "api", listenPort: 444, targetPort: hypemanAPIPort},
+	{role: "cdp", listenPort: hypemanCDPPort, targetPort: hypemanCDPPort},
+	{role: "cd", listenPort: hypemanChromeDriverPort, targetPort: hypemanChromeDriverPort},
+}
+
+// Tag applied to ingresses this backend creates, so they are recognizable as
+// e2e-managed. We still reuse any pre-existing ingress (e.g. the API's own
+// browser ingress) regardless of tag — matching is by rule shape.
 const (
-	ingressName   = "ki-e2e"
 	ingressTagKey = "managed-by"
 	ingressTagVal = "ki-e2e"
 )
-
-// ingressRoles maps a logical endpoint role to the guest port it targets. The
-// public hostname for a role is "<instance>-<role>.<domain>"; the shared ingress
-// matches the pattern "{instance}-<role>.<domain>" and routes to the captured
-// instance on the guest port.
-var ingressRoles = []struct {
-	role string
-	port int64
-}{
-	{role: "api", port: hypemanAPIPort},
-	{role: "cdp", port: hypemanCDPPort},
-	{role: "cd", port: hypemanChromeDriverPort},
-}
 
 // hypemanBackend starts the image as a remote VM on a running Hypeman dev server
 // using the github.com/kernel/hypeman-go client library.
 //
 // Endpoints are reached one of two ways:
 //
-//   - Ingress (preferred): when KI_E2E_HYPEMAN_INGRESS_DOMAIN is set, a single
-//     host-level wildcard ingress (find-or-create, keyed by tag) routes
-//     "<instance>-<role>.<domain>" through the hypeman host's reverse proxy to
-//     the instance's guest ports. This works from anywhere that can resolve the
-//     domain and reach the host's :80/:443, without L3 access to the instance
-//     subnet.
-//   - Raw network IP (fallback): the instance's assigned private IP on the fixed
-//     guest ports. Only works from a network with L3 reachability to the hypeman
-//     instance subnet (e.g. the API's own tailnet-tagged hosts).
+//   - Ingress (default): a wildcard ingress per role routes
+//     "<instance>.<domain>:<listenPort>" through the host's reverse proxy to the
+//     instance's guest port. Each rule uses the "{instance}" hostname capture so
+//     a single host-level ingress serves every instance; rules are found-or-
+//     created (reusing pre-existing ones, e.g. the browser API :444 -> :10001).
+//     Works from anywhere that can resolve <domain> and reach the host.
+//   - Raw network IP (opt-in via KI_E2E_HYPEMAN_RAW_IP): the instance's private
+//     IP on the fixed guest ports. Needs L3 reachability to the instance subnet.
 //
-// Command execution is performed against the instance's own API server
-// (/process/exec) so that callers get the same (exitCode, combinedOutput, error)
-// shape as the Docker backend.
+// Command execution runs against the instance's own API server (/process/exec)
+// so callers get the same (exitCode, combinedOutput, error) shape as Docker.
 type hypemanBackend struct {
 	client hypeman.Client
 	image  string
@@ -102,7 +110,7 @@ type hypemanBackend struct {
 	name       string
 	ip         string
 
-	// ingressDomain is empty in raw-IP mode; non-empty enables hostname routing.
+	useIngress    bool
 	ingressDomain string
 	ingressTLS    bool
 
@@ -122,9 +130,14 @@ func newHypemanBackend(image string) (Backend, error) {
 		opts = append(opts, option.WithAPIKey(token))
 	}
 
+	baseURL := strings.TrimSpace(os.Getenv(envHypemanBaseURL))
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(os.Getenv("HYPEMAN_BASE_URL"))
+	}
+
 	// Fail fast with an actionable message if neither this var nor the SDK's
 	// native vars provide connection details.
-	hasBase := strings.TrimSpace(os.Getenv(envHypemanBaseURL)) != "" || strings.TrimSpace(os.Getenv("HYPEMAN_BASE_URL")) != ""
+	hasBase := baseURL != ""
 	hasToken := strings.TrimSpace(os.Getenv(envHypemanToken)) != "" || strings.TrimSpace(os.Getenv("HYPEMAN_API_KEY")) != ""
 	if !hasBase || !hasToken {
 		return nil, fmt.Errorf(
@@ -133,17 +146,34 @@ func newHypemanBackend(image string) (Backend, error) {
 		)
 	}
 
+	domain := strings.TrimSpace(os.Getenv(envHypemanIngressDomain))
+	if domain == "" {
+		domain = deriveIngressDomain(baseURL)
+	}
+	rawIP := isTruthy(os.Getenv(envHypemanRawIP))
+
 	return &hypemanBackend{
 		client:        hypeman.NewClient(opts...),
 		image:         image,
-		ingressDomain: strings.TrimSpace(os.Getenv(envHypemanIngressDomain)),
-		ingressTLS:    isTruthy(os.Getenv(envHypemanIngressTLS)),
+		useIngress:    !rawIP && domain != "",
+		ingressDomain: domain,
+		ingressTLS:    envBoolDefault(envHypemanIngressTLS, true),
 		exitCh:        make(chan error, 1),
 	}, nil
 }
 
+// deriveIngressDomain extracts the wildcard ingress base domain from the control
+// API base URL by stripping a leading "hypeman." label.
+func deriveIngressDomain(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return strings.TrimPrefix(u.Hostname(), "hypeman.")
+}
+
 // Start creates and boots a hypeman instance for the image, waits for it to
-// reach the Running state, and resolves its network IP.
+// reach the Running state, then prepares the chosen routing mode.
 func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 	env := make(map[string]string, len(cfg.Env)+1)
 	for k, v := range cfg.Env {
@@ -168,6 +198,9 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 	if devs := parseCommaList(os.Getenv(envHypemanGPUDevices)); len(devs) > 0 {
 		params.Devices = devs
 	}
+	if profile := strings.TrimSpace(os.Getenv(envHypemanGPUProfile)); profile != "" {
+		params.GPU = hypeman.InstanceNewParamsGPU{Profile: hypeman.String(profile)}
+	}
 
 	inst, err := c.client.Instances.New(ctx, params)
 	if err != nil {
@@ -181,13 +214,10 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 		return err
 	}
 
-	// Hostname routing: ensure the shared host-level ingress exists, then derive
-	// endpoints from "<instance>-<role>.<domain>". No instance IP needed.
-	if c.ingressDomain != "" {
-		if err := c.ensureIngress(ctx); err != nil {
-			return err
-		}
-		return nil
+	if c.useIngress {
+		// Ensure the wildcard ingress rules exist; endpoints derive from the
+		// instance name + domain, so no instance IP is needed.
+		return c.ensureIngress(ctx)
 	}
 
 	// Raw-IP fallback: reach the instance directly on its private network IP.
@@ -199,85 +229,78 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 	return nil
 }
 
-// ensureIngress finds or creates the single shared, host-level ingress that
-// routes every e2e instance by hostname. Ingresses are host-level constructs, so
-// we must not create one per instance: we look one up by tag and only create it
-// if absent (tolerating a creation race with concurrent test binaries).
+// ensureIngress finds or creates a wildcard ingress for each role. Ingresses are
+// host-level constructs keyed by rule shape (wildcard hostname + listen port ->
+// target port), so we reuse any pre-existing rule (e.g. the API's browser
+// ingress) and only create what's missing — never one ingress per instance.
 func (c *hypemanBackend) ensureIngress(ctx context.Context) error {
-	if c.ingressExists(ctx) {
-		return nil
-	}
-	_, err := c.client.Ingresses.New(ctx, c.desiredIngressParams())
-	if err != nil {
-		// Another runner may have created it concurrently; accept that.
-		if c.ingressExists(ctx) {
-			return nil
+	have := c.existingRuleSet(ctx)
+	for _, r := range ingressRoles {
+		key := ruleKey(c.wildcardHost(), r.listenPort, r.targetPort)
+		if have[key] {
+			continue
 		}
-		return fmt.Errorf("hypeman: ensure ingress %q: %w", ingressName, err)
+		if _, err := c.client.Ingresses.New(ctx, c.roleIngressParams(r)); err != nil {
+			// Another runner may have created it concurrently; re-check.
+			if c.existingRuleSet(ctx)[key] {
+				continue
+			}
+			return fmt.Errorf("hypeman: ensure ingress for role %q (:%d->:%d): %w", r.role, r.listenPort, r.targetPort, err)
+		}
 	}
 	return nil
 }
 
-// ingressExists reports whether a managed ingress that routes our API role
-// pattern is already present on the host.
-func (c *hypemanBackend) ingressExists(ctx context.Context) bool {
-	list, err := c.client.Ingresses.List(ctx, hypeman.IngressListParams{
-		Tags: map[string]string{ingressTagKey: ingressTagVal},
-	})
+// existingRuleSet lists all ingresses and indexes their rules by shape so we can
+// reuse any rule (regardless of ingress name/tag) that already provides routing.
+func (c *hypemanBackend) existingRuleSet(ctx context.Context) map[string]bool {
+	set := map[string]bool{}
+	list, err := c.client.Ingresses.List(ctx, hypeman.IngressListParams{})
 	if err != nil || list == nil {
-		return false
+		return set
 	}
-	wantAPI := c.ingressPatternHost("api")
 	for _, ing := range *list {
 		for _, rule := range ing.Rules {
-			if rule.Match.Hostname == wantAPI {
-				return true
-			}
+			set[ruleKey(rule.Match.Hostname, rule.Match.Port, rule.Target.Port)] = true
 		}
 	}
-	return false
+	return set
 }
 
-// desiredIngressParams builds the shared ingress: one rule per role, each a
-// wildcard pattern hostname "{instance}-<role>.<domain>" routed to the captured
-// instance on the corresponding guest port.
-func (c *hypemanBackend) desiredIngressParams() hypeman.IngressNewParams {
-	rules := make([]hypeman.IngressRuleParam, 0, len(ingressRoles))
-	for _, r := range ingressRoles {
-		rules = append(rules, hypeman.IngressRuleParam{
+func (c *hypemanBackend) roleIngressParams(r ingressRole) hypeman.IngressNewParams {
+	return hypeman.IngressNewParams{
+		Name: "ki-e2e-" + r.role,
+		Rules: []hypeman.IngressRuleParam{{
 			Match: hypeman.IngressMatchParam{
-				Hostname: c.ingressPatternHost(r.role),
-				Port:     hypeman.Int(c.ingressListenPort()),
+				Hostname: c.wildcardHost(),
+				Port:     hypeman.Int(r.listenPort),
 			},
 			Target: hypeman.IngressTargetParam{
 				Instance: "{instance}",
-				Port:     r.port,
+				Port:     r.targetPort,
 			},
 			Tls: hypeman.Bool(c.ingressTLS),
-		})
-	}
-	return hypeman.IngressNewParams{
-		Name:  ingressName,
-		Rules: rules,
-		Tags:  map[string]string{ingressTagKey: ingressTagVal},
+		}},
+		Tags: map[string]string{ingressTagKey: ingressTagVal},
 	}
 }
 
-// ingressPatternHost is the wildcard hostname pattern for a role (uses the
-// {instance} capture). ingressHost is the concrete hostname for this instance.
-func (c *hypemanBackend) ingressPatternHost(role string) string {
-	return fmt.Sprintf("{instance}-%s.%s", role, c.ingressDomain)
+func ruleKey(host string, listen, target int64) string {
+	return fmt.Sprintf("%s|%d|%d", host, listen, target)
 }
 
-func (c *hypemanBackend) ingressHost(role string) string {
-	return fmt.Sprintf("%s-%s.%s", c.name, role, c.ingressDomain)
-}
+// wildcardHost is the pattern hostname ("{instance}.<domain>") used in ingress
+// rules; ingressHost is the concrete hostname for this instance.
+func (c *hypemanBackend) wildcardHost() string { return "{instance}." + c.ingressDomain }
+func (c *hypemanBackend) ingressHost() string  { return c.name + "." + c.ingressDomain }
 
-func (c *hypemanBackend) ingressListenPort() int64 {
-	if c.ingressTLS {
-		return 443
+func (c *hypemanBackend) listenPortFor(role string) int64 {
+	for _, r := range ingressRoles {
+		if r.role == role {
+			return r.listenPort
+		}
 	}
-	return 80
+	return 0
 }
 
 // waitForRunning polls the instance wait endpoint until the instance is Running
@@ -317,7 +340,8 @@ func (c *hypemanBackend) resolveIP(ctx context.Context) (string, error) {
 	}
 }
 
-// Stop deletes the hypeman instance.
+// Stop deletes the hypeman instance. The shared wildcard ingresses are
+// host-level and intentionally left in place for reuse by other instances/runs.
 func (c *hypemanBackend) Stop(ctx context.Context) error {
 	if c.instanceID == "" {
 		return nil
@@ -333,40 +357,40 @@ func (c *hypemanBackend) Stop(ctx context.Context) error {
 }
 
 func (c *hypemanBackend) APIBaseURL() string {
-	return c.httpScheme() + "://" + c.endpointHostPort("api", hypemanAPIPort)
+	return c.httpScheme() + "://" + c.endpoint("api", hypemanAPIPort)
 }
 
 func (c *hypemanBackend) CDPURL() string {
-	return c.wsScheme() + "://" + c.endpointHostPort("cdp", hypemanCDPPort) + "/"
+	return c.wsScheme() + "://" + c.endpoint("cdp", hypemanCDPPort) + "/"
 }
 
 func (c *hypemanBackend) CDPAddr() string {
-	return c.endpointHostPort("cdp", hypemanCDPPort)
+	return c.endpoint("cdp", hypemanCDPPort)
 }
 
 func (c *hypemanBackend) ChromeDriverURL() string {
-	return c.httpScheme() + "://" + c.endpointHostPort("cd", hypemanChromeDriverPort)
+	return c.httpScheme() + "://" + c.endpoint("cd", hypemanChromeDriverPort)
 }
 
-// endpointHostPort returns the host:port a caller should dial for a role: the
-// ingress hostname on the proxy's listen port when hostname routing is enabled,
-// otherwise the instance's private IP on the fixed guest port.
-func (c *hypemanBackend) endpointHostPort(role string, guestPort int) string {
-	if c.ingressDomain != "" {
-		return fmt.Sprintf("%s:%d", c.ingressHost(role), c.ingressListenPort())
+// endpoint returns the host:port a caller should dial for a role: the ingress
+// hostname on the role's listen port when hostname routing is enabled, otherwise
+// the instance's private IP on the fixed guest port.
+func (c *hypemanBackend) endpoint(role string, guestPort int64) string {
+	if c.useIngress {
+		return fmt.Sprintf("%s:%d", c.ingressHost(), c.listenPortFor(role))
 	}
 	return fmt.Sprintf("%s:%d", c.ip, guestPort)
 }
 
 func (c *hypemanBackend) httpScheme() string {
-	if c.ingressDomain != "" && c.ingressTLS {
+	if c.useIngress && c.ingressTLS {
 		return "https"
 	}
 	return "http"
 }
 
 func (c *hypemanBackend) wsScheme() string {
-	if c.ingressDomain != "" && c.ingressTLS {
+	if c.useIngress && c.ingressTLS {
 		return "wss"
 	}
 	return "ws"
@@ -467,6 +491,15 @@ func isTruthy(s string) bool {
 	default:
 		return false
 	}
+}
+
+// envBoolDefault parses a boolean env var, returning def when unset/empty.
+func envBoolDefault(name string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return def
+	}
+	return isTruthy(v)
 }
 
 func parseCommaList(s string) []string {

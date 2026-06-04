@@ -77,46 +77,65 @@ func TestHypemanRawIPMode(t *testing.T) {
 	}
 }
 
-// TestHypemanIngressRouting verifies hostname-routed endpoints and that the
-// shared ingress params describe one wildcard rule per role on the proxy's
-// plaintext listen port. The instance name contains dashes, which must end up
-// inside the {instance} capture, not split the role suffix.
+// TestHypemanIngressRouting verifies hostname-routed endpoints (single wildcard
+// hostname, roles differentiated by listen port, TLS) and the per-role ingress
+// params. The instance name contains dashes, which must stay inside the single
+// {instance} hostname label.
 func TestHypemanIngressRouting(t *testing.T) {
-	b := &hypemanBackend{name: "ki-e2e-abc123", ingressDomain: "e2e.hypeman.dev"}
+	const domain = "dev-yul-hypeman-1.kernel.sh"
+	b := &hypemanBackend{name: "ki-e2e-abc123", useIngress: true, ingressDomain: domain, ingressTLS: true}
 	for _, tc := range []struct{ name, got, want string }{
-		{"api", b.APIBaseURL(), "http://ki-e2e-abc123-api.e2e.hypeman.dev:80"},
-		{"cdp", b.CDPURL(), "ws://ki-e2e-abc123-cdp.e2e.hypeman.dev:80/"},
-		{"cdpAddr", b.CDPAddr(), "ki-e2e-abc123-cdp.e2e.hypeman.dev:80"},
-		{"cd", b.ChromeDriverURL(), "http://ki-e2e-abc123-cd.e2e.hypeman.dev:80"},
-		{"pattern", b.ingressPatternHost("api"), "{instance}-api.e2e.hypeman.dev"},
+		{"api", b.APIBaseURL(), "https://ki-e2e-abc123." + domain + ":444"},
+		{"cdp", b.CDPURL(), "wss://ki-e2e-abc123." + domain + ":9222/"},
+		{"cdpAddr", b.CDPAddr(), "ki-e2e-abc123." + domain + ":9222"},
+		{"cd", b.ChromeDriverURL(), "https://ki-e2e-abc123." + domain + ":9224"},
+		{"wildcard", b.wildcardHost(), "{instance}." + domain},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %q, want %q", tc.name, tc.got, tc.want)
 		}
 	}
 
-	p := b.desiredIngressParams()
-	if p.Name != ingressName {
-		t.Errorf("ingress name = %q, want %q", p.Name, ingressName)
+	// The "api" role reuses the host's :444 -> :10001 browser ingress shape.
+	p := b.roleIngressParams(ingressRoles[0])
+	if p.Name != "ki-e2e-api" {
+		t.Errorf("ingress name = %q, want ki-e2e-api", p.Name)
 	}
-	if len(p.Rules) != len(ingressRoles) {
-		t.Fatalf("got %d rules, want %d", len(p.Rules), len(ingressRoles))
+	if len(p.Rules) != 1 {
+		t.Fatalf("got %d rules, want 1", len(p.Rules))
 	}
-	if got := p.Rules[0].Target.Instance; got != "{instance}" {
-		t.Errorf("rule[0] target instance = %q, want {instance}", got)
+	r := p.Rules[0]
+	if r.Match.Hostname != "{instance}."+domain {
+		t.Errorf("match hostname = %q", r.Match.Hostname)
 	}
-	if got := p.Rules[0].Target.Port; got != hypemanAPIPort {
-		t.Errorf("rule[0] target port = %d, want %d", got, hypemanAPIPort)
+	if got := r.Match.Port.Or(0); got != 444 {
+		t.Errorf("match port = %d, want 444", got)
+	}
+	if r.Target.Instance != "{instance}" || r.Target.Port != hypemanAPIPort {
+		t.Errorf("target = %q:%d, want {instance}:%d", r.Target.Instance, r.Target.Port, hypemanAPIPort)
 	}
 }
 
-// TestHypemanIngressTLS verifies https/wss + :443 when TLS is enabled.
-func TestHypemanIngressTLS(t *testing.T) {
-	b := &hypemanBackend{name: "x", ingressDomain: "d", ingressTLS: true}
-	if got, want := b.APIBaseURL(), "https://x-api.d:443"; got != want {
+// TestHypemanIngressPlaintext verifies http/ws when TLS is disabled.
+func TestHypemanIngressPlaintext(t *testing.T) {
+	b := &hypemanBackend{name: "x", useIngress: true, ingressDomain: "d", ingressTLS: false}
+	if got, want := b.APIBaseURL(), "http://x.d:444"; got != want {
 		t.Errorf("APIBaseURL = %q, want %q", got, want)
 	}
-	if got, want := b.CDPURL(), "wss://x-cdp.d:443/"; got != want {
+	if got, want := b.CDPURL(), "ws://x.d:9222/"; got != want {
 		t.Errorf("CDPURL = %q, want %q", got, want)
+	}
+}
+
+// TestDeriveIngressDomain strips a leading "hypeman." from the control API host.
+func TestDeriveIngressDomain(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"https://hypeman.dev-yul-hypeman-1.kernel.sh", "dev-yul-hypeman-1.kernel.sh"},
+		{"https://dev-yul-hypeman-1.kernel.sh", "dev-yul-hypeman-1.kernel.sh"},
+		{"", ""},
+	} {
+		if got := deriveIngressDomain(tc.in); got != tc.want {
+			t.Errorf("deriveIngressDomain(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
