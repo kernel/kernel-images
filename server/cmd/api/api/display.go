@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -250,19 +251,148 @@ func (s *ApiService) probeDisplayMode(ctx context.Context) string {
 	return "xorg"
 }
 
+// xorgOutputName returns the RandR output to drive on the headful Xorg
+// "dummy" driver. It exposes DUMMY0 (not "default"); the historical
+// `xrandr --output default --mode ...` exits 0 while silently doing nothing on
+// this driver. Default to DUMMY0 and let an env var override it for any
+// non-standard image layout.
+func xorgOutputName() string {
+	output := strings.TrimSpace(os.Getenv("KERNEL_IMAGES_XRANDR_OUTPUT"))
+	if output == "" {
+		output = "DUMMY0"
+	}
+	return output
+}
+
+// generateExactModeline synthesizes a CVT-style modeline that preserves the
+// EXACT requested active resolution. The standard generators (cvt/libxcvt and
+// gtf) round horizontal active pixels down to the 8-pixel CVT cell
+// granularity, so they cannot express odd or non-multiple-of-8 widths such as
+// 1365 (gtf turns "1365 768" into a 1368-wide mode). Virtual drivers — the
+// Xorg "dummy" driver and Xvfb — impose no cell-granularity or pixel-clock
+// constraints (the dummy Monitor sync range is effectively unbounded), so we
+// can hand the X server a modeline whose hdisplay/vdisplay are exactly what
+// the caller asked for, with CVT-derived blanking around them.
+//
+// It returns the mode name (matching the WxH_R.00 convention used elsewhere)
+// and the argument list for `xrandr --newmode`.
+func generateExactModeline(width, height, refreshRate int) (string, []string) {
+	const (
+		cellGran   = 8.0
+		minVPorch  = 3.0
+		minVSyncBP = 550.0 // microseconds (min vsync + back porch)
+		cPrime     = 30.0
+		mPrime     = 300.0
+		hSyncPct   = 0.08
+		clockStep  = 0.25 // MHz
+	)
+	if refreshRate <= 0 {
+		refreshRate = 60
+	}
+	hActive := float64(width)
+	vActive := float64(height)
+
+	// Vertical sync width by aspect ratio (CVT table); falls back to 10.
+	vSync := 10
+	switch {
+	case height == width*3/4:
+		vSync = 4
+	case height == width*9/16:
+		vSync = 5
+	case height == width*10/16:
+		vSync = 6
+	case height == width*4/5:
+		vSync = 7
+	case height == width*9/15:
+		vSync = 7
+	}
+
+	hPeriod := (1000000.0/float64(refreshRate) - minVSyncBP) / (vActive + minVPorch) // us/line
+	vSyncBP := math.Floor(minVSyncBP/hPeriod) + 1
+	if vSyncBP < float64(vSync)+minVPorch {
+		vSyncBP = float64(vSync) + minVPorch
+	}
+	vTotal := vActive + minVPorch + vSyncBP
+	vSyncStart := vActive + minVPorch
+	vSyncEnd := vSyncStart + float64(vSync)
+
+	idealDuty := cPrime - mPrime*hPeriod/1000.0
+	if idealDuty < 20 {
+		idealDuty = 20
+	}
+	hBlank := math.Floor(hActive*idealDuty/(100.0-idealDuty)/(2*cellGran)) * (2 * cellGran)
+	hTotal := hActive + hBlank
+	hSync := math.Floor(hSyncPct*hTotal/cellGran) * cellGran
+	hSyncStart := hActive + (hBlank/2 - hSync)
+	hSyncEnd := hSyncStart + hSync
+
+	clock := math.Floor((hTotal/hPeriod)/clockStep) * clockStep // MHz, snapped to step
+	if clock <= 0 {
+		clock = clockStep
+	}
+
+	name := fmt.Sprintf("%dx%d_%d.00", width, height, refreshRate)
+	args := []string{
+		name,
+		strconv.FormatFloat(clock, 'f', 2, 64),
+		strconv.Itoa(width), strconv.Itoa(int(hSyncStart)), strconv.Itoa(int(hSyncEnd)), strconv.Itoa(int(hTotal)),
+		strconv.Itoa(height), strconv.Itoa(int(vSyncStart)), strconv.Itoa(int(vSyncEnd)), strconv.Itoa(int(vTotal)),
+		"-HSync", "+VSync",
+	}
+	return name, args
+}
+
+// ensureXorgModeline guarantees a modeline for the exact width/height/rate
+// exists on the given output, creating it on the fly when necessary. This lets
+// the headful "dummy" driver honor arbitrary viewport sizes without baking
+// every possibility into xorg.conf. newmode/addmode are idempotent here: an
+// "already exists" failure (the mode was created by a prior resize or shipped
+// in xorg.conf) is treated as success. Returns the resolved mode name.
+func (s *ApiService) ensureXorgModeline(ctx context.Context, output string, width, height, refreshRate int) string {
+	log := logger.FromContext(ctx)
+	display := s.resolveDisplayFromEnv()
+	name, newmodeArgs := generateExactModeline(width, height, refreshRate)
+
+	runXrandr := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, "xrandr", args...)
+		cmd.Env = append(os.Environ(), "DISPLAY="+display)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+
+	if out, err := runXrandr(append([]string{"--newmode"}, newmodeArgs...)...); err != nil {
+		if !strings.Contains(out, "already exists") {
+			log.Warn("xrandr --newmode failed (continuing; mode may already exist)", "mode", name, "out", out, "error", err)
+		}
+	}
+	if out, err := runXrandr("--addmode", output, name); err != nil {
+		if !strings.Contains(out, "already") {
+			log.Warn("xrandr --addmode failed (continuing)", "mode", name, "output", output, "out", out, "error", err)
+		}
+	}
+	log.Info("ensured xorg modeline", "mode", name, "output", output)
+	return name
+}
+
+// assertXorgMode applies a named modeline to the output via xrandr directly.
+// Used to pin the exact geometry after Neko's (cache-laggy) screen change. The
+// mode must already exist on the output (see ensureXorgModeline).
+func (s *ApiService) assertXorgMode(ctx context.Context, output, modeName string) error {
+	display := s.resolveDisplayFromEnv()
+	cmd := exec.CommandContext(ctx, "xrandr", "--output", output, "--mode", modeName)
+	cmd.Env = append(os.Environ(), "DISPLAY="+display)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("xrandr --output %s --mode %s: %s: %w", output, modeName, strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
 // setResolutionXorgViaXrandr changes resolution for Xorg using xrandr (fallback when Neko is disabled)
 func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, height, refreshRate int) error {
 	log := logger.FromContext(ctx)
 	display := s.resolveDisplayFromEnv()
 
-	// The headful Xorg dummy driver exposes DUMMY0, not "default". The
-	// historical `xrandr --output default --mode ...` command exits 0 while
-	// silently doing nothing on this driver. Default to DUMMY0 and let an
-	// env var override it for any non-standard image layout.
-	output := strings.TrimSpace(os.Getenv("KERNEL_IMAGES_XRANDR_OUTPUT"))
-	if output == "" {
-		output = "DUMMY0"
-	}
+	output := xorgOutputName()
 
 	// Per-output resizing requires --mode <name>; --size is a legacy global
 	// screen option that cannot be combined with --output. Always go through
@@ -272,7 +402,9 @@ func (s *ApiService) setResolutionXorgViaXrandr(ctx context.Context, width, heig
 	if refreshRate <= 0 {
 		refreshRate = 60
 	}
-	modeName := fmt.Sprintf("%dx%d_%d.00", width, height, refreshRate)
+	// Generate-and-add the exact modeline on the fly so arbitrary viewport
+	// sizes work without an xorg.conf allowlist (option 1).
+	modeName := s.ensureXorgModeline(ctx, output, width, height, refreshRate)
 	xrandrCmd := fmt.Sprintf("xrandr --output %s --mode %s", output, modeName)
 	log.Info("using specific modeline", "output", output, "mode", modeName)
 
@@ -813,6 +945,14 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 		refreshRate = 60
 	}
 
+	// Generate-and-add the exact modeline before asking Neko to switch, so
+	// Neko's ScreenConfigurationChange finds an exact match instead of
+	// snapping to the nearest pre-baked mode (option 1). Without this, an
+	// odd/non-standard size like 1365x768 lands on 1366x768 and the
+	// post-resize X-root verification fails.
+	output := xorgOutputName()
+	modeName := s.ensureXorgModeline(ctx, output, width, height, refreshRate)
+
 	// Prepare screen configuration
 	screenConfig := nekooapi.ScreenConfiguration{
 		Width:  &width,
@@ -823,6 +963,17 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 	// Change screen configuration using authenticated client
 	if err := s.nekoAuthClient.ScreenConfigurationChange(ctx, screenConfig); err != nil {
 		return fmt.Errorf("failed to change screen configuration: %w", err)
+	}
+
+	// Neko matches the requested WxH against a cached RandR mode list. A
+	// just-added modeline may not be in that cache yet, in which case Neko
+	// reports success but snaps the X root to its largest known mode
+	// (e.g. 3840x2160). Pin the exact geometry directly afterwards: the
+	// modeline is guaranteed to exist (ensured above), so this is immediate
+	// and authoritative, and it aligns the X root with the size already
+	// handed to Neko's capture pipeline.
+	if err := s.assertXorgMode(ctx, output, modeName); err != nil {
+		log.Warn("failed to pin exact mode after Neko change (continuing)", "mode", modeName, "error", err)
 	}
 
 	log.Info("successfully changed resolution via Neko API", "width", width, "height", height, "refresh_rate", refreshRate)
