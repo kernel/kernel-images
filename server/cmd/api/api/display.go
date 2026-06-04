@@ -143,25 +143,29 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		// accepted for API compatibility but no longer triggers a
 		// restart on this path.
 		if err == nil {
-			// Read the X root immediately after neko's synchronous
-			// resize, before any window-state CDP calls. This captures
-			// libxcvt's realized size — which can differ from the
-			// request (CVT 8-pixel grid round + FWXGA bump for
-			// 1360×768 → 1366×768) — without racing the chromium
-			// maximize that follows. Returning the realized size in
-			// the response body lets callers' coordinate math line up
-			// with what the X server actually rendered.
-			realizedW, realizedH, _, _, xrErr := s.getCurrentResolutionFromXrandr(ctx)
-			if xrErr != nil {
-				log.Error("failed to read X root after resize", "error", xrErr)
-				err = fmt.Errorf("X root read: %w", xrErr)
-			} else {
+			// Wait for the X root to settle, then use it as the
+			// realized size in the response. The wait returns early
+			// when either (a) xrandr reports the requested size — the
+			// common case — or (b) consecutive reads are stable for a
+			// short window, capturing libxcvt's rounded size on
+			// requests it can't honour exactly (CVT 8-pixel grid +
+			// FWXGA bump for 1360×768 → 1366×768).
+			//
+			// The poll absorbs transient X root states — chromium
+			// running in --kiosk briefly pushes the root to the dummy
+			// DDX's max mode (3840×2160) while mutter settles on the
+			// new screen, and a single immediate read would catch that
+			// transient instead of the steady-state size.
+			realizedW, realizedH := s.waitForXRootRealized(ctx, width, height, 10*time.Second)
+			if realizedW > 0 && realizedH > 0 {
 				if realizedW != width || realizedH != height {
 					log.Info("X root differs from request after resize",
 						"requested", fmt.Sprintf("%dx%d", width, height),
 						"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
 				}
 				width, height = realizedW, realizedH
+			} else {
+				log.Warn("X root never read successfully after resize, returning requested dimensions")
 			}
 		}
 		if err == nil {
@@ -463,6 +467,58 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 	}
 	log.Info("re-asserted maximized window state via CDP")
 	return nil
+}
+
+// waitForXRootRealized polls the X root via xrandr after a resize and
+// returns the realized dimensions. It returns early on either of two
+// success conditions:
+//
+//  1. The reading matches the requested width/height — the common case,
+//     when libxcvt honoured the request exactly.
+//  2. The reading has been stable across stableReads consecutive samples —
+//     captures libxcvt's rounded size on requests it can't honour
+//     (CVT 8-pixel grid round + FWXGA bump for 1360×768 → 1366×768).
+//
+// If neither happens before timeout, returns the last observation. Always
+// non-fatal — the response always echoes some size, never 500s.
+//
+// Calls getCurrentResolutionFromXrandr directly rather than the higher-
+// level getCurrentResolution: the latter prefers a cached viewportOverride
+// when one is set, which would silently report the CDP viewport instead
+// of the X root. The override is only set on the headless Xvfb fast path
+// today, so the Xorg branch never reaches that case — but the invariant
+// is non-local and would silently regress if anyone ever sets the
+// override on the Xorg path.
+func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int, timeout time.Duration) (int, int) {
+	const stableReads = 3
+	deadline := time.Now().Add(timeout)
+	var lastW, lastH int
+	var stableCount int
+	for {
+		w, h, _, _, err := s.getCurrentResolutionFromXrandr(ctx)
+		if err == nil {
+			if w == wantW && h == wantH {
+				return w, h
+			}
+			if w == lastW && h == lastH {
+				stableCount++
+				if stableCount >= stableReads {
+					return w, h
+				}
+			} else {
+				stableCount = 1
+				lastW, lastH = w, h
+			}
+		}
+		if time.Now().After(deadline) {
+			return lastW, lastH
+		}
+		select {
+		case <-ctx.Done():
+			return lastW, lastH
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
