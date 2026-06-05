@@ -254,9 +254,9 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 	}
 	params.DiskIoBps = hypeman.String(diskIO)
 
-	inst, err := c.client.Instances.New(ctx, params)
+	inst, err := c.createWithImagePull(ctx, params)
 	if err != nil {
-		return fmt.Errorf("hypeman: create instance: %w", err)
+		return err
 	}
 	c.instanceID = inst.ID
 
@@ -295,6 +295,35 @@ func (c *hypemanBackend) bringUp(ctx context.Context) error {
 	}
 	c.ip = ip
 	return nil
+}
+
+// createWithImagePull creates the instance, retrying while Hypeman reports the
+// image is still being pulled. A freshly-pushed tag isn't on the host yet, so
+// the first create triggers a background pull and returns a retryable 400
+// image_not_ready; we poll until the pull completes or ctx is done.
+func (c *hypemanBackend) createWithImagePull(ctx context.Context, params hypeman.InstanceNewParams) (*hypeman.Instance, error) {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for {
+		inst, err := c.client.Instances.New(ctx, params)
+		if err == nil {
+			return inst, nil
+		}
+		if !isImageNotReady(err) {
+			return nil, fmt.Errorf("hypeman: create instance: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("hypeman: create instance: image %q still pulling: %w", c.image, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+// isImageNotReady reports whether err is Hypeman's retryable "image is being
+// pulled" response (HTTP 400, code image_not_ready).
+func isImageNotReady(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "image_not_ready")
 }
 
 // ensureIngress finds or creates a wildcard ingress for each role. Ingresses are
