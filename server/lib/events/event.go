@@ -41,13 +41,10 @@ var UserCategories = []oapi.TelemetryEventCategory{
 }
 
 // DefaultCategories is captured when the caller enables telemetry without
-// per-category settings: every configurable category except Screenshot, which
-// is high-volume base64 image data and therefore opt-in.
+// per-category settings: the lightweight operational signals. CDP categories
+// (console/network/page/interaction) and screenshot are excluded so the default
+// never starts the CDP collector or emits high-volume streams; they are opt-in.
 var DefaultCategories = []oapi.TelemetryEventCategory{
-	Console,
-	Network,
-	Page,
-	Interaction,
 	Control,
 	Connection,
 	System,

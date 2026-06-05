@@ -143,15 +143,35 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		// accepted for API compatibility but no longer triggers a
 		// restart on this path.
 		if err == nil {
-			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
-				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
-				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
+			// Wait for the X root to settle, then use it as the
+			// realized size in the response. The wait returns early
+			// when either (a) xrandr reports the requested size — the
+			// common case — or (b) consecutive reads are stable for a
+			// short window, capturing libxcvt's rounded size on
+			// requests it can't honour exactly (CVT 8-pixel grid +
+			// FWXGA bump for 1360×768 → 1366×768).
+			//
+			// The poll absorbs transient X root states — chromium
+			// running in --kiosk briefly pushes the root to the dummy
+			// DDX's max mode (3840×2160) while mutter settles on the
+			// new screen, and a single immediate read would catch that
+			// transient instead of the steady-state size.
+			realizedW, realizedH := s.waitForXRootRealized(ctx, width, height, 10*time.Second)
+			if realizedW > 0 && realizedH > 0 {
+				if realizedW != width || realizedH != height {
+					log.Info("X root differs from request after resize",
+						"requested", fmt.Sprintf("%dx%d", width, height),
+						"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
+				}
+				width, height = realizedW, realizedH
+			} else {
+				log.Warn("X root never read successfully after resize, returning requested dimensions")
 			}
 		}
 		if err == nil {
-			if waitErr := s.waitForXRootSize(ctx, width, height, 3*time.Second); waitErr != nil {
-				log.Error("X root did not reach requested size after resize", "error", waitErr)
-				err = fmt.Errorf("X root verification: %w", waitErr)
+			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
+				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
+				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
 			}
 		}
 	} else if len(stopped) > 0 {
@@ -431,12 +451,13 @@ func (s *ApiService) withCDPClient(ctx context.Context, fn func(context.Context,
 // in the state that triggers the reflow. The CDP call is idempotent: it
 // no-ops on a window already in maximized or fullscreen state.
 //
-// The PATCH /display handler waits for the X root to reach the requested
-// size separately (waitForXRootSize) rather than reading the chromium
-// window's own bounds, so the contract stays panel-robust: if mutter
-// ever gained a taskbar/dock, a maximized window would be smaller than
-// the root by the panel's reserved space, and a window-bounds poll
-// would 3s-timeout forever.
+// The PATCH /display handler reads the X root separately (via
+// getCurrentResolutionFromXrandr) to capture the realized size for the
+// response, rather than reading the chromium window's own bounds. That
+// keeps the contract panel-robust: if mutter ever gained a taskbar/dock,
+// a maximized window would be smaller than the root by the panel's
+// reserved space, and any window-bounds-based check would diverge from
+// the X root.
 func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 	if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
@@ -448,52 +469,75 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 	return nil
 }
 
-// waitForXRootSize polls the X root resolution via xrandr until it matches
-// the requested size, or the deadline expires. This is the authoritative
-// post-condition for PATCH /display: the X root is what the server set
-// (via Neko or xrandr), and the rest of the stack — mutter, chromium —
-// follows from there. Polling the X root rather than chromium's window
-// bounds keeps the contract panel-robust: a future mutter config with a
-// taskbar/dock would shrink the maximized window below the root size,
-// but the root itself would still match what we asked for.
+// waitForXRootRealized polls the X root via xrandr after a resize and
+// returns the realized dimensions. It returns early on either of two
+// success conditions:
 //
-// Calls getCurrentResolutionFromXrandr directly rather than the
-// higher-level getCurrentResolution: the latter prefers a cached
-// viewportOverride when one is set, which would silently validate this
-// post-condition against the CDP viewport instead of the X root. The
-// override is only set on the headless Xvfb fast path today, so the
-// Xorg branch never reaches that case — but the invariant is non-local
-// and would silently regress this check if anyone ever sets the
+//  1. The reading matches the requested width/height — the common case,
+//     when libxcvt honoured the request exactly.
+//  2. The reading has been stable across stableReads consecutive samples
+//     AT A VALUE CLOSE TO THE REQUEST — captures libxcvt's rounded size
+//     on requests it can't honour exactly (CVT 8-pixel grid round +
+//     FWXGA bump for 1360×768 → 1366×768) and covers the idempotent
+//     re-PATCH case.
+//
+// The "close to request" guard on the stable-N path rejects transient
+// xrandr readings far from the request — chromium running in
+// --start-maximized or --kiosk briefly drives xrandr to report the dummy
+// DDX's max mode (e.g. 3840×2160) while mode-switch propagates, and a
+// naive stable-N would echo that transient into the response body. Real
+// libxcvt rounding is <16 px; the dummy max is >1000 px off any normal
+// request — acceptableDelta=32 sits comfortably between them.
+//
+// If neither condition fires before the timeout, returns the last
+// observation. Always non-fatal — the response always echoes some size,
+// never 500s.
+//
+// Calls getCurrentResolutionFromXrandr directly rather than the higher-
+// level getCurrentResolution: the latter prefers a cached viewportOverride
+// when one is set, which would silently report the CDP viewport instead
+// of the X root. The override is only set on the headless Xvfb fast path
+// today, so the Xorg branch never reaches that case — but the invariant
+// is non-local and would silently regress if anyone ever sets the
 // override on the Xorg path.
-//
-// Typical convergence is sub-millisecond (Neko's ScreenConfigurationChange
-// returns after the X server has applied the mode), but a small loop
-// covers any future asynchrony in the resize chain.
-func (s *ApiService) waitForXRootSize(ctx context.Context, width, height int, timeout time.Duration) error {
+func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int, timeout time.Duration) (int, int) {
+	const stableReads = 3
+	const acceptableDelta = 32
 	deadline := time.Now().Add(timeout)
 	var lastW, lastH int
-	var lastErr error
+	var stableCount int
 	for {
 		w, h, _, _, err := s.getCurrentResolutionFromXrandr(ctx)
-		lastErr = err
 		if err == nil {
-			lastW, lastH = w, h
-			if w == width && h == height {
-				return nil
+			if w == wantW && h == wantH {
+				return w, h
+			}
+			if w == lastW && h == lastH {
+				stableCount++
+				if stableCount >= stableReads && abs(w-wantW) <= acceptableDelta && abs(h-wantH) <= acceptableDelta {
+					return w, h
+				}
+			} else {
+				stableCount = 1
+				lastW, lastH = w, h
 			}
 		}
 		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return fmt.Errorf("last getCurrentResolutionFromXrandr error: %w", lastErr)
-			}
-			return fmt.Errorf("x root is %dx%d, want %dx%d", lastW, lastH, width, height)
+			return lastW, lastH
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return lastW, lastH
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
@@ -804,7 +848,12 @@ func (s *ApiService) isNekoEnabled() bool {
 	return os.Getenv("ENABLE_WEBRTC") == "true"
 }
 
-// setResolutionViaNeko delegates resolution change to Neko API
+// setResolutionViaNeko delegates resolution change to Neko API. The
+// realized X root dimensions can differ from the request — libxcvt rounds
+// widths to the CVT 8-pixel grid and applies a FWXGA bump for
+// 1360×768 → 1366×768. Neko's HTTP response echoes the request, not the
+// realized size, so the PatchDisplay handler reads the X root via xrandr
+// after this call returns.
 func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, refreshRate int) error {
 	log := logger.FromContext(ctx)
 
