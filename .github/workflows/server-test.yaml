@@ -111,7 +111,7 @@ jobs:
         working-directory: server
         env:
           KI_E2E_BACKEND: hypeman
-          HYPEMAN_BASE_URL: ${{ vars.HYPEMAN_API_URL }}
+          HYPEMAN_BASE_URL: ${{ vars.HYPEMAN_BASE_URL }}
           HYPEMAN_API_KEY: ${{ secrets.HYPEMAN_API_KEY }}
           E2E_CHROMIUM_HEADFUL_IMAGE: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}
           E2E_CHROMIUM_HEADLESS_IMAGE: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}
