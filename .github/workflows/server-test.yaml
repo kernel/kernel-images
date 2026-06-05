@@ -106,8 +106,11 @@ jobs:
         shell: bash
         run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Run server Makefile tests against Hypeman
-        run: make test
+      # Only the e2e suite — unit tests run in the `test` job above; re-running
+      # them here just adds an unrelated failure surface (and they don't touch
+      # the backend abstraction).
+      - name: Run server e2e tests against Hypeman
+        run: make test-e2e
         working-directory: server
         env:
           KI_E2E_BACKEND: hypeman
