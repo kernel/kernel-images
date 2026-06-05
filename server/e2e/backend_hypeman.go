@@ -235,6 +235,9 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 		Image: c.image,
 		Name:  c.name,
 		Env:   env,
+		// Tag so leaked instances (e.g. a test that panics after Start) are
+		// reapable by a scheduled job, in addition to the ki-e2e- name prefix.
+		Tags: map[string]string{ingressTagKey: ingressTagVal},
 	}
 	if c.cfg.Size != "" {
 		params.Size = hypeman.String(c.cfg.Size)
@@ -257,6 +260,22 @@ func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 	}
 	c.instanceID = inst.ID
 
+	// The instance now exists. Callers (tests) only register Stop after Start
+	// returns nil, so if bring-up fails we must delete it here or leak a remote
+	// VM. Use a fresh context so cleanup still runs even if ctx was cancelled or
+	// hit its deadline (the common bring-up failure).
+	if err := c.bringUp(ctx); err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_ = c.Stop(cleanupCtx)
+		return err
+	}
+	return nil
+}
+
+// bringUp waits for the just-created instance to reach Running and prepares the
+// selected routing mode (ingress or raw IP). It assumes c.instanceID is set.
+func (c *hypemanBackend) bringUp(ctx context.Context) error {
 	// Wait for the guest program to start. The SDK caps the server-side wait at
 	// a few minutes; loop until our context deadline if needed.
 	if err := c.waitForRunning(ctx); err != nil {

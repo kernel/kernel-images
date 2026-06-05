@@ -1,0 +1,90 @@
+name: Reap leaked Hypeman e2e instances
+
+# The Hypeman e2e backend (server/e2e) names every instance "ki-e2e-<id>" and
+# tags it managed-by=ki-e2e. Start() deletes its instance on bring-up failure
+# and tests delete on Stop, but a panic/timeout/crashed runner can still strand a
+# remote VM. This nightly job reaps any "ki-e2e-" instance older than the age
+# threshold (default 3h — comfortably longer than the 2h e2e timeout, so it can
+# never delete an in-progress run's instance). It only touches instances; the
+# shared ki-e2e ingresses are host-level and intentionally persistent.
+
+on:
+  schedule:
+    - cron: "0 7 * * *" # 07:00 UTC nightly
+  workflow_dispatch:
+    inputs:
+      max_age_hours:
+        description: "Delete ki-e2e instances older than this many hours"
+        default: "3"
+      dry_run:
+        description: "List what would be deleted without deleting"
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete stale ki-e2e Hypeman instances
+        env:
+          HYPEMAN_BASE_URL: ${{ vars.HYPEMAN_BASE_URL }}
+          HYPEMAN_API_KEY: ${{ secrets.HYPEMAN_API_KEY }}
+          MAX_AGE_HOURS: ${{ github.event.inputs.max_age_hours || '3' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HYPEMAN_BASE_URL:-}" ] || [ -z "${HYPEMAN_API_KEY:-}" ]; then
+            echo "::error::HYPEMAN_BASE_URL (var) and HYPEMAN_API_KEY (secret) must be set"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os, json, datetime, urllib.request, urllib.error
+
+          base = os.environ["HYPEMAN_BASE_URL"].rstrip("/")
+          key = os.environ["HYPEMAN_API_KEY"]
+          max_age = float(os.environ.get("MAX_AGE_HOURS", "3"))
+          dry_run = os.environ.get("DRY_RUN", "false").lower() in ("1", "true", "yes")
+
+          def call(method, path):
+              req = urllib.request.Request(
+                  base + path, method=method,
+                  headers={"Authorization": "Bearer " + key, "Accept": "application/json"},
+              )
+              return urllib.request.urlopen(req, timeout=30)
+
+          instances = json.load(call("GET", "/instances"))
+          now = datetime.datetime.now(datetime.timezone.utc)
+          cutoff = now - datetime.timedelta(hours=max_age)
+
+          deleted = kept = failed = 0
+          for inst in instances:
+              name = inst.get("name", "")
+              if not name.startswith("ki-e2e-"):
+                  continue
+              created = inst.get("created_at", "")
+              try:
+                  t = datetime.datetime.fromisoformat(created.replace("Z", "+00:00"))
+              except Exception:
+                  t = None  # unknown age -> treat as stale (reap)
+              if t is not None and t > cutoff:
+                  kept += 1
+                  print(f"keep (fresh, < {max_age}h): {name} created={created}")
+                  continue
+              if dry_run:
+                  print(f"[dry-run] would delete {name} ({inst['id']}) created={created}")
+                  deleted += 1
+                  continue
+              try:
+                  call("DELETE", "/instances/" + inst["id"])
+                  deleted += 1
+                  print(f"deleted {name} ({inst['id']}) created={created}")
+              except urllib.error.HTTPError as e:
+                  failed += 1
+                  print(f"::warning::failed to delete {name} ({inst['id']}): {e.code} {e.reason}")
+
+          print(f"done: deleted={deleted} kept_fresh={kept} failed={failed} (dry_run={dry_run})")
+          if failed:
+              raise SystemExit(1)
+          PY
