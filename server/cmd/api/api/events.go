@@ -76,11 +76,19 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamTelemetryEventsRequestObject) (oapi.StreamTelemetryEventsResponseObject, error) {
 	// Default to the current seq so fresh connections only see new events.
 	// Seqs are process-monotonic; a Last-Event-ID from any prior session resumes correctly.
+	// Last-Event-ID wins over replay=all so SSE auto-reconnect resumes from the last
+	// seen event rather than re-replaying history.
 	afterSeq := s.eventStream.Seq()
-	if id := req.Params.LastEventID; id != nil && *id != "" {
-		if n, err := strconv.ParseUint(*id, 10, 64); err == nil && n > 0 {
+	hasLastID := req.Params.LastEventID != nil && *req.Params.LastEventID != ""
+	replayAll := req.Params.Replay != nil && *req.Params.Replay == oapi.All
+
+	switch {
+	case hasLastID:
+		if n, err := strconv.ParseUint(*req.Params.LastEventID, 10, 64); err == nil && n > 0 {
 			afterSeq = n
 		}
+	case replayAll:
+		afterSeq = 0 // NewReader(0) starts from the oldest retained envelope
 	}
 
 	reader := s.eventStream.NewReader(afterSeq)

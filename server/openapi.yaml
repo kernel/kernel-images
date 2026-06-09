@@ -1391,7 +1391,8 @@ paths:
         than 1 ahead of the last-seen `id`, events were evicted from the buffer.
         Clients should track the last-seen `id` to detect gaps.
         Fresh connections with no Last-Event-ID start from the current sequence
-        and only see new events.
+        and only see new events; pass `?replay=all` to start from the oldest
+        retained event instead.
         The wire shape is the generic `TelemetryEvent`. For browser events
         emitted by the Kernel image (or by callers using a documented `type`),
         the event's `data` conforms to the matching `Browser*EventData`
@@ -1407,6 +1408,18 @@ paths:
             Resume after this sequence number. Omit or send 0 to start from
             the current position. Sequence numbers are process-monotonic, so
             any previous value resumes correctly from that point.
+            Takes precedence over `replay` when both are present, so SSE
+            auto-reconnect resumes cleanly instead of re-replaying history.
+        - in: query
+          name: replay
+          schema:
+            type: string
+            enum: [all]
+          required: false
+          description: >
+            Pass `all` to start from the oldest retained event. Ring buffer
+            caps at 1024; older events are evicted and surface as a first
+            `id` greater than 1.
       responses:
         "200":
           description: Live SSE stream of telemetry events.

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -154,4 +155,164 @@ func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "events in disabled categories should return 204")
+}
+
+// publishTestEvents publishes n system events through an already-started
+// telemetry session. Seqs run 1..n on a fresh stream.
+func publishTestEvents(ctx context.Context, t *testing.T, svc *ApiService, n int) {
+	t.Helper()
+	sys := oapi.PublishEventRequestCategorySystem
+	for i := 0; i < n; i++ {
+		resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+			Body: &oapi.PublishEventRequest{Type: "test.event", Category: &sys},
+		})
+		require.NoError(t, err)
+		require.IsType(t, publishTelemetryEventOKResponse{}, resp, "publish %d expected 200", i)
+	}
+}
+
+// streamFirstID opens the stream with the given params and returns the id of
+// the first SSE frame. The stream context is bounded so the read cannot hang.
+func streamFirstID(t *testing.T, svc *ApiService, params oapi.StreamTelemetryEventsParams) uint64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+	resp, err := svc.StreamTelemetryEvents(ctx, oapi.StreamTelemetryEventsRequestObject{Params: params})
+	require.NoError(t, err)
+	r200, ok := resp.(oapi.StreamTelemetryEvents200TexteventStreamResponse)
+	require.True(t, ok, "expected SSE response, got %T", resp)
+
+	rd := bufio.NewReader(r200.Body)
+	for {
+		line, err := rd.ReadString('\n')
+		require.NoError(t, err, "stream closed before any id frame")
+		if !strings.HasPrefix(line, "id: ") {
+			continue
+		}
+		id, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, "id: ")), 10, 64)
+		require.NoError(t, err)
+		return id
+	}
+}
+
+func TestStreamReplayAllFromOldest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	publishTestEvents(ctx, t, svc, 5)
+
+	replay := oapi.All
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay})
+	assert.Equal(t, uint64(1), id, "replay=all on an unfilled buffer should start at the lowest seq")
+}
+
+func TestStreamReplayAllAfterEviction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	// Overfill the ring so the head is evicted. The oldest retained seq is
+	// latestSeq - cap + 1, surfaced as a first id greater than 1.
+	total := testRingCapacity + 36
+	publishTestEvents(ctx, t, svc, total)
+
+	replay := oapi.All
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay})
+	assert.Equal(t, uint64(total-testRingCapacity+1), id, "replay=all after eviction should start at the oldest retained seq")
+}
+
+func TestStreamReplayAllYieldsToLastEventID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	publishTestEvents(ctx, t, svc, 10)
+
+	replay := oapi.All
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay, LastEventID: ptrOf("5")})
+	assert.Equal(t, uint64(6), id, "Last-Event-ID must win over replay=all and resume after seq 5")
+}
+
+func TestStreamReplayAllWithEmptyLastEventID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	publishTestEvents(ctx, t, svc, 5)
+
+	replay := oapi.All
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay, LastEventID: ptrOf("")})
+	assert.Equal(t, uint64(1), id, "empty Last-Event-ID is treated as absent, so replay=all wins")
+}
+
+func TestStreamResumeAfterLastEventIDUnchanged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	publishTestEvents(ctx, t, svc, 10)
+
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{LastEventID: ptrOf("5")})
+	assert.Equal(t, uint64(6), id, "Last-Event-ID without replay must behave as before and resume after seq 5")
+}
+
+func TestStreamLastEventIDZeroWithReplayAllIsFromNow(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	// Pre-publish events that must NOT be replayed: Last-Event-ID: 0 keeps the
+	// from-current contract and is never overridden by replay=all.
+	publishTestEvents(ctx, t, svc, 5)
+
+	streamCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	replay := oapi.All
+	resp, err := svc.StreamTelemetryEvents(streamCtx, oapi.StreamTelemetryEventsRequestObject{
+		Params: oapi.StreamTelemetryEventsParams{Replay: &replay, LastEventID: ptrOf("0")},
+	})
+	require.NoError(t, err)
+	r200, ok := resp.(oapi.StreamTelemetryEvents200TexteventStreamResponse)
+	require.True(t, ok)
+
+	received := make(chan uint64, 8)
+	go func() {
+		defer close(received)
+		rd := bufio.NewReader(r200.Body)
+		for {
+			line, err := rd.ReadString('\n')
+			if err != nil {
+				return
+			}
+			if !strings.HasPrefix(line, "id: ") {
+				continue
+			}
+			if id, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, "id: ")), 10, 64); err == nil {
+				received <- id
+			}
+		}
+	}()
+
+	// Publish one more event after the stream is open. Only this event (seq 6)
+	// should arrive; the five pre-published events must not be replayed.
+	publishTestEvents(ctx, t, svc, 1)
+	select {
+	case id := <-received:
+		assert.Equal(t, uint64(6), id, "only the post-open event should arrive, proving no replay")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for the post-open event")
+	}
 }
