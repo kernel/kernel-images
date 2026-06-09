@@ -77,7 +77,9 @@ func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamT
 	// Default to the current seq so fresh connections only see new events.
 	// Seqs are process-monotonic; a Last-Event-ID from any prior session resumes correctly.
 	// Last-Event-ID wins over replay=all so SSE auto-reconnect resumes from the last
-	// seen event rather than re-replaying history.
+	// seen event rather than re-replaying history. Any non-empty Last-Event-ID takes
+	// this branch and suppresses replay=all; an unparseable or non-positive value
+	// (including 0) resolves to from-now.
 	afterSeq := s.eventStream.Seq()
 	hasLastID := req.Params.LastEventID != nil && *req.Params.LastEventID != ""
 	replayAll := req.Params.Replay != nil && *req.Params.Replay == oapi.All

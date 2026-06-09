@@ -226,6 +226,36 @@ func TestStreamReplayAllAfterEviction(t *testing.T) {
 	assert.Equal(t, uint64(total-testRingCapacity+1), id, "replay=all after eviction should start at the oldest retained seq")
 }
 
+func TestStreamReplayAllAtCapacityBoundary(t *testing.T) {
+	t.Parallel()
+	// oldestSeq() switches at latestSeq == cap: a buffer filled to exactly cap
+	// still starts at seq 1, while one event past cap starts at seq 2. Guards
+	// the <= comparison in ringBuffer.oldestSeq against an off-by-one.
+	cases := []struct {
+		name      string
+		published int
+		wantID    uint64
+	}{
+		{"exactly full starts at seq 1", testRingCapacity, 1},
+		{"one past full starts at seq 2", testRingCapacity + 1, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			svc := newTestService(t, newMockRecordManager())
+			_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+			require.NoError(t, err)
+
+			publishTestEvents(ctx, t, svc, tc.published)
+
+			replay := oapi.All
+			id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay})
+			assert.Equal(t, tc.wantID, id)
+		})
+	}
+}
+
 func TestStreamReplayAllYieldsToLastEventID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
