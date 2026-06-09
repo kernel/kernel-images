@@ -115,7 +115,8 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 
 	// Route to appropriate resolution change handler
 	if displayMode == "xorg" {
-		if s.isNekoEnabled() {
+		useNeko := s.isNekoEnabled()
+		if useNeko {
 			log.Info("using Neko API for Xorg resolution change")
 			err = s.setResolutionViaNeko(ctx, width, height, refreshRate)
 		} else {
@@ -156,16 +157,48 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 			// DDX's max mode (3840×2160) while mutter settles on the
 			// new screen, and a single immediate read would catch that
 			// transient instead of the steady-state size.
-			realizedW, realizedH := s.waitForXRootRealized(ctx, width, height, 10*time.Second)
-			if realizedW > 0 && realizedH > 0 {
-				if realizedW != width || realizedH != height {
-					log.Info("X root differs from request after resize",
+			//
+			// On the Neko path, retry the reconfig RPC when X never
+			// converges. Neko applies screen configuration asynchronously
+			// and can drop/clobber a PATCH that lands while a previous
+			// reconfig (e.g. its boot 1920x1080) is still in flight —
+			// the new request is silently lost and X stays at the dummy
+			// DDX default (3840x2160). Polling X harder won't recover;
+			// only re-issuing the reconfig will.
+			const maxAttempts = 3
+			var realizedW, realizedH int
+			var converged bool
+			for attempt := 0; attempt < maxAttempts; attempt++ {
+				realizedW, realizedH, converged = s.waitForXRootRealized(ctx, width, height, 10*time.Second)
+				if converged {
+					break
+				}
+				if !useNeko || attempt == maxAttempts-1 {
+					break
+				}
+				log.Warn("X root did not converge after resize, retrying neko reconfig",
+					"attempt", attempt+1,
+					"requested", fmt.Sprintf("%dx%d", width, height),
+					"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
+				if retryErr := s.setResolutionViaNeko(ctx, width, height, refreshRate); retryErr != nil {
+					err = retryErr
+					break
+				}
+			}
+			if err == nil {
+				if !converged {
+					log.Error("display did not converge to requested mode after retries",
 						"requested", fmt.Sprintf("%dx%d", width, height),
 						"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
+					err = fmt.Errorf("display did not converge to %dx%d (X root reports %dx%d)", width, height, realizedW, realizedH)
+				} else {
+					if realizedW != width || realizedH != height {
+						log.Info("X root differs from request after resize",
+							"requested", fmt.Sprintf("%dx%d", width, height),
+							"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
+					}
+					width, height = realizedW, realizedH
 				}
-				width, height = realizedW, realizedH
-			} else {
-				log.Warn("X root never read successfully after resize, returning requested dimensions")
 			}
 		}
 		if err == nil {
@@ -500,7 +533,7 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 // today, so the Xorg branch never reaches that case — but the invariant
 // is non-local and would silently regress if anyone ever sets the
 // override on the Xorg path.
-func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int, timeout time.Duration) (int, int) {
+func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int, timeout time.Duration) (int, int, bool) {
 	const stableReads = 3
 	const acceptableDelta = 32
 	deadline := time.Now().Add(timeout)
@@ -510,12 +543,12 @@ func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int,
 		w, h, _, _, err := s.getCurrentResolutionFromXrandr(ctx)
 		if err == nil {
 			if w == wantW && h == wantH {
-				return w, h
+				return w, h, true
 			}
 			if w == lastW && h == lastH {
 				stableCount++
 				if stableCount >= stableReads && abs(w-wantW) <= acceptableDelta && abs(h-wantH) <= acceptableDelta {
-					return w, h
+					return w, h, true
 				}
 			} else {
 				stableCount = 1
@@ -523,11 +556,11 @@ func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int,
 			}
 		}
 		if time.Now().After(deadline) {
-			return lastW, lastH
+			return lastW, lastH, false
 		}
 		select {
 		case <-ctx.Done():
-			return lastW, lastH
+			return lastW, lastH, false
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
