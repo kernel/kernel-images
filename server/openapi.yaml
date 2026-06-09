@@ -1095,6 +1095,10 @@ paths:
                         type: string
                         description: Folder name to place the extension under /home/kernel/extensions/<name>
                         pattern: "^[A-Za-z0-9._-]{1,255}$"
+                      pinned:
+                        type: boolean
+                        default: false
+                        description: Force-pin the extension to the toolbar via ExtensionSettings.toolbar_pin.
                     required: [zip_file, name]
               required: [extensions]
       responses:
@@ -1234,6 +1238,10 @@ paths:
                       name:
                         type: string
                         pattern: "^[A-Za-z0-9._-]{1,255}$"
+                      pinned:
+                        type: boolean
+                        default: false
+                        description: Force-pin the extension to the toolbar via ExtensionSettings.toolbar_pin.
                     required: [zip_file, name]
       responses:
         "200":

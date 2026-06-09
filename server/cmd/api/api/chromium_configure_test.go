@@ -206,6 +206,84 @@ func TestChromiumCfgParseMultipartValidation(t *testing.T) {
 	}
 }
 
+func TestParseExtensionPinned(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    bool
+		wantErr bool
+	}{
+		{"true", true, false},
+		{"false", false, false},
+		{"1", true, false},
+		{"0", false, false},
+		{"", false, false},
+		{"  true  ", true, false},
+		{"maybe", false, true},
+	}
+	for _, tc := range cases {
+		got, err := parseExtensionPinned(tc.in)
+		if tc.wantErr {
+			require.Error(t, err, "input %q", tc.in)
+			continue
+		}
+		require.NoError(t, err, "input %q", tc.in)
+		require.Equal(t, tc.want, got, "input %q", tc.in)
+	}
+}
+
+func TestChromiumCfgParseMultipartPinned(t *testing.T) {
+	// pinned after the pair completes (attaches to the finalized item),
+	// and pinned interleaved within a second pair.
+	buf := bytes.NewBuffer(nil)
+	w := multipart.NewWriter(buf)
+
+	part, err := w.CreateFormFile("extensions.zip_file", "one.zip")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "not validated by parser")
+	require.NoError(t, err)
+	require.NoError(t, w.WriteField("extensions.name", "one"))
+	require.NoError(t, w.WriteField("extensions.pinned", "true"))
+
+	part, err = w.CreateFormFile("extensions.zip_file", "two.zip")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "not validated by parser")
+	require.NoError(t, err)
+	require.NoError(t, w.WriteField("extensions.pinned", "false"))
+	require.NoError(t, w.WriteField("extensions.name", "two"))
+	require.NoError(t, w.Close())
+
+	st := &chromiumConfigureState{}
+	err = chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+	defer st.cleanup()
+	require.NoError(t, err)
+	require.Len(t, st.extItems, 2)
+	require.Equal(t, "one", st.extItems[0].name)
+	require.True(t, st.extItems[0].pinned)
+	require.Equal(t, "two", st.extItems[1].name)
+	require.False(t, st.extItems[1].pinned)
+}
+
+func TestChromiumCfgParseMultipartPinnedInvalid(t *testing.T) {
+	buf := bytes.NewBuffer(nil)
+	w := multipart.NewWriter(buf)
+
+	part, err := w.CreateFormFile("extensions.zip_file", "one.zip")
+	require.NoError(t, err)
+	_, err = io.WriteString(part, "x")
+	require.NoError(t, err)
+	require.NoError(t, w.WriteField("extensions.name", "one"))
+	require.NoError(t, w.WriteField("extensions.pinned", "maybe"))
+	require.NoError(t, w.Close())
+
+	st := &chromiumConfigureState{}
+	err = chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+	defer st.cleanup()
+	require.Error(t, err)
+	var parseErr chromiumCfgParseError
+	require.True(t, errors.As(err, &parseErr))
+	require.False(t, parseErr.internal)
+}
+
 func TestChromiumCfgParseMultipartMultipleExtensionPairs(t *testing.T) {
 	buf := bytes.NewBuffer(nil)
 	w := multipart.NewWriter(buf)

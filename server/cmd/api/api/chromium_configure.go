@@ -389,9 +389,11 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 	}
 
 	type pend struct {
-		zipTmp string
-		name   string
-		gotZip bool
+		zipTmp    string
+		name      string
+		gotZip    bool
+		pinned    bool
+		gotPinned bool
 	}
 	var cur *pend
 	var gotDisplay, gotChromiumFlags, gotChromePolicies, gotStripComponents, gotProfileArchive, gotStartURL bool
@@ -519,11 +521,33 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 				return cfgParseBadRequest("duplicate extensions.name in pair")
 			}
 			cur.name = nm
+		case "extensions.pinned":
+			b, err := io.ReadAll(part)
+			if err != nil {
+				return cfgParseInternal("read extensions.pinned")
+			}
+			pv, perr := parseExtensionPinned(string(b))
+			if perr != nil {
+				return cfgParseBadRequest(perr.Error())
+			}
+			// pinned may arrive after the zip+name pair has already been finalized;
+			// attach it to the most recently finalized item in that case.
+			if cur != nil {
+				if cur.gotPinned {
+					return cfgParseBadRequest("duplicate extensions.pinned in pair")
+				}
+				cur.pinned = pv
+				cur.gotPinned = true
+			} else if n := len(st.extItems); n > 0 {
+				st.extItems[n-1].pinned = pv
+			} else {
+				cur = &pend{pinned: pv, gotPinned: true}
+			}
 		default:
 			return cfgParseBadRequest(fmt.Sprintf("unknown form field %q", name))
 		}
 		if cur != nil && cur.gotZip && cur.name != "" {
-			st.extItems = append(st.extItems, extensionZipItem{zipTemp: cur.zipTmp, name: cur.name})
+			st.extItems = append(st.extItems, extensionZipItem{zipTemp: cur.zipTmp, name: cur.name, pinned: cur.pinned})
 			cur = nil
 		}
 	}

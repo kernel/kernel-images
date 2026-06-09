@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +27,21 @@ var nameRegex = regexp.MustCompile(`^[A-Za-z0-9._-]{1,255}$`)
 type extensionZipItem struct {
 	zipTemp string
 	name    string
+	pinned  bool
+}
+
+// parseExtensionPinned interprets the optional extensions.pinned multipart field.
+// An empty value is treated as false; otherwise standard bool spellings are accepted.
+func parseExtensionPinned(raw string) (bool, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return false, nil
+	}
+	v, err := strconv.ParseBool(s)
+	if err != nil {
+		return false, fmt.Errorf("invalid extensions.pinned value %q", raw)
+	}
+	return v, nil
 }
 
 // chromiumFlagsPath is the runtime flags file read by the chromium-launcher at startup.
@@ -62,11 +78,14 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		zipTemp     string
 		name        string
 		zipReceived bool
+		pinned      bool
+		pinnedSet   bool
 	}
-	// Process consecutive pairs of fields:
+	// Process consecutive groups of fields per extension:
 	//   extensions.name (text)
 	//   extensions.zip_file (file)
-	// Order may be name then zip or zip then name, but they must be consecutive.
+	//   extensions.pinned (text, optional)
+	// Order within a group is flexible, but the fields must be grouped per extension.
 	items := []pending{}
 	var current *pending
 
@@ -79,11 +98,11 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 			log.Error("read form part", "error", err)
 			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "failed to read form part"}}, nil
 		}
-		if current == nil {
-			current = &pending{}
-		}
 		switch part.FormName() {
 		case "extensions.zip_file":
+			if current == nil {
+				current = &pending{}
+			}
 			tmp, err := os.CreateTemp("", "ext-*.zip")
 			if err != nil {
 				log.Error("failed to create temporary file", "error", err)
@@ -105,6 +124,9 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 			current.zipTemp = tmp.Name()
 			current.zipReceived = true
 		case "extensions.name":
+			if current == nil {
+				current = &pending{}
+			}
 			b, err := io.ReadAll(part)
 			if err != nil {
 				log.Error("failed to read name", "error", err)
@@ -118,10 +140,33 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 				return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "duplicate name in pair"}}, nil
 			}
 			current.name = name
+		case "extensions.pinned":
+			b, err := io.ReadAll(part)
+			if err != nil {
+				log.Error("failed to read pinned", "error", err)
+				return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to read pinned"}}, nil
+			}
+			pv, perr := parseExtensionPinned(string(b))
+			if perr != nil {
+				return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: perr.Error()}}, nil
+			}
+			// pinned may arrive after the zip+name pair has already been finalized;
+			// attach it to the most recently finalized item in that case.
+			if current != nil {
+				if current.pinnedSet {
+					return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "duplicate pinned in pair"}}, nil
+				}
+				current.pinned = pv
+				current.pinnedSet = true
+			} else if n := len(items); n > 0 {
+				items[n-1].pinned = pv
+			} else {
+				current = &pending{pinned: pv, pinnedSet: true}
+			}
 		default:
 			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: fmt.Sprintf("invalid field: %s", part.FormName())}}, nil
 		}
-		// If we have both fields, finalize this item
+		// Once both required fields are present, finalize this item.
 		if current != nil && current.zipReceived && current.name != "" {
 			items = append(items, *current)
 			current = nil
@@ -142,7 +187,7 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		if !p.zipReceived || p.name == "" {
 			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "each item must include zip_file and name"}}, nil
 		}
-		extItems = append(extItems, extensionZipItem{zipTemp: p.zipTemp, name: p.name})
+		extItems = append(extItems, extensionZipItem{zipTemp: p.zipTemp, name: p.name, pinned: p.pinned})
 	}
 
 	reqMsg, err := s.applyExtensionZipItems(ctx, extItems)
@@ -279,7 +324,7 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 			pathsNeedingFlags = append(pathsNeedingFlags, extensionPath)
 		}
 
-		if err := s.policy.AddExtension(extensionName, chromeExtensionID, extensionPath, requiresEntPolicy); err != nil {
+		if err := s.policy.AddExtension(extensionName, chromeExtensionID, extensionPath, requiresEntPolicy, p.pinned); err != nil {
 			log.Error("failed to update enterprise policy", "error", err, "extension", extensionName)
 			return "", fmt.Errorf("failed to update enterprise policy for %s: %w", extensionName, err)
 		}

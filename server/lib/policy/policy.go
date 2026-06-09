@@ -1,10 +1,12 @@
 package policy
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -12,6 +14,10 @@ import (
 )
 
 const PolicyPath = "/etc/chromium/policies/managed/policy.json"
+
+// forcePinned is the ExtensionSettings toolbar_pin value that pins an extension
+// to the toolbar and prevents the user from unpinning it.
+const forcePinned = "force_pinned"
 
 // Chrome extension IDs are 32 lowercase a-p characters
 var extensionIDRegex = regexp.MustCompile(`^[a-p]{32}$`)
@@ -115,6 +121,7 @@ func (p *Policy) MarshalJSON() ([]byte, error) {
 type ExtensionSetting struct {
 	InstallationMode    string   `json:"installation_mode,omitempty"`
 	UpdateUrl           string   `json:"update_url,omitempty"`
+	ToolbarPin          string   `json:"toolbar_pin,omitempty"`
 	AllowedTypes        []string `json:"allowed_types,omitempty"`
 	InstallSources      []string `json:"install_sources,omitempty"`
 	RuntimeBlockedHosts []string `json:"runtime_blocked_hosts,omitempty"`
@@ -195,7 +202,8 @@ func (p *Policy) ReadPolicy() (*Policy, error) {
 // extensionName is the user-provided name used for the directory and URL paths.
 // chromeExtensionID is the actual Chrome extension ID (from update.xml appid) used in policy entries.
 // extensionPath is the full path to the unpacked extension directory.
-func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath string, requiresEnterprisePolicy bool) error {
+// When pinned is true the extension is force-pinned to the toolbar via ExtensionSettings.toolbar_pin.
+func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath string, requiresEnterprisePolicy, pinned bool) error {
 	return p.Modify(func(current *Policy) error {
 		if _, exists := current.ExtensionSettings["*"]; !exists {
 			current.ExtensionSettings["*"] = ExtensionSetting{
@@ -212,6 +220,9 @@ func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath st
 			// Chrome requires the extension to be in ExtensionInstallForcelist.
 			// Format: "extension_id;update_url" per https://chromeenterprise.google/intl/en_ca/policies/#ExtensionInstallForcelist
 			setting.InstallationMode = "force_installed"
+			if pinned {
+				setting.ToolbarPin = forcePinned
+			}
 
 			forcelistEntry := fmt.Sprintf("%s;%s", chromeExtensionID, setting.UpdateUrl)
 
@@ -228,10 +239,51 @@ func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath st
 			current.ExtensionSettings[chromeExtensionID] = setting
 		} else {
 			current.ExtensionSettings[extensionName] = setting
+
+			// Extensions on this path are loaded via --load-extension, where Chrome
+			// assigns an ID derived from the install path rather than extensionName.
+			// toolbar_pin is keyed by that real ID, so pin under the computed ID.
+			if pinned {
+				pinnedID := UnpackedExtensionID(extensionPath)
+				pinnedSetting := current.ExtensionSettings[pinnedID]
+				pinnedSetting.ToolbarPin = forcePinned
+				current.ExtensionSettings[pinnedID] = pinnedSetting
+			}
 		}
 
 		return nil
 	})
+}
+
+// UnpackedExtensionID computes the extension ID Chrome assigns to an unpacked
+// extension loaded via --load-extension. Chrome derives the ID from the SHA-256
+// of the absolute, symlink-resolved directory path: the first 16 bytes are taken
+// and each nibble is mapped into the a-p alphabet. Symlinks are resolved because
+// Chrome calls realpath() on the load path before hashing.
+func UnpackedExtensionID(extensionPath string) string {
+	return idFromPathBytes(resolveExtensionPath(extensionPath))
+}
+
+func resolveExtensionPath(extensionPath string) string {
+	resolved := extensionPath
+	if abs, err := filepath.Abs(resolved); err == nil {
+		resolved = abs
+	}
+	if real, err := filepath.EvalSymlinks(resolved); err == nil {
+		resolved = real
+	}
+	return resolved
+}
+
+func idFromPathBytes(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	var sb strings.Builder
+	sb.Grow(32)
+	for i := 0; i < 16; i++ {
+		sb.WriteByte('a' + (sum[i] >> 4))
+		sb.WriteByte('a' + (sum[i] & 0x0f))
+	}
+	return sb.String()
 }
 
 // GenerateExtensionID returns a stable identifier for the extension policy.

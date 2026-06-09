@@ -2,6 +2,7 @@ package policy
 
 import (
 	"encoding/json"
+	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -144,6 +145,66 @@ func TestPolicy_ExtensionInstallForcelist(t *testing.T) {
 	forcelist, ok := result["ExtensionInstallForcelist"].([]interface{})
 	require.True(t, ok)
 	assert.Len(t, forcelist, 2)
+}
+
+func TestIdFromPathBytes_Golden(t *testing.T) {
+	// Chrome assigns this ID to an unpacked extension loaded from this path.
+	// Golden value matches Chromium's crx_file::id_util::GenerateId algorithm.
+	got := idFromPathBytes("/home/kernel/extensions/pinned-test")
+	assert.Equal(t, "bgkdncmcaifgbfaghmkmogipnckclhoe", got)
+}
+
+func TestUnpackedExtensionID_Format(t *testing.T) {
+	idRegex := regexp.MustCompile(`^[a-p]{32}$`)
+
+	a := UnpackedExtensionID("/home/kernel/extensions/alpha")
+	b := UnpackedExtensionID("/home/kernel/extensions/beta")
+
+	assert.Regexp(t, idRegex, a)
+	assert.Regexp(t, idRegex, b)
+	assert.NotEqual(t, a, b, "different paths must yield different IDs")
+	assert.Equal(t, a, UnpackedExtensionID("/home/kernel/extensions/alpha"), "same path must be stable")
+}
+
+func TestExtensionSetting_ToolbarPinJSON(t *testing.T) {
+	withPin, err := json.Marshal(ExtensionSetting{ToolbarPin: forcePinned})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"toolbar_pin":"force_pinned"}`, string(withPin))
+
+	withoutPin, err := json.Marshal(ExtensionSetting{UpdateUrl: "http://example/update.xml"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(withoutPin), "toolbar_pin")
+}
+
+func TestPolicy_PinnedSettingPreservesUnknownFields(t *testing.T) {
+	// Simulates the --load-extension pinning path of AddExtension: a toolbar_pin
+	// entry keyed by the computed ID is added without clobbering other fields.
+	input := `{
+		"PasswordManagerEnabled": false,
+		"ExtensionSettings": {"*": {"allowed_types": ["extension"], "install_sources": ["*"]}}
+	}`
+
+	var policy Policy
+	require.NoError(t, json.Unmarshal([]byte(input), &policy))
+
+	id := UnpackedExtensionID("/home/kernel/extensions/pinme")
+	setting := policy.ExtensionSettings[id]
+	setting.ToolbarPin = forcePinned
+	policy.ExtensionSettings[id] = setting
+
+	output, err := json.Marshal(&policy)
+	require.NoError(t, err)
+
+	var result map[string]interface{}
+	require.NoError(t, json.Unmarshal(output, &result))
+
+	assert.Equal(t, false, result["PasswordManagerEnabled"])
+	extSettings, ok := result["ExtensionSettings"].(map[string]interface{})
+	require.True(t, ok)
+	assert.Contains(t, extSettings, "*", "managed default entry must be preserved")
+	pinned, ok := extSettings[id].(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, "force_pinned", pinned["toolbar_pin"])
 }
 
 func TestPolicy_EmptyPolicy(t *testing.T) {
