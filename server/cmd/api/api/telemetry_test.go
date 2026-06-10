@@ -358,7 +358,7 @@ func (m *mockRecordManager) StopAll(_ context.Context) error                    
 func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0)
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, "", "", "")
 	require.NoError(t, err)
 	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc

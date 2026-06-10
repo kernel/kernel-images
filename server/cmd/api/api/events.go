@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
@@ -134,6 +135,115 @@ func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamT
 
 	headers := oapi.StreamTelemetryEvents200ResponseHeaders{XSSEContentType: "application/json"}
 	return oapi.StreamTelemetryEvents200TexteventStreamResponse{Body: pr, Headers: headers}, nil
+}
+
+// defaultReadWindow bounds a read that supplies no since/until.
+const defaultReadWindow = 5 * time.Minute
+
+// maxReadLimit caps the number of envelopes a single read returns.
+const maxReadLimit = 1000
+
+// ReadTelemetryEvents handles GET /telemetry/events.
+// Reads archived telemetry envelopes for the current session from durable S2
+// storage, applies category and limit filters, and returns them in ascending
+// sequence order. Returns an empty list when S2 storage is not configured.
+func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelemetryEventsRequestObject) (oapi.ReadTelemetryEventsResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	if !s.s2Enabled() {
+		return readTelemetryEventsOKResponse{}, nil
+	}
+
+	startSeq := s.telemetrySession.SessionStartSeq()
+	envs, err := events.Read(ctx, s.s2Basin, s.s2AccessToken, s.s2Stream, buildReadOptions(req.Params), log)
+	if err != nil {
+		log.Error("failed to read telemetry events from S2", "err", err)
+		return oapi.ReadTelemetryEvents500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to read telemetry events"}}, nil
+	}
+
+	envs = dropPriorSessions(envs, startSeq)
+	envs = filterByCategory(envs, req.Params.Category)
+	envs = capLimit(envs, req.Params.Limit)
+
+	return readTelemetryEventsOKResponse{envs: envs}, nil
+}
+
+// buildReadOptions maps query params to a bounded read window. since/until are
+// the start/end of the window; the window defaults to the last defaultReadWindow.
+// limit is applied after category filtering, not pushed into the S2 read.
+func buildReadOptions(p oapi.ReadTelemetryEventsParams) events.ReadOptions {
+	var opts events.ReadOptions
+	if p.Since != nil {
+		start := uint64(*p.Since)
+		opts.Timestamp = &start
+	} else {
+		start := uint64(time.Now().Add(-defaultReadWindow).UnixMilli())
+		opts.Timestamp = &start
+	}
+	if p.Until != nil {
+		until := uint64(*p.Until)
+		opts.Until = &until
+	}
+	return opts
+}
+
+// dropPriorSessions removes envelopes from before the current session's start.
+// startSeq is 0 when no session has run, in which case nothing is dropped.
+func dropPriorSessions(envs []events.Envelope, startSeq uint64) []events.Envelope {
+	if startSeq == 0 {
+		return envs
+	}
+	out := make([]events.Envelope, 0, len(envs))
+	for _, e := range envs {
+		if e.Seq >= startSeq {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func filterByCategory(envs []events.Envelope, cats *[]oapi.TelemetryEventCategory) []events.Envelope {
+	if cats == nil || len(*cats) == 0 {
+		return envs
+	}
+	want := make(map[oapi.TelemetryEventCategory]struct{}, len(*cats))
+	for _, c := range *cats {
+		want[c] = struct{}{}
+	}
+	out := make([]events.Envelope, 0, len(envs))
+	for _, e := range envs {
+		if _, ok := want[e.Event.Category]; ok {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func capLimit(envs []events.Envelope, limit *int) []events.Envelope {
+	n := maxReadLimit
+	if limit != nil && *limit > 0 && *limit < n {
+		n = *limit
+	}
+	if len(envs) > n {
+		return envs[:n]
+	}
+	return envs
+}
+
+// readTelemetryEventsOKResponse serializes events.Envelope directly so the
+// response shape matches the SSE stream frames and the publish endpoint.
+type readTelemetryEventsOKResponse struct{ envs []events.Envelope }
+
+func (r readTelemetryEventsOKResponse) VisitReadTelemetryEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	envs := r.envs
+	if envs == nil {
+		envs = []events.Envelope{}
+	}
+	return json.NewEncoder(w).Encode(struct {
+		Events []events.Envelope `json:"events"`
+	}{Events: envs})
 }
 
 // publishTelemetryEventOKResponse serializes events.Envelope directly so the response

@@ -1379,6 +1379,64 @@ paths:
           description: Event accepted but filtered by the active telemetry config; not published.
         "400":
           $ref: "#/components/responses/BadRequestError"
+    get:
+      summary: Read archived telemetry events from durable storage
+      description: >
+        Reads telemetry event envelopes for the current session from durable S2
+        storage, so events remain available after they age out of the live SSE
+        ring buffer. Results are scoped to the current session and returned in
+        ascending sequence order within the requested time window. Returns an
+        empty list when durable storage is not configured.
+      operationId: readTelemetryEvents
+      parameters:
+        - in: query
+          name: since
+          required: false
+          description: Start of the time window, unix milliseconds. Defaults to 5 minutes ago.
+          schema:
+            type: integer
+            format: int64
+        - in: query
+          name: until
+          required: false
+          description: End of the time window (exclusive), unix milliseconds. Defaults to the current time.
+          schema:
+            type: integer
+            format: int64
+        - in: query
+          name: limit
+          required: false
+          description: Maximum number of events to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+        - in: query
+          name: category
+          required: false
+          description: Restrict results to these event categories. Repeat the parameter for multiple values.
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/TelemetryEventCategory"
+          style: form
+          explode: true
+      responses:
+        "200":
+          description: Telemetry events from durable storage in ascending sequence order.
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - events
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TelemetryEnvelope"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /telemetry/stream:
     get:
       summary: Stream telemetry events as Server-Sent Events

@@ -92,6 +92,17 @@ type ApiService struct {
 	monitorMu        sync.Mutex
 	lifecycleCtx     context.Context
 	lifecycleCancel  context.CancelFunc
+
+	// Durable S2 telemetry storage. All three must be set for reads to hit S2;
+	// they mirror the values that gate the S2 storage writer.
+	s2Basin       string
+	s2AccessToken string
+	s2Stream      string
+}
+
+// s2Enabled reports whether durable S2 telemetry storage is configured.
+func (s *ApiService) s2Enabled() bool {
+	return s.s2Basin != "" && s.s2AccessToken != "" && s.s2Stream != ""
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -105,6 +116,9 @@ func New(
 	telemetrySession *telemetry.TelemetrySession,
 	eventStream *events.EventStream,
 	displayNum int,
+	s2Basin string,
+	s2AccessToken string,
+	s2Stream string,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -140,6 +154,9 @@ func New(
 		cdpMonitor:        mon,
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
+		s2Basin:           s2Basin,
+		s2AccessToken:     s2AccessToken,
+		s2Stream:          s2Stream,
 	}, nil
 }
 

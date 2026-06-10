@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
@@ -295,4 +297,70 @@ func TestStreamResumeAfterLastEventIDUnchanged(t *testing.T) {
 
 	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{LastEventID: ptrOf("5")})
 	assert.Equal(t, uint64(6), id, "Last-Event-ID without replay must behave as before and resume after seq 5")
+}
+
+func TestReadTelemetryEventsS2Disabled(t *testing.T) {
+	t.Parallel()
+	svc := newTestService(t, newMockRecordManager()) // s2 creds empty -> disabled
+
+	resp, err := svc.ReadTelemetryEvents(context.Background(), oapi.ReadTelemetryEventsRequestObject{})
+	require.NoError(t, err)
+	ok, isOK := resp.(readTelemetryEventsOKResponse)
+	require.True(t, isOK, "expected 200 response when S2 is disabled")
+
+	rec := httptest.NewRecorder()
+	require.NoError(t, ok.VisitReadTelemetryEventsResponse(rec))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// Empty result must serialize as [] not null, or the Python SDK chokes.
+	assert.JSONEq(t, `{"events":[]}`, rec.Body.String())
+}
+
+func TestDropPriorSessions(t *testing.T) {
+	t.Parallel()
+	envs := []events.Envelope{{Seq: 1}, {Seq: 2}, {Seq: 3}}
+
+	got := dropPriorSessions(envs, 2)
+	require.Len(t, got, 2)
+	assert.Equal(t, uint64(2), got[0].Seq)
+
+	// startSeq 0 means no session ran; keep everything.
+	assert.Len(t, dropPriorSessions(envs, 0), 3)
+}
+
+func TestFilterByCategory(t *testing.T) {
+	t.Parallel()
+	mk := func(c oapi.TelemetryEventCategory) events.Envelope {
+		return events.Envelope{Event: events.Event{Category: c}}
+	}
+	envs := []events.Envelope{mk(events.Console), mk(events.Network), mk(events.Console)}
+
+	assert.Len(t, filterByCategory(envs, nil), 3, "nil filter keeps everything")
+
+	cats := []oapi.TelemetryEventCategory{events.Console}
+	assert.Len(t, filterByCategory(envs, &cats), 2)
+}
+
+func TestCapLimit(t *testing.T) {
+	t.Parallel()
+	envs := make([]events.Envelope, 5)
+
+	assert.Len(t, capLimit(envs, nil), 5, "no limit returns all under the ceiling")
+
+	three := 3
+	assert.Len(t, capLimit(envs, &three), 3)
+}
+
+func TestBuildReadOptions(t *testing.T) {
+	t.Parallel()
+	// No params: defaults the start to roughly defaultReadWindow ago, no end bound.
+	opts := buildReadOptions(oapi.ReadTelemetryEventsParams{})
+	require.NotNil(t, opts.Timestamp)
+	assert.Nil(t, opts.Until)
+
+	since, until := int64(1000), int64(2000)
+	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: &since, Until: &until})
+	require.NotNil(t, opts.Timestamp)
+	require.NotNil(t, opts.Until)
+	assert.Equal(t, uint64(1000), *opts.Timestamp)
+	assert.Equal(t, uint64(2000), *opts.Until)
 }
