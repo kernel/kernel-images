@@ -47,6 +47,9 @@ type Config struct {
 	S2Basin       string `envconfig:"S2_BASIN"        default:""`
 	S2AccessToken string `envconfig:"S2_ACCESS_TOKEN" default:""`
 	S2Stream      string `envconfig:"S2_STREAM"       default:""`
+	// S2 batcher tuning for the append path.
+	S2BatcherLinger     time.Duration `envconfig:"S2_BATCHER_LINGER"      default:"100ms"`
+	S2BatcherMaxRecords int           `envconfig:"S2_BATCHER_MAX_RECORDS" default:"50"`
 }
 
 // LogValue implements slog.LogValuer, redacting secret fields.
@@ -73,6 +76,8 @@ func (c *Config) LogValue() slog.Value {
 		slog.String("s2_basin", c.S2Basin),
 		slog.String("s2_access_token", s2AccessToken),
 		slog.String("s2_stream", c.S2Stream),
+		slog.Duration("s2_batcher_linger", c.S2BatcherLinger),
+		slog.Int("s2_batcher_max_records", c.S2BatcherMaxRecords),
 	)
 }
 

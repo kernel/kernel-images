@@ -118,7 +118,10 @@ func main() {
 	var s2Writer *events.S2StorageWriter
 	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
 		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", config.S2Stream)
-		s2Writer = events.NewS2StorageWriter(eventStream, config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{}, slogger)
+		s2Writer = events.NewS2StorageWriter(eventStream, config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{
+			BatcherLinger:     config.S2BatcherLinger,
+			BatcherMaxRecords: config.S2BatcherMaxRecords,
+		}, slogger)
 		if err := s2Writer.Start(ctx); err != nil {
 			slogger.Error("failed to start S2 storage writer", "err", err)
 			os.Exit(1)
