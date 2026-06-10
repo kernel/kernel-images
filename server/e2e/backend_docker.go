@@ -10,6 +10,7 @@ import (
 	"github.com/docker/go-connections/nat"
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/testcontainers/testcontainers-go"
+	tcexec "github.com/testcontainers/testcontainers-go/exec"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
@@ -209,7 +210,8 @@ func (c *dockerBackend) WaitChromeDriver(ctx context.Context) error {
 
 // Exec executes a command inside the container and returns the combined output.
 func (c *dockerBackend) Exec(ctx context.Context, cmd []string) (int, string, error) {
-	exitCode, reader, err := c.ctr.Exec(ctx, cmd)
+	// Use Multiplexed() to strip Docker's multiplexing headers from output.
+	exitCode, reader, err := c.ctr.Exec(ctx, cmd, tcexec.Multiplexed())
 	if err != nil {
 		return exitCode, "", err
 	}
