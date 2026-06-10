@@ -87,13 +87,15 @@ func waitForCondition(timeout time.Duration, cond func() bool) bool {
 
 // killProcessGroup kills cmd's entire process group and reaps the parent.
 // Requires the command to have been started with Setpgid so the group ID
-// equals the child's PID.
+// equals the child's PID. Idempotent: a reaped cmd (ProcessState set by
+// Wait below) is never re-signalled, so a recycled PGID can't be hit by
+// a second call — e.g. a defer following an explicit kill.
 func killProcessGroup(cmd *exec.Cmd) {
-	if cmd == nil || cmd.Process == nil {
+	if cmd == nil || cmd.Process == nil || cmd.ProcessState != nil {
 		return
 	}
 	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	_, _ = cmd.Process.Wait()
+	_ = cmd.Wait()
 }
 
 func TestWaitForInitialTimeoutWhenLogMissing(t *testing.T) {
