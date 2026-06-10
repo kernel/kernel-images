@@ -33,6 +33,10 @@ func newDockerBackend(image string) Backend {
 	return &dockerBackend{Image: image}
 }
 
+// SupportsHostAccess reports that the Docker backend can bridge the container
+// to services on the test host via host.docker.internal.
+func (c *dockerBackend) SupportsHostAccess() bool { return true }
+
 // Start starts the container with the given configuration using testcontainers-go.
 func (c *dockerBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 	// Build environment variables

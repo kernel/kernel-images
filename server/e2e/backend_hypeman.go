@@ -209,13 +209,19 @@ func deriveIngressDomain(baseURL string) string {
 	return strings.TrimPrefix(u.Hostname(), "hypeman.")
 }
 
+// SupportsHostAccess reports that the hypeman backend cannot bridge a remote VM
+// to a service on the test host: there is no equivalent of Docker's
+// host.docker.internal. TestContainer.Start skips host-fixture tests on this
+// backend rather than failing them.
+func (c *hypemanBackend) SupportsHostAccess() bool { return false }
+
 // Start creates and boots a hypeman instance for the image, waits for it to
 // reach the Running state, then prepares the chosen routing mode.
 func (c *hypemanBackend) Start(ctx context.Context, cfg ContainerConfig) error {
 	if cfg.HostAccess {
-		// A remote VM has no equivalent of Docker's host.docker.internal; we
-		// reject rather than silently ignore so host-fixture tests (capmonster,
-		// persisted-login) fail loudly here and stay on the Docker backend.
+		// Defensive: TestContainer.Start skips host-access tests on backends
+		// that don't support them (SupportsHostAccess), so this should be
+		// unreachable from the suite. Kept as a guard for direct callers.
 		return fmt.Errorf("hypeman backend does not support ContainerConfig.HostAccess (no host loopback bridge for remote instances); run host-access tests on the docker backend")
 	}
 
