@@ -58,7 +58,14 @@ func Handler(logger *slog.Logger, opts *Options) http.Handler {
 	reverseProxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(upstream)
-			r.Out.Host = r.In.Host
+			// ChromeDriver (Chrome 111+) rejects any request whose Host/Origin
+			// header is not localhost or an IP, returning HTTP 500 ("Host header
+			// or origin header is specified and is not whitelisted or localhost")
+			// as DNS-rebinding protection. SetURL clears Out.Host so net/http
+			// uses the loopback upstream as the Host — do NOT restore the inbound
+			// Host (e.g. an ingress hostname like {instance}.<domain>) or
+			// ChromeDriver refuses every request. Strip Origin for the same reason.
+			r.Out.Header.Del("Origin")
 		},
 	}
 
@@ -135,6 +142,13 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		return
 	}
 	for k, vv := range r.Header {
+		// Skip Origin: ChromeDriver rejects non-localhost Origin/Host headers
+		// (see the reverse-proxy rewrite above). proxyReq already targets the
+		// loopback upstream, so its Host is correct; don't forward the client's
+		// Origin (e.g. an ingress hostname) or ChromeDriver returns HTTP 500.
+		if strings.EqualFold(k, "Origin") {
+			continue
+		}
 		for _, v := range vv {
 			proxyReq.Header.Add(k, v)
 		}
