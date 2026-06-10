@@ -69,31 +69,34 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 	return publishTelemetryEventOKResponse{env}, nil
 }
 
+// resolveStartSeq picks the ring-buffer position a telemetry stream reads from,
+// given the request's Last-Event-ID and replay params and the current head seq.
+// Fresh connections start at the current seq so they only see new events; seqs are
+// process-monotonic, so a Last-Event-ID from any prior session resumes correctly.
+// Last-Event-ID wins over replay=all so SSE auto-reconnect resumes from the last
+// seen event rather than re-replaying history: any non-empty Last-Event-ID takes the
+// resume branch, and an unparseable or non-positive value (including 0) resolves to
+// from-now. replay=all returns 0, the NewReader sentinel for the oldest retained event.
+func resolveStartSeq(lastEventID *string, replay *oapi.StreamTelemetryEventsParamsReplay, current uint64) uint64 {
+	switch {
+	case lastEventID != nil && *lastEventID != "":
+		if n, err := strconv.ParseUint(*lastEventID, 10, 64); err == nil && n > 0 {
+			return n
+		}
+		return current
+	case replay != nil && *replay == oapi.All:
+		return 0
+	default:
+		return current
+	}
+}
+
 // StreamTelemetryEvents handles GET /telemetry/stream.
 // Opens an SSE stream of telemetry event envelopes from the telemetry stream ring buffer.
 // Supports reconnection via the Last-Event-ID header. Emits a keepalive comment
 // frame every 15 s when no event arrives.
 func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamTelemetryEventsRequestObject) (oapi.StreamTelemetryEventsResponseObject, error) {
-	// Default to the current seq so fresh connections only see new events.
-	// Seqs are process-monotonic; a Last-Event-ID from any prior session resumes correctly.
-	// Last-Event-ID wins over replay=all so SSE auto-reconnect resumes from the last
-	// seen event rather than re-replaying history. Any non-empty Last-Event-ID takes
-	// this branch and suppresses replay=all; an unparseable or non-positive value
-	// (including 0) resolves to from-now.
-	afterSeq := s.eventStream.Seq()
-	hasLastID := req.Params.LastEventID != nil && *req.Params.LastEventID != ""
-	replayAll := req.Params.Replay != nil && *req.Params.Replay == oapi.All
-
-	switch {
-	case hasLastID:
-		if n, err := strconv.ParseUint(*req.Params.LastEventID, 10, 64); err == nil && n > 0 {
-			afterSeq = n
-		}
-	case replayAll:
-		afterSeq = 0 // NewReader(0) starts from the oldest retained envelope
-	}
-
-	reader := s.eventStream.NewReader(afterSeq)
+	reader := s.eventStream.NewReader(resolveStartSeq(req.Params.LastEventID, req.Params.Replay, s.eventStream.Seq()))
 
 	pr, pw := io.Pipe()
 	go func() {
