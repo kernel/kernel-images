@@ -242,11 +242,15 @@ func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath st
 
 			// Extensions on this path are loaded via --load-extension, where Chrome
 			// assigns an ID derived from the install path rather than extensionName.
-			// toolbar_pin is keyed by that real ID, so pin under the computed ID.
+			// toolbar_pin is keyed by that real ID.
+			pinnedID := UnpackedExtensionID(extensionPath)
 			if pinned {
-				pinnedID := UnpackedExtensionID(extensionPath)
 				pinnedSetting := current.ExtensionSettings[pinnedID]
 				pinnedSetting.ToolbarPin = forcePinned
+				current.ExtensionSettings[pinnedID] = pinnedSetting
+			} else if pinnedSetting, exists := current.ExtensionSettings[pinnedID]; exists {
+				// Explicitly clear stale force_pinned when callers unpin.
+				pinnedSetting.ToolbarPin = ""
 				current.ExtensionSettings[pinnedID] = pinnedSetting
 			}
 		}
