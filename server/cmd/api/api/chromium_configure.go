@@ -389,12 +389,29 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 	}
 
 	type pend struct {
-		zipTmp string
-		name   string
-		gotZip bool
+		zipTmp    string
+		name      string
+		gotZip    bool
+		pinned    bool
+		gotPinned bool
 	}
 	var cur *pend
 	var gotDisplay, gotChromiumFlags, gotChromePolicies, gotStripComponents, gotProfileArchive, gotStartURL bool
+
+	// A new extension group begins whenever a field repeats, so flush the
+	// in-progress group before starting the next one. This keeps the optional
+	// extensions.pinned field attached to its own extension.
+	flushExt := func() error {
+		if cur == nil {
+			return nil
+		}
+		if !cur.gotZip || cur.name == "" {
+			return cfgParseBadRequest("each extension pair needs extensions.zip_file plus extensions.name")
+		}
+		st.extItems = append(st.extItems, extensionZipItem{zipTemp: cur.zipTmp, name: cur.name, pinned: cur.pinned})
+		cur = nil
+		return nil
+	}
 
 	for {
 		part, err := mr.NextPart()
@@ -483,11 +500,13 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 			v := string(b)
 			st.startURLRaw = &v
 		case "extensions.zip_file":
+			if cur != nil && cur.gotZip {
+				if ferr := flushExt(); ferr != nil {
+					return ferr
+				}
+			}
 			if cur == nil {
 				cur = &pend{}
-			}
-			if cur.gotZip {
-				return cfgParseBadRequest("duplicate extensions.zip_file pair")
 			}
 			tmp, err := os.CreateTemp("", "bcc-ext-*.zip")
 			if err != nil {
@@ -504,6 +523,11 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 			cur.zipTmp = tmp.Name()
 			cur.gotZip = true
 		case "extensions.name":
+			if cur != nil && cur.name != "" {
+				if ferr := flushExt(); ferr != nil {
+					return ferr
+				}
+			}
 			if cur == nil {
 				cur = &pend{}
 			}
@@ -515,20 +539,32 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 			if nm == "" || !nameRegex.MatchString(nm) {
 				return cfgParseBadRequest("invalid extensions.name")
 			}
-			if cur.name != "" {
-				return cfgParseBadRequest("duplicate extensions.name in pair")
-			}
 			cur.name = nm
+		case "extensions.pinned":
+			if cur != nil && cur.gotPinned {
+				if ferr := flushExt(); ferr != nil {
+					return ferr
+				}
+			}
+			if cur == nil {
+				cur = &pend{}
+			}
+			b, err := io.ReadAll(part)
+			if err != nil {
+				return cfgParseInternal("read extensions.pinned")
+			}
+			pv, perr := parseExtensionPinned(string(b))
+			if perr != nil {
+				return cfgParseBadRequest(perr.Error())
+			}
+			cur.pinned = pv
+			cur.gotPinned = true
 		default:
 			return cfgParseBadRequest(fmt.Sprintf("unknown form field %q", name))
 		}
-		if cur != nil && cur.gotZip && cur.name != "" {
-			st.extItems = append(st.extItems, extensionZipItem{zipTemp: cur.zipTmp, name: cur.name})
-			cur = nil
-		}
 	}
-	if cur != nil && (!cur.gotZip || cur.name == "") {
-		return cfgParseBadRequest("each extension pair needs extensions.zip_file plus extensions.name")
+	if ferr := flushExt(); ferr != nil {
+		return ferr
 	}
 	return nil
 }
