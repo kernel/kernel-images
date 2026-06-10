@@ -226,3 +226,58 @@ func (w *S2StorageWriter) Stop(ctx context.Context) error {
 	}
 	return w.storage.Close(ctx)
 }
+
+// ReadOptions bounds a one-shot read. SeqNum and Timestamp set the start
+// position; Count and Until bound the end.
+type ReadOptions struct {
+	SeqNum    *uint64
+	Timestamp *uint64
+	Count     *uint64
+	Until     *uint64
+}
+
+// Read returns every telemetry envelope in the bounded range from streamName.
+// It opens a fresh client per call and surfaces S2 errors to the caller.
+func Read(ctx context.Context, basin, accessToken, streamName string, opts ReadOptions, log *slog.Logger) ([]Envelope, error) {
+	if basin == "" || accessToken == "" || streamName == "" {
+		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
+	}
+
+	readOpts := &s2.ReadOptions{
+		Clamp:                s2.Bool(true),
+		IgnoreCommandRecords: true,
+		SeqNum:               opts.SeqNum,
+		Timestamp:            opts.Timestamp,
+		Count:                opts.Count,
+		Until:                opts.Until,
+	}
+	// An unbounded read blocks waiting for new records; cap it at the tail.
+	if readOpts.Count == nil && readOpts.Until == nil {
+		readOpts.Until = s2.Uint64(uint64(time.Now().UnixMilli()))
+	}
+
+	client := s2.New(accessToken, nil)
+	stream := client.Basin(basin).Stream(s2.StreamName(streamName))
+
+	session, err := stream.ReadSession(ctx, readOpts)
+	if err != nil {
+		return nil, fmt.Errorf("s2storage: open read session: %w", err)
+	}
+	defer session.Close()
+
+	envelopes := make([]Envelope, 0)
+	for session.Next() {
+		rec := session.Record()
+		var env Envelope
+		if err := json.Unmarshal(rec.Body, &env); err != nil {
+			return nil, fmt.Errorf("s2storage: unmarshal envelope seqnum=%d: %w", rec.SeqNum, err)
+		}
+		envelopes = append(envelopes, env)
+	}
+	if err := session.Err(); err != nil {
+		return nil, fmt.Errorf("s2storage: read session: %w", err)
+	}
+
+	log.DebugContext(ctx, "s2storage: read complete", "stream", streamName, "records", len(envelopes))
+	return envelopes, nil
+}
