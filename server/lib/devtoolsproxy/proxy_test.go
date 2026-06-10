@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -82,6 +83,17 @@ func waitForCondition(timeout time.Duration, cond func() bool) bool {
 		time.Sleep(50 * time.Millisecond)
 	}
 	return cond()
+}
+
+// killProcessGroup kills cmd's entire process group and reaps the parent.
+// Requires the command to have been started with Setpgid so the group ID
+// equals the child's PID.
+func killProcessGroup(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	_, _ = cmd.Process.Wait()
 }
 
 func TestWaitForInitialTimeoutWhenLogMissing(t *testing.T) {
@@ -294,6 +306,10 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 			cmd = exec.Command(browser, chromiumArgs...)
 		}
 
+		// Own process group so cleanup can kill the whole tree — killing
+		// only the parent leaves renderer/crashpad children writing the
+		// user-data-dir while t.TempDir() cleanup deletes it.
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 		if err := cmd.Start(); err != nil {
@@ -311,13 +327,13 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start chromium 1: %v", err)
 	}
-	defer func() {
-		_ = cmd1.Process.Kill()
-		_, _ = cmd1.Process.Wait()
-	}()
+	defer killProcessGroup(cmd1)
 
-	// Wait for initial upstream containing port1
-	ok := waitForCondition(20*time.Second, func() bool {
+	// Wait for initial upstream containing port1. Generous timeout: CI
+	// runners can take tens of seconds to bring up chromium's devtools
+	// endpoint under load.
+	const upstreamDetectTimeout = 60 * time.Second
+	ok := waitForCondition(upstreamDetectTimeout, func() bool {
 		u := mgr.Current()
 		return strings.Contains(u, fmt.Sprintf(":%d/", port1))
 	})
@@ -338,20 +354,16 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 		t.Fatalf("get free port 2: %v", err)
 	}
 	t.Logf("killing first chromium instance to restart on port %d", port2)
-	_ = cmd1.Process.Kill()
-	_, _ = cmd1.Process.Wait()
+	killProcessGroup(cmd1)
 
 	cmd2, err := startChromium(port2)
 	if err != nil {
 		t.Fatalf("start chromium 2: %v", err)
 	}
-	defer func() {
-		_ = cmd2.Process.Kill()
-		_, _ = cmd2.Process.Wait()
-	}()
+	defer killProcessGroup(cmd2)
 
 	// Expect manager to update to new port
-	ok = waitForCondition(20*time.Second, func() bool {
+	ok = waitForCondition(upstreamDetectTimeout, func() bool {
 		u := mgr.Current()
 		return strings.Contains(u, fmt.Sprintf(":%d/", port2))
 	})
