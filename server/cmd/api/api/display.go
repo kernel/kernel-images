@@ -522,9 +522,15 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 // libxcvt rounding is <16 px; the dummy max is >1000 px off any normal
 // request — acceptableDelta=32 sits comfortably between them.
 //
-// If neither condition fires before the timeout, returns the last
-// observation. Always non-fatal — the response always echoes some size,
-// never 500s.
+// The boolean reports convergence. False means the root never settled on
+// the request: either the timeout (or ctx) expired, or — early — the root
+// has been stable at a value far from the request past failFastGrace. A
+// dropped neko reconfig parks X at the dummy default immediately and
+// stably, so once readings stop moving there is nothing left to wait for;
+// returning early lets the caller re-issue the reconfig (neko path) or
+// fail the request instead of burning the rest of the timeout. The
+// realized dimensions returned alongside false are the last observation,
+// for error reporting only.
 //
 // Calls getCurrentResolutionFromXrandr directly rather than the higher-
 // level getCurrentResolution: the latter prefers a cached viewportOverride
@@ -536,6 +542,13 @@ func (s *ApiService) setWindowMaximizedViaCDP(ctx context.Context) error {
 func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int, timeout time.Duration) (int, int, bool) {
 	const stableReads = 3
 	const acceptableDelta = 32
+	// failFastGrace must outlast the worst legit transient (chromium in
+	// --kiosk briefly parks the root at the dummy max during mode-switch);
+	// failFastStableReads — ~500ms of identical reads at the 50ms cadence —
+	// rejects values still in motion.
+	const failFastGrace = 2 * time.Second
+	const failFastStableReads = 10
+	start := time.Now()
 	deadline := time.Now().Add(timeout)
 	var lastW, lastH int
 	var stableCount int
@@ -549,6 +562,10 @@ func (s *ApiService) waitForXRootRealized(ctx context.Context, wantW, wantH int,
 				stableCount++
 				if stableCount >= stableReads && abs(w-wantW) <= acceptableDelta && abs(h-wantH) <= acceptableDelta {
 					return w, h, true
+				}
+				if stableCount >= failFastStableReads && time.Since(start) >= failFastGrace &&
+					(abs(w-wantW) > acceptableDelta || abs(h-wantH) > acceptableDelta) {
+					return w, h, false
 				}
 			} else {
 				stableCount = 1
