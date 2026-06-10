@@ -172,7 +172,7 @@ func TestChromiumCfgParseMultipartValidation(t *testing.T) {
 			want: "each extension pair needs extensions.zip_file plus extensions.name",
 		},
 		{
-			name: "duplicate extension zip",
+			name: "two zips with no name between them is an incomplete pair",
 			build: func(t *testing.T, w *multipart.Writer) {
 				t.Helper()
 				part, err := w.CreateFormFile("extensions.zip_file", "one.zip")
@@ -184,7 +184,7 @@ func TestChromiumCfgParseMultipartValidation(t *testing.T) {
 				_, err = io.WriteString(part, "second")
 				require.NoError(t, err)
 			},
-			want: "duplicate extensions.zip_file pair",
+			want: "each extension pair needs extensions.zip_file plus extensions.name",
 		},
 	}
 

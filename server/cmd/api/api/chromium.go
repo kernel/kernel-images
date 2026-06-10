@@ -88,6 +88,16 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 	// Order within a group is flexible, but the fields must be grouped per extension.
 	items := []pending{}
 	var current *pending
+	// A new extension group begins whenever a field repeats (e.g. a second
+	// zip_file), so flush the in-progress group before starting the next one.
+	// This keeps the optional extensions.pinned field attached to its own
+	// extension regardless of where it appears within the group.
+	flush := func() {
+		if current != nil {
+			items = append(items, *current)
+			current = nil
+		}
+	}
 
 	for {
 		part, err := mr.NextPart()
@@ -100,6 +110,9 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		}
 		switch part.FormName() {
 		case "extensions.zip_file":
+			if current != nil && current.zipReceived {
+				flush()
+			}
 			if current == nil {
 				current = &pending{}
 			}
@@ -118,12 +131,12 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 				log.Error("failed to finalize temporary file", "error", err)
 				return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "internal error"}}, nil
 			}
-			if current.zipReceived {
-				return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "duplicate zip_file in pair"}}, nil
-			}
 			current.zipTemp = tmp.Name()
 			current.zipReceived = true
 		case "extensions.name":
+			if current != nil && current.name != "" {
+				flush()
+			}
 			if current == nil {
 				current = &pending{}
 			}
@@ -136,11 +149,14 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 			if name == "" || !nameRegex.MatchString(name) {
 				return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid extension name"}}, nil
 			}
-			if current.name != "" {
-				return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "duplicate name in pair"}}, nil
-			}
 			current.name = name
 		case "extensions.pinned":
+			if current != nil && current.pinnedSet {
+				flush()
+			}
+			if current == nil {
+				current = &pending{}
+			}
 			b, err := io.ReadAll(part)
 			if err != nil {
 				log.Error("failed to read pinned", "error", err)
@@ -150,33 +166,13 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 			if perr != nil {
 				return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: perr.Error()}}, nil
 			}
-			// pinned may arrive after the zip+name pair has already been finalized;
-			// attach it to the most recently finalized item in that case.
-			if current != nil {
-				if current.pinnedSet {
-					return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "duplicate pinned in pair"}}, nil
-				}
-				current.pinned = pv
-				current.pinnedSet = true
-			} else if n := len(items); n > 0 {
-				items[n-1].pinned = pv
-			} else {
-				current = &pending{pinned: pv, pinnedSet: true}
-			}
+			current.pinned = pv
+			current.pinnedSet = true
 		default:
 			return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: fmt.Sprintf("invalid field: %s", part.FormName())}}, nil
 		}
-		// Once both required fields are present, finalize this item.
-		if current != nil && current.zipReceived && current.name != "" {
-			items = append(items, *current)
-			current = nil
-		}
 	}
-
-	// If the last pair is incomplete, reject the request
-	if current != nil && (!current.zipReceived || current.name == "") {
-		return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "each extension must include consecutive name and zip_file"}}, nil
-	}
+	flush()
 
 	if len(items) == 0 {
 		return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no extensions provided"}}, nil
