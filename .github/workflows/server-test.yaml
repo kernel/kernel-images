@@ -27,6 +27,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Chrome
+        id: setup-chrome
         uses: browser-actions/setup-chrome@v2
 
       - name: Set up Node.js
@@ -62,3 +63,8 @@ jobs:
         env:
           E2E_CHROMIUM_HEADFUL_IMAGE: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}
           E2E_CHROMIUM_HEADLESS_IMAGE: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}
+          # Pin the browser used by devtoolsproxy's UpstreamManager test to the
+          # Chrome for Testing installed above (rather than the runner image's
+          # /usr/bin/chromium snapshot build) so the browser under test is
+          # deterministic across runner-image updates.
+          CHROMIUM_BIN: ${{ steps.setup-chrome.outputs.chrome-path }}

@@ -55,7 +55,32 @@ func newTestLogWriter(t *testing.T) *testLogWriter {
 }
 
 func findBrowserBinary() (string, error) {
-	candidates := []string{"chromium", "chromium-browser", "google-chrome", "google-chrome-stable"}
+	// Allow CI/developers to pin an exact browser binary. This is important
+	// because the UpstreamManager detects the CDP endpoint solely by scraping
+	// the "DevTools listening on ws://..." line from the browser's stderr, and
+	// not every Chromium build emits that line reliably (see candidate ordering
+	// below).
+	for _, env := range []string{"CHROMIUM_BIN", "CHROME_BIN"} {
+		if v := os.Getenv(env); v != "" {
+			if p, err := exec.LookPath(v); err == nil {
+				return p, nil
+			}
+			// Treat a non-PATH value as an explicit path.
+			if _, err := os.Stat(v); err == nil {
+				return v, nil
+			}
+		}
+	}
+
+	// Prefer the deterministic Chrome/Chrome-for-Testing binaries over a bare
+	// "chromium". On GitHub's ubuntu-latest runner /usr/bin/chromium is a
+	// symlink to an open-source Chromium *snapshot* build (installed by
+	// runner-images from chromium-browser-snapshots); the CI workflow separately
+	// installs a pinned Chrome for Testing via browser-actions/setup-chrome,
+	// exposed on PATH as "chrome". Preferring "chrome"/"google-chrome" keeps the
+	// browser under test deterministic across runner-image updates. (This is
+	// hygiene, not the flake fix — see browserDetectTimeout below.)
+	candidates := []string{"chrome", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser"}
 	for _, name := range candidates {
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
@@ -234,6 +259,16 @@ func TestDialUpstreamWithRetry_RechecksCurrentAfterMissedUpdate(t *testing.T) {
 	}
 }
 
+// browserDetectTimeout bounds how long the test waits for the UpstreamManager
+// to scrape the "DevTools listening on ws://..." line from a freshly launched
+// browser. Chromium's cold-start time has a long tail on shared CI runners:
+// across recent CI runs this same launch printed the line in ~6s on a warm
+// runner but took 15-17s on a slow/contended one, and occasionally exceeded the
+// previous 20s budget (failing at exactly ~20.15s — the timeout, not a missing
+// line). 60s gives ample headroom for the slow tail while still failing fast if
+// the browser truly never comes up.
+const browserDetectTimeout = 60 * time.Second
+
 func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 	browser, err := findBrowserBinary()
 	if err != nil {
@@ -317,7 +352,7 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 	}()
 
 	// Wait for initial upstream containing port1
-	ok := waitForCondition(20*time.Second, func() bool {
+	ok := waitForCondition(browserDetectTimeout, func() bool {
 		u := mgr.Current()
 		return strings.Contains(u, fmt.Sprintf(":%d/", port1))
 	})
@@ -351,7 +386,7 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 	}()
 
 	// Expect manager to update to new port
-	ok = waitForCondition(20*time.Second, func() bool {
+	ok = waitForCondition(browserDetectTimeout, func() bool {
 		u := mgr.Current()
 		return strings.Contains(u, fmt.Sprintf(":%d/", port2))
 	})
