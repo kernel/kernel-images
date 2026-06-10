@@ -1478,19 +1478,7 @@ components:
           type: string
           description: Event type identifier.
         category:
-          type: string
-          description: Event category.
-          enum:
-            - console
-            - network
-            - page
-            - interaction
-            - control
-            - connection
-            - system
-            - screenshot
-            - captcha
-            - monitor
+          $ref: "#/components/schemas/TelemetryEventCategory"
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -1501,6 +1489,20 @@ components:
         truncated:
           type: boolean
           description: Set by the server when the data field was truncated to fit the size limit.
+    TelemetryEventCategory:
+      type: string
+      description: Event category.
+      enum:
+        - console
+        - network
+        - page
+        - interaction
+        - control
+        - connection
+        - system
+        - screenshot
+        - captcha
+        - monitor
     BrowserEventSource:
       type: object
       description: Provenance metadata identifying which producer emitted the event.
