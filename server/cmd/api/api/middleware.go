@@ -35,6 +35,15 @@ func DisableTelemetryMiddleware() { telemetryMiddlewareEnabled.Store(false) }
 // TelemetryMiddlewareEnabled reports the current state.
 func TelemetryMiddlewareEnabled() bool { return telemetryMiddlewareEnabled.Load() }
 
+// telemetryReadOps are the telemetry-observer endpoints that must not emit their
+// own api_call event: doing so would append to the very stream they read, a
+// feedback loop that (e.g. at page size 1) prevents a paginated read from ever
+// catching the tail.
+var telemetryReadOps = map[string]struct{}{
+	"ReadTelemetryEvents":   {},
+	"StreamTelemetryEvents": {},
+}
+
 // TelemetryHTTPMiddleware emits a BrowserApiCallEvent per documented operation,
 // capturing the final status and wall-clock duration. publish is wired to
 // TelemetrySession.Publish; the middleware ignores the returns.
@@ -53,6 +62,9 @@ func TelemetryHTTPMiddleware(publish func(events.Event) (events.Envelope, bool))
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
 			if tc.operationID == "" {
+				return
+			}
+			if _, skip := telemetryReadOps[tc.operationID]; skip {
 				return
 			}
 			data, _ := json.Marshal(oapi.BrowserApiCallEventData{

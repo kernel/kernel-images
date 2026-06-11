@@ -145,6 +145,13 @@ func TestReadTelemetryEventsPagination(t *testing.T) {
 	for i := 1; i < len(collected); i++ {
 		assert.Greater(t, collected[i].Seq, collected[i-1].Seq, "events must be strictly ascending with no dupes across pages")
 	}
+
+	// Reads must be side-effect-free: reading telemetry must not emit an api_call
+	// event back into the stream, or pagination could never catch the tail. Two
+	// full reads must return the same count.
+	first, _, _ := readEventsPage(t, readCtx, client, &instanceoapi.ReadTelemetryEventsParams{})
+	second, _, _ := readEventsPage(t, readCtx, client, &instanceoapi.ReadTelemetryEventsParams{})
+	assert.Equal(t, len(first), len(second), "a read must not append to the stream it reads")
 }
 
 // readEventsPage calls the endpoint and returns the page plus its cursor state.
