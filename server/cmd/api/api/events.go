@@ -144,9 +144,9 @@ const defaultReadWindow = 5 * time.Minute
 const maxReadLimit = 1000
 
 // ReadTelemetryEvents handles GET /telemetry/events.
-// Reads archived telemetry envelopes for the current session from durable S2
-// storage, applies category and limit filters, and returns them in ascending
-// sequence order. Returns an empty list when S2 storage is not configured.
+// Reads archived telemetry envelopes for this browser from durable S2 storage,
+// applies category and limit filters, and returns them in ascending sequence
+// order. Returns an empty list when S2 storage is not configured.
 func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelemetryEventsRequestObject) (oapi.ReadTelemetryEventsResponseObject, error) {
 	log := logger.FromContext(ctx)
 
@@ -154,14 +154,12 @@ func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelem
 		return readTelemetryEventsOKResponse{}, nil
 	}
 
-	startSeq := s.telemetrySession.SessionStartSeq()
 	envs, err := events.Read(ctx, s.s2Basin, s.s2AccessToken, s.s2Stream, buildReadOptions(req.Params), log)
 	if err != nil {
 		log.Error("failed to read telemetry events from S2", "err", err)
 		return oapi.ReadTelemetryEvents500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to read telemetry events"}}, nil
 	}
 
-	envs = dropPriorSessions(envs, startSeq)
 	envs = filterByCategory(envs, req.Params.Category)
 	envs = capLimit(envs, req.Params.Limit)
 
@@ -187,21 +185,6 @@ func buildReadOptions(p oapi.ReadTelemetryEventsParams) events.ReadOptions {
 	return opts
 }
 
-// dropPriorSessions removes envelopes from before the current session's start.
-// startSeq is 0 when no session has run, in which case nothing is dropped.
-func dropPriorSessions(envs []events.Envelope, startSeq uint64) []events.Envelope {
-	if startSeq == 0 {
-		return envs
-	}
-	out := make([]events.Envelope, 0, len(envs))
-	for _, e := range envs {
-		if e.Seq >= startSeq {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
 func filterByCategory(envs []events.Envelope, cats *[]oapi.TelemetryEventCategory) []events.Envelope {
 	if cats == nil || len(*cats) == 0 {
 		return envs
@@ -219,13 +202,15 @@ func filterByCategory(envs []events.Envelope, cats *[]oapi.TelemetryEventCategor
 	return out
 }
 
+// capLimit returns at most n envelopes, keeping the most recent when the set
+// exceeds the limit. Order is preserved (ascending sequence).
 func capLimit(envs []events.Envelope, limit *int) []events.Envelope {
 	n := maxReadLimit
 	if limit != nil && *limit > 0 && *limit < n {
 		n = *limit
 	}
 	if len(envs) > n {
-		return envs[:n]
+		return envs[len(envs)-n:]
 	}
 	return envs
 }

@@ -1382,11 +1382,11 @@ paths:
     get:
       summary: Read archived telemetry events from durable storage
       description: >
-        Reads telemetry event envelopes for the current session from durable S2
+        Reads telemetry event envelopes for this browser from durable S2
         storage, so events remain available after they age out of the live SSE
-        ring buffer. Results are scoped to the current session and returned in
-        ascending sequence order within the requested time window. Returns an
-        empty list when durable storage is not configured.
+        ring buffer. Results are returned in ascending sequence order within the
+        requested time window. Returns an empty list when durable storage is not
+        configured.
       operationId: readTelemetryEvents
       parameters:
         - in: query
@@ -1406,7 +1406,7 @@ paths:
         - in: query
           name: limit
           required: false
-          description: Maximum number of events to return.
+          description: Maximum number of events to return. The most recent events within the window are kept.
           schema:
             type: integer
             minimum: 1

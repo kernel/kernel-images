@@ -315,18 +315,6 @@ func TestReadTelemetryEventsS2Disabled(t *testing.T) {
 	assert.JSONEq(t, `{"events":[]}`, rec.Body.String())
 }
 
-func TestDropPriorSessions(t *testing.T) {
-	t.Parallel()
-	envs := []events.Envelope{{Seq: 1}, {Seq: 2}, {Seq: 3}}
-
-	got := dropPriorSessions(envs, 2)
-	require.Len(t, got, 2)
-	assert.Equal(t, uint64(2), got[0].Seq)
-
-	// startSeq 0 means no session ran; keep everything.
-	assert.Len(t, dropPriorSessions(envs, 0), 3)
-}
-
 func TestFilterByCategory(t *testing.T) {
 	t.Parallel()
 	mk := func(c oapi.TelemetryEventCategory) events.Envelope {
@@ -342,12 +330,16 @@ func TestFilterByCategory(t *testing.T) {
 
 func TestCapLimit(t *testing.T) {
 	t.Parallel()
-	envs := make([]events.Envelope, 5)
+	envs := []events.Envelope{{Seq: 1}, {Seq: 2}, {Seq: 3}, {Seq: 4}, {Seq: 5}}
 
 	assert.Len(t, capLimit(envs, nil), 5, "no limit returns all under the ceiling")
 
 	three := 3
-	assert.Len(t, capLimit(envs, &three), 3)
+	got := capLimit(envs, &three)
+	require.Len(t, got, 3)
+	// The most recent events are kept, in ascending order.
+	assert.Equal(t, uint64(3), got[0].Seq)
+	assert.Equal(t, uint64(5), got[2].Seq)
 }
 
 func TestBuildReadOptions(t *testing.T) {
