@@ -181,9 +181,15 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 	}
 
 	if spec.needsNav {
-		if err := chromiumDoNavigate(ctx, s, spec); err != nil {
-			logger.FromContext(ctx).Warn("start_url dispatch failed", "error", err)
-		}
+		// Dispatch navigation asynchronously so the configure response doesn't
+		// block on it. This runs after profile install and chromium restart, so
+		// the start_url ordering relative to profile loading is preserved.
+		navCtx := context.WithoutCancel(ctx)
+		go func() {
+			if err := chromiumDoNavigate(navCtx, s, spec); err != nil {
+				logger.FromContext(navCtx).Warn("start_url dispatch failed", "error", err)
+			}
+		}()
 	}
 
 	logger.FromContext(ctx).Info("chromium configure finished", "elapsed", time.Since(start).String())
