@@ -154,7 +154,7 @@ func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelem
 		return readTelemetryEventsOKResponse{}, nil
 	}
 
-	envs, err := events.Read(ctx, s.s2Basin, s.s2AccessToken, s.s2Stream, buildReadOptions(req.Params), log)
+	envs, err := s.telemetryReader.Read(ctx, buildReadOptions(req.Params), log)
 	if err != nil {
 		log.Error("failed to read telemetry events from S2", "err", err)
 		return oapi.ReadTelemetryEvents500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to read telemetry events"}}, nil

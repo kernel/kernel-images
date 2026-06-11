@@ -137,9 +137,7 @@ func main() {
 		telemetrySession,
 		eventStream,
 		config.DisplayNum,
-		config.S2Basin,
-		config.S2AccessToken,
-		config.S2Stream,
+		events.NewS2Reader(config.S2Basin, config.S2AccessToken, config.S2Stream),
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)

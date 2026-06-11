@@ -236,13 +236,25 @@ type ReadOptions struct {
 	Until     *uint64
 }
 
-// Read returns every telemetry envelope in the bounded range from streamName.
-// It opens a fresh client per call and surfaces S2 errors to the caller.
-func Read(ctx context.Context, basin, accessToken, streamName string, opts ReadOptions, log *slog.Logger) ([]Envelope, error) {
-	if basin == "" || accessToken == "" || streamName == "" {
-		return nil, fmt.Errorf("s2storage: basin, accessToken, and streamName are required")
-	}
+// S2Reader reads archived telemetry envelopes from a single S2 stream.
+type S2Reader struct {
+	basin       string
+	accessToken string
+	streamName  string
+}
 
+// NewS2Reader returns a reader for streamName, or nil when any connection value
+// is empty (durable storage not configured).
+func NewS2Reader(basin, accessToken, streamName string) *S2Reader {
+	if basin == "" || accessToken == "" || streamName == "" {
+		return nil
+	}
+	return &S2Reader{basin: basin, accessToken: accessToken, streamName: streamName}
+}
+
+// Read returns every telemetry envelope in the bounded range. It opens a fresh
+// client per call and surfaces S2 errors to the caller.
+func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger) ([]Envelope, error) {
 	readOpts := &s2.ReadOptions{
 		Clamp:                s2.Bool(true),
 		IgnoreCommandRecords: true,
@@ -256,8 +268,8 @@ func Read(ctx context.Context, basin, accessToken, streamName string, opts ReadO
 		readOpts.Until = s2.Uint64(uint64(time.Now().UnixMilli()))
 	}
 
-	client := s2.New(accessToken, nil)
-	stream := client.Basin(basin).Stream(s2.StreamName(streamName))
+	client := s2.New(r.accessToken, nil)
+	stream := client.Basin(r.basin).Stream(s2.StreamName(r.streamName))
 
 	session, err := stream.ReadSession(ctx, readOpts)
 	if err != nil {
@@ -278,6 +290,6 @@ func Read(ctx context.Context, basin, accessToken, streamName string, opts ReadO
 		return nil, fmt.Errorf("s2storage: read session: %w", err)
 	}
 
-	log.DebugContext(ctx, "s2storage: read complete", "stream", streamName, "records", len(envelopes))
+	log.DebugContext(ctx, "s2storage: read complete", "stream", r.streamName, "records", len(envelopes))
 	return envelopes, nil
 }
