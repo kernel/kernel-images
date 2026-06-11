@@ -312,7 +312,9 @@ func TestReadTelemetryEventsS2Disabled(t *testing.T) {
 	require.NoError(t, ok.VisitReadTelemetryEventsResponse(rec))
 	assert.Equal(t, http.StatusOK, rec.Code)
 	// Empty result must serialize as [] not null, or the Python SDK chokes.
-	assert.JSONEq(t, `{"events":[]}`, rec.Body.String())
+	assert.JSONEq(t, `[]`, rec.Body.String())
+	assert.Equal(t, "false", rec.Header().Get("X-Has-More"))
+	assert.Empty(t, rec.Header().Get("X-Next-Offset"), "no cursor when there is no more")
 }
 
 func TestFilterByCategory(t *testing.T) {
@@ -328,31 +330,42 @@ func TestFilterByCategory(t *testing.T) {
 	assert.Len(t, filterByCategory(envs, &cats), 2)
 }
 
-func TestCapLimit(t *testing.T) {
+func TestPageSize(t *testing.T) {
 	t.Parallel()
-	envs := []events.Envelope{{Seq: 1}, {Seq: 2}, {Seq: 3}, {Seq: 4}, {Seq: 5}}
+	assert.Equal(t, defaultPageSize, pageSize(nil), "unset defaults")
 
-	assert.Len(t, capLimit(envs, nil), 5, "no limit returns all under the ceiling")
-
-	three := 3
-	got := capLimit(envs, &three)
-	require.Len(t, got, 3)
-	// The most recent events are kept, in ascending order.
-	assert.Equal(t, uint64(3), got[0].Seq)
-	assert.Equal(t, uint64(5), got[2].Seq)
+	ptr := func(n int) *int { return &n }
+	assert.Equal(t, 50, pageSize(ptr(50)))
+	assert.Equal(t, 1, pageSize(ptr(0)), "clamped up to 1")
+	assert.Equal(t, 1, pageSize(ptr(-5)), "clamped up to 1")
+	assert.Equal(t, maxPageSize, pageSize(ptr(5000)), "clamped down to max")
 }
 
 func TestBuildReadOptions(t *testing.T) {
 	t.Parallel()
-	// No params: defaults the start to roughly defaultReadWindow ago, no end bound.
+
+	// No params: defaults the start to ~defaultReadWindow ago, no end bound, default page.
 	opts := buildReadOptions(oapi.ReadTelemetryEventsParams{})
 	require.NotNil(t, opts.Timestamp)
+	assert.Nil(t, opts.SeqNum)
 	assert.Nil(t, opts.Until)
+	require.NotNil(t, opts.Count)
+	assert.Equal(t, uint64(defaultPageSize), *opts.Count)
 
-	since, until := int64(1000), int64(2000)
-	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: &since, Until: &until})
+	// since/until/limit map through; limit bounds the page.
+	since, until, limit := int64(1000), int64(2000), 25
+	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: &since, Until: &until, Limit: &limit})
 	require.NotNil(t, opts.Timestamp)
-	require.NotNil(t, opts.Until)
 	assert.Equal(t, uint64(1000), *opts.Timestamp)
+	require.NotNil(t, opts.Until)
 	assert.Equal(t, uint64(2000), *opts.Until)
+	require.NotNil(t, opts.Count)
+	assert.Equal(t, uint64(25), *opts.Count)
+
+	// offset is the cursor and takes precedence over since (SeqNum start, no Timestamp).
+	offset := int64(4213)
+	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Offset: &offset, Since: &since})
+	require.NotNil(t, opts.SeqNum)
+	assert.Equal(t, uint64(4213), *opts.SeqNum)
+	assert.Nil(t, opts.Timestamp, "since is ignored when offset is set")
 }

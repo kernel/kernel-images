@@ -137,16 +137,19 @@ func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamT
 	return oapi.StreamTelemetryEvents200TexteventStreamResponse{Body: pr, Headers: headers}, nil
 }
 
-// defaultReadWindow bounds a read that supplies no since/until.
-const defaultReadWindow = 5 * time.Minute
-
-// maxReadLimit caps the number of envelopes a single read returns.
-const maxReadLimit = 1000
+const (
+	// defaultReadWindow bounds a read that supplies no since/until.
+	defaultReadWindow = 5 * time.Minute
+	// defaultPageSize / maxPageSize bound how many records one page reads.
+	defaultPageSize = 100
+	maxPageSize     = 1000
+)
 
 // ReadTelemetryEvents handles GET /telemetry/events.
-// Reads archived telemetry envelopes for this browser from durable S2 storage,
-// applies category and limit filters, and returns them in ascending sequence
-// order. Returns an empty list when S2 storage is not configured.
+// Reads one page of archived telemetry envelopes for this browser from durable
+// S2 storage in ascending sequence order, applying the category filter. The
+// X-Has-More / X-Next-Offset response headers carry the pagination cursor.
+// Returns an empty list when S2 storage is not configured.
 func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelemetryEventsRequestObject) (oapi.ReadTelemetryEventsResponseObject, error) {
 	log := logger.FromContext(ctx)
 
@@ -154,35 +157,60 @@ func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelem
 		return readTelemetryEventsOKResponse{}, nil
 	}
 
-	envs, err := s.telemetryReader.Read(ctx, buildReadOptions(req.Params), log)
+	result, err := s.telemetryReader.Read(ctx, buildReadOptions(req.Params), log)
 	if err != nil {
 		log.Error("failed to read telemetry events from S2", "err", err)
 		return oapi.ReadTelemetryEvents500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to read telemetry events"}}, nil
 	}
 
-	envs = filterByCategory(envs, req.Params.Category)
-	envs = capLimit(envs, req.Params.Limit)
+	// has_more / next cursor track the raw stream position, independent of the
+	// category filter, so a filtered page may come back empty while more remain.
+	envs := filterByCategory(result.Envelopes, req.Params.Category)
 
-	return readTelemetryEventsOKResponse{envs: envs}, nil
+	return readTelemetryEventsOKResponse{envs: envs, nextSeqNum: result.NextSeqNum, hasMore: result.HasMore}, nil
 }
 
-// buildReadOptions maps query params to a bounded read window. since/until are
-// the start/end of the window; the window defaults to the last defaultReadWindow.
-// limit is applied after category filtering, not pushed into the S2 read.
+// buildReadOptions maps query params to a bounded, paginated read. offset is the
+// S2 sequence cursor and takes precedence over since as the start position (the
+// two are mutually exclusive starts); until bounds the window end; the page is
+// bounded to limit records.
 func buildReadOptions(p oapi.ReadTelemetryEventsParams) events.ReadOptions {
 	var opts events.ReadOptions
-	if p.Since != nil {
-		start := uint64(*p.Since)
-		opts.Timestamp = &start
-	} else {
-		start := uint64(time.Now().Add(-defaultReadWindow).UnixMilli())
-		opts.Timestamp = &start
+
+	switch {
+	case p.Offset != nil && *p.Offset >= 0:
+		seq := uint64(*p.Offset)
+		opts.SeqNum = &seq
+	case p.Since != nil:
+		ts := uint64(*p.Since)
+		opts.Timestamp = &ts
+	default:
+		ts := uint64(time.Now().Add(-defaultReadWindow).UnixMilli())
+		opts.Timestamp = &ts
 	}
+
 	if p.Until != nil {
 		until := uint64(*p.Until)
 		opts.Until = &until
 	}
+
+	count := uint64(pageSize(p.Limit))
+	opts.Count = &count
 	return opts
+}
+
+// pageSize clamps a requested limit into [1, maxPageSize], defaulting when unset.
+func pageSize(limit *int) int {
+	switch {
+	case limit == nil:
+		return defaultPageSize
+	case *limit < 1:
+		return 1
+	case *limit > maxPageSize:
+		return maxPageSize
+	default:
+		return *limit
+	}
 }
 
 func filterByCategory(envs []events.Envelope, cats *[]oapi.TelemetryEventCategory) []events.Envelope {
@@ -202,33 +230,28 @@ func filterByCategory(envs []events.Envelope, cats *[]oapi.TelemetryEventCategor
 	return out
 }
 
-// capLimit returns at most n envelopes, keeping the most recent when the set
-// exceeds the limit. Order is preserved (ascending sequence).
-func capLimit(envs []events.Envelope, limit *int) []events.Envelope {
-	n := maxReadLimit
-	if limit != nil && *limit > 0 && *limit < n {
-		n = *limit
-	}
-	if len(envs) > n {
-		return envs[len(envs)-n:]
-	}
-	return envs
+// readTelemetryEventsOKResponse serializes a page of events.Envelope directly,
+// matching the SSE stream and publish endpoints. The pagination cursor rides in
+// the X-Has-More / X-Next-Offset headers (X-Next-Offset only when there is more),
+// following the offset_pagination convention used by the list endpoints.
+type readTelemetryEventsOKResponse struct {
+	envs       []events.Envelope
+	nextSeqNum uint64
+	hasMore    bool
 }
 
-// readTelemetryEventsOKResponse serializes events.Envelope directly so the
-// response shape matches the SSE stream frames and the publish endpoint.
-type readTelemetryEventsOKResponse struct{ envs []events.Envelope }
-
 func (r readTelemetryEventsOKResponse) VisitReadTelemetryEventsResponse(w http.ResponseWriter) error {
+	w.Header().Set("X-Has-More", strconv.FormatBool(r.hasMore))
+	if r.hasMore {
+		w.Header().Set("X-Next-Offset", strconv.FormatUint(r.nextSeqNum, 10))
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	envs := r.envs
 	if envs == nil {
 		envs = []events.Envelope{}
 	}
-	return json.NewEncoder(w).Encode(struct {
-		Events []events.Envelope `json:"events"`
-	}{Events: envs})
+	return json.NewEncoder(w).Encode(envs)
 }
 
 // publishTelemetryEventOKResponse serializes events.Envelope directly so the response

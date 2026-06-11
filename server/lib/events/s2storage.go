@@ -252,9 +252,17 @@ func NewS2Reader(basin, accessToken, streamName string) *S2Reader {
 	return &S2Reader{basin: basin, accessToken: accessToken, streamName: streamName}
 }
 
-// Read returns every telemetry envelope in the bounded range. It opens a fresh
-// client per call and surfaces S2 errors to the caller.
-func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger) ([]Envelope, error) {
+// S2ReadResult is one page of a paginated read. NextSeqNum is the S2 sequence
+// number to resume from on the next page; it is meaningful only when HasMore.
+type S2ReadResult struct {
+	Envelopes  []Envelope
+	NextSeqNum uint64
+	HasMore    bool
+}
+
+// Read returns one page of telemetry envelopes from the bounded range. It opens
+// a fresh client per call and surfaces S2 errors to the caller.
+func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger) (*S2ReadResult, error) {
 	readOpts := &s2.ReadOptions{
 		Clamp:                s2.Bool(true),
 		IgnoreCommandRecords: true,
@@ -290,6 +298,19 @@ func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger)
 		return nil, fmt.Errorf("s2storage: read session: %w", err)
 	}
 
-	log.DebugContext(ctx, "s2storage: read complete", "stream", r.streamName, "records", len(envelopes))
-	return envelopes, nil
+	// Both positions ride along in the read batches, so there's no extra
+	// round-trip. More records remain whenever the resume position hasn't caught
+	// up to the stream tail. This holds regardless of whether the page stopped on
+	// the count, byte, or time bound, so it never under-reports as a "full page"
+	// heuristic would.
+	result := &S2ReadResult{Envelopes: envelopes}
+	next := session.NextReadPosition()
+	tail := session.LastObservedTail()
+	if next != nil && tail != nil && next.SeqNum < tail.SeqNum {
+		result.NextSeqNum = next.SeqNum
+		result.HasMore = true
+	}
+
+	log.DebugContext(ctx, "s2storage: read complete", "stream", r.streamName, "records", len(envelopes), "has_more", result.HasMore)
+	return result, nil
 }

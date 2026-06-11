@@ -1382,35 +1382,49 @@ paths:
     get:
       summary: Read archived telemetry events from durable storage
       description: >
-        Reads telemetry event envelopes for this browser from durable S2
-        storage, so events remain available after they age out of the live SSE
-        ring buffer. Results are returned in ascending sequence order within the
-        requested time window. Returns an empty list when durable storage is not
-        configured.
+        Reads a page of telemetry event envelopes for this browser from durable
+        S2 storage, so events remain available after they age out of the live
+        SSE ring buffer. Events are returned in ascending sequence order. To page
+        through results, pass the `X-Next-Offset` value from the previous
+        response as `offset` and repeat while `X-Has-More` is true. Returns an
+        empty list when durable storage is not configured.
       operationId: readTelemetryEvents
       parameters:
         - in: query
+          name: offset
+          required: false
+          description: >
+            Pagination cursor: pass the `X-Next-Offset` value from the previous
+            response to fetch the next page. This is a stream position and takes
+            precedence over `since`; it is not an event's `seq` field — do not
+            derive it from the response body.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - in: query
           name: since
           required: false
-          description: Start of the time window, unix milliseconds. Defaults to 5 minutes ago.
+          description: Start of the time window, unix milliseconds. Defaults to 5 minutes ago. Ignored when `offset` is set.
           schema:
             type: integer
             format: int64
         - in: query
           name: until
           required: false
-          description: End of the time window (exclusive), unix milliseconds. Defaults to the current time.
+          description: End of the time window (exclusive), unix milliseconds.
           schema:
             type: integer
             format: int64
         - in: query
           name: limit
           required: false
-          description: Maximum number of events to return. The most recent events within the window are kept.
+          description: Maximum number of events per page. Defaults to 100.
           schema:
             type: integer
             minimum: 1
             maximum: 1000
+            default: 100
         - in: query
           name: category
           required: false
@@ -1423,18 +1437,23 @@ paths:
           explode: true
       responses:
         "200":
-          description: Telemetry events from durable storage in ascending sequence order.
+          description: A page of telemetry events from durable storage in ascending sequence order.
+          headers:
+            X-Has-More:
+              description: Whether more events are available beyond this page.
+              schema:
+                type: boolean
+            X-Next-Offset:
+              description: Cursor to pass as `offset` for the next page. Present only when X-Has-More is true.
+              schema:
+                type: integer
+                format: int64
           content:
             application/json:
               schema:
-                type: object
-                required:
-                  - events
-                properties:
-                  events:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/TelemetryEnvelope"
+                type: array
+                items:
+                  $ref: "#/components/schemas/TelemetryEnvelope"
         "500":
           $ref: "#/components/responses/InternalError"
   /telemetry/stream:
