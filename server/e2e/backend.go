@@ -42,6 +42,13 @@ type Backend interface {
 	// Stop tears the instance down and releases its resources.
 	Stop(ctx context.Context) error
 
+	// SupportsHostAccess reports whether the backend can bridge the instance to
+	// a service the test stands up on its own host (ContainerConfig.HostAccess).
+	// The Docker backend can (host.docker.internal); a remote VM backend cannot.
+	// TestContainer.Start uses this to skip host-fixture tests on backends that
+	// can't satisfy them, rather than failing.
+	SupportsHostAccess() bool
+
 	// APIBaseURL returns the base URL for the instance's control-plane API
 	// server (container port 10001).
 	APIBaseURL() string

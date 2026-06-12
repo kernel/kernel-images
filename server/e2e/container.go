@@ -20,6 +20,7 @@ type TestContainer struct {
 	// Image is the OCI image reference under test.
 	Image string
 
+	tb      testing.TB
 	backend Backend
 }
 
@@ -30,12 +31,22 @@ func NewTestContainer(tb testing.TB, image string) *TestContainer {
 	tb.Helper()
 	return &TestContainer{
 		Image:   image,
+		tb:      tb,
 		backend: newBackend(tb, image),
 	}
 }
 
 // Start starts the instance with the given configuration.
+//
+// If the test requests HostAccess but the selected backend can't bridge the
+// instance to the test host (e.g. the hypeman backend, which runs a remote VM),
+// the test is skipped rather than failed: such tests rely on a fixture served
+// from the runner's loopback that a remote instance cannot reach. This keeps the
+// hypeman CI job green while preserving coverage on the Docker backend.
 func (c *TestContainer) Start(ctx context.Context, cfg ContainerConfig) error {
+	if cfg.HostAccess && !c.backend.SupportsHostAccess() {
+		c.tb.Skipf("skipping host-access test: %s backend has no host-loopback bridge for the instance", backendKindFromEnv())
+	}
 	return c.backend.Start(ctx, cfg)
 }
 

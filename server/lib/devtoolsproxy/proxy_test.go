@@ -234,6 +234,16 @@ func TestDialUpstreamWithRetry_RechecksCurrentAfterMissedUpdate(t *testing.T) {
 	}
 }
 
+// browserDetectTimeout bounds how long the test waits for the UpstreamManager
+// to scrape the "DevTools listening on ws://..." line from a freshly launched
+// browser. Chromium's cold-start time has a long tail on shared CI runners:
+// across recent CI runs this same launch printed the line in ~6s on a warm
+// runner but took 15-17s on a slow/contended one, and occasionally exceeded the
+// previous 20s budget (failing at exactly ~20.15s — the timeout, not a missing
+// line). 60s gives ample headroom for the slow tail while still failing fast if
+// the browser truly never comes up.
+const browserDetectTimeout = 60 * time.Second
+
 func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 	browser, err := findBrowserBinary()
 	if err != nil {
@@ -317,7 +327,7 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 	}()
 
 	// Wait for initial upstream containing port1
-	ok := waitForCondition(20*time.Second, func() bool {
+	ok := waitForCondition(browserDetectTimeout, func() bool {
 		u := mgr.Current()
 		return strings.Contains(u, fmt.Sprintf(":%d/", port1))
 	})
@@ -351,7 +361,7 @@ func TestUpstreamManagerDetectsChromiumAndRestart(t *testing.T) {
 	}()
 
 	// Expect manager to update to new port
-	ok = waitForCondition(20*time.Second, func() bool {
+	ok = waitForCondition(browserDetectTimeout, func() bool {
 		u := mgr.Current()
 		return strings.Contains(u, fmt.Sprintf(":%d/", port2))
 	})
