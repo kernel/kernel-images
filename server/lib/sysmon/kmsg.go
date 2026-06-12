@@ -83,8 +83,8 @@ type OomInstance struct {
 	// the standard "CPU: N PID: N Comm: ..." header line. Zero if the
 	// kernel did not emit that header.
 	TriggerPid int
-	// TimeOfDeath is the timestamp of the closing "Killed process" line
-	// as reported by the kmsg envelope.
+	// TimeOfDeath is the wall-clock time the closing "Killed process"
+	// line was observed, taken from the message's Timestamp.
 	TimeOfDeath time.Time
 }
 
@@ -102,6 +102,9 @@ type TaskMemSnapshot struct {
 // lets the parser run portably under unit tests; the production wiring
 // lives in kmsg_linux.go.
 type KmsgMessage struct {
+	// Timestamp is the wall-clock time the record was observed; the
+	// production source (kmsg_linux.go) sets it to read time, not the
+	// kmsg envelope timestamp.
 	Timestamp time.Time
 	Body      string
 }
