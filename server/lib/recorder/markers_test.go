@@ -28,7 +28,7 @@ func TestBuildChapterMetadata_SentinelAndOrdering(t *testing.T) {
 		{Name: "first", At: start.Add(2 * time.Second)},
 	}
 
-	path, ok, err := buildChapterMetadata(out, markers, start, 0, 10000)
+	path, ok, err := buildChapterMetadata(out, markers, start, 10000)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, out+".ffmeta", path)
@@ -53,7 +53,7 @@ func TestBuildChapterMetadata_DropsNegativeOffsets(t *testing.T) {
 		{Name: "kept", At: start.Add(4 * time.Second)},
 	}
 
-	path, ok, err := buildChapterMetadata(out, markers, start, 0, 8000)
+	path, ok, err := buildChapterMetadata(out, markers, start, 8000)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -64,25 +64,6 @@ func TestBuildChapterMetadata_DropsNegativeOffsets(t *testing.T) {
 	assert.Equal(t, 2, strings.Count(meta, "[CHAPTER]"))
 }
 
-func TestBuildChapterMetadata_OriginShift(t *testing.T) {
-	start := time.Unix(1000, 0)
-	out := filepath.Join(t.TempDir(), "rec.mp4")
-	markers := []Marker{
-		{Name: "shifted", At: start.Add(5 * time.Second)},
-	}
-
-	// Shifting the origin forward by 2s moves the marker from 5000ms to 3000ms.
-	path, ok, err := buildChapterMetadata(out, markers, start, 2000, 8000)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Contains(t, readMeta(t, path), "START=3000\nEND=8000\ntitle=shifted")
-
-	// A shift larger than the offset drops the marker, leaving none usable.
-	_, ok, err = buildChapterMetadata(out, markers, start, 6000, 8000)
-	require.NoError(t, err)
-	assert.False(t, ok)
-}
-
 func TestBuildChapterMetadata_EscapesSpecialChars(t *testing.T) {
 	start := time.Unix(1000, 0)
 	out := filepath.Join(t.TempDir(), "rec.mp4")
@@ -90,7 +71,7 @@ func TestBuildChapterMetadata_EscapesSpecialChars(t *testing.T) {
 		{Name: "a=b;c#d\\e", At: start.Add(1 * time.Second)},
 	}
 
-	path, ok, err := buildChapterMetadata(out, markers, start, 0, 4000)
+	path, ok, err := buildChapterMetadata(out, markers, start, 4000)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Contains(t, readMeta(t, path), `title=a\=b\;c\#d\\e`)
@@ -100,7 +81,7 @@ func TestBuildChapterMetadata_NoUsableMarkers(t *testing.T) {
 	start := time.Unix(1000, 0)
 	out := filepath.Join(t.TempDir(), "rec.mp4")
 
-	path, ok, err := buildChapterMetadata(out, nil, start, 0, 4000)
+	path, ok, err := buildChapterMetadata(out, nil, start, 4000)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	assert.Empty(t, path)
@@ -115,7 +96,7 @@ func TestBuildChapterMetadata_NoSentinelWhenFirstAtZero(t *testing.T) {
 		{Name: "at-zero", At: start},
 	}
 
-	path, ok, err := buildChapterMetadata(out, markers, start, 0, 4000)
+	path, ok, err := buildChapterMetadata(out, markers, start, 4000)
 	require.NoError(t, err)
 	require.True(t, ok)
 	meta := readMeta(t, path)

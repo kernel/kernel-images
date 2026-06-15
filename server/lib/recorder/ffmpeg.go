@@ -430,7 +430,7 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		// or corrupt the recording: fall back to the plain no-chapter remux.
 		metaPath := ""
 		if len(markers) > 0 {
-			path, ok, err := buildChapterMetadata(outputPath, markers, startTime, 0, durationMs)
+			path, ok, err := buildChapterMetadata(outputPath, markers, startTime, durationMs)
 			if err != nil {
 				log.Warn("failed to build chapter metadata, finalizing without chapters", "err", err)
 			} else if ok {
