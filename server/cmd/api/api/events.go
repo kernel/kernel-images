@@ -36,7 +36,7 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 	if cat, ok := events.CategoryForType(body.Type); ok {
 		ev.Category = cat
 	} else if body.Category != nil {
-		cat := oapi.TelemetryEventCategory(*body.Category)
+		cat := *body.Category
 		if !cat.Valid() {
 			return oapi.PublishTelemetryEvent400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid category"}}, nil
 		}
@@ -177,12 +177,15 @@ func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelem
 func buildReadOptions(p oapi.ReadTelemetryEventsParams) events.ReadOptions {
 	var opts events.ReadOptions
 
+	// since/until/offset are spec'd minimum:0, but no request-validation
+	// middleware is mounted, so clamp negatives to 0 here rather than wrap them
+	// into a huge uint64.
 	switch {
-	case p.Offset != nil && *p.Offset >= 0:
-		seq := uint64(*p.Offset)
+	case p.Offset != nil:
+		seq := uint64(max(*p.Offset, 0))
 		opts.SeqNum = &seq
 	case p.Since != nil:
-		ts := uint64(*p.Since)
+		ts := uint64(max(*p.Since, 0))
 		opts.Timestamp = &ts
 	default:
 		ts := uint64(time.Now().Add(-defaultReadWindow).UnixMilli())
@@ -190,7 +193,7 @@ func buildReadOptions(p oapi.ReadTelemetryEventsParams) events.ReadOptions {
 	}
 
 	if p.Until != nil {
-		until := uint64(*p.Until)
+		until := uint64(max(*p.Until, 0))
 		opts.Until = &until
 	}
 
@@ -232,8 +235,7 @@ func filterByCategory(envs []events.Envelope, cats *[]oapi.TelemetryEventCategor
 
 // readTelemetryEventsOKResponse serializes a page of events.Envelope directly,
 // matching the SSE stream and publish endpoints. The pagination cursor rides in
-// the X-Has-More / X-Next-Offset headers (X-Next-Offset only when there is more),
-// following the offset_pagination convention used by the list endpoints.
+// the X-Has-More / X-Next-Offset headers (X-Next-Offset only when there is more).
 type readTelemetryEventsOKResponse struct {
 	envs       []events.Envelope
 	nextSeqNum uint64

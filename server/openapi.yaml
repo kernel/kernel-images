@@ -1409,6 +1409,7 @@ paths:
           schema:
             type: integer
             format: int64
+            minimum: 0
         - in: query
           name: until
           required: false
@@ -1416,6 +1417,7 @@ paths:
           schema:
             type: integer
             format: int64
+            minimum: 0
         - in: query
           name: limit
           required: false
@@ -1494,9 +1496,9 @@ paths:
             enum: [all]
           required: false
           description: >
-            Pass `all` to start from the oldest retained event. Ring buffer
-            caps at 1024; older events are evicted and surface as a first
-            `id` greater than 1.
+            Pass `all` to start from the oldest retained event. The stream's
+            buffer is bounded, so once older events are evicted the first `id`
+            may be greater than 1.
       responses:
         "200":
           description: Live SSE stream of telemetry events.
@@ -1616,22 +1618,11 @@ components:
           type: string
           description: Event type identifier.
         category:
-          type: string
           description: >
             Event category. Optional and advisory: for a known event `type` the
             server assigns the category authoritatively and ignores this field.
             It is only used for unknown custom types, where it is required.
-          enum:
-            - console
-            - network
-            - page
-            - interaction
-            - control
-            - connection
-            - system
-            - screenshot
-            - captcha
-            - monitor
+          $ref: "#/components/schemas/TelemetryEventCategory"
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:

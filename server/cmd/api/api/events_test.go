@@ -58,7 +58,7 @@ func TestEventLifecycle(t *testing.T) {
 	}()
 
 	// Publish a custom event. Unknown types must carry an explicit category.
-	sys := oapi.PublishEventRequestCategorySystem
+	sys := oapi.TelemetryEventCategorySystem
 	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
 		Body: &oapi.PublishEventRequest{Type: "test.event", Category: &sys},
 	})
@@ -90,7 +90,7 @@ func TestPublishDroppedWhenTelemetryInactive(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t, newMockRecordManager())
 
-	sys := oapi.PublishEventRequestCategorySystem
+	sys := oapi.TelemetryEventCategorySystem
 	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
 		Body: &oapi.PublishEventRequest{Type: "test.event", Category: &sys},
 	})
@@ -121,7 +121,7 @@ func TestPublishKnownTypeCategoryIsServerAuthoritative(t *testing.T) {
 
 	// api_call is a known type that maps to the control category. A caller
 	// supplying a different category must be overridden by the server.
-	console := oapi.PublishEventRequestCategoryConsole
+	console := oapi.TelemetryEventCategoryConsole
 	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
 		Body: &oapi.PublishEventRequest{Type: "api_call", Category: &console},
 	})
@@ -151,7 +151,7 @@ func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	page := oapi.PublishEventRequestCategoryPage
+	page := oapi.TelemetryEventCategoryPage
 	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
 		Body: &oapi.PublishEventRequest{Type: "test.page", Category: &page},
 	})
@@ -163,7 +163,7 @@ func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {
 // telemetry session. Seqs run 1..n on a fresh stream.
 func publishTestEvents(ctx context.Context, t *testing.T, svc *ApiService, n int) {
 	t.Helper()
-	sys := oapi.PublishEventRequestCategorySystem
+	sys := oapi.TelemetryEventCategorySystem
 	for i := 0; i < n; i++ {
 		resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
 			Body: &oapi.PublishEventRequest{Type: "test.event", Category: &sys},
@@ -368,4 +368,15 @@ func TestBuildReadOptions(t *testing.T) {
 	require.NotNil(t, opts.SeqNum)
 	assert.Equal(t, uint64(4213), *opts.SeqNum)
 	assert.Nil(t, opts.Timestamp, "since is ignored when offset is set")
+
+	// Negative bounds clamp to 0 rather than wrapping into a huge uint64.
+	neg := int64(-1)
+	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Offset: &neg})
+	require.NotNil(t, opts.SeqNum)
+	assert.Equal(t, uint64(0), *opts.SeqNum)
+	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: &neg, Until: &neg})
+	require.NotNil(t, opts.Timestamp)
+	assert.Equal(t, uint64(0), *opts.Timestamp)
+	require.NotNil(t, opts.Until)
+	assert.Equal(t, uint64(0), *opts.Until)
 }

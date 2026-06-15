@@ -73,7 +73,7 @@ func TestMapEventExitedUnexpectedFromRunning(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, string(oapi.ServiceCrashed), body.Type)
 	require.NotNil(t, body.Category)
-	assert.Equal(t, oapi.PublishEventRequestCategory("system"), *body.Category)
+	assert.Equal(t, oapi.TelemetryEventCategory("system"), *body.Category)
 	require.NotNil(t, body.Source)
 	assert.Equal(t, oapi.LocalProcess, body.Source.Kind)
 	require.NotNil(t, body.Source.Event)

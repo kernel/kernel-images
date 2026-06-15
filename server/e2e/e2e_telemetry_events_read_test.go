@@ -16,6 +16,11 @@ import (
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
+// s2FlushWait is how long to wait after publishing for the S2 storage writer to
+// flush to the durable stream (batcher linger of 100ms plus network), before
+// reading the archive back.
+const s2FlushWait = 2 * time.Second
+
 // startTelemetryReadContainer boots a headless container wired to S2 on a
 // per-test stream (so tests sharing the S2_STREAM env don't pollute each other)
 // and starts a telemetry session. Skips when S2 creds or docker are absent.
@@ -66,14 +71,14 @@ func TestReadTelemetryEvents(t *testing.T) {
 	// Publish a deterministic set of events across two enabled categories.
 	const systemCount, connectionCount = 3, 2
 	for i := 0; i < systemCount; i++ {
-		publishEvent(t, ctx, client, "test.system", instanceoapi.PublishEventRequestCategorySystem)
+		publishEvent(t, ctx, client, "test.system", instanceoapi.TelemetryEventCategorySystem)
 	}
 	for i := 0; i < connectionCount; i++ {
-		publishEvent(t, ctx, client, "test.connection", instanceoapi.PublishEventRequestCategoryConnection)
+		publishEvent(t, ctx, client, "test.connection", instanceoapi.TelemetryEventCategoryConnection)
 	}
 
 	// Give the storage writer time to flush to S2 (batcher linger + network).
-	time.Sleep(2 * time.Second)
+	time.Sleep(s2FlushWait)
 
 	// Bound every read tightly: a correct handler caps the S2 read, so these
 	// return promptly. A hang here means the read is unbounded.
@@ -114,9 +119,9 @@ func TestReadTelemetryEventsPagination(t *testing.T) {
 
 	const published = 5
 	for i := 0; i < published; i++ {
-		publishEvent(t, ctx, client, "test.system", instanceoapi.PublishEventRequestCategorySystem)
+		publishEvent(t, ctx, client, "test.system", instanceoapi.TelemetryEventCategorySystem)
 	}
-	time.Sleep(2 * time.Second)
+	time.Sleep(s2FlushWait)
 
 	readCtx, readCancel := context.WithTimeout(ctx, 20*time.Second)
 	defer readCancel()
@@ -154,6 +159,60 @@ func TestReadTelemetryEventsPagination(t *testing.T) {
 	assert.Equal(t, len(first), len(second), "a read must not append to the stream it reads")
 }
 
+// TestReadTelemetryEventsFilteredPagination verifies that paginating with a
+// category filter still returns the complete matching set even when intermediate
+// pages come back empty. The filter is applied after the cursor-bounded read, so
+// a page can be empty while X-Has-More is true; a correct client follows the
+// cursor rather than stopping on an empty page.
+func TestReadTelemetryEventsFilteredPagination(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	client := startTelemetryReadContainer(t, ctx)
+
+	// A run of connection events (each also emits a control api_call), then a few
+	// system events at the tail. Filtering for system means the early pages, which
+	// scan only connection/control records, come back empty with more remaining.
+	const systemCount = 3
+	for i := 0; i < 15; i++ {
+		publishEvent(t, ctx, client, "test.connection", instanceoapi.TelemetryEventCategoryConnection)
+	}
+	for i := 0; i < systemCount; i++ {
+		publishEvent(t, ctx, client, "test.system", instanceoapi.TelemetryEventCategorySystem)
+	}
+	time.Sleep(s2FlushWait)
+
+	readCtx, readCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer readCancel()
+
+	systemCat := []instanceoapi.TelemetryEventCategory{instanceoapi.TelemetryEventCategorySystem}
+	const pageLimit = 2
+	var collected []instanceoapi.TelemetryEnvelope
+	var offset *int64
+	pages, emptyPages := 0, 0
+	for {
+		pages++
+		require.LessOrEqual(t, pages, 100, "filtered pagination did not terminate")
+		limit := pageLimit
+		page, hasMore, next := readEventsPage(t, readCtx, client, &instanceoapi.ReadTelemetryEventsParams{Limit: &limit, Category: &systemCat, Offset: offset})
+		if len(page) == 0 {
+			emptyPages++
+		}
+		for _, e := range page {
+			require.NotNil(t, e.Event.Category)
+			assert.Equal(t, instanceoapi.TelemetryEventCategorySystem, *e.Event.Category)
+		}
+		collected = append(collected, page...)
+		if !hasMore {
+			break
+		}
+		offset = &next
+	}
+
+	assert.GreaterOrEqual(t, len(collected), systemCount, "cursor walk must collect every matching event across empty pages")
+	assert.Positive(t, emptyPages, "the connection run should yield empty system-filtered pages (the sparse-filter edge)")
+}
+
 // readEventsPage calls the endpoint and returns the page plus its cursor state.
 func readEventsPage(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, params *instanceoapi.ReadTelemetryEventsParams) (page []instanceoapi.TelemetryEnvelope, hasMore bool, next int64) {
 	t.Helper()
@@ -172,7 +231,7 @@ func readEventsPage(t *testing.T, ctx context.Context, client *instanceoapi.Clie
 	return *resp.JSON200, hasMore, next
 }
 
-func publishEvent(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, eventType string, category instanceoapi.PublishEventRequestCategory) {
+func publishEvent(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, eventType string, category instanceoapi.TelemetryEventCategory) {
 	t.Helper()
 	resp, err := client.PublishTelemetryEventWithResponse(ctx, instanceoapi.PublishTelemetryEventJSONRequestBody{
 		Type:     eventType,

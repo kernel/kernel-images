@@ -231,7 +231,7 @@ func mapEvent(header, payload map[string]string) (oapi.PublishEventRequest, bool
 		}
 	}
 
-	category := oapi.PublishEventRequestCategory(oapi.TelemetryEventCategorySystem)
+	category := oapi.TelemetryEventCategory(oapi.TelemetryEventCategorySystem)
 	sourceEvent := "service.crashed"
 	return oapi.PublishEventRequest{
 		Type:     string(oapi.ServiceCrashed),
