@@ -83,6 +83,9 @@ func newS2Storage(ctx context.Context, basin, accessToken, streamName string, cf
 		return nil, fmt.Errorf("s2storage: open append session: %w", err)
 	}
 
+	// Defensive defaults for a zero-value S2Config. In production these are
+	// already set from config (S2_BATCHER_LINGER / S2_BATCHER_MAX_RECORDS), which
+	// owns the canonical defaults; keep these two in sync with that layer.
 	if cfg.BatcherLinger == 0 {
 		cfg.BatcherLinger = 100 * time.Millisecond
 	}
@@ -238,18 +241,23 @@ type ReadOptions struct {
 
 // S2Reader reads archived telemetry envelopes from a single S2 stream.
 type S2Reader struct {
-	basin       string
-	accessToken string
-	streamName  string
+	streamName string
+	stream     *s2.StreamClient
 }
 
 // NewS2Reader returns a reader for streamName, or nil when any connection value
-// is empty (durable storage not configured).
+// is empty (durable storage not configured). The client (and its connection
+// pool) is built once and reused across Read calls, mirroring the writer; a
+// fresh client per request would re-handshake TLS/HTTP2 on every page.
 func NewS2Reader(basin, accessToken, streamName string) *S2Reader {
 	if basin == "" || accessToken == "" || streamName == "" {
 		return nil
 	}
-	return &S2Reader{basin: basin, accessToken: accessToken, streamName: streamName}
+	client := s2.New(accessToken, nil)
+	return &S2Reader{
+		streamName: streamName,
+		stream:     client.Basin(basin).Stream(s2.StreamName(streamName)),
+	}
 }
 
 // S2ReadResult is one page of a paginated read. NextSeqNum is the S2 sequence
@@ -260,8 +268,8 @@ type S2ReadResult struct {
 	HasMore    bool
 }
 
-// Read returns one page of telemetry envelopes from the bounded range. It opens
-// a fresh client per call and surfaces S2 errors to the caller.
+// Read returns one page of telemetry envelopes from the bounded range, reusing
+// the reader's client. S2 errors are surfaced to the caller.
 func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger) (*S2ReadResult, error) {
 	readOpts := &s2.ReadOptions{
 		Clamp:                s2.Bool(true),
@@ -276,10 +284,7 @@ func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger)
 		readOpts.Until = s2.Uint64(uint64(time.Now().UnixMilli()))
 	}
 
-	client := s2.New(r.accessToken, nil)
-	stream := client.Basin(r.basin).Stream(s2.StreamName(r.streamName))
-
-	session, err := stream.ReadSession(ctx, readOpts)
+	session, err := r.stream.ReadSession(ctx, readOpts)
 	if err != nil {
 		return nil, fmt.Errorf("s2storage: open read session: %w", err)
 	}
