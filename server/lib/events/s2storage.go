@@ -295,7 +295,11 @@ func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger)
 		rec := session.Record()
 		var env Envelope
 		if err := json.Unmarshal(rec.Body, &env); err != nil {
-			return nil, fmt.Errorf("s2storage: unmarshal envelope seqnum=%d: %w", rec.SeqNum, err)
+			// Skip rather than fail the page: the cursor is a seqnum, so failing
+			// here would wedge every page that spans this record. Warn so the
+			// corruption is still visible.
+			log.WarnContext(ctx, "s2storage: skipping unparseable record", "stream", r.streamName, "seqnum", rec.SeqNum, "err", err)
+			continue
 		}
 		envelopes = append(envelopes, env)
 	}

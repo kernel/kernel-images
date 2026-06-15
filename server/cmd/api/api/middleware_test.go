@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -153,6 +154,23 @@ func TestTelemetryMiddleware_SkipsTelemetryReadEndpoints(t *testing.T) {
 				ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/telemetry/events", nil))
 			assert.Empty(t, rp.snapshot(), "telemetry read endpoints must not emit an api_call back into the stream")
 		})
+	}
+}
+
+// telemetryReadOps keys must be real operations, so an operationId rename can't
+// leave the skip set stale and silently revive the api_call read-feedback loop.
+// A rename also renames the StrictServerInterface method (the compiler forces
+// ApiService to follow), so a stale key stops matching any method here.
+func TestTelemetryReadOpsAreRealOperations(t *testing.T) {
+	iface := reflect.TypeOf((*oapi.StrictServerInterface)(nil)).Elem()
+	methods := make(map[string]struct{}, iface.NumMethod())
+	for i := 0; i < iface.NumMethod(); i++ {
+		methods[iface.Method(i).Name] = struct{}{}
+	}
+	require.NotEmpty(t, telemetryReadOps)
+	for op := range telemetryReadOps {
+		_, ok := methods[op]
+		assert.Truef(t, ok, "telemetryReadOps key %q is not a StrictServerInterface operation; did an operationId get renamed?", op)
 	}
 }
 
