@@ -22,15 +22,14 @@ type Marker struct {
 const sentinelChapterName = "_recording_start"
 
 // buildChapterMetadata writes an ffmetadata file describing one MP4 chapter per
-// marker and returns its path. originShiftMs is subtracted from every marker's
-// raw offset before it becomes a chapter start; this repo passes 0, but a
-// downstream fork passes a nonzero value, so it stays a parameter. durationMs
-// is the recording length and becomes the END of the final chapter.
+// marker and returns its path. Each marker's chapter starts at its offset from
+// startTime; markers before startTime are dropped. durationMs is the recording
+// length and becomes the END of the final chapter.
 //
 // ok is false when there are no usable markers (all dropped or none supplied),
 // signalling the caller to fall back to the normal no-chapter remux. The
 // metadata file is written next to outputPath with a ".ffmeta" suffix.
-func buildChapterMetadata(outputPath string, markers []Marker, startTime time.Time, originShiftMs int64, durationMs int64) (string, bool, error) {
+func buildChapterMetadata(outputPath string, markers []Marker, startTime time.Time, durationMs int64) (string, bool, error) {
 	type chapter struct {
 		startMs int64
 		title   string
@@ -38,7 +37,7 @@ func buildChapterMetadata(outputPath string, markers []Marker, startTime time.Ti
 
 	chapters := make([]chapter, 0, len(markers))
 	for _, m := range markers {
-		startMs := m.At.Sub(startTime).Milliseconds() - originShiftMs
+		startMs := m.At.Sub(startTime).Milliseconds()
 		if startMs < 0 {
 			continue
 		}
