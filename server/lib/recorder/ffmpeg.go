@@ -41,6 +41,18 @@ var ErrRecordingFinalizing = errors.New("recording is being finalized")
 // can use errors.Is to surface a client-facing error instead of a 500.
 var ErrInvalidParams = errors.New("invalid recording parameters")
 
+// ErrNotRecording is returned by Mark when no recording is actively running.
+// Callers can use errors.Is to surface a 409.
+var ErrNotRecording = errors.New("no active recording")
+
+// ErrInvalidMarkerName is returned by Mark when the marker name is empty or too
+// long. Callers can use errors.Is to surface a 400.
+var ErrInvalidMarkerName = errors.New("invalid marker name")
+
+// maxMarkerNameLen bounds marker names so a chapter title can't be abused to
+// bloat the metadata file.
+const maxMarkerNameLen = 200
+
 // FFmpegRecorder encapsulates an FFmpeg recording session with platform-specific screen capture.
 // It manages the lifecycle of a single FFmpeg process and provides thread-safe operations.
 type FFmpegRecorder struct {
@@ -57,6 +69,7 @@ type FFmpegRecorder struct {
 	exitCode   int
 	exited     chan struct{}
 	deleted    bool
+	markers    []Marker
 	stz        *scaletozero.Oncer
 
 	// flight coordinates concurrent operations using different keys:
@@ -394,6 +407,9 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		}
 		outputPath := fr.outputPath
 		binaryPath := fr.binaryPath
+		markers := fr.markers
+		startTime := fr.startTime
+		durationMs := fr.endTime.Sub(fr.startTime).Milliseconds()
 		fr.mu.Unlock()
 
 		// Check if the recording file exists
@@ -409,15 +425,30 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		// Create temp file for the remuxed output
 		tempPath := outputPath + ".tmp"
 
+		// When markers exist, build an ffmetadata file and inject it as a second
+		// input so the remux carries MP4 chapters. A failure here must never fail
+		// or corrupt the recording: fall back to the plain no-chapter remux.
+		metaPath := ""
+		if len(markers) > 0 {
+			path, ok, err := buildChapterMetadata(outputPath, markers, startTime, 0, durationMs)
+			if err != nil {
+				log.Warn("failed to build chapter metadata, finalizing without chapters", "err", err)
+			} else if ok {
+				metaPath = path
+				defer os.Remove(metaPath)
+			}
+		}
+
 		// Remux: copy streams without re-encoding, move moov atom to start with faststart
-		args := []string{
-			"-i", outputPath,
+		args := []string{"-i", outputPath}
+		args = append(args, chapterInputArgs(metaPath)...)
+		args = append(args,
 			"-c", "copy",
 			"-movflags", "+faststart",
 			"-f", "mp4", // Explicitly specify format since .tmp extension isn't recognized
 			"-y",
 			tempPath,
-		}
+		)
 
 		log.Info("finalizing recording", "cmd", fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " ")))
 
@@ -447,6 +478,46 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		return nil, result
 	})
 	return err
+}
+
+// Mark records a named marker at the current time. It returns the stored
+// (trimmed) marker name and the offset from the recording start in
+// milliseconds. The offset is provisional: it is measured against startTime at
+// mark time, while the authoritative value is the chapter start computed at
+// finalize.
+//
+// Returns ErrNotRecording if the recording isn't actively running and
+// ErrInvalidMarkerName if the name is empty or exceeds maxMarkerNameLen.
+func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+
+	if fr.cmd == nil || fr.exitCode >= exitCodeProcessDoneMinValue {
+		return "", 0, ErrNotRecording
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > maxMarkerNameLen {
+		return "", 0, ErrInvalidMarkerName
+	}
+
+	now := time.Now()
+	fr.markers = append(fr.markers, Marker{Name: name, At: now})
+	return name, now.Sub(fr.startTime).Milliseconds(), nil
+}
+
+// chapterInputArgs returns the extra remux arguments that pull MP4 chapters
+// from the ffmetadata input at metaPath: the second input plus the stream and
+// chapter mapping. When metaPath is empty it returns nil so the remux args are
+// byte-identical to the no-marker path. The ffmetadata demuxer must be named
+// explicitly with -f since the .ffmeta extension isn't auto-detected. -map 0
+// preserves all streams from the recording; -map_chapters 1 takes chapters from
+// the metadata input.
+func chapterInputArgs(metaPath string) []string {
+	if metaPath == "" {
+		return nil
+	}
+	return []string{"-f", "ffmetadata", "-i", metaPath, "-map", "0", "-map_chapters", "1"}
 }
 
 // IsRecording returns true if a recording is currently in progress.

@@ -1,0 +1,92 @@
+package recorder
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"time"
+)
+
+// Marker records a named point in time during a recording. At finalize the
+// markers are written into the output MP4 as chapters so they can be scrubbed
+// to in any tool that reads MP4 chapter metadata.
+type Marker struct {
+	Name string
+	At   time.Time
+}
+
+// sentinelChapterName is the synthetic first chapter covering the span before
+// the first real marker. ffmpeg forces the first chapter to start at 0, so
+// without it the first real marker's timestamp would be clamped to 0.
+const sentinelChapterName = "_recording_start"
+
+// buildChapterMetadata writes an ffmetadata file describing one MP4 chapter per
+// marker and returns its path. originShiftMs is subtracted from every marker's
+// raw offset before it becomes a chapter start; this repo passes 0, but a
+// downstream fork passes a nonzero value, so it stays a parameter. durationMs
+// is the recording length and becomes the END of the final chapter.
+//
+// ok is false when there are no usable markers (all dropped or none supplied),
+// signalling the caller to fall back to the normal no-chapter remux. The
+// metadata file is written next to outputPath with a ".ffmeta" suffix.
+func buildChapterMetadata(outputPath string, markers []Marker, startTime time.Time, originShiftMs int64, durationMs int64) (string, bool, error) {
+	type chapter struct {
+		startMs int64
+		title   string
+	}
+
+	chapters := make([]chapter, 0, len(markers))
+	for _, m := range markers {
+		startMs := m.At.Sub(startTime).Milliseconds() - originShiftMs
+		if startMs < 0 {
+			continue
+		}
+		chapters = append(chapters, chapter{startMs: startMs, title: m.Name})
+	}
+	if len(chapters) == 0 {
+		return "", false, nil
+	}
+
+	sort.SliceStable(chapters, func(i, j int) bool {
+		return chapters[i].startMs < chapters[j].startMs
+	})
+
+	// Prepend the sentinel so the first real marker keeps its true start.
+	if chapters[0].startMs > 0 {
+		chapters = append([]chapter{{startMs: 0, title: sentinelChapterName}}, chapters...)
+	}
+
+	var b strings.Builder
+	b.WriteString("FFMETADATA1\n")
+	for i, c := range chapters {
+		endMs := durationMs
+		if i+1 < len(chapters) {
+			endMs = chapters[i+1].startMs
+		}
+		b.WriteString("[CHAPTER]\n")
+		b.WriteString("TIMEBASE=1/1000\n")
+		fmt.Fprintf(&b, "START=%d\n", c.startMs)
+		fmt.Fprintf(&b, "END=%d\n", endMs)
+		fmt.Fprintf(&b, "title=%s\n", escapeFFMetadata(c.title))
+	}
+
+	path := outputPath + ".ffmeta"
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		return "", false, fmt.Errorf("failed to write chapter metadata: %w", err)
+	}
+	return path, true, nil
+}
+
+// escapeFFMetadata escapes the characters ffmpeg treats specially in
+// ffmetadata values: backslash, equals, semicolon, hash, and newline.
+func escapeFFMetadata(s string) string {
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"=", "\\=",
+		";", "\\;",
+		"#", "\\#",
+		"\n", "\\\n",
+	)
+	return replacer.Replace(s)
+}
