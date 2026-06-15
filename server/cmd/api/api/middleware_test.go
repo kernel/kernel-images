@@ -140,6 +140,22 @@ func TestTelemetryMiddleware_ShortCircuitsWhenDisabled(t *testing.T) {
 	assert.Empty(t, rp.snapshot(), "disabled middleware must not emit")
 }
 
+// Reading telemetry must not emit its own api_call event, or the read would
+// append to the very stream it reads (a feedback loop that, at page size 1,
+// stops a paginated read from ever catching the tail). Pins the telemetryReadOps
+// skip set against operationId drift.
+func TestTelemetryMiddleware_SkipsTelemetryReadEndpoints(t *testing.T) {
+	withTelemetryMiddlewareEnabled(t)
+	for _, op := range []string{"ReadTelemetryEvents", "StreamTelemetryEvents"} {
+		t.Run(op, func(t *testing.T) {
+			rp := &recordingPublisher{}
+			chiHandler(t, rp.publish, op, http.StatusOK).
+				ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/telemetry/events", nil))
+			assert.Empty(t, rp.snapshot(), "telemetry read endpoints must not emit an api_call back into the stream")
+		})
+	}
+}
+
 // Builds the same middleware stack as main.go: RequestID -> HTTP middleware ->
 // strict dispatch -> inner handler.
 func chiHandler(t *testing.T, publish func(events.Event) (events.Envelope, bool), operationID string, status int) http.Handler {
