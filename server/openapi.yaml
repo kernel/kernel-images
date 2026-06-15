@@ -308,6 +308,33 @@ paths:
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /recording/mark:
+    post:
+      summary: Add a named marker to an in-progress recording
+      description: >-
+        Records a named point in time during an active recording. At finalize
+        the markers are injected into the output MP4 as chapter markers.
+      operationId: markRecording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkRecordingRequest"
+      responses:
+        "201":
+          description: Marker recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkRecordingResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: No recording is currently in progress
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /computer/click_mouse:
     post:
       summary: Simulate a mouse click action on the host computer
@@ -3519,6 +3546,33 @@ components:
           type: string
           description: Identifier of the recording to delete. Alphanumeric or hyphen.
           pattern: "^[a-zA-Z0-9-]+$"
+      additionalProperties: false
+    MarkRecordingRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Name of the marker, used as the MP4 chapter title.
+        id:
+          type: string
+          description: Identifier of the recorder to mark. Alphanumeric or hyphen.
+          pattern: "^[a-zA-Z0-9-]+$"
+      additionalProperties: false
+    MarkRecordingResult:
+      type: object
+      required: [name, offsetMs]
+      properties:
+        name:
+          type: string
+          description: Name of the recorded marker.
+        offsetMs:
+          type: integer
+          format: int64
+          description: >-
+            Provisional offset of the marker from the recording start, in
+            milliseconds, measured against the start time at mark time. The
+            authoritative offset is the chapter start written at finalize.
       additionalProperties: false
     FileInfo:
       type: object
