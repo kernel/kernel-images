@@ -1380,24 +1380,24 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequestError"
     get:
-      summary: Read archived telemetry events from durable storage
+      summary: Read telemetry events for a browser session
       description: >
-        Reads a page of telemetry event envelopes for this browser from durable
-        S2 storage, so events remain available after they age out of the live
-        SSE ring buffer. Events are returned in ascending sequence order. To page
-        through results, pass the `X-Next-Offset` value from the previous
-        response as `offset` and repeat while `X-Has-More` is true. Returns an
-        empty list when durable storage is not configured.
+        Reads a page of telemetry event data for the browser session, returned
+        in ascending sequence order. To page through results, pass the
+        `X-Next-Offset` value from the previous response as `offset` and repeat
+        while `X-Has-More` is true. Returns an empty list when telemetry data is
+        unavailable.
       operationId: readTelemetryEvents
       parameters:
         - in: query
           name: offset
           required: false
           description: >
-            Pagination cursor: pass the `X-Next-Offset` value from the previous
-            response to fetch the next page. This is a stream position and takes
-            precedence over `since`; it is not an event's `seq` field — do not
-            derive it from the response body.
+            Opaque pagination cursor: pass the `X-Next-Offset` value from the
+            previous response to fetch the next page. When set, paging continues
+            from this cursor and `since` is ignored, while `until` still bounds
+            the page. It is not an event's `seq` field, so do not derive it from
+            the response body.
           schema:
             type: integer
             format: int64
@@ -1405,28 +1405,28 @@ paths:
         - in: query
           name: since
           required: false
-          description: Start of the time window, unix milliseconds. Defaults to 5 minutes ago. Ignored when `offset` is set.
+          description: >
+            Start of the window: an RFC-3339 timestamp, or a duration like `5m`
+            meaning that long ago. Defaults to `5m`. Ignored when `offset` is set.
           schema:
-            type: integer
-            format: int64
-            minimum: 0
+            type: string
         - in: query
           name: until
           required: false
-          description: End of the time window (exclusive), unix milliseconds.
+          description: >
+            End of the window (exclusive): an RFC-3339 timestamp, or a duration
+            like `5m` meaning that long ago.
           schema:
-            type: integer
-            format: int64
-            minimum: 0
+            type: string
         - in: query
           name: limit
           required: false
-          description: Maximum number of events per page. Defaults to 100.
+          description: Maximum number of events per page. Defaults to 20.
           schema:
             type: integer
             minimum: 1
-            maximum: 1000
-            default: 100
+            maximum: 100
+            default: 20
         - in: query
           name: category
           required: false
@@ -1439,7 +1439,7 @@ paths:
           explode: true
       responses:
         "200":
-          description: A page of telemetry events from durable storage in ascending sequence order.
+          description: A page of telemetry events in ascending sequence order.
           headers:
             X-Has-More:
               description: Whether more events are available beyond this page.
@@ -1456,6 +1456,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/TelemetryEnvelope"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
   /telemetry/stream:

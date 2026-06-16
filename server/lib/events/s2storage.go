@@ -279,7 +279,9 @@ func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger)
 		Count:                opts.Count,
 		Until:                opts.Until,
 	}
-	// An unbounded read blocks waiting for new records; cap it at the tail.
+	// Safety net for direct callers: an unbounded read blocks waiting for new
+	// records, so cap it at the tail. The HTTP handler always sets Count, so this
+	// is unreachable from that path.
 	if readOpts.Count == nil && readOpts.Until == nil {
 		readOpts.Until = s2.Uint64(uint64(time.Now().UnixMilli()))
 	}
@@ -308,18 +310,23 @@ func (r *S2Reader) Read(ctx context.Context, opts ReadOptions, log *slog.Logger)
 	}
 
 	// Both positions ride along in the read batches, so there's no extra
-	// round-trip. More records remain whenever the resume position hasn't caught
-	// up to the stream tail. This holds regardless of whether the page stopped on
-	// the count, byte, or time bound, so it never under-reports as a "full page"
-	// heuristic would.
+	// round-trip.
 	result := &S2ReadResult{Envelopes: envelopes}
-	next := session.NextReadPosition()
-	tail := session.LastObservedTail()
-	if next != nil && tail != nil && next.SeqNum < tail.SeqNum {
-		result.NextSeqNum = next.SeqNum
-		result.HasMore = true
-	}
+	result.NextSeqNum, result.HasMore = nextCursor(session.NextReadPosition(), session.LastObservedTail())
 
 	log.DebugContext(ctx, "s2storage: read complete", "stream", r.streamName, "records", len(envelopes), "has_more", result.HasMore)
 	return result, nil
+}
+
+// nextCursor decides whether more records remain after a page, given the read
+// session's resume position and the observed stream tail. More records remain
+// only when the resume position hasn't caught up to the tail; this holds whether
+// the page stopped on the count, byte, or time bound, so it never under-reports
+// as a "full page" heuristic would. A nil next (empty/exhausted read) or a
+// caught-up position terminates pagination.
+func nextCursor(next, tail *s2.StreamPosition) (seq uint64, hasMore bool) {
+	if next != nil && tail != nil && next.SeqNum < tail.SeqNum {
+		return next.SeqNum, true
+	}
+	return 0, false
 }

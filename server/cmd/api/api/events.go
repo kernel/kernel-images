@@ -138,11 +138,12 @@ func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamT
 }
 
 const (
-	// defaultReadWindow bounds a read that supplies no since/until.
-	defaultReadWindow = 5 * time.Minute
+	// defaultSince is the window start used when neither since nor offset is
+	// given: a duration meaning "this long ago", matching the public API default.
+	defaultSince = "5m"
 	// defaultPageSize / maxPageSize bound how many records one page reads.
-	defaultPageSize = 100
-	maxPageSize     = 1000
+	defaultPageSize = 20
+	maxPageSize     = 100
 )
 
 // ReadTelemetryEvents handles GET /telemetry/events.
@@ -157,7 +158,11 @@ func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelem
 		return readTelemetryEventsOKResponse{}, nil
 	}
 
-	result, err := s.telemetryReader.Read(ctx, buildReadOptions(req.Params), log)
+	opts, err := buildReadOptions(req.Params)
+	if err != nil {
+		return oapi.ReadTelemetryEvents400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+	}
+	result, err := s.telemetryReader.Read(ctx, opts, log)
 	if err != nil {
 		log.Error("failed to read telemetry events from S2", "err", err)
 		return oapi.ReadTelemetryEvents500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to read telemetry events"}}, nil
@@ -171,35 +176,64 @@ func (s *ApiService) ReadTelemetryEvents(ctx context.Context, req oapi.ReadTelem
 }
 
 // buildReadOptions maps query params to a bounded, paginated read. offset is the
-// S2 sequence cursor and takes precedence over since as the start position (the
-// two are mutually exclusive starts); until bounds the window end; the page is
-// bounded to limit records.
-func buildReadOptions(p oapi.ReadTelemetryEventsParams) events.ReadOptions {
+// opaque cursor and takes precedence over since as the start (until still bounds
+// the page); since/until accept an RFC-3339 timestamp or a duration like "5m".
+func buildReadOptions(p oapi.ReadTelemetryEventsParams) (events.ReadOptions, error) {
 	var opts events.ReadOptions
 
-	// since/until/offset are spec'd minimum:0, but no request-validation
-	// middleware is mounted, so clamp negatives to 0 here rather than wrap them
-	// into a huge uint64.
 	switch {
 	case p.Offset != nil:
+		// Offset is the cursor; no request validator is mounted, so clamp a
+		// negative value to 0 rather than wrap it into a huge uint64.
 		seq := uint64(max(*p.Offset, 0))
 		opts.SeqNum = &seq
 	case p.Since != nil:
-		ts := uint64(max(*p.Since, 0))
-		opts.Timestamp = &ts
+		ms, err := parseTimeParam(*p.Since)
+		if err != nil {
+			return opts, fmt.Errorf("since: %w", err)
+		}
+		opts.Timestamp = &ms
+	case p.Until != nil:
+		// until-only: read from the start of the stream (seqnum 0, clamped to the
+		// oldest retained record) up to until, rather than anchoring the start at
+		// defaultSince ago which would silently empty a far-past window.
+		seq := uint64(0)
+		opts.SeqNum = &seq
 	default:
-		ts := uint64(time.Now().Add(-defaultReadWindow).UnixMilli())
-		opts.Timestamp = &ts
+		// No bounds given at all: default the start to defaultSince ago.
+		ms, err := parseTimeParam(defaultSince)
+		if err != nil {
+			return opts, fmt.Errorf("since: %w", err)
+		}
+		opts.Timestamp = &ms
 	}
 
 	if p.Until != nil {
-		until := uint64(max(*p.Until, 0))
-		opts.Until = &until
+		ms, err := parseTimeParam(*p.Until)
+		if err != nil {
+			return opts, fmt.Errorf("until: %w", err)
+		}
+		opts.Until = &ms
 	}
 
 	count := uint64(pageSize(p.Limit))
 	opts.Count = &count
-	return opts
+	return opts, nil
+}
+
+// parseTimeParam parses an RFC-3339 timestamp or a non-negative duration like
+// "5m" (interpreted as that long before now) into unix milliseconds.
+func parseTimeParam(s string) (uint64, error) {
+	if d, err := time.ParseDuration(s); err == nil {
+		if d < 0 {
+			return 0, fmt.Errorf("duration must not be negative: %q", s)
+		}
+		return uint64(time.Now().Add(-d).UnixMilli()), nil
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return uint64(t.UnixMilli()), nil
+	}
+	return 0, fmt.Errorf("invalid time value %q: want an RFC-3339 timestamp or a duration like 5m", s)
 }
 
 // pageSize clamps a requested limit into [1, maxPageSize], defaulting when unset.

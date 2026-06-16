@@ -116,7 +116,7 @@ func main() {
 
 	// Optional S2 storage sink.
 	var s2Writer *events.S2StorageWriter
-	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
+	if config.S2Enabled() {
 		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", config.S2Stream)
 		s2Writer = events.NewS2StorageWriter(eventStream, config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{
 			BatcherLinger:     config.S2BatcherLinger,

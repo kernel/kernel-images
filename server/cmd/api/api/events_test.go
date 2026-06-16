@@ -343,40 +343,66 @@ func TestPageSize(t *testing.T) {
 
 func TestBuildReadOptions(t *testing.T) {
 	t.Parallel()
+	strp := func(s string) *string { return &s }
 
-	// No params: defaults the start to ~defaultReadWindow ago, no end bound, default page.
-	opts := buildReadOptions(oapi.ReadTelemetryEventsParams{})
+	// No params: start defaults to ~defaultSince ago, no end bound, default page.
+	opts, err := buildReadOptions(oapi.ReadTelemetryEventsParams{})
+	require.NoError(t, err)
 	require.NotNil(t, opts.Timestamp)
 	assert.Nil(t, opts.SeqNum)
 	assert.Nil(t, opts.Until)
 	require.NotNil(t, opts.Count)
 	assert.Equal(t, uint64(defaultPageSize), *opts.Count)
 
-	// since/until/limit map through; limit bounds the page.
-	since, until, limit := int64(1000), int64(2000), 25
-	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: &since, Until: &until, Limit: &limit})
+	// since/until accept RFC-3339 timestamps (→ unix ms); limit bounds the page.
+	limit := 25
+	opts, err = buildReadOptions(oapi.ReadTelemetryEventsParams{
+		Since: strp("2020-01-01T00:00:00Z"),
+		Until: strp("2020-01-02T00:00:00Z"),
+		Limit: &limit,
+	})
+	require.NoError(t, err)
 	require.NotNil(t, opts.Timestamp)
-	assert.Equal(t, uint64(1000), *opts.Timestamp)
+	assert.Equal(t, uint64(1577836800000), *opts.Timestamp)
 	require.NotNil(t, opts.Until)
-	assert.Equal(t, uint64(2000), *opts.Until)
+	assert.Equal(t, uint64(1577923200000), *opts.Until)
 	require.NotNil(t, opts.Count)
 	assert.Equal(t, uint64(25), *opts.Count)
 
+	// since also accepts a duration meaning "this long ago".
+	opts, err = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: strp("5m")})
+	require.NoError(t, err)
+	require.NotNil(t, opts.Timestamp)
+	assert.InDelta(t, time.Now().Add(-5*time.Minute).UnixMilli(), int64(*opts.Timestamp), 5000)
+
 	// offset is the cursor and takes precedence over since (SeqNum start, no Timestamp).
 	offset := int64(4213)
-	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Offset: &offset, Since: &since})
+	opts, err = buildReadOptions(oapi.ReadTelemetryEventsParams{Offset: &offset, Since: strp("5m")})
+	require.NoError(t, err)
 	require.NotNil(t, opts.SeqNum)
 	assert.Equal(t, uint64(4213), *opts.SeqNum)
 	assert.Nil(t, opts.Timestamp, "since is ignored when offset is set")
 
-	// Negative bounds clamp to 0 rather than wrapping into a huge uint64.
+	// until-only: start from seqnum 0 (the beginning), not anchored at now-5m,
+	// so a far-past until doesn't silently yield an empty page.
+	opts, err = buildReadOptions(oapi.ReadTelemetryEventsParams{Until: strp("2020-01-01T00:00:00Z")})
+	require.NoError(t, err)
+	require.NotNil(t, opts.SeqNum)
+	assert.Equal(t, uint64(0), *opts.SeqNum, "until-only reads from the start of the stream")
+	assert.Nil(t, opts.Timestamp)
+	require.NotNil(t, opts.Until)
+	assert.Equal(t, uint64(1577836800000), *opts.Until)
+
+	// Negative offset clamps to 0 rather than wrapping into a huge uint64.
 	neg := int64(-1)
-	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Offset: &neg})
+	opts, err = buildReadOptions(oapi.ReadTelemetryEventsParams{Offset: &neg})
+	require.NoError(t, err)
 	require.NotNil(t, opts.SeqNum)
 	assert.Equal(t, uint64(0), *opts.SeqNum)
-	opts = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: &neg, Until: &neg})
-	require.NotNil(t, opts.Timestamp)
-	assert.Equal(t, uint64(0), *opts.Timestamp)
-	require.NotNil(t, opts.Until)
-	assert.Equal(t, uint64(0), *opts.Until)
+
+	// Unparseable / negative time values are rejected (→ 400 at the handler).
+	_, err = buildReadOptions(oapi.ReadTelemetryEventsParams{Since: strp("nonsense")})
+	assert.Error(t, err)
+	_, err = buildReadOptions(oapi.ReadTelemetryEventsParams{Until: strp("-5m")})
+	assert.Error(t, err, "negative duration rejected")
 }

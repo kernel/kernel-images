@@ -52,6 +52,11 @@ type Config struct {
 	S2BatcherMaxRecords int           `envconfig:"S2_BATCHER_MAX_RECORDS" default:"50"`
 }
 
+// S2Enabled reports whether all three S2 connection values are set.
+func (c *Config) S2Enabled() bool {
+	return c.S2Basin != "" && c.S2AccessToken != "" && c.S2Stream != ""
+}
+
 // LogValue implements slog.LogValuer, redacting secret fields.
 func (c *Config) LogValue() slog.Value {
 	s2AccessToken := ""

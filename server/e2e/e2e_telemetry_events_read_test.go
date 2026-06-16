@@ -99,7 +99,7 @@ func TestReadTelemetryEvents(t *testing.T) {
 	}
 
 	// An empty window returns [] (not null) with no cursor.
-	pastSince, pastUntil := int64(1), int64(2)
+	pastSince, pastUntil := "2000-01-01T00:00:00Z", "2000-01-02T00:00:00Z"
 	empty, err := client.ReadTelemetryEventsWithResponse(readCtx, &instanceoapi.ReadTelemetryEventsParams{Since: &pastSince, Until: &pastUntil})
 	require.NoError(t, err)
 	require.NotNil(t, empty.JSON200)
@@ -211,6 +211,54 @@ func TestReadTelemetryEventsFilteredPagination(t *testing.T) {
 
 	assert.GreaterOrEqual(t, len(collected), systemCount, "cursor walk must collect every matching event across empty pages")
 	assert.Positive(t, emptyPages, "the connection run should yield empty system-filtered pages (the sparse-filter edge)")
+}
+
+// TestReadTelemetryEventsWindowedPagination verifies that an until-bounded read
+// terminates even when the stream extends past the window: it returns the
+// in-window events and stops, rather than chasing the physical tail.
+func TestReadTelemetryEventsWindowedPagination(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	client := startTelemetryReadContainer(t, ctx)
+
+	// First batch is in-window; capture the boundary; a second batch lands after
+	// it, so the physical tail sits past `until`.
+	const inWindow = 6
+	for i := 0; i < inWindow; i++ {
+		publishEvent(t, ctx, client, "test.system", instanceoapi.TelemetryEventCategorySystem)
+	}
+	time.Sleep(s2FlushWait)
+	until := time.Now().UTC().Format(time.RFC3339Nano)
+	for i := 0; i < 6; i++ {
+		publishEvent(t, ctx, client, "test.system", instanceoapi.TelemetryEventCategorySystem)
+	}
+	time.Sleep(s2FlushWait)
+
+	readCtx, readCancel := context.WithTimeout(ctx, 20*time.Second)
+	defer readCancel()
+
+	// Page the window; it must terminate via X-Has-More=false rather than walk
+	// page after page toward the tail that lives past `until`.
+	const pageLimit = 2
+	var collected []instanceoapi.TelemetryEnvelope
+	var offset *int64
+	pages := 0
+	for {
+		pages++
+		require.LessOrEqual(t, pages, 50, "windowed pagination did not terminate")
+		limit := pageLimit
+		page, hasMore, next := readEventsPage(t, readCtx, client, &instanceoapi.ReadTelemetryEventsParams{Limit: &limit, Until: &until, Offset: offset})
+		collected = append(collected, page...)
+		if !hasMore {
+			break
+		}
+		offset = &next
+	}
+
+	// The in-window events (and their api_call pairs) come back; the run
+	// terminates without chasing the post-until tail.
+	assert.GreaterOrEqual(t, len(collected), inWindow)
 }
 
 // readEventsPage calls the endpoint and returns the page plus its cursor state.
