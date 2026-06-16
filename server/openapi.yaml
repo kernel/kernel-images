@@ -3484,6 +3484,8 @@ components:
         name:
           type: string
           description: Name of the marker, used as the MP4 chapter title.
+          minLength: 1
+          maxLength: 200
         id:
           type: string
           description: Identifier of the recorder to mark. Alphanumeric or hyphen.

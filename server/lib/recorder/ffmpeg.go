@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
@@ -497,7 +498,7 @@ func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
 	}
 
 	name = strings.TrimSpace(name)
-	if name == "" || len(name) > maxMarkerNameLen {
+	if name == "" || utf8.RuneCountInString(name) > maxMarkerNameLen {
 		return "", 0, ErrInvalidMarkerName
 	}
 

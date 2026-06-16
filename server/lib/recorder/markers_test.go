@@ -156,6 +156,12 @@ func TestMark_RejectsBadNames(t *testing.T) {
 
 	_, _, err = rec.Mark(strings.Repeat("x", maxMarkerNameLen+1))
 	assert.ErrorIs(t, err, ErrInvalidMarkerName)
+
+	_, _, err = rec.Mark(strings.Repeat("界", maxMarkerNameLen))
+	assert.NoError(t, err)
+
+	_, _, err = rec.Mark(strings.Repeat("界", maxMarkerNameLen+1))
+	assert.ErrorIs(t, err, ErrInvalidMarkerName)
 }
 
 func TestMark_ConcurrentCallsAreSafe(t *testing.T) {
