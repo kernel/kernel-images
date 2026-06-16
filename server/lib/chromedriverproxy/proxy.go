@@ -190,6 +190,13 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 // there's no TLS indication (e.g. the docker plaintext path).
 func clientWSScheme(r *http.Request) string {
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		// X-Forwarded-Proto may be a comma-separated list when the request
+		// traverses multiple proxies (e.g. "https, http"); the first value is
+		// the original client-facing scheme.
+		if i := strings.IndexByte(proto, ','); i >= 0 {
+			proto = proto[:i]
+		}
+		proto = strings.TrimSpace(proto)
 		if strings.EqualFold(proto, "https") || strings.EqualFold(proto, "wss") {
 			return "wss"
 		}
