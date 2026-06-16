@@ -126,6 +126,44 @@ func TestHandler_PostSession_InjectsDebuggerAddress(t *testing.T) {
 		"webSocketUrl in capabilities should be rewritten to proxy address")
 }
 
+// TestHandler_PostSession_WSSchemeFromForwardedProto verifies that behind a
+// TLS-terminating ingress (X-Forwarded-Proto: https) the rewritten
+// webSocketUrl is wss:// — a ws:// URL would be unreachable through the TLS
+// listener (this is what broke the BiDi tests on the hypeman :9224 ingress).
+func TestHandler_PostSession_WSSchemeFromForwardedProto(t *testing.T) {
+	// "https" plus the multi-proxy comma-separated form ("https, http"), where
+	// only the first (client-facing) value should decide the scheme.
+	for _, proto := range []string{"https", "https, http"} {
+		t.Run(proto, func(t *testing.T) {
+			backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{"value":{"sessionId":"abc123","capabilities":{"webSocketUrl":"ws://127.0.0.1:9225/session/abc123"}}}`))
+			}))
+			defer backend.Close()
+
+			backendURL, _ := url.Parse(backend.URL)
+			handler := Handler(silentLogger(), testOptions(backendURL.Host, "127.0.0.1:9911"))
+
+			req := httptest.NewRequest(http.MethodPost, "/session", strings.NewReader(`{"capabilities":{}}`))
+			req.Host = "inst.dev-yul-hypeman-1.kernel.sh:9224"
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-Forwarded-Proto", proto)
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+
+			var respBody map[string]interface{}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &respBody))
+			value := respBody["value"].(map[string]interface{})
+			respCaps := value["capabilities"].(map[string]interface{})
+			assert.Equal(t, "wss://inst.dev-yul-hypeman-1.kernel.sh:9224/session/abc123", respCaps["webSocketUrl"],
+				"webSocketUrl must be wss:// when X-Forwarded-Proto's first value is https (got %q)", proto)
+		})
+	}
+}
+
 // TestHandler_RewritesHostAndStripsOrigin is a regression test for the
 // ChromeDriver "Host header or origin header ... is not whitelisted or
 // localhost" HTTP 500. ChromeDriver (Chrome 111+) rejects requests whose

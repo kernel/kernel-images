@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -456,7 +457,14 @@ func touchContainerFile(ctx context.Context, client *instanceoapi.ClientWithResp
 }
 
 func fetchBrowserWebSocketURL(ctx context.Context, c *TestContainer) (string, error) {
-	versionURL := fmt.Sprintf("http://%s/json/version", c.CDPAddr())
+	// The CDP endpoint is served over TLS behind the hypeman :9222 ingress
+	// (wss), so /json/version must be fetched over https there; docker is
+	// plaintext (ws/http). Derive the HTTP scheme from the CDP URL's transport.
+	scheme := "http"
+	if strings.HasPrefix(c.CDPURL(), "wss://") {
+		scheme = "https"
+	}
+	versionURL := fmt.Sprintf("%s://%s/json/version", scheme, c.CDPAddr())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
 	if err != nil {
 		return "", err

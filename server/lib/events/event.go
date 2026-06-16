@@ -76,7 +76,12 @@ func HasCDPCategory(cats []oapi.TelemetryEventCategory) bool {
 // Event is the portable event schema. It contains only producer-emitted content;
 // pipeline metadata (seq) lives on the Envelope.
 type Event struct {
-	Ts        int64                       `json:"ts"` // Unix microseconds (µs since epoch)
+	// Ts is the event time in Unix microseconds. It must be wall-clock
+	// (time.Now()) captured at emit/observe, never a monotonic or other
+	// source-derived clock (e.g. a kmsg envelope timestamp), which skews
+	// on VM suspend. HTTP-published events are stamped by the API handler;
+	// in-process producers must set it themselves.
+	Ts        int64                       `json:"ts"`
 	Type      string                      `json:"type"`
 	Category  oapi.TelemetryEventCategory `json:"category"`
 	Source    oapi.BrowserEventSource     `json:"source"`

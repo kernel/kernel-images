@@ -76,16 +76,27 @@ func (c *TestContainer) ChromeDriverURL() string {
 }
 
 // ChromeDriverAddr returns the host:port for the instance's ChromeDriver proxy,
-// derived from ChromeDriverURL (without scheme). Useful for substring assertions
-// on proxy-rewritten URLs.
+// derived from ChromeDriverURL (scheme stripped). Useful for substring
+// assertions on proxy-rewritten URLs. Handles both http:// (docker) and
+// https:// (hypeman ingress) ChromeDriver URLs.
 func (c *TestContainer) ChromeDriverAddr() string {
-	return strings.TrimPrefix(c.backend.ChromeDriverURL(), "http://")
+	u := c.backend.ChromeDriverURL()
+	if i := strings.Index(u, "://"); i >= 0 {
+		return u[i+3:]
+	}
+	return u
 }
 
-// ChromeDriverWSURL returns the WebSocket URL (ws://host:port/path) for the
-// instance's ChromeDriver proxy. path should include a leading slash.
+// ChromeDriverWSURL returns the WebSocket URL for the instance's ChromeDriver
+// proxy. The scheme matches the ChromeDriver endpoint's transport: wss:// when
+// it's served over TLS (the hypeman ingress on :9224), ws:// otherwise (docker).
+// path should include a leading slash.
 func (c *TestContainer) ChromeDriverWSURL(path string) string {
-	return "ws://" + c.ChromeDriverAddr() + path
+	scheme := "ws"
+	if strings.HasPrefix(c.backend.ChromeDriverURL(), "https://") {
+		scheme = "wss"
+	}
+	return scheme + "://" + c.ChromeDriverAddr() + path
 }
 
 // APIClient creates an OpenAPI client for this instance's API.
