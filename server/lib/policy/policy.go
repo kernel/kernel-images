@@ -271,6 +271,29 @@ func (p *Policy) RequiresEnterprisePolicy(manifestPath string) (bool, error) {
 	return false, nil
 }
 
+// ManifestVersion reads the manifest_version field from an extension's manifest.json.
+// It returns the version and whether a manifest.json was present. A missing manifest.json
+// is not an error: extensions installed via update.xml + .crx may not ship an unpacked
+// manifest, and those are validated by Chromium itself.
+func ManifestVersion(manifestPath string) (version int, found bool, err error) {
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, false, nil
+		}
+		return 0, false, err
+	}
+
+	var m struct {
+		ManifestVersion int `json:"manifest_version"`
+	}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return 0, false, fmt.Errorf("failed to parse manifest.json: %w", err)
+	}
+
+	return m.ManifestVersion, true, nil
+}
+
 // updateManifest represents the Chrome extension update manifest XML structure
 type updateManifest struct {
 	XMLName xml.Name  `xml:"gupdate"`

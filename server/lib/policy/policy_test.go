@@ -2,6 +2,8 @@ package policy
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -167,4 +169,38 @@ func TestPolicy_EmptyPolicy(t *testing.T) {
 
 	// Should have empty ExtensionSettings as null/missing
 	assert.Nil(t, result["ExtensionSettings"])
+}
+
+func TestManifestVersion(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, contents string) string {
+		path := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(path, []byte(contents), 0o644))
+		return path
+	}
+
+	t.Run("manifest v3", func(t *testing.T) {
+		version, found, err := ManifestVersion(write("mv3.json", `{"manifest_version": 3, "name": "x"}`))
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, 3, version)
+	})
+
+	t.Run("manifest v2", func(t *testing.T) {
+		version, found, err := ManifestVersion(write("mv2.json", `{"manifest_version": 2, "name": "x"}`))
+		require.NoError(t, err)
+		assert.True(t, found)
+		assert.Equal(t, 2, version)
+	})
+
+	t.Run("missing file is not an error", func(t *testing.T) {
+		_, found, err := ManifestVersion(filepath.Join(dir, "does-not-exist.json"))
+		require.NoError(t, err)
+		assert.False(t, found)
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		_, _, err := ManifestVersion(write("bad.json", `{not json`))
+		require.Error(t, err)
+	})
 }

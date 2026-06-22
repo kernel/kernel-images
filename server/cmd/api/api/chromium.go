@@ -208,6 +208,14 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 			return "invalid zip file", nil
 		}
 
+		manifestVersion, found, err := policy.ManifestVersion(filepath.Join(dest, "manifest.json"))
+		if err != nil {
+			return fmt.Sprintf("extension %s has an invalid manifest.json: %v", p.name, err), nil
+		}
+		if found && manifestVersion > 0 && manifestVersion < 3 {
+			return fmt.Sprintf("extension %s uses Manifest V%d, which Chromium no longer supports; upgrade it to Manifest V3", p.name, manifestVersion), nil
+		}
+
 		updateXMLPath := filepath.Join(dest, "update.xml")
 		if err := policy.RewriteUpdateXMLUrls(updateXMLPath, p.name); err != nil {
 			log.Warn("failed to rewrite update.xml URLs", "error", err, "extension", p.name)
