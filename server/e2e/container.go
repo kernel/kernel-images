@@ -2,254 +2,137 @@ package e2e
 
 import (
 	"context"
-	"fmt"
-	"net/http"
+	"strings"
 	"testing"
-	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// TestContainer wraps testcontainers-go to manage a Docker container for e2e tests.
-// This enables parallel test execution by giving each test its own dynamically allocated ports.
+// TestContainer is the handle every e2e test uses to drive a browser instance.
+//
+// Historically this struct wrapped testcontainers-go directly. It is now a thin
+// facade over a pluggable Backend (see backend.go), selected at construction
+// time via the KI_E2E_BACKEND env var. The public method set is unchanged, so
+// the ~24 e2e_*_test.go files that hold a *TestContainer continue to work
+// without modification regardless of whether the instance runs as a local
+// Docker container or a remote Hypeman VM.
 type TestContainer struct {
-	Name             string
-	Image            string
-	APIPort          int // dynamically allocated host port -> container 10001
-	CDPPort          int // dynamically allocated host port -> container 9222
-	ChromeDriverPort int // dynamically allocated host port -> container 9224
-	ctr              testcontainers.Container
+	// Image is the OCI image reference under test.
+	Image string
+
+	tb      testing.TB
+	backend Backend
 }
 
-// ContainerConfig holds optional configuration for container startup.
-type ContainerConfig struct {
-	Env        map[string]string
-	HostAccess bool // Add host.docker.internal mapping
-}
-
-// NewTestContainer creates a new test container placeholder.
-// The actual container is started when Start() is called.
+// NewTestContainer creates a new test container handle backed by the configured
+// backend. The actual instance is provisioned when Start() is called.
 // Works with both *testing.T and *testing.B (any testing.TB).
 func NewTestContainer(tb testing.TB, image string) *TestContainer {
 	tb.Helper()
 	return &TestContainer{
-		Image: image,
+		Image:   image,
+		tb:      tb,
+		backend: newBackend(tb, image),
 	}
 }
 
-// Start starts the container with the given configuration using testcontainers-go.
+// Start starts the instance with the given configuration.
+//
+// If the test requests HostAccess but the selected backend can't bridge the
+// instance to the test host (e.g. the hypeman backend, which runs a remote VM),
+// the test is skipped rather than failed: such tests rely on a fixture served
+// from the runner's loopback that a remote instance cannot reach. This keeps the
+// hypeman CI job green while preserving coverage on the Docker backend.
 func (c *TestContainer) Start(ctx context.Context, cfg ContainerConfig) error {
-	// Build environment variables
-	env := make(map[string]string)
-	for k, v := range cfg.Env {
-		env[k] = v
+	if cfg.HostAccess && !c.backend.SupportsHostAccess() {
+		c.tb.Skipf("skipping host-access test: %s backend has no host-loopback bridge for the instance", backendKindFromEnv())
 	}
-	// Ensure CHROMIUM_FLAGS includes --no-sandbox for CI
-	if flags, ok := env["CHROMIUM_FLAGS"]; !ok {
-		env["CHROMIUM_FLAGS"] = "--no-sandbox"
-	} else if flags != "" {
-		env["CHROMIUM_FLAGS"] = flags + " --no-sandbox"
-	} else {
-		env["CHROMIUM_FLAGS"] = "--no-sandbox"
-	}
-
-	// Build container request options
-	opts := []testcontainers.ContainerCustomizer{
-		testcontainers.WithImage(c.Image),
-		testcontainers.WithExposedPorts("10001/tcp", "9222/tcp", "9224/tcp"),
-		testcontainers.WithEnv(env),
-		testcontainers.WithTmpfs(map[string]string{"/dev/shm": "size=2g,mode=1777"}),
-		// Set privileged mode for Chrome
-		testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.Privileged = true
-		}),
-		// Wait for the API to be ready
-		testcontainers.WithWaitStrategy(
-			wait.ForHTTP("/spec.yaml").
-				WithPort("10001/tcp").
-				WithStartupTimeout(2 * time.Minute),
-		),
-	}
-
-	// Add host access if requested
-	if cfg.HostAccess {
-		opts = append(opts, testcontainers.WithHostConfigModifier(func(hc *container.HostConfig) {
-			hc.ExtraHosts = append(hc.ExtraHosts, "host.docker.internal:host-gateway")
-		}))
-	}
-
-	// Start container
-	ctr, err := testcontainers.Run(ctx, c.Image, opts...)
-	if err != nil {
-		return fmt.Errorf("failed to start container: %w", err)
-	}
-	c.ctr = ctr
-
-	// Get container name
-	inspect, err := ctr.Inspect(ctx)
-	if err == nil {
-		c.Name = inspect.Name
-	}
-
-	// Get mapped ports
-	apiPort, err := ctr.MappedPort(ctx, "10001/tcp")
-	if err != nil {
-		return fmt.Errorf("failed to get API port: %w", err)
-	}
-	c.APIPort = apiPort.Int()
-
-	cdpPort, err := ctr.MappedPort(ctx, "9222/tcp")
-	if err != nil {
-		return fmt.Errorf("failed to get CDP port: %w", err)
-	}
-	c.CDPPort = cdpPort.Int()
-
-	chromeDriverPort, err := ctr.MappedPort(ctx, "9224/tcp")
-	if err != nil {
-		return fmt.Errorf("failed to get ChromeDriver port: %w", err)
-	}
-	c.ChromeDriverPort = chromeDriverPort.Int()
-
-	return nil
+	return c.backend.Start(ctx, cfg)
 }
 
-// Stop stops and removes the container.
+// Stop stops and removes the instance.
 func (c *TestContainer) Stop(ctx context.Context) error {
-	if c.ctr == nil {
-		return nil
-	}
-	return testcontainers.TerminateContainer(c.ctr)
+	return c.backend.Stop(ctx)
 }
 
-// APIBaseURL returns the URL for the container's API server.
+// APIBaseURL returns the URL for the instance's API server.
 func (c *TestContainer) APIBaseURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d", c.APIPort)
+	return c.backend.APIBaseURL()
 }
 
-// CDPURL returns the WebSocket URL for the container's DevTools proxy.
+// CDPURL returns the WebSocket URL for the instance's DevTools proxy.
 func (c *TestContainer) CDPURL() string {
-	return fmt.Sprintf("ws://127.0.0.1:%d/", c.CDPPort)
+	return c.backend.CDPURL()
 }
 
-// APIClient creates an OpenAPI client for this container's API.
-func (c *TestContainer) APIClient() (*instanceoapi.ClientWithResponses, error) {
-	return instanceoapi.NewClientWithResponses(c.APIBaseURL())
+// CDPAddr returns the TCP address for the instance's DevTools proxy.
+func (c *TestContainer) CDPAddr() string {
+	return c.backend.CDPAddr()
 }
 
-// WaitReady waits for the container's API to become ready.
-// Note: With testcontainers-go, this is usually handled by the wait strategy in Start().
-// This method is kept for compatibility and performs an additional health check.
-func (c *TestContainer) WaitReady(ctx context.Context) error {
-	url := c.APIBaseURL() + "/spec.yaml"
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+// ChromeDriverURL returns the base HTTP URL for the instance's ChromeDriver proxy.
+func (c *TestContainer) ChromeDriverURL() string {
+	return c.backend.ChromeDriverURL()
+}
 
-	client := &http.Client{Timeout: 2 * time.Second}
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			resp, err := client.Get(url)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					return nil
-				}
-			}
-		}
+// ChromeDriverAddr returns the host:port for the instance's ChromeDriver proxy,
+// derived from ChromeDriverURL (scheme stripped). Useful for substring
+// assertions on proxy-rewritten URLs. Handles both http:// (docker) and
+// https:// (hypeman ingress) ChromeDriver URLs.
+func (c *TestContainer) ChromeDriverAddr() string {
+	u := c.backend.ChromeDriverURL()
+	if i := strings.Index(u, "://"); i >= 0 {
+		return u[i+3:]
 	}
+	return u
 }
 
-// ExitCh returns a channel that receives when the container exits.
-// Note: testcontainers-go handles this internally; this is kept for API compatibility.
-func (c *TestContainer) ExitCh() <-chan error {
-	ch := make(chan error, 1)
-	// testcontainers-go doesn't expose an exit channel directly
-	// Return a channel that never fires - container lifecycle is managed by testcontainers
-	return ch
+// ChromeDriverWSURL returns the WebSocket URL for the instance's ChromeDriver
+// proxy. The scheme matches the ChromeDriver endpoint's transport: wss:// when
+// it's served over TLS (the hypeman ingress on :9224), ws:// otherwise (docker).
+// path should include a leading slash.
+func (c *TestContainer) ChromeDriverWSURL(path string) string {
+	scheme := "ws"
+	if strings.HasPrefix(c.backend.ChromeDriverURL(), "https://") {
+		scheme = "wss"
+	}
+	return scheme + "://" + c.ChromeDriverAddr() + path
 }
 
-// WaitDevTools waits for the CDP WebSocket endpoint to be ready.
-func (c *TestContainer) WaitDevTools(ctx context.Context) error {
-	return wait.ForListeningPort(nat.Port("9222/tcp")).
-		WithStartupTimeout(2*time.Minute).
-		WaitUntilReady(ctx, c.ctr)
+// APIClient creates an OpenAPI client for this instance's API.
+func (c *TestContainer) APIClient() (*instanceoapi.ClientWithResponses, error) {
+	return c.backend.APIClient()
 }
 
 // APIClientNoKeepAlive creates an API client that doesn't reuse connections.
 // This is useful after server restarts where existing connections may be stale.
 func (c *TestContainer) APIClientNoKeepAlive() (*instanceoapi.ClientWithResponses, error) {
-	transport := &http.Transport{
-		DisableKeepAlives: true,
-	}
-	httpClient := &http.Client{Transport: transport}
-	return instanceoapi.NewClientWithResponses(c.APIBaseURL(), instanceoapi.WithHTTPClient(httpClient))
+	return c.backend.APIClientNoKeepAlive()
 }
 
-// CDPAddr returns the TCP address for the container's DevTools proxy.
-func (c *TestContainer) CDPAddr() string {
-	return fmt.Sprintf("127.0.0.1:%d", c.CDPPort)
+// WaitReady waits for the instance's API to become ready.
+func (c *TestContainer) WaitReady(ctx context.Context) error {
+	return c.backend.WaitReady(ctx)
 }
 
-// ChromeDriverURL returns the base HTTP URL for the container's ChromeDriver proxy.
-func (c *TestContainer) ChromeDriverURL() string {
-	return fmt.Sprintf("http://127.0.0.1:%d", c.ChromeDriverPort)
+// WaitDevTools waits for the CDP WebSocket endpoint to be ready.
+func (c *TestContainer) WaitDevTools(ctx context.Context) error {
+	return c.backend.WaitDevTools(ctx)
 }
 
 // WaitChromeDriver waits for the ChromeDriver proxy (and upstream ChromeDriver)
-// to be ready by polling the /status endpoint.
+// to be ready.
 func (c *TestContainer) WaitChromeDriver(ctx context.Context) error {
-	statusURL := c.ChromeDriverURL() + "/status"
-	client := &http.Client{Timeout: 2 * time.Second}
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			resp, err := client.Get(statusURL)
-			if err == nil {
-				resp.Body.Close()
-				if resp.StatusCode == http.StatusOK {
-					return nil
-				}
-			}
-		}
-	}
+	return c.backend.WaitChromeDriver(ctx)
 }
 
-// Exec executes a command inside the container and returns the combined output.
+// Exec executes a command inside the instance and returns the exit code and
+// combined output.
 func (c *TestContainer) Exec(ctx context.Context, cmd []string) (int, string, error) {
-	exitCode, reader, err := c.ctr.Exec(ctx, cmd)
-	if err != nil {
-		return exitCode, "", err
-	}
-
-	// Read all output
-	buf := make([]byte, 0)
-	tmp := make([]byte, 1024)
-	for {
-		n, err := reader.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-		}
-		if err != nil {
-			break
-		}
-	}
-
-	return exitCode, string(buf), nil
+	return c.backend.Exec(ctx, cmd)
 }
 
-// Container returns the underlying testcontainers.Container for advanced usage.
-func (c *TestContainer) Container() testcontainers.Container {
-	return c.ctr
+// ExitCh returns a channel that receives when the instance exits.
+func (c *TestContainer) ExitCh() <-chan error {
+	return c.backend.ExitCh()
 }

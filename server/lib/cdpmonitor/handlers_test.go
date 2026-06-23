@@ -59,6 +59,7 @@ func TestConsoleEvents(t *testing.T) {
 	})
 
 	t.Run("non_string_args", func(t *testing.T) {
+		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.consoleAPICalled",
 			"params": map[string]any{
@@ -70,7 +71,7 @@ func TestConsoleEvents(t *testing.T) {
 				},
 			},
 		})
-		ev := ec.waitForNew(t, "console_log", 2*time.Second)
+		ev := ec.waitForNew(t, "console_log", cp, 2*time.Second)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		args := data["args"].([]any)
@@ -146,6 +147,7 @@ func TestNetworkEvents(t *testing.T) {
 	})
 
 	t.Run("loading_failed", func(t *testing.T) {
+		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.requestWillBeSent",
 			"params": map[string]any{
@@ -153,7 +155,7 @@ func TestNetworkEvents(t *testing.T) {
 				"request":   map[string]any{"method": "GET", "url": "https://fail.example.com/"},
 			},
 		})
-		ec.waitForNew(t, "network_request", 2*time.Second)
+		ec.waitForNew(t, "network_request", cp, 2*time.Second)
 
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.loadingFailed",
@@ -172,6 +174,7 @@ func TestNetworkEvents(t *testing.T) {
 
 	t.Run("binary_resource_skips_body", func(t *testing.T) {
 		getBodyCalled.Store(false)
+		cp := ec.checkpoint()
 		// Use PDL wire key "type" (not "resourceType") — Chrome emits ResourceType
 		// under "type" for Network.requestWillBeSent.
 		srv.sendToMonitor(t, map[string]any{
@@ -194,7 +197,7 @@ func TestNetworkEvents(t *testing.T) {
 			"params": map[string]any{"requestId": "img-001"},
 		})
 
-		ev := ec.waitForNew(t, "network_response", 3*time.Second)
+		ev := ec.waitForNew(t, "network_response", cp, 3*time.Second)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Nil(t, data["body"], "binary resource should not have body field")
@@ -483,11 +486,12 @@ func TestPerTargetStateMachines(t *testing.T) {
 		})
 
 		// Wait past sess-b's 500 ms debounce so its network_idle fires before we
-		// set our checkpoint. The next new network_idle will then come from sess-a.
+		// take the checkpoint. The next network_idle will then come from sess-a.
 		time.Sleep(700 * time.Millisecond)
 
-		// Finish sess-a's request; waitForNew captures the current event count so
-		// sess-b's already-fired network_idle is excluded from the result.
+		// Checkpoint after sess-b's network_idle has fired so it is excluded, then
+		// finish sess-a's request to drive sess-a's own network_idle.
+		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.responseReceived", "sessionId": "sess-a",
 			"params": map[string]any{
@@ -500,7 +504,7 @@ func TestPerTargetStateMachines(t *testing.T) {
 			"params": map[string]any{"requestId": "req-a"},
 		})
 
-		ev := ec.waitForNew(t, "network_idle", 2*time.Second)
+		ev := ec.waitForNew(t, "network_idle", cp, 2*time.Second)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "sess-a", data["session_id"], "network_idle must be attributed to sess-a")

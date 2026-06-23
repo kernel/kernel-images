@@ -43,7 +43,7 @@
         <li><i @click.stop.prevent="requestFullscreen" class="fas fa-expand"></i></li>
         <li v-if="admin"><i @click.stop.prevent="openResolution" class="fas fa-desktop"></i></li>
         -->
-        <li v-if="!controlLocked && !implicitHosting" :class="extraControls || 'extra-control'">
+        <li v-if="!controlLocked && !implicitHosting && !readOnly" :class="extraControls || 'extra-control'">
           <i
             :class="[
               hosted && !hosting ? 'disabled' : '',
@@ -257,6 +257,8 @@
     @Prop(Boolean) readonly hideControls!: boolean
     // extra controls are shown (e.g. for embed mode)
     @Prop(Boolean) readonly extraControls!: boolean
+    // hide the request-control toggle (input is locked, so it can't do anything)
+    @Prop(Boolean) readonly readOnly!: boolean
 
     private keyboard = GuacamoleKeyboard()
     private observer = new ResizeObserver(this.onResize.bind(this))

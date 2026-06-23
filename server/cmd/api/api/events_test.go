@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -154,4 +155,144 @@ func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "events in disabled categories should return 204")
+}
+
+// publishTestEvents publishes n system events through an already-started
+// telemetry session. Seqs run 1..n on a fresh stream.
+func publishTestEvents(ctx context.Context, t *testing.T, svc *ApiService, n int) {
+	t.Helper()
+	sys := oapi.PublishEventRequestCategorySystem
+	for i := 0; i < n; i++ {
+		resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+			Body: &oapi.PublishEventRequest{Type: "test.event", Category: &sys},
+		})
+		require.NoError(t, err)
+		require.IsType(t, publishTelemetryEventOKResponse{}, resp, "publish %d expected 200", i)
+	}
+}
+
+// streamFirstID opens the stream with the given params and returns the id of
+// the first SSE frame. The stream context is bounded so the read cannot hang.
+func streamFirstID(t *testing.T, svc *ApiService, params oapi.StreamTelemetryEventsParams) uint64 {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	t.Cleanup(cancel)
+	resp, err := svc.StreamTelemetryEvents(ctx, oapi.StreamTelemetryEventsRequestObject{Params: params})
+	require.NoError(t, err)
+	r200, ok := resp.(oapi.StreamTelemetryEvents200TexteventStreamResponse)
+	require.True(t, ok, "expected SSE response, got %T", resp)
+
+	rd := bufio.NewReader(r200.Body)
+	for {
+		line, err := rd.ReadString('\n')
+		require.NoError(t, err, "stream closed before any id frame")
+		if !strings.HasPrefix(line, "id: ") {
+			continue
+		}
+		id, err := strconv.ParseUint(strings.TrimSpace(strings.TrimPrefix(line, "id: ")), 10, 64)
+		require.NoError(t, err)
+		return id
+	}
+}
+
+func TestResolveStartSeq(t *testing.T) {
+	t.Parallel()
+	const current = 10
+	all := oapi.All
+	other := oapi.StreamTelemetryEventsParamsReplay("foo")
+	cases := []struct {
+		name        string
+		lastEventID *string
+		replay      *oapi.StreamTelemetryEventsParamsReplay
+		want        uint64
+	}{
+		{"fresh connection is from-now", nil, nil, current},
+		{"replay=all starts from oldest", nil, &all, 0},
+		{"non-all replay falls back to from-now", nil, &other, current},
+		{"Last-Event-ID resumes after seq", ptrOf("5"), nil, 5},
+		{"Last-Event-ID wins over replay=all", ptrOf("5"), &all, 5},
+		{"Last-Event-ID 0 stays from-now even with replay=all", ptrOf("0"), &all, current},
+		{"empty Last-Event-ID is treated as absent", ptrOf(""), &all, 0},
+		{"unparseable Last-Event-ID falls back to from-now", ptrOf("abc"), &all, current},
+		{"negative Last-Event-ID falls back to from-now", ptrOf("-1"), &all, current},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, resolveStartSeq(tc.lastEventID, tc.replay, current))
+		})
+	}
+}
+
+func TestStreamReplayAllFromOldest(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	publishTestEvents(ctx, t, svc, 5)
+
+	replay := oapi.All
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay})
+	assert.Equal(t, uint64(1), id, "replay=all on an unfilled buffer should start at the lowest seq")
+}
+
+func TestStreamReplayAllAfterEviction(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	// Overfill the ring so the head is evicted. The oldest retained seq is
+	// latestSeq - cap + 1, surfaced as a first id greater than 1.
+	total := testRingCapacity + 36
+	publishTestEvents(ctx, t, svc, total)
+
+	replay := oapi.All
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay})
+	assert.Equal(t, uint64(total-testRingCapacity+1), id, "replay=all after eviction should start at the oldest retained seq")
+}
+
+func TestStreamReplayAllAtCapacityBoundary(t *testing.T) {
+	t.Parallel()
+	// oldestSeq() switches at latestSeq == cap: a buffer filled to exactly cap
+	// still starts at seq 1, while one event past cap starts at seq 2. Guards
+	// the <= comparison in ringBuffer.oldestSeq against an off-by-one.
+	cases := []struct {
+		name      string
+		published int
+		wantID    uint64
+	}{
+		{"exactly full starts at seq 1", testRingCapacity, 1},
+		{"one past full starts at seq 2", testRingCapacity + 1, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+			svc := newTestService(t, newMockRecordManager())
+			_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+			require.NoError(t, err)
+
+			publishTestEvents(ctx, t, svc, tc.published)
+
+			replay := oapi.All
+			id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{Replay: &replay})
+			assert.Equal(t, tc.wantID, id)
+		})
+	}
+}
+
+func TestStreamResumeAfterLastEventIDUnchanged(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	publishTestEvents(ctx, t, svc, 10)
+
+	id := streamFirstID(t, svc, oapi.StreamTelemetryEventsParams{LastEventID: ptrOf("5")})
+	assert.Equal(t, uint64(6), id, "Last-Event-ID without replay must behave as before and resume after seq 5")
 }

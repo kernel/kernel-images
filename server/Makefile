@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate build dev test clean
+.PHONY: oapi-generate build dev test test-unit test-e2e clean
 
 BIN_DIR ?= $(CURDIR)/bin
 RECORDING_DIR ?= $(CURDIR)/recordings
@@ -30,12 +30,18 @@ build: | $(BIN_DIR)
 dev: build $(RECORDING_DIR)
 	OUTPUT_DIR=$(RECORDING_DIR) DISPLAY_NUM=$(DISPLAY_NUM) ./bin/api
 
-# we run the e2e tests separately so that we can see the logs from the e2e tests as they run instead of waiting for all tests to complete
-test:
+# `test` runs unit + e2e. The two are split so callers (e.g. the Hypeman CI job)
+# can run just the e2e suite, and so e2e logs stream as they run instead of
+# waiting for all unit tests to complete.
+test: test-unit test-e2e
+
+test-unit:
 	go vet ./...
 	go test -v -race $$(go list ./... | grep -v /e2e$$)
+
+test-e2e:
 	@echo ""
-	@echo "=== Running e2e tests (testcontainers — this may take a few minutes) ==="
+	@echo "=== Running e2e tests (this may take a few minutes) ==="
 	@echo ""
 	go test -v -race -timeout 120m ./e2e/
 

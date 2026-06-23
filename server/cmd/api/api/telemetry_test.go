@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -48,17 +49,39 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		assert.ElementsMatch(t, events.DefaultCategories, cfg.Categories)
 	})
 
-	t.Run("omitted enabled resolves to default state", func(t *testing.T) {
+	t.Run("opt-in captures exactly the enabled categories", func(t *testing.T) {
+		tr := true
 		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Console: &oapi.BrowserTelemetryCategoryConfig{}, // Enabled nil → default state (on)
+				Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				Network: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
 			},
 		})
 		require.NoError(t, err)
 		assert.False(t, allDisabled)
-		assert.Contains(t, cfg.Categories, events.Console)
-		// Screenshot is off by default and must stay off when unspecified.
-		assert.NotContains(t, cfg.Categories, events.Screenshot)
+		assert.ElementsMatch(t, []oapi.TelemetryEventCategory{events.Console, events.Network}, cfg.Categories)
+	})
+
+	t.Run("omitted category is off (opt-in)", func(t *testing.T) {
+		tr := true
+		cfg, _, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+			},
+		})
+		require.NoError(t, err)
+		// Only console is enabled; default-bundle categories are not added in.
+		assert.Equal(t, []oapi.TelemetryEventCategory{events.Console}, cfg.Categories)
+	})
+
+	t.Run("enabled:nil is treated as off", func(t *testing.T) {
+		_, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Console: &oapi.BrowserTelemetryCategoryConfig{}, // Enabled nil → off
+			},
+		})
+		require.NoError(t, err)
+		assert.True(t, allDisabled, "a browser config that enables nothing clears telemetry")
 	})
 
 	t.Run("screenshot is opt-in", func(t *testing.T) {
@@ -72,45 +95,35 @@ func TestTelemetryConfigFromOAPI(t *testing.T) {
 		assert.Contains(t, cfg.Categories, events.Screenshot)
 	})
 
-	t.Run("all configurable categories false returns allDisabled=true", func(t *testing.T) {
+	t.Run("empty browser config clears", func(t *testing.T) {
 		_, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
-			Browser: allCategoriesDisabled(),
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{},
 		})
 		require.NoError(t, err)
 		assert.True(t, allDisabled)
 	})
+}
 
-	t.Run("disabling only the default-on categories does not clear", func(t *testing.T) {
-		f := false
-		_, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
-			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Console:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Network:     &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Page:        &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-				Interaction: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-			},
-		})
-		require.NoError(t, err)
-		// control/connection/system/captcha remain at their default-on state.
-		assert.False(t, allDisabled)
-	})
+func TestPutTelemetryIgnoresUnknownCategory(t *testing.T) {
+	// Forward-compat: a newer control plane may send a telemetry category this
+	// image does not yet know. The strict handler decodes the body with
+	// encoding/json (no DisallowUnknownFields), so an unknown category must be
+	// ignored, not rejected, and known categories must still apply.
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
 
-	t.Run("mixed enabled flags resolve unspecified to default", func(t *testing.T) {
-		tr, f := true, false
-		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
-			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
-				Network: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
-			},
-		})
-		require.NoError(t, err)
-		assert.False(t, allDisabled)
-		// network off; screenshot default off; the other 7 default-on categories remain.
-		assert.Contains(t, cfg.Categories, events.Console)
-		assert.NotContains(t, cfg.Categories, events.Network)
-		assert.NotContains(t, cfg.Categories, events.Screenshot)
-		assert.Len(t, cfg.Categories, len(events.DefaultCategories)-1)
-	})
+	var body oapi.PutTelemetryJSONRequestBody
+	raw := []byte(`{"browser":{"console":{"enabled":true},"future_category":{"enabled":true}}}`)
+	require.NoError(t, json.Unmarshal(raw, &body))
+
+	resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: &body})
+	require.NoError(t, err)
+	r201, ok := resp.(oapi.PutTelemetry201JSONResponse)
+	require.True(t, ok, "expected 201, got %T", resp)
+	require.NotNil(t, r201.Config.Browser)
+	require.NotNil(t, r201.Config.Browser.Console)
+	require.NotNil(t, r201.Config.Browser.Console.Enabled)
+	assert.True(t, *r201.Config.Browser.Console.Enabled, "known category should be captured")
 }
 
 func TestPutTelemetry(t *testing.T) {
@@ -373,7 +386,15 @@ func TestTelemetryCollectorFailureLeavesConfigUnchanged(t *testing.T) {
 		svc := newTestService(t, newMockRecordManager())
 		svc.cdpMonitor = &failingCdpMonitor{}
 
-		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+		// Enable a CDP category so the (failing) collector start is attempted.
+		tr := true
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{
+				Browser: &oapi.BrowserTelemetryCategoriesConfig{
+					Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				},
+			},
+		})
 		require.NoError(t, err)
 		assert.IsType(t, oapi.PutTelemetry500JSONResponse{}, resp)
 		assert.False(t, svc.telemetrySession.Active(), "failed collector start must not leave a session active")

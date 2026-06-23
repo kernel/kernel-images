@@ -5,6 +5,7 @@ package sysmon
 import (
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/euank/go-kmsg-parser/v2/kmsgparser"
 )
@@ -39,7 +40,12 @@ func (s *kmsgparserSource) Messages() <-chan KmsgMessage {
 	go func() {
 		defer close(out)
 		for m := range in {
-			out <- KmsgMessage{Timestamp: m.Timestamp, Body: m.Message}
+			// Stamp wall-clock read time, not m.Timestamp: the kmsg
+			// envelope timestamp is CLOCK_MONOTONIC-derived, which freezes
+			// while the VM is suspended (scale-to-zero) and so skews
+			// backward by the suspended duration. We only read live records
+			// (openKmsgSource seeks to end), so read time is accurate.
+			out <- KmsgMessage{Timestamp: time.Now(), Body: m.Message}
 		}
 	}()
 	return out

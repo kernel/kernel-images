@@ -203,7 +203,7 @@ func TestBidiWebSocket(t *testing.T) {
 	require.NoError(t, c.WaitChromeDriver(ctx), "chromedriver not ready")
 
 	// Connect to BiDi WebSocket endpoint
-	bidiURL := fmt.Sprintf("ws://127.0.0.1:%d/session", c.ChromeDriverPort)
+	bidiURL := c.ChromeDriverWSURL("/session")
 	t.Logf("connecting to BiDi endpoint: %s", bidiURL)
 
 	conn, _, err := websocket.Dial(ctx, bidiURL, nil)
@@ -376,7 +376,7 @@ func TestBidiHTTPSession(t *testing.T) {
 	t.Logf("session ID: %s, webSocketUrl: %s", sessionID, wsURL)
 
 	// Verify the proxy rewrote webSocketUrl to point through itself
-	expectedHost := fmt.Sprintf("127.0.0.1:%d", c.ChromeDriverPort)
+	expectedHost := c.ChromeDriverAddr()
 	require.Contains(t, wsURL, expectedHost,
 		"webSocketUrl should point through the proxy (expected host %s), got: %s", expectedHost, wsURL)
 
@@ -445,7 +445,7 @@ func TestBidiPuppeteer(t *testing.T) {
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
 	require.NoError(t, c.WaitChromeDriver(ctx), "chromedriver not ready")
 
-	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/session", c.ChromeDriverPort)
+	endpoint := c.ChromeDriverWSURL("/session")
 	t.Logf("running test-puppeteer-bidi.js against %s", endpoint)
 
 	cmd := exec.CommandContext(ctx, "node", "test-puppeteer-bidi.js", "--endpoint", endpoint)
@@ -476,7 +476,7 @@ func TestBidiVibium(t *testing.T) {
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
 	require.NoError(t, c.WaitChromeDriver(ctx), "chromedriver not ready")
 
-	endpoint := fmt.Sprintf("ws://127.0.0.1:%d/session", c.ChromeDriverPort)
+	endpoint := c.ChromeDriverWSURL("/session")
 	t.Logf("running test-vibium-bidi.js against %s", endpoint)
 
 	cmd := exec.CommandContext(ctx, "node", "test-vibium-bidi.js", "--endpoint", endpoint)
@@ -506,7 +506,7 @@ func TestBidiSelenium(t *testing.T) {
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
 	require.NoError(t, c.WaitChromeDriver(ctx), "chromedriver not ready")
 
-	endpoint := fmt.Sprintf("http://127.0.0.1:%d", c.ChromeDriverPort)
+	endpoint := c.ChromeDriverURL()
 	t.Logf("running test-selenium-bidi.js against %s", endpoint)
 
 	cmd := exec.CommandContext(ctx, "node", "test-selenium-bidi.js", "--endpoint", endpoint)

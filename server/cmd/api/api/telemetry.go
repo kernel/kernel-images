@@ -199,8 +199,9 @@ func containsCategory(cats []oapi.TelemetryEventCategory, target oapi.TelemetryE
 }
 
 // telemetryConfigFromOAPI converts an *oapi.BrowserTelemetryConfig to a telemetry.TelemetryConfig.
-// An omitted category resolves to its default state (events.DefaultCategories). Returns the
-// config, whether every configurable category ended up disabled (stop signal), and any error.
+// Selection is opt-in: with no browser config the default set is used; with a browser config only
+// the categories explicitly enabled there are captured (anything omitted is off). Returns the
+// config, whether the result is empty (stop signal), and any error.
 func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool, error) {
 	if cfg == nil || cfg.Browser == nil {
 		// No per-category settings: resolve to the explicit default set so the
@@ -209,14 +210,9 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 		return telemetry.TelemetryConfig{Categories: cats}, false, nil
 	}
 
-	defaultOn := categorySetOf(events.DefaultCategories)
 	cats := make([]oapi.TelemetryEventCategory, 0, len(events.UserCategories))
 	for _, f := range categoryFields(cfg.Browser) {
-		on := defaultOn[f.category]
-		if f.config != nil && f.config.Enabled != nil {
-			on = *f.config.Enabled
-		}
-		if on {
+		if f.config != nil && f.config.Enabled != nil && *f.config.Enabled {
 			cats = append(cats, f.category)
 		}
 	}

@@ -305,9 +305,12 @@ func newMockNekoClient(t *testing.T) *nekoclient.AuthClient {
 	return client
 }
 
+// testRingCapacity is the ring buffer size used across telemetry tests.
+const testRingCapacity = 64
+
 func newTelemetrySession(t *testing.T) (*telemetry.TelemetrySession, *events.EventStream) {
 	t.Helper()
-	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 64})
+	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: testRingCapacity})
 	if err != nil {
 		t.Fatal(err)
 	}

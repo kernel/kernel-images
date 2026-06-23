@@ -41,13 +41,10 @@ var UserCategories = []oapi.TelemetryEventCategory{
 }
 
 // DefaultCategories is captured when the caller enables telemetry without
-// per-category settings: every configurable category except Screenshot, which
-// is high-volume base64 image data and therefore opt-in.
+// per-category settings: the lightweight operational signals. CDP categories
+// (console/network/page/interaction) and screenshot are excluded so the default
+// never starts the CDP collector or emits high-volume streams; they are opt-in.
 var DefaultCategories = []oapi.TelemetryEventCategory{
-	Console,
-	Network,
-	Page,
-	Interaction,
 	Control,
 	Connection,
 	System,
@@ -79,7 +76,12 @@ func HasCDPCategory(cats []oapi.TelemetryEventCategory) bool {
 // Event is the portable event schema. It contains only producer-emitted content;
 // pipeline metadata (seq) lives on the Envelope.
 type Event struct {
-	Ts        int64                       `json:"ts"` // Unix microseconds (µs since epoch)
+	// Ts is the event time in Unix microseconds. It must be wall-clock
+	// (time.Now()) captured at emit/observe, never a monotonic or other
+	// source-derived clock (e.g. a kmsg envelope timestamp), which skews
+	// on VM suspend. HTTP-published events are stamped by the API handler;
+	// in-process producers must set it themselves.
+	Ts        int64                       `json:"ts"`
 	Type      string                      `json:"type"`
 	Category  oapi.TelemetryEventCategory `json:"category"`
 	Source    oapi.BrowserEventSource     `json:"source"`
