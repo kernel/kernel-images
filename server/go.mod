@@ -8,7 +8,7 @@ require (
 	github.com/avast/retry-go/v5 v5.0.0
 	github.com/coder/websocket v1.8.14
 	github.com/creack/pty v1.1.24
-	github.com/docker/docker v28.5.1+incompatible
+	github.com/docker/docker v28.5.2+incompatible
 	github.com/docker/go-connections v0.6.0
 	github.com/euank/go-kmsg-parser/v2 v2.1.0
 	github.com/fsnotify/fsnotify v1.9.0
@@ -18,6 +18,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.1
 	github.com/google/uuid v1.6.0
 	github.com/kelseyhightower/envconfig v1.4.0
+	github.com/kernel/hypeman-go v0.20.0
 	github.com/klauspost/compress v1.18.3
 	github.com/m1k1o/neko/server v0.0.0-20251008185748-46e2fc7d3866
 	github.com/nrednav/cuid2 v1.1.0
@@ -26,7 +27,7 @@ require (
 	github.com/samber/lo v1.52.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
-	golang.org/x/sync v0.17.0
+	golang.org/x/sync v0.18.0
 	golang.org/x/sys v0.39.0
 	golang.org/x/term v0.37.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -34,7 +35,7 @@ require (
 
 require (
 	dario.cat/mergo v1.0.2 // indirect
-	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
+	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/cenkalti/backoff/v4 v4.3.0 // indirect
@@ -57,6 +58,7 @@ require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect
+	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
@@ -87,24 +89,31 @@ require (
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/speakeasy-api/jsonpath v0.6.0 // indirect
 	github.com/speakeasy-api/openapi-overlay v0.10.2 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.1.1 // indirect
+	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/vmware-labs/yaml-jsonpath v0.3.2 // indirect
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.49.0 // indirect
+	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.61.0 // indirect
 	go.opentelemetry.io/otel v1.39.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.39.0 // indirect
 	go.opentelemetry.io/otel/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.39.0 // indirect
+	go.opentelemetry.io/otel/sdk/metric v1.39.0 // indirect
 	go.opentelemetry.io/otel/trace v1.39.0 // indirect
-	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
-	golang.org/x/crypto v0.43.0 // indirect
-	golang.org/x/mod v0.28.0 // indirect
-	golang.org/x/net v0.45.0 // indirect
-	golang.org/x/text v0.30.0 // indirect
-	golang.org/x/tools v0.37.0 // indirect
+	golang.org/x/crypto v0.44.0 // indirect
+	golang.org/x/mod v0.29.0 // indirect
+	golang.org/x/net v0.47.0 // indirect
+	golang.org/x/text v0.31.0 // indirect
+	golang.org/x/tools v0.38.0 // indirect
+	google.golang.org/genproto/googleapis/api v0.0.0-20250825161204-c5933d9347a5 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20250825161204-c5933d9347a5 // indirect
+	google.golang.org/grpc v1.75.1 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gorm.io/gorm v1.25.7 // indirect

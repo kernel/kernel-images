@@ -7,6 +7,6 @@
     "puppeteer-core": "^24.37.3",
     "selenium-webdriver": "^4.40.0",
     "vibium": "^26.3.9",
-    "ws": "^8.19.0"
+    "ws": "^8.20.1"
   }
 }

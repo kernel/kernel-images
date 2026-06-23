@@ -24,7 +24,9 @@ func newTestEventStream(t *testing.T, capacity int) *events.EventStream {
 func newTestTelemetrySession(t *testing.T) *TelemetrySession {
 	t.Helper()
 	ts := NewTelemetrySession(newTestEventStream(t, 100))
-	ts.Start("test-session", TelemetryConfig{})
+	// Capture all user categories so publish-mechanics tests are independent of
+	// the default-set composition.
+	ts.Start("test-session", TelemetryConfig{Categories: events.UserCategories})
 	return ts
 }
 
@@ -55,7 +57,7 @@ func TestTelemetrySession(t *testing.T) {
 		const total = goroutines * eventsEach
 
 		ts := NewTelemetrySession(newTestEventStream(t, total))
-		ts.Start("test-concurrent", TelemetryConfig{})
+		ts.Start("test-concurrent", TelemetryConfig{Categories: events.UserCategories})
 		reader := ts.NewReader(0)
 
 		var wg sync.WaitGroup
@@ -149,7 +151,7 @@ func TestTelemetrySession(t *testing.T) {
 
 	t.Run("start_sets_telemetry_session_id_in_source_metadata", func(t *testing.T) {
 		ts := newTestTelemetrySession(t)
-		ts.Start("test-uuid", TelemetryConfig{})
+		ts.Start("test-uuid", TelemetryConfig{Categories: events.UserCategories})
 
 		reader := ts.NewReader(0)
 		ts.Publish(events.Event{Type: "page.navigation", Category: events.Page, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
@@ -163,7 +165,7 @@ func TestTelemetrySession(t *testing.T) {
 
 	t.Run("data_unchanged_when_telemetry_session_id_in_metadata", func(t *testing.T) {
 		ts := newTestTelemetrySession(t)
-		ts.Start("merge-session", TelemetryConfig{})
+		ts.Start("merge-session", TelemetryConfig{Categories: events.UserCategories})
 
 		reader := ts.NewReader(0)
 		ts.Publish(events.Event{

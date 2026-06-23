@@ -501,6 +501,89 @@ func patchDisplayExpectingOK(t *testing.T, ctx context.Context, c *TestContainer
 	require.Equal(t, height, *rsp.JSON200.Height)
 }
 
+// TestDisplayResizeOddWidthHonoursLibxcvtRounding covers the path where a
+// caller requests dimensions libxcvt cannot honour exactly. libxcvt rounds
+// widths to the CVT 8-pixel grid and then applies a hard-coded FWXGA bump
+// for 1360×768 → 1366×768 (xf86EdidModes.c convention so virtual displays
+// match real "HD ready" laptop panels). For request 1365×768 the realized
+// X root is 1366×768.
+//
+// Before the fix, waitForXRootSize compared the X root against the
+// requested 1365 and returned 500 with "X root verification: x root is
+// 1366x768, want 1365x768". The browser pool treats that 500 as fatal —
+// the production incident that prompted this test recycled the VM on
+// every odd-width /configure call.
+//
+// After the fix (PatchDisplay reads the realized dimensions back from
+// neko's ScreenConfigurationChange response and uses them for both the
+// post-condition and the 200 body), the resize succeeds and the response
+// truthfully reports 1366×768.
+func TestDisplayResizeOddWidthHonoursLibxcvtRounding(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	// Production-equivalent: Neko + --start-maximized + CHROMIUM_FLAGS
+	// mirror of run-docker.sh. Same config the real failing instance used.
+	env := map[string]string{
+		"WIDTH":               "1024",
+		"HEIGHT":              "768",
+		"ENABLE_WEBRTC":       "true",
+		"NEKO_ADMIN_PASSWORD": "admin",
+		"CHROMIUM_FLAGS":      "--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*",
+	}
+
+	c := NewTestContainer(t, headfulImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: env}), "failed to start container")
+	defer c.Stop(ctx)
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+
+	navigateBlank(t, ctx, c)
+
+	// Request an odd width — the exact pattern from the production taint.
+	// libxcvt rounds 1365 to 1360 (CVT 8-pixel grid) then bumps to 1366
+	// (FWXGA hack for 1360×768 specifically). The X root lands at 1366×768.
+	const requestedWidth, height, refreshRate = 1365, 768, 60
+	const realizedWidth = 1366
+
+	client, err := c.APIClient()
+	require.NoError(t, err)
+	rate := instanceoapi.PatchDisplayRequestRefreshRate(refreshRate)
+	w, h := requestedWidth, height
+	rsp, err := client.PatchDisplayWithResponse(ctx, instanceoapi.PatchDisplayJSONRequestBody{
+		Width:       &w,
+		Height:      &h,
+		RefreshRate: &rate,
+	})
+	require.NoError(t, err)
+
+	rootW, rootH, xrErr := getXRootResolution(ctx, c)
+	require.NoError(t, xrErr, "read x root after resize")
+	t.Logf("PATCH /display(width=%d, height=%d) -> status=%d body=%s; x_root=%dx%d",
+		requestedWidth, height, rsp.StatusCode(), strings.TrimSpace(string(rsp.Body)), rootW, rootH)
+
+	// X root reflects libxcvt's realized mode, not the request.
+	require.Equal(t, realizedWidth, rootW,
+		"expected libxcvt FWXGA hack to round %dx%d to %dx%d in X root; got %dx%d. If libxcvt's rounding rule changed, update the expected realized width.",
+		requestedWidth, height, realizedWidth, height, rootW, rootH)
+	require.Equal(t, height, rootH, "height should pass through unchanged")
+
+	// API now succeeds and reports the realized dimensions — the caller
+	// learns the screen is 1366×768 even though they asked for 1365×768.
+	require.Equal(t, http.StatusOK, rsp.StatusCode(),
+		"PATCH /display: expected 200 after fix, got %d body=%s", rsp.StatusCode(), string(rsp.Body))
+	require.NotNil(t, rsp.JSON200, "JSON200 response must be present")
+	require.NotNil(t, rsp.JSON200.Width, "response must include realized width")
+	require.NotNil(t, rsp.JSON200.Height, "response must include realized height")
+	require.Equal(t, realizedWidth, *rsp.JSON200.Width,
+		"response width should be the realized %d, not the requested %d", realizedWidth, requestedWidth)
+	require.Equal(t, height, *rsp.JSON200.Height)
+}
+
 // waitForXRootResolution polls xrandr until the X root reaches the requested
 // size, mirroring waitForXvfbResolution but operating on the live X root
 // instead of the Xvfb process command line.

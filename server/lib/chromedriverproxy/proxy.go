@@ -58,7 +58,14 @@ func Handler(logger *slog.Logger, opts *Options) http.Handler {
 	reverseProxy := &httputil.ReverseProxy{
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(upstream)
-			r.Out.Host = r.In.Host
+			// ChromeDriver (Chrome 111+) rejects any request whose Host/Origin
+			// header is not localhost or an IP, returning HTTP 500 ("Host header
+			// or origin header is specified and is not whitelisted or localhost")
+			// as DNS-rebinding protection. SetURL clears Out.Host so net/http
+			// uses the loopback upstream as the Host — do NOT restore the inbound
+			// Host (e.g. an ingress hostname like {instance}.<domain>) or
+			// ChromeDriver refuses every request. Strip Origin for the same reason.
+			r.Out.Header.Del("Origin")
 		},
 	}
 
@@ -135,6 +142,13 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		return
 	}
 	for k, vv := range r.Header {
+		// Skip Origin: ChromeDriver rejects non-localhost Origin/Host headers
+		// (see the reverse-proxy rewrite above). proxyReq already targets the
+		// loopback upstream, so its Host is correct; don't forward the client's
+		// Origin (e.g. an ingress hostname) or ChromeDriver returns HTTP 500.
+		if strings.EqualFold(k, "Origin") {
+			continue
+		}
 		for _, v := range vv {
 			proxyReq.Header.Add(k, v)
 		}
@@ -156,7 +170,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 		return
 	}
 
-	respBody = rewriteWebSocketURL(respBody, r.Host, logger)
+	respBody = rewriteWebSocketURL(respBody, r.Host, clientWSScheme(r), logger)
 
 	for k, vv := range resp.Header {
 		for _, v := range vv {
@@ -168,6 +182,32 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 	w.Write(respBody)
 }
 
+// clientWSScheme returns the WebSocket scheme the external client must use to
+// reach this proxy. A TLS-terminating ingress (e.g. the hypeman :9224 ingress)
+// forwards plaintext HTTP to the proxy but sets X-Forwarded-Proto: https, so
+// the rewritten webSocketUrl has to be wss:// — a ws:// URL would be
+// unreachable through the TLS listener. Returns "" (keep upstream scheme) when
+// there's no TLS indication (e.g. the docker plaintext path).
+func clientWSScheme(r *http.Request) string {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		// X-Forwarded-Proto may be a comma-separated list when the request
+		// traverses multiple proxies (e.g. "https, http"); the first value is
+		// the original client-facing scheme.
+		if i := strings.IndexByte(proto, ','); i >= 0 {
+			proto = proto[:i]
+		}
+		proto = strings.TrimSpace(proto)
+		if strings.EqualFold(proto, "https") || strings.EqualFold(proto, "wss") {
+			return "wss"
+		}
+		return "ws"
+	}
+	if r.TLS != nil {
+		return "wss"
+	}
+	return ""
+}
+
 // rewriteWebSocketURL rewrites `value.capabilities.webSocketUrl` in a
 // WebDriver new-session response to point at this proxy.
 //
@@ -177,7 +217,7 @@ func handleCreateSession(w http.ResponseWriter, r *http.Request, logger *slog.Lo
 // Example:
 //
 //	ws://127.0.0.1:9225/session/abc -> ws://proxy-host:9224/session/abc
-func rewriteWebSocketURL(body []byte, proxyHost string, logger *slog.Logger) []byte {
+func rewriteWebSocketURL(body []byte, proxyHost, scheme string, logger *slog.Logger) []byte {
 	var respPayload map[string]interface{}
 	if err := json.Unmarshal(body, &respPayload); err != nil {
 		return body
@@ -201,6 +241,13 @@ func rewriteWebSocketURL(body []byte, proxyHost string, logger *slog.Logger) []b
 		return body
 	}
 	parsed.Host = proxyHost
+	// Match the external transport. Behind a TLS-terminating ingress the client
+	// reaches this proxy over wss://, so a ws:// webSocketUrl (chromedriver's
+	// default) would be unreachable; clientWSScheme upgrades it from
+	// X-Forwarded-Proto.
+	if scheme != "" {
+		parsed.Scheme = scheme
+	}
 	caps["webSocketUrl"] = parsed.String()
 
 	out, err := json.Marshal(respPayload)
