@@ -202,5 +202,6 @@ func TestManifestVersion(t *testing.T) {
 	t.Run("invalid json", func(t *testing.T) {
 		_, _, err := ManifestVersion(write("bad.json", `{not json`))
 		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrInvalidManifest)
 	})
 }

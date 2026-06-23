@@ -3,6 +3,7 @@ package policy
 import (
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -10,6 +11,10 @@ import (
 	"strings"
 	"sync"
 )
+
+// ErrInvalidManifest indicates a manifest.json that exists but could not be parsed.
+// It distinguishes a malformed manifest (a client error) from an I/O failure reading it.
+var ErrInvalidManifest = errors.New("invalid manifest.json")
 
 const PolicyPath = "/etc/chromium/policies/managed/policy.json"
 
@@ -288,7 +293,7 @@ func ManifestVersion(manifestPath string) (version int, found bool, err error) {
 		ManifestVersion int `json:"manifest_version"`
 	}
 	if err := json.Unmarshal(data, &m); err != nil {
-		return 0, false, fmt.Errorf("failed to parse manifest.json: %w", err)
+		return 0, false, fmt.Errorf("%w: %v", ErrInvalidManifest, err)
 	}
 
 	return m.ManifestVersion, true, nil

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -210,7 +211,11 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 
 		manifestVersion, found, err := policy.ManifestVersion(filepath.Join(dest, "manifest.json"))
 		if err != nil {
-			return fmt.Sprintf("extension %s has an invalid manifest.json: %v", p.name, err), nil
+			if errors.Is(err, policy.ErrInvalidManifest) {
+				return fmt.Sprintf("extension %s has an invalid manifest.json: %v", p.name, err), nil
+			}
+			log.Error("failed to read extension manifest", "error", err, "extension", p.name)
+			return "", fmt.Errorf("failed to read extension manifest: %w", err)
 		}
 		if found && manifestVersion > 0 && manifestVersion < 3 {
 			return fmt.Sprintf("extension %s uses Manifest V%d, which Chromium no longer supports; upgrade it to Manifest V3", p.name, manifestVersion), nil
