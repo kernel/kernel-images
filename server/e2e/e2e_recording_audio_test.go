@@ -449,41 +449,41 @@ func mp4Durations(t *testing.T, data []byte) (float64, float64) {
 	recordingPath := filepath.Join(t.TempDir(), "recording.mp4")
 	require.NoError(t, os.WriteFile(recordingPath, data, 0o644), "failed to write recording for duration analysis")
 
+	// Decode the first audio stream to null; ffmpeg reports the container
+	// duration from the input header and the decoded audio length as the final
+	// time= progress value. ffprobe is intentionally not shipped in the image.
 	out, err := exec.Command(
 		"docker", "run", "--rm",
 		"-v", recordingPath+":/tmp/recording.mp4:ro",
-		"--entrypoint", "ffprobe",
+		"--entrypoint", "ffmpeg",
 		headfulImage,
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-show_entries", "stream=codec_type,duration",
-		"-of", "json",
-		"/tmp/recording.mp4",
+		"-hide_banner",
+		"-i", "/tmp/recording.mp4",
+		"-map", "0:a:0",
+		"-f", "null",
+		"-",
 	).CombinedOutput()
-	require.NoError(t, err, "failed to probe recording durations: %s", string(out))
+	require.NoError(t, err, "failed to analyze recording durations: %s", string(out))
 
-	var probe struct {
-		Streams []struct {
-			CodecType string `json:"codec_type"`
-			Duration  string `json:"duration"`
-		} `json:"streams"`
-		Format struct {
-			Duration string `json:"duration"`
-		} `json:"format"`
-	}
-	require.NoError(t, json.Unmarshal(out, &probe), "failed to parse ffprobe output")
+	formatMatch := regexp.MustCompile(`Duration: (\d+):(\d+):(\d+(?:\.\d+)?)`).FindStringSubmatch(string(out))
+	require.Len(t, formatMatch, 4, "failed to find container duration in ffmpeg output: %s", string(out))
+	formatDuration := hmsToSeconds(t, formatMatch[1], formatMatch[2], formatMatch[3])
 
-	formatDuration, err := strconv.ParseFloat(probe.Format.Duration, 64)
-	require.NoError(t, err, "failed to parse format duration")
+	timeMatches := regexp.MustCompile(`time=(\d+):(\d+):(\d+(?:\.\d+)?)`).FindAllStringSubmatch(string(out), -1)
+	require.NotEmpty(t, timeMatches, "failed to find audio duration in ffmpeg output: %s", string(out))
+	last := timeMatches[len(timeMatches)-1]
+	audioDuration := hmsToSeconds(t, last[1], last[2], last[3])
 
-	for _, stream := range probe.Streams {
-		if stream.CodecType != "audio" {
-			continue
-		}
-		audioDuration, err := strconv.ParseFloat(stream.Duration, 64)
-		require.NoError(t, err, "failed to parse audio duration")
-		return formatDuration, audioDuration
-	}
-	t.Fatal("ffprobe did not report an audio stream")
-	return 0, 0
+	return formatDuration, audioDuration
+}
+
+func hmsToSeconds(t *testing.T, h, m, s string) float64 {
+	t.Helper()
+	hours, err := strconv.ParseFloat(h, 64)
+	require.NoError(t, err, "failed to parse hours")
+	minutes, err := strconv.ParseFloat(m, 64)
+	require.NoError(t, err, "failed to parse minutes")
+	seconds, err := strconv.ParseFloat(s, 64)
+	require.NoError(t, err, "failed to parse seconds")
+	return hours*3600 + minutes*60 + seconds
 }
