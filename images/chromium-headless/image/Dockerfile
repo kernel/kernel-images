@@ -143,9 +143,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get -yqq --no-install-recommends install \
     ca-certificates \
     curl \
-    build-essential \
-    libssl-dev \
-    git \
+    gpg \
     gpg-agent \
     dbus \
     dbus-x11 \
@@ -159,7 +157,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     fonts-nanum \
-    software-properties-common \
     supervisor; \
     fc-cache -f
 
@@ -191,7 +188,6 @@ COPY shared/chromium-policies/managed/policy.json /etc/chromium/policies/managed
 
 # Install FFmpeg (latest static build) for the recording server
 COPY --from=ffmpeg-downloader /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-downloader /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
 # Remove upower to prevent spurious D-Bus activations and logs
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
@@ -209,8 +205,9 @@ RUN set -eux; \
     ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
     fi
 
-# Install TypeScript, Playwright, Patchright, esbuild globally
-RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g typescript playwright-core patchright esbuild
+# Install Playwright, Patchright, esbuild globally (esbuild is required at
+# runtime by playwright-daemon.js for TypeScript transformation)
+RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g playwright-core patchright esbuild
 
 # Pre-install openssh-server and websocat for faster SSH setup via kernel CLI.
 # Only installed, NOT configured: no host keys, no custom config, service not enabled.

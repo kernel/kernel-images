@@ -177,42 +177,17 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get update && \
     apt-get -y upgrade && \
     apt-get --no-install-recommends -y install  \
+    gpg \
     gpg-agent \
     # UI Requirements
     xvfb \
-    xterm \
     xdotool \
-    scrot \
-    imagemagick \
     sudo \
     mutter \
-    # Python/pyenv reqs
-    build-essential \
-    libssl-dev  \
-    zlib1g-dev \
-    libbz2-dev \
-    libreadline-dev \
-    libsqlite3-dev \
-    curl \
-    git \
-    libncursesw5-dev \
-    xz-utils \
-    tk-dev \
-    libxml2-dev \
-    libxmlsec1-dev \
-    libffi-dev \
-    liblzma-dev \
-    # Network tools
-    net-tools \
-    netcat \
-    # PPA req
-    software-properties-common && \
     # Userland apps
-    sudo add-apt-repository ppa:mozillateam/ppa && \
-    sudo apt-get --no-install-recommends -y install \
-    x11-apps \
-    tint2 \
+    curl \
     wget \
+    xz-utils \
     xdg-utils \
     libvulkan1 \
     fontconfig \
@@ -254,7 +229,6 @@ RUN apt-get update && \
 
 # install ffmpeg manually since the version available in apt is from the 4.x branch due to #drama.
 COPY --from=ffmpeg-downloader /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
-COPY --from=ffmpeg-downloader /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
 # runtime
 ENV USERNAME=root
@@ -263,13 +237,13 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     set -eux; \
     apt-get update; \
     apt-get --no-install-recommends -y install \
-    wget ca-certificates python2 supervisor xclip xdotool unclutter \
+    wget ca-certificates supervisor xclip xdotool unclutter \
     pulseaudio dbus-x11 xserver-xorg-video-dummy \
     libcairo2 libxcb1 libxrandr2 libxv1 libopus0 libvpx7 \
     x11-xserver-utils \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-    gstreamer1.0-pulseaudio gstreamer1.0-omx; \
+    gstreamer1.0-pulseaudio; \
     #
     # install libxcvt0 (not available in debian:bullseye)
     ARCH=$(dpkg --print-architecture); \
@@ -291,12 +265,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     chown $USERNAME /var/log/neko/ /tmp/runtime-$USERNAME; \
     chown -R $USERNAME:$USERNAME /home/$USERNAME;
 
-# sqlite3 for debugging the cookies file; runtime libs are chrome-for-testing's listed deb.deps.
+# runtime libs are chrome-for-testing's listed deb.deps.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
     --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
     apt-get update -y && \
     apt-get --no-install-recommends -y install \
-        sqlite3 \
         libasound2 libatk-bridge2.0-0 libatk1.0-0 libatspi2.0-0 \
         libcups2 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0 libgtk-3-0 \
         libnspr4 libnss3 libpango-1.0-0 libxcomposite1 libxdamage1 \
@@ -333,8 +306,9 @@ RUN set -eux; \
     ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
     fi
 
-# Install TypeScript, Playwright, Patchright, esbuild globally
-RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g typescript playwright-core patchright esbuild
+# Install Playwright, Patchright, esbuild globally (esbuild is required at
+# runtime by playwright-daemon.js for TypeScript transformation)
+RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g playwright-core patchright esbuild
 
 # Pre-install openssh-server and websocat for faster SSH setup via kernel CLI.
 # Only installed, NOT configured: no host keys, no custom config, service not enabled.
