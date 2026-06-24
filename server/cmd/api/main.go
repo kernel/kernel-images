@@ -283,18 +283,21 @@ func main() {
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
 
-	// Close hijacked WebSockets with Going Away before draining the HTTP
-	// servers. http.Server.Shutdown leaves hijacked conns untouched, so without
-	// this CDP/WebDriver clients would see a 1006 abnormal closure when the VM
-	// is destroyed instead of a clean 1001.
-	if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
-		slogger.Info("closed active websocket connections for shutdown", "count", n)
-	}
-
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	g, _ := errgroup.WithContext(shutdownCtx)
 
+	// Close hijacked WebSockets with Going Away. http.Server.Shutdown leaves
+	// hijacked conns untouched, so without this CDP/WebDriver clients would see
+	// a 1006 abnormal closure when the VM is destroyed instead of a clean 1001.
+	// This drains a disjoint set of connections from the servers below, so it
+	// runs alongside them.
+	g.Go(func() error {
+		if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
+			slogger.Info("closed active websocket connections for shutdown", "count", n)
+		}
+		return nil
+	})
 	g.Go(func() error {
 		return srv.Shutdown(shutdownCtx)
 	})
