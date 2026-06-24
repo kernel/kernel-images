@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -32,6 +33,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/sysmon"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/wsdrain"
 )
 
 func main() {
@@ -44,6 +46,11 @@ func main() {
 		os.Exit(1)
 	}
 	slogger.Info("server configuration", "config", config)
+
+	// Tracks live hijacked WebSocket connections (CDP, WebDriver/BiDi,
+	// ChromeDriver, PTY attach) so they can be closed with a clean Going Away
+	// frame on shutdown — http.Server.Shutdown does not touch hijacked conns.
+	wsRegistry := wsdrain.New()
 
 	// context cancellation on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -166,7 +173,7 @@ func main() {
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "process_id")
-		apiService.HandleProcessAttachWS(w, r, id)
+		apiService.HandleProcessAttachWS(w, r, id, wsRegistry)
 	})
 
 	// Serve extension files for Chrome policy-installed extensions
@@ -214,7 +221,7 @@ func main() {
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
@@ -240,6 +247,7 @@ func main() {
 	rChromeDriver.Handle("/*", chromedriverproxy.Handler(slogger, &chromedriverproxy.Options{
 		ChromeDriverUpstream: config.ChromeDriverUpstreamAddr,
 		DevToolsProxyAddr:    config.DevToolsProxyAddr,
+		Registry:             wsRegistry,
 	}))
 
 	srvChromeDriver := &http.Server{
@@ -274,6 +282,14 @@ func main() {
 	// graceful shutdown
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
+
+	// Close hijacked WebSockets with Going Away before draining the HTTP
+	// servers. http.Server.Shutdown leaves hijacked conns untouched, so without
+	// this CDP/WebDriver clients would see a 1006 abnormal closure when the VM
+	// is destroyed instead of a clean 1001.
+	if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
+		slogger.Info("closed active websocket connections for shutdown", "count", n)
+	}
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

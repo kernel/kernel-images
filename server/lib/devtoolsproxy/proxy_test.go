@@ -23,6 +23,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/wsdrain"
 	"github.com/kernel/kernel-images/server/lib/wsproxy"
 )
 
@@ -132,7 +133,7 @@ func TestWebSocketProxyHandler_ProxiesEcho(t *testing.T) {
 	// seed current upstream to echo server including path/query (bypass tailing)
 	mgr.setCurrent((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawQuery: u.RawQuery}).String())
 
-	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil)
+	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil)
 	proxySrv := httptest.NewServer(proxy)
 	defer proxySrv.Close()
 
@@ -161,6 +162,64 @@ func TestWebSocketProxyHandler_ProxiesEcho(t *testing.T) {
 	expectedPrefix := u.Path + "?" + u.RawQuery + "|"
 	if !strings.HasPrefix(string(resp), expectedPrefix) || !strings.HasSuffix(string(resp), msg) {
 		t.Fatalf("unexpected echo: %q", string(resp))
+	}
+}
+
+func TestWebSocketProxyHandler_RegistryClosesClientWithGoingAway(t *testing.T) {
+	echoSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+		if err != nil {
+			return
+		}
+		defer c.Close(websocket.StatusNormalClosure, "")
+		ctx := r.Context()
+		for {
+			mt, msg, err := c.Read(ctx)
+			if err != nil {
+				return
+			}
+			if err := c.Write(ctx, mt, msg); err != nil {
+				return
+			}
+		}
+	}))
+	defer echoSrv.Close()
+
+	u, _ := url.Parse(echoSrv.URL)
+	logger := silentLogger()
+	mgr := NewUpstreamManager("/dev/null", logger)
+	mgr.setCurrent((&url.URL{Scheme: "ws", Host: u.Host, Path: "/echo"}).String())
+
+	reg := wsdrain.New()
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, reg))
+	defer proxySrv.Close()
+
+	pu, _ := url.Parse(proxySrv.URL)
+	pu.Scheme = "ws"
+	ctx := context.Background()
+	conn, _, err := websocket.Dial(ctx, pu.String(), nil)
+	if err != nil {
+		t.Fatalf("dial proxy failed: %v", err)
+	}
+	defer conn.Close(websocket.StatusInternalError, "")
+
+	// Round-trip so the proxy session is fully established and registered.
+	if err := conn.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if _, _, err := conn.Read(ctx); err != nil {
+		t.Fatalf("read failed: %v", err)
+	}
+
+	if n := reg.CloseAll(websocket.StatusGoingAway, "shutting down"); n != 1 {
+		t.Fatalf("CloseAll closed %d conns, want 1", n)
+	}
+
+	// The client should observe a 1001 Going Away, not the 1000 the proxy's
+	// own cleanup would otherwise send.
+	_, _, err = conn.Read(ctx)
+	if got := websocket.CloseStatus(err); got != websocket.StatusGoingAway {
+		t.Fatalf("client close status = %v (err %v), want StatusGoingAway", got, err)
 	}
 }
 
@@ -461,7 +520,7 @@ func TestWebSocketProxyHandler_EmitsConnectAndDisconnect(t *testing.T) {
 	mgr.setCurrent(u.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -636,7 +695,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -720,7 +779,7 @@ func TestWebSocketProxyHandler_KicksClientOffStaleUpstreamOnURLChange(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -772,7 +831,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 	mgr.setCurrent(deadURL)
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
