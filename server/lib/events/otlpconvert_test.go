@@ -1,0 +1,125 @@
+package events
+
+import (
+	"encoding/json"
+	"testing"
+	"time"
+
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/log"
+)
+
+func strptr(s string) *string { return &s }
+
+func attrsOf(rec log.Record) map[string]log.Value {
+	out := make(map[string]log.Value)
+	rec.WalkAttributes(func(kv log.KeyValue) bool {
+		out[kv.Key] = kv.Value
+		return true
+	})
+	return out
+}
+
+func TestToLogRecord_CoreFields(t *testing.T) {
+	meta := map[string]string{
+		"telemetry_session_id": "cs_abc",
+		"cdp_session_id":       "s1",
+		"target_id":            "t1",
+	}
+	env := Envelope{
+		Seq: 412,
+		Event: Event{
+			Ts:       1_718_801_234_567_890,
+			Type:     "network_response",
+			Category: Network,
+			Source: oapi.BrowserEventSource{
+				Kind:     oapi.BrowserEventSourceKind("cdp"),
+				Event:    strptr("Network.loadingFinished"),
+				Metadata: &meta,
+			},
+			Data: json.RawMessage(`{"status":200,"url":"https://api.foo.com/v1/x","ok":true}`),
+		},
+	}
+
+	rec := toLogRecord(env)
+
+	assert.Equal(t, "network_response", rec.EventName())
+	assert.Equal(t, time.UnixMicro(1_718_801_234_567_890).UTC(), rec.Timestamp().UTC())
+	assert.Equal(t, log.SeverityInfo, rec.Severity())
+
+	attrs := attrsOf(rec)
+	assert.Equal(t, "network", attrs["kernel.event.category"].AsString())
+	assert.Equal(t, int64(412), attrs["kernel.event.seq"].AsInt64())
+	assert.Equal(t, "cdp", attrs["kernel.source.kind"].AsString())
+	assert.Equal(t, "Network.loadingFinished", attrs["kernel.source.event"].AsString())
+	assert.Equal(t, "cs_abc", attrs["kernel.telemetry_session_id"].AsString())
+	assert.Equal(t, "s1", attrs["kernel.cdp_session_id"].AsString())
+	assert.Equal(t, "t1", attrs["kernel.target_id"].AsString())
+}
+
+func TestToLogRecord_StructuredBody(t *testing.T) {
+	env := Envelope{Seq: 1, Event: Event{
+		Ts:   1,
+		Type: "network_response",
+		Data: json.RawMessage(`{"status":200,"ok":true,"ratio":1.5,"tags":["a","b"]}`),
+	}}
+
+	rec := toLogRecord(env)
+	body := rec.Body()
+	require.Equal(t, log.KindMap, body.Kind())
+
+	got := make(map[string]log.Value)
+	for _, kv := range body.AsMap() {
+		got[kv.Key] = kv.Value
+	}
+	assert.Equal(t, int64(200), got["status"].AsInt64(), "integral json number stays int64")
+	assert.Equal(t, true, got["ok"].AsBool())
+	assert.Equal(t, 1.5, got["ratio"].AsFloat64())
+	require.Equal(t, log.KindSlice, got["tags"].Kind())
+	assert.Len(t, got["tags"].AsSlice(), 2)
+}
+
+func TestToLogRecord_Severity(t *testing.T) {
+	cases := map[string]log.Severity{
+		"console_error":          log.SeverityError,
+		"network_loading_failed": log.SeverityWarn,
+		"monitor_init_failed":    log.SeverityWarn,
+		"network_response":       log.SeverityInfo,
+		"page_navigation":        log.SeverityInfo,
+	}
+	for typ, want := range cases {
+		rec := toLogRecord(Envelope{Event: Event{Type: typ}})
+		assert.Equalf(t, want, rec.Severity(), "severity for %q", typ)
+	}
+}
+
+func TestToLogRecord_TruncatedNoData(t *testing.T) {
+	env := Envelope{Seq: 9, Event: Event{
+		Ts:        1,
+		Type:      "network_response",
+		Category:  Network,
+		Truncated: true,
+		// Data nil: oversized envelope had its payload stripped at publish.
+	}}
+
+	rec := toLogRecord(env)
+	assert.Equal(t, log.KindEmpty, rec.Body().Kind(), "no body when data is absent")
+	assert.Equal(t, true, attrsOf(rec)["kernel.truncated"].AsBool())
+}
+
+func TestToLogRecord_InvalidJSONFallsBackToString(t *testing.T) {
+	env := Envelope{Seq: 1, Event: Event{Ts: 1, Type: "x", Data: json.RawMessage(`not json`)}}
+	rec := toLogRecord(env)
+	body := rec.Body()
+	require.Equal(t, log.KindString, body.Kind())
+	assert.Equal(t, "not json", body.AsString())
+}
+
+func TestOTLPCategoryExported(t *testing.T) {
+	assert.True(t, otlpCategoryExported(Network))
+	assert.True(t, otlpCategoryExported(Console))
+	assert.False(t, otlpCategoryExported(Screenshot))
+	assert.False(t, otlpCategoryExported(Monitor))
+}
