@@ -1,11 +1,5 @@
 // Package wsdrain tracks live WebSocket connections so they can be closed with
 // a single status code when the server shuts down.
-//
-// Browser VMs are torn down on session destroy. The hijacked WebSocket flows
-// (CDP proxy, WebDriver/BiDi, ChromeDriver, PTY attach) are not touched by
-// http.Server.Shutdown, so without a proactive close the client sees a 1006
-// abnormal closure when the VM dies. Registering each connection here lets the
-// shutdown path send every client a clean 1001 Going Away first.
 package wsdrain
 
 import (

@@ -47,11 +47,6 @@ func main() {
 	}
 	slogger.Info("server configuration", "config", config)
 
-	// Tracks live hijacked WebSocket connections (CDP, WebDriver/BiDi,
-	// ChromeDriver, PTY attach) so they can be closed with a clean Going Away
-	// frame on shutdown — http.Server.Shutdown does not touch hijacked conns.
-	wsRegistry := wsdrain.New()
-
 	// context cancellation on SIGINT/SIGTERM
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -86,6 +81,9 @@ func main() {
 		slogger.Error("invalid default recording parameters", "err", err)
 		os.Exit(1)
 	}
+
+	// ws conn tracker
+	wsRegistry := wsdrain.New()
 
 	// DevTools WebSocket upstream manager: tail Chromium supervisord log
 	const chromiumLogPath = "/var/log/supervisord/chromium"
@@ -287,22 +285,17 @@ func main() {
 	defer shutdownCancel()
 	g, _ := errgroup.WithContext(shutdownCtx)
 
-	// Close hijacked WebSockets with Going Away. http.Server.Shutdown leaves
-	// hijacked conns untouched, so without this CDP/WebDriver clients would see
-	// a 1006 abnormal closure when the VM is destroyed instead of a clean 1001.
-	// This drains a disjoint set of connections from the servers below, so it
-	// runs alongside them.
-	g.Go(func() error {
-		if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
-			slogger.Info("closed active websocket connections for shutdown", "count", n)
-		}
-		return nil
-	})
 	g.Go(func() error {
 		return srv.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {
 		return apiService.Shutdown(shutdownCtx)
+	})
+	g.Go(func() error {
+		if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
+			slogger.Info("closed active websocket connections for shutdown", "count", n)
+		}
+		return nil
 	})
 	g.Go(func() error {
 		upstreamMgr.Stop()
