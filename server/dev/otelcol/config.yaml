@@ -1,0 +1,24 @@
+# Local OTel Collector for testing the OTLP telemetry sink (Phase 1).
+# Receives OTLP/HTTP on :4318 and prints decoded records to stdout.
+#
+#   docker run --rm -p 4318:4318 \
+#     -v "$PWD/server/dev/otelcol/config.yaml":/etc/otelcol-contrib/config.yaml \
+#     otel/opentelemetry-collector-contrib:latest
+#
+# Then run the server with:
+#   OTLP_RELAY_ENDPOINT=localhost:4318 OTLP_RELAY_PATH=/v1/logs OTLP_RELAY_INSECURE=true
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [debug]
