@@ -102,6 +102,23 @@ func TestTelemetrySession(t *testing.T) {
 		assert.Equal(t, "ev.three", env.Event.Type)
 	})
 
+	t.Run("nil_metadata_events_keep_original_session_id", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 100))
+		reader := ts.NewReader(0)
+
+		ts.Start("session-1", TelemetryConfig{Categories: events.UserCategories})
+		ts.Publish(events.Event{Type: "page.navigation", Category: events.Page, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 1})
+		ts.Start("session-2", TelemetryConfig{Categories: events.UserCategories})
+		ts.Publish(events.Event{Type: "page.navigation", Category: events.Page, Source: oapi.BrowserEventSource{Kind: oapi.Cdp}, Ts: 2})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		first := readEnvelope(t, reader, ctx)
+		second := readEnvelope(t, reader, ctx)
+		assert.Equal(t, "session-1", telemetrySessionIDFromMetadata(t, first.Event.Source))
+		assert.Equal(t, "session-2", telemetrySessionIDFromMetadata(t, second.Event.Source))
+	})
+
 	t.Run("publish_increments_seq", func(t *testing.T) {
 		ts := newTestTelemetrySession(t)
 		reader := ts.NewReader(0)

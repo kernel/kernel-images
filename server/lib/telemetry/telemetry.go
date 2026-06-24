@@ -31,6 +31,7 @@ type TelemetrySession struct {
 	id              string
 	sessionStartSeq uint64
 	categories      map[oapi.TelemetryEventCategory]struct{}
+	sessionMetadata *map[string]string
 	appliedAt       time.Time
 }
 
@@ -68,6 +69,8 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.sessionStartSeq = s.es.Seq()
 	s.appliedAt = time.Now()
 	s.categories = categorySet(cfg.Categories)
+	metadata := map[string]string{"telemetry_session_id": telemetrySessionID}
+	s.sessionMetadata = &metadata
 }
 
 // publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
@@ -77,10 +80,10 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 		ev.Ts = time.Now().UnixMicro()
 	}
 	if ev.Source.Metadata == nil {
-		m := make(map[string]string)
-		ev.Source.Metadata = &m
+		ev.Source.Metadata = s.sessionMetadata
+	} else {
+		(*ev.Source.Metadata)["telemetry_session_id"] = s.id
 	}
-	(*ev.Source.Metadata)["telemetry_session_id"] = s.id
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 
@@ -176,5 +179,6 @@ func (s *TelemetrySession) Stop() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.id = ""
+	s.sessionMetadata = nil
 	s.appliedAt = time.Time{}
 }

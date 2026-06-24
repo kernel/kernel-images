@@ -12,6 +12,15 @@ import (
 // maxS2RecordBytes is the maximum record size for the S2 event pipeline (1 MB).
 const maxS2RecordBytes = 1_000_000
 
+// Below this conservative size estimate, JSON overhead cannot push a record
+// near the S2 limit, so Publish can avoid a full marshal on the hot path.
+const truncateMarshalThreshold = maxS2RecordBytes - 64*1024
+
+const (
+	jsonEnvelopeOverhead      = 512
+	jsonMetadataEntryOverhead = 16
+)
+
 const (
 	Console     = oapi.TelemetryEventCategory("console")
 	Network     = oapi.TelemetryEventCategory("network")
@@ -97,8 +106,11 @@ type Envelope struct {
 
 // truncateIfNeeded marshals env and returns the (possibly truncated) envelope.
 // If the envelope still exceeds maxS2RecordBytes after nulling data (e.g. huge
-// source.metadata), it is returned as-is, callers must handle nil data.
+// source.metadata), it is returned as-is with data set to null.
 func truncateIfNeeded(env Envelope) (Envelope, []byte) {
+	if estimatedEnvelopeBytes(env) < truncateMarshalThreshold {
+		return env, nil
+	}
 	data, err := json.Marshal(env)
 	if err != nil {
 		return env, nil
@@ -113,7 +125,27 @@ func truncateIfNeeded(env Envelope) (Envelope, []byte) {
 		return env, nil
 	}
 	if len(data) > maxS2RecordBytes {
-		slog.Warn("truncateIfNeeded: envelope exceeds limit even without data", "seq", env.Seq, "size", len(data))
+		slog.Warn("truncateIfNeeded: envelope exceeds limit even without data", "size", len(data))
 	}
 	return env, data
+}
+
+func estimatedEnvelopeBytes(env Envelope) int {
+	n := jsonEnvelopeOverhead + len(env.Event.Data)
+	n += maxEscapedJSONLen(env.Event.Type)
+	n += maxEscapedJSONLen(string(env.Event.Category))
+	n += maxEscapedJSONLen(string(env.Event.Source.Kind))
+	if env.Event.Source.Event != nil {
+		n += maxEscapedJSONLen(*env.Event.Source.Event)
+	}
+	if env.Event.Source.Metadata != nil {
+		for k, v := range *env.Event.Source.Metadata {
+			n += jsonMetadataEntryOverhead + maxEscapedJSONLen(k) + maxEscapedJSONLen(v)
+		}
+	}
+	return n
+}
+
+func maxEscapedJSONLen(s string) int {
+	return len(s) * 6
 }

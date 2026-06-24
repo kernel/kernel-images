@@ -13,7 +13,8 @@ type ringBuffer struct {
 	buf        []Envelope
 	cap        uint64
 	latestSeq  uint64        // highest envelope.Seq published
-	readerWake chan struct{} // closed-and-replaced on each Publish to wake blocked readers
+	readerWake chan struct{} // closed-and-replaced when blocked readers need a wakeup
+	waiters    int
 }
 
 func newRingBuffer(capacity int) (*ringBuffer, error) {
@@ -36,21 +37,56 @@ func (rb *ringBuffer) reset() {
 		rb.buf[i] = Envelope{}
 	}
 	rb.latestSeq = 0
+	var old chan struct{}
+	if rb.waiters > 0 {
+		old = rb.readerWake
+		rb.readerWake = make(chan struct{})
+	}
+	rb.mu.Unlock()
+	if old != nil {
+		close(old)
+	}
+}
+
+func (rb *ringBuffer) publishLocked(env Envelope) chan struct{} {
+	rb.buf[env.Seq%rb.cap] = env
+	rb.latestSeq = env.Seq
+	if rb.waiters == 0 {
+		return nil
+	}
 	old := rb.readerWake
 	rb.readerWake = make(chan struct{})
-	rb.mu.Unlock()
-	close(old)
+	return old
+}
+
+func (rb *ringBuffer) closeWake(old chan struct{}) {
+	if old != nil {
+		close(old)
+	}
 }
 
 // publish adds an envelope to the ring, evicting the oldest on overflow.
 func (rb *ringBuffer) publish(env Envelope) {
 	rb.mu.Lock()
-	rb.buf[env.Seq%rb.cap] = env
-	rb.latestSeq = env.Seq
-	old := rb.readerWake
-	rb.readerWake = make(chan struct{})
+	old := rb.publishLocked(env)
 	rb.mu.Unlock()
-	close(old)
+	rb.closeWake(old)
+}
+
+func (rb *ringBuffer) publishNext(env Envelope) Envelope {
+	rb.mu.Lock()
+	env.Seq = rb.latestSeq + 1
+	env, _ = truncateIfNeeded(env)
+	old := rb.publishLocked(env)
+	rb.mu.Unlock()
+	rb.closeWake(old)
+	return env
+}
+
+func (rb *ringBuffer) seq() uint64 {
+	rb.mu.RLock()
+	defer rb.mu.RUnlock()
+	return rb.latestSeq
 }
 
 func (rb *ringBuffer) oldestSeq() uint64 {
@@ -108,7 +144,7 @@ func (r *Reader) TryRead() (ReadResult, bool) {
 // Read blocks until the next envelope is available or ctx is cancelled.
 func (r *Reader) Read(ctx context.Context) (ReadResult, error) {
 	for {
-		r.rb.mu.RLock()
+		r.rb.mu.Lock()
 		wake := r.rb.readerWake
 		latest := r.rb.latestSeq
 		oldest := r.rb.oldestSeq()
@@ -117,35 +153,49 @@ func (r *Reader) Read(ctx context.Context) (ReadResult, error) {
 			// Buffer is empty (or was just reset). Reset reader position
 			// so it starts from the beginning when new data arrives.
 			r.nextSeq = 1
-			r.rb.mu.RUnlock()
-			select {
-			case <-ctx.Done():
+			r.rb.waiters++
+			r.rb.mu.Unlock()
+			err := waitForWake(ctx, wake)
+			r.rb.mu.Lock()
+			r.rb.waiters--
+			r.rb.mu.Unlock()
+			if err != nil {
 				return ReadResult{}, ctx.Err()
-			case <-wake:
-				continue
 			}
+			continue
 		}
 
 		if r.nextSeq < oldest {
 			dropped := oldest - r.nextSeq
 			r.nextSeq = oldest
-			r.rb.mu.RUnlock()
+			r.rb.mu.Unlock()
 			return ReadResult{Dropped: dropped}, nil
 		}
 
 		if r.nextSeq <= latest {
 			env := r.rb.buf[r.nextSeq%r.rb.cap]
 			r.nextSeq++
-			r.rb.mu.RUnlock()
+			r.rb.mu.Unlock()
 			return ReadResult{Envelope: &env}, nil
 		}
 
-		r.rb.mu.RUnlock()
-
-		select {
-		case <-ctx.Done():
+		r.rb.waiters++
+		r.rb.mu.Unlock()
+		err := waitForWake(ctx, wake)
+		r.rb.mu.Lock()
+		r.rb.waiters--
+		r.rb.mu.Unlock()
+		if err != nil {
 			return ReadResult{}, ctx.Err()
-		case <-wake:
 		}
+	}
+}
+
+func waitForWake(ctx context.Context, wake <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-wake:
+		return nil
 	}
 }

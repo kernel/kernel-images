@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -118,6 +119,44 @@ func TestEventOmitEmpty(t *testing.T) {
 	assert.NotContains(t, s, `"event"`)
 }
 
+func TestTruncateIfNeededChecksLargeMetadata(t *testing.T) {
+	metadata := map[string]string{"large": strings.Repeat("x", maxS2RecordBytes)}
+	env := Envelope{
+		Event: Event{
+			Type:     "console.log",
+			Category: Console,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &metadata},
+			Data:     json.RawMessage(`{"message":"hello"}`),
+		},
+	}
+
+	truncated, data := truncateIfNeeded(env)
+
+	require.NotNil(t, data)
+	assert.True(t, truncated.Event.Truncated)
+	assert.Equal(t, json.RawMessage("null"), truncated.Event.Data)
+	assert.Greater(t, len(data), maxS2RecordBytes)
+}
+
+func TestTruncateIfNeededChecksEscapedMetadata(t *testing.T) {
+	metadata := map[string]string{"escaped": strings.Repeat("<", maxS2RecordBytes/5)}
+	env := Envelope{
+		Event: Event{
+			Type:     "console.log",
+			Category: Console,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &metadata},
+			Data:     json.RawMessage(`{"message":"hello"}`),
+		},
+	}
+
+	truncated, data := truncateIfNeeded(env)
+
+	require.NotNil(t, data)
+	assert.True(t, truncated.Event.Truncated)
+	assert.Equal(t, json.RawMessage("null"), truncated.Event.Data)
+	assert.Greater(t, len(data), maxS2RecordBytes)
+}
+
 func mkEnv(seq uint64, ev Event) Envelope {
 	return Envelope{Seq: seq, Event: ev}
 }
@@ -131,6 +170,74 @@ func newTestRingBuffer(t *testing.T, capacity int) *ringBuffer {
 	rb, err := newRingBuffer(capacity)
 	require.NoError(t, err)
 	return rb
+}
+
+func TestEventStreamPublishAssignsSeq(t *testing.T) {
+	es, err := NewEventStream(EventStreamConfig{RingCapacity: 10})
+	require.NoError(t, err)
+	reader := es.NewReader(0)
+
+	first := es.Publish(Envelope{Event: cdpEvent("console.log", Console)})
+	second := es.Publish(Envelope{Event: cdpEvent("network.request", Network)})
+
+	assert.Equal(t, uint64(1), first.Seq)
+	assert.Equal(t, uint64(2), second.Seq)
+	assert.Equal(t, uint64(2), es.Seq())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	assert.Equal(t, uint64(1), readEnvelope(t, reader, ctx).Seq)
+	assert.Equal(t, uint64(2), readEnvelope(t, reader, ctx).Seq)
+}
+
+func TestEventStreamPublishTruncatesWithAssignedSeq(t *testing.T) {
+	es, err := NewEventStream(EventStreamConfig{RingCapacity: 10})
+	require.NoError(t, err)
+	nextSeq := uint64(1_000_000_000_000_000_000)
+	es.ring.latestSeq = nextSeq - 1
+
+	env := Envelope{
+		Event: Event{
+			Type:     "console.log",
+			Category: Console,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
+			Data:     json.RawMessage(`""`),
+		},
+	}
+	seqZeroLen := marshaledEnvelopeLen(t, env)
+	env.Seq = nextSeq
+	nextSeqLen := marshaledEnvelopeLen(t, env)
+	payloadLen := maxS2RecordBytes - seqZeroLen
+	payload := json.RawMessage(`"` + strings.Repeat("x", payloadLen) + `"`)
+	seqZeroEnv := Envelope{Event: Event{
+		Type:     "console.log",
+		Category: Console,
+		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
+		Data:     payload,
+	}}
+	nextSeqEnv := seqZeroEnv
+	nextSeqEnv.Seq = nextSeq
+	require.LessOrEqual(t, marshaledEnvelopeLen(t, seqZeroEnv), maxS2RecordBytes)
+	require.Greater(t, marshaledEnvelopeLen(t, nextSeqEnv), maxS2RecordBytes)
+	require.Greater(t, nextSeqLen-seqZeroLen, 0)
+
+	published := es.Publish(Envelope{Event: Event{
+		Type:     "console.log",
+		Category: Console,
+		Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
+		Data:     payload,
+	}})
+
+	assert.Equal(t, nextSeq, published.Seq)
+	assert.True(t, published.Event.Truncated)
+	assert.Equal(t, json.RawMessage("null"), published.Event.Data)
+}
+
+func marshaledEnvelopeLen(t *testing.T, env Envelope) int {
+	t.Helper()
+	data, err := json.Marshal(env)
+	require.NoError(t, err)
+	return len(data)
 }
 
 // TestRingBuffer: publish 3 envelopes; reader reads all 3 in order
