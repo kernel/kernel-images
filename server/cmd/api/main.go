@@ -147,6 +147,9 @@ func main() {
 	})
 	oapi.HandlerFromMux(strictHandler, r)
 
+	r.Post("/internal/fork-identity", forkIdentityHandler(slogger))
+	r.Get("/internal/fork-identity/config", forkIdentityConfigHandler(slogger))
+
 	// endpoints to expose the spec
 	r.Get("/spec.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi")
