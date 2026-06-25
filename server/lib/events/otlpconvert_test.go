@@ -50,6 +50,7 @@ func TestToLogRecord_CoreFields(t *testing.T) {
 	assert.Equal(t, log.SeverityInfo, rec.Severity())
 
 	attrs := attrsOf(rec)
+	assert.Equal(t, "network_response", attrs["kernel.event.type"].AsString(), "event type mirrored as attribute for backends that drop EventName")
 	assert.Equal(t, "network", attrs["kernel.event.category"].AsString())
 	assert.Equal(t, int64(412), attrs["kernel.event.seq"].AsInt64())
 	assert.Equal(t, "cdp", attrs["kernel.source.kind"].AsString())
@@ -57,6 +58,33 @@ func TestToLogRecord_CoreFields(t *testing.T) {
 	assert.Equal(t, "cs_abc", attrs["kernel.telemetry_session_id"].AsString())
 	assert.Equal(t, "s1", attrs["kernel.cdp_session_id"].AsString())
 	assert.Equal(t, "t1", attrs["kernel.target_id"].AsString())
+	// High-value network fields promoted to queryable attributes.
+	assert.Equal(t, int64(200), attrs["http.response.status_code"].AsInt64())
+	assert.Equal(t, "https://api.foo.com/v1/x", attrs["url.full"].AsString())
+}
+
+func TestToLogRecord_PromotedAttributes(t *testing.T) {
+	t.Run("network", func(t *testing.T) {
+		env := Envelope{Seq: 1, Event: Event{Type: "network_request", Category: Network,
+			Data: json.RawMessage(`{"method":"GET","url":"https://x/y","status":404}`)}}
+		rec := toLogRecord(env)
+		attrs := attrsOf(rec)
+		assert.Equal(t, "GET", attrs["http.request.method"].AsString())
+		assert.Equal(t, "https://x/y", attrs["url.full"].AsString())
+		assert.Equal(t, int64(404), attrs["http.response.status_code"].AsInt64())
+	})
+	t.Run("console", func(t *testing.T) {
+		env := Envelope{Seq: 2, Event: Event{Type: "console_error", Category: Console,
+			Data: json.RawMessage(`{"level":"error","text":"boom"}`)}}
+		rec := toLogRecord(env)
+		assert.Equal(t, "error", attrsOf(rec)["kernel.console.level"].AsString())
+	})
+	t.Run("non-object data does not panic", func(t *testing.T) {
+		env := Envelope{Seq: 3, Event: Event{Type: "x", Category: Network,
+			Data: json.RawMessage(`["a","b"]`)}}
+		rec := toLogRecord(env)
+		assert.Equal(t, "x", attrsOf(rec)["kernel.event.type"].AsString())
+	})
 }
 
 func TestToLogRecord_StructuredBody(t *testing.T) {

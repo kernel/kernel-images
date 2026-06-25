@@ -40,12 +40,23 @@ func toLogRecord(env Envelope) log.Record {
 	rec.SetSeverity(sev)
 	rec.SetSeverityText(sevText)
 
-	if body, ok := jsonToLogValue(ev.Data); ok {
-		rec.SetBody(body)
+	// Decode the payload once: it becomes the structured body and the source of
+	// promoted attributes.
+	var data any
+	if len(ev.Data) > 0 {
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			rec.SetBody(log.StringValue(string(ev.Data)))
+			data = nil
+		} else {
+			rec.SetBody(anyToLogValue(data))
+		}
 	}
 
-	attrs := make([]log.KeyValue, 0, 8)
+	attrs := make([]log.KeyValue, 0, 12)
 	attrs = append(attrs,
+		// EventName is dropped by some backends (Datadog, Loki), so the event
+		// type is mirrored into an attribute to stay queryable everywhere.
+		log.String("kernel.event.type", ev.Type),
 		log.String("kernel.event.category", string(ev.Category)),
 		log.Int64("kernel.event.seq", int64(env.Seq)),
 		log.String("kernel.source.kind", string(ev.Source.Kind)),
@@ -61,8 +72,36 @@ func toLogRecord(env Envelope) log.Record {
 			attrs = append(attrs, log.String("kernel."+k, v))
 		}
 	}
+	if m, ok := data.(map[string]any); ok {
+		attrs = append(attrs, promotedAttributes(ev.Category, m)...)
+	}
 	rec.AddAttributes(attrs...)
 	return rec
+}
+
+// promotedAttributes lifts high-value payload fields into typed, queryable
+// attributes (OTel semantic conventions where they exist) so they stay
+// filterable in backends that do not flatten a structured body (Datadog, Loki).
+// The full payload remains in the body for fidelity.
+func promotedAttributes(cat oapi.TelemetryEventCategory, data map[string]any) []log.KeyValue {
+	var out []log.KeyValue
+	switch cat {
+	case Network:
+		if v, ok := data["method"].(string); ok {
+			out = append(out, log.String("http.request.method", v))
+		}
+		if v, ok := data["url"].(string); ok {
+			out = append(out, log.String("url.full", v))
+		}
+		if v, ok := data["status"].(float64); ok {
+			out = append(out, log.Int64("http.response.status_code", int64(v)))
+		}
+	case Console:
+		if v, ok := data["level"].(string); ok {
+			out = append(out, log.String("kernel.console.level", v))
+		}
+	}
+	return out
 }
 
 // otlpSeverity maps an event type to an OTLP severity. Console errors are
@@ -77,21 +116,6 @@ func otlpSeverity(eventType string) (log.Severity, string) {
 	default:
 		return log.SeverityInfo, "INFO"
 	}
-}
-
-// jsonToLogValue decodes raw event data into a structured OTLP value so the
-// body stays navigable in the backend rather than an opaque string. Returns
-// false when there is no data (e.g. truncated oversized envelopes). Invalid
-// JSON falls back to the raw bytes as a string.
-func jsonToLogValue(raw json.RawMessage) (log.Value, bool) {
-	if len(raw) == 0 {
-		return log.Value{}, false
-	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return log.StringValue(string(raw)), true
-	}
-	return anyToLogValue(v), true
 }
 
 func anyToLogValue(v any) log.Value {
