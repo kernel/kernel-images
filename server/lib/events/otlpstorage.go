@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -20,10 +19,6 @@ import (
 // publish, so this keeps the common case well under the limit. Byte-based
 // batching (the real guard against many large records) is deferred.
 const defaultOTLPMaxBatchRecords = 200
-
-// maxOTLPRecordBytes drops a single envelope whose data alone would risk the
-// relay body cap. A safety net above the publish-time truncation.
-const maxOTLPRecordBytes = 4 * 1024 * 1024
 
 // OTLPConfig configures the OTLP telemetry sink.
 type OTLPConfig struct {
@@ -53,11 +48,9 @@ type OTLPConfig struct {
 type otlpStorage struct {
 	provider *sdklog.LoggerProvider
 	logger   log.Logger
-	log      *slog.Logger
-	dropped  atomic.Uint64
 }
 
-func newOTLPStorage(ctx context.Context, cfg OTLPConfig, logger *slog.Logger) (*otlpStorage, error) {
+func newOTLPStorage(ctx context.Context, cfg OTLPConfig) (*otlpStorage, error) {
 	opts := []otlploghttp.Option{otlploghttp.WithEndpoint(cfg.Endpoint)}
 	if cfg.URLPath != "" {
 		opts = append(opts, otlploghttp.WithURLPath(cfg.URLPath))
@@ -93,19 +86,13 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, logger *slog.Logger) (*
 	return &otlpStorage{
 		provider: provider,
 		logger:   provider.Logger(otlpScopeName),
-		log:      logger,
 	}, nil
 }
 
 // Append converts an exported-category envelope to an OTLP record and hands it
-// to the SDK. Excluded categories and oversized envelopes are dropped.
+// to the SDK. Excluded categories are dropped.
 func (s *otlpStorage) Append(ctx context.Context, env Envelope) error {
 	if !otlpCategoryExported(env.Event.Category) {
-		return nil
-	}
-	if len(env.Event.Data) > maxOTLPRecordBytes {
-		n := s.dropped.Add(1)
-		s.log.Warn("otlp storage: dropped oversized event", "seq", env.Seq, "bytes", len(env.Event.Data), "total_dropped", n)
 		return nil
 	}
 	s.logger.Emit(ctx, toLogRecord(env))
@@ -145,7 +132,7 @@ func (w *OTLPStorageWriter) Start(ctx context.Context) error {
 	if w.started {
 		return fmt.Errorf("otlpstoragewriter: Start called more than once")
 	}
-	storage, err := newOTLPStorage(ctx, w.cfg, w.log)
+	storage, err := newOTLPStorage(ctx, w.cfg)
 	if err != nil {
 		return err
 	}
