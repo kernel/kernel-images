@@ -457,7 +457,6 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 	}
 }
 
-
 // navigateBlank points the active page at about:blank via playwright so the
 // renderer is alive before we query window dimensions.
 func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
@@ -491,14 +490,44 @@ func patchDisplayExpectingOK(t *testing.T, ctx context.Context, c *TestContainer
 		Height:      &height,
 		RefreshRate: &rate,
 	}
-	rsp, err := client.PatchDisplayWithResponse(ctx, req)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, rsp.StatusCode(), "PATCH /display: %s body=%s", rsp.Status(), string(rsp.Body))
-	require.NotNil(t, rsp.JSON200)
-	require.NotNil(t, rsp.JSON200.Width)
-	require.NotNil(t, rsp.JSON200.Height)
+	// Retry on the "neko not converged" signal: under concurrent
+	// privileged-container load neko's ScreenConfigurationChange can fail to
+	// apply, leaving the X root at the dummy DDX default (3840x2160). The
+	// server polls the X root for the realized size, so on that race it
+	// truthfully reports back 3840x2160 instead of the requested mode. That's
+	// a transient environmental hiccup, not a resize bug — re-issue the PATCH
+	// until neko applies the mode (or give up and let the assertions fail with
+	// the real observed value).
+	var rsp *instanceoapi.PatchDisplayResponse
+	for attempt := 0; attempt < 5; attempt++ {
+		rsp, err = client.PatchDisplayWithResponse(ctx, req)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, rsp.StatusCode(), "PATCH /display: %s body=%s", rsp.Status(), string(rsp.Body))
+		require.NotNil(t, rsp.JSON200)
+		require.NotNil(t, rsp.JSON200.Width)
+		require.NotNil(t, rsp.JSON200.Height)
+		if !isUnconvergedNekoSize(*rsp.JSON200.Width, *rsp.JSON200.Height, width, height) {
+			break
+		}
+		t.Logf("PATCH /display returned unconverged neko size %dx%d (requested %dx%d), retrying",
+			*rsp.JSON200.Width, *rsp.JSON200.Height, width, height)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context cancelled while retrying PATCH /display: %v", ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
 	require.Equal(t, width, *rsp.JSON200.Width)
 	require.Equal(t, height, *rsp.JSON200.Height)
+}
+
+// isUnconvergedNekoSize reports whether a realized (w,h) looks like neko's
+// unconverged dummy-DDX default rather than the requested mode. The dummy max
+// (3840x2160) is >1000px off any normal request; real libxcvt rounding is
+// <16px, so a >64px gap on either axis is a safe "neko didn't apply" signal.
+func isUnconvergedNekoSize(realizedW, realizedH, wantW, wantH int) bool {
+	const slack = 64
+	return abs(realizedW-wantW) > slack || abs(realizedH-wantH) > slack
 }
 
 // TestDisplayResizeOddWidthHonoursLibxcvtRounding covers the path where a
@@ -544,6 +573,16 @@ func TestDisplayResizeOddWidthHonoursLibxcvtRounding(t *testing.T) {
 
 	navigateBlank(t, ctx, c)
 
+	// Wait for neko to apply its boot screen config (neko.yaml: 1920x1080@25)
+	// before resizing. Under concurrent privileged-container load neko's
+	// initial ScreenConfigurationChange can be slow; until it lands the X root
+	// sits at the dummy DDX default (3840x2160, the largest attached modeline).
+	// Resizing while neko is still unconverged makes neko echo back that stale
+	// 3840x2160 screen — which is exactly the flake this test used to hit
+	// (PATCH returned 200 body={3840x2160}). Gate on the baseline so the resize
+	// runs against a converged neko.
+	waitForXRootResolution(t, ctx, c, 1920, 1080, 60*time.Second)
+
 	// Request an odd width — the exact pattern from the production taint.
 	// libxcvt rounds 1365 to 1360 (CVT 8-pixel grid) then bumps to 1366
 	// (FWXGA hack for 1360×768 specifically). The X root lands at 1366×768.
@@ -554,13 +593,38 @@ func TestDisplayResizeOddWidthHonoursLibxcvtRounding(t *testing.T) {
 	require.NoError(t, err)
 	rate := instanceoapi.PatchDisplayRequestRefreshRate(refreshRate)
 	w, h := requestedWidth, height
-	rsp, err := client.PatchDisplayWithResponse(ctx, instanceoapi.PatchDisplayJSONRequestBody{
-		Width:       &w,
-		Height:      &h,
-		RefreshRate: &rate,
-	})
-	require.NoError(t, err)
 
+	// Retry on the unconverged-neko signal (X root stuck at the 3840x2160
+	// dummy default) just like patchDisplayExpectingOK; see that helper for
+	// the rationale. Without this the resize occasionally lands while neko is
+	// still mid-reconfiguration and echoes back 3840x2160.
+	var rsp *instanceoapi.PatchDisplayResponse
+	for attempt := 0; attempt < 5; attempt++ {
+		rsp, err = client.PatchDisplayWithResponse(ctx, instanceoapi.PatchDisplayJSONRequestBody{
+			Width:       &w,
+			Height:      &h,
+			RefreshRate: &rate,
+		})
+		require.NoError(t, err)
+		require.NotNil(t, rsp.JSON200, "JSON200 response must be present")
+		require.NotNil(t, rsp.JSON200.Width, "response must include realized width")
+		require.NotNil(t, rsp.JSON200.Height, "response must include realized height")
+		if !isUnconvergedNekoSize(*rsp.JSON200.Width, *rsp.JSON200.Height, requestedWidth, height) {
+			break
+		}
+		t.Logf("PATCH /display returned unconverged neko size %dx%d (requested %dx%d), retrying",
+			*rsp.JSON200.Width, *rsp.JSON200.Height, requestedWidth, height)
+		select {
+		case <-ctx.Done():
+			t.Fatalf("context cancelled while retrying PATCH /display: %v", ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
+
+	// Poll the X root until it converges on the realized mode rather than
+	// reading once: neko's ScreenConfigurationChange is asynchronous and the
+	// root may not reflect the new mode the instant PATCH returns.
+	waitForXRootResolution(t, ctx, c, realizedWidth, height, 30*time.Second)
 	rootW, rootH, xrErr := getXRootResolution(ctx, c)
 	require.NoError(t, xrErr, "read x root after resize")
 	t.Logf("PATCH /display(width=%d, height=%d) -> status=%d body=%s; x_root=%dx%d",

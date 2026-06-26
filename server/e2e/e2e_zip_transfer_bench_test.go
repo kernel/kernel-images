@@ -113,13 +113,23 @@ func TestZipTransferTiming(t *testing.T) {
 // populateUserData creates some realistic content in the user-data directory
 // by executing a playwright script that navigates to a page.
 func populateUserData(ctx context.Context, client *instanceoapi.ClientWithResponses) error {
-	// Navigate to example.com to generate some browser state
+	// Navigate to generate some browser state (cache/cookies/history) so the
+	// user-data dir is non-trivial for the transfer benchmark. We only need
+	// *some* state, not a specific site. Use example.com (small, reliable) and
+	// wait for 'domcontentloaded' rather than 'load': the previous version
+	// navigated to www.google.com with the default 'load' wait, which
+	// regularly timed out at 30s under concurrent CI network pressure (it
+	// fans out to many subresources) and failed the whole test. Any secondary
+	// navigation is best-effort — its only purpose is to add more state.
 	code := `
-		await page.goto('https://example.com');
+		await page.goto('https://example.com', { waitUntil: 'domcontentloaded' });
 		await page.waitForTimeout(500);
-		// Visit another page to generate more cache/state
-		await page.goto('https://www.google.com');
-		await page.waitForTimeout(500);
+		try {
+			await page.goto('https://example.org', { waitUntil: 'domcontentloaded', timeout: 10000 });
+			await page.waitForTimeout(500);
+		} catch (e) {
+			// best-effort: extra state is a nice-to-have, not required
+		}
 		return 'done';
 	`
 	req := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
