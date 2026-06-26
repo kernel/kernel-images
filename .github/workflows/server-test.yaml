@@ -16,7 +16,7 @@ jobs:
     uses: ./.github/workflows/chromium-headless-image.yaml
     secrets: inherit
 
-  test:
+  test-server-e2e:
     runs-on: ubuntu-latest
     needs: [build-headful, build-headless]
     permissions:
