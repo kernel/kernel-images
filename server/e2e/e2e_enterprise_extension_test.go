@@ -443,6 +443,16 @@ func TestExtensionDownloadLogSince(t *testing.T) {
 	require.Equal(t, "line 3\n", extensionDownloadLogSince("line 3\n", ""))
 }
 
+func TestNextExtensionInstallPollDelay(t *testing.T) {
+	t.Parallel()
+
+	require.Zero(t, nextExtensionInstallPollDelay(0))
+	require.Zero(t, nextExtensionInstallPollDelay(-time.Millisecond))
+	require.Equal(t, 250*time.Millisecond, nextExtensionInstallPollDelay(500*time.Millisecond))
+	require.Equal(t, time.Second, nextExtensionInstallPollDelay(time.Second))
+	require.Equal(t, time.Second, nextExtensionInstallPollDelay(5*time.Second))
+}
+
 // checkChromePolicies checks how Chrome sees the policies.
 func checkChromePolicies(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
@@ -598,13 +608,28 @@ func waitForExtensionInstalled(t *testing.T, ctx context.Context, c *TestContain
 			return
 		}
 
+		delay := nextExtensionInstallPollDelay(time.Until(deadline))
+		if delay <= 0 {
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
 			require.NoError(t, ctx.Err(), "context cancelled waiting for extension installation")
 			return
-		case <-time.After(1 * time.Second):
+		case <-time.After(delay):
 		}
 	}
+}
+
+func nextExtensionInstallPollDelay(remaining time.Duration) time.Duration {
+	if remaining <= 0 {
+		return 0
+	}
+	if remaining < time.Second {
+		return remaining / 2
+	}
+	return time.Second
 }
 
 func chromeExtensionsCheckOutput(ctx context.Context, c *TestContainer, expectedExtensionName string) ([]byte, error) {
