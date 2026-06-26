@@ -314,13 +314,17 @@ func TestTabOpened(t *testing.T) {
 }
 
 func TestBindingAndTimeline(t *testing.T) {
-	srv := newTestServer(t)
-	defer srv.close()
-
-	_, ec, cleanup := startMonitor(t, srv, nil)
-	defer cleanup()
+	withMonitor := func(t *testing.T) (*testServer, *eventCollector) {
+		t.Helper()
+		srv := newTestServer(t)
+		t.Cleanup(srv.close)
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		t.Cleanup(cleanup)
+		return srv, ec
+	}
 
 	t.Run("interaction_click", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
@@ -334,6 +338,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("interaction_scroll_settled", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
@@ -349,6 +354,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("layout_shift", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "PerformanceTimeline.timelineEventAdded",
 			"params": map[string]any{
@@ -379,6 +385,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("unknown_binding_ignored", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
@@ -390,6 +397,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("rate_limited_per_session", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		// Send two binding events back-to-back within the 50ms window.
 		// Only the first should produce a published event.
 		before := func() int {
