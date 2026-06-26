@@ -20,6 +20,8 @@ import (
 )
 
 func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
 	}
@@ -30,8 +32,8 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 	c := NewTestContainer(t, headfulImage)
 	require.NoError(t, c.Start(ctx, ContainerConfig{
 		Env: map[string]string{
-			"WIDTH":        "1280",
-			"HEIGHT":       "720",
+			"WIDTH":  "1280",
+			"HEIGHT": "720",
 		},
 	}), "failed to start container")
 	defer c.Stop(ctx)
@@ -77,8 +79,8 @@ func TestReplayRecordingZombocomArchiveAudio(t *testing.T) {
 	c := NewTestContainer(t, headfulImage)
 	require.NoError(t, c.Start(ctx, ContainerConfig{
 		Env: map[string]string{
-			"WIDTH":        "1280",
-			"HEIGHT":       "720",
+			"WIDTH":  "1280",
+			"HEIGHT": "720",
 		},
 	}), "failed to start container")
 	defer c.Stop(ctx)
@@ -199,9 +201,10 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 		require.NoError(t, os.WriteFile(outputPath, downloadResp.Body, 0o644), "failed to write downloaded recording")
 	}
 
+	recordingPath := writeContainerRecording(t, ctx, c, downloadResp.Body)
 	require.True(t, mp4HasAudioTrack(downloadResp.Body), "downloaded recording does not contain an audio track")
-	require.Greater(t, mp4AudioPeakLevel(t, downloadResp.Body), minPeakLevel, "downloaded recording audio track is silent")
-	formatDuration, audioDuration := mp4Durations(t, downloadResp.Body)
+	require.Greater(t, mp4AudioPeakLevel(t, ctx, c, recordingPath), minPeakLevel, "downloaded recording audio track is silent")
+	formatDuration, audioDuration := mp4Durations(t, ctx, c, recordingPath)
 	require.GreaterOrEqual(t, audioDuration, formatDuration-2, "downloaded recording audio track ends before the recording does")
 }
 
@@ -392,6 +395,20 @@ func writeContainerAudioFixture(t *testing.T, ctx context.Context, c *TestContai
 	return "file://" + fixturePath
 }
 
+func writeContainerRecording(t *testing.T, ctx context.Context, c *TestContainer, data []byte) string {
+	t.Helper()
+
+	client, err := c.APIClient()
+	require.NoError(t, err, "failed to create API client")
+
+	const recordingPath = "/tmp/e2e-recording-audio.mp4"
+	params := &instanceoapi.WriteFileParams{Path: recordingPath}
+	rsp, err := client.WriteFileWithBodyWithResponse(ctx, params, "video/mp4", bytes.NewReader(data))
+	require.NoError(t, err, "write recording for audio analysis")
+	require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected write status: %s body=%s", rsp.Status(), string(rsp.Body))
+	return recordingPath
+}
+
 func mp4HasAudioTrack(data []byte) bool {
 	for i := 0; i+16 <= len(data); i++ {
 		if !bytes.Equal(data[i:i+4], []byte("hdlr")) {
@@ -415,24 +432,22 @@ func stringValue(v *string) string {
 	return *v
 }
 
-func mp4AudioPeakLevel(t *testing.T, data []byte) float64 {
+func mp4AudioPeakLevel(t *testing.T, ctx context.Context, c *TestContainer, recordingPath string) float64 {
 	t.Helper()
 
-	recordingPath := filepath.Join(t.TempDir(), "recording.mp4")
-	require.NoError(t, os.WriteFile(recordingPath, data, 0o644), "failed to write recording for audio analysis")
-
-	out, err := exec.Command(
-		"docker", "run", "--rm",
-		"-v", recordingPath+":/tmp/recording.mp4:ro",
-		"--entrypoint", "ffmpeg",
-		headfulImage,
-		"-hide_banner",
-		"-i", "/tmp/recording.mp4",
-		"-map", "0:a:0",
-		"-af", "astats=metadata=1:reset=0",
-		"-f", "null",
-		"-",
-	).CombinedOutput()
+	out, err := execCombinedOutput(
+		ctx,
+		c,
+		"ffmpeg",
+		[]string{
+			"-hide_banner",
+			"-i", recordingPath,
+			"-map", "0:a:0",
+			"-af", "astats=metadata=1:reset=0",
+			"-f", "null",
+			"-",
+		},
+	)
 	require.NoError(t, err, "failed to analyze recording audio: %s", string(out))
 
 	matches := regexp.MustCompile(`Max level: ([0-9.]+)`).FindStringSubmatch(string(out))
@@ -443,23 +458,21 @@ func mp4AudioPeakLevel(t *testing.T, data []byte) float64 {
 	return peak
 }
 
-func mp4Durations(t *testing.T, data []byte) (float64, float64) {
+func mp4Durations(t *testing.T, ctx context.Context, c *TestContainer, recordingPath string) (float64, float64) {
 	t.Helper()
 
-	recordingPath := filepath.Join(t.TempDir(), "recording.mp4")
-	require.NoError(t, os.WriteFile(recordingPath, data, 0o644), "failed to write recording for duration analysis")
-
-	out, err := exec.Command(
-		"docker", "run", "--rm",
-		"-v", recordingPath+":/tmp/recording.mp4:ro",
-		"--entrypoint", "ffprobe",
-		headfulImage,
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-show_entries", "stream=codec_type,duration",
-		"-of", "json",
-		"/tmp/recording.mp4",
-	).CombinedOutput()
+	out, err := execCombinedOutput(
+		ctx,
+		c,
+		"ffprobe",
+		[]string{
+			"-v", "error",
+			"-show_entries", "format=duration",
+			"-show_entries", "stream=codec_type,duration",
+			"-of", "json",
+			recordingPath,
+		},
+	)
 	require.NoError(t, err, "failed to probe recording durations: %s", string(out))
 
 	var probe struct {
@@ -471,7 +484,7 @@ func mp4Durations(t *testing.T, data []byte) (float64, float64) {
 			Duration string `json:"duration"`
 		} `json:"format"`
 	}
-	require.NoError(t, json.Unmarshal(out, &probe), "failed to parse ffprobe output")
+	require.NoError(t, json.Unmarshal([]byte(out), &probe), "failed to parse ffprobe output")
 
 	formatDuration, err := strconv.ParseFloat(probe.Format.Duration, 64)
 	require.NoError(t, err, "failed to parse format duration")

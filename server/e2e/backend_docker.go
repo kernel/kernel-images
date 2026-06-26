@@ -118,7 +118,7 @@ func (c *dockerBackend) Stop(ctx context.Context) error {
 	if c.ctr == nil {
 		return nil
 	}
-	return testcontainers.TerminateContainer(c.ctr)
+	return testcontainers.TerminateContainer(c.ctr, testcontainers.StopTimeout(0))
 }
 
 // APIBaseURL returns the URL for the container's API server.

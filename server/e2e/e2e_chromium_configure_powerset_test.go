@@ -31,6 +31,7 @@ const (
 // TestChromiumConfigureMultipartPowerset runs a representative matrix by default.
 // Set E2E_CHROMIUM_CONFIGURE_POWERSET=1 to run every non-empty combination.
 func TestChromiumConfigureMultipartPowerset(t *testing.T) {
+	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
@@ -57,6 +58,7 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 	for _, bits := range matrix {
 		bits := bits
 		t.Run(chromiumConfigurePowersetLabel(bits), func(t *testing.T) {
+			t.Parallel()
 
 			ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 			defer cancel()

@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os/exec"
 	"testing"
@@ -101,17 +102,20 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	// Helper to execute playwright code and verify success
-	executeAndVerify := func(description string) {
-		t.Logf("action: %s", description)
-
+	executeUserAgent := func() error {
 		code := `return await page.evaluate(() => navigator.userAgent);`
 		req := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
 
 		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, req)
-		require.NoError(t, err, "%s: request error: %v", description, err)
-		require.Equal(t, http.StatusOK, rsp.StatusCode(), "%s: unexpected status: %s body=%s", description, rsp.Status(), string(rsp.Body))
-		require.NotNil(t, rsp.JSON200, "%s: expected JSON200 response", description)
+		if err != nil {
+			return fmt.Errorf("request error: %w", err)
+		}
+		if rsp.StatusCode() != http.StatusOK {
+			return fmt.Errorf("unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+		}
+		if rsp.JSON200 == nil {
+			return fmt.Errorf("expected JSON200 response")
+		}
 
 		if !rsp.JSON200.Success {
 			var errorMsg, stderr string
@@ -121,11 +125,45 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 			if rsp.JSON200.Stderr != nil {
 				stderr = *rsp.JSON200.Stderr
 			}
-			t.Fatalf("%s: execution failed. Error: %s, Stderr: %s", description, errorMsg, stderr)
+			return fmt.Errorf("execution failed. Error: %s, Stderr: %s", errorMsg, stderr)
 		}
 
-		require.NotNil(t, rsp.JSON200.Result, "%s: expected result to be non-nil", description)
+		if rsp.JSON200.Result == nil {
+			return fmt.Errorf("expected result to be non-nil")
+		}
+		return nil
+	}
+
+	executeAndVerify := func(description string) {
+		t.Logf("action: %s", description)
+		require.NoError(t, executeUserAgent(), "%s", description)
 		t.Logf("%s: success", description)
+	}
+
+	waitForExecution := func(description string, timeout time.Duration) {
+		t.Logf("action: %s", description)
+		deadline := time.Now().Add(timeout)
+		var lastErr error
+		for attempt := 1; ; attempt++ {
+			if err := executeUserAgent(); err != nil {
+				lastErr = err
+			} else {
+				t.Logf("%s: success after %d attempt(s)", description, attempt)
+				return
+			}
+
+			if time.Now().After(deadline) {
+				require.NoError(t, lastErr, "%s did not recover within %s", description, timeout)
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				require.NoError(t, ctx.Err(), "%s context cancelled while waiting for recovery", description)
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
 	}
 
 	// Step 1: Execute playwright code to start the daemon and establish CDP connection
@@ -151,12 +189,12 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 		}
 	}
 
-	// Step 3: Wait for chromium to be ready again
+	// Step 3: Wait for chromium and the playwright daemon to be ready again
 	t.Log("waiting for chromium to be ready after restart")
-	time.Sleep(2 * time.Second)
+	require.NoError(t, c.WaitDevTools(ctx), "DevTools not ready after chromium restart")
 
 	// Step 4: Execute playwright code again - daemon should recover
-	executeAndVerify("execution after chromium restart (daemon should recover)")
+	waitForExecution("execution after chromium restart (daemon should recover)", 30*time.Second)
 
 	t.Log("playwright daemon recovery test passed")
 }
