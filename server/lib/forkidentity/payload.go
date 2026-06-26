@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -69,15 +68,23 @@ func WriteAppliedMarker(instanceName string) error {
 	return os.WriteFile(AppliedFile, []byte(strings.TrimSpace(instanceName)+"\n"), 0o644)
 }
 
-func AppliedMarkerMatches(instanceName string) (bool, error) {
+func ReadAppliedMarker() (string, error) {
 	data, err := os.ReadFile(AppliedFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return "", nil
 		}
+		return "", err
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
+func AppliedMarkerMatches(instanceName string) (bool, error) {
+	applied, err := ReadAppliedMarker()
+	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(string(data)) == strings.TrimSpace(instanceName), nil
+	return applied == strings.TrimSpace(instanceName), nil
 }
 
 func WaitAppliedMarker(instanceName string, timeout time.Duration) error {
@@ -90,7 +97,7 @@ func WaitAppliedMarker(instanceName string, timeout time.Duration) error {
 		if matches {
 			return nil
 		}
-		runtime.Gosched()
+		time.Sleep(20 * time.Millisecond)
 	}
 	return fmt.Errorf("timed out waiting for applied marker")
 }

@@ -22,6 +22,16 @@ func forkIdentityHandler(log *slog.Logger) http.HandlerFunc {
 			http.Error(w, "fork identity wait is disabled", http.StatusConflict)
 			return
 		}
+		appliedInstance, err := forkidentity.ReadAppliedMarker()
+		if err != nil {
+			log.Error("fork identity applied marker read failed", "err", err)
+			http.Error(w, "failed to read fork identity", http.StatusInternalServerError)
+			return
+		}
+		if appliedInstance != "" {
+			http.Error(w, "fork identity already applied", http.StatusConflict)
+			return
+		}
 
 		var payload forkidentity.Payload
 		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, forkidentity.MaxPayloadBytes))

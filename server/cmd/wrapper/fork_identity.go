@@ -5,7 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	goruntime "runtime"
+	"time"
 
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 )
@@ -63,16 +63,24 @@ func waitForForkIdentityPayload(ctx context.Context) (forkidentity.Payload, erro
 		if err := ctx.Err(); err != nil {
 			return nil, ctx.Err()
 		}
-		goruntime.Gosched()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }
 
 func applyForkIdentityPayload(payload forkidentity.Payload) error {
 	for _, key := range forkidentity.ClearEnvKeys(payload) {
-		_ = os.Unsetenv(key)
+		if err := os.Unsetenv(key); err != nil {
+			return err
+		}
 	}
 	for key, value := range forkidentity.Env(payload) {
-		_ = os.Setenv(key, value)
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
 	}
 	return nil
 }

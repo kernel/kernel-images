@@ -22,8 +22,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/kernel/kernel-images/server/lib/forkidentity"
 )
 
 const (
@@ -193,7 +191,7 @@ func main() {
 	waitForSocket(pulseSocket, 10*time.Second)
 	startAll("chromium")
 	if forkIdentityWait {
-		waitForHTTPProbe("chromium devtools", "http://127.0.0.1:"+forkidentity.FirstNonEmpty(os.Getenv("INTERNAL_PORT"), defaultIntPort)+"/json/version", 30*time.Second)
+		waitForHTTPProbe("chromium devtools", "http://127.0.0.1:"+os.Getenv("INTERNAL_PORT")+"/json/version", 30*time.Second)
 		startAll("kernel-images-api")
 	}
 	waitForSocket(dbusSocket, 10*time.Second)
@@ -201,7 +199,7 @@ func main() {
 		startAll("neko")
 	}
 	if forkIdentityWait {
-		waitForHTTPProbe("public cdp", "http://127.0.0.1:"+os.Getenv("CHROME_PORT")+"/json/version", 10*time.Second)
+		waitForHTTPProbe("public cdp", "http://127.0.0.1:"+os.Getenv("CHROME_PORT")+"/json/version", 30*time.Second)
 	}
 	browserDone := time.Now()
 

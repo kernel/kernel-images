@@ -147,6 +147,7 @@ func main() {
 	})
 	oapi.HandlerFromMux(strictHandler, r)
 
+	// Fork identity endpoints - not part of OpenAPI spec.
 	r.Post("/internal/fork-identity", forkIdentityHandler(slogger))
 	r.Get("/internal/fork-identity/config", forkIdentityConfigHandler(slogger))
 
