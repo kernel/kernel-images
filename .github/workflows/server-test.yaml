@@ -7,6 +7,10 @@ on:
     branches: ["main"]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-headful:
     uses: ./.github/workflows/chromium-headful-image.yaml
@@ -16,7 +20,27 @@ jobs:
     uses: ./.github/workflows/chromium-headless-image.yaml
     secrets: inherit
 
-  test:
+  test-server-unit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "server/go.mod"
+          cache: true
+          cache-dependency-path: server/go.sum
+
+      - name: Run server unit tests
+        run: make test-unit
+        working-directory: server
+
+  test-server-e2e:
     runs-on: ubuntu-latest
     needs: [build-headful, build-headless]
     permissions:
@@ -39,11 +63,21 @@ jobs:
         with:
           version: 10
 
+      - name: Add pnpm to PATH
+        run: |
+          echo "$PNPM_HOME" >> "$GITHUB_PATH"
+          export PATH="$PNPM_HOME:$PATH"
+          pnpm --version
+
+      - name: Install Playwright e2e dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: server/e2e/playwright
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: "server/go.mod"
-          cache: true
+          cache: false
 
       - name: Compute short SHA for images
         id: vars
@@ -56,8 +90,8 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Run server Makefile tests
-        run: make test
+      - name: Run server e2e tests
+        run: make test-e2e
         working-directory: server
         env:
           E2E_CHROMIUM_HEADFUL_IMAGE: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}

@@ -26,6 +26,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/ptyio"
+	"github.com/kernel/kernel-images/server/lib/wsdrain"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
@@ -659,7 +660,7 @@ func writeJSON(w http.ResponseWriter, status int, body string) {
 //   - Server sends TextMessage with JSON for events (e.g., exit code)
 //
 // This endpoint is intentionally not defined in OpenAPI.
-func (s *ApiService) HandleProcessAttachWS(w http.ResponseWriter, r *http.Request, id string) {
+func (s *ApiService) HandleProcessAttachWS(w http.ResponseWriter, r *http.Request, id string, reg *wsdrain.Registry) {
 	ctx := r.Context()
 	log := logger.FromContext(ctx)
 
@@ -701,6 +702,9 @@ func (s *ApiService) HandleProcessAttachWS(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer wsConn.CloseNow()
+
+	untrack := reg.Track(wsConn)
+	defer untrack()
 
 	// Set a generous read limit for PTY data
 	wsConn.SetReadLimit(1024 * 1024) // 1MB

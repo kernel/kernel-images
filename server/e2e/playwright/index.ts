@@ -322,49 +322,53 @@ class CDPClient {
       console.log('[cdp] action: verify-mv3-service-worker');
       this.page.setDefaultTimeout(timeout);
 
-      // Step 1: Navigate to chrome://extensions
       console.log('[cdp] navigating to chrome://extensions');
       await this.page.goto('chrome://extensions');
-      await this.page.waitForTimeout(2000);
 
-      // Step 2: Enable developer mode by clicking the toggle
       console.log('[cdp] enabling developer mode');
       const devMode = this.page.getByRole('button', { name: 'Developer mode' });
       await devMode.click();
-      await this.page.waitForTimeout(1000);
 
-      // Step 3: Find the extension and extract the ID
-      // chrome://extensions uses shadow DOM, so we need to use evaluate to pierce it
       console.log('[cdp] checking for MV3 Service Worker Test extension');
+      await this.page.waitForFunction(() => {
+        const manager = document.querySelector('extensions-manager');
+        if (!manager?.shadowRoot) return false;
+
+        const itemList = manager.shadowRoot.querySelector('extensions-item-list');
+        if (!itemList?.shadowRoot) return false;
+
+        for (const item of itemList.shadowRoot.querySelectorAll('extensions-item')) {
+          if (!item.shadowRoot) continue;
+
+          const name = item.shadowRoot.querySelector('#name')?.textContent?.trim() || '';
+          const inspectViews = item.shadowRoot.querySelector('#inspect-views')?.textContent || '';
+          if (name === 'MV3 Service Worker Test' && inspectViews.includes('service worker')) {
+            return true;
+          }
+        }
+
+        return false;
+      }, undefined, { timeout });
 
       const extensionInfo = await this.page.evaluate(() => {
-        // Get the extensions-manager element
         const manager = document.querySelector('extensions-manager');
         if (!manager || !manager.shadowRoot) return null;
 
-        // Get the item list
         const itemList = manager.shadowRoot.querySelector('extensions-item-list');
         if (!itemList || !itemList.shadowRoot) return null;
 
-        // Find all extension items
         const items = itemList.shadowRoot.querySelectorAll('extensions-item');
 
         for (const item of items) {
           if (!item.shadowRoot) continue;
 
-          // Get the extension name
           const nameEl = item.shadowRoot.querySelector('#name');
           const name = nameEl?.textContent?.trim() || '';
 
           if (name === 'MV3 Service Worker Test') {
-            // Get the extension ID from the item's id attribute
             const id = item.getAttribute('id');
-
-            // Check if service worker is inactive
             const inspectViews = item.shadowRoot.querySelector('#inspect-views');
             const isInactive = inspectViews?.textContent?.includes('(Inactive)') || false;
-
-            // Check if service worker link exists
             const hasServiceWorker = inspectViews?.textContent?.includes('service worker') || false;
 
             return { id, name, isInactive, hasServiceWorker };
@@ -387,27 +391,30 @@ class CDPClient {
         throw new Error('Extension does not have a service worker registered');
       }
 
-      if (extensionInfo.isInactive) {
-        await this.captureScreenshot({ filename: 'mv3-service-worker-inactive.png' });
-        throw new Error('Service worker is marked as (Inactive)');
+      if (!extensionInfo.id) {
+        await this.captureScreenshot({ filename: 'mv3-extension-missing-id.png' });
+        throw new Error('MV3 Service Worker Test extension did not expose an extension ID');
       }
 
-      console.log('[cdp] service worker is active');
+      if (extensionInfo.isInactive) {
+        console.log('[cdp] service worker is inactive before ping; verifying message handling wakes it');
+      } else {
+        console.log('[cdp] service worker is active before ping');
+      }
 
-      // Step 4: Navigate to the extension's popup
       const extensionId = extensionInfo.id;
       const popupUrl = `chrome-extension://${extensionId}/popup.html`;
       console.log(`[cdp] navigating to popup: ${popupUrl}`);
       await this.page.goto(popupUrl);
-      await this.page.waitForTimeout(1000);
 
-      // Step 5: Click the "Ping Service Worker" button
       console.log('[cdp] clicking Ping Service Worker button');
       const pingButton = this.page.getByRole('button', { name: 'Ping Service Worker' });
       await pingButton.click();
-      await this.page.waitForTimeout(2000);
+      await this.page.waitForFunction(() => {
+        const status = document.querySelector('#status');
+        return status?.classList.contains('success') || status?.classList.contains('error');
+      }, undefined, { timeout });
 
-      // Step 6: Verify the status shows success
       const statusElement = this.page.locator('#status');
       const statusText = await statusElement.textContent();
       console.log(`[cdp] status text: ${statusText}`);

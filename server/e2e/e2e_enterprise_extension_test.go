@@ -80,49 +80,24 @@ func runEnterpriseExtensionTest(t *testing.T, image string) {
 	t.Log("[test] uploading kernel-like extension first (to simulate prod)")
 	uploadKernelLikeExtension(t, ctx, c)
 
-	// Wait for Chrome to restart with the new flags
-	time.Sleep(3 * time.Second)
-	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready after kernel extension")
+	downloadLogBaseline := extensionDownloadLogSnapshot(t, ctx, c)
 
 	// Upload the enterprise test extension (with update.xml and .crx)
 	t.Log("[test] uploading enterprise test extension (with update.xml and .crx)")
 	uploadEnterpriseTestExtension(t, ctx, c)
 
-	// Wait a bit for Chrome to process the enterprise policy
-	t.Log("[test] waiting for Chrome to process enterprise policy")
-	time.Sleep(5 * time.Second)
-
 	// Check what files were extracted on the server
 	t.Log("[test] checking extracted extension files on server")
 	checkExtractedFiles(t, ctx, c)
 
-	// Check the kernel-images-api logs for extension download requests
-	t.Log("[test] checking if Chrome fetched the extension")
-	checkExtensionDownloadLogs(t, ctx, c)
-
 	// Verify enterprise policy was configured correctly
 	t.Log("[test] verifying enterprise policy configuration")
-	verifyEnterprisePolicy(t, ctx, c)
+	waitForEnterprisePolicy(t, ctx, c, 10*time.Second)
 
-	// Wait longer and check again if Chrome has downloaded the extension
 	t.Log("[test] waiting for Chrome to download extension via enterprise policy")
-	time.Sleep(30 * time.Second)
-
-	// Check logs again
-	checkExtensionDownloadLogs(t, ctx, c)
+	waitForExtensionDownload(t, ctx, c, downloadLogBaseline, 30*time.Second)
 
 	// Check Chrome's extension installation logs
-	t.Log("[test] checking Chrome stderr for extension-related logs")
-	checkChromiumLogs(t, ctx, c)
-
-	// Try to trigger extension installation by restarting Chrome
-	t.Log("[test] restarting Chrome to trigger policy refresh")
-	restartChrome(t, ctx, c)
-
-	time.Sleep(15 * time.Second)
-
-	// Check logs one more time
-	checkExtensionDownloadLogs(t, ctx, c)
 	checkChromiumLogs(t, ctx, c)
 
 	// Check Chrome's policy state
@@ -135,7 +110,7 @@ func runEnterpriseExtensionTest(t *testing.T, image string) {
 
 	// Verify the extension is installed
 	t.Log("[test] checking if extension is installed in Chrome's user-data")
-	verifyExtensionInstalled(t, ctx, c)
+	waitForExtensionInstalled(t, ctx, c, 30*time.Second)
 
 	t.Log("[test] enterprise extension installation test completed")
 }
@@ -240,31 +215,64 @@ func uploadEnterpriseTestExtension(t *testing.T, ctx context.Context, c *TestCon
 	t.Logf("[extension] uploaded elapsed=%s", elapsed.String())
 }
 
-// verifyEnterprisePolicy checks that the enterprise policy was configured correctly.
-func verifyEnterprisePolicy(t *testing.T, ctx context.Context, c *TestContainer) {
+func waitForEnterprisePolicy(t *testing.T, ctx context.Context, c *TestContainer, timeout time.Duration) {
 	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastContent string
+	var lastErr error
+	for {
+		policyContent, err := enterprisePolicyContent(ctx, c)
+		lastContent, lastErr = policyContent, err
+		if err == nil {
+			lastErr = assertEnterprisePolicy(policyContent)
+			if lastErr == nil {
+				t.Logf("[policy] configured content=%s", policyContent)
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			require.NoError(t, lastErr, "enterprise policy did not become ready within %s; last_content=%s", timeout, lastContent)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err(), "context cancelled waiting for enterprise policy")
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
 
+func enterprisePolicyContent(ctx context.Context, c *TestContainer) (string, error) {
 	// Read policy.json
 	policyContent, err := execCombinedOutputWithClient(ctx, c, "cat", []string{"/etc/chromium/policies/managed/policy.json"})
-	require.NoError(t, err, "failed to read policy.json")
-	t.Logf("[policy] content=%s", policyContent)
+	if err != nil {
+		return "", fmt.Errorf("failed to read policy.json: %w", err)
+	}
+	return policyContent, nil
+}
 
+func assertEnterprisePolicy(policyContent string) error {
 	var policy map[string]interface{}
-	err = json.Unmarshal([]byte(policyContent), &policy)
-	require.NoError(t, err, "failed to parse policy.json")
+	if err := json.Unmarshal([]byte(policyContent), &policy); err != nil {
+		return fmt.Errorf("failed to parse policy.json: %w", err)
+	}
 
 	maxConnectionsPerProxy, ok := policy["MaxConnectionsPerProxy"].(float64)
-	require.True(t, ok, "MaxConnectionsPerProxy not found in policy.json")
-	require.Equal(t, float64(16), maxConnectionsPerProxy, "unexpected MaxConnectionsPerProxy value")
+	if !ok {
+		return fmt.Errorf("MaxConnectionsPerProxy not found in policy.json")
+	}
+	if maxConnectionsPerProxy != float64(16) {
+		return fmt.Errorf("unexpected MaxConnectionsPerProxy value: %v", maxConnectionsPerProxy)
+	}
 
 	// Check ExtensionInstallForcelist exists and contains our extension
 	extensionInstallForcelist, ok := policy["ExtensionInstallForcelist"].([]interface{})
-	require.True(t, ok, "ExtensionInstallForcelist not found in policy.json")
-	require.GreaterOrEqual(t, len(extensionInstallForcelist), 1, "ExtensionInstallForcelist should have at least 1 entry")
-
-	// Log all entries
-	for i, entry := range extensionInstallForcelist {
-		t.Logf("[policy] forcelist_entry=%d value=%v", i, entry)
+	if !ok {
+		return fmt.Errorf("ExtensionInstallForcelist not found in policy.json")
+	}
+	if len(extensionInstallForcelist) < 1 {
+		return fmt.Errorf("ExtensionInstallForcelist should have at least 1 entry")
 	}
 
 	// Find the enterprise-test entry
@@ -272,17 +280,13 @@ func verifyEnterprisePolicy(t *testing.T, ctx context.Context, c *TestContainer)
 	for _, entry := range extensionInstallForcelist {
 		if entryStr, ok := entry.(string); ok && strings.Contains(entryStr, "enterprise-test") {
 			found = true
-			t.Logf("[policy] found_entry=%s", entryStr)
 			break
 		}
 	}
-	require.True(t, found, "enterprise-test entry not found in ExtensionInstallForcelist")
-
-	// Check ExtensionSettings
-	extensionSettings, ok := policy["ExtensionSettings"].(map[string]interface{})
-	if ok {
-		t.Logf("[policy] extension_settings=%+v", extensionSettings)
+	if !found {
+		return fmt.Errorf("enterprise-test entry not found in ExtensionInstallForcelist")
 	}
+	return nil
 }
 
 // checkExtractedFiles checks what files were extracted on the server side.
@@ -326,8 +330,7 @@ func checkExtractedFiles(t *testing.T, ctx context.Context, c *TestContainer) {
 func checkExtensionDownloadLogs(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
 
-	// Check kernel-images-api log for requests to update.xml and .crx
-	apiLog, err := execCombinedOutputWithClient(ctx, c, "cat", []string{"/var/log/supervisord/kernel-images-api"})
+	apiLog, err := extensionDownloadLog(ctx, c)
 	if err != nil {
 		t.Logf("[logs] error=%v", err)
 		return
@@ -353,6 +356,91 @@ func checkExtensionDownloadLogs(t *testing.T, ctx context.Context, c *TestContai
 			t.Logf("[logs] GET_request=%s", line)
 		}
 	}
+}
+
+func extensionDownloadLogSnapshot(t *testing.T, ctx context.Context, c *TestContainer) string {
+	t.Helper()
+	apiLog, err := extensionDownloadLog(ctx, c)
+	if err != nil {
+		t.Logf("[logs] baseline_error=%v", err)
+		return ""
+	}
+	return apiLog
+}
+
+func waitForExtensionDownload(t *testing.T, ctx context.Context, c *TestContainer, baseline string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastLog string
+	var lastErr error
+	for {
+		apiLog, err := extensionDownloadLog(ctx, c)
+		lastLog, lastErr = extensionDownloadLogSince(apiLog, baseline), err
+		if err == nil && extensionDownloadObserved(lastLog) {
+			t.Log("[logs] Chrome made GET requests to fetch the enterprise extension")
+			checkExtensionDownloadLogs(t, ctx, c)
+			return
+		}
+		if time.Now().After(deadline) {
+			require.NoError(t, lastErr, "extension download was not observed within %s; last_log=%s", timeout, lastLog)
+			require.True(t, extensionDownloadObserved(lastLog), "extension download was not observed within %s", timeout)
+			return
+		}
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err(), "context cancelled waiting for extension download")
+			return
+		case <-time.After(1 * time.Second):
+		}
+	}
+}
+
+func extensionDownloadLog(ctx context.Context, c *TestContainer) (string, error) {
+	return execCombinedOutputWithClient(ctx, c, "cat", []string{"/var/log/supervisord/kernel-images-api"})
+}
+
+func extensionDownloadLogSince(apiLog, baseline string) string {
+	if baseline != "" && strings.HasPrefix(apiLog, baseline) {
+		return apiLog[len(baseline):]
+	}
+	return apiLog
+}
+
+func extensionDownloadObserved(apiLog string) bool {
+	var sawUpdateXML, sawCRX bool
+	for _, line := range strings.Split(apiLog, "\n") {
+		if !strings.Contains(line, "GET") || !strings.Contains(line, "enterprise-test") {
+			continue
+		}
+		if strings.Contains(line, "update.xml") {
+			sawUpdateXML = true
+		}
+		if strings.Contains(line, ".crx") {
+			sawCRX = true
+		}
+	}
+	return sawUpdateXML && sawCRX
+}
+
+func TestExtensionDownloadObservedRequiresUpdateXMLAndCRX(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, extensionDownloadObserved(""))
+	require.False(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/enterprise-test/update.xml HTTP/1.1`))
+	require.False(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/enterprise-test/extension.crx HTTP/1.1`))
+	require.False(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/kernel/update.xml HTTP/1.1
+GET http://127.0.0.1/extensions/kernel/extension.crx HTTP/1.1`))
+	require.True(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/enterprise-test/update.xml HTTP/1.1
+GET http://127.0.0.1/extensions/enterprise-test/extension.crx HTTP/1.1`))
+}
+
+func TestExtensionDownloadLogSince(t *testing.T) {
+	t.Parallel()
+
+	baseline := "line 1\nline 2\n"
+	require.Equal(t, "line 3\n", extensionDownloadLogSince(baseline+"line 3\n", baseline))
+	require.Equal(t, "line 3\n", extensionDownloadLogSince("line 3\n", baseline))
+	require.Equal(t, "line 3\n", extensionDownloadLogSince("line 3\n", ""))
 }
 
 // checkChromePolicies checks how Chrome sees the policies.
@@ -422,18 +510,6 @@ func checkChromiumLogs(t *testing.T, ctx context.Context, c *TestContainer) {
 	}
 }
 
-// restartChrome restarts Chrome via supervisorctl.
-func restartChrome(t *testing.T, ctx context.Context, c *TestContainer) {
-	t.Helper()
-
-	output, err := execCombinedOutputWithClient(ctx, c, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"})
-	if err != nil {
-		t.Logf("[restart] error=%v output=%s", err, output)
-	} else {
-		t.Logf("[restart] result=%s", output)
-	}
-}
-
 // takeChromePolicyScreenshot takes a screenshot of chrome://policy to debug what Chrome sees
 func takeChromePolicyScreenshot(t *testing.T, ctx context.Context, c *TestContainer) {
 	t.Helper()
@@ -496,28 +572,42 @@ const { chromium } = require('playwright-core');
 	}
 }
 
-// verifyExtensionInstalled checks if the extension was installed by Chrome.
-func verifyExtensionInstalled(t *testing.T, ctx context.Context, c *TestContainer) {
+func waitForExtensionInstalled(t *testing.T, ctx context.Context, c *TestContainer, timeout time.Duration) {
 	t.Helper()
-
-	// Check the extension directory
-	extDir, err := execCombinedOutputWithClient(ctx, c, "ls", []string{"-la", "/home/kernel/extensions/"})
-	if err != nil {
-		t.Logf("[verify] error=%v", err)
-	} else {
-		t.Logf("[verify] extensions_dir=%s", extDir)
-	}
-
-	// Check if Chrome installed the extension using Playwright to inspect chrome://extensions
-	// Note: When loaded via --load-extension, Chrome generates a NEW extension ID based on the
-	// directory path, which differs from the ID in update.xml (which is for the packed .crx file).
-	// So we verify by extension name instead.
-
 	expectedExtensionName := "Minimal Enterprise Test Extension"
-	t.Logf("[verify] expected_extension_name=%s", expectedExtensionName)
+	deadline := time.Now().Add(timeout)
+	var lastOut []byte
+	var lastErr error
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Logf("[verify] last_output=%s", string(lastOut))
+			require.NoError(t, lastErr, "extension %q was not installed within %s", expectedExtensionName, timeout)
+			return
+		}
 
-	// Use playwright to navigate to chrome://extensions and verify extension is loaded
-	t.Log("[verify] checking chrome://extensions via playwright")
+		attemptTimeout := 15 * time.Second
+		if remaining < attemptTimeout {
+			attemptTimeout = remaining
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		lastOut, lastErr = chromeExtensionsCheckOutput(attemptCtx, c, expectedExtensionName)
+		cancel()
+		if lastErr == nil {
+			t.Logf("[verify] extension installed output=%s", string(lastOut))
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			require.NoError(t, ctx.Err(), "context cancelled waiting for extension installation")
+			return
+		case <-time.After(1 * time.Second):
+		}
+	}
+}
+
+func chromeExtensionsCheckOutput(ctx context.Context, c *TestContainer, expectedExtensionName string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "-e", fmt.Sprintf(`
 const { chromium } = require('playwright-core');
 
@@ -527,52 +617,69 @@ const { chromium } = require('playwright-core');
   const ctx = contexts[0] || await browser.newContext();
   const pages = ctx.pages();
   const page = pages[0] || await ctx.newPage();
-  
+
   await page.goto('chrome://extensions');
   await page.waitForLoadState('networkidle');
-  await page.waitForTimeout(2000);
-  
-  const extensionInfo = await page.evaluate(() => {
+
+  const expectedName = %q;
+
+  const readExtensions = async () => await page.evaluate(() => {
     const manager = document.querySelector('extensions-manager');
     if (!manager || !manager.shadowRoot) return { error: 'no extensions-manager' };
-    
+
     const itemList = manager.shadowRoot.querySelector('extensions-item-list');
     if (!itemList || !itemList.shadowRoot) return { error: 'no item-list' };
-    
+
     const items = itemList.shadowRoot.querySelectorAll('extensions-item');
     const extensions = [];
-    
+
     for (const item of items) {
       if (!item.shadowRoot) continue;
       const nameEl = item.shadowRoot.querySelector('#name');
       const name = nameEl?.textContent?.trim() || 'unknown';
       extensions.push(name);
     }
-    
+
     return { extensions };
   });
-  
-  if (extensionInfo.error) {
-    console.log('ERROR: ' + extensionInfo.error);
-    process.exit(1);
-  }
-  
-  const expectedName = %q;
-  if (extensionInfo.extensions.includes(expectedName)) {
-    console.log('SUCCESS: Extension "' + expectedName + '" found');
+
+  try {
+    await page.waitForFunction((expectedName) => {
+      const manager = document.querySelector('extensions-manager');
+      if (!manager || !manager.shadowRoot) return false;
+
+      const itemList = manager.shadowRoot.querySelector('extensions-item-list');
+      if (!itemList || !itemList.shadowRoot) return false;
+
+      const items = itemList.shadowRoot.querySelectorAll('extensions-item');
+      for (const item of items) {
+        if (!item.shadowRoot) continue;
+        const nameEl = item.shadowRoot.querySelector('#name');
+        const name = nameEl?.textContent?.trim() || 'unknown';
+        if (name === expectedName) return true;
+      }
+      return false;
+    }, expectedName, { timeout: 2000 });
+
+    const extensionInfo = await readExtensions();
+    console.log('SUCCESS: Extension "' + expectedName + '" found. Extensions: ' + extensionInfo.extensions.join(', '));
+    await browser.close();
     process.exit(0);
-  } else {
-    console.log('FAIL: Extension "' + expectedName + '" not found. Extensions: ' + extensionInfo.extensions.join(', '));
+  } catch (err) {
+    const extensionInfo = await readExtensions();
+    if (extensionInfo.error) {
+      console.log('ERROR: ' + extensionInfo.error);
+    } else {
+      console.log('FAIL: Extension "' + expectedName + '" not found. Extensions: ' + extensionInfo.extensions.join(', '));
+    }
+    console.log('wait_error=' + err.message);
+    await browser.close();
     process.exit(1);
   }
-  
-  await browser.close();
 })();
 `, c.CDPURL(), expectedExtensionName))
 	cmd.Dir = getPlaywrightPath()
-	out, err := cmd.CombinedOutput()
-	t.Logf("[playwright] output=%s", string(out))
-	require.NoError(t, err, "extension verification failed: expected extension %q to be installed in chrome://extensions", expectedExtensionName)
+	return cmd.CombinedOutput()
 }
 
 // execCombinedOutputWithClient executes a command in the container via the API.
