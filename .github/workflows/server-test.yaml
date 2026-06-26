@@ -77,7 +77,8 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "server/go.mod"
-          cache: false
+          cache: true
+          cache-dependency-path: server/go.sum
 
       - name: Compute short SHA for images
         id: vars
@@ -89,6 +90,23 @@ jobs:
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Pull e2e images
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker pull "$E2E_CHROMIUM_HEADFUL_IMAGE" &
+          headful_pid=$!
+
+          docker pull "$E2E_CHROMIUM_HEADLESS_IMAGE" &
+          headless_pid=$!
+
+          wait "$headful_pid"
+          wait "$headless_pid"
+        env:
+          E2E_CHROMIUM_HEADFUL_IMAGE: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}
+          E2E_CHROMIUM_HEADLESS_IMAGE: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}
 
       - name: Run server e2e tests
         run: make test-e2e
