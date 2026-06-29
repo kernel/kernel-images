@@ -44,13 +44,14 @@ func main() {
 	rate := flag.Int("rate", 500, "driver: events per second")
 	dur := flag.Duration("dur", 10*time.Second, "driver: run duration")
 	profile := flag.String("profile", "light", "driver: light | heavy")
+	readLatency := flag.Duration("read-latency", 0, "driver: simulated S2 read-hop latency; models the server-side pusher substrates (shapes 2/3)")
 	flag.Parse()
 
 	switch *mode {
 	case "receiver":
 		runReceiver(*addr, *delay)
 	case "relay":
-		runRelay(*endpoint, *path, *profile, *rate, *dur)
+		runRelay(*endpoint, *path, *profile, *rate, *dur, *readLatency)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode %q\n", *mode)
 		os.Exit(2)
@@ -135,7 +136,7 @@ func runReceiver(addr string, delay time.Duration) {
 	fmt.Printf("lag p99:    %s\n", pct(lags, 0.99))
 }
 
-func runRelay(endpoint, path, profile string, rate int, dur time.Duration) {
+func runRelay(endpoint, path, profile string, rate int, dur time.Duration, readLatency time.Duration) {
 	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 4096})
 	if err != nil {
 		panic(err)
@@ -163,16 +164,32 @@ func runRelay(endpoint, path, profile string, rate int, dur time.Duration) {
 			break
 		}
 		for i := 0; i < perTick; i++ {
-			es.Publish(makeEnvelope(profile, published))
+			env := makeEnvelope(profile, published)
+			if readLatency > 0 {
+				// Models the server-side substrates: the record is emitted now
+				// but only reaches the pusher after the S2 read hop, so the
+				// measured end-to-end lag includes it.
+				time.AfterFunc(readLatency, func() { es.Publish(env) })
+			} else {
+				es.Publish(env)
+			}
 			published++
 		}
+	}
+	if readLatency > 0 {
+		time.Sleep(readLatency + 200*time.Millisecond)
 	}
 
 	wcancel()
 	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	_ = writer.Stop(stopCtx)
-	fmt.Printf("relay driver: published=%d over %s (target %d/s, profile=%s)\n", published, dur, rate, profile)
+
+	shape := "relay (in-VM)"
+	if readLatency > 0 {
+		shape = fmt.Sprintf("server-side pusher (modeled, read-latency=%s)", readLatency)
+	}
+	fmt.Printf("%s: published=%d over %s (target %d/s, profile=%s)\n", shape, published, dur, rate, profile)
 }
 
 var heavyBody = `{"status":200,"url":"https://example.com/api","mime_type":"application/json","body":"` +
