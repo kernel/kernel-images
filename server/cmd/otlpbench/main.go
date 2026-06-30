@@ -45,13 +45,18 @@ func main() {
 	dur := flag.Duration("dur", 10*time.Second, "driver: run duration")
 	profile := flag.String("profile", "light", "driver: light | heavy")
 	readLatency := flag.Duration("read-latency", 0, "driver: simulated S2 read-hop latency; models the server-side pusher substrates (shapes 2/3)")
+	pauseAt := flag.Duration("pause-at", 0, "driver: when to take the delivery path down (fault injection)")
+	pauseFor := flag.Duration("pause-for", 0, "driver: how long the delivery path stays down")
 	flag.Parse()
 
+	fault := fault{at: *pauseAt, dur: *pauseFor}
 	switch *mode {
 	case "receiver":
 		runReceiver(*addr, *delay)
 	case "relay":
-		runRelay(*endpoint, *path, *profile, *rate, *dur, *readLatency)
+		runRelay(*endpoint, *path, *profile, *rate, *dur, *readLatency, fault)
+	case "durable":
+		runDurable(*endpoint, *path, *profile, *rate, *dur, fault)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode %q\n", *mode)
 		os.Exit(2)
@@ -64,6 +69,7 @@ func runReceiver(addr string, delay time.Duration) {
 		total     int
 		byteCount int64
 		lags      []time.Duration
+		seen      = map[int64]struct{}{}
 	)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -89,6 +95,11 @@ func runReceiver(addr string, delay time.Duration) {
 					total++
 					if lr.TimeUnixNano > 0 {
 						lags = append(lags, time.Duration(now-int64(lr.TimeUnixNano)))
+					}
+					for _, kv := range lr.Attributes {
+						if kv.Key == "kernel.event.seq" {
+							seen[kv.Value.GetIntValue()] = struct{}{}
+						}
 					}
 				}
 			}
@@ -130,22 +141,41 @@ func runReceiver(addr string, delay time.Duration) {
 	mu.Lock()
 	defer mu.Unlock()
 	fmt.Println("\n=== otlpbench receiver summary ===")
-	fmt.Printf("records:    %d\n", total)
-	fmt.Printf("bytes:      %d\n", byteCount)
-	fmt.Printf("lag p50:    %s\n", pct(lags, 0.50))
-	fmt.Printf("lag p99:    %s\n", pct(lags, 0.99))
+	fmt.Printf("records:     %d\n", total)
+	fmt.Printf("unique:      %d\n", len(seen))
+	fmt.Printf("duplicates:  %d\n", total-len(seen))
+	fmt.Printf("bytes:       %d\n", byteCount)
+	fmt.Printf("lag p50:     %s\n", pct(lags, 0.50))
+	fmt.Printf("lag p99:     %s\n", pct(lags, 0.99))
 }
 
-func runRelay(endpoint, path, profile string, rate int, dur time.Duration, readLatency time.Duration) {
-	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 4096})
+// fault describes a delivery-path outage injected mid-run.
+type fault struct {
+	at  time.Duration
+	dur time.Duration
+}
+
+func (f fault) active(elapsed time.Duration) bool {
+	return f.dur > 0 && elapsed >= f.at && elapsed < f.at+f.dur
+}
+
+func newWriter(es *events.EventStream, endpoint, path string) *events.OTLPStorageWriter {
+	return events.NewOTLPStorageWriter(es, events.OTLPConfig{
+		Endpoint: endpoint, URLPath: path, Insecure: true,
+		ServiceName: "kernel-browser", InstanceName: "bench", Metro: "dev-local",
+	}, slog.Default())
+}
+
+func runRelay(endpoint, path, profile string, rate int, dur time.Duration, readLatency time.Duration, f fault) {
+	// The relay's source is the volatile in-VM ring (1024 slots). While the
+	// delivery path is down it keeps filling and overflows; those records are
+	// lost with no replay.
+	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 1024})
 	if err != nil {
 		panic(err)
 	}
 	wctx, wcancel := context.WithCancel(context.Background())
-	writer := events.NewOTLPStorageWriter(es, events.OTLPConfig{
-		Endpoint: endpoint, URLPath: path, Insecure: true,
-		ServiceName: "kernel-browser", InstanceName: "bench", Metro: "dev-local",
-	}, slog.Default())
+	writer := newWriter(es, endpoint, path)
 	if err := writer.Start(wctx); err != nil {
 		panic(err)
 	}
@@ -156,19 +186,34 @@ func runRelay(endpoint, path, profile string, rate int, dur time.Duration, readL
 		perTick = 1
 	}
 	published := 0
-	deadline := time.Now().Add(dur)
+	start := time.Now()
+	deadline := start.Add(dur)
+	paused, resumed := false, false
 	t := time.NewTicker(tick)
 	defer t.Stop()
 	for now := range t.C {
 		if !now.Before(deadline) {
 			break
 		}
+		elapsed := now.Sub(start)
+		if f.active(elapsed) && !paused {
+			wcancel()
+			sc, c := context.WithTimeout(context.Background(), 2*time.Second)
+			_ = writer.Stop(sc)
+			c()
+			paused = true
+			fmt.Printf("  [fault] relay delivery DOWN at %s\n", elapsed.Round(time.Millisecond))
+		}
+		if paused && !resumed && elapsed >= f.at+f.dur {
+			wctx, wcancel = context.WithCancel(context.Background())
+			writer = newWriter(es, endpoint, path)
+			_ = writer.Start(wctx)
+			resumed = true
+			fmt.Printf("  [fault] relay delivery RESTORED at %s\n", elapsed.Round(time.Millisecond))
+		}
 		for i := 0; i < perTick; i++ {
 			env := makeEnvelope(profile, published)
 			if readLatency > 0 {
-				// Models the server-side substrates: the record is emitted now
-				// but only reaches the pusher after the S2 read hop, so the
-				// measured end-to-end lag includes it.
 				time.AfterFunc(readLatency, func() { es.Publish(env) })
 			} else {
 				es.Publish(env)
@@ -185,11 +230,102 @@ func runRelay(endpoint, path, profile string, rate int, dur time.Duration, readL
 	defer cancel()
 	_ = writer.Stop(stopCtx)
 
-	shape := "relay (in-VM)"
+	shape := "relay (in-VM, best-effort)"
 	if readLatency > 0 {
 		shape = fmt.Sprintf("server-side pusher (modeled, read-latency=%s)", readLatency)
 	}
 	fmt.Printf("%s: published=%d over %s (target %d/s, profile=%s)\n", shape, published, dur, rate, profile)
+}
+
+// runDurable models the server-side durable pusher: a producer appends every
+// record to an unbounded persistent log (this models the existing reliable
+// VM->S2 write), and a pusher reads from a cursor and delivers. While the
+// delivery path is down the log keeps growing, so on resume the pusher catches
+// up from the cursor and loses nothing.
+func runDurable(endpoint, path, profile string, rate int, dur time.Duration, f fault) {
+	es, err := events.NewEventStream(events.EventStreamConfig{RingCapacity: 262144})
+	if err != nil {
+		panic(err)
+	}
+	wctx, wcancel := context.WithCancel(context.Background())
+	writer := newWriter(es, endpoint, path)
+	if err := writer.Start(wctx); err != nil {
+		panic(err)
+	}
+
+	const tick = 10 * time.Millisecond
+	perTick := rate * int(tick) / int(time.Second)
+	if perTick < 1 {
+		perTick = 1
+	}
+
+	var (
+		mu       sync.Mutex
+		logq     []events.Envelope
+		produced int
+	)
+	start := time.Now()
+	prodDone := make(chan struct{})
+	go func() {
+		defer close(prodDone)
+		t := time.NewTicker(tick)
+		defer t.Stop()
+		deadline := start.Add(dur)
+		for now := range t.C {
+			if !now.Before(deadline) {
+				return
+			}
+			mu.Lock()
+			for i := 0; i < perTick; i++ {
+				logq = append(logq, makeEnvelope(profile, produced))
+				produced++
+			}
+			mu.Unlock()
+		}
+	}()
+
+	cursor := 0
+	producing := true
+	loggedDown := false
+	for producing || func() bool { mu.Lock(); defer mu.Unlock(); return cursor < len(logq) }() {
+		elapsed := time.Since(start)
+		if f.active(elapsed) {
+			if !loggedDown {
+				fmt.Printf("  [fault] pusher delivery DOWN at %s (log keeps growing)\n", elapsed.Round(time.Millisecond))
+				loggedDown = true
+			}
+			time.Sleep(tick)
+			goto checkProd
+		}
+		if loggedDown {
+			fmt.Printf("  [fault] pusher RESUMED at %s, catching up from cursor\n", elapsed.Round(time.Millisecond))
+			loggedDown = false
+		}
+		for {
+			mu.Lock()
+			if cursor >= len(logq) {
+				mu.Unlock()
+				break
+			}
+			env := logq[cursor]
+			mu.Unlock()
+			es.Publish(env)
+			cursor++
+		}
+	checkProd:
+		select {
+		case <-prodDone:
+			producing = false
+		default:
+			time.Sleep(tick)
+		}
+	}
+
+	wcancel()
+	stopCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = writer.Stop(stopCtx)
+	fmt.Printf("durable pusher (at-least-once): produced=%d delivered-from-log=%d (profile=%s)\n", produced, cursor, profile)
 }
 
 var heavyBody = `{"status":200,"url":"https://example.com/api","mime_type":"application/json","body":"` +
