@@ -14,7 +14,8 @@ const (
 	// Set to "0", "false", "off", or "none" to disable the guard explicitly.
 	ChromiumRecursionGuardURLBlocklistEnv = "CHROMIUM_RECURSION_GUARD_URL_BLOCKLIST"
 
-	// URLBlocklist treats a bare host as matching that host and its subdomains.
+	// Chrome URLBlocklist matches a bare host and any subdomain; a leading dot
+	// would disable subdomain matching.
 	// The query is intentionally omitted so livestream JWT variations are
 	// covered without per-request proxy work.
 	DefaultChromiumRecursionGuardURLBlocklist = "https://onkernel.com:8443/browser/live"
