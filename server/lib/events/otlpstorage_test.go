@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,18 +13,32 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestOTLPStorageWriter_ExportsEvents drives the full sink against a local HTTP
-// server standing in for the relay/collector, verifying records reach the
-// configured path with the configured headers.
+// server standing in for the relay/collector. It decodes the exported OTLP
+// payload to confirm the request lands with the configured path/headers and
+// that an excluded category (screenshot) never reaches the receiver.
 func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	var mu sync.Mutex
-	var paths, auths []string
+	var paths, auths, eventNames []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var req collogspb.ExportLogsServiceRequest
+		require.NoError(t, proto.Unmarshal(body, &req))
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
 		auths = append(auths, r.Header.Get("Authorization"))
+		for _, rl := range req.ResourceLogs {
+			for _, sl := range rl.ScopeLogs {
+				for _, lr := range sl.LogRecords {
+					eventNames = append(eventNames, lr.EventName)
+				}
+			}
+		}
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -33,14 +48,13 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := OTLPConfig{
-		Endpoint:        strings.TrimPrefix(srv.URL, "http://"),
-		URLPath:         "/otlp-relay/v1/logs",
-		Insecure:        true,
-		Headers:         map[string]string{"Authorization": "Bearer test-jwt"},
-		ServiceName:     "kernel-browser",
-		InstanceName:    "browser-1",
-		Metro:           "dev-iad",
-		MaxBatchRecords: 10,
+		Endpoint:     strings.TrimPrefix(srv.URL, "http://"),
+		URLPath:      "/otlp-relay/v1/logs",
+		Insecure:     true,
+		Headers:      map[string]string{"Authorization": "Bearer test-jwt"},
+		ServiceName:  "kernel-browser",
+		InstanceName: "browser-1",
+		Metro:        "dev-iad",
 	}
 	wtr := NewOTLPStorageWriter(es, cfg, slog.Default())
 
@@ -60,4 +74,6 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	require.NotEmpty(t, paths, "expected at least one export request")
 	assert.Equal(t, "/otlp-relay/v1/logs", paths[0])
 	assert.Equal(t, "Bearer test-jwt", auths[0])
+	// The excluded screenshot must not reach the receiver; only the page event does.
+	assert.Equal(t, []string{"page_navigation"}, eventNames)
 }

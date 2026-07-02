@@ -82,7 +82,9 @@ func toLogRecord(env Envelope) log.Record {
 // promotedAttributes lifts high-value payload fields into typed, queryable
 // attributes (OTel semantic conventions where they exist) so they stay
 // filterable in backends that do not flatten a structured body (Datadog, Loki).
-// The full payload remains in the body for fidelity.
+// The full payload remains in the body for fidelity. The data keys read here
+// mirror the producer event-data schema (network/console event data in
+// openapi.yaml); keep them in sync if that schema changes.
 func promotedAttributes(cat oapi.TelemetryEventCategory, data map[string]any) []log.KeyValue {
 	var out []log.KeyValue
 	switch cat {

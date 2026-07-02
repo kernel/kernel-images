@@ -93,6 +93,8 @@ func (c *Config) LogValue() slog.Value {
 		slog.Bool("otlp_insecure", c.OTLPInsecure),
 		slog.String("otlp_instance_jwt", otlpJWT),
 		slog.String("otlp_service_name", c.OTLPServiceName),
+		slog.String("otlp_instance_name", c.OTLPInstanceName),
+		slog.String("otlp_metro", c.OTLPMetro),
 	)
 }
 

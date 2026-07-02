@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -14,10 +15,11 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
-// defaultOTLPMaxBatchRecords bounds records per export request. The metro-api
-// relay caps bodies at 10MB; envelopes are already capped at ~1MB each at
-// publish, so this keeps the common case well under the limit. Byte-based
-// batching (the real guard against many large records) is deferred.
+// defaultOTLPMaxBatchRecords bounds records per export request. Envelopes are
+// capped at ~1MB each at publish, so a small batch keeps typical requests
+// under the metro-api relay's 10MB body cap. This is a count bound, not a byte
+// bound: byte-based batching (the real guard against many large records) is
+// deferred.
 const defaultOTLPMaxBatchRecords = 200
 
 // OTLPConfig configures the OTLP telemetry sink.
@@ -37,9 +39,24 @@ type OTLPConfig struct {
 	ServiceName  string
 	InstanceName string
 	Metro        string
+}
 
-	// MaxBatchRecords bounds records per export. Defaults to 200.
-	MaxBatchRecords int
+// loggingExporter wraps the OTLP exporter to surface export failures. The SDK
+// otherwise reports them only through a global logger that is not installed
+// here, so delivery loss would be silent.
+type loggingExporter struct {
+	sdklog.Exporter
+	log      *slog.Logger
+	failures atomic.Uint64
+}
+
+func (e *loggingExporter) Export(ctx context.Context, records []sdklog.Record) error {
+	err := e.Exporter.Export(ctx, records)
+	if err != nil {
+		n := e.failures.Add(1)
+		e.log.Warn("otlp export failed", "records", len(records), "err", err, "total_failures", n)
+	}
+	return err
 }
 
 // otlpStorage implements Storage by converting envelopes to OTLP log records
@@ -50,7 +67,7 @@ type otlpStorage struct {
 	logger   log.Logger
 }
 
-func newOTLPStorage(ctx context.Context, cfg OTLPConfig) (*otlpStorage, error) {
+func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otlpStorage, error) {
 	opts := []otlploghttp.Option{otlploghttp.WithEndpoint(cfg.Endpoint)}
 	if cfg.URLPath != "" {
 		opts = append(opts, otlploghttp.WithURLPath(cfg.URLPath))
@@ -67,17 +84,19 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig) (*otlpStorage, error) {
 		return nil, fmt.Errorf("otlp storage: new exporter: %w", err)
 	}
 
-	res := resource.NewSchemaless(
-		semconv.ServiceName(cfg.ServiceName),
-		attribute.String("kernel.instance_name", cfg.InstanceName),
-		attribute.String("kernel.metro", cfg.Metro),
-	)
-
-	maxBatch := cfg.MaxBatchRecords
-	if maxBatch == 0 {
-		maxBatch = defaultOTLPMaxBatchRecords
+	attrs := []attribute.KeyValue{semconv.ServiceName(cfg.ServiceName)}
+	if cfg.InstanceName != "" {
+		attrs = append(attrs, attribute.String("kernel.instance_name", cfg.InstanceName))
 	}
-	processor := sdklog.NewBatchProcessor(exporter, sdklog.WithExportMaxBatchSize(maxBatch))
+	if cfg.Metro != "" {
+		attrs = append(attrs, attribute.String("kernel.metro", cfg.Metro))
+	}
+	res := resource.NewSchemaless(attrs...)
+
+	processor := sdklog.NewBatchProcessor(
+		&loggingExporter{Exporter: exporter, log: log},
+		sdklog.WithExportMaxBatchSize(defaultOTLPMaxBatchRecords),
+	)
 	provider := sdklog.NewLoggerProvider(
 		sdklog.WithResource(res),
 		sdklog.WithProcessor(processor),
@@ -90,7 +109,8 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig) (*otlpStorage, error) {
 }
 
 // Append converts an exported-category envelope to an OTLP record and hands it
-// to the SDK. Excluded categories are dropped.
+// to the SDK. Excluded categories are dropped. Delivery failures surface via
+// the loggingExporter, not this return value (the SDK batches asynchronously).
 func (s *otlpStorage) Append(ctx context.Context, env Envelope) error {
 	if !otlpCategoryExported(env.Event.Category) {
 		return nil
@@ -132,7 +152,7 @@ func (w *OTLPStorageWriter) Start(ctx context.Context) error {
 	if w.started {
 		return fmt.Errorf("otlpstoragewriter: Start called more than once")
 	}
-	storage, err := newOTLPStorage(ctx, w.cfg)
+	storage, err := newOTLPStorage(ctx, w.cfg, w.log)
 	if err != nil {
 		return err
 	}
