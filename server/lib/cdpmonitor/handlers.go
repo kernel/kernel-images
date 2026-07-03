@@ -32,9 +32,19 @@ func exceptionMessage(exc json.RawMessage, fallback string) string {
 		}
 		return o.Description
 	}
+	// Symbol, BigInt, NaN, and ±Infinity throws carry no value/description; CDP
+	// puts them here.
+	if o.UnserializableValue != "" {
+		return o.UnserializableValue
+	}
 	if len(o.Value) > 0 {
 		var v any
 		if json.Unmarshal(o.Value, &v) == nil {
+			// A thrown JSON null unmarshals to nil, which %v renders as the
+			// useless "<nil>"; fall back to the generic text instead.
+			if v == nil {
+				return fallback
+			}
 			return fmt.Sprintf("%v", v)
 		}
 		return string(o.Value)

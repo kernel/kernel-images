@@ -13,6 +13,9 @@ func TestExceptionMessage(t *testing.T) {
 		{"description without newline", `{"description":"TypeError: x is not a function"}`, "Uncaught", "TypeError: x is not a function"},
 		{"thrown string value", `{"type":"string","value":"just a string"}`, "Uncaught", "just a string"},
 		{"thrown number value", `{"type":"number","value":42}`, "Uncaught", "42"},
+		{"thrown null value falls back to text", `{"type":"object","subtype":"null","value":null}`, "Uncaught", "Uncaught"},
+		{"unserializable bigint", `{"type":"bigint","unserializableValue":"10n"}`, "Uncaught", "10n"},
+		{"unserializable symbol", `{"type":"symbol","unserializableValue":"Symbol(x)"}`, "Uncaught", "Symbol(x)"},
 		{"empty exception falls back to text", ``, "Uncaught (in promise)", "Uncaught (in promise)"},
 		{"malformed json falls back to text", `not json`, "Uncaught", "Uncaught"},
 	}
