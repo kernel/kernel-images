@@ -4,11 +4,43 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
+
+// exceptionMessage derives a human-readable message from a Runtime.exceptionThrown
+// exception RemoteObject. CDP's exceptionDetails.text is only a generic prefix
+// ("Uncaught" / "Uncaught (in promise)"); the real message lives here. Prefers the
+// first line of the object's description (e.g. "Error: boom") since the full stack
+// is already captured separately, falls back to the thrown value for non-Error
+// throws, then to the generic text.
+func exceptionMessage(exc json.RawMessage, fallback string) string {
+	if len(exc) == 0 {
+		return fallback
+	}
+	var o cdpRemoteObject
+	if err := json.Unmarshal(exc, &o); err != nil {
+		return fallback
+	}
+	if o.Description != "" {
+		if i := strings.IndexByte(o.Description, '\n'); i >= 0 {
+			return o.Description[:i]
+		}
+		return o.Description
+	}
+	if len(o.Value) > 0 {
+		var v any
+		if json.Unmarshal(o.Value, &v) == nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(o.Value)
+	}
+	return fallback
+}
 
 // logUnmarshalErr logs a Debug message when a handler can't parse CDP params.
 // These indicate Chrome sent an unexpected params shape, rare and non-actionable
@@ -184,6 +216,7 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 		Url:        ptrOf(url),
 		NavSeq:     nseq,
 		Text:       p.ExceptionDetails.Text,
+		Message:    ptrOf(exceptionMessage(p.ExceptionDetails.Exception, p.ExceptionDetails.Text)),
 		Line:       ptrOf(p.ExceptionDetails.LineNumber),
 		Column:     ptrOf(p.ExceptionDetails.ColumnNumber),
 		SourceUrl:  ptrOf(p.ExceptionDetails.URL),

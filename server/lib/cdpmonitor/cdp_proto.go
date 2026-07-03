@@ -70,6 +70,14 @@ type cdpRuntimeExceptionThrownParams struct {
 	ExceptionDetails cdpRuntimeExceptionDetails `json:"exceptionDetails"`
 }
 
+// cdpRemoteObject mirrors the subset of Runtime.RemoteObject we read off an
+// exception payload: Description holds "Error: msg\n at ..." for thrown Errors;
+// Value holds the raw value for thrown primitives.
+type cdpRemoteObject struct {
+	Description string          `json:"description,omitempty"`
+	Value       json.RawMessage `json:"value,omitempty"`
+}
+
 // cdpRuntimeBindingCalledParams mirrors Runtime.bindingCalled params.
 type cdpRuntimeBindingCalledParams struct {
 	Name               string `json:"name"`
