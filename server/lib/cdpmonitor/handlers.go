@@ -216,6 +216,14 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 		stackTrace = &oapi.BrowserCallStack{}
 		_ = json.Unmarshal(p.ExceptionDetails.StackTrace, stackTrace)
 	}
+	// CDP's exceptionDetails.text is only a prefix ("Uncaught" / "Uncaught (in
+	// promise)"). Append the error message so text reads like the console line,
+	// e.g. "Uncaught Error: boom". An empty derived message keeps just the prefix
+	// (passing "" as the fallback avoids a "Uncaught Uncaught" doubling).
+	text := p.ExceptionDetails.Text
+	if msg := exceptionMessage(p.ExceptionDetails.Exception, ""); msg != "" {
+		text = strings.TrimSpace(text + " " + msg)
+	}
 	// source_url is the script file URL; distinct from nav context's url (the page URL).
 	data, _ := json.Marshal(oapi.BrowserConsoleErrorEventData{
 		SessionId:  sid,
@@ -225,8 +233,7 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 		LoaderId:   ptrOf(lid),
 		Url:        ptrOf(url),
 		NavSeq:     nseq,
-		Text:       p.ExceptionDetails.Text,
-		Message:    ptrOf(exceptionMessage(p.ExceptionDetails.Exception, p.ExceptionDetails.Text)),
+		Text:       text,
 		Line:       ptrOf(p.ExceptionDetails.LineNumber),
 		Column:     ptrOf(p.ExceptionDetails.ColumnNumber),
 		SourceUrl:  ptrOf(p.ExceptionDetails.URL),

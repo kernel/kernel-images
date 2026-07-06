@@ -58,6 +58,27 @@ func TestConsoleEvents(t *testing.T) {
 		assert.Equal(t, float64(42), data["line"])
 	})
 
+	t.Run("exception_thrown_appends_message_to_text", func(t *testing.T) {
+		cp := ec.checkpoint()
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Runtime.exceptionThrown",
+			"params": map[string]any{
+				"timestamp": 1234.5,
+				"exceptionDetails": map[string]any{
+					"text": "Uncaught",
+					"exception": map[string]any{
+						"className":   "Error",
+						"description": "Error: boom\n    at <anonymous>:1:7",
+					},
+				},
+			},
+		})
+		ev := ec.waitForNew(t, "console_error", cp, 2*time.Second)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "Uncaught Error: boom", data["text"])
+	})
+
 	t.Run("non_string_args", func(t *testing.T) {
 		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
