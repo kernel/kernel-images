@@ -1771,11 +1771,9 @@ components:
             message:
               type: string
               description: >
-                Human-readable exception message — the error's name and message
-                (first line of the CDP exception description, e.g. "Error: boom")
-                or the thrown value for non-Error throws. Present only when sourced
-                from Runtime.exceptionThrown, where text is only a generic
-                "Uncaught" prefix.
+                The exception message, e.g. "Error: boom" (or the thrown value for
+                non-Error throws). Present only when sourced from
+                Runtime.exceptionThrown.
             stack_trace:
               $ref: "#/components/schemas/BrowserCallStack"
             level:
