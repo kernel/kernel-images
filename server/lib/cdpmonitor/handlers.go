@@ -223,7 +223,8 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 	// Rate-limit per (session, event type): cap at 20 events/s per pair so a
 	// misbehaving page cannot flood the event pipeline with a single event type.
 	// interaction_key is exempt from the rate limit: keystrokes can arrive faster
-	// than the cap, and a dropped key leaves the recorded input incomplete.
+	// than the cap, and a dropped key leaves the recorded input incomplete. Other
+	// event types stay rate-limited unless added to this exemption.
 	if header.Type != EventInteractionKey {
 		now := time.Now()
 		rateKey := sessionID + ":" + header.Type

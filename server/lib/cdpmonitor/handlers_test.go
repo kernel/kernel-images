@@ -461,6 +461,20 @@ func TestBindingAndTimeline(t *testing.T) {
 			}
 			return count == n
 		}, 2*time.Second, 20*time.Millisecond, "all keystrokes should be published, none rate-limited")
+
+		// The payload must survive, not just the event count.
+		ec.mu.Lock()
+		defer ec.mu.Unlock()
+		var data map[string]any
+		for _, ev := range ec.events {
+			if ev.Type == EventInteractionKey {
+				require.NoError(t, json.Unmarshal(ev.Data, &data))
+				break
+			}
+		}
+		assert.Equal(t, "a", data["key"])
+		assert.Equal(t, "input", data["selector"])
+		assert.Equal(t, "INPUT", data["tag"])
 	})
 }
 

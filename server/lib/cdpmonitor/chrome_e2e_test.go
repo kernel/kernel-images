@@ -27,8 +27,10 @@ import (
 // the current-document injection (Runtime.evaluate in injectScript) and the
 // keystroke rate-limit exemption end to end.
 //
-// Opt-in: set KERNEL_CDPMONITOR_CHROME_E2E=1 and have a chromium binary on PATH.
-// Skips otherwise so normal unit runs never launch a browser.
+// Opt-in: set KERNEL_CDPMONITOR_CHROME_E2E=1 with a chromium binary on PATH; it
+// skips otherwise so normal unit runs never launch a browser. This is the only
+// coverage that drives the injected listeners against a real browser, so run it
+// (locally or in a CI job that sets the flag) before relying on the injection path.
 func TestInteractionCaptureOnAlreadyLoadedPage(t *testing.T) {
 	if os.Getenv("KERNEL_CDPMONITOR_CHROME_E2E") == "" {
 		t.Skip("set KERNEL_CDPMONITOR_CHROME_E2E=1 to run the real-Chromium interaction test")
@@ -180,7 +182,12 @@ func dialCDP(t *testing.T, ctx context.Context, url string) *cdpConn {
 			}
 			if json.Unmarshal(b, &msg) == nil && msg.ID != nil {
 				if ch, ok := c.replies.Load(*msg.ID); ok {
-					ch.(chan json.RawMessage) <- b
+					// Non-blocking: the waiter may have already timed out and
+					// deleted its entry.
+					select {
+					case ch.(chan json.RawMessage) <- b:
+					default:
+					}
 				}
 			}
 		}
@@ -191,12 +198,12 @@ func dialCDP(t *testing.T, ctx context.Context, url string) *cdpConn {
 func (c *cdpConn) close() { _ = c.conn.Close(websocket.StatusNormalClosure, "") }
 
 type cdpResult struct {
-	t   *testing.T
 	raw json.RawMessage
 }
 
-func (c *cdpConn) call(t *testing.T, ctx context.Context, sessionID, method string, params map[string]any) cdpResult {
-	t.Helper()
+// roundtrip sends a command and waits for its reply. Shared by call (which fails
+// the test on error) and evalBool (which tolerates errors while polling).
+func (c *cdpConn) roundtrip(ctx context.Context, sessionID, method string, params map[string]any) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
 	ch := make(chan json.RawMessage, 1)
 	c.replies.Store(id, ch)
@@ -212,15 +219,22 @@ func (c *cdpConn) call(t *testing.T, ctx context.Context, sessionID, method stri
 	c.mu.Lock()
 	err := wsjson.Write(ctx, c.conn, msg)
 	c.mu.Unlock()
-	require.NoError(t, err)
-
+	if err != nil {
+		return nil, err
+	}
 	select {
 	case raw := <-ch:
-		return cdpResult{t: t, raw: raw}
+		return raw, nil
 	case <-ctx.Done():
-		t.Fatalf("cdp call %s timed out", method)
-		return cdpResult{}
+		return nil, ctx.Err()
 	}
+}
+
+func (c *cdpConn) call(t *testing.T, ctx context.Context, sessionID, method string, params map[string]any) cdpResult {
+	t.Helper()
+	raw, err := c.roundtrip(ctx, sessionID, method, params)
+	require.NoError(t, err, "cdp call %s", method)
+	return cdpResult{raw: raw}
 }
 
 func (r cdpResult) targetID(t *testing.T) string {
@@ -245,31 +259,24 @@ func (r cdpResult) sessionID(t *testing.T) string {
 	return resp.Result.SessionID
 }
 
+// evalBool is a readiness poll: any transport or parse error reads as "not ready
+// yet" so the caller retries, rather than failing the test on a transient miss.
 func (c *cdpConn) evalBool(ctx context.Context, sessionID, expr string) bool {
-	id := c.nextID.Add(1)
-	ch := make(chan json.RawMessage, 1)
-	c.replies.Store(id, ch)
-	defer c.replies.Delete(id)
-	c.mu.Lock()
-	_ = wsjson.Write(ctx, c.conn, map[string]any{
-		"id": id, "sessionId": sessionID, "method": "Runtime.evaluate",
-		"params": map[string]any{"expression": expr, "returnByValue": true},
-	})
-	c.mu.Unlock()
-	select {
-	case raw := <-ch:
-		var resp struct {
-			Result struct {
-				Result struct {
-					Value bool `json:"value"`
-				} `json:"result"`
-			} `json:"result"`
-		}
-		_ = json.Unmarshal(raw, &resp)
-		return resp.Result.Result.Value
-	case <-ctx.Done():
+	raw, err := c.roundtrip(ctx, sessionID, "Runtime.evaluate", map[string]any{"expression": expr, "returnByValue": true})
+	if err != nil {
 		return false
 	}
+	var resp struct {
+		Result struct {
+			Result struct {
+				Value bool `json:"value"`
+			} `json:"result"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return false
+	}
+	return resp.Result.Result.Value
 }
 
 type domRect struct {

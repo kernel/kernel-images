@@ -65,10 +65,12 @@ func (m *Monitor) injectScript(ctx context.Context, sessionID string) error {
 	_, err := m.send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
 		"source": injectedJS,
 	}, sessionID)
-	// Best-effort: the current document may lack a JS context (e.g. about:blank);
-	// the registration above still applies to the next load.
-	_, _ = m.send(ctx, "Runtime.evaluate", map[string]any{
+	// Some documents have no evaluable main-world context (e.g. chrome:// pages);
+	// the registration above still applies to the next load. Surface anything else.
+	if _, evalErr := m.send(ctx, "Runtime.evaluate", map[string]any{
 		"expression": injectedJS,
-	}, sessionID)
+	}, sessionID); evalErr != nil && ctx.Err() == nil {
+		m.log.Warn("cdpmonitor: failed to inject interaction script into current document", "session", sessionID, "err", evalErr)
+	}
 	return err
 }
