@@ -41,6 +41,8 @@ func main() {
 	endpoint := flag.String("endpoint", "127.0.0.1:4318", "driver target host[:port]")
 	path := flag.String("path", "/v1/logs", "driver target path")
 	delay := flag.Duration("delay", 0, "receiver: artificial per-request delay (simulate slow customer)")
+	failAt := flag.Duration("fail-at", 0, "receiver: when to start returning 503 (models an endpoint outage, exporter keeps running)")
+	failFor := flag.Duration("fail-for", 0, "receiver: how long to return 503")
 	rate := flag.Int("rate", 500, "driver: events per second")
 	dur := flag.Duration("dur", 10*time.Second, "driver: run duration")
 	profile := flag.String("profile", "light", "driver: light | heavy")
@@ -52,7 +54,7 @@ func main() {
 	fault := fault{at: *pauseAt, dur: *pauseFor}
 	switch *mode {
 	case "receiver":
-		runReceiver(*addr, *delay)
+		runReceiver(*addr, *delay, *failAt, *failFor)
 	case "relay":
 		runRelay(*endpoint, *path, *profile, *rate, *dur, *readLatency, fault)
 	case "durable":
@@ -63,7 +65,7 @@ func main() {
 	}
 }
 
-func runReceiver(addr string, delay time.Duration) {
+func runReceiver(addr string, delay, failAt, failFor time.Duration) {
 	var (
 		mu        sync.Mutex
 		total     int
@@ -71,8 +73,18 @@ func runReceiver(addr string, delay time.Duration) {
 		lags      []time.Duration
 		seen      = map[int64]struct{}{}
 	)
+	start := time.Now()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Model an endpoint outage: return 503 (retryable) for a window while
+		// the exporter keeps running, so its ring + batch queue + retries are
+		// all exercised, unlike the driver-side pause that stops the reader.
+		if failFor > 0 {
+			if el := time.Since(start); el >= failAt && el < failAt+failFor {
+				http.Error(w, "endpoint down", http.StatusServiceUnavailable)
+				return
+			}
+		}
 		body, _ := io.ReadAll(r.Body)
 		data := body
 		if r.Header.Get("Content-Encoding") == "gzip" {
