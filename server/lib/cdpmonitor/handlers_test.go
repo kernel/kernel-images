@@ -435,6 +435,33 @@ func TestBindingAndTimeline(t *testing.T) {
 		ec.mu.Unlock()
 		assert.Equal(t, countBefore+1, countAfter, "rate limiter should have dropped the 2nd and 3rd events")
 	})
+
+	t.Run("keys_not_rate_limited", func(t *testing.T) {
+		srv, ec := withMonitor(t)
+		// Keystrokes arrive faster than the 50ms rate-limit window; all must be
+		// published so typed input can be reconstructed exactly.
+		const n = 5
+		for range n {
+			srv.sendToMonitor(t, map[string]any{
+				"method": "Runtime.bindingCalled",
+				"params": map[string]any{
+					"name":    "__kernelEvent",
+					"payload": `{"type":"interaction_key","key":"a","selector":"input","tag":"INPUT"}`,
+				},
+			})
+		}
+		require.Eventually(t, func() bool {
+			ec.mu.Lock()
+			defer ec.mu.Unlock()
+			count := 0
+			for _, ev := range ec.events {
+				if ev.Type == EventInteractionKey {
+					count++
+				}
+			}
+			return count == n
+		}, 2*time.Second, 20*time.Millisecond, "all keystrokes should be published, none rate-limited")
+	})
 }
 
 func TestPerTargetStateMachines(t *testing.T) {
