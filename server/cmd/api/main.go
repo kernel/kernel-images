@@ -125,6 +125,29 @@ func main() {
 		}
 	}
 
+	// Optional OTLP export sink. Independent of S2; both can run together.
+	var otlpWriter *events.OTLPStorageWriter
+	if config.OTLPEndpoint != "" {
+		headers := map[string]string{}
+		if config.OTLPInstanceJWT != "" {
+			headers["Authorization"] = "Bearer " + config.OTLPInstanceJWT
+		}
+		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
+		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
+			Endpoint:     config.OTLPEndpoint,
+			URLPath:      config.OTLPPath,
+			Insecure:     config.OTLPInsecure,
+			Headers:      headers,
+			ServiceName:  config.OTLPServiceName,
+			InstanceName: config.OTLPInstanceName,
+			Metro:        config.OTLPMetro,
+		}, slogger)
+		if err := otlpWriter.Start(ctx); err != nil {
+			slogger.Error("failed to start OTLP storage writer", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
@@ -304,6 +327,14 @@ func main() {
 		defer stopCancel()
 		if err := s2Writer.Stop(stopCtx); err != nil {
 			slogger.Error("s2 storage writer stop failed", "err", err)
+		}
+	}
+
+	if otlpWriter != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		if err := otlpWriter.Stop(stopCtx); err != nil {
+			slogger.Error("otlp storage writer stop failed", "err", err)
 		}
 	}
 }
