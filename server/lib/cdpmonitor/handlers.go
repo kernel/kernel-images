@@ -222,16 +222,20 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 
 	// Rate-limit per (session, event type): cap at 20 events/s per pair so a
 	// misbehaving page cannot flood the event pipeline with a single event type.
-	now := time.Now()
-	rateKey := sessionID + ":" + header.Type
-	m.bindingRateMu.Lock()
-	last := m.bindingLastSeen[rateKey]
-	if now.Sub(last) < bindingMinInterval {
+	// interaction_key is exempt from the rate limit: keystrokes can arrive faster
+	// than the cap, and a dropped key leaves the recorded input incomplete.
+	if header.Type != EventInteractionKey {
+		now := time.Now()
+		rateKey := sessionID + ":" + header.Type
+		m.bindingRateMu.Lock()
+		last := m.bindingLastSeen[rateKey]
+		if now.Sub(last) < bindingMinInterval {
+			m.bindingRateMu.Unlock()
+			return
+		}
+		m.bindingLastSeen[rateKey] = now
 		m.bindingRateMu.Unlock()
-		return
 	}
-	m.bindingLastSeen[rateKey] = now
-	m.bindingRateMu.Unlock()
 
 	var payloadMap map[string]any
 	_ = json.Unmarshal(payload, &payloadMap)
