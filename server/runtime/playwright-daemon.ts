@@ -50,6 +50,12 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
+function requireWithinDeadline(deadlineMs: number, timeoutMs: number): void {
+  if (Date.now() >= deadlineMs) {
+    throw new Error(`Execution timed out after ${timeoutMs}ms`);
+  }
+}
+
 async function transformCode(code: string): Promise<string> {
   // Wrap in async function so top-level await/return are valid for esbuild
   const wrapped = `async function __userCode__() {\n${code}\n}`;
@@ -117,7 +123,7 @@ async function ensureBrowserConnection(): Promise<Browser> {
   }
 }
 
-async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
+async function executeCode(request: ExecuteRequest, deadlineMs: number, timeoutMs: number): Promise<ExecuteResponse> {
   const { id, code } = request;
 
   try {
@@ -132,6 +138,7 @@ async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
         stack: transformError.stack,
       };
     }
+    requireWithinDeadline(deadlineMs, timeoutMs);
 
     let browserInstance: Browser;
     try {
@@ -156,11 +163,14 @@ async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
         };
       }
     }
+    requireWithinDeadline(deadlineMs, timeoutMs);
 
     const contexts = browserInstance.contexts();
     const context = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
+    requireWithinDeadline(deadlineMs, timeoutMs);
     const pages = context.pages();
     const page = pages.length > 0 ? pages[0] : await context.newPage();
+    requireWithinDeadline(deadlineMs, timeoutMs);
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);
@@ -209,9 +219,10 @@ function handleConnection(socket: Socket): void {
       }
 
       const timeoutMs = request.timeout_ms ?? 60000;
+      const deadlineMs = Date.now() + timeoutMs;
       let response: ExecuteResponse;
       try {
-        response = await withTimeout(executeCode(request), timeoutMs);
+        response = await withTimeout(executeCode(request, deadlineMs, timeoutMs), timeoutMs);
       } catch (error: any) {
         response = {
           id: request.id,
