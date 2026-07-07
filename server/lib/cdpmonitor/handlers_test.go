@@ -436,12 +436,13 @@ func TestBindingAndTimeline(t *testing.T) {
 		assert.Equal(t, countBefore+1, countAfter, "rate limiter should have dropped the 2nd and 3rd events")
 	})
 
-	t.Run("keys_not_rate_limited", func(t *testing.T) {
+	t.Run("keys_use_higher_rate_limit", func(t *testing.T) {
 		srv, ec := withMonitor(t)
-		// Keystrokes arrive faster than the 50ms rate-limit window; all must be
-		// published so typed input can be reconstructed exactly.
+		// Keystrokes are capped far higher than clicks (bindingKeyMinInterval), so
+		// keys spaced above that interval all publish, whereas clicks at the same
+		// spacing would be dropped by bindingMinInterval.
 		const n = 5
-		for range n {
+		for i := range n {
 			srv.sendToMonitor(t, map[string]any{
 				"method": "Runtime.bindingCalled",
 				"params": map[string]any{
@@ -449,6 +450,9 @@ func TestBindingAndTimeline(t *testing.T) {
 					"payload": `{"type":"interaction_key","key":"a","selector":"input","tag":"INPUT"}`,
 				},
 			})
+			if i < n-1 {
+				time.Sleep(3 * bindingKeyMinInterval)
+			}
 		}
 		require.Eventually(t, func() bool {
 			ec.mu.Lock()
@@ -460,7 +464,7 @@ func TestBindingAndTimeline(t *testing.T) {
 				}
 			}
 			return count == n
-		}, 2*time.Second, 20*time.Millisecond, "all keystrokes should be published, none rate-limited")
+		}, 2*time.Second, 20*time.Millisecond, "keystrokes spaced above the key interval must all publish")
 
 		// The payload must survive, not just the event count.
 		ec.mu.Lock()
@@ -476,6 +480,13 @@ func TestBindingAndTimeline(t *testing.T) {
 		assert.Equal(t, "input", data["selector"])
 		assert.Equal(t, "INPUT", data["tag"])
 	})
+}
+
+func TestBindingIntervalFor(t *testing.T) {
+	assert.Equal(t, bindingKeyMinInterval, bindingIntervalFor(EventInteractionKey))
+	assert.Equal(t, bindingMinInterval, bindingIntervalFor(EventInteractionClick))
+	assert.Equal(t, bindingMinInterval, bindingIntervalFor(EventScrollSettled))
+	assert.Less(t, bindingKeyMinInterval, bindingMinInterval, "keys must get a higher cap than other events")
 }
 
 func TestPerTargetStateMachines(t *testing.T) {

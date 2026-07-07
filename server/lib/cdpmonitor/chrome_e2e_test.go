@@ -75,6 +75,8 @@ func TestInteractionCaptureOnAlreadyLoadedPage(t *testing.T) {
 		s := string(r)
 		cdp.call(t, ctx, sessionID, "Input.dispatchKeyEvent", map[string]any{"type": "keyDown", "text": s, "key": s})
 		cdp.call(t, ctx, sessionID, "Input.dispatchKeyEvent", map[string]any{"type": "keyUp", "key": s})
+		// Space keystrokes above the interaction_key rate cap so none are dropped.
+		time.Sleep(3 * bindingKeyMinInterval)
 	}
 
 	// The click must be captured (proves listeners are attached to the current doc).
