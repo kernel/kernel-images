@@ -10,21 +10,36 @@ import (
 )
 
 // DefaultUMAHistograms is the curated set of Chrome UMA histograms exposed
-// on the metrics endpoint. All are recorded per page load with millisecond
-// units unless noted. Histograms with no samples yet are simply absent from
-// the output.
+// on the metrics endpoint. Units are milliseconds unless noted. Histograms
+// with no samples yet are simply absent from the output.
+//
+// Only histograms recorded in the browser process are eligible:
+// Browser.getHistograms cannot see renderer/GPU-process histograms (e.g.
+// EventLatency.*, Graphics.Smoothness.*, Blink.*) because those only merge
+// into the browser's recorder when a UMA log is staged or chrome://histograms
+// is opened, neither of which happens on our images.
 var DefaultUMAHistograms = []string{
 	"PageLoad.PaintTiming.NavigationToFirstContentfulPaint",
 	"PageLoad.PaintTiming.NavigationToLargestContentfulPaint2",
 	"PageLoad.DocumentTiming.NavigationToDOMContentLoadedEventFired",
 	"PageLoad.DocumentTiming.NavigationToLoadEventFired",
 	"PageLoad.ParseTiming.NavigationToParseStart",
-	// INP: worst-case interaction latency, high percentile per page load.
+	// INP: worst-case interaction latency (input to next paint), high
+	// percentile per page load.
 	"PageLoad.InteractiveTiming.UserInteractionLatency.HighPercentile2.MaxEventDuration",
+	// FID: input delay of the first interaction per page load.
+	"PageLoad.InteractiveTiming.FirstInputDelay4",
+	// Interactions per page load; unitless count.
+	"PageLoad.InteractiveTiming.NumInteractions",
 	// CLS: unitless layout-shift score, not milliseconds.
 	"PageLoad.LayoutInstability.MaxCumulativeShiftScore.SessionWindow.Gap1000ms.Max5000ms2",
 	// CPU milliseconds consumed by the page across its lifetime.
 	"PageLoad.Cpu.TotalUsage",
+	// Browser start to first web contents paint; one sample per browser
+	// start, measures how quickly a fresh VM renders content.
+	"Startup.FirstWebContents.NonEmptyPaint3",
+	// Peak GPU memory during scroll sequences, in MB.
+	"Memory.GPU.PeakMemoryUsage2.Scroll",
 }
 
 // DevToolsUpstream reports the current browser-level DevTools WebSocket URL.
