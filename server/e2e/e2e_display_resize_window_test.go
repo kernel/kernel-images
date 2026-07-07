@@ -457,7 +457,6 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 	}
 }
 
-
 // navigateBlank points the active page at about:blank via playwright so the
 // renderer is alive before we query window dimensions.
 func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
@@ -465,13 +464,26 @@ func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 	timeout := 5
-	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
-		Code:       `await page.goto('about:blank'); return true;`,
-		TimeoutSec: &timeout,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, rsp.JSON200, "playwright navigate response missing")
-	require.True(t, rsp.JSON200.Success, "playwright navigate to about:blank failed: %s", string(rsp.Body))
+	var lastFailure string
+	require.Eventually(t, func() bool {
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
+			Code:       `await page.goto('about:blank'); return true;`,
+			TimeoutSec: &timeout,
+		})
+		if err != nil {
+			lastFailure = err.Error()
+			return false
+		}
+		if rsp.JSON200 == nil {
+			lastFailure = fmt.Sprintf("missing JSON200 status=%s body=%s", rsp.Status(), string(rsp.Body))
+			return false
+		}
+		if !rsp.JSON200.Success {
+			lastFailure = string(rsp.Body)
+			return false
+		}
+		return true
+	}, 30*time.Second, 500*time.Millisecond, "playwright navigate to about:blank failed: %s", lastFailure)
 }
 
 // patchDisplayExpectingOK issues PATCH /display and requires a 200. The
