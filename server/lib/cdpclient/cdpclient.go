@@ -133,6 +133,64 @@ func (c *Client) GetBrowserVersion(ctx context.Context) (*BrowserVersion, error)
 	return &v, nil
 }
 
+// Histogram is a snapshot of a Chrome UMA histogram as returned by
+// Browser.getHistograms. Values are cumulative since browser start and the
+// units follow the UMA definition of the histogram (PageLoad timings are
+// milliseconds). Only buckets with at least one sample are present.
+type Histogram struct {
+	Name    string            `json:"name"`
+	Sum     int64             `json:"sum"`
+	Count   int64             `json:"count"`
+	Buckets []HistogramBucket `json:"buckets"`
+}
+
+// HistogramBucket is a [Low, High) bucket of a Histogram.
+type HistogramBucket struct {
+	Low   int64 `json:"low"`
+	High  int64 `json:"high"`
+	Count int64 `json:"count"`
+}
+
+// GetHistograms sends Browser.getHistograms, a browser-level command that
+// reads Chrome's in-memory UMA histograms without attaching to any page.
+// query is a substring filter on the histogram name; empty returns all.
+func (c *Client) GetHistograms(ctx context.Context, query string) ([]Histogram, error) {
+	raw, err := c.send(ctx, "Browser.getHistograms", map[string]any{"query": query}, "")
+	if err != nil {
+		return nil, fmt.Errorf("Browser.getHistograms: %w", err)
+	}
+	var result struct {
+		Histograms []Histogram `json:"histograms"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal Browser.getHistograms: %w", err)
+	}
+	return result.Histograms, nil
+}
+
+// CountPageTargets returns the number of open page targets.
+func (c *Client) CountPageTargets(ctx context.Context) (int, error) {
+	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return 0, fmt.Errorf("Target.getTargets: %w", err)
+	}
+	var targets struct {
+		TargetInfos []struct {
+			Type string `json:"type"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(targetsResult, &targets); err != nil {
+		return 0, fmt.Errorf("unmarshal targets: %w", err)
+	}
+	n := 0
+	for _, t := range targets.TargetInfos {
+		if t.Type == "page" {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // DispatchStartURL closes extra page targets and dispatches a navigation on the
 // first page target. It does not wait for lifecycle events; Chrome owns the
 // eventual navigation result.

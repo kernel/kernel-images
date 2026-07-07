@@ -27,6 +27,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/metrics"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
@@ -257,6 +258,22 @@ func main() {
 		Handler: rChromeDriver,
 	}
 
+	// Prometheus metrics for external collection. Served on its own
+	// listener, deliberately without the scale-to-zero middleware (periodic
+	// scrapes must not count as session activity) and without per-request
+	// logging (scrapes would drown the logs).
+	rMetrics := chi.NewRouter()
+	rMetrics.Use(chiMiddleware.Recoverer)
+	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger,
+		metrics.NewChromeCollector(upstreamMgr),
+		metrics.NewGPUCollector(),
+		metrics.NewSystemCollector(),
+	))
+	srvMetrics := &http.Server{
+		Addr:    fmt.Sprintf("0.0.0.0:%d", config.MetricsPort),
+		Handler: rMetrics,
+	}
+
 	go func() {
 		slogger.Info("http server starting", "addr", srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -277,6 +294,14 @@ func main() {
 		slogger.Info("chromedriver proxy starting", "addr", srvChromeDriver.Addr)
 		if err := srvChromeDriver.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slogger.Error("chromedriver proxy failed", "err", err)
+			stop()
+		}
+	}()
+
+	go func() {
+		slogger.Info("metrics server starting", "addr", srvMetrics.Addr)
+		if err := srvMetrics.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slogger.Error("metrics server failed", "err", err)
 			stop()
 		}
 	}()
@@ -307,6 +332,9 @@ func main() {
 	})
 	g.Go(func() error {
 		return srvChromeDriver.Shutdown(shutdownCtx)
+	})
+	g.Go(func() error {
+		return srvMetrics.Shutdown(shutdownCtx)
 	})
 
 	if err := g.Wait(); err != nil {

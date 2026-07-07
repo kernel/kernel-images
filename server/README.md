@@ -51,6 +51,7 @@ Configure the server using environment variables:
 | Variable       | Default   | Description                                 |
 | -------------- | --------- | ------------------------------------------- |
 | `PORT`         | `10001`   | HTTP server port                            |
+| `METRICS_PORT` | `10002`   | Prometheus metrics port (`GET /metrics`)    |
 | `FRAME_RATE`   | `10`      | Default recording framerate (fps)           |
 | `DISPLAY_NUM`  | `1`       | Display/screen number to capture            |
 | `MAX_SIZE_MB`  | `500`     | Default maximum file size (MB)              |

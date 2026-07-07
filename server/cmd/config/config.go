@@ -13,6 +13,11 @@ type Config struct {
 	// Server configuration
 	Port int `envconfig:"PORT" default:"10001"`
 
+	// Port for the Prometheus metrics endpoint. Served on a separate
+	// listener so scrapes bypass the scale-to-zero middleware and the
+	// external API surface.
+	MetricsPort int `envconfig:"METRICS_PORT" default:"10002"`
+
 	// Recording configuration
 	FrameRate   int    `envconfig:"FRAME_RATE" default:"10"`
 	DisplayNum  int    `envconfig:"DISPLAY_NUM" default:"1"`
@@ -57,6 +62,7 @@ func (c *Config) LogValue() slog.Value {
 	}
 	return slog.GroupValue(
 		slog.Int("port", c.Port),
+		slog.Int("metrics_port", c.MetricsPort),
 		slog.Int("frame_rate", c.FrameRate),
 		slog.Int("display_num", c.DisplayNum),
 		slog.Int("max_size_mb", c.MaxSizeInMB),
