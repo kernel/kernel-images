@@ -248,6 +248,21 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 // a misbehaving page from flooding the event pipeline.
 const bindingMinInterval = 50 * time.Millisecond
 
+// bindingKeyMinInterval caps interaction_key at 1000 events/s. Typing produces
+// keystrokes in bursts faster than other interaction events, and a dropped key
+// leaves the recorded input incomplete, so keys get a higher cap; the cap still
+// bounds a page that synthesises a keydown flood.
+const bindingKeyMinInterval = time.Millisecond
+
+// bindingIntervalFor returns the minimum spacing between accepted binding events
+// of the given type.
+func bindingIntervalFor(eventType string) time.Duration {
+	if eventType == EventInteractionKey {
+		return bindingKeyMinInterval
+	}
+	return bindingMinInterval
+}
+
 // handleBindingCalled processes __kernelEvent binding calls from the page.
 func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID string) {
 	if p.Name != bindingName {
@@ -270,13 +285,15 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 		return
 	}
 
-	// Rate-limit per (session, event type): cap at 20 events/s per pair so a
-	// misbehaving page cannot flood the event pipeline with a single event type.
+	// Rate-limit per (session, event type) so a misbehaving page cannot flood the
+	// pipeline. interaction_key uses a higher cap (bindingKeyMinInterval); other
+	// event types use bindingMinInterval.
+	minInterval := bindingIntervalFor(header.Type)
 	now := time.Now()
 	rateKey := sessionID + ":" + header.Type
 	m.bindingRateMu.Lock()
 	last := m.bindingLastSeen[rateKey]
-	if now.Sub(last) < bindingMinInterval {
+	if now.Sub(last) < minInterval {
 		m.bindingRateMu.Unlock()
 		return
 	}

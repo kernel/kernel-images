@@ -57,10 +57,20 @@ func (m *Monitor) enableDomains(ctx context.Context, sessionID string, targetTyp
 //go:embed interaction.js
 var injectedJS string
 
-// injectScript registers the interaction tracking JS for the given session.
+// injectScript installs the interaction tracker for the session on both future
+// document loads and the currently-loaded document, so a page that was already
+// live when the session attached is tracked without waiting for a navigation.
+// Idempotent via window.__kernelEventInjected.
 func (m *Monitor) injectScript(ctx context.Context, sessionID string) error {
 	_, err := m.send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
 		"source": injectedJS,
 	}, sessionID)
+	// Some documents have no evaluable main-world context (e.g. chrome:// pages);
+	// the registration above still applies to the next load. Surface anything else.
+	if _, evalErr := m.send(ctx, "Runtime.evaluate", map[string]any{
+		"expression": injectedJS,
+	}, sessionID); evalErr != nil && ctx.Err() == nil {
+		m.log.Warn("cdpmonitor: failed to inject interaction script into current document", "session", sessionID, "err", evalErr)
+	}
 	return err
 }

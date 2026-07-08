@@ -456,6 +456,58 @@ func TestBindingAndTimeline(t *testing.T) {
 		ec.mu.Unlock()
 		assert.Equal(t, countBefore+1, countAfter, "rate limiter should have dropped the 2nd and 3rd events")
 	})
+
+	t.Run("keys_use_higher_rate_limit", func(t *testing.T) {
+		srv, ec := withMonitor(t)
+		// Keystrokes are capped far higher than clicks (bindingKeyMinInterval), so
+		// keys spaced above that interval all publish, whereas clicks at the same
+		// spacing would be dropped by bindingMinInterval.
+		const n = 5
+		for i := range n {
+			srv.sendToMonitor(t, map[string]any{
+				"method": "Runtime.bindingCalled",
+				"params": map[string]any{
+					"name":    "__kernelEvent",
+					"payload": `{"type":"interaction_key","key":"a","selector":"input","tag":"INPUT"}`,
+				},
+			})
+			if i < n-1 {
+				time.Sleep(3 * bindingKeyMinInterval)
+			}
+		}
+		require.Eventually(t, func() bool {
+			ec.mu.Lock()
+			defer ec.mu.Unlock()
+			count := 0
+			for _, ev := range ec.events {
+				if ev.Type == EventInteractionKey {
+					count++
+				}
+			}
+			return count == n
+		}, 2*time.Second, 20*time.Millisecond, "keystrokes spaced above the key interval must all publish")
+
+		// The payload must survive, not just the event count.
+		ec.mu.Lock()
+		defer ec.mu.Unlock()
+		var data map[string]any
+		for _, ev := range ec.events {
+			if ev.Type == EventInteractionKey {
+				require.NoError(t, json.Unmarshal(ev.Data, &data))
+				break
+			}
+		}
+		assert.Equal(t, "a", data["key"])
+		assert.Equal(t, "input", data["selector"])
+		assert.Equal(t, "INPUT", data["tag"])
+	})
+}
+
+func TestBindingIntervalFor(t *testing.T) {
+	assert.Equal(t, bindingKeyMinInterval, bindingIntervalFor(EventInteractionKey))
+	assert.Equal(t, bindingMinInterval, bindingIntervalFor(EventInteractionClick))
+	assert.Equal(t, bindingMinInterval, bindingIntervalFor(EventScrollSettled))
+	assert.Less(t, bindingKeyMinInterval, bindingMinInterval, "keys must get a higher cap than other events")
 }
 
 func TestPerTargetStateMachines(t *testing.T) {
