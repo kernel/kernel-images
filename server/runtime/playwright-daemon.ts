@@ -56,18 +56,6 @@ function requireWithinDeadline(deadlineMs: number, timeoutMs: number): void {
   }
 }
 
-async function delayWithinDeadline(delayMs: number, deadlineMs: number, timeoutMs: number): Promise<void> {
-  requireWithinDeadline(deadlineMs, timeoutMs);
-
-  const remainingMs = deadlineMs - Date.now();
-  if (remainingMs < delayMs) {
-    throw new Error(`Execution timed out after ${timeoutMs}ms`);
-  }
-
-  await new Promise(resolve => setTimeout(resolve, delayMs));
-  requireWithinDeadline(deadlineMs, timeoutMs);
-}
-
 async function transformCode(code: string): Promise<string> {
   // Wrap in async function so top-level await/return are valid for esbuild
   const wrapped = `async function __userCode__() {\n${code}\n}`;
@@ -150,8 +138,6 @@ async function executeCode(request: ExecuteRequest, deadlineMs: number, timeoutM
         stack: transformError.stack,
       };
     }
-    requireWithinDeadline(deadlineMs, timeoutMs);
-
     let browserInstance: Browser;
     try {
       browserInstance = await ensureBrowserConnection();
@@ -164,7 +150,7 @@ async function executeCode(request: ExecuteRequest, deadlineMs: number, timeoutM
           error: `Failed to connect to browser after ${MAX_RECONNECT_ATTEMPTS} attempts: ${connError.message}`,
         };
       }
-      await delayWithinDeadline(RECONNECT_DELAY_MS, deadlineMs, timeoutMs);
+      await new Promise(resolve => setTimeout(resolve, RECONNECT_DELAY_MS));
       try {
         browserInstance = await ensureBrowserConnection();
       } catch (retryError: any) {
@@ -175,14 +161,10 @@ async function executeCode(request: ExecuteRequest, deadlineMs: number, timeoutM
         };
       }
     }
-    requireWithinDeadline(deadlineMs, timeoutMs);
-
     const contexts = browserInstance.contexts();
     const context = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
-    requireWithinDeadline(deadlineMs, timeoutMs);
     const pages = context.pages();
     const page = pages.length > 0 ? pages[0] : await context.newPage();
-    requireWithinDeadline(deadlineMs, timeoutMs);
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);

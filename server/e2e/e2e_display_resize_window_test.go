@@ -470,18 +470,9 @@ func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
 			Code:       `await page.goto('about:blank'); return true;`,
 			TimeoutSec: &timeout,
 		})
-		if err != nil {
-			require.NoError(collect, err)
-			return
-		}
-		if rsp.JSON200 == nil {
-			require.NotNil(collect, rsp.JSON200, "missing JSON200 status=%s body=%s", rsp.Status(), string(rsp.Body))
-			return
-		}
-		if !rsp.JSON200.Success {
-			require.True(collect, rsp.JSON200.Success, "playwright navigate to about:blank failed: %s", string(rsp.Body))
-			return
-		}
+		require.NoError(collect, err)
+		require.NotNil(collect, rsp.JSON200, "missing JSON200 status=%s body=%s", rsp.Status(), string(rsp.Body))
+		require.True(collect, rsp.JSON200.Success, "playwright navigate to about:blank failed: %s", string(rsp.Body))
 	}, 30*time.Second, 500*time.Millisecond)
 }
 
