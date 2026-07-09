@@ -17,18 +17,17 @@ import (
 
 // defaultOTLPMaxBatchRecords bounds records per export request. Envelopes are
 // capped at ~1MB each at publish, so a small batch keeps typical requests
-// under the metro-api relay's 10MB body cap. This is a count bound, not a byte
-// bound: byte-based batching (the real guard against many large records) is
-// deferred.
+// under a common 10MB body cap. This is a count bound, not a byte bound:
+// byte-based batching (the real guard against many large records) is deferred.
 const defaultOTLPMaxBatchRecords = 200
 
 // OTLPConfig configures the OTLP telemetry sink.
 type OTLPConfig struct {
-	// Endpoint is the host[:port] of the OTLP/HTTP target: the metro-api relay
-	// in production, a local collector in development.
+	// Endpoint is the host[:port] of the OTLP/HTTP target: a collector in
+	// development, or a forwarding relay in production.
 	Endpoint string
 	// URLPath overrides the request path. Empty uses the exporter default of
-	// /v1/logs; the relay path is configured by the caller.
+	// /v1/logs.
 	URLPath string
 	// Insecure sends over plaintext HTTP. Development only.
 	Insecure bool

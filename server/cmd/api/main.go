@@ -129,8 +129,8 @@ func main() {
 	var otlpWriter *events.OTLPStorageWriter
 	if config.OTLPEndpoint != "" {
 		headers := map[string]string{}
-		if config.OTLPInstanceJWT != "" {
-			headers["Authorization"] = "Bearer " + config.OTLPInstanceJWT
+		if config.InstanceJWT != "" {
+			headers["Authorization"] = "Bearer " + config.InstanceJWT
 		}
 		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
@@ -139,12 +139,13 @@ func main() {
 			Insecure:     config.OTLPInsecure,
 			Headers:      headers,
 			ServiceName:  config.OTLPServiceName,
-			InstanceName: config.OTLPInstanceName,
-			Metro:        config.OTLPMetro,
+			InstanceName: config.InstanceName,
+			Metro:        config.MetroName,
 		}, slogger)
 		if err := otlpWriter.Start(ctx); err != nil {
-			slogger.Error("failed to start OTLP storage writer", "err", err)
-			os.Exit(1)
+			// Best-effort sink: a failed exporter must not take down the browser.
+			slogger.Error("OTLP export disabled: storage writer failed to start", "err", err)
+			otlpWriter = nil
 		}
 	}
 
