@@ -39,15 +39,17 @@ interface ExecuteResponse {
   stack?: string;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(`Execution timed out after ${timeoutMs}ms`)), timeoutMs);
-  });
+function withTimeout<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
 
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timeout) clearTimeout(timeout);
-  });
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  ]);
 }
 
 async function transformCode(code: string): Promise<string> {
@@ -207,11 +209,10 @@ function handleConnection(socket: Socket): void {
         continue;
       }
 
-      const timeoutMs = request.timeout_ms ?? 60000;
-      const signal = AbortSignal.timeout(timeoutMs);
+      const signal = AbortSignal.timeout(request.timeout_ms ?? 60000);
       let response: ExecuteResponse;
       try {
-        response = await withTimeout(executeCode(request, signal), timeoutMs);
+        response = await withTimeout(executeCode(request, signal), signal);
       } catch (error: any) {
         response = {
           id: request.id,
