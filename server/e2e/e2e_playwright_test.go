@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,6 +79,67 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Contains(t, resultStr, "Example Domain", "expected result to contain 'Example Domain'")
 
 	t.Log("playwright execute API test passed")
+}
+
+func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
+
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	client, err := c.APIClient()
+	require.NoError(t, err)
+
+	timeoutSec := 2
+	timeoutReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code:       `await new Promise(r => setTimeout(r, 30000));`,
+		TimeoutSec: &timeoutSec,
+	}
+
+	t.Log("executing playwright code expected to exceed timeout")
+	start := time.Now()
+	timeoutRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, timeoutReq)
+	elapsed := time.Since(start)
+
+	require.NoError(t, err, "playwright timeout request should return an API response")
+	require.Less(t, elapsed, 5*time.Second, "timeout response should arrive before the API socket read deadline")
+	require.Equal(t, http.StatusOK, timeoutRsp.StatusCode(), "unexpected status for timed-out playwright execute: %s body=%s", timeoutRsp.Status(), string(timeoutRsp.Body))
+	require.NotNil(t, timeoutRsp.JSON200, "expected JSON200 timeout response, got nil")
+	require.False(t, timeoutRsp.JSON200.Success, "expected success=false for timed-out playwright execution")
+	require.NotNil(t, timeoutRsp.JSON200.Error, "expected timeout error message")
+
+	errorMsg := strings.ToLower(*timeoutRsp.JSON200.Error)
+	require.True(t, strings.Contains(errorMsg, "timeout") || strings.Contains(errorMsg, "timed out"), "expected timeout error, got %q", *timeoutRsp.JSON200.Error)
+	require.NotContains(t, errorMsg, "i/o timeout", "daemon should return a timeout response before the API socket read deadline")
+
+	recoveryReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return await page.evaluate(() => navigator.userAgent);`,
+	}
+
+	t.Log("executing normal playwright code after timed-out request")
+	recoveryRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, recoveryReq)
+	require.NoError(t, err, "playwright recovery request error: %v", err)
+	require.Equal(t, http.StatusOK, recoveryRsp.StatusCode(), "unexpected status for playwright recovery execute: %s body=%s", recoveryRsp.Status(), string(recoveryRsp.Body))
+	require.NotNil(t, recoveryRsp.JSON200, "expected JSON200 recovery response, got nil")
+	require.True(t, recoveryRsp.JSON200.Success, "expected recovery request success=true, got error: %s", func() string {
+		if recoveryRsp.JSON200.Error != nil {
+			return *recoveryRsp.JSON200.Error
+		}
+		return "nil"
+	}())
+	require.NotNil(t, recoveryRsp.JSON200.Result, "expected recovery result to be non-nil")
+
+	t.Log("playwright timeout regression test passed")
 }
 
 // TestPlaywrightDaemonRecovery tests that the playwright daemon recovers after chromium is restarted.
