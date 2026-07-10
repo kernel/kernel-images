@@ -690,7 +690,7 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *
 	}
 	var err error
 	if s.isNekoEnabled() {
-		err = s.setResolutionViaNeko(ctx, w, h, rr)
+		_, _, err = s.applyResolutionAndConverge(ctx, w, h, rr, true)
 	} else {
 		err = s.setResolutionXorgViaXrandr(ctx, w, h, rr)
 	}
