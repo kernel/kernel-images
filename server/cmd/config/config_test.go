@@ -31,6 +31,8 @@ func TestLoad(t *testing.T) {
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
 				DevToolsProxyAddr:        "127.0.0.1:9222",
+				OTLPPath:                 "/v1/logs",
+				OTLPServiceName:          "kernel-browser",
 			},
 		},
 		{
@@ -63,6 +65,8 @@ func TestLoad(t *testing.T) {
 				ChromeDriverProxyPort:    5432,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9999",
 				DevToolsProxyAddr:        "127.0.0.1:9876",
+				OTLPPath:                 "/v1/logs",
+				OTLPServiceName:          "kernel-browser",
 			},
 		},
 		{
@@ -85,6 +89,8 @@ func TestLoad(t *testing.T) {
 				ChromeDriverProxyPort:    9224,
 				ChromeDriverUpstreamAddr: "127.0.0.1:9225",
 				DevToolsProxyAddr:        "10.0.0.1:1234",
+				OTLPPath:                 "/v1/logs",
+				OTLPServiceName:          "kernel-browser",
 			},
 		},
 		{
