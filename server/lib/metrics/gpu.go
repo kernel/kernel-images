@@ -46,7 +46,7 @@ func (c *GPUCollector) Collect(ctx context.Context, w *Writer) error {
 	if err != nil {
 		return fmt.Errorf("nvidia-smi: %w", err)
 	}
-	stats, err := parseNvidiaSMI(out, c.now())
+	stats, err := parseNvidiaSMI(out)
 	if err != nil {
 		return err
 	}
@@ -131,10 +131,13 @@ type smiLog struct {
 
 // licenseExpiryRe matches the expiry timestamp inside a license status like
 // "Licensed (Expiry: 2026-7-7 15:58:42 GMT)". nvidia-smi does not zero-pad
-// date or time components.
-var licenseExpiryRe = regexp.MustCompile(`Expiry: (\d{4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}:\d{1,2} \w+)`)
+// date or time components. The zone is captured separately and required to
+// be GMT: time.Parse would silently give an unknown abbreviation a zero
+// offset, so a driver that starts emitting another zone must fail parsing
+// loudly (no expiry metric) rather than skew it.
+var licenseExpiryRe = regexp.MustCompile(`Expiry: (\d{4}-\d{1,2}-\d{1,2} \d{1,2}:\d{1,2}:\d{1,2}) (\w+)`)
 
-func parseNvidiaSMI(out []byte, now time.Time) (*gpuStats, error) {
+func parseNvidiaSMI(out []byte) (*gpuStats, error) {
 	var log smiLog
 	if err := xml.Unmarshal(out, &log); err != nil {
 		return nil, fmt.Errorf("parse nvidia-smi xml: %w", err)
@@ -142,6 +145,7 @@ func parseNvidiaSMI(out []byte, now time.Time) (*gpuStats, error) {
 	if len(log.GPUs) == 0 {
 		return nil, fmt.Errorf("nvidia-smi reported no GPUs")
 	}
+	// Browser VMs get exactly one vGPU slice; only the first GPU is read.
 	gpu := log.GPUs[0]
 
 	stats := &gpuStats{
@@ -150,8 +154,8 @@ func parseNvidiaSMI(out []byte, now time.Time) (*gpuStats, error) {
 		LicensedProduct: gpu.Licensed.ProductName,
 		Licensed:        strings.HasPrefix(gpu.Licensed.Status, "Licensed"),
 	}
-	if m := licenseExpiryRe.FindStringSubmatch(gpu.Licensed.Status); m != nil {
-		if t, err := time.Parse("2006-1-2 15:4:5 MST", m[1]); err == nil {
+	if m := licenseExpiryRe.FindStringSubmatch(gpu.Licensed.Status); m != nil && m[2] == "GMT" {
+		if t, err := time.ParseInLocation("2006-1-2 15:4:5", m[1], time.UTC); err == nil {
 			stats.LicenseExpiry = &t
 		}
 	}

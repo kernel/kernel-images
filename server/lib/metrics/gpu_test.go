@@ -39,8 +39,7 @@ const smiLicensed = `<?xml version="1.0" ?>
 </nvidia_smi_log>`
 
 func TestParseNvidiaSMILicensed(t *testing.T) {
-	now := time.Date(2026, 7, 7, 15, 46, 44, 0, time.UTC)
-	stats, err := parseNvidiaSMI([]byte(smiLicensed), now)
+	stats, err := parseNvidiaSMI([]byte(smiLicensed))
 	require.NoError(t, err)
 
 	assert.Equal(t, "NVIDIA L40S-2Q", stats.Product)
@@ -48,7 +47,7 @@ func TestParseNvidiaSMILicensed(t *testing.T) {
 	assert.Equal(t, "NVIDIA RTX Virtual Workstation", stats.LicensedProduct)
 	assert.True(t, stats.Licensed)
 	require.NotNil(t, stats.LicenseExpiry)
-	assert.Equal(t, 15*time.Minute, stats.LicenseExpiry.Sub(now))
+	assert.Equal(t, time.Date(2026, 7, 7, 16, 1, 44, 0, time.UTC), stats.LicenseExpiry.UTC())
 
 	require.NotNil(t, stats.GPUUtil)
 	assert.Equal(t, 7.0, *stats.GPUUtil)
@@ -65,9 +64,20 @@ func TestParseNvidiaSMILicensed(t *testing.T) {
 func TestParseNvidiaSMIUnlicensed(t *testing.T) {
 	xml := strings.Replace(smiLicensed,
 		"Licensed (Expiry: 2026-7-7 16:1:44 GMT)", "Unlicensed (Restricted)", 1)
-	stats, err := parseNvidiaSMI([]byte(xml), time.Now())
+	stats, err := parseNvidiaSMI([]byte(xml))
 	require.NoError(t, err)
 	assert.False(t, stats.Licensed)
+	assert.Nil(t, stats.LicenseExpiry)
+}
+
+func TestParseNvidiaSMIUnknownZone(t *testing.T) {
+	// A non-GMT zone must fail loudly (no expiry) instead of silently
+	// parsing with a zero offset.
+	xml := strings.Replace(smiLicensed,
+		"Expiry: 2026-7-7 16:1:44 GMT", "Expiry: 2026-7-7 16:1:44 PST", 1)
+	stats, err := parseNvidiaSMI([]byte(xml))
+	require.NoError(t, err)
+	assert.True(t, stats.Licensed)
 	assert.Nil(t, stats.LicenseExpiry)
 }
 

@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -42,6 +43,33 @@ func TestParseNetDev(t *testing.T) {
 	rx, tx := parseNetDev(data)
 	assert.Equal(t, 2000000.0, rx)
 	assert.Equal(t, 500000.0, tx)
+}
+
+func TestParsePressureSomeAvg10(t *testing.T) {
+	v, ok := parsePressureSomeAvg10("some avg10=1.53 avg60=0.42 avg300=0.11 total=123456\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n")
+	require.True(t, ok)
+	assert.Equal(t, 1.53, v)
+
+	_, ok = parsePressureSomeAvg10("garbage\n")
+	assert.False(t, ok)
+}
+
+func TestPSIEmission(t *testing.T) {
+	proc := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(proc, "pressure"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(proc, "pressure", "cpu"),
+		[]byte("some avg10=1.53 avg60=0.42 avg300=0.11 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(proc, "pressure", "io"),
+		[]byte("some avg10=0.07 avg60=0.01 avg300=0.00 total=9\n"), 0o644))
+	// memory intentionally absent: emission must skip it without failing.
+
+	c := &SystemCollector{procDir: proc, rootPath: "/"}
+	w := &Writer{}
+	require.NoError(t, c.Collect(context.Background(), w))
+	out := string(w.Bytes())
+	assert.Contains(t, out, `kernel_vm_pressure_some_avg10_percent{resource="cpu"} 1.53`)
+	assert.Contains(t, out, `kernel_vm_pressure_some_avg10_percent{resource="io"} 0.07`)
+	assert.NotContains(t, out, `resource="memory"`)
 }
 
 func TestChromiumProcesses(t *testing.T) {

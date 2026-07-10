@@ -21,8 +21,9 @@ import (
 type Collector interface {
 	// Name identifies the collector in error logs.
 	Name() string
-	// Collect appends samples to w. Returning an error does not fail the
-	// scrape; the other collectors' output is still served.
+	// Collect appends samples to w. On error the collector's entire
+	// output is discarded — partially written metric families never reach
+	// the scraper — and the other collectors' output is still served.
 	Collect(ctx context.Context, w *Writer) error
 }
 
@@ -66,6 +67,10 @@ func (w *Writer) Bytes() []byte {
 	return w.buf.Bytes()
 }
 
+func (w *Writer) append(other *Writer) {
+	w.buf.Write(other.buf.Bytes())
+}
+
 func formatValue(v float64) string {
 	if math.IsInf(v, 1) {
 		return "+Inf"
@@ -73,10 +78,18 @@ func formatValue(v float64) string {
 	return strconv.FormatFloat(v, 'g', -1, 64)
 }
 
-const scrapeTimeout = 10 * time.Second
+const (
+	scrapeTimeout = 10 * time.Second
+	// Each collector gets its own deadline under the scrape budget so a
+	// slow one (usually Chrome under load) cannot starve the others.
+	collectorTimeout = 4 * time.Second
+)
 
 // Handler serves GET /metrics. Scrapes are serialized: concurrent requests
-// wait rather than probing Chrome and nvidia-smi in parallel.
+// wait rather than probing Chrome and nvidia-smi in parallel. Each
+// collector writes into its own buffer that is appended only on success,
+// so a failure never leaves a partially written metric family in the
+// response.
 func Handler(log *slog.Logger, collectors ...Collector) http.Handler {
 	var mu sync.Mutex
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
@@ -88,9 +101,15 @@ func Handler(log *slog.Logger, collectors ...Collector) http.Handler {
 
 		w := &Writer{}
 		for _, c := range collectors {
-			if err := c.Collect(ctx, w); err != nil {
+			cw := &Writer{}
+			cctx, ccancel := context.WithTimeout(ctx, collectorTimeout)
+			err := c.Collect(cctx, cw)
+			ccancel()
+			if err != nil {
 				log.Error("metrics collector failed", "collector", c.Name(), "err", err)
+				continue
 			}
+			w.append(cw)
 		}
 		rw.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		rw.Write(w.Bytes())

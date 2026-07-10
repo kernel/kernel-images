@@ -51,6 +51,12 @@ func fakeCDP(t *testing.T) *httptest.Server {
 					{"targetId": "C", "type": "service_worker"},
 				}}
 			case "Browser.getHistograms":
+				if req.Params.Query == "Fail.Me" {
+					resp, err := json.Marshal(map[string]any{"id": req.ID, "error": map[string]any{"code": -32000, "message": "boom"}})
+					require.NoError(t, err)
+					require.NoError(t, conn.Write(ctx, websocket.MessageText, resp))
+					continue
+				}
 				histograms := []map[string]any{}
 				if strings.Contains("PageLoad.PaintTiming.NavigationToFirstContentfulPaint", req.Params.Query) {
 					histograms = append(histograms,
@@ -94,20 +100,37 @@ func TestChromeCollector(t *testing.T) {
 	assert.Contains(t, out, `kernel_chromium_info{product="Chrome/145.0.7632.75"} 1`)
 	assert.Contains(t, out, "kernel_chromium_pages 2\n")
 
-	// Cumulative le buckets from Chrome's disjoint buckets, overflow folded
-	// into +Inf.
+	// Chrome's buckets ([606,638):2, [819,862):1, overflow:1) re-bucket
+	// onto the fixed grid: both finite buckets land at le=1000, the
+	// overflow lands in +Inf, and every fixed bound is emitted so all VMs
+	// produce identical le sets.
 	fcp := `kernel_chromium_uma_bucket{histogram="PageLoad.PaintTiming.NavigationToFirstContentfulPaint",le=`
-	assert.Contains(t, out, fcp+`"638"} 2`)
-	assert.Contains(t, out, fcp+`"862"} 3`)
+	assert.Contains(t, out, fcp+`"100"} 0`)
+	assert.Contains(t, out, fcp+`"500"} 0`)
+	assert.Contains(t, out, fcp+`"1000"} 3`)
+	assert.Contains(t, out, fcp+`"60000"} 3`)
 	assert.Contains(t, out, fcp+`"+Inf"} 4`)
+	assert.NotContains(t, out, `le="638"`)
 	assert.Contains(t, out, `kernel_chromium_uma_sum{histogram="PageLoad.PaintTiming.NavigationToFirstContentfulPaint"} 21921`)
 	assert.Contains(t, out, `kernel_chromium_uma_count{histogram="PageLoad.PaintTiming.NavigationToFirstContentfulPaint"} 4`)
 	assert.NotContains(t, out, "UserInitiated")
 }
 
 func TestChromeCollectorDown(t *testing.T) {
+	// An unreachable browser is not a collector error: the up sample must
+	// survive the handler's discard-on-error policy.
 	c := NewChromeCollector(staticUpstream(""))
 	w := &Writer{}
-	require.Error(t, c.Collect(context.Background(), w))
+	require.NoError(t, c.Collect(context.Background(), w))
 	assert.Contains(t, string(w.Bytes()), "kernel_chromium_up 0\n")
+}
+
+func TestChromeCollectorHistogramFailure(t *testing.T) {
+	srv := fakeCDP(t)
+	defer srv.Close()
+
+	c := NewChromeCollector(staticUpstream("ws" + strings.TrimPrefix(srv.URL, "http")))
+	c.histograms = []UMAHistogram{{Name: "Fail.Me", Bounds: boundsPageLoadMs}}
+	w := &Writer{}
+	require.Error(t, c.Collect(context.Background(), w))
 }

@@ -37,10 +37,10 @@ func (s *stubCollector) Collect(_ context.Context, w *Writer) error {
 	return s.fn(w)
 }
 
-func TestHandlerServesAllCollectorsDespiteError(t *testing.T) {
+func TestHandlerDiscardsFailedCollectorOutput(t *testing.T) {
 	failing := &stubCollector{name: "bad", fn: func(w *Writer) error {
-		w.Metric("bad_up", "Whether bad works.", "gauge")
-		w.Sample("bad_up", nil, 0)
+		w.Metric("bad_partial", "A partially written family.", "histogram")
+		w.Sample("bad_partial_sum", nil, 1)
 		return errors.New("boom")
 	}}
 	ok := &stubCollector{name: "good", fn: func(w *Writer) error {
@@ -55,6 +55,6 @@ func TestHandlerServesAllCollectorsDespiteError(t *testing.T) {
 
 	require.Equal(t, 200, rec.Code)
 	assert.Equal(t, "text/plain; version=0.0.4; charset=utf-8", rec.Header().Get("Content-Type"))
-	assert.Contains(t, rec.Body.String(), "bad_up 0\n")
+	assert.NotContains(t, rec.Body.String(), "bad_partial")
 	assert.Contains(t, rec.Body.String(), "good_total 3\n")
 }

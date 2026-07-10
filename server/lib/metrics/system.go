@@ -60,12 +60,31 @@ func (c *SystemCollector) Collect(ctx context.Context, w *Writer) error {
 	if data, err := os.ReadFile(filepath.Join(c.procDir, "uptime")); err == nil {
 		if fields := strings.Fields(string(data)); len(fields) > 0 {
 			if v, err := strconv.ParseFloat(fields[0], 64); err == nil {
-				// CLOCK_MONOTONIC pauses while a scale-to-zero VM is
-				// suspended, so this measures active runtime, not wall age.
+				// /proc/uptime is CLOCK_BOOTTIME-based, but an externally
+				// paused VM's clocks stop entirely, so this still measures
+				// active runtime rather than wall age.
 				w.Metric("kernel_vm_uptime_seconds", "VM active runtime; excludes time spent suspended.", "gauge")
 				w.Sample("kernel_vm_uptime_seconds", nil, v)
 			}
 		}
+	}
+
+	psi := false
+	for _, resource := range []string{"cpu", "memory", "io"} {
+		data, err := os.ReadFile(filepath.Join(c.procDir, "pressure", resource))
+		if err != nil {
+			continue
+		}
+		v, ok := parsePressureSomeAvg10(string(data))
+		if !ok {
+			continue
+		}
+		if !psi {
+			w.Metric("kernel_vm_pressure_some_avg10_percent",
+				"PSI: percentage of the last 10s in which at least one task stalled on the resource.", "gauge")
+			psi = true
+		}
+		w.Sample("kernel_vm_pressure_some_avg10_percent", []Label{{"resource", resource}}, v)
 	}
 
 	if data, err := os.ReadFile(filepath.Join(c.procDir, "net", "dev")); err == nil {
@@ -169,8 +188,28 @@ func parseNetDev(data string) (rx, tx float64) {
 	return rx, tx
 }
 
+// parsePressureSomeAvg10 extracts the avg10 value from the "some" line of
+// a /proc/pressure file, e.g. "some avg10=1.23 avg60=... total=...".
+func parsePressureSomeAvg10(data string) (float64, bool) {
+	for _, line := range strings.Split(data, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != "some" {
+			continue
+		}
+		for _, f := range fields[1:] {
+			if val, ok := strings.CutPrefix(f, "avg10="); ok {
+				v, err := strconv.ParseFloat(val, 64)
+				return v, err == nil
+			}
+		}
+	}
+	return 0, false
+}
+
 // chromiumProcesses counts processes whose comm is "chromium" and sums
-// their resident memory.
+// their resident memory. Summing per-process RSS double-counts shared
+// pages, so treat the total as an upper bound useful for trends rather
+// than absolute usage.
 func (c *SystemCollector) chromiumProcesses() (count int, rssBytes float64) {
 	entries, err := os.ReadDir(c.procDir)
 	if err != nil {
