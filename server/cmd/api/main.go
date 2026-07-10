@@ -265,7 +265,7 @@ func main() {
 	rMetrics := chi.NewRouter()
 	rMetrics.Use(chiMiddleware.Recoverer)
 	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger,
-		metrics.NewChromeCollector(upstreamMgr),
+		metrics.NewChromeCollector(upstreamMgr, slogger),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),
 	))

@@ -104,6 +104,11 @@ func (c *SystemCollector) Collect(ctx context.Context, w *Writer) error {
 		w.Sample("kernel_vm_disk_free_bytes", []Label{{"mount", c.rootPath}}, float64(fs.Bavail)*bsize)
 	}
 
+	// The /proc reads above are microseconds; the PID walk is the only
+	// part worth gating on an expired scrape deadline.
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	procs, rssBytes := c.chromiumProcesses()
 	w.Metric("kernel_chromium_processes", "Number of running Chromium processes (browser, renderers, utilities).", "gauge")
 	w.Sample("kernel_chromium_processes", nil, float64(procs))

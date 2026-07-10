@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,7 +92,7 @@ func TestChromeCollector(t *testing.T) {
 	srv := fakeCDP(t)
 	defer srv.Close()
 
-	c := NewChromeCollector(staticUpstream("ws" + strings.TrimPrefix(srv.URL, "http")))
+	c := NewChromeCollector(staticUpstream("ws"+strings.TrimPrefix(srv.URL, "http")), slog.New(slog.DiscardHandler))
 	w := &Writer{}
 	require.NoError(t, c.Collect(context.Background(), w))
 	out := string(w.Bytes())
@@ -119,18 +120,24 @@ func TestChromeCollector(t *testing.T) {
 func TestChromeCollectorDown(t *testing.T) {
 	// An unreachable browser is not a collector error: the up sample must
 	// survive the handler's discard-on-error policy.
-	c := NewChromeCollector(staticUpstream(""))
+	c := NewChromeCollector(staticUpstream(""), slog.New(slog.DiscardHandler))
 	w := &Writer{}
 	require.NoError(t, c.Collect(context.Background(), w))
 	assert.Contains(t, string(w.Bytes()), "kernel_chromium_up 0\n")
 }
 
 func TestChromeCollectorHistogramFailure(t *testing.T) {
+	// A histogram fetch failure must not take down the whole chrome
+	// scrape: up/info/pages survive and only the UMA family is skipped.
 	srv := fakeCDP(t)
 	defer srv.Close()
 
-	c := NewChromeCollector(staticUpstream("ws" + strings.TrimPrefix(srv.URL, "http")))
+	c := NewChromeCollector(staticUpstream("ws"+strings.TrimPrefix(srv.URL, "http")), slog.New(slog.DiscardHandler))
 	c.histograms = []UMAHistogram{{Name: "Fail.Me", Bounds: boundsPageLoadMs}}
 	w := &Writer{}
-	require.Error(t, c.Collect(context.Background(), w))
+	require.NoError(t, c.Collect(context.Background(), w))
+	out := string(w.Bytes())
+	assert.Contains(t, out, "kernel_chromium_up 1\n")
+	assert.Contains(t, out, "kernel_chromium_pages 2\n")
+	assert.NotContains(t, out, "kernel_chromium_uma")
 }

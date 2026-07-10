@@ -3,6 +3,7 @@ package metrics
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -78,10 +79,11 @@ type DevToolsUpstream interface {
 type ChromeCollector struct {
 	upstream   DevToolsUpstream
 	histograms []UMAHistogram
+	log        *slog.Logger
 }
 
-func NewChromeCollector(upstream DevToolsUpstream) *ChromeCollector {
-	return &ChromeCollector{upstream: upstream, histograms: DefaultUMAHistograms}
+func NewChromeCollector(upstream DevToolsUpstream, log *slog.Logger) *ChromeCollector {
+	return &ChromeCollector{upstream: upstream, histograms: DefaultUMAHistograms, log: log}
 }
 
 func (c *ChromeCollector) Name() string { return "chrome" }
@@ -109,9 +111,13 @@ func (c *ChromeCollector) Collect(ctx context.Context, w *Writer) error {
 		w.Sample("kernel_chromium_pages", nil, float64(pages))
 	}
 
+	// A histogram fetch failure must not discard the up/info/pages
+	// samples already gathered: log it, skip the UMA family for this
+	// scrape, and report success for the rest.
 	fetched, err := c.fetchHistograms(ctx, client)
 	if err != nil {
-		return err
+		c.log.Error("chrome histogram fetch failed", "err", err)
+		return nil
 	}
 	w.Metric("kernel_chromium_uma",
 		"Chrome UMA histogram, cumulative since browser start, re-bucketed onto fixed bounds. Units follow the UMA definition: PageLoad timings are milliseconds, NumInteractions is a count, CLS is a unitless score, Memory.GPU.* is MB.",
