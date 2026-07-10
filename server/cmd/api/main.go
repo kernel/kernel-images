@@ -17,6 +17,8 @@ import (
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel"
 	"golang.org/x/sync/errgroup"
 
 	serverpkg "github.com/kernel/kernel-images/server"
@@ -133,6 +135,12 @@ func main() {
 			headers["Authorization"] = "Bearer " + config.InstanceJWT
 		}
 		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
+		// The OTel log SDK reports batch-queue drops through its global logger at
+		// logr V(1), which slog renders just below Info, so a default Info handler
+		// would swallow it. Wire it to a handler that admits that level so records
+		// dropped under sustained backpressure are observable, not silently lost.
+		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
+		otel.SetLogger(logr.FromSlogHandler(otelDiag))
 		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
 			Endpoint:     config.OTLPEndpoint,
 			URLPath:      config.OTLPPath,

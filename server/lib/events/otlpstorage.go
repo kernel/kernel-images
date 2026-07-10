@@ -41,10 +41,10 @@ type OTLPConfig struct {
 }
 
 // loggingExporter wraps the OTLP exporter to surface export-time failures
-// (network / customer-endpoint errors), which the SDK otherwise reports only
-// through the global otel logger. Queue-overflow drops under sustained
-// backpressure are best-effort: the SDK drops the oldest record, bounded by the
-// batch queue size, and are not counted here.
+// (network / customer-endpoint errors) with a running failure count. Queue
+// drops under sustained backpressure are best-effort (the SDK drops the oldest
+// record, bounded by the batch queue size) and are reported separately by the
+// SDK's global logger, which main wires to our logger so they are observable.
 type loggingExporter struct {
 	sdklog.Exporter
 	log      *slog.Logger
