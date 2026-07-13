@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -34,7 +33,6 @@ import (
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/sysmon"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
-	"github.com/kernel/kernel-images/server/lib/wsdrain"
 )
 
 func main() {
@@ -83,10 +81,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ws conn tracker
-	wsRegistry := wsdrain.New()
-
-	// DevTools WebSocket upstream manager: tail Chromium supervisord log
+		// DevTools WebSocket upstream manager: tail Chromium supervisord log
 	const chromiumLogPath = "/var/log/supervisord/chromium"
 	upstreamMgr := devtoolsproxy.NewUpstreamManager(chromiumLogPath, slogger)
 	upstreamMgr.Start(ctx)
@@ -176,7 +171,7 @@ func main() {
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "process_id")
-		apiService.HandleProcessAttachWS(w, r, id, wsRegistry)
+		apiService.HandleProcessAttachWS(w, r, id)
 	})
 
 	// Serve extension files for Chrome policy-installed extensions
@@ -224,7 +219,7 @@ func main() {
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
@@ -250,7 +245,6 @@ func main() {
 	rChromeDriver.Handle("/*", chromedriverproxy.Handler(slogger, &chromedriverproxy.Options{
 		ChromeDriverUpstream: config.ChromeDriverUpstreamAddr,
 		DevToolsProxyAddr:    config.DevToolsProxyAddr,
-		Registry:             wsRegistry,
 	}))
 
 	srvChromeDriver := &http.Server{
@@ -319,12 +313,6 @@ func main() {
 	})
 	g.Go(func() error {
 		return apiService.Shutdown(shutdownCtx)
-	})
-	g.Go(func() error {
-		if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
-			slogger.Info("closed active websocket connections for shutdown", "count", n)
-		}
-		return nil
 	})
 	g.Go(func() error {
 		upstreamMgr.Stop()

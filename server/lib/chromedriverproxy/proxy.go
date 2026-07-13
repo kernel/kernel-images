@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
-	"github.com/kernel/kernel-images/server/lib/wsdrain"
 	"github.com/kernel/kernel-images/server/lib/wsproxy"
 )
 
@@ -26,9 +25,6 @@ const (
 type Options struct {
 	ChromeDriverUpstream string
 	DevToolsProxyAddr    string
-	// Registry, when set, tracks accepted WebDriver/BiDi connections so they
-	// are closed with a Going Away frame on server shutdown.
-	Registry *wsdrain.Registry
 }
 
 func resolveOptions(opts *Options) Options {
@@ -44,8 +40,6 @@ func resolveOptions(opts *Options) Options {
 	}
 	if opts.DevToolsProxyAddr != "" {
 		resolved.DevToolsProxyAddr = opts.DevToolsProxyAddr
-	}
-	resolved.Registry = opts.Registry
 	return resolved
 }
 
@@ -318,7 +312,6 @@ func proxyWebSocket(w http.ResponseWriter, r *http.Request, logger *slog.Logger,
 		DialOptions:   dialOpts,
 		Logger:        logger,
 		Transform:     transform,
-		Registry:      cfg.Registry,
 	})
 }
 

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net"
@@ -167,41 +166,19 @@ func execLookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
-// waitForPort waits until the given port is available for binding on IPv4.
-// This handles the delay after SIGKILL before the kernel releases the socket.
-// We disable SO_REUSEADDR to get an accurate check matching chromium's bind behavior.
+// waitForPort waits until the devtools port can be bound on IPv4. After SIGKILL
+// the old listener may linger briefly; this loop waits for that to clear.
+// Go's net.Listen sets SO_REUSEADDR, matching chromium's DevTools bind — so
+// TIME_WAIT sockets from prior CDP client connections do not block the probe.
 // Only IPv4 is checked because IPv6 is disabled at the kernel level in the VM.
 func waitForPort(port string, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
-	addrs := []string{"127.0.0.1:" + port}
+	addr := "127.0.0.1:" + port
 
-	// ListenConfig with Control to disable SO_REUSEADDR for accurate port availability check
-	lc := &net.ListenConfig{
-		Control: func(network, address string, c syscall.RawConn) error {
-			var sockErr error
-			err := c.Control(func(fd uintptr) {
-				// Disable SO_REUSEADDR to match chromium's behavior
-				sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 0)
-			})
-			if err != nil {
-				return err
-			}
-			return sockErr
-		},
-	}
-
-	ctx := context.Background()
 	for time.Now().Before(deadline) {
-		allFree := true
-		for _, addr := range addrs {
-			ln, err := lc.Listen(ctx, "tcp", addr)
-			if err != nil {
-				allFree = false
-				break
-			}
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
 			ln.Close()
-		}
-		if allFree {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)

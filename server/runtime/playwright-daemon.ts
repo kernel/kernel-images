@@ -39,19 +39,6 @@ interface ExecuteResponse {
   stack?: string;
 }
 
-function withTimeout<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    return Promise.reject(signal.reason);
-  }
-
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) => {
-      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-    }),
-  ]);
-}
-
 async function transformCode(code: string): Promise<string> {
   // Wrap in async function so top-level await/return are valid for esbuild
   const wrapped = `async function __userCode__() {\n${code}\n}`;
@@ -101,26 +88,23 @@ async function ensureBrowserConnection(): Promise<Browser> {
     }
 
     console.error(`[playwright-daemon] Connecting to CDP: ${CDP_ENDPOINT}`);
-    const connectedBrowser = await chromium.connectOverCDP(CDP_ENDPOINT);
-    browser = connectedBrowser;
+    browser = await chromium.connectOverCDP(CDP_ENDPOINT);
     reconnectAttempts = 0;
 
-    connectedBrowser.on('disconnected', () => {
+    browser.on('disconnected', () => {
       console.error('[playwright-daemon] Browser disconnected');
-      if (browser === connectedBrowser) {
-        browser = null;
-      }
+      browser = null;
     });
 
     console.error('[playwright-daemon] CDP connection established');
-    return connectedBrowser;
+    return browser;
   } finally {
     connecting = false;
   }
 }
 
-async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promise<ExecuteResponse> {
-  const { id, code } = request;
+async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
+  const { id, code, timeout_ms = 60000 } = request;
 
   try {
     let jsCode: string;
@@ -164,9 +148,15 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);
-    signal.throwIfAborted();
 
-    const result = await userFunction(page, context, browserInstance);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Execution timed out after ${timeout_ms}ms`)), timeout_ms);
+    });
+
+    const result = await Promise.race([
+      userFunction(page, context, browserInstance),
+      timeoutPromise,
+    ]);
 
     return {
       id,
@@ -209,18 +199,7 @@ function handleConnection(socket: Socket): void {
         continue;
       }
 
-      const signal = AbortSignal.timeout(request.timeout_ms ?? 60000);
-      let response: ExecuteResponse;
-      try {
-        response = await withTimeout(executeCode(request, signal), signal);
-      } catch (error: any) {
-        response = {
-          id: request.id,
-          success: false,
-          error: error.message,
-          stack: error.stack,
-        };
-      }
+      const response = await executeCode(request);
       socket.write(JSON.stringify(response) + '\n');
     }
   });
