@@ -15,11 +15,17 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
-// defaultOTLPMaxBatchRecords bounds records per export request. Envelopes are
-// capped at ~1MB each at publish, so a small batch keeps typical requests
-// under a common 10MB body cap. This is a count bound, not a byte bound:
-// byte-based batching (the real guard against many large records) is deferred.
+// defaultOTLPMaxBatchRecords bounds how many records the SDK buffers per export
+// cycle. The per-request byte size is bounded separately by the loggingExporter,
+// which splits an export into sub-requests under maxOTLPExportBytes so a batch of
+// large records can't exceed the target's HTTP body limit.
 const defaultOTLPMaxBatchRecords = 200
+
+// maxOTLPExportBytes caps the estimated payload of a single export request so it
+// stays well under common OTLP/HTTP body limits (collectors default to ~20MiB).
+// A single record is at most ~1MB (the publish-time envelope cap), so every
+// record fits within one sub-request.
+const maxOTLPExportBytes = 4 << 20 // 4 MiB
 
 // OTLPConfig configures the OTLP telemetry sink.
 type OTLPConfig struct {
@@ -40,11 +46,13 @@ type OTLPConfig struct {
 	Metro        string
 }
 
-// loggingExporter wraps the OTLP exporter to surface export-time failures
-// (network / customer-endpoint errors) with a running failure count. Queue
-// drops under sustained backpressure are best-effort (the SDK drops the oldest
-// record, bounded by the batch queue size) and are reported separately by the
-// SDK's global logger, which main wires to our logger so they are observable.
+// loggingExporter wraps the OTLP exporter to (1) split each export into
+// sub-requests under maxOTLPExportBytes so a batch of large records can't exceed
+// the target's HTTP body limit, and (2) surface export-time failures (network /
+// customer-endpoint errors) with a running failure count. Queue drops under
+// sustained backpressure are best-effort (the SDK drops the oldest record,
+// bounded by the batch queue size) and are reported separately by the SDK's
+// global logger, which main wires to our logger so they are observable.
 type loggingExporter struct {
 	sdklog.Exporter
 	log      *slog.Logger
@@ -52,12 +60,72 @@ type loggingExporter struct {
 }
 
 func (e *loggingExporter) Export(ctx context.Context, records []sdklog.Record) error {
-	err := e.Exporter.Export(ctx, records)
-	if err != nil {
-		n := e.failures.Add(1)
-		e.log.Warn("otlp export failed", "records", len(records), "err", err, "total_failures", n)
+	var firstErr error
+	for _, chunk := range chunkBySize(records, maxOTLPExportBytes) {
+		if err := e.Exporter.Export(ctx, chunk); err != nil {
+			n := e.failures.Add(1)
+			e.log.Warn("otlp export failed", "records", len(chunk), "err", err, "total_failures", n)
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
-	return err
+	return firstErr
+}
+
+// chunkBySize splits records into consecutive groups whose estimated encoded
+// size stays under maxBytes, so no single export request exceeds the target's
+// body limit. A record larger than maxBytes on its own still ships alone.
+func chunkBySize(records []sdklog.Record, maxBytes int) [][]sdklog.Record {
+	if len(records) == 0 {
+		return nil
+	}
+	var chunks [][]sdklog.Record
+	start, size := 0, 0
+	for i := range records {
+		rs := estimateRecordBytes(&records[i])
+		if i > start && size+rs > maxBytes {
+			chunks = append(chunks, records[start:i])
+			start, size = i, 0
+		}
+		size += rs
+	}
+	return append(chunks, records[start:])
+}
+
+// estimateRecordBytes approximates a record's encoded size from its body and
+// attributes. It ignores protobuf framing, which the maxOTLPExportBytes headroom
+// absorbs.
+func estimateRecordBytes(r *sdklog.Record) int {
+	n := estimateValueBytes(r.Body())
+	r.WalkAttributes(func(kv log.KeyValue) bool {
+		n += len(kv.Key) + estimateValueBytes(kv.Value)
+		return true
+	})
+	return n
+}
+
+func estimateValueBytes(v log.Value) int {
+	switch v.Kind() {
+	case log.KindString:
+		return len(v.AsString())
+	case log.KindBytes:
+		return len(v.AsBytes())
+	case log.KindSlice:
+		n := 0
+		for _, e := range v.AsSlice() {
+			n += estimateValueBytes(e)
+		}
+		return n
+	case log.KindMap:
+		n := 0
+		for _, kv := range v.AsMap() {
+			n += len(kv.Key) + estimateValueBytes(kv.Value)
+		}
+		return n
+	default:
+		return 8 // bool / int64 / float64 / empty: fixed-width
+	}
 }
 
 // otlpStorage implements Storage by converting envelopes to OTLP log records

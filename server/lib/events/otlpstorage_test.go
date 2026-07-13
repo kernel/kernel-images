@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	collogspb "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	"google.golang.org/protobuf/proto"
@@ -29,13 +30,14 @@ func (s stubExporter) ForceFlush(context.Context) error              { return ni
 // TestLoggingExporter_CountsExportFailures confirms the wrapper surfaces export
 // failures (the reason it exists) and leaves the counter untouched on success.
 func TestLoggingExporter_CountsExportFailures(t *testing.T) {
+	recs := []sdklog.Record{recordOfSize(10)}
 	failing := &loggingExporter{Exporter: stubExporter{err: errors.New("boom")}, log: slog.Default()}
-	require.Error(t, failing.Export(context.Background(), nil))
-	require.Error(t, failing.Export(context.Background(), nil))
+	require.Error(t, failing.Export(context.Background(), recs))
+	require.Error(t, failing.Export(context.Background(), recs))
 	assert.Equal(t, uint64(2), failing.failures.Load())
 
 	ok := &loggingExporter{Exporter: stubExporter{}, log: slog.Default()}
-	require.NoError(t, ok.Export(context.Background(), nil))
+	require.NoError(t, ok.Export(context.Background(), recs))
 	assert.Equal(t, uint64(0), ok.failures.Load())
 }
 
@@ -117,4 +119,54 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	assert.Equal(t, "GET", attrStr["http.request.method"])
 	assert.Equal(t, int64(200), statusAttr)
 	assert.True(t, bodyIsMap, "structured body should arrive as a kvlist")
+}
+
+// recordOfSize builds a log record whose body string is n bytes, so
+// estimateRecordBytes reports ~n.
+func recordOfSize(n int) sdklog.Record {
+	var r sdklog.Record
+	r.SetBody(log.StringValue(strings.Repeat("x", n)))
+	return r
+}
+
+// TestChunkBySize confirms an export is split into sub-requests that each stay
+// under the byte budget, so a batch of large records can't exceed the target's
+// HTTP body limit.
+func TestChunkBySize(t *testing.T) {
+	const mb = 1_000_000
+
+	t.Run("empty is nil", func(t *testing.T) {
+		assert.Nil(t, chunkBySize(nil, maxOTLPExportBytes))
+	})
+
+	t.Run("small batch stays whole", func(t *testing.T) {
+		recs := []sdklog.Record{recordOfSize(1000), recordOfSize(1000), recordOfSize(1000)}
+		chunks := chunkBySize(recs, maxOTLPExportBytes)
+		require.Len(t, chunks, 1)
+		assert.Len(t, chunks[0], 3)
+	})
+
+	t.Run("large batch splits under budget", func(t *testing.T) {
+		recs := make([]sdklog.Record, 10) // 10 x 1MB, budget 4MiB -> 4,4,2
+		for i := range recs {
+			recs[i] = recordOfSize(mb)
+		}
+		chunks := chunkBySize(recs, maxOTLPExportBytes)
+		require.Len(t, chunks, 3)
+		assert.Equal(t, []int{4, 4, 2}, []int{len(chunks[0]), len(chunks[1]), len(chunks[2])})
+		for _, c := range chunks {
+			total := 0
+			for i := range c {
+				total += estimateRecordBytes(&c[i])
+			}
+			assert.LessOrEqual(t, total, maxOTLPExportBytes)
+		}
+	})
+
+	t.Run("oversized single record ships alone", func(t *testing.T) {
+		recs := []sdklog.Record{recordOfSize(maxOTLPExportBytes + mb)}
+		chunks := chunkBySize(recs, maxOTLPExportBytes)
+		require.Len(t, chunks, 1)
+		assert.Len(t, chunks[0], 1)
+	})
 }
