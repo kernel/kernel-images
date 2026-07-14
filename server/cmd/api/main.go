@@ -130,9 +130,12 @@ func main() {
 	// Optional OTLP export sink. Independent of S2; both can run together.
 	var otlpWriter *events.OTLPStorageWriter
 	if config.OTLPEndpoint != "" {
+		// The relay authenticates the VM by its instance name (checked against
+		// active sessions), mirroring the capmonster/hcaptcha relays. Sent as
+		// x-api-key, not a bearer token.
 		headers := map[string]string{}
-		if config.InstanceJWT != "" {
-			headers["Authorization"] = "Bearer " + config.InstanceJWT
+		if config.InstanceName != "" {
+			headers["x-api-key"] = config.InstanceName
 		}
 		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		// The OTel log SDK reports batch-queue drops through its global logger at
