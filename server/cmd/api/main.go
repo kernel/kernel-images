@@ -141,12 +141,6 @@ func main() {
 			headers["Authorization"] = "Bearer " + config.InstanceJWT
 		}
 		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
-		// The OTel log SDK reports batch-queue drops through its global logger at
-		// logr V(1), which slog renders just below Info, so a default Info handler
-		// would swallow it. Wire it to a handler that admits that level so records
-		// dropped under sustained backpressure are observable, not silently lost.
-		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
-		otel.SetLogger(logr.FromSlogHandler(otelDiag))
 		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
 			Endpoint:     config.OTLPEndpoint,
 			URLPath:      config.OTLPPath,
@@ -160,6 +154,13 @@ func main() {
 			// Best-effort sink: a failed exporter must not take down the browser.
 			slogger.Error("OTLP export disabled: storage writer failed to start", "err", err)
 			otlpWriter = nil
+		} else {
+			// Export is running, so route the OTel log SDK's global logger (which
+			// reports batch-queue drops at logr V(1), just below slog Info) to a
+			// handler that admits that level, making drops observable. Only touched
+			// on success, so a failed start leaves the process-wide logger alone.
+			otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
+			otel.SetLogger(logr.FromSlogHandler(otelDiag))
 		}
 	}
 
