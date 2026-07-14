@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
@@ -44,15 +45,23 @@ func NewTestContainer(tb testing.TB, image string) *TestContainer {
 // from the runner's loopback that a remote instance cannot reach. This keeps the
 // hypeman CI job green while preserving coverage on the Docker backend.
 func (c *TestContainer) Start(ctx context.Context, cfg ContainerConfig) error {
+	c.tb.Helper()
+	start := time.Now()
 	if cfg.HostAccess && !c.backend.SupportsHostAccess() {
 		c.tb.Skipf("skipping host-access test: %s backend has no host-loopback bridge for the instance", backendKindFromEnv())
 	}
-	return c.backend.Start(ctx, cfg)
+	err := c.backend.Start(ctx, cfg)
+	c.logTiming("start", start, err)
+	return err
 }
 
 // Stop stops and removes the instance.
 func (c *TestContainer) Stop(ctx context.Context) error {
-	return c.backend.Stop(ctx)
+	c.tb.Helper()
+	start := time.Now()
+	err := c.backend.Stop(ctx)
+	c.logTiming("stop", start, err)
+	return err
 }
 
 // APIBaseURL returns the URL for the instance's API server.
@@ -112,18 +121,30 @@ func (c *TestContainer) APIClientNoKeepAlive() (*instanceoapi.ClientWithResponse
 
 // WaitReady waits for the instance's API to become ready.
 func (c *TestContainer) WaitReady(ctx context.Context) error {
-	return c.backend.WaitReady(ctx)
+	c.tb.Helper()
+	start := time.Now()
+	err := c.backend.WaitReady(ctx)
+	c.logTiming("wait_ready", start, err)
+	return err
 }
 
 // WaitDevTools waits for the CDP WebSocket endpoint to be ready.
 func (c *TestContainer) WaitDevTools(ctx context.Context) error {
-	return c.backend.WaitDevTools(ctx)
+	c.tb.Helper()
+	start := time.Now()
+	err := c.backend.WaitDevTools(ctx)
+	c.logTiming("wait_devtools", start, err)
+	return err
 }
 
 // WaitChromeDriver waits for the ChromeDriver proxy (and upstream ChromeDriver)
 // to be ready.
 func (c *TestContainer) WaitChromeDriver(ctx context.Context) error {
-	return c.backend.WaitChromeDriver(ctx)
+	c.tb.Helper()
+	start := time.Now()
+	err := c.backend.WaitChromeDriver(ctx)
+	c.logTiming("wait_chromedriver", start, err)
+	return err
 }
 
 // Exec executes a command inside the instance and returns the exit code and
@@ -135,4 +156,19 @@ func (c *TestContainer) Exec(ctx context.Context, cmd []string) (int, string, er
 // ExitCh returns a channel that receives when the instance exits.
 func (c *TestContainer) ExitCh() <-chan error {
 	return c.backend.ExitCh()
+}
+
+func (c *TestContainer) logTiming(phase string, start time.Time, err error) {
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	c.tb.Logf("[e2e-timing] test=%q phase=%s backend=%s image=%s duration=%s status=%s",
+		c.tb.Name(),
+		phase,
+		backendKindFromEnv(),
+		c.Image,
+		time.Since(start).Truncate(time.Millisecond),
+		status,
+	)
 }

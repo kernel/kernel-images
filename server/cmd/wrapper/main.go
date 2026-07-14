@@ -13,6 +13,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,6 +61,10 @@ func main() {
 	prof := detectProfile()
 	stzManaged := scaleToZeroManaged()
 	logf("starting wrapper (profile=%s stz=%s)", profileName(prof), stzMode(stzManaged))
+	forkIdentityWait, err := forkIdentityWaitEnabled()
+	if err != nil {
+		fatalf("fork identity config: %v", err)
+	}
 
 	// Register signal handling early so a SIGTERM/SIGINT during the
 	// seconds-long startup window queues into the channel instead of
@@ -67,6 +72,8 @@ func main() {
 	// goroutine is installed below, once supervisord is running.
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
+	startupCtx, cancelStartup := context.WithCancel(context.Background())
+	defer cancelStartup()
 
 	// /dev/shm: only mount when not running under Docker (Docker manages it).
 	if os.Getenv("WITHDOCKER") == "" {
@@ -142,6 +149,7 @@ func main() {
 	// before this point gets picked up on the first iteration.
 	go func() {
 		<-sigs
+		cancelStartup()
 		logf("shutdown: stopping services")
 		_ = exec.Command("supervisorctl", "-c", supervisorConf, "stop", "all").Run()
 		_ = supCmd.Process.Signal(syscall.SIGTERM)
@@ -182,41 +190,36 @@ func main() {
 	}
 	waitForSocket(pulseSocket, 10*time.Second)
 	startAll("chromium")
+	if forkIdentityWait {
+		waitForHTTPProbe("chromium devtools", "http://127.0.0.1:"+os.Getenv("INTERNAL_PORT")+"/json/version", 30*time.Second)
+		startAll("kernel-images-api")
+	}
 	waitForSocket(dbusSocket, 10*time.Second)
 	if prof == profileHeadful && webrtc {
 		startAll("neko")
 	}
+	if forkIdentityWait {
+		waitForHTTPProbe("public cdp", "http://127.0.0.1:"+os.Getenv("CHROME_PORT")+"/json/version", 30*time.Second)
+	}
 	browserDone := time.Now()
 
-	// FORK HOOK:
-	//   When this binary runs as a forked snapshot restore, the per-fork
-	//   identity envs (INST_NAME, METRO_NAME, XDS_SERVER, KERNEL_INSTANCE_JWT,
-	//   plus any future per-tenant secrets) won't be set yet at this point —
-	//   the snapshot was taken from a different instance. Insert the
-	//   following sequence here once the env-delivery channel exists:
-	//     1. Block on the host-pushed env bundle (vsock socket, virtio-fs
-	//        drop file, or whatever transport the control plane settles on).
-	//     2. Apply the bundle to this process's environ via os.Setenv so
-	//        the identity phase below picks them up via the existing $VAR
-	//        expansion in init-envoy.sh and the supervisorctl-spawned
-	//        services inherit them.
-	//     3. The identity phase uses `supervisorctl restart envoy`
-	//        (idempotent — start on first boot, stop+start on a re-render
-	//        after fork) so a restored snapshot drops its stale identity
-	//        cleanly.
-	//   Boot path keeps running through unchanged: the wait simply no-ops
-	//   when there's no fork bundle to receive.
+	if !waitForForkIdentityIfEnabled(startupCtx, forkIdentityWait) {
+		if err := supCmd.Wait(); err != nil {
+			logf("supervisord exited: %v", err)
+		}
+		return
+	}
 
-	// Identity phase: identity-bound services. Render envoy bootstrap with
-	// INST_NAME/JWT/etc and (re)start envoy + kernel-images-api. Both
-	// services use `restart` so the same code path works for boot (start a
-	// stopped service) and post-fork (stop+start to force a re-read of
-	// refreshed envs).
+	// Identity phase: render envoy bootstrap with INST_NAME/JWT/etc. In fork
+	// identity wait mode, kernel-images-api was started early and is not
+	// restarted here, so public CDP stays connected after identity apply.
 	identityStart := time.Now()
 	if isExecutable("/usr/local/bin/init-envoy.sh") {
 		runStreamFatal("envoy-init", "/usr/local/bin/init-envoy.sh")
 	}
-	restartAll("kernel-images-api")
+	if !forkIdentityWait {
+		restartAll("kernel-images-api")
+	}
 	identityDone := time.Now()
 
 	// Wait for the union of caller-visible ready signals. Each probe runs
@@ -291,6 +294,19 @@ func waitAllReady(t0 time.Time, webrtc bool) map[string]time.Duration {
 		}
 	}
 	return durations
+}
+
+func waitForHTTPProbe(name, url string, timeout time.Duration) {
+	start := time.Now()
+	deadline := start.Add(timeout)
+	for time.Now().Before(deadline) {
+		if httpProbeOK(url) {
+			logf("%s ready in %s", name, since(start))
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	fatalf("%s unavailable after %s", name, timeout)
 }
 
 type probe struct {

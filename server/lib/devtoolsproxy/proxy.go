@@ -22,6 +22,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/wsdrain"
 	"github.com/kernel/kernel-images/server/lib/wsproxy"
 )
 
@@ -309,7 +310,7 @@ type EventPublisher func(ev events.Event) (events.Envelope, bool)
 // If logCDPMessages is true, all CDP messages will be logged with their direction.
 // publish is invoked on accept (cdp_connect) and on teardown (cdp_disconnect); pass
 // nil to disable emission.
-func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher) http.Handler {
+func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, reg *wsdrain.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Counts every relayed message so cdp_disconnect can report message_count.
 		var msgCount atomic.Int64
@@ -348,6 +349,9 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			return
 		}
 		clientConn.SetReadLimit(100 * 1024 * 1024)
+
+		untrack := reg.Track(clientConn)
+		defer untrack()
 
 		publishCdpConnect(publish)
 		connectedAt := time.Now()

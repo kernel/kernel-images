@@ -39,6 +39,19 @@ interface ExecuteResponse {
   stack?: string;
 }
 
+function withTimeout<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }),
+  ]);
+}
+
 async function transformCode(code: string): Promise<string> {
   // Wrap in async function so top-level await/return are valid for esbuild
   const wrapped = `async function __userCode__() {\n${code}\n}`;
@@ -88,23 +101,26 @@ async function ensureBrowserConnection(): Promise<Browser> {
     }
 
     console.error(`[playwright-daemon] Connecting to CDP: ${CDP_ENDPOINT}`);
-    browser = await chromium.connectOverCDP(CDP_ENDPOINT);
+    const connectedBrowser = await chromium.connectOverCDP(CDP_ENDPOINT);
+    browser = connectedBrowser;
     reconnectAttempts = 0;
 
-    browser.on('disconnected', () => {
+    connectedBrowser.on('disconnected', () => {
       console.error('[playwright-daemon] Browser disconnected');
-      browser = null;
+      if (browser === connectedBrowser) {
+        browser = null;
+      }
     });
 
     console.error('[playwright-daemon] CDP connection established');
-    return browser;
+    return connectedBrowser;
   } finally {
     connecting = false;
   }
 }
 
-async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
-  const { id, code, timeout_ms = 60000 } = request;
+async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promise<ExecuteResponse> {
+  const { id, code } = request;
 
   try {
     let jsCode: string;
@@ -118,7 +134,6 @@ async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
         stack: transformError.stack,
       };
     }
-
     let browserInstance: Browser;
     try {
       browserInstance = await ensureBrowserConnection();
@@ -142,7 +157,6 @@ async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
         };
       }
     }
-
     const contexts = browserInstance.contexts();
     const context = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
     const pages = context.pages();
@@ -150,15 +164,9 @@ async function executeCode(request: ExecuteRequest): Promise<ExecuteResponse> {
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);
+    signal.throwIfAborted();
 
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Execution timed out after ${timeout_ms}ms`)), timeout_ms);
-    });
-
-    const result = await Promise.race([
-      userFunction(page, context, browserInstance),
-      timeoutPromise,
-    ]);
+    const result = await userFunction(page, context, browserInstance);
 
     return {
       id,
@@ -201,7 +209,18 @@ function handleConnection(socket: Socket): void {
         continue;
       }
 
-      const response = await executeCode(request);
+      const signal = AbortSignal.timeout(request.timeout_ms ?? 60000);
+      let response: ExecuteResponse;
+      try {
+        response = await withTimeout(executeCode(request, signal), signal);
+      } catch (error: any) {
+        response = {
+          id: request.id,
+          success: false,
+          error: error.message,
+          stack: error.stack,
+        };
+      }
       socket.write(JSON.stringify(response) + '\n');
     }
   });

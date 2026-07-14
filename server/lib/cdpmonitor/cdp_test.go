@@ -203,18 +203,26 @@ func (c *eventCollector) waitFor(t *testing.T, eventType string, timeout time.Du
 	}
 }
 
-// waitForNew blocks until a NEW event of the given type is published after this
-// call, ignoring any events already in the collector.
-func (c *eventCollector) waitForNew(t *testing.T, eventType string, timeout time.Duration) events.Event {
-	t.Helper()
+// checkpoint records the current event count. Pass it to waitForNew to wait for
+// an event published after the checkpoint. Take the checkpoint before sending
+// the messages that trigger the event: events are published asynchronously
+// (readLoop dispatch and the async body-fetch goroutine), so the event can land
+// before waitForNew runs. Snapshotting inside waitForNew would then skip it and
+// the wait would hang until timeout.
+func (c *eventCollector) checkpoint() int {
 	c.mu.Lock()
-	skip := len(c.events)
-	c.mu.Unlock()
+	defer c.mu.Unlock()
+	return len(c.events)
+}
 
+// waitForNew blocks until an event of the given type is published at or after
+// the given checkpoint index, ignoring earlier events.
+func (c *eventCollector) waitForNew(t *testing.T, eventType string, since int, timeout time.Duration) events.Event {
+	t.Helper()
 	deadline := time.After(timeout)
 	for {
 		c.mu.Lock()
-		for i := skip; i < len(c.events); i++ {
+		for i := since; i < len(c.events); i++ {
 			if c.events[i].Type == eventType {
 				ev := c.events[i]
 				c.mu.Unlock()

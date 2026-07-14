@@ -143,10 +143,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get -yqq --no-install-recommends install \
     ca-certificates \
     curl \
-    build-essential \
-    libssl-dev \
-    git \
-    gpg-agent \
+    gpg \
     dbus \
     dbus-x11 \
     pulseaudio \
@@ -159,7 +156,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     fonts-nanum \
-    software-properties-common \
     supervisor; \
     fc-cache -f
 

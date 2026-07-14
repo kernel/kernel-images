@@ -15,3 +15,7 @@ Dockerfile
 .unikraft
 initrd
 .tmp
+server/api
+server/e2e
+server/**/*_test.go
+server/**/testdata

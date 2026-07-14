@@ -24,10 +24,13 @@ func startAll(progs ...string) {
 	supervisorctl("start", progs...)
 }
 
+func stopAll(progs ...string) {
+	supervisorctl("stop", progs...)
+}
+
 // restartAll is the start-or-stop+start variant. It's used for services
-// that may already be running from a snapshot restore (post-fork, see the
-// FORK HOOK in main) so they pick up refreshed envs cleanly. supervisorctl
-// `restart` is a no-op stop on cold programs followed by a normal start.
+// that need to pick up refreshed envs cleanly. supervisorctl `restart` is
+// a no-op stop on cold programs followed by a normal start.
 func restartAll(progs ...string) {
 	supervisorctl("restart", progs...)
 }
