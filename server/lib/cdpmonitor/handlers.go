@@ -180,9 +180,15 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 // stamped into source metadata by publishEvent.
 func (m *Monitor) handleTargetCrashed(sessionID string) {
 	m.sessionsMu.RLock()
-	info := m.sessions[sessionID]
+	info, tracked := m.sessions[sessionID]
 	m.sessionsMu.RUnlock()
 
+	// A crash on a session we never attached to shouldn't happen, but if it
+	// does, still emit the event (the crash is real) rather than a record with
+	// empty identity.
+	if !tracked {
+		m.log.Warn("cdpmonitor: target crashed on untracked session", "session", sessionID)
+	}
 	data, _ := json.Marshal(oapi.BrowserPageCrashedEventData{
 		TargetId:   info.targetID,
 		TargetType: oapi.BrowserTargetType(info.targetType),

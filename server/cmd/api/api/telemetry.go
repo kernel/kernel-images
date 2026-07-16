@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -46,7 +45,7 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	if allDisabled {
 		if wasActive {
 			s.telemetrySession.Stop()
-			s.stopTelemetryState()
+			s.stopTelemetryState(ctx)
 		}
 		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
@@ -63,11 +62,11 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	}
 
 	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
-		s.rollbackTelemetry(wasActive, prev)
+		s.rollbackTelemetry(ctx, wasActive, prev)
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PutTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start telemetry"}}, nil
 	}
-	s.reconcileExport(cfg.ExportOTLP)
+	s.reconcileExport(ctx, cfg.ExportOTLP)
 
 	if wasActive {
 		return oapi.PutTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
@@ -94,7 +93,7 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	cfg, allDisabled := mergeTelemetryConfig(prev, req.Body)
 	if allDisabled {
 		s.telemetrySession.Stop()
-		s.stopTelemetryState()
+		s.stopTelemetryState(ctx)
 		return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
@@ -102,11 +101,11 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	// reconcile and roll back on collector-start failure.
 	s.telemetrySession.UpdateConfig(cfg)
 	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
-		s.rollbackTelemetry(true, prev)
+		s.rollbackTelemetry(ctx, true, prev)
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PatchTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to apply telemetry"}}, nil
 	}
-	s.reconcileExport(cfg.ExportOTLP)
+	s.reconcileExport(ctx, cfg.ExportOTLP)
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
 
@@ -136,47 +135,50 @@ func (s *ApiService) reconcileTelemetryState(cats []oapi.TelemetryEventCategory)
 // A fresh session is torn down; an updated session is reverted to prev. Reverting
 // never requires a fallible collector start (the failed start left it stopped),
 // so the reconcile here cannot fail.
-func (s *ApiService) rollbackTelemetry(wasActive bool, prev telemetry.TelemetryConfig) {
+func (s *ApiService) rollbackTelemetry(ctx context.Context, wasActive bool, prev telemetry.TelemetryConfig) {
 	if !wasActive {
 		s.telemetrySession.Stop()
-		s.stopTelemetryState()
+		s.stopTelemetryState(ctx)
 		return
 	}
 	s.telemetrySession.UpdateConfig(prev)
 	_ = s.reconcileTelemetryState(prev.Categories)
-	s.reconcileExport(prev.ExportOTLP)
+	s.reconcileExport(ctx, prev.ExportOTLP)
 }
 
 // reconcileExport starts or stops the OTLP export sink to match the desired
 // state. Export is best-effort: a failed start is logged, never surfaced as an
-// error, so it cannot fail a telemetry apply. No-op when no export endpoint is
-// provisioned on the VM.
-func (s *ApiService) reconcileExport(enabled bool) {
+// error, so it cannot fail a telemetry apply. No-op when no export destination
+// is configured.
+func (s *ApiService) reconcileExport(ctx context.Context, enabled bool) {
 	if s.otlpExport == nil {
 		if enabled {
-			slog.Default().Warn("otlp export enabled but no endpoint provisioned; export inactive")
+			logger.FromContext(ctx).Warn("otlp export enabled but no destination configured; export inactive")
 		}
 		return
 	}
 	switch {
 	case enabled && !s.otlpExport.Running():
+		// Root the export on the app lifecycle, not this request; only its logs
+		// carry the request context.
 		if err := s.otlpExport.Start(s.lifecycleCtx); err != nil {
-			slog.Default().Error("otlp export failed to start", "err", err)
+			logger.FromContext(ctx).Error("otlp export failed to start", "err", err)
 		}
 	case !enabled && s.otlpExport.Running():
-		ctx, cancel := context.WithTimeout(context.Background(), otlpStopTimeout)
+		// Draining must outlive the request, so bound it independently.
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), otlpStopTimeout)
 		defer cancel()
-		_ = s.otlpExport.Stop(ctx)
+		_ = s.otlpExport.Stop(stopCtx)
 	}
 }
 
 // stopTelemetryState tears down the collector, export sink, and middleware
 // after a session is cleared.
-func (s *ApiService) stopTelemetryState() {
+func (s *ApiService) stopTelemetryState(ctx context.Context) {
 	if s.cdpMonitor.IsRunning() {
 		s.cdpMonitor.Stop()
 	}
-	s.reconcileExport(false)
+	s.reconcileExport(ctx, false)
 	DisableTelemetryMiddleware()
 }
 
