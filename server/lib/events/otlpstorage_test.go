@@ -27,18 +27,22 @@ func (s stubExporter) Export(context.Context, []sdklog.Record) error { return s.
 func (s stubExporter) Shutdown(context.Context) error                { return nil }
 func (s stubExporter) ForceFlush(context.Context) error              { return nil }
 
-// TestLoggingExporter_CountsExportFailures confirms the wrapper surfaces export
-// failures (the reason it exists) and leaves the counter untouched on success.
+// TestLoggingExporter_CountsExportFailures confirms the wrapper records export
+// failures and successfully exported records into the shared metrics.
 func TestLoggingExporter_CountsExportFailures(t *testing.T) {
 	recs := []sdklog.Record{recordOfSize(10)}
-	failing := &loggingExporter{Exporter: stubExporter{err: errors.New("boom")}, log: slog.Default()}
+	fm := &OTLPMetrics{}
+	failing := &loggingExporter{Exporter: stubExporter{err: errors.New("boom")}, log: slog.Default(), metrics: fm}
 	require.Error(t, failing.Export(context.Background(), recs))
 	require.Error(t, failing.Export(context.Background(), recs))
-	assert.Equal(t, uint64(2), failing.failures.Load())
+	assert.Equal(t, uint64(2), fm.Failures())
+	assert.Equal(t, uint64(0), fm.Exported())
 
-	ok := &loggingExporter{Exporter: stubExporter{}, log: slog.Default()}
+	om := &OTLPMetrics{}
+	ok := &loggingExporter{Exporter: stubExporter{}, log: slog.Default(), metrics: om}
 	require.NoError(t, ok.Export(context.Background(), recs))
-	assert.Equal(t, uint64(0), ok.failures.Load())
+	assert.Equal(t, uint64(0), om.Failures())
+	assert.Equal(t, uint64(1), om.Exported())
 }
 
 // TestOTLPStorageWriter_ExportsEvents drives the full sink against a local HTTP

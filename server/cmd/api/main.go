@@ -138,6 +138,7 @@ func main() {
 	// off until turned on per-session via the telemetry API, so a VM that always
 	// has the relay injected does not export (and get dropped) by default.
 	var otlpExporter api.OTLPExporter
+	var otlpMetrics *events.OTLPMetrics
 	if config.OTLPEndpoint != "" {
 		headers := map[string]string{}
 		if config.InstanceJWT != "" {
@@ -146,10 +147,11 @@ func main() {
 		slogger.Info("OTLP export available", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		// The OTel log SDK reports batch-queue drops through its global logger at
 		// logr V(1), which slog renders just below Info, so a default Info handler
-		// would swallow it. Wire it to a handler that admits that level so records
-		// dropped under sustained backpressure are observable, not silently lost.
+		// would swallow it. Wire it to a handler that admits that level and counts
+		// drops into otlpMetrics, so backpressure is both logged and scrapable.
+		otlpMetrics = &events.OTLPMetrics{}
 		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
-		otel.SetLogger(logr.FromSlogHandler(otelDiag))
+		otel.SetLogger(logr.FromSlogHandler(events.NewDropCountingHandler(otelDiag, otlpMetrics)))
 		otlpExporter = events.NewOTLPExportController(eventStream, events.OTLPConfig{
 			Endpoint:       config.OTLPEndpoint,
 			URLPath:        config.OTLPPath,
@@ -161,6 +163,7 @@ func main() {
 			MaxQueueSize:   config.OTLPMaxQueueSize,
 			ExportInterval: config.OTLPExportInterval,
 			ExportTimeout:  config.OTLPExportTimeout,
+			Metrics:        otlpMetrics,
 		}, slogger)
 	}
 
@@ -298,11 +301,15 @@ func main() {
 	// logging (scrapes would drown the logs).
 	rMetrics := chi.NewRouter()
 	rMetrics.Use(chiMiddleware.Recoverer)
-	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger,
+	metricsCollectors := []metrics.Collector{
 		metrics.NewChromeCollector(upstreamMgr),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),
-	))
+	}
+	if otlpMetrics != nil {
+		metricsCollectors = append(metricsCollectors, metrics.NewOTLPCollector(otlpMetrics))
+	}
+	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger, metricsCollectors...))
 	srvMetrics := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", config.MetricsPort),
 		Handler: rMetrics,

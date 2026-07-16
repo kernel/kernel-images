@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -50,31 +49,36 @@ type OTLPConfig struct {
 	MaxQueueSize   int
 	ExportInterval time.Duration
 	ExportTimeout  time.Duration
+
+	// Metrics accumulates export counters. When nil a throwaway is used so the
+	// sink still runs; callers that scrape metrics pass a shared instance.
+	Metrics *OTLPMetrics
 }
 
 // loggingExporter wraps the OTLP exporter to (1) split each export into
 // sub-requests under maxOTLPExportBytes so a batch of large records can't exceed
-// the target's HTTP body limit, and (2) surface export-time failures (network /
-// customer-endpoint errors) with a running failure count. Queue drops under
-// sustained backpressure are best-effort (the SDK drops the oldest record,
-// bounded by the batch queue size) and are reported separately by the SDK's
-// global logger, which main wires to our logger so they are observable.
+// the target's HTTP body limit, and (2) record export outcomes into the shared
+// OTLPMetrics (failures and successfully exported records). Queue drops under
+// sustained backpressure are counted separately, via the SDK's global logger,
+// which main wires through NewDropCountingHandler.
 type loggingExporter struct {
 	sdklog.Exporter
-	log      *slog.Logger
-	failures atomic.Uint64
+	log     *slog.Logger
+	metrics *OTLPMetrics
 }
 
 func (e *loggingExporter) Export(ctx context.Context, records []sdklog.Record) error {
 	var firstErr error
 	for _, chunk := range chunkBySize(records, maxOTLPExportBytes) {
 		if err := e.Exporter.Export(ctx, chunk); err != nil {
-			n := e.failures.Add(1)
+			n := e.metrics.failures.Add(1)
 			e.log.Warn("otlp export failed", "records", len(chunk), "err", err, "total_failures", n)
 			if firstErr == nil {
 				firstErr = err
 			}
+			continue
 		}
+		e.metrics.exported.Add(uint64(len(chunk)))
 	}
 	return firstErr
 }
@@ -182,8 +186,12 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 	if cfg.ExportTimeout > 0 {
 		procOpts = append(procOpts, sdklog.WithExportTimeout(cfg.ExportTimeout))
 	}
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = &OTLPMetrics{}
+	}
 	processor := sdklog.NewBatchProcessor(
-		&loggingExporter{Exporter: exporter, log: log},
+		&loggingExporter{Exporter: exporter, log: log, metrics: metrics},
 		procOpts...,
 	)
 	provider := sdklog.NewLoggerProvider(
