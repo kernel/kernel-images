@@ -142,13 +142,16 @@ func main() {
 		}
 		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
-			Endpoint:     config.OTLPEndpoint,
-			URLPath:      config.OTLPPath,
-			Insecure:     config.OTLPInsecure,
-			Headers:      headers,
-			ServiceName:  config.OTLPServiceName,
-			InstanceName: config.InstanceName,
-			Metro:        config.MetroName,
+			Endpoint:       config.OTLPEndpoint,
+			URLPath:        config.OTLPPath,
+			Insecure:       config.OTLPInsecure,
+			Headers:        headers,
+			ServiceName:    config.OTLPServiceName,
+			InstanceName:   config.InstanceName,
+			Metro:          config.MetroName,
+			MaxQueueSize:   config.OTLPMaxQueueSize,
+			ExportInterval: config.OTLPExportInterval,
+			ExportTimeout:  config.OTLPExportTimeout,
 		}, slogger)
 		if err := otlpWriter.Start(ctx); err != nil {
 			// Best-effort sink: a failed exporter must not take down the browser.

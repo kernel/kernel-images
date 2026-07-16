@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -44,6 +45,11 @@ type OTLPConfig struct {
 	ServiceName  string
 	InstanceName string
 	Metro        string
+
+	// Batch tuning. Zero values fall back to the SDK defaults.
+	MaxQueueSize   int
+	ExportInterval time.Duration
+	ExportTimeout  time.Duration
 }
 
 // loggingExporter wraps the OTLP exporter to (1) split each export into
@@ -166,9 +172,19 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 	}
 	res := resource.NewSchemaless(attrs...)
 
+	procOpts := []sdklog.BatchProcessorOption{sdklog.WithExportMaxBatchSize(defaultOTLPMaxBatchRecords)}
+	if cfg.MaxQueueSize > 0 {
+		procOpts = append(procOpts, sdklog.WithMaxQueueSize(cfg.MaxQueueSize))
+	}
+	if cfg.ExportInterval > 0 {
+		procOpts = append(procOpts, sdklog.WithExportInterval(cfg.ExportInterval))
+	}
+	if cfg.ExportTimeout > 0 {
+		procOpts = append(procOpts, sdklog.WithExportTimeout(cfg.ExportTimeout))
+	}
 	processor := sdklog.NewBatchProcessor(
 		&loggingExporter{Exporter: exporter, log: log},
-		sdklog.WithExportMaxBatchSize(defaultOTLPMaxBatchRecords),
+		procOpts...,
 	)
 	provider := sdklog.NewLoggerProvider(
 		sdklog.WithResource(res),

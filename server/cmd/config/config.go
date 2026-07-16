@@ -60,6 +60,12 @@ type Config struct {
 	OTLPPath        string `envconfig:"BTEL_OTLP_PATH"         default:"/v1/logs"`
 	OTLPInsecure    bool   `envconfig:"BTEL_OTLP_INSECURE"     default:"false"`
 	OTLPServiceName string `envconfig:"BTEL_OTLP_SERVICE_NAME" default:"kernel-browser"`
+	// OTLP batch tuning. Defaults match the OTel SDK's, so leaving these unset
+	// preserves prior behavior. MaxQueueSize is the backpressure buffer: once
+	// full, the oldest records are dropped (see the drop metric).
+	OTLPMaxQueueSize   int           `envconfig:"BTEL_OTLP_MAX_QUEUE_SIZE" default:"2048"`
+	OTLPExportInterval time.Duration `envconfig:"BTEL_OTLP_EXPORT_INTERVAL" default:"1s"`
+	OTLPExportTimeout  time.Duration `envconfig:"BTEL_OTLP_EXPORT_TIMEOUT"  default:"30s"`
 	// Platform-injected identity, reused to stamp the OTLP Resource. These are
 	// the same envs the VM already receives.
 	InstanceJWT  string `envconfig:"KERNEL_INSTANCE_JWT" default:""`
@@ -101,6 +107,9 @@ func (c *Config) LogValue() slog.Value {
 		slog.Bool("otlp_insecure", c.OTLPInsecure),
 		slog.String("otlp_instance_jwt", otlpJWT),
 		slog.String("otlp_service_name", c.OTLPServiceName),
+		slog.Int("otlp_max_queue_size", c.OTLPMaxQueueSize),
+		slog.Duration("otlp_export_interval", c.OTLPExportInterval),
+		slog.Duration("otlp_export_timeout", c.OTLPExportTimeout),
 		slog.String("otlp_instance_name", c.InstanceName),
 		slog.String("otlp_metro", c.MetroName),
 	)
@@ -143,6 +152,15 @@ func validate(config *Config) error {
 	}
 	if config.DevToolsProxyAddr == "" {
 		return fmt.Errorf("DEVTOOLS_PROXY_ADDR is required")
+	}
+	if config.OTLPMaxQueueSize <= 0 {
+		return fmt.Errorf("BTEL_OTLP_MAX_QUEUE_SIZE must be greater than 0")
+	}
+	if config.OTLPExportInterval <= 0 {
+		return fmt.Errorf("BTEL_OTLP_EXPORT_INTERVAL must be greater than 0")
+	}
+	if config.OTLPExportTimeout <= 0 {
+		return fmt.Errorf("BTEL_OTLP_EXPORT_TIMEOUT must be greater than 0")
 	}
 
 	return nil
