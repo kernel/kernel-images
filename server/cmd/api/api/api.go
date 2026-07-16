@@ -30,6 +30,16 @@ type cdpMonitorController interface {
 
 var _ cdpMonitorController = (*cdpmonitor.Monitor)(nil)
 
+// OTLPExporter controls the optional OTLP export sink. Nil when no export
+// endpoint is provisioned on the VM. Implemented by *events.OTLPExportController.
+type OTLPExporter interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Running() bool
+}
+
+var _ OTLPExporter = (*events.OTLPExportController)(nil)
+
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
 	defaultRecorderID string
@@ -89,6 +99,7 @@ type ApiService struct {
 	eventStream      *events.EventStream
 	telemetrySession *telemetry.TelemetrySession
 	cdpMonitor       cdpMonitorController
+	otlpExport       OTLPExporter
 	monitorMu        sync.Mutex
 	lifecycleCtx     context.Context
 	lifecycleCancel  context.CancelFunc
@@ -105,6 +116,7 @@ func New(
 	telemetrySession *telemetry.TelemetrySession,
 	eventStream *events.EventStream,
 	displayNum int,
+	otlpExport OTLPExporter,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -138,6 +150,7 @@ func New(
 		eventStream:       eventStream,
 		telemetrySession:  telemetrySession,
 		cdpMonitor:        mon,
+		otlpExport:        otlpExport,
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}, nil
@@ -367,6 +380,9 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()
+	if s.otlpExport != nil {
+		_ = s.otlpExport.Stop(ctx)
+	}
 	s.telemetrySession.Stop()
 	s.monitorMu.Unlock()
 	return s.recordManager.StopAll(ctx)

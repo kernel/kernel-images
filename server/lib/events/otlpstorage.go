@@ -278,3 +278,60 @@ func (w *OTLPStorageWriter) Stop(ctx context.Context) error {
 	}
 	return w.storage.Close(ctx)
 }
+
+// OTLPExportController starts and stops OTLP export on demand so it can be
+// toggled at runtime via the telemetry API. The underlying writer is one-shot,
+// so each enable builds a fresh one. Safe for concurrent use.
+type OTLPExportController struct {
+	es  *EventStream
+	cfg OTLPConfig
+	log *slog.Logger
+
+	mu     sync.Mutex
+	writer *OTLPStorageWriter
+	cancel context.CancelFunc
+}
+
+func NewOTLPExportController(es *EventStream, cfg OTLPConfig, log *slog.Logger) *OTLPExportController {
+	return &OTLPExportController{es: es, cfg: cfg, log: log}
+}
+
+// Start begins export, or is a no-op if already running. parent governs the
+// read loop; the controller derives a cancelable child so Stop can halt the
+// loop even when parent is still live (a runtime toggle-off).
+func (c *OTLPExportController) Start(parent context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.writer != nil {
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	w := NewOTLPStorageWriter(c.es, c.cfg, c.log)
+	if err := w.Start(runCtx); err != nil {
+		cancel()
+		return err
+	}
+	c.writer, c.cancel = w, cancel
+	return nil
+}
+
+// Stop drains and shuts down a running exporter, or is a no-op if stopped. ctx
+// bounds shutdown time.
+func (c *OTLPExportController) Stop(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.writer == nil {
+		return nil
+	}
+	c.cancel()
+	err := c.writer.Stop(ctx)
+	c.writer, c.cancel = nil, nil
+	return err
+}
+
+// Running reports whether export is currently active.
+func (c *OTLPExportController) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writer != nil
+}

@@ -134,14 +134,23 @@ func main() {
 	}
 
 	// Optional OTLP export sink. Independent of S2; both can run together.
-	var otlpWriter *events.OTLPStorageWriter
+	// Constructed when an endpoint is provisioned, but left stopped: export is
+	// off until turned on per-session via the telemetry API, so a VM that always
+	// has the relay injected does not export (and get dropped) by default.
+	var otlpExporter api.OTLPExporter
 	if config.OTLPEndpoint != "" {
 		headers := map[string]string{}
 		if config.InstanceJWT != "" {
 			headers["Authorization"] = "Bearer " + config.InstanceJWT
 		}
-		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
-		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
+		slogger.Info("OTLP export available", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
+		// The OTel log SDK reports batch-queue drops through its global logger at
+		// logr V(1), which slog renders just below Info, so a default Info handler
+		// would swallow it. Wire it to a handler that admits that level so records
+		// dropped under sustained backpressure are observable, not silently lost.
+		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
+		otel.SetLogger(logr.FromSlogHandler(otelDiag))
+		otlpExporter = events.NewOTLPExportController(eventStream, events.OTLPConfig{
 			Endpoint:       config.OTLPEndpoint,
 			URLPath:        config.OTLPPath,
 			Insecure:       config.OTLPInsecure,
@@ -153,18 +162,6 @@ func main() {
 			ExportInterval: config.OTLPExportInterval,
 			ExportTimeout:  config.OTLPExportTimeout,
 		}, slogger)
-		if err := otlpWriter.Start(ctx); err != nil {
-			// Best-effort sink: a failed exporter must not take down the browser.
-			slogger.Error("OTLP export disabled: storage writer failed to start", "err", err)
-			otlpWriter = nil
-		} else {
-			// Export is running, so route the OTel log SDK's global logger (which
-			// reports batch-queue drops at logr V(1), just below slog Info) to a
-			// handler that admits that level, making drops observable. Only touched
-			// on success, so a failed start leaves the process-wide logger alone.
-			otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
-			otel.SetLogger(logr.FromSlogHandler(otelDiag))
-		}
 	}
 
 	apiService, err := api.New(
@@ -176,6 +173,7 @@ func main() {
 		telemetrySession,
 		eventStream,
 		config.DisplayNum,
+		otlpExporter,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)
@@ -387,13 +385,6 @@ func main() {
 		}
 	}
 
-	if otlpWriter != nil {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer stopCancel()
-		if err := otlpWriter.Stop(stopCtx); err != nil {
-			slogger.Error("otlp storage writer stop failed", "err", err)
-		}
-	}
 }
 
 func mustFFmpeg() {

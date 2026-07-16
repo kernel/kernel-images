@@ -358,7 +358,7 @@ func (m *mockRecordManager) StopAll(_ context.Context) error                    
 func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0)
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil)
 	require.NoError(t, err)
 	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc
@@ -425,5 +425,92 @@ func TestTelemetryCollectorFailureLeavesConfigUnchanged(t *testing.T) {
 		require.NoError(t, err)
 		assert.IsType(t, oapi.PatchTelemetry500JSONResponse{}, resp)
 		assert.ElementsMatch(t, before, svc.telemetrySession.Config().Categories, "failed PATCH must not change the persisted config")
+	})
+}
+
+// stubOTLPExporter records start/stop calls for export-toggle tests.
+type stubOTLPExporter struct {
+	running  bool
+	starts   int
+	stops    int
+	startErr error
+}
+
+func (s *stubOTLPExporter) Start(context.Context) error {
+	if s.startErr != nil {
+		return s.startErr
+	}
+	s.starts++
+	s.running = true
+	return nil
+}
+
+func (s *stubOTLPExporter) Stop(context.Context) error {
+	s.stops++
+	s.running = false
+	return nil
+}
+
+func (s *stubOTLPExporter) Running() bool { return s.running }
+
+func TestTelemetryExportToggle(t *testing.T) {
+	ctx := context.Background()
+	tr, fa := true, false
+	exportOn := func() *oapi.BrowserTelemetryConfig {
+		return &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+			Export:  &oapi.BrowserTelemetryExportConfig{Otlp: &oapi.BrowserTelemetryOTLPExportConfig{Enabled: &tr}},
+		}
+	}
+
+	t.Run("PUT enables export, PATCH disables it", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		exp := &stubOTLPExporter{}
+		svc.otlpExport = exp
+
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: exportOn()})
+		require.NoError(t, err)
+		r := resp.(oapi.PutTelemetry201JSONResponse)
+		assert.True(t, exp.Running(), "export should be running after enable")
+		assert.True(t, *r.Config.Export.Otlp.Enabled, "response should report export enabled")
+
+		presp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+			Body: &oapi.BrowserTelemetryConfig{Export: &oapi.BrowserTelemetryExportConfig{Otlp: &oapi.BrowserTelemetryOTLPExportConfig{Enabled: &fa}}},
+		})
+		require.NoError(t, err)
+		p := presp.(oapi.PatchTelemetry200JSONResponse)
+		assert.False(t, exp.Running(), "export should stop after disable")
+		assert.False(t, *p.Config.Export.Otlp.Enabled)
+	})
+
+	t.Run("export defaults off when unspecified", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		exp := &stubOTLPExporter{}
+		svc.otlpExport = exp
+
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+		require.NoError(t, err)
+		assert.False(t, exp.Running(), "export must stay off without an explicit toggle")
+		assert.Equal(t, 0, exp.starts)
+	})
+
+	t.Run("enabling export with no endpoint provisioned is a no-op", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager()) // otlpExport left nil
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: exportOn()})
+		require.NoError(t, err, "a missing endpoint must not fail the telemetry apply")
+	})
+
+	t.Run("clearing the session stops export", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		exp := &stubOTLPExporter{}
+		svc.otlpExport = exp
+
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: exportOn()})
+		require.NoError(t, err)
+		require.True(t, exp.Running())
+
+		_, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()}})
+		require.NoError(t, err)
+		assert.False(t, exp.Running(), "clearing telemetry should stop export")
 	})
 }

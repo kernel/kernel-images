@@ -1592,6 +1592,30 @@ components:
       properties:
         browser:
           $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
+        export:
+          $ref: "#/components/schemas/BrowserTelemetryExportConfig"
+      additionalProperties: false
+    BrowserTelemetryExportConfig:
+      type: object
+      description: >
+        Forwarding of captured telemetry to an external destination. Independent
+        of what is captured: export is off unless explicitly enabled here, even
+        when a destination endpoint is provisioned on the VM. In PATCH requests
+        an omitted field leaves the current setting unchanged.
+      properties:
+        otlp:
+          $ref: "#/components/schemas/BrowserTelemetryOTLPExportConfig"
+      additionalProperties: false
+    BrowserTelemetryOTLPExportConfig:
+      type: object
+      description: OTLP/HTTP export settings.
+      properties:
+        enabled:
+          type: boolean
+          description: >
+            Whether captured telemetry is forwarded to the configured OTLP
+            endpoint. Off by default. Has no effect (export stays inactive) when
+            no endpoint is provisioned on the VM.
       additionalProperties: false
     BrowserTelemetryCategoriesConfig:
       type: object

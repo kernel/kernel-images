@@ -321,7 +321,7 @@ func newTelemetrySession(t *testing.T) (*telemetry.TelemetrySession, *events.Eve
 func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0)
+	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil)
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {
