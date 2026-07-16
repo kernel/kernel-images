@@ -113,6 +113,8 @@ func TestToLogRecord_StructuredBody(t *testing.T) {
 func TestToLogRecord_Severity(t *testing.T) {
 	cases := map[string]log.Severity{
 		"console_error":          log.SeverityError,
+		"service_crashed":        log.SeverityError,
+		"system_oom_kill":        log.SeverityError,
 		"network_loading_failed": log.SeverityWarn,
 		"monitor_init_failed":    log.SeverityWarn,
 		"network_response":       log.SeverityInfo,

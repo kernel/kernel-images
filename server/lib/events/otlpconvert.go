@@ -127,6 +127,10 @@ func otlpSeverity(eventType string) (log.Severity, string) {
 	switch {
 	case eventType == "console_error":
 		return log.SeverityError, "ERROR"
+	// Process-death and OOM events are failures a consumer alerts on, so they
+	// map to ERROR rather than the default INFO.
+	case eventType == "service_crashed", eventType == "system_oom_kill":
+		return log.SeverityError, "ERROR"
 	case strings.HasSuffix(eventType, "_failed"):
 		return log.SeverityWarn, "WARN"
 	default:
