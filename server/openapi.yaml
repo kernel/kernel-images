@@ -2171,6 +2171,45 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserPageCrashedEventData:
+      type: object
+      additionalProperties: false
+      required: [target_id, target_type, url]
+      properties:
+        target_id:
+          type: string
+          description: CDP target identifier of the crashed page.
+        target_type:
+          $ref: "#/components/schemas/BrowserTargetType"
+        url:
+          type: string
+          description: URL the page was on when its renderer process crashed.
+    BrowserPageCrashedEvent:
+      type: object
+      description: >
+        A page's renderer process crashed (CDP Inspector.targetCrashed) — the
+        "Aw, Snap!" failure — while the browser process itself stayed alive, so
+        no service_crashed fires. Emitted on the crashed page's attached
+        session; the CDP session and target ids are on `source.metadata`.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: page_crashed
+        category:
+          type: string
+          const: page
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserPageCrashedEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     BrowserPageLayoutShiftEventData:
       allOf:
         - $ref: "#/components/schemas/BrowserEventContext"
@@ -3024,6 +3063,7 @@ components:
         - $ref: "#/components/schemas/BrowserPageDomContentLoadedEvent"
         - $ref: "#/components/schemas/BrowserPageLoadEvent"
         - $ref: "#/components/schemas/BrowserPageTabOpenedEvent"
+        - $ref: "#/components/schemas/BrowserPageCrashedEvent"
         - $ref: "#/components/schemas/BrowserPageLayoutShiftEvent"
         - $ref: "#/components/schemas/BrowserPageLcpEvent"
         - $ref: "#/components/schemas/BrowserPageLayoutSettledEvent"
@@ -3057,6 +3097,7 @@ components:
           page_dom_content_loaded: "#/components/schemas/BrowserPageDomContentLoadedEvent"
           page_load: "#/components/schemas/BrowserPageLoadEvent"
           page_tab_opened: "#/components/schemas/BrowserPageTabOpenedEvent"
+          page_crashed: "#/components/schemas/BrowserPageCrashedEvent"
           page_layout_shift: "#/components/schemas/BrowserPageLayoutShiftEvent"
           page_lcp: "#/components/schemas/BrowserPageLcpEvent"
           page_layout_settled: "#/components/schemas/BrowserPageLayoutSettledEvent"
