@@ -2187,10 +2187,10 @@ components:
     BrowserPageCrashedEvent:
       type: object
       description: >
-        A page's renderer process crashed (CDP Inspector.targetCrashed) — the
-        "Aw, Snap!" failure — while the browser process itself stayed alive, so
-        no service_crashed fires. Emitted on the crashed page's attached
-        session; the CDP session and target ids are on `source.metadata`.
+        A page's renderer process crashed (an "Aw, Snap!" failure) while the
+        browser process itself stayed alive. Reported on the crashed page's
+        session, with the session and target ids on `source.metadata`. Captured
+        only while the `page` category is enabled.
       required: [ts, type, category, source]
       properties:
         ts:
