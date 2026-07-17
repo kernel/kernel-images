@@ -240,17 +240,12 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
       return
     }
 
-    if (this.id === id) {
-      this.$vue.$notify({
-        group: 'neko',
-        type: 'info',
-        title: this.$vue.$t('notifications.controls_taken', {
-          name: member.id == this.id && this.$vue.$te('you') ? this.$vue.$t('you') : member.displayname,
-        }) as string,
-        duration: 5000,
-        speed: 1000,
-      })
-    }
+    // KERNEL: don't surface a "you took the controls" toast to the viewer.
+    // With implicit hosting, control is now registered automatically on the
+    // first interaction (see remote.request() in video.vue), so this would
+    // fire on essentially every session's first click — pure noise for a
+    // single-viewer embedded live view. Notifications for other members
+    // taking/stealing control are left intact.
 
     this.$accessor.chat.newMessage({
       id: member.id,

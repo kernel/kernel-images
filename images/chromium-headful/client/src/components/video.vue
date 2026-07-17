@@ -280,6 +280,10 @@
       return this.$accessor.connecting
     }
 
+    get controlling() {
+      return this.$accessor.remote.controlling
+    }
+
     get hosting() {
       return this.$accessor.remote.hosting
     }
@@ -806,6 +810,10 @@
 
     onMouseDown(e: MouseEvent) {
       this.unmuteOnInteraction()
+
+      if (!this.controlling && this.implicitHosting && !this.locked) {
+        this.$accessor.remote.request()
+      }
 
       if (!this.hosting) {
         this.$emit('control-attempt', e)
