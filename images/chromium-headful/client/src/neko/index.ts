@@ -240,12 +240,15 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
       return
     }
 
-    // KERNEL: don't surface a "you took the controls" toast to the viewer.
-    // With implicit hosting, control is now registered automatically on the
-    // first interaction (see remote.request() in video.vue), so this would
-    // fire on essentially every session's first click — pure noise for a
-    // single-viewer embedded live view. Notifications for other members
-    // taking/stealing control are left intact.
+    // KERNEL: drop the self-only "you took the controls" toast (was gated on
+    // this.id === id). With implicit hosting, control is now registered
+    // automatically on the first interaction (see remote.request() in
+    // video.vue), so it would fire on essentially every session's first click
+    // — pure noise for a single-viewer embedded live view. The chat event
+    // below (and other members' take/steal toasts elsewhere) is unaffected.
+    // Note: this is a shared component, so explicit control-takes in the full
+    // neko UI also lose this confirmation; acceptable since Kernel only ships
+    // the embedded live view.
 
     this.$accessor.chat.newMessage({
       id: member.id,
