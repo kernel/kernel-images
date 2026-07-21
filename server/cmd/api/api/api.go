@@ -380,10 +380,9 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()
-	if s.otlpExport != nil {
-		_ = s.otlpExport.Stop(ctx)
-	}
 	s.telemetrySession.Stop()
 	s.monitorMu.Unlock()
+	// The OTLP export sink is stopped by main after the servers drain, so any
+	// events they emit on the way down are still exported (mirrors s2Writer).
 	return s.recordManager.StopAll(ctx)
 }

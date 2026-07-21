@@ -392,6 +392,16 @@ func main() {
 		}
 	}
 
+	// Likewise stop OTLP export after the servers drain (a no-op if the toggle
+	// left it off), so shutdown-window events are exported rather than dropped.
+	if otlpExporter != nil {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stopCancel()
+		if err := otlpExporter.Stop(stopCtx); err != nil {
+			slogger.Error("otlp export stop failed", "err", err)
+		}
+	}
+
 }
 
 func mustFFmpeg() {

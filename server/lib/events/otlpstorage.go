@@ -27,6 +27,10 @@ const defaultOTLPMaxBatchRecords = 200
 // record fits within one sub-request.
 const maxOTLPExportBytes = 4 << 20 // 4 MiB
 
+// otlpForceCloseTimeout bounds the provider shutdown when Stop's read-loop wait
+// has already exhausted its ctx, so a hung flush can't block indefinitely.
+const otlpForceCloseTimeout = 2 * time.Second
+
 // OTLPConfig configures the OTLP telemetry sink.
 type OTLPConfig struct {
 	// Endpoint is the host[:port] of the OTLP/HTTP target: a collector in
@@ -279,6 +283,12 @@ func (w *OTLPStorageWriter) Stop(ctx context.Context) error {
 	select {
 	case <-w.done:
 	case <-ctx.Done():
+		// The read loop didn't exit in time. Still shut the provider down so its
+		// batch-export goroutines don't leak; detach from the expired ctx to give
+		// Shutdown a brief window to flush.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), otlpForceCloseTimeout)
+		defer cancel()
+		_ = w.storage.Close(closeCtx)
 		return ctx.Err()
 	}
 	if err := w.writer.Drain(ctx); err != nil {
