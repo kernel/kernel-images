@@ -85,7 +85,9 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not configured"}}, nil
 	}
 
-	if req.Body == nil {
+	// Nothing to merge when neither the category block nor the export toggle is
+	// present; skip the reconcile and echo current state, as before.
+	if req.Body == nil || (req.Body.Browser == nil && req.Body.Export == nil) {
 		return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
 
@@ -281,7 +283,7 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	if patch.Browser != nil {
 		for _, f := range categoryFields(patch.Browser) {
 			if f.config == nil || f.config.Enabled == nil {
-				continue // not mentioned in patch — keep current state
+				continue // not mentioned in patch; keep current state
 			}
 			if *f.config.Enabled {
 				active[f.category] = struct{}{}

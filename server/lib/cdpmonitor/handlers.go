@@ -184,14 +184,19 @@ func (m *Monitor) handleTargetCrashed(sessionID string) {
 	m.sessionsMu.RUnlock()
 
 	// A crash on a session we never attached to shouldn't happen, but if it
-	// does, still emit the event (the crash is real) rather than a record with
-	// empty identity.
+	// does, still emit the event (the crash is real) rather than dropping it.
+	// The tracked target info is empty in that case; fall back to "other" so
+	// target_type stays a valid BrowserTargetType rather than an empty string.
 	if !tracked {
 		m.log.Warn("cdpmonitor: target crashed on untracked session", "session", sessionID)
 	}
+	targetType := oapi.BrowserTargetType(info.targetType)
+	if targetType == "" {
+		targetType = oapi.BrowserTargetTypeOther
+	}
 	data, _ := json.Marshal(oapi.BrowserPageCrashedEventData{
 		TargetId:   info.targetID,
-		TargetType: oapi.BrowserTargetType(info.targetType),
+		TargetType: targetType,
 		Url:        info.url,
 	})
 	m.publishEvent(EventPageCrashed, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Inspector.targetCrashed", data, sessionID)

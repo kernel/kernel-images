@@ -369,6 +369,29 @@ func TestTargetCrashed(t *testing.T) {
 	assert.Equal(t, "https://crash.example.com", data["url"])
 }
 
+// A crash on a session the monitor never attached to still emits page_crashed,
+// but target_type must stay a valid enum ("other"), not an empty string.
+func TestTargetCrashedUntracked(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	_, ec, cleanup := startMonitor(t, srv, nil)
+	defer cleanup()
+
+	srv.sendToMonitor(t, map[string]any{
+		"method":    "Inspector.targetCrashed",
+		"sessionId": "sess-unknown",
+		"params":    map[string]any{},
+	})
+	ev := ec.waitFor(t, "page_crashed", 2*time.Second)
+	assert.Equal(t, events.Page, ev.Category)
+	var data map[string]any
+	require.NoError(t, json.Unmarshal(ev.Data, &data))
+	assert.Equal(t, "other", data["target_type"])
+	assert.Equal(t, "", data["target_id"])
+	assert.Equal(t, "", data["url"])
+}
+
 func TestBindingAndTimeline(t *testing.T) {
 	withMonitor := func(t *testing.T) (*testServer, *eventCollector) {
 		t.Helper()
