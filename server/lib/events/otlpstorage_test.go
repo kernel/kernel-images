@@ -125,6 +125,71 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	assert.True(t, bodyIsMap, "structured body should arrive as a kvlist")
 }
 
+// TestOTLPExportController_NoReplayOnReenable confirms that toggling export off
+// and back on does not re-export events already sent, and does not export events
+// published while it was off: the rebuilt writer starts from the stream tail.
+func TestOTLPExportController_NoReplayOnReenable(t *testing.T) {
+	var mu sync.Mutex
+	var urls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var req collogspb.ExportLogsServiceRequest
+		require.NoError(t, proto.Unmarshal(body, &req))
+		mu.Lock()
+		for _, rl := range req.ResourceLogs {
+			for _, sl := range rl.ScopeLogs {
+				for _, lr := range sl.LogRecords {
+					for _, kv := range lr.Attributes {
+						if kv.Key == "url.full" {
+							urls = append(urls, kv.Value.GetStringValue())
+						}
+					}
+				}
+			}
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	es, err := NewEventStream(EventStreamConfig{RingCapacity: 64})
+	require.NoError(t, err)
+
+	publish := func(url string) {
+		es.Publish(Envelope{Event: Event{Ts: 1, Type: "network_response", Category: Network,
+			Data: []byte(`{"method":"GET","url":"` + url + `","status":200}`)}})
+	}
+
+	ctrl := NewOTLPExportController(es, OTLPConfig{
+		Endpoint: strings.TrimPrefix(srv.URL, "http://"),
+		URLPath:  "/v1/logs",
+		Insecure: true,
+	}, slog.Default())
+
+	// First enable: only events published while on are exported.
+	require.NoError(t, ctrl.Start(context.Background()))
+	publish("https://one")
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, ctrl.Stop(stopCtx))
+
+	// Published while off: must never be exported.
+	publish("https://gap")
+
+	// Re-enable: must not replay "one" or "gap", only forward new events.
+	require.NoError(t, ctrl.Start(context.Background()))
+	publish("https://two")
+	stopCtx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	require.NoError(t, ctrl.Stop(stopCtx2))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.ElementsMatch(t, []string{"https://one", "https://two"}, urls,
+		"each event exported exactly once; no ring replay and no off-window events")
+}
+
 // recordOfSize builds a log record whose body string is n bytes, so
 // estimateRecordBytes reports ~n.
 func recordOfSize(n int) sdklog.Record {

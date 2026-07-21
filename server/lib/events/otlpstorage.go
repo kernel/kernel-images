@@ -227,7 +227,9 @@ func (s *otlpStorage) Close(ctx context.Context) error {
 
 // OTLPStorageWriter reads from an EventStream and forwards each event to an
 // OTLP endpoint. Construct with NewOTLPStorageWriter, call Start to begin and
-// Stop to drain and shut down. Mirrors S2StorageWriter.
+// Stop to drain and shut down. Unlike S2StorageWriter it starts from the stream
+// tail at Start, so a writer rebuilt on a runtime export re-enable forwards only
+// new events rather than replaying the retained ring.
 type OTLPStorageWriter struct {
 	es  *EventStream
 	cfg OTLPConfig
@@ -258,7 +260,11 @@ func (w *OTLPStorageWriter) Start(ctx context.Context) error {
 		return err
 	}
 	w.storage = storage
-	w.writer = NewStorageWriter(w.es, storage, w.log)
+	// Start from the current tail, not seq 0: export is toggled at runtime and
+	// the writer is rebuilt on each enable, so reading from the oldest buffered
+	// event would re-export the retained ring every time it is turned back on.
+	// Only events published while export is on are forwarded.
+	w.writer = NewStorageWriterAfter(w.es, storage, w.log, w.es.Seq())
 	w.done = make(chan struct{})
 	w.started = true
 	go func() {
