@@ -183,4 +183,7 @@ func (s *TelemetrySession) Stop() {
 	defer s.mu.Unlock()
 	s.id = ""
 	s.appliedAt = time.Time{}
+	// The session is over, so export is off; keep Config() authoritative for the
+	// desired export state after a clear.
+	s.exportOTLP = false
 }

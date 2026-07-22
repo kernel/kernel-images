@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
+
+	"github.com/kernel/kernel-images/server/lib/events"
 )
 
 // Config holds all configuration for the server
@@ -62,7 +64,9 @@ type Config struct {
 	OTLPServiceName string `envconfig:"BTEL_OTLP_SERVICE_NAME" default:"kernel-browser"`
 	// OTLP batch tuning. Defaults match the OTel SDK's, so leaving these unset
 	// preserves prior behavior. MaxQueueSize is the backpressure buffer: once
-	// full, the oldest records are dropped (see the drop metric).
+	// full, the oldest records are dropped (see the drop metric). It must be at
+	// least the export batch size (validated); a smaller queue would drop before
+	// a batch fills.
 	OTLPMaxQueueSize   int           `envconfig:"BTEL_OTLP_MAX_QUEUE_SIZE" default:"2048"`
 	OTLPExportInterval time.Duration `envconfig:"BTEL_OTLP_EXPORT_INTERVAL" default:"1s"`
 	OTLPExportTimeout  time.Duration `envconfig:"BTEL_OTLP_EXPORT_TIMEOUT"  default:"30s"`
@@ -153,8 +157,11 @@ func validate(config *Config) error {
 	if config.DevToolsProxyAddr == "" {
 		return fmt.Errorf("DEVTOOLS_PROXY_ADDR is required")
 	}
-	if config.OTLPMaxQueueSize <= 0 {
-		return fmt.Errorf("BTEL_OTLP_MAX_QUEUE_SIZE must be greater than 0")
+	// The queue must hold at least one full export batch; a smaller value would
+	// drop records before a batch ever fills. Validated against the batch-size
+	// constant so the two can't drift.
+	if config.OTLPMaxQueueSize < events.DefaultOTLPMaxBatchRecords {
+		return fmt.Errorf("BTEL_OTLP_MAX_QUEUE_SIZE must be at least %d (the export batch size)", events.DefaultOTLPMaxBatchRecords)
 	}
 	if config.OTLPExportInterval <= 0 {
 		return fmt.Errorf("BTEL_OTLP_EXPORT_INTERVAL must be greater than 0")

@@ -135,6 +135,13 @@ func TestLoad(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "otlp queue size below the export batch size",
+			env: map[string]string{
+				"BTEL_OTLP_MAX_QUEUE_SIZE": "100",
+			},
+			wantErr: true,
+		},
+		{
 			name: "missing ffmpeg path (set to empty)",
 			env: map[string]string{
 				"FFMPEG_PATH": "",

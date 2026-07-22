@@ -15,11 +15,13 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
-// defaultOTLPMaxBatchRecords bounds how many records the SDK buffers per export
+// DefaultOTLPMaxBatchRecords bounds how many records the SDK buffers per export
 // cycle. The per-request byte size is bounded separately by the loggingExporter,
 // which splits an export into sub-requests under maxOTLPExportBytes so a batch of
-// large records can't exceed the target's HTTP body limit.
-const defaultOTLPMaxBatchRecords = 200
+// large records can't exceed the target's HTTP body limit. Exported so the
+// config layer can validate the queue size against it (the queue must hold at
+// least one full batch).
+const DefaultOTLPMaxBatchRecords = 200
 
 // maxOTLPExportBytes caps the estimated payload of a single export request so it
 // stays well under common OTLP/HTTP body limits (collectors default to ~20MiB).
@@ -180,7 +182,7 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 	}
 	res := resource.NewSchemaless(attrs...)
 
-	procOpts := []sdklog.BatchProcessorOption{sdklog.WithExportMaxBatchSize(defaultOTLPMaxBatchRecords)}
+	procOpts := []sdklog.BatchProcessorOption{sdklog.WithExportMaxBatchSize(DefaultOTLPMaxBatchRecords)}
 	if cfg.MaxQueueSize > 0 {
 		procOpts = append(procOpts, sdklog.WithMaxQueueSize(cfg.MaxQueueSize))
 	}

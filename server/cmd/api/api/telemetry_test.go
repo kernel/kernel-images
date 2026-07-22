@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -513,4 +515,70 @@ func TestTelemetryExportToggle(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, exp.Running(), "clearing telemetry should stop export")
 	})
+
+	t.Run("toggle-off drain does not block concurrent reads", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		exp := &blockingStopExporter{running: true, stopEntered: make(chan struct{}), release: make(chan struct{})}
+		svc.otlpExport = exp
+
+		// Disable export while keeping a category on, so reconcileExport hits the
+		// drain path; run it in the background since Stop blocks.
+		off := &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+			Export:  &oapi.BrowserTelemetryExportConfig{Otlp: &oapi.BrowserTelemetryOTLPExportConfig{Enabled: &fa}},
+		}
+		putDone := make(chan struct{})
+		go func() {
+			_, _ = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: off})
+			close(putDone)
+		}()
+
+		<-exp.stopEntered // drain is now in progress, holding exportMu (not monitorMu)
+
+		// A concurrent read must not block behind the drain.
+		readReturned := make(chan struct{})
+		go func() {
+			_, _ = svc.GetTelemetry(ctx, oapi.GetTelemetryRequestObject{})
+			close(readReturned)
+		}()
+		select {
+		case <-readReturned:
+		case <-time.After(2 * time.Second):
+			t.Fatal("GET blocked on the export drain (monitorMu held during Stop)")
+		}
+
+		close(exp.release)
+		<-putDone
+	})
+}
+
+// blockingStopExporter blocks in Stop until released, to prove the drain does
+// not hold monitorMu.
+type blockingStopExporter struct {
+	mu          sync.Mutex
+	running     bool
+	stopEntered chan struct{}
+	release     chan struct{}
+}
+
+func (e *blockingStopExporter) Start(context.Context) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.running = true
+	return nil
+}
+
+func (e *blockingStopExporter) Stop(context.Context) error {
+	close(e.stopEntered)
+	<-e.release
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.running = false
+	return nil
+}
+
+func (e *blockingStopExporter) Running() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.running
 }

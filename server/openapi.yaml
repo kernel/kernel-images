@@ -1600,8 +1600,9 @@ components:
       description: >
         Forwarding of captured telemetry to an external destination. Independent
         of what is captured: export is off unless explicitly enabled here, even
-        when an export destination is configured. In PATCH requests an omitted
-        field leaves the current setting unchanged.
+        when an export destination is configured. In a PUT (full replace) an
+        omitted export block resets export to off, the same as omitted categories
+        turn off; in a PATCH an omitted field leaves the current setting unchanged.
       properties:
         otlp:
           $ref: "#/components/schemas/BrowserTelemetryOTLPExportConfig"

@@ -101,8 +101,12 @@ type ApiService struct {
 	cdpMonitor       cdpMonitorController
 	otlpExport       OTLPExporter
 	monitorMu        sync.Mutex
-	lifecycleCtx     context.Context
-	lifecycleCancel  context.CancelFunc
+	// exportMu serializes OTLP export reconciliation independently of monitorMu,
+	// so a toggle-off drain (bounded by otlpStopTimeout) never blocks concurrent
+	// telemetry reads/writes on monitorMu.
+	exportMu        sync.Mutex
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)

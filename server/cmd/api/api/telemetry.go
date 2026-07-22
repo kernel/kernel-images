@@ -32,6 +32,11 @@ func (s *ApiService) GetTelemetry(_ context.Context, _ oapi.GetTelemetryRequestO
 // Sets the telemetry configuration. Returns 201 if not previously configured, 200 if it was.
 // Setting every configurable category to enabled:false clears the configuration (200).
 func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequestObject) (oapi.PutTelemetryResponseObject, error) {
+	// Reconcile export after monitorMu is released (defers run LIFO), so the
+	// toggle-off drain does not hold the API-wide lock. It reads the committed
+	// desired state from the session, so it is correct regardless of how this
+	// request exits.
+	defer s.reconcileExport(ctx)
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
@@ -45,7 +50,7 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	if allDisabled {
 		if wasActive {
 			s.telemetrySession.Stop()
-			s.stopTelemetryState(ctx)
+			s.stopTelemetryState()
 		}
 		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
@@ -62,11 +67,10 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	}
 
 	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
-		s.rollbackTelemetry(ctx, wasActive, prev)
+		s.rollbackTelemetry(wasActive, prev)
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PutTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start telemetry"}}, nil
 	}
-	s.reconcileExport(ctx, cfg.ExportOTLP)
 
 	if wasActive {
 		return oapi.PutTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
@@ -78,6 +82,8 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 // Partially updates the telemetry configuration. Returns 404 if not configured.
 // Setting every configurable category to enabled:false clears the configuration (200).
 func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetryRequestObject) (oapi.PatchTelemetryResponseObject, error) {
+	// See PutTelemetry: reconcile export after monitorMu is released.
+	defer s.reconcileExport(ctx)
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
@@ -95,7 +101,7 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	cfg, allDisabled := mergeTelemetryConfig(prev, req.Body)
 	if allDisabled {
 		s.telemetrySession.Stop()
-		s.stopTelemetryState(ctx)
+		s.stopTelemetryState()
 		return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
 	}
 
@@ -103,11 +109,10 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	// reconcile and roll back on collector-start failure.
 	s.telemetrySession.UpdateConfig(cfg)
 	if err := s.reconcileTelemetryState(cfg.Categories); err != nil {
-		s.rollbackTelemetry(ctx, true, prev)
+		s.rollbackTelemetry(true, prev)
 		logger.FromContext(ctx).Error("failed to apply telemetry state", "err", err)
 		return oapi.PatchTelemetry500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to apply telemetry"}}, nil
 	}
-	s.reconcileExport(ctx, cfg.ExportOTLP)
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
 
@@ -137,22 +142,29 @@ func (s *ApiService) reconcileTelemetryState(cats []oapi.TelemetryEventCategory)
 // A fresh session is torn down; an updated session is reverted to prev. Reverting
 // never requires a fallible collector start (the failed start left it stopped),
 // so the reconcile here cannot fail.
-func (s *ApiService) rollbackTelemetry(ctx context.Context, wasActive bool, prev telemetry.TelemetryConfig) {
+func (s *ApiService) rollbackTelemetry(wasActive bool, prev telemetry.TelemetryConfig) {
 	if !wasActive {
 		s.telemetrySession.Stop()
-		s.stopTelemetryState(ctx)
+		s.stopTelemetryState()
 		return
 	}
 	s.telemetrySession.UpdateConfig(prev)
 	_ = s.reconcileTelemetryState(prev.Categories)
-	s.reconcileExport(ctx, prev.ExportOTLP)
 }
 
-// reconcileExport starts or stops the OTLP export sink to match the desired
-// state. Export is best-effort: a failed start is logged, never surfaced as an
-// error, so it cannot fail a telemetry apply. No-op when no export destination
-// is configured.
-func (s *ApiService) reconcileExport(ctx context.Context, enabled bool) {
+// reconcileExport starts or stops the OTLP export sink to match the committed
+// telemetry config. It reads the desired state from the session rather than a
+// parameter, and holds exportMu (not monitorMu) so the toggle-off drain does
+// not block concurrent telemetry reads/writes; whichever call wins exportMu
+// last observes the final committed state, so the sink converges. Callers run
+// it after releasing monitorMu (via defer). Export is best-effort: a failed
+// start is logged, never surfaced. No-op when no export destination is
+// configured.
+func (s *ApiService) reconcileExport(ctx context.Context) {
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+
+	enabled := s.telemetrySession.Config().ExportOTLP
 	if s.otlpExport == nil {
 		if enabled {
 			logger.FromContext(ctx).Warn("otlp export enabled but no destination configured; export inactive")
@@ -174,13 +186,12 @@ func (s *ApiService) reconcileExport(ctx context.Context, enabled bool) {
 	}
 }
 
-// stopTelemetryState tears down the collector, export sink, and middleware
-// after a session is cleared.
-func (s *ApiService) stopTelemetryState(ctx context.Context) {
+// stopTelemetryState tears down the collector and middleware after a session is
+// cleared. Export is reconciled separately, after monitorMu is released.
+func (s *ApiService) stopTelemetryState() {
 	if s.cdpMonitor.IsRunning() {
 		s.cdpMonitor.Stop()
 	}
-	s.reconcileExport(ctx, false)
 	DisableTelemetryMiddleware()
 }
 
