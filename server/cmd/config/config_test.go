@@ -19,6 +19,7 @@ func TestLoad(t *testing.T) {
 			env:  map[string]string{},
 			wantCfg: &Config{
 				Port:                     10001,
+				MetricsPort:              10002,
 				FrameRate:                10,
 				DisplayNum:               1,
 				MaxSizeInMB:              500,
@@ -39,6 +40,7 @@ func TestLoad(t *testing.T) {
 			name: "custom valid env",
 			env: map[string]string{
 				"PORT":                       "12345",
+				"METRICS_PORT":               "12346",
 				"FRAME_RATE":                 "20",
 				"DISPLAY_NUM":                "2",
 				"MAX_SIZE_MB":                "250",
@@ -53,6 +55,7 @@ func TestLoad(t *testing.T) {
 			},
 			wantCfg: &Config{
 				Port:                     12345,
+				MetricsPort:              12346,
 				FrameRate:                20,
 				DisplayNum:               2,
 				MaxSizeInMB:              250,
@@ -77,6 +80,7 @@ func TestLoad(t *testing.T) {
 			},
 			wantCfg: &Config{
 				Port:                     10001,
+				MetricsPort:              10002,
 				FrameRate:                10,
 				DisplayNum:               1,
 				MaxSizeInMB:              500,

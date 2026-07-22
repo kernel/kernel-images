@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/ghodss/yaml"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -28,12 +29,14 @@ import (
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/metrics"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/sysmon"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/wsdrain"
 )
 
 func main() {
@@ -81,6 +84,9 @@ func main() {
 		slogger.Error("invalid default recording parameters", "err", err)
 		os.Exit(1)
 	}
+
+	// ws conn tracker
+	wsRegistry := wsdrain.New()
 
 	// DevTools WebSocket upstream manager: tail Chromium supervisord log
 	const chromiumLogPath = "/var/log/supervisord/chromium"
@@ -138,12 +144,6 @@ func main() {
 			headers["x-api-key"] = config.InstanceName
 		}
 		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
-		// The OTel log SDK reports batch-queue drops through its global logger at
-		// logr V(1), which slog renders just below Info, so a default Info handler
-		// would swallow it. Wire it to a handler that admits that level so records
-		// dropped under sustained backpressure are observable, not silently lost.
-		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
-		otel.SetLogger(logr.FromSlogHandler(otelDiag))
 		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
 			Endpoint:     config.OTLPEndpoint,
 			URLPath:      config.OTLPPath,
@@ -157,6 +157,13 @@ func main() {
 			// Best-effort sink: a failed exporter must not take down the browser.
 			slogger.Error("OTLP export disabled: storage writer failed to start", "err", err)
 			otlpWriter = nil
+		} else {
+			// Export is running, so route the OTel log SDK's global logger (which
+			// reports batch-queue drops at logr V(1), just below slog Info) to a
+			// handler that admits that level, making drops observable. Only touched
+			// on success, so a failed start leaves the process-wide logger alone.
+			otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
+			otel.SetLogger(logr.FromSlogHandler(otelDiag))
 		}
 	}
 
@@ -182,6 +189,10 @@ func main() {
 	})
 	oapi.HandlerFromMux(strictHandler, r)
 
+	// Fork identity endpoints - not part of OpenAPI spec.
+	r.Post("/internal/fork-identity", forkIdentityHandler(slogger))
+	r.Get("/internal/fork-identity/config", forkIdentityConfigHandler(slogger))
+
 	// endpoints to expose the spec
 	r.Get("/spec.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/vnd.oai.openapi")
@@ -201,7 +212,7 @@ func main() {
 	// Uses WebSocket for bidirectional streaming, which works well through proxies.
 	r.Get("/process/{process_id}/attach", func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "process_id")
-		apiService.HandleProcessAttachWS(w, r, id)
+		apiService.HandleProcessAttachWS(w, r, id, wsRegistry)
 	})
 
 	// Serve extension files for Chrome policy-installed extensions
@@ -249,7 +260,7 @@ func main() {
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
@@ -275,11 +286,28 @@ func main() {
 	rChromeDriver.Handle("/*", chromedriverproxy.Handler(slogger, &chromedriverproxy.Options{
 		ChromeDriverUpstream: config.ChromeDriverUpstreamAddr,
 		DevToolsProxyAddr:    config.DevToolsProxyAddr,
+		Registry:             wsRegistry,
 	}))
 
 	srvChromeDriver := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", config.ChromeDriverProxyPort),
 		Handler: rChromeDriver,
+	}
+
+	// Prometheus metrics for external collection. Served on its own
+	// listener, deliberately without the scale-to-zero middleware (periodic
+	// scrapes must not count as session activity) and without per-request
+	// logging (scrapes would drown the logs).
+	rMetrics := chi.NewRouter()
+	rMetrics.Use(chiMiddleware.Recoverer)
+	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger,
+		metrics.NewChromeCollector(upstreamMgr),
+		metrics.NewGPUCollector(),
+		metrics.NewSystemCollector(),
+	))
+	srvMetrics := &http.Server{
+		Addr:    fmt.Sprintf("0.0.0.0:%d", config.MetricsPort),
+		Handler: rMetrics,
 	}
 
 	go func() {
@@ -306,6 +334,14 @@ func main() {
 		}
 	}()
 
+	go func() {
+		slogger.Info("metrics server starting", "addr", srvMetrics.Addr)
+		if err := srvMetrics.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			slogger.Error("metrics server failed", "err", err)
+			stop()
+		}
+	}()
+
 	// graceful shutdown
 	<-ctx.Done()
 	slogger.Info("shutdown signal received")
@@ -321,11 +357,20 @@ func main() {
 		return apiService.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {
+		if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
+			slogger.Info("closed active websocket connections for shutdown", "count", n)
+		}
+		return nil
+	})
+	g.Go(func() error {
 		upstreamMgr.Stop()
 		return srvDevtools.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {
 		return srvChromeDriver.Shutdown(shutdownCtx)
+	})
+	g.Go(func() error {
+		return srvMetrics.Shutdown(shutdownCtx)
 	})
 
 	if err := g.Wait(); err != nil {

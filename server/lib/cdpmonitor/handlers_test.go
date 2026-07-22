@@ -58,7 +58,29 @@ func TestConsoleEvents(t *testing.T) {
 		assert.Equal(t, float64(42), data["line"])
 	})
 
+	t.Run("exception_thrown_appends_message_to_text", func(t *testing.T) {
+		cp := ec.checkpoint()
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Runtime.exceptionThrown",
+			"params": map[string]any{
+				"timestamp": 1234.5,
+				"exceptionDetails": map[string]any{
+					"text": "Uncaught",
+					"exception": map[string]any{
+						"className":   "Error",
+						"description": "Error: boom\n    at <anonymous>:1:7",
+					},
+				},
+			},
+		})
+		ev := ec.waitForNew(t, "console_error", cp, 2*time.Second)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "Uncaught Error: boom", data["text"])
+	})
+
 	t.Run("non_string_args", func(t *testing.T) {
+		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.consoleAPICalled",
 			"params": map[string]any{
@@ -70,7 +92,7 @@ func TestConsoleEvents(t *testing.T) {
 				},
 			},
 		})
-		ev := ec.waitForNew(t, "console_log", 2*time.Second)
+		ev := ec.waitForNew(t, "console_log", cp, 2*time.Second)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		args := data["args"].([]any)
@@ -146,6 +168,7 @@ func TestNetworkEvents(t *testing.T) {
 	})
 
 	t.Run("loading_failed", func(t *testing.T) {
+		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.requestWillBeSent",
 			"params": map[string]any{
@@ -153,7 +176,7 @@ func TestNetworkEvents(t *testing.T) {
 				"request":   map[string]any{"method": "GET", "url": "https://fail.example.com/"},
 			},
 		})
-		ec.waitForNew(t, "network_request", 2*time.Second)
+		ec.waitForNew(t, "network_request", cp, 2*time.Second)
 
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.loadingFailed",
@@ -172,6 +195,7 @@ func TestNetworkEvents(t *testing.T) {
 
 	t.Run("binary_resource_skips_body", func(t *testing.T) {
 		getBodyCalled.Store(false)
+		cp := ec.checkpoint()
 		// Use PDL wire key "type" (not "resourceType") — Chrome emits ResourceType
 		// under "type" for Network.requestWillBeSent.
 		srv.sendToMonitor(t, map[string]any{
@@ -194,7 +218,7 @@ func TestNetworkEvents(t *testing.T) {
 			"params": map[string]any{"requestId": "img-001"},
 		})
 
-		ev := ec.waitForNew(t, "network_response", 3*time.Second)
+		ev := ec.waitForNew(t, "network_response", cp, 3*time.Second)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Nil(t, data["body"], "binary resource should not have body field")
@@ -311,13 +335,17 @@ func TestTabOpened(t *testing.T) {
 }
 
 func TestBindingAndTimeline(t *testing.T) {
-	srv := newTestServer(t)
-	defer srv.close()
-
-	_, ec, cleanup := startMonitor(t, srv, nil)
-	defer cleanup()
+	withMonitor := func(t *testing.T) (*testServer, *eventCollector) {
+		t.Helper()
+		srv := newTestServer(t)
+		t.Cleanup(srv.close)
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		t.Cleanup(cleanup)
+		return srv, ec
+	}
 
 	t.Run("interaction_click", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
@@ -331,6 +359,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("interaction_scroll_settled", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
@@ -346,6 +375,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("layout_shift", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "PerformanceTimeline.timelineEventAdded",
 			"params": map[string]any{
@@ -376,6 +406,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("unknown_binding_ignored", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Runtime.bindingCalled",
 			"params": map[string]any{
@@ -387,6 +418,7 @@ func TestBindingAndTimeline(t *testing.T) {
 	})
 
 	t.Run("rate_limited_per_session", func(t *testing.T) {
+		srv, ec := withMonitor(t)
 		// Send two binding events back-to-back within the 50ms window.
 		// Only the first should produce a published event.
 		before := func() int {
@@ -424,6 +456,58 @@ func TestBindingAndTimeline(t *testing.T) {
 		ec.mu.Unlock()
 		assert.Equal(t, countBefore+1, countAfter, "rate limiter should have dropped the 2nd and 3rd events")
 	})
+
+	t.Run("keys_use_higher_rate_limit", func(t *testing.T) {
+		srv, ec := withMonitor(t)
+		// Keystrokes are capped far higher than clicks (bindingKeyMinInterval), so
+		// keys spaced above that interval all publish, whereas clicks at the same
+		// spacing would be dropped by bindingMinInterval.
+		const n = 5
+		for i := range n {
+			srv.sendToMonitor(t, map[string]any{
+				"method": "Runtime.bindingCalled",
+				"params": map[string]any{
+					"name":    "__kernelEvent",
+					"payload": `{"type":"interaction_key","key":"a","selector":"input","tag":"INPUT"}`,
+				},
+			})
+			if i < n-1 {
+				time.Sleep(3 * bindingKeyMinInterval)
+			}
+		}
+		require.Eventually(t, func() bool {
+			ec.mu.Lock()
+			defer ec.mu.Unlock()
+			count := 0
+			for _, ev := range ec.events {
+				if ev.Type == EventInteractionKey {
+					count++
+				}
+			}
+			return count == n
+		}, 2*time.Second, 20*time.Millisecond, "keystrokes spaced above the key interval must all publish")
+
+		// The payload must survive, not just the event count.
+		ec.mu.Lock()
+		defer ec.mu.Unlock()
+		var data map[string]any
+		for _, ev := range ec.events {
+			if ev.Type == EventInteractionKey {
+				require.NoError(t, json.Unmarshal(ev.Data, &data))
+				break
+			}
+		}
+		assert.Equal(t, "a", data["key"])
+		assert.Equal(t, "input", data["selector"])
+		assert.Equal(t, "INPUT", data["tag"])
+	})
+}
+
+func TestBindingIntervalFor(t *testing.T) {
+	assert.Equal(t, bindingKeyMinInterval, bindingIntervalFor(EventInteractionKey))
+	assert.Equal(t, bindingMinInterval, bindingIntervalFor(EventInteractionClick))
+	assert.Equal(t, bindingMinInterval, bindingIntervalFor(EventScrollSettled))
+	assert.Less(t, bindingKeyMinInterval, bindingMinInterval, "keys must get a higher cap than other events")
 }
 
 func TestPerTargetStateMachines(t *testing.T) {
@@ -483,11 +567,12 @@ func TestPerTargetStateMachines(t *testing.T) {
 		})
 
 		// Wait past sess-b's 500 ms debounce so its network_idle fires before we
-		// set our checkpoint. The next new network_idle will then come from sess-a.
+		// take the checkpoint. The next network_idle will then come from sess-a.
 		time.Sleep(700 * time.Millisecond)
 
-		// Finish sess-a's request; waitForNew captures the current event count so
-		// sess-b's already-fired network_idle is excluded from the result.
+		// Checkpoint after sess-b's network_idle has fired so it is excluded, then
+		// finish sess-a's request to drive sess-a's own network_idle.
+		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.responseReceived", "sessionId": "sess-a",
 			"params": map[string]any{
@@ -500,7 +585,7 @@ func TestPerTargetStateMachines(t *testing.T) {
 			"params": map[string]any{"requestId": "req-a"},
 		})
 
-		ev := ec.waitForNew(t, "network_idle", 2*time.Second)
+		ev := ec.waitForNew(t, "network_idle", cp, 2*time.Second)
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "sess-a", data["session_id"], "network_idle must be attributed to sess-a")

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -457,7 +458,6 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 	}
 }
 
-
 // navigateBlank points the active page at about:blank via playwright so the
 // renderer is alive before we query window dimensions.
 func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
@@ -465,13 +465,15 @@ func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 	timeout := 5
-	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
-		Code:       `await page.goto('about:blank'); return true;`,
-		TimeoutSec: &timeout,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, rsp.JSON200, "playwright navigate response missing")
-	require.True(t, rsp.JSON200.Success, "playwright navigate to about:blank failed: %s", string(rsp.Body))
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
+			Code:       `await page.goto('about:blank'); return true;`,
+			TimeoutSec: &timeout,
+		})
+		require.NoError(collect, err)
+		require.NotNil(collect, rsp.JSON200, "missing JSON200 status=%s body=%s", rsp.Status(), string(rsp.Body))
+		require.True(collect, rsp.JSON200.Success, "playwright navigate to about:blank failed: %s", string(rsp.Body))
+	}, 30*time.Second, 500*time.Millisecond)
 }
 
 // patchDisplayExpectingOK issues PATCH /display and requires a 200. The

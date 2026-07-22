@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/coder/websocket"
+	"github.com/kernel/kernel-images/server/lib/wsdrain"
 )
 
 // Conn abstracts a WebSocket connection for testing and flexibility.
@@ -28,6 +29,9 @@ type ProxyOptions struct {
 	DialOptions   *websocket.DialOptions
 	Logger        *slog.Logger
 	Transform     MessageTransform
+	// Registry, when set, tracks the accepted client connection so it is
+	// closed with a Going Away frame on server shutdown.
+	Registry *wsdrain.Registry
 }
 
 // PumpExitCause names which side caused Pump to return. Callers use this to
@@ -120,6 +124,9 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts Prox
 		return
 	}
 	clientConn.SetReadLimit(100 * 1024 * 1024)
+
+	untrack := opts.Registry.Track(clientConn)
+	defer untrack()
 
 	upstreamConn, _, err := websocket.Dial(r.Context(), upstreamURL, opts.DialOptions)
 	if err != nil {

@@ -115,92 +115,26 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 
 	// Route to appropriate resolution change handler
 	if displayMode == "xorg" {
-		useNeko := s.isNekoEnabled()
-		if useNeko {
-			log.Info("using Neko API for Xorg resolution change")
-			err = s.setResolutionViaNeko(ctx, width, height, refreshRate)
-		} else {
-			log.Info("using xrandr for Xorg resolution change (Neko disabled)")
-			err = s.setResolutionXorgViaXrandr(ctx, width, height, refreshRate)
-		}
-		// Re-assert the maximized window state via CDP, then verify the
-		// X root has reached the requested size. Mutter reflows a
-		// maximized (or fullscreen) window onto the new root
-		// automatically, so the CDP call's only job is to make sure the
-		// window is in the state that triggers the reflow. The X root
-		// poll is the authoritative post-condition: it's the value the
-		// server actually set and stays panel-robust if mutter ever
-		// gains a taskbar (a maximized window would then be smaller
-		// than the root by the panel's reserved space).
-		//
-		// Both are fatal on failure — returning 200 with the X root
-		// still at the old size, or the window stuck in normal state,
-		// would leave the caller with no signal of the mismatch. The
-		// previous approach of restarting chromium so it could re-apply
-		// --start-maximized had the same effective contract (the
-		// restart blocked the response) but cost ~9s per resize and
-		// wiped browser-side state (Emulation.* overrides, devtools
-		// sessions). The restart_chromium request field is still
-		// accepted for API compatibility but no longer triggers a
-		// restart on this path.
+		var realizedW, realizedH int
+		realizedW, realizedH, err = s.applyResolutionAndConverge(ctx, width, height, refreshRate, s.isNekoEnabled())
 		if err == nil {
-			// Wait for the X root to settle, then use it as the
-			// realized size in the response. The wait returns early
-			// when either (a) xrandr reports the requested size — the
-			// common case — or (b) consecutive reads are stable for a
-			// short window, capturing libxcvt's rounded size on
-			// requests it can't honour exactly (CVT 8-pixel grid +
-			// FWXGA bump for 1360×768 → 1366×768).
-			//
-			// The poll absorbs transient X root states — chromium
-			// running in --kiosk briefly pushes the root to the dummy
-			// DDX's max mode (3840×2160) while mutter settles on the
-			// new screen, and a single immediate read would catch that
-			// transient instead of the steady-state size.
-			//
-			// On the Neko path, retry the reconfig RPC when X never
-			// converges. Neko applies screen configuration asynchronously
-			// and can drop/clobber a PATCH that lands while a previous
-			// reconfig (e.g. its boot 1920x1080) is still in flight —
-			// the new request is silently lost and X stays at the dummy
-			// DDX default (3840x2160). Polling X harder won't recover;
-			// only re-issuing the reconfig will.
-			const maxAttempts = 3
-			var realizedW, realizedH int
-			var converged bool
-			for attempt := 0; attempt < maxAttempts; attempt++ {
-				realizedW, realizedH, converged = s.waitForXRootRealized(ctx, width, height, 10*time.Second)
-				if converged {
-					break
-				}
-				if !useNeko || attempt == maxAttempts-1 {
-					break
-				}
-				log.Warn("X root did not converge after resize, retrying neko reconfig",
-					"attempt", attempt+1,
+			if realizedW != width || realizedH != height {
+				log.Info("X root differs from request after resize",
 					"requested", fmt.Sprintf("%dx%d", width, height),
 					"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
-				if retryErr := s.setResolutionViaNeko(ctx, width, height, refreshRate); retryErr != nil {
-					err = retryErr
-					break
-				}
 			}
-			if err == nil {
-				if !converged {
-					log.Error("display did not converge to requested mode after retries",
-						"requested", fmt.Sprintf("%dx%d", width, height),
-						"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
-					err = fmt.Errorf("display did not converge to %dx%d (X root reports %dx%d)", width, height, realizedW, realizedH)
-				} else {
-					if realizedW != width || realizedH != height {
-						log.Info("X root differs from request after resize",
-							"requested", fmt.Sprintf("%dx%d", width, height),
-							"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
-					}
-					width, height = realizedW, realizedH
-				}
-			}
+			width, height = realizedW, realizedH
 		}
+		// Re-assert the maximized window state via CDP so mutter reflows the
+		// window onto the new root; applyResolutionAndConverge already verified
+		// the root size, which is the authoritative post-condition. Fatal on
+		// failure — returning 200 with the window stuck in its old state would
+		// leave the caller with no signal of the mismatch. The previous approach
+		// of restarting chromium so it could re-apply --start-maximized had the
+		// same effective contract but cost ~9s per resize and wiped browser-side
+		// state (Emulation.* overrides, devtools sessions); restart_chromium is
+		// still accepted for API compatibility but no longer triggers a restart
+		// on this path.
 		if err == nil {
 			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
 				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
@@ -588,6 +522,67 @@ func abs(x int) int {
 		return -x
 	}
 	return x
+}
+
+// applyResolutionAndConverge sets the Xorg resolution — via Neko when enabled,
+// otherwise xrandr — and waits for the X root to actually reach the requested
+// size, returning the realized dimensions.
+//
+// The poll absorbs transient X root states: chromium running in --kiosk briefly
+// pushes the root to the dummy DDX's max mode (3840x2160) while mutter settles
+// on the new screen, and a single immediate read would catch that transient. It
+// also captures libxcvt's rounded size on requests the driver can't honour
+// exactly (CVT 8-pixel grid + FWXGA bump for 1360x768 -> 1366x768).
+//
+// On the Neko path it re-issues the reconfig when the root never converges.
+// Neko applies screen configuration asynchronously and can drop/clobber a
+// request that lands while a previous reconfig (e.g. its boot 1920x1080) is
+// still in flight — the request is silently lost and X stays at the dummy DDX
+// default (3840x2160). Polling X harder won't recover it, only re-issuing will.
+// setResolutionViaNeko returns as soon as the request is accepted, so every
+// caller that needs the resolution to have taken effect — the live-resize path
+// before re-asserting the window, and the configure stop/start path before
+// relaunching Chromium in --kiosk — must go through here rather than call
+// setResolutionViaNeko directly.
+func (s *ApiService) applyResolutionAndConverge(ctx context.Context, width, height, refreshRate int, useNeko bool) (int, int, error) {
+	log := logger.FromContext(ctx)
+	var err error
+	if useNeko {
+		log.Info("using Neko API for Xorg resolution change")
+		err = s.setResolutionViaNeko(ctx, width, height, refreshRate)
+	} else {
+		log.Info("using xrandr for Xorg resolution change (Neko disabled)")
+		err = s.setResolutionXorgViaXrandr(ctx, width, height, refreshRate)
+	}
+	if err != nil {
+		return 0, 0, err
+	}
+	const maxAttempts = 3
+	var realizedW, realizedH int
+	var converged bool
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		realizedW, realizedH, converged = s.waitForXRootRealized(ctx, width, height, 10*time.Second)
+		if converged {
+			break
+		}
+		if !useNeko || attempt == maxAttempts-1 {
+			break
+		}
+		log.Warn("X root did not converge after resize, retrying neko reconfig",
+			"attempt", attempt+1,
+			"requested", fmt.Sprintf("%dx%d", width, height),
+			"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
+		if retryErr := s.setResolutionViaNeko(ctx, width, height, refreshRate); retryErr != nil {
+			return realizedW, realizedH, retryErr
+		}
+	}
+	if !converged {
+		log.Error("display did not converge to requested mode after retries",
+			"requested", fmt.Sprintf("%dx%d", width, height),
+			"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
+		return realizedW, realizedH, fmt.Errorf("display did not converge to %dx%d (X root reports %dx%d)", width, height, realizedW, realizedH)
+	}
+	return realizedW, realizedH, nil
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP

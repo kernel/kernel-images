@@ -15,9 +15,16 @@ export const state = () => ({
   implicitHosting: true,
   fileTransfer: true,
   keyboardModifierState: -1,
+  // true once a control/request has been sent and we're waiting for the
+  // server's control/locked response. Prevents rapid clicks from emitting
+  // multiple requests before `controlling` flips.
+  requesting: false,
 })
 
 export const getters = getterTree(state, {
+  controlling: (state, getters, root) => {
+    return root.user.id !== '' && root.user.id === state.id
+  },
   hosting: (state, getters, root) => {
     return root.user.id === state.id || state.implicitHosting
   },
@@ -36,6 +43,8 @@ export const mutations = mutationTree(state, {
     } else {
       state.id = host.id
     }
+    // host resolved (for us or someone else) — clear any pending request
+    state.requesting = false
   },
 
   setClipboard(state, clipboard: string) {
@@ -58,10 +67,15 @@ export const mutations = mutationTree(state, {
     state.fileTransfer = val
   },
 
+  setRequesting(state, val: boolean) {
+    state.requesting = val
+  },
+
   reset(state) {
     state.id = ''
     state.clipboard = ''
     state.locked = false
+    state.requesting = false
   },
 })
 
@@ -88,11 +102,12 @@ export const actions = actionTree(
       }
     },
 
-    request({ getters }) {
-      if (!accessor.connected || getters.hosting) {
+    request({ state, getters }) {
+      if (!accessor.connected || getters.controlling || state.requesting) {
         return
       }
 
+      accessor.remote.setRequesting(true)
       $client.sendMessage(EVENT.CONTROL.REQUEST)
     },
 

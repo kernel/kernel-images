@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const transferFixtureURL = "https://public-ping-bucket-kernel.s3.us-east-1.amazonaws.com/index.html"
+
 // TestZipTransferTiming measures the time to download a directory as a zip and re-upload it.
 // This is useful for understanding the performance characteristics of the zip transfer endpoints
 // and evaluating whether alternative compression methods (like zstd) would be beneficial.
@@ -110,17 +112,104 @@ func TestZipTransferTiming(t *testing.T) {
 	t.Logf("  Upload throughput:    %.1f MB/s (uncompressed)", float64(dirSize)/1024/1024/avgUpload.Seconds())
 }
 
-// populateUserData creates some realistic content in the user-data directory
-// by executing a playwright script that navigates to a page.
+// populateUserData creates browser profile content using a static page origin.
 func populateUserData(ctx context.Context, client *instanceoapi.ClientWithResponses) error {
-	// Navigate to example.com to generate some browser state
 	code := `
-		await page.goto('https://example.com');
-		await page.waitForTimeout(500);
-		// Visit another page to generate more cache/state
-		await page.goto('https://www.google.com');
-		await page.waitForTimeout(500);
-		return 'done';
+		await page.goto('` + transferFixtureURL + `', { waitUntil: 'load', timeout: 10000 });
+		await page.evaluate(async () => {
+			const payload = 'kernel-transfer-fixture-' + 'x'.repeat(256 * 1024);
+			localStorage.setItem('transfer-payload', payload);
+			document.cookie = 'transfer_fixture=ok; path=/; max-age=3600';
+
+			await new Promise((resolve, reject) => {
+				const req = indexedDB.open('transfer-fixture-db', 1);
+				req.onupgradeneeded = () => req.result.createObjectStore('entries', { keyPath: 'id' });
+				req.onerror = () => reject(req.error);
+				req.onsuccess = () => {
+					const db = req.result;
+					const tx = db.transaction('entries', 'readwrite');
+					tx.oncomplete = () => {
+						db.close();
+						resolve();
+					};
+					tx.onerror = () => {
+						db.close();
+						reject(tx.error);
+					};
+					tx.onabort = () => {
+						db.close();
+						reject(tx.error);
+					};
+					tx.objectStore('entries').put({ id: 'payload', value: payload });
+				};
+			});
+
+			if ('caches' in window) {
+				const cache = await caches.open('transfer-fixture-cache');
+				await cache.put('/fixture-cache-entry', new Response(payload));
+			}
+		});
+
+		await page.goto('` + transferFixtureURL + `', { waitUntil: 'load', timeout: 10000 });
+		const result = await page.evaluate(async () => {
+			const localStorageValue = localStorage.getItem('transfer-payload') ?? '';
+			const cookiePresent = document.cookie.includes('transfer_fixture=ok');
+			const indexedDBValue = await new Promise((resolve, reject) => {
+				const req = indexedDB.open('transfer-fixture-db', 1);
+				req.onerror = () => reject(req.error);
+				req.onsuccess = () => {
+					const db = req.result;
+					const tx = db.transaction('entries', 'readonly');
+					let value = '';
+					tx.oncomplete = () => {
+						db.close();
+						resolve(value);
+					};
+					tx.onerror = () => {
+						db.close();
+						reject(tx.error);
+					};
+					const getReq = tx.objectStore('entries').get('payload');
+					getReq.onsuccess = () => {
+						value = getReq.result?.value ?? '';
+					};
+					getReq.onerror = () => {
+						db.close();
+						reject(getReq.error);
+					};
+				};
+			});
+
+			let cacheValue = '';
+			if ('caches' in window) {
+				const match = await caches.match('/fixture-cache-entry');
+				cacheValue = match ? await match.text() : '';
+			}
+
+			const expectedBytes = 'kernel-transfer-fixture-'.length + 256 * 1024;
+			return {
+				title: document.title,
+				expectedBytes,
+				localStorageBytes: localStorageValue.length,
+				indexedDBBytes: indexedDBValue.length,
+				cacheBytes: cacheValue.length,
+				cookiePresent,
+			};
+		});
+
+		if (
+			result.localStorageBytes !== result.expectedBytes ||
+			result.indexedDBBytes !== result.expectedBytes ||
+			result.cacheBytes !== result.expectedBytes ||
+			!result.cookiePresent
+		) {
+			throw new Error('transfer fixture did not persist before snapshot: ' + JSON.stringify(result));
+		}
+
+		await context.storageState();
+		await page.goto('about:blank', { waitUntil: 'domcontentloaded', timeout: 10000 });
+
+		return result;
 	`
 	req := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
 	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, req)

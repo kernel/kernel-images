@@ -240,17 +240,15 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
       return
     }
 
-    if (this.id === id) {
-      this.$vue.$notify({
-        group: 'neko',
-        type: 'info',
-        title: this.$vue.$t('notifications.controls_taken', {
-          name: member.id == this.id && this.$vue.$te('you') ? this.$vue.$t('you') : member.displayname,
-        }) as string,
-        duration: 5000,
-        speed: 1000,
-      })
-    }
+    // KERNEL: drop the self-only "you took the controls" toast (was gated on
+    // this.id === id). With implicit hosting, control is now registered
+    // automatically on the first interaction (see remote.request() in
+    // video.vue), so it would fire on essentially every session's first click
+    // — pure noise for a single-viewer embedded live view. The chat event
+    // below (and other members' take/steal toasts elsewhere) is unaffected.
+    // Note: this is a shared component, so explicit control-takes in the full
+    // neko UI also lose this confirmation; acceptable since Kernel only ships
+    // the embedded live view.
 
     this.$accessor.chat.newMessage({
       id: member.id,

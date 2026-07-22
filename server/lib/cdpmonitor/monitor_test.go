@@ -3,6 +3,7 @@ package cdpmonitor
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -229,6 +230,61 @@ func TestAutoAttach(t *testing.T) {
 	m.sessionsMu.RUnlock()
 	assert.Equal(t, "target-xyz", info.targetID)
 	assert.Equal(t, "page", info.targetType)
+}
+
+// TestInjectScriptEvaluatesCurrentDocument verifies that when a page target
+// attaches, the monitor both registers interaction.js for future document loads
+// (Page.addScriptToEvaluateOnNewDocument) and evaluates it against the already
+// loaded document (Runtime.evaluate), so a page that was live before the session
+// attached gets the interaction listeners without waiting for a navigation.
+func TestInjectScriptEvaluatesCurrentDocument(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	var mu sync.Mutex
+	var addScriptSession, evaluateSession string
+	responder := func(msg cdpMessage) any {
+		switch msg.Method {
+		case "Page.addScriptToEvaluateOnNewDocument":
+			var p struct {
+				Source string `json:"source"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			if p.Source == injectedJS {
+				mu.Lock()
+				addScriptSession = msg.SessionID
+				mu.Unlock()
+			}
+		case "Runtime.evaluate":
+			var p struct {
+				Expression string `json:"expression"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			if p.Expression == injectedJS {
+				mu.Lock()
+				evaluateSession = msg.SessionID
+				mu.Unlock()
+			}
+		}
+		return nil
+	}
+
+	_, _, cleanup := startMonitor(t, srv, responder)
+	defer cleanup()
+
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":  "session-doc",
+			"targetInfo": map[string]any{"targetId": "target-doc", "type": "page", "url": "https://example.com"},
+		},
+	})
+
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return addScriptSession == "session-doc" && evaluateSession == "session-doc"
+	}, 3*time.Second, 50*time.Millisecond, "interaction.js must be injected into both future and current documents")
 }
 
 func TestAttachExistingTargets(t *testing.T) {

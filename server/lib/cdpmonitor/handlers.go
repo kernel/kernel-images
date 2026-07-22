@@ -4,11 +4,53 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
+
+// exceptionMessage derives a human-readable message from a Runtime.exceptionThrown
+// exception RemoteObject. CDP's exceptionDetails.text is only a generic prefix
+// ("Uncaught" / "Uncaught (in promise)"); the real message lives here. Prefers the
+// first line of the object's description (e.g. "Error: boom") since the full stack
+// is already captured separately, falls back to the thrown value for non-Error
+// throws, then to the generic text.
+func exceptionMessage(exc json.RawMessage, fallback string) string {
+	if len(exc) == 0 {
+		return fallback
+	}
+	var o cdpRemoteObject
+	if err := json.Unmarshal(exc, &o); err != nil {
+		return fallback
+	}
+	if o.Description != "" {
+		if i := strings.IndexByte(o.Description, '\n'); i >= 0 {
+			return o.Description[:i]
+		}
+		return o.Description
+	}
+	// Symbol, BigInt, NaN, and ±Infinity throws carry no value/description; CDP
+	// puts them here.
+	if o.UnserializableValue != "" {
+		return o.UnserializableValue
+	}
+	if len(o.Value) > 0 {
+		var v any
+		if json.Unmarshal(o.Value, &v) == nil {
+			// A thrown JSON null unmarshals to nil, which %v renders as the
+			// useless "<nil>"; fall back to the generic text instead.
+			if v == nil {
+				return fallback
+			}
+			return fmt.Sprintf("%v", v)
+		}
+		return string(o.Value)
+	}
+	return fallback
+}
 
 // logUnmarshalErr logs a Debug message when a handler can't parse CDP params.
 // These indicate Chrome sent an unexpected params shape, rare and non-actionable
@@ -174,6 +216,14 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 		stackTrace = &oapi.BrowserCallStack{}
 		_ = json.Unmarshal(p.ExceptionDetails.StackTrace, stackTrace)
 	}
+	// CDP's exceptionDetails.text is only a prefix ("Uncaught" / "Uncaught (in
+	// promise)"). Append the error message so text reads like the console line,
+	// e.g. "Uncaught Error: boom". An empty derived message keeps just the prefix
+	// (passing "" as the fallback avoids a "Uncaught Uncaught" doubling).
+	text := p.ExceptionDetails.Text
+	if msg := exceptionMessage(p.ExceptionDetails.Exception, ""); msg != "" {
+		text = strings.TrimSpace(text + " " + msg)
+	}
 	// source_url is the script file URL; distinct from nav context's url (the page URL).
 	data, _ := json.Marshal(oapi.BrowserConsoleErrorEventData{
 		SessionId:  sid,
@@ -183,7 +233,7 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 		LoaderId:   ptrOf(lid),
 		Url:        ptrOf(url),
 		NavSeq:     nseq,
-		Text:       p.ExceptionDetails.Text,
+		Text:       text,
 		Line:       ptrOf(p.ExceptionDetails.LineNumber),
 		Column:     ptrOf(p.ExceptionDetails.ColumnNumber),
 		SourceUrl:  ptrOf(p.ExceptionDetails.URL),
@@ -197,6 +247,21 @@ func (m *Monitor) handleExceptionThrown(ctx context.Context, p cdpRuntimeExcepti
 // calls per session. This caps throughput at 20 events/s per session, preventing
 // a misbehaving page from flooding the event pipeline.
 const bindingMinInterval = 50 * time.Millisecond
+
+// bindingKeyMinInterval caps interaction_key at 1000 events/s. Typing produces
+// keystrokes in bursts faster than other interaction events, and a dropped key
+// leaves the recorded input incomplete, so keys get a higher cap; the cap still
+// bounds a page that synthesises a keydown flood.
+const bindingKeyMinInterval = time.Millisecond
+
+// bindingIntervalFor returns the minimum spacing between accepted binding events
+// of the given type.
+func bindingIntervalFor(eventType string) time.Duration {
+	if eventType == EventInteractionKey {
+		return bindingKeyMinInterval
+	}
+	return bindingMinInterval
+}
 
 // handleBindingCalled processes __kernelEvent binding calls from the page.
 func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID string) {
@@ -220,13 +285,15 @@ func (m *Monitor) handleBindingCalled(p cdpRuntimeBindingCalledParams, sessionID
 		return
 	}
 
-	// Rate-limit per (session, event type): cap at 20 events/s per pair so a
-	// misbehaving page cannot flood the event pipeline with a single event type.
+	// Rate-limit per (session, event type) so a misbehaving page cannot flood the
+	// pipeline. interaction_key uses a higher cap (bindingKeyMinInterval); other
+	// event types use bindingMinInterval.
+	minInterval := bindingIntervalFor(header.Type)
 	now := time.Now()
 	rateKey := sessionID + ":" + header.Type
 	m.bindingRateMu.Lock()
 	last := m.bindingLastSeen[rateKey]
-	if now.Sub(last) < bindingMinInterval {
+	if now.Sub(last) < minInterval {
 		m.bindingRateMu.Unlock()
 		return
 	}

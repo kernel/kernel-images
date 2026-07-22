@@ -13,6 +13,7 @@
             ref="video"
             :hideControls="hideControls"
             :extraControls="isEmbedMode"
+            :readOnly="isReadOnlyMode"
             @control-attempt="controlAttempt"
           />
         </div>
@@ -222,6 +223,12 @@
       return !!new URL(location.href).searchParams.get('embed')
     }
 
+    get isReadOnlyMode() {
+      const params = new URL(location.href).searchParams
+      const value = params.get('readOnly') || params.get('readonly') || params.get('ro')
+      return typeof value === 'string' && ['1', 'true', 'yes'].includes(value.toLowerCase())
+    }
+
     get hideControls() {
       return this.isCastMode
     }
@@ -318,10 +325,7 @@
         }
       }
 
-      // Handle readOnly query param (e.g., ?readOnly=true or ?readonly=1)
-      const readOnlyParam = params.get('readOnly') || params.get('readonly') || params.get('ro')
-      const readOnly = typeof readOnlyParam === 'string' && ['1', 'true', 'yes'].includes(readOnlyParam.toLowerCase())
-      if (readOnly) {
+      if (this.isReadOnlyMode) {
         // Disable implicit hosting so the user doesn't automatically gain control
         this.$accessor.remote.setImplicitHosting(false)
         // Lock the session locally to block any input even if hosting is later requested

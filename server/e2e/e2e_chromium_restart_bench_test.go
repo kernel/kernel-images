@@ -269,6 +269,8 @@ func doChromiumRestart(ctx context.Context, client *instanceoapi.ClientWithRespo
 // Useful for quick iteration without the full benchmark harness.
 // Run with: go test -v -run TestChromiumRestartTiming ./e2e/...
 func TestChromiumRestartTiming(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
@@ -284,7 +286,10 @@ func TestChromiumRestartTiming(t *testing.T) {
 	const iterations = 3
 
 	for _, img := range images {
+		img := img
 		t.Run(img.name, func(t *testing.T) {
+			t.Parallel()
+
 			c := NewTestContainer(t, img.image)
 
 			env := map[string]string{
