@@ -134,7 +134,11 @@ func main() {
 	}
 
 	// Optional OTLP export sink. Independent of S2; both can run together.
-	var otlpWriter *events.OTLPStorageWriter
+	// Constructed when an endpoint is provisioned, but left stopped: export is
+	// off until turned on per-session via the telemetry API, so a VM that always
+	// has the relay injected does not export (and get dropped) by default.
+	var otlpExporter api.OTLPExporter
+	var otlpMetrics *events.OTLPMetrics
 	if config.OTLPEndpoint != "" {
 		// The relay authenticates the VM by its instance name (checked against
 		// active sessions), mirroring the capmonster/hcaptcha relays. Sent as
@@ -143,28 +147,27 @@ func main() {
 		if config.InstanceName != "" {
 			headers["x-api-key"] = config.InstanceName
 		}
-		slogger.Info("OTLP export enabled", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
-		otlpWriter = events.NewOTLPStorageWriter(eventStream, events.OTLPConfig{
-			Endpoint:     config.OTLPEndpoint,
-			URLPath:      config.OTLPPath,
-			Insecure:     config.OTLPInsecure,
-			Headers:      headers,
-			ServiceName:  config.OTLPServiceName,
-			InstanceName: config.InstanceName,
-			Metro:        config.MetroName,
+		slogger.Info("OTLP export available", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
+		// The OTel log SDK reports batch-queue drops through its global logger at
+		// logr V(1), which slog renders just below Info, so a default Info handler
+		// would swallow it. Wire it to a handler that admits that level and counts
+		// drops into otlpMetrics, so backpressure is both logged and scrapable.
+		otlpMetrics = &events.OTLPMetrics{}
+		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
+		otel.SetLogger(logr.FromSlogHandler(events.NewDropCountingHandler(otelDiag, otlpMetrics)))
+		otlpExporter = events.NewOTLPExportController(eventStream, events.OTLPConfig{
+			Endpoint:       config.OTLPEndpoint,
+			URLPath:        config.OTLPPath,
+			Insecure:       config.OTLPInsecure,
+			Headers:        headers,
+			ServiceName:    config.OTLPServiceName,
+			InstanceName:   config.InstanceName,
+			Metro:          config.MetroName,
+			MaxQueueSize:   config.OTLPMaxQueueSize,
+			ExportInterval: config.OTLPExportInterval,
+			ExportTimeout:  config.OTLPExportTimeout,
+			Metrics:        otlpMetrics,
 		}, slogger)
-		if err := otlpWriter.Start(ctx); err != nil {
-			// Best-effort sink: a failed exporter must not take down the browser.
-			slogger.Error("OTLP export disabled: storage writer failed to start", "err", err)
-			otlpWriter = nil
-		} else {
-			// Export is running, so route the OTel log SDK's global logger (which
-			// reports batch-queue drops at logr V(1), just below slog Info) to a
-			// handler that admits that level, making drops observable. Only touched
-			// on success, so a failed start leaves the process-wide logger alone.
-			otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
-			otel.SetLogger(logr.FromSlogHandler(otelDiag))
-		}
 	}
 
 	apiService, err := api.New(
@@ -176,6 +179,7 @@ func main() {
 		telemetrySession,
 		eventStream,
 		config.DisplayNum,
+		otlpExporter,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)
@@ -300,11 +304,15 @@ func main() {
 	// logging (scrapes would drown the logs).
 	rMetrics := chi.NewRouter()
 	rMetrics.Use(chiMiddleware.Recoverer)
-	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger,
+	metricsCollectors := []metrics.Collector{
 		metrics.NewChromeCollector(upstreamMgr),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),
-	))
+	}
+	if otlpMetrics != nil {
+		metricsCollectors = append(metricsCollectors, metrics.NewOTLPCollector(otlpMetrics))
+	}
+	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger, metricsCollectors...))
 	srvMetrics := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", config.MetricsPort),
 		Handler: rMetrics,
@@ -387,13 +395,16 @@ func main() {
 		}
 	}
 
-	if otlpWriter != nil {
+	// Likewise stop OTLP export after the servers drain (a no-op if the toggle
+	// left it off), so shutdown-window events are exported rather than dropped.
+	if otlpExporter != nil {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
-		if err := otlpWriter.Stop(stopCtx); err != nil {
-			slogger.Error("otlp storage writer stop failed", "err", err)
+		if err := otlpExporter.Stop(stopCtx); err != nil {
+			slogger.Error("otlp export stop failed", "err", err)
 		}
 	}
+
 }
 
 func mustFFmpeg() {

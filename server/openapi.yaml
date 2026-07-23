@@ -1592,6 +1592,31 @@ components:
       properties:
         browser:
           $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
+        export:
+          $ref: "#/components/schemas/BrowserTelemetryExportConfig"
+      additionalProperties: false
+    BrowserTelemetryExportConfig:
+      type: object
+      description: >
+        Forwarding of captured telemetry to an external destination. Independent
+        of what is captured: export is off unless explicitly enabled here, even
+        when an export destination is configured. In a PUT (full replace) an
+        omitted export block resets export to off, the same as omitted categories
+        turn off; in a PATCH an omitted field leaves the current setting unchanged.
+      properties:
+        otlp:
+          $ref: "#/components/schemas/BrowserTelemetryOTLPExportConfig"
+      additionalProperties: false
+    BrowserTelemetryOTLPExportConfig:
+      type: object
+      description: OTLP/HTTP export settings.
+      properties:
+        enabled:
+          type: boolean
+          description: >
+            Whether captured telemetry is forwarded to the configured OTLP
+            destination. Off by default. Has no effect (export stays inactive)
+            when no export destination is configured.
       additionalProperties: false
     BrowserTelemetryCategoriesConfig:
       type: object
@@ -2144,6 +2169,45 @@ components:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
           $ref: "#/components/schemas/BrowserPageTabOpenedEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserPageCrashedEventData:
+      type: object
+      additionalProperties: false
+      required: [target_id, target_type, url]
+      properties:
+        target_id:
+          type: string
+          description: CDP target identifier of the crashed page.
+        target_type:
+          $ref: "#/components/schemas/BrowserTargetType"
+        url:
+          type: string
+          description: URL the page was on when its renderer process crashed.
+    BrowserPageCrashedEvent:
+      type: object
+      description: >
+        A page's renderer process crashed (an "Aw, Snap!" failure) while the
+        browser process itself stayed alive. Reported on the crashed page's
+        session, with the session and target ids on `source.metadata`. Captured
+        only while the `page` category is enabled.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: page_crashed
+        category:
+          type: string
+          const: page
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserPageCrashedEventData"
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
@@ -3000,6 +3064,7 @@ components:
         - $ref: "#/components/schemas/BrowserPageDomContentLoadedEvent"
         - $ref: "#/components/schemas/BrowserPageLoadEvent"
         - $ref: "#/components/schemas/BrowserPageTabOpenedEvent"
+        - $ref: "#/components/schemas/BrowserPageCrashedEvent"
         - $ref: "#/components/schemas/BrowserPageLayoutShiftEvent"
         - $ref: "#/components/schemas/BrowserPageLcpEvent"
         - $ref: "#/components/schemas/BrowserPageLayoutSettledEvent"
@@ -3033,6 +3098,7 @@ components:
           page_dom_content_loaded: "#/components/schemas/BrowserPageDomContentLoadedEvent"
           page_load: "#/components/schemas/BrowserPageLoadEvent"
           page_tab_opened: "#/components/schemas/BrowserPageTabOpenedEvent"
+          page_crashed: "#/components/schemas/BrowserPageCrashedEvent"
           page_layout_shift: "#/components/schemas/BrowserPageLayoutShiftEvent"
           page_lcp: "#/components/schemas/BrowserPageLcpEvent"
           page_layout_settled: "#/components/schemas/BrowserPageLayoutSettledEvent"

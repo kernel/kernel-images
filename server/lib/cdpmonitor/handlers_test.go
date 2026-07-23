@@ -334,6 +334,64 @@ func TestTabOpened(t *testing.T) {
 	})
 }
 
+func TestTargetCrashed(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	_, ec, cleanup := startMonitor(t, srv, nil)
+	defer cleanup()
+
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId": "sess-crash",
+			"targetInfo": map[string]any{
+				"targetId": "target-crash", "type": "page",
+				"url": "https://crash.example.com", "attached": true,
+			},
+			"waitingForDebugger": false,
+		},
+	})
+	ec.waitFor(t, "page_tab_opened", 2*time.Second)
+
+	srv.sendToMonitor(t, map[string]any{
+		"method":    "Inspector.targetCrashed",
+		"sessionId": "sess-crash",
+		"params":    map[string]any{},
+	})
+	ev := ec.waitFor(t, "page_crashed", 2*time.Second)
+	assert.Equal(t, events.Page, ev.Category)
+	assert.Equal(t, "Inspector.targetCrashed", *ev.Source.Event)
+	var data map[string]any
+	require.NoError(t, json.Unmarshal(ev.Data, &data))
+	assert.Equal(t, "target-crash", data["target_id"])
+	assert.Equal(t, "page", data["target_type"])
+	assert.Equal(t, "https://crash.example.com", data["url"])
+}
+
+// A crash on a session the monitor never attached to still emits page_crashed,
+// but target_type must stay a valid enum ("other"), not an empty string.
+func TestTargetCrashedUntracked(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	_, ec, cleanup := startMonitor(t, srv, nil)
+	defer cleanup()
+
+	srv.sendToMonitor(t, map[string]any{
+		"method":    "Inspector.targetCrashed",
+		"sessionId": "sess-unknown",
+		"params":    map[string]any{},
+	})
+	ev := ec.waitFor(t, "page_crashed", 2*time.Second)
+	assert.Equal(t, events.Page, ev.Category)
+	var data map[string]any
+	require.NoError(t, json.Unmarshal(ev.Data, &data))
+	assert.Equal(t, "other", data["target_type"])
+	assert.Equal(t, "", data["target_id"])
+	assert.Equal(t, "", data["url"])
+}
+
 func TestBindingAndTimeline(t *testing.T) {
 	withMonitor := func(t *testing.T) (*testServer, *eventCollector) {
 		t.Helper()

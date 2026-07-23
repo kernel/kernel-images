@@ -27,18 +27,22 @@ func (s stubExporter) Export(context.Context, []sdklog.Record) error { return s.
 func (s stubExporter) Shutdown(context.Context) error                { return nil }
 func (s stubExporter) ForceFlush(context.Context) error              { return nil }
 
-// TestLoggingExporter_CountsExportFailures confirms the wrapper surfaces export
-// failures (the reason it exists) and leaves the counter untouched on success.
+// TestLoggingExporter_CountsExportFailures confirms the wrapper records export
+// failures and successfully exported records into the shared metrics.
 func TestLoggingExporter_CountsExportFailures(t *testing.T) {
 	recs := []sdklog.Record{recordOfSize(10)}
-	failing := &loggingExporter{Exporter: stubExporter{err: errors.New("boom")}, log: slog.Default()}
+	fm := &OTLPMetrics{}
+	failing := &loggingExporter{Exporter: stubExporter{err: errors.New("boom")}, log: slog.Default(), metrics: fm}
 	require.Error(t, failing.Export(context.Background(), recs))
 	require.Error(t, failing.Export(context.Background(), recs))
-	assert.Equal(t, uint64(2), failing.failures.Load())
+	assert.Equal(t, uint64(2), fm.Failures())
+	assert.Equal(t, uint64(0), fm.Exported())
 
-	ok := &loggingExporter{Exporter: stubExporter{}, log: slog.Default()}
+	om := &OTLPMetrics{}
+	ok := &loggingExporter{Exporter: stubExporter{}, log: slog.Default(), metrics: om}
 	require.NoError(t, ok.Export(context.Background(), recs))
-	assert.Equal(t, uint64(0), ok.failures.Load())
+	assert.Equal(t, uint64(0), om.Failures())
+	assert.Equal(t, uint64(1), om.Exported())
 }
 
 // TestOTLPStorageWriter_ExportsEvents drives the full sink against a local HTTP
@@ -119,6 +123,71 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	assert.Equal(t, "GET", attrStr["http.request.method"])
 	assert.Equal(t, int64(200), statusAttr)
 	assert.True(t, bodyIsMap, "structured body should arrive as a kvlist")
+}
+
+// TestOTLPExportController_NoReplayOnReenable confirms that toggling export off
+// and back on does not re-export events already sent, and does not export events
+// published while it was off: the rebuilt writer starts from the stream tail.
+func TestOTLPExportController_NoReplayOnReenable(t *testing.T) {
+	var mu sync.Mutex
+	var urls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		var req collogspb.ExportLogsServiceRequest
+		require.NoError(t, proto.Unmarshal(body, &req))
+		mu.Lock()
+		for _, rl := range req.ResourceLogs {
+			for _, sl := range rl.ScopeLogs {
+				for _, lr := range sl.LogRecords {
+					for _, kv := range lr.Attributes {
+						if kv.Key == "url.full" {
+							urls = append(urls, kv.Value.GetStringValue())
+						}
+					}
+				}
+			}
+		}
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	es, err := NewEventStream(EventStreamConfig{RingCapacity: 64})
+	require.NoError(t, err)
+
+	publish := func(url string) {
+		es.Publish(Envelope{Event: Event{Ts: 1, Type: "network_response", Category: Network,
+			Data: []byte(`{"method":"GET","url":"` + url + `","status":200}`)}})
+	}
+
+	ctrl := NewOTLPExportController(es, OTLPConfig{
+		Endpoint: strings.TrimPrefix(srv.URL, "http://"),
+		URLPath:  "/v1/logs",
+		Insecure: true,
+	}, slog.Default())
+
+	// First enable: only events published while on are exported.
+	require.NoError(t, ctrl.Start(context.Background()))
+	publish("https://one")
+	stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	require.NoError(t, ctrl.Stop(stopCtx))
+
+	// Published while off: must never be exported.
+	publish("https://gap")
+
+	// Re-enable: must not replay "one" or "gap", only forward new events.
+	require.NoError(t, ctrl.Start(context.Background()))
+	publish("https://two")
+	stopCtx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	require.NoError(t, ctrl.Stop(stopCtx2))
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.ElementsMatch(t, []string{"https://one", "https://two"}, urls,
+		"each event exported exactly once; no ring replay and no off-window events")
 }
 
 // recordOfSize builds a log record whose body string is n bytes, so

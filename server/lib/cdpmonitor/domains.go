@@ -38,6 +38,11 @@ func (m *Monitor) enableDomains(ctx context.Context, sessionID string, targetTyp
 		m.log.Warn("cdpmonitor: failed to enable CDP domain", "method", "Page.enable", "session", sessionID, "err", err)
 	}
 
+	// Inspector.targetCrashed reports a renderer crash on this session.
+	if _, err := m.send(ctx, "Inspector.enable", nil, sessionID); err != nil && ctx.Err() == nil {
+		m.log.Warn("cdpmonitor: failed to enable CDP domain", "method", "Inspector.enable", "session", sessionID, "err", err)
+	}
+
 	if _, err := m.send(ctx, "Runtime.addBinding", map[string]any{
 		"name": bindingName,
 	}, sessionID); err != nil && ctx.Err() == nil {

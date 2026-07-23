@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"sync/atomic"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
@@ -15,17 +15,23 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.27.0"
 )
 
-// defaultOTLPMaxBatchRecords bounds how many records the SDK buffers per export
+// DefaultOTLPMaxBatchRecords bounds how many records the SDK buffers per export
 // cycle. The per-request byte size is bounded separately by the loggingExporter,
 // which splits an export into sub-requests under maxOTLPExportBytes so a batch of
-// large records can't exceed the target's HTTP body limit.
-const defaultOTLPMaxBatchRecords = 200
+// large records can't exceed the target's HTTP body limit. Exported so the
+// config layer can validate the queue size against it (the queue must hold at
+// least one full batch).
+const DefaultOTLPMaxBatchRecords = 200
 
 // maxOTLPExportBytes caps the estimated payload of a single export request so it
 // stays well under common OTLP/HTTP body limits (collectors default to ~20MiB).
 // A single record is at most ~1MB (the publish-time envelope cap), so every
 // record fits within one sub-request.
 const maxOTLPExportBytes = 4 << 20 // 4 MiB
+
+// otlpForceCloseTimeout bounds the provider shutdown when Stop's read-loop wait
+// has already exhausted its ctx, so a hung flush can't block indefinitely.
+const otlpForceCloseTimeout = 2 * time.Second
 
 // OTLPConfig configures the OTLP telemetry sink.
 type OTLPConfig struct {
@@ -44,31 +50,41 @@ type OTLPConfig struct {
 	ServiceName  string
 	InstanceName string
 	Metro        string
+
+	// Batch tuning. Zero values fall back to the SDK defaults.
+	MaxQueueSize   int
+	ExportInterval time.Duration
+	ExportTimeout  time.Duration
+
+	// Metrics accumulates export counters. When nil a throwaway is used so the
+	// sink still runs; callers that scrape metrics pass a shared instance.
+	Metrics *OTLPMetrics
 }
 
 // loggingExporter wraps the OTLP exporter to (1) split each export into
 // sub-requests under maxOTLPExportBytes so a batch of large records can't exceed
-// the target's HTTP body limit, and (2) surface export-time failures (network /
-// customer-endpoint errors) with a running failure count. Queue drops under
-// sustained backpressure are best-effort (the SDK drops the oldest record,
-// bounded by the batch queue size) and are reported separately by the SDK's
-// global logger, which main wires to our logger so they are observable.
+// the target's HTTP body limit, and (2) record export outcomes into the shared
+// OTLPMetrics (failures and successfully exported records). Queue drops under
+// sustained backpressure are counted separately, via the SDK's global logger,
+// which main wires through NewDropCountingHandler.
 type loggingExporter struct {
 	sdklog.Exporter
-	log      *slog.Logger
-	failures atomic.Uint64
+	log     *slog.Logger
+	metrics *OTLPMetrics
 }
 
 func (e *loggingExporter) Export(ctx context.Context, records []sdklog.Record) error {
 	var firstErr error
 	for _, chunk := range chunkBySize(records, maxOTLPExportBytes) {
 		if err := e.Exporter.Export(ctx, chunk); err != nil {
-			n := e.failures.Add(1)
+			n := e.metrics.failures.Add(1)
 			e.log.Warn("otlp export failed", "records", len(chunk), "err", err, "total_failures", n)
 			if firstErr == nil {
 				firstErr = err
 			}
+			continue
 		}
+		e.metrics.exported.Add(uint64(len(chunk)))
 	}
 	return firstErr
 }
@@ -166,9 +182,23 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 	}
 	res := resource.NewSchemaless(attrs...)
 
+	procOpts := []sdklog.BatchProcessorOption{sdklog.WithExportMaxBatchSize(DefaultOTLPMaxBatchRecords)}
+	if cfg.MaxQueueSize > 0 {
+		procOpts = append(procOpts, sdklog.WithMaxQueueSize(cfg.MaxQueueSize))
+	}
+	if cfg.ExportInterval > 0 {
+		procOpts = append(procOpts, sdklog.WithExportInterval(cfg.ExportInterval))
+	}
+	if cfg.ExportTimeout > 0 {
+		procOpts = append(procOpts, sdklog.WithExportTimeout(cfg.ExportTimeout))
+	}
+	metrics := cfg.Metrics
+	if metrics == nil {
+		metrics = &OTLPMetrics{}
+	}
 	processor := sdklog.NewBatchProcessor(
-		&loggingExporter{Exporter: exporter, log: log},
-		sdklog.WithExportMaxBatchSize(defaultOTLPMaxBatchRecords),
+		&loggingExporter{Exporter: exporter, log: log, metrics: metrics},
+		procOpts...,
 	)
 	provider := sdklog.NewLoggerProvider(
 		sdklog.WithResource(res),
@@ -199,7 +229,9 @@ func (s *otlpStorage) Close(ctx context.Context) error {
 
 // OTLPStorageWriter reads from an EventStream and forwards each event to an
 // OTLP endpoint. Construct with NewOTLPStorageWriter, call Start to begin and
-// Stop to drain and shut down. Mirrors S2StorageWriter.
+// Stop to drain and shut down. Unlike S2StorageWriter it starts from the stream
+// tail at Start, so a writer rebuilt on a runtime export re-enable forwards only
+// new events rather than replaying the retained ring.
 type OTLPStorageWriter struct {
 	es  *EventStream
 	cfg OTLPConfig
@@ -230,7 +262,11 @@ func (w *OTLPStorageWriter) Start(ctx context.Context) error {
 		return err
 	}
 	w.storage = storage
-	w.writer = NewStorageWriter(w.es, storage, w.log)
+	// Start from the current tail, not seq 0: export is toggled at runtime and
+	// the writer is rebuilt on each enable, so reading from the oldest buffered
+	// event would re-export the retained ring every time it is turned back on.
+	// Only events published while export is on are forwarded.
+	w.writer = NewStorageWriterAfter(w.es, storage, w.log, w.es.Seq())
 	w.done = make(chan struct{})
 	w.started = true
 	go func() {
@@ -255,10 +291,73 @@ func (w *OTLPStorageWriter) Stop(ctx context.Context) error {
 	select {
 	case <-w.done:
 	case <-ctx.Done():
+		// The read loop didn't exit in time. Still shut the provider down so its
+		// batch-export goroutines don't leak; detach from the expired ctx to give
+		// Shutdown a brief window to flush.
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), otlpForceCloseTimeout)
+		defer cancel()
+		_ = w.storage.Close(closeCtx)
 		return ctx.Err()
 	}
 	if err := w.writer.Drain(ctx); err != nil {
 		w.log.Warn("otlp storage writer: drain incomplete", "err", err)
 	}
 	return w.storage.Close(ctx)
+}
+
+// OTLPExportController starts and stops OTLP export on demand so it can be
+// toggled at runtime via the telemetry API. The underlying writer is one-shot,
+// so each enable builds a fresh one. Safe for concurrent use.
+type OTLPExportController struct {
+	es  *EventStream
+	cfg OTLPConfig
+	log *slog.Logger
+
+	mu     sync.Mutex
+	writer *OTLPStorageWriter
+	cancel context.CancelFunc
+}
+
+func NewOTLPExportController(es *EventStream, cfg OTLPConfig, log *slog.Logger) *OTLPExportController {
+	return &OTLPExportController{es: es, cfg: cfg, log: log}
+}
+
+// Start begins export, or is a no-op if already running. parent governs the
+// read loop; the controller derives a cancelable child so Stop can halt the
+// loop even when parent is still live (a runtime toggle-off).
+func (c *OTLPExportController) Start(parent context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.writer != nil {
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	w := NewOTLPStorageWriter(c.es, c.cfg, c.log)
+	if err := w.Start(runCtx); err != nil {
+		cancel()
+		return err
+	}
+	c.writer, c.cancel = w, cancel
+	return nil
+}
+
+// Stop drains and shuts down a running exporter, or is a no-op if stopped. ctx
+// bounds shutdown time.
+func (c *OTLPExportController) Stop(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.writer == nil {
+		return nil
+	}
+	c.cancel()
+	err := c.writer.Stop(ctx)
+	c.writer, c.cancel = nil, nil
+	return err
+}
+
+// Running reports whether export is currently active.
+func (c *OTLPExportController) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writer != nil
 }

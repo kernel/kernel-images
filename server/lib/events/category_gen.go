@@ -25,6 +25,7 @@ var categoryByType = map[string]oapi.TelemetryEventCategory{
 	"network_loading_failed":     oapi.TelemetryEventCategory("network"),
 	"network_request":            oapi.TelemetryEventCategory("network"),
 	"network_response":           oapi.TelemetryEventCategory("network"),
+	"page_crashed":               oapi.TelemetryEventCategory("page"),
 	"page_dom_content_loaded":    oapi.TelemetryEventCategory("page"),
 	"page_layout_settled":        oapi.TelemetryEventCategory("page"),
 	"page_layout_shift":          oapi.TelemetryEventCategory("page"),

@@ -15,6 +15,9 @@ type TelemetryConfig struct {
 	// captures events.DefaultCategories. Monitor is added automatically when
 	// any CDP category is present and is not configurable here.
 	Categories []oapi.TelemetryEventCategory
+	// ExportOTLP forwards captured events to the configured OTLP endpoint.
+	// Off by default and independent of what is captured.
+	ExportOTLP bool
 }
 
 // TelemetrySession manages a telemetry session against a shared EventStream.
@@ -31,6 +34,7 @@ type TelemetrySession struct {
 	id              string
 	sessionStartSeq uint64
 	categories      map[oapi.TelemetryEventCategory]struct{}
+	exportOTLP      bool
 	appliedAt       time.Time
 }
 
@@ -68,6 +72,7 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.sessionStartSeq = s.es.Seq()
 	s.appliedAt = time.Now()
 	s.categories = categorySet(cfg.Categories)
+	s.exportOTLP = cfg.ExportOTLP
 }
 
 // publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
@@ -133,7 +138,7 @@ func (s *TelemetrySession) Config() TelemetryConfig {
 	for c := range s.categories {
 		cats = append(cats, c)
 	}
-	return TelemetryConfig{Categories: cats}
+	return TelemetryConfig{Categories: cats, ExportOTLP: s.exportOTLP}
 }
 
 // AppliedAt returns when the current configuration was applied, or the zero
@@ -149,6 +154,7 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.categories = categorySet(cfg.Categories)
+	s.exportOTLP = cfg.ExportOTLP
 }
 
 // CategoryEnabled reports whether events in category c are currently captured.
@@ -177,4 +183,7 @@ func (s *TelemetrySession) Stop() {
 	defer s.mu.Unlock()
 	s.id = ""
 	s.appliedAt = time.Time{}
+	// The session is over, so export is off; keep Config() authoritative for the
+	// desired export state after a clear.
+	s.exportOTLP = false
 }

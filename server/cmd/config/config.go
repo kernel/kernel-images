@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/kelseyhightower/envconfig"
+
+	"github.com/kernel/kernel-images/server/lib/events"
 )
 
 // Config holds all configuration for the server
@@ -60,6 +62,14 @@ type Config struct {
 	OTLPPath        string `envconfig:"BTEL_OTLP_PATH"         default:"/v1/logs"`
 	OTLPInsecure    bool   `envconfig:"BTEL_OTLP_INSECURE"     default:"false"`
 	OTLPServiceName string `envconfig:"BTEL_OTLP_SERVICE_NAME" default:"kernel-browser"`
+	// OTLP batch tuning. Defaults match the OTel SDK's, so leaving these unset
+	// preserves prior behavior. MaxQueueSize is the backpressure buffer: once
+	// full, the oldest records are dropped (see the drop metric). It must be at
+	// least the export batch size (validated); a smaller queue would drop before
+	// a batch fills.
+	OTLPMaxQueueSize   int           `envconfig:"BTEL_OTLP_MAX_QUEUE_SIZE" default:"2048"`
+	OTLPExportInterval time.Duration `envconfig:"BTEL_OTLP_EXPORT_INTERVAL" default:"1s"`
+	OTLPExportTimeout  time.Duration `envconfig:"BTEL_OTLP_EXPORT_TIMEOUT"  default:"30s"`
 	// Platform-injected identity: InstanceName is sent to the relay as x-api-key
 	// and, with MetroName, stamps the OTLP Resource. Same envs the VM already
 	// receives.
@@ -96,6 +106,9 @@ func (c *Config) LogValue() slog.Value {
 		slog.String("otlp_path", c.OTLPPath),
 		slog.Bool("otlp_insecure", c.OTLPInsecure),
 		slog.String("otlp_service_name", c.OTLPServiceName),
+		slog.Int("otlp_max_queue_size", c.OTLPMaxQueueSize),
+		slog.Duration("otlp_export_interval", c.OTLPExportInterval),
+		slog.Duration("otlp_export_timeout", c.OTLPExportTimeout),
 		slog.String("otlp_instance_name", c.InstanceName),
 		slog.String("otlp_metro", c.MetroName),
 	)
@@ -138,6 +151,18 @@ func validate(config *Config) error {
 	}
 	if config.DevToolsProxyAddr == "" {
 		return fmt.Errorf("DEVTOOLS_PROXY_ADDR is required")
+	}
+	// The queue must hold at least one full export batch; a smaller value would
+	// drop records before a batch ever fills. Validated against the batch-size
+	// constant so the two can't drift.
+	if config.OTLPMaxQueueSize < events.DefaultOTLPMaxBatchRecords {
+		return fmt.Errorf("BTEL_OTLP_MAX_QUEUE_SIZE must be at least %d (the export batch size)", events.DefaultOTLPMaxBatchRecords)
+	}
+	if config.OTLPExportInterval <= 0 {
+		return fmt.Errorf("BTEL_OTLP_EXPORT_INTERVAL must be greater than 0")
+	}
+	if config.OTLPExportTimeout <= 0 {
+		return fmt.Errorf("BTEL_OTLP_EXPORT_TIMEOUT must be greater than 0")
 	}
 
 	return nil

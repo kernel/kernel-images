@@ -169,7 +169,37 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		if m.decodeParams(msg.Method, msg.Params, &p) {
 			m.handleDetachedFromTarget(p)
 		}
+	case "Inspector.targetCrashed":
+		// No params; the crashed page is identified by the session it fires on.
+		m.handleTargetCrashed(msg.SessionID)
 	}
+}
+
+// handleTargetCrashed publishes a page_crashed event for a renderer crash on
+// sessionID. The URL comes from the tracked target info; target id and type are
+// stamped into source metadata by publishEvent.
+func (m *Monitor) handleTargetCrashed(sessionID string) {
+	m.sessionsMu.RLock()
+	info, tracked := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
+
+	// A crash on a session we never attached to shouldn't happen, but if it
+	// does, still emit the event (the crash is real) rather than dropping it.
+	// The tracked target info is empty in that case; fall back to "other" so
+	// target_type stays a valid BrowserTargetType rather than an empty string.
+	if !tracked {
+		m.log.Warn("cdpmonitor: target crashed on untracked session", "session", sessionID)
+	}
+	targetType := oapi.BrowserTargetType(info.targetType)
+	if targetType == "" {
+		targetType = oapi.BrowserTargetTypeOther
+	}
+	data, _ := json.Marshal(oapi.BrowserPageCrashedEventData{
+		TargetId:   info.targetID,
+		TargetType: targetType,
+		Url:        info.url,
+	})
+	m.publishEvent(EventPageCrashed, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Inspector.targetCrashed", data, sessionID)
 }
 
 func (m *Monitor) handleConsole(p cdpRuntimeConsoleAPICalledParams, sessionID string) {

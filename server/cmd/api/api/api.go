@@ -30,6 +30,16 @@ type cdpMonitorController interface {
 
 var _ cdpMonitorController = (*cdpmonitor.Monitor)(nil)
 
+// OTLPExporter controls the optional OTLP export sink. Nil when no export
+// endpoint is provisioned on the VM. Implemented by *events.OTLPExportController.
+type OTLPExporter interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Running() bool
+}
+
+var _ OTLPExporter = (*events.OTLPExportController)(nil)
+
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
 	defaultRecorderID string
@@ -89,9 +99,14 @@ type ApiService struct {
 	eventStream      *events.EventStream
 	telemetrySession *telemetry.TelemetrySession
 	cdpMonitor       cdpMonitorController
+	otlpExport       OTLPExporter
 	monitorMu        sync.Mutex
-	lifecycleCtx     context.Context
-	lifecycleCancel  context.CancelFunc
+	// exportMu serializes OTLP export reconciliation independently of monitorMu,
+	// so a toggle-off drain (bounded by otlpStopTimeout) never blocks concurrent
+	// telemetry reads/writes on monitorMu.
+	exportMu        sync.Mutex
+	lifecycleCtx    context.Context
+	lifecycleCancel context.CancelFunc
 }
 
 var _ oapi.StrictServerInterface = (*ApiService)(nil)
@@ -105,6 +120,7 @@ func New(
 	telemetrySession *telemetry.TelemetrySession,
 	eventStream *events.EventStream,
 	displayNum int,
+	otlpExport OTLPExporter,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -138,6 +154,7 @@ func New(
 		eventStream:       eventStream,
 		telemetrySession:  telemetrySession,
 		cdpMonitor:        mon,
+		otlpExport:        otlpExport,
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}, nil
@@ -369,5 +386,7 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.cdpMonitor.Stop()
 	s.telemetrySession.Stop()
 	s.monitorMu.Unlock()
+	// The OTLP export sink is stopped by main after the servers drain, so any
+	// events they emit on the way down are still exported (mirrors s2Writer).
 	return s.recordManager.StopAll(ctx)
 }

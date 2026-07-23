@@ -26,10 +26,19 @@ type StorageWriter struct {
 	appendErrors atomic.Uint64 // total append failures; best-effort, not retried
 }
 
-// NewStorageWriter creates a writer that reads from es starting at seq 0.
+// NewStorageWriter creates a writer that reads from es starting at the oldest
+// buffered event (seq 0).
 func NewStorageWriter(es *EventStream, storage Storage, log *slog.Logger) *StorageWriter {
+	return NewStorageWriterAfter(es, storage, log, 0)
+}
+
+// NewStorageWriterAfter creates a writer that reads from es starting after
+// afterSeq. Pass 0 to start from the oldest buffered event; pass the stream's
+// current seq to start from the tail (only future events), so a writer that is
+// rebuilt on demand does not replay the ring.
+func NewStorageWriterAfter(es *EventStream, storage Storage, log *slog.Logger, afterSeq uint64) *StorageWriter {
 	return &StorageWriter{
-		reader:  es.NewReader(0),
+		reader:  es.NewReader(afterSeq),
 		storage: storage,
 		log:     log,
 	}

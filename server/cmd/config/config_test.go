@@ -34,6 +34,9 @@ func TestLoad(t *testing.T) {
 				DevToolsProxyAddr:        "127.0.0.1:9222",
 				OTLPPath:                 "/v1/logs",
 				OTLPServiceName:          "kernel-browser",
+				OTLPMaxQueueSize:         2048,
+				OTLPExportInterval:       time.Second,
+				OTLPExportTimeout:        30 * time.Second,
 			},
 		},
 		{
@@ -70,6 +73,9 @@ func TestLoad(t *testing.T) {
 				DevToolsProxyAddr:        "127.0.0.1:9876",
 				OTLPPath:                 "/v1/logs",
 				OTLPServiceName:          "kernel-browser",
+				OTLPMaxQueueSize:         2048,
+				OTLPExportInterval:       time.Second,
+				OTLPExportTimeout:        30 * time.Second,
 			},
 		},
 		{
@@ -95,6 +101,9 @@ func TestLoad(t *testing.T) {
 				DevToolsProxyAddr:        "10.0.0.1:1234",
 				OTLPPath:                 "/v1/logs",
 				OTLPServiceName:          "kernel-browser",
+				OTLPMaxQueueSize:         2048,
+				OTLPExportInterval:       time.Second,
+				OTLPExportTimeout:        30 * time.Second,
 			},
 		},
 		{
@@ -115,6 +124,20 @@ func TestLoad(t *testing.T) {
 			name: "max size too big",
 			env: map[string]string{
 				"MAX_SIZE_MB": "10001",
+			},
+			wantErr: true,
+		},
+		{
+			name: "non-positive otlp queue size",
+			env: map[string]string{
+				"BTEL_OTLP_MAX_QUEUE_SIZE": "0",
+			},
+			wantErr: true,
+		},
+		{
+			name: "otlp queue size below the export batch size",
+			env: map[string]string{
+				"BTEL_OTLP_MAX_QUEUE_SIZE": "100",
 			},
 			wantErr: true,
 		},

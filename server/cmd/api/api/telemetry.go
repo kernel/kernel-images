@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"time"
 
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/nrednav/cuid2"
@@ -11,6 +12,9 @@ import (
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
 )
+
+// otlpStopTimeout bounds how long a runtime export toggle-off waits to drain.
+const otlpStopTimeout = 5 * time.Second
 
 // GetTelemetry handles GET /telemetry.
 // Returns the current telemetry configuration. Returns 404 if telemetry is not configured.
@@ -28,6 +32,11 @@ func (s *ApiService) GetTelemetry(_ context.Context, _ oapi.GetTelemetryRequestO
 // Sets the telemetry configuration. Returns 201 if not previously configured, 200 if it was.
 // Setting every configurable category to enabled:false clears the configuration (200).
 func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequestObject) (oapi.PutTelemetryResponseObject, error) {
+	// Reconcile export after monitorMu is released (defers run LIFO), so the
+	// toggle-off drain does not hold the API-wide lock. It reads the committed
+	// desired state from the session, so it is correct regardless of how this
+	// request exits.
+	defer s.reconcileExport(ctx)
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
@@ -73,6 +82,8 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 // Partially updates the telemetry configuration. Returns 404 if not configured.
 // Setting every configurable category to enabled:false clears the configuration (200).
 func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetryRequestObject) (oapi.PatchTelemetryResponseObject, error) {
+	// See PutTelemetry: reconcile export after monitorMu is released.
+	defer s.reconcileExport(ctx)
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 
@@ -80,12 +91,14 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not configured"}}, nil
 	}
 
-	if req.Body == nil || req.Body.Browser == nil {
+	// Nothing to merge when neither the category block nor the export toggle is
+	// present; skip the reconcile and echo current state, as before.
+	if req.Body == nil || (req.Body.Browser == nil && req.Body.Export == nil) {
 		return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
 
 	prev := s.telemetrySession.Config()
-	cfg, allDisabled := mergeTelemetryConfig(prev, req.Body.Browser)
+	cfg, allDisabled := mergeTelemetryConfig(prev, req.Body)
 	if allDisabled {
 		s.telemetrySession.Stop()
 		s.stopTelemetryState()
@@ -139,8 +152,42 @@ func (s *ApiService) rollbackTelemetry(wasActive bool, prev telemetry.TelemetryC
 	_ = s.reconcileTelemetryState(prev.Categories)
 }
 
+// reconcileExport starts or stops the OTLP export sink to match the committed
+// telemetry config. It reads the desired state from the session rather than a
+// parameter, and holds exportMu (not monitorMu) so the toggle-off drain does
+// not block concurrent telemetry reads/writes; whichever call wins exportMu
+// last observes the final committed state, so the sink converges. Callers run
+// it after releasing monitorMu (via defer). Export is best-effort: a failed
+// start is logged, never surfaced. No-op when no export destination is
+// configured.
+func (s *ApiService) reconcileExport(ctx context.Context) {
+	s.exportMu.Lock()
+	defer s.exportMu.Unlock()
+
+	enabled := s.telemetrySession.Config().ExportOTLP
+	if s.otlpExport == nil {
+		if enabled {
+			logger.FromContext(ctx).Warn("otlp export enabled but no destination configured; export inactive")
+		}
+		return
+	}
+	switch {
+	case enabled && !s.otlpExport.Running():
+		// Root the export on the app lifecycle, not this request; only its logs
+		// carry the request context.
+		if err := s.otlpExport.Start(s.lifecycleCtx); err != nil {
+			logger.FromContext(ctx).Error("otlp export failed to start", "err", err)
+		}
+	case !enabled && s.otlpExport.Running():
+		// Draining must outlive the request, so bound it independently.
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), otlpStopTimeout)
+		defer cancel()
+		_ = s.otlpExport.Stop(stopCtx)
+	}
+}
+
 // stopTelemetryState tears down the collector and middleware after a session is
-// cleared.
+// cleared. Export is reconciled separately, after monitorMu is released.
 func (s *ApiService) stopTelemetryState() {
 	if s.cdpMonitor.IsRunning() {
 		s.cdpMonitor.Stop()
@@ -203,11 +250,12 @@ func containsCategory(cats []oapi.TelemetryEventCategory, target oapi.TelemetryE
 // the categories explicitly enabled there are captured (anything omitted is off). Returns the
 // config, whether the result is empty (stop signal), and any error.
 func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool, error) {
+	exportOTLP := exportOTLPFromOAPI(cfg)
 	if cfg == nil || cfg.Browser == nil {
 		// No per-category settings: resolve to the explicit default set so the
 		// effective categories are known before the collector is reconciled.
 		cats := append([]oapi.TelemetryEventCategory(nil), events.DefaultCategories...)
-		return telemetry.TelemetryConfig{Categories: cats}, false, nil
+		return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP}, false, nil
 	}
 
 	cats := make([]oapi.TelemetryEventCategory, 0, len(events.UserCategories))
@@ -219,13 +267,22 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 	if len(cats) == 0 {
 		return telemetry.TelemetryConfig{}, true, nil
 	}
-	return telemetry.TelemetryConfig{Categories: cats}, false, nil
+	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP}, false, nil
+}
+
+// exportOTLPFromOAPI reads the OTLP export toggle from a config, defaulting to
+// false (off) when the export block is omitted.
+func exportOTLPFromOAPI(cfg *oapi.BrowserTelemetryConfig) bool {
+	if cfg != nil && cfg.Export != nil && cfg.Export.Otlp != nil && cfg.Export.Otlp.Enabled != nil {
+		return *cfg.Export.Otlp.Enabled
+	}
+	return false
 }
 
 // mergeTelemetryConfig applies patch overrides onto current, returning the merged config and
 // whether every configurable category ended up disabled (stop signal). Only categories with an
 // explicit Enabled field in patch are changed; omitted categories keep their current state.
-func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.BrowserTelemetryCategoriesConfig) (telemetry.TelemetryConfig, bool) {
+func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool) {
 	userCat := categorySetOf(events.UserCategories)
 	active := make(map[oapi.TelemetryEventCategory]struct{}, len(current.Categories))
 	for _, c := range current.Categories {
@@ -234,15 +291,23 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		}
 	}
 
-	for _, f := range categoryFields(patch) {
-		if f.config == nil || f.config.Enabled == nil {
-			continue // not mentioned in patch — keep current state
+	if patch.Browser != nil {
+		for _, f := range categoryFields(patch.Browser) {
+			if f.config == nil || f.config.Enabled == nil {
+				continue // not mentioned in patch; keep current state
+			}
+			if *f.config.Enabled {
+				active[f.category] = struct{}{}
+			} else {
+				delete(active, f.category)
+			}
 		}
-		if *f.config.Enabled {
-			active[f.category] = struct{}{}
-		} else {
-			delete(active, f.category)
-		}
+	}
+
+	// Export follows the same patch semantics: an omitted toggle is unchanged.
+	exportOTLP := current.ExportOTLP
+	if patch.Export != nil && patch.Export.Otlp != nil && patch.Export.Otlp.Enabled != nil {
+		exportOTLP = *patch.Export.Otlp.Enabled
 	}
 
 	if len(active) == 0 {
@@ -252,7 +317,7 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	for c := range active {
 		cats = append(cats, c)
 	}
-	return telemetry.TelemetryConfig{Categories: cats}, false
+	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP}, false
 }
 
 // disabledConfig returns a BrowserTelemetryConfig with every configurable category explicitly disabled.
@@ -272,6 +337,14 @@ func disabledConfig() oapi.BrowserTelemetryConfig {
 			Screenshot:  off(),
 			Captcha:     off(),
 		},
+		Export: exportConfigToOAPI(false),
+	}
+}
+
+// exportConfigToOAPI renders the OTLP export toggle for API responses.
+func exportConfigToOAPI(enabled bool) *oapi.BrowserTelemetryExportConfig {
+	return &oapi.BrowserTelemetryExportConfig{
+		Otlp: &oapi.BrowserTelemetryOTLPExportConfig{Enabled: lo.ToPtr(enabled)},
 	}
 }
 
@@ -295,5 +368,6 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 			Screenshot:  enabled(events.Screenshot),
 			Captcha:     enabled(events.Captcha),
 		},
+		Export: exportConfigToOAPI(cfg.ExportOTLP),
 	}
 }
