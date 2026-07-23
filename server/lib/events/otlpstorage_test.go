@@ -51,7 +51,7 @@ func TestLoggingExporter_CountsExportFailures(t *testing.T) {
 // that an excluded category (screenshot) never reaches the receiver.
 func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	var mu sync.Mutex
-	var paths, auths, eventNames []string
+	var paths, apiKeys, eventNames []string
 	attrStr := map[string]string{}
 	var statusAttr int64
 	var bodyIsMap bool
@@ -62,7 +62,7 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 		require.NoError(t, proto.Unmarshal(body, &req))
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
-		auths = append(auths, r.Header.Get("Authorization"))
+		apiKeys = append(apiKeys, r.Header.Get("x-api-key"))
 		for _, rl := range req.ResourceLogs {
 			for _, sl := range rl.ScopeLogs {
 				for _, lr := range sl.LogRecords {
@@ -92,7 +92,7 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 		Endpoint:     strings.TrimPrefix(srv.URL, "http://"),
 		URLPath:      "/otlp-relay/v1/logs",
 		Insecure:     true,
-		Headers:      map[string]string{"Authorization": "Bearer test-jwt"},
+		Headers:      map[string]string{"x-api-key": "browser-1"},
 		ServiceName:  "kernel-browser",
 		InstanceName: "browser-1",
 		Metro:        "dev-iad",
@@ -115,7 +115,8 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	defer mu.Unlock()
 	require.NotEmpty(t, paths, "expected at least one export request")
 	assert.Equal(t, "/otlp-relay/v1/logs", paths[0])
-	assert.Equal(t, "Bearer test-jwt", auths[0])
+	// The relay authenticates the VM by instance name sent as x-api-key.
+	assert.Equal(t, "browser-1", apiKeys[0])
 	// The excluded screenshot must not reach the receiver; only the network event does.
 	assert.Equal(t, []string{"network_response"}, eventNames)
 	// Promoted attributes and the structured body survive the SDK to protobuf translation.
