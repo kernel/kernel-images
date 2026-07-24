@@ -71,12 +71,12 @@ type FFmpegRecorder struct {
 	// chapter offsets to the media timeline; zero means never detected and
 	// callers fall back to startTime (stamped before the process spawned).
 	captureAnchor time.Time
-	ffmpegErr  error
-	exitCode   int
-	exited     chan struct{}
-	deleted    bool
-	markers    []Marker
-	stz        *scaletozero.Oncer
+	ffmpegErr     error
+	exitCode      int
+	exited        chan struct{}
+	deleted       bool
+	markers       []Marker
+	stz           *scaletozero.Oncer
 
 	// flight coordinates concurrent operations using different keys:
 	// - "stop": prevents multiple SIGINTs from being sent to ffmpeg
@@ -426,6 +426,9 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		binaryPath := fr.binaryPath
 		markers := fr.markers
 		anchor := fr.anchorLocked()
+		if !fr.endTime.IsZero() && !anchor.Before(fr.endTime) {
+			anchor = fr.startTime
+		}
 		durationMs := fr.endTime.Sub(anchor).Milliseconds()
 		fr.mu.Unlock()
 
@@ -511,7 +514,7 @@ func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
 	fr.mu.Lock()
 	defer fr.mu.Unlock()
 
-	if fr.cmd == nil || fr.exitCode >= exitCodeProcessDoneMinValue {
+	if !fr.canMarkLocked() {
 		return "", 0, ErrNotRecording
 	}
 
@@ -523,6 +526,45 @@ func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
 	now := time.Now()
 	fr.markers = append(fr.markers, Marker{Name: name, At: now})
 	return name, now.Sub(fr.anchorLocked()).Milliseconds(), nil
+}
+
+// canMarkLocked reports whether ffmpeg is still actively recording. It is
+// stricter than the exitCode sentinel check alone because the process can exit
+// before the wait goroutine updates exitCode/endTime.
+func (fr *FFmpegRecorder) canMarkLocked() bool {
+	if fr.cmd == nil || fr.cmd.Process == nil || fr.exitCode >= exitCodeProcessDoneMinValue {
+		return false
+	}
+	if fr.cmd.ProcessState != nil && fr.cmd.ProcessState.Exited() {
+		return false
+	}
+	return processRunning(fr.cmd.Process.Pid)
+}
+
+// processRunning reports whether pid is still alive. On Linux it treats zombie
+// tasks as not running so callers can reject work after capture has ended.
+func processRunning(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	if runtime.GOOS == "linux" {
+		statPath := fmt.Sprintf("/proc/%d/stat", pid)
+		if b, err := os.ReadFile(statPath); err == nil {
+			stat := string(b)
+			if end := strings.LastIndexByte(stat, ')'); end != -1 && end+2 < len(stat) {
+				state := stat[end+2]
+				if state == 'Z' || state == 'X' || state == 'x' {
+					return false
+				}
+				return true
+			}
+		} else if os.IsNotExist(err) {
+			return false
+		}
+	}
+	// Fallback for non-Linux or /proc parsing failures.
+	err := syscall.Kill(pid, 0)
+	return err == nil || !errors.Is(err, syscall.ESRCH)
 }
 
 // watchCaptureStart stamps captureAnchor with the moment ffmpeg writes its
@@ -542,7 +584,15 @@ func (fr *FFmpegRecorder) watchCaptureStart() {
 			if info, err := os.Stat(fr.outputPath); err == nil && info.Size() > 0 {
 				now := time.Now()
 				fr.mu.Lock()
-				fr.captureAnchor = now
+				// If ffmpeg already exited, avoid stamping a late anchor after
+				// endTime; finalize then falls back to startTime.
+				if fr.cmd != nil && fr.exitCode >= exitCodeProcessDoneMinValue {
+					fr.mu.Unlock()
+					return
+				}
+				if fr.captureAnchor.IsZero() {
+					fr.captureAnchor = now
+				}
 				fr.mu.Unlock()
 				return
 			}

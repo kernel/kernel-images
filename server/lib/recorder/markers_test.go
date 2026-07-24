@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -171,6 +172,27 @@ func TestMark_NotRecording(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNotRecording)
 }
 
+func TestMark_RejectsWhenProcessExitedBeforeWait(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux /proc state inspection")
+	}
+
+	cmd := exec.Command("sh", "-c", "exit 0")
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { _ = cmd.Wait() })
+	require.Eventually(t, func() bool {
+		return !processRunning(cmd.Process.Pid)
+	}, 2*time.Second, 10*time.Millisecond, "process should have exited before mark attempt")
+
+	rec := &FFmpegRecorder{
+		id:       "mark-exited",
+		cmd:      cmd,
+		exitCode: exitCodeInitValue,
+	}
+	_, _, err := rec.Mark("late")
+	assert.ErrorIs(t, err, ErrNotRecording)
+}
+
 func TestMark_AppendsAndReturnsOffset(t *testing.T) {
 	tempDir := t.TempDir()
 	rec := &FFmpegRecorder{
@@ -306,6 +328,38 @@ func TestFinalize_RetriesWithoutChaptersOnRemuxFailure(t *testing.T) {
 	assert.True(t, os.IsNotExist(statErr), "metadata temp file should be removed")
 }
 
+func TestFinalize_UsesStartAnchorWhenCaptureAnchorIsAfterEnd(t *testing.T) {
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "rec.mp4")
+	require.NoError(t, os.WriteFile(outputPath, []byte("recording"), 0o644))
+
+	argsLog := filepath.Join(tempDir, "args.log")
+	t.Setenv("FAKE_FFMPEG_ARGS_LOG", argsLog)
+	script := "#!/usr/bin/env bash\n" +
+		"printf '%s\\n' \"$@\" > \"$FAKE_FFMPEG_ARGS_LOG\"\n" +
+		"printf remuxed > \"${@: -1}\"\n"
+	bin := filepath.Join(tempDir, "fake_ffmpeg.sh")
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+
+	start := time.Now()
+	rec := &FFmpegRecorder{
+		id:            "anchor-after-end",
+		binaryPath:    bin,
+		outputPath:    outputPath,
+		startTime:     start,
+		endTime:       start.Add(4 * time.Second),
+		captureAnchor: start.Add(5 * time.Second), // late/stale anchor should be ignored at finalize.
+		exitCode:      0,
+		markers:       []Marker{{Name: "m", At: start.Add(1 * time.Second)}},
+		stz:           scaletozero.NewOncer(scaletozero.NewNoopController()),
+	}
+	require.NoError(t, rec.finalizeRecording(context.Background()))
+
+	args, err := os.ReadFile(argsLog)
+	require.NoError(t, err)
+	assert.Contains(t, string(args), "-map_chapters", "chapter metadata should still be injected")
+}
+
 func TestMark_NameLimitCountsCharactersNotBytes(t *testing.T) {
 	tempDir := t.TempDir()
 	rec := &FFmpegRecorder{
@@ -373,7 +427,7 @@ func TestMark_OffsetUsesCaptureAnchor(t *testing.T) {
 	start := time.Now()
 	rec := &FFmpegRecorder{
 		id:            "anchor-offset",
-		cmd:           &exec.Cmd{},
+		cmd:           &exec.Cmd{Process: &os.Process{Pid: os.Getpid()}},
 		exitCode:      exitCodeInitValue,
 		startTime:     start.Add(-10 * time.Second),
 		captureAnchor: start.Add(-1 * time.Second),
