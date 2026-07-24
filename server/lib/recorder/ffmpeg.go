@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
@@ -49,8 +50,8 @@ var ErrNotRecording = errors.New("no active recording")
 // long. Callers can use errors.Is to surface a 400.
 var ErrInvalidMarkerName = errors.New("invalid marker name")
 
-// maxMarkerNameLen bounds marker names so a chapter title can't be abused to
-// bloat the metadata file.
+// maxMarkerNameLen bounds marker names (in characters) so a chapter title
+// can't be abused to bloat the metadata file.
 const maxMarkerNameLen = 200
 
 // FFmpegRecorder encapsulates an FFmpeg recording session with platform-specific screen capture.
@@ -65,6 +66,11 @@ type FFmpegRecorder struct {
 	outputPath string
 	startTime  time.Time
 	endTime    time.Time
+	// captureAnchor is the moment ffmpeg wrote its first output bytes, i.e.
+	// when the capture pipeline actually started producing media. It anchors
+	// chapter offsets to the media timeline; zero means never detected and
+	// callers fall back to startTime (stamped before the process spawned).
+	captureAnchor time.Time
 	ffmpegErr  error
 	exitCode   int
 	exited     chan struct{}
@@ -269,6 +275,7 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	fr.ffmpegErr = nil
 	fr.exitCode = exitCodeInitValue
 	fr.startTime = time.Now()
+	fr.captureAnchor = time.Time{}
 	fr.exited = make(chan struct{})
 
 	args, err := ffmpegArgs(fr.params, fr.outputPath)
@@ -302,6 +309,10 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 
 	// Launch background waiter to capture process completion.
 	go fr.waitForCommand(ctx)
+
+	// Watch for ffmpeg's first output bytes to anchor chapter offsets to the
+	// media timeline rather than the pre-spawn startTime.
+	go fr.watchCaptureStart()
 
 	// Check for startup errors before returning
 	if err := waitForChan(ctx, 250*time.Millisecond, fr.exited); err == nil {
@@ -408,8 +419,8 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		outputPath := fr.outputPath
 		binaryPath := fr.binaryPath
 		markers := fr.markers
-		startTime := fr.startTime
-		durationMs := fr.endTime.Sub(fr.startTime).Milliseconds()
+		anchor := fr.anchorLocked()
+		durationMs := fr.endTime.Sub(anchor).Milliseconds()
 		fr.mu.Unlock()
 
 		// Check if the recording file exists
@@ -430,7 +441,7 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		// or corrupt the recording: fall back to the plain no-chapter remux.
 		metaPath := ""
 		if len(markers) > 0 {
-			path, ok, err := buildChapterMetadata(outputPath, markers, startTime, durationMs)
+			path, ok, err := buildChapterMetadata(outputPath, markers, anchor, durationMs)
 			if err != nil {
 				log.Warn("failed to build chapter metadata, finalizing without chapters", "err", err)
 			} else if ok {
@@ -484,9 +495,9 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 
 // Mark records a named marker at the current time. It returns the stored
 // (trimmed) marker name and the offset from the recording start in
-// milliseconds. The offset is provisional: it is measured against startTime at
-// mark time, while the authoritative value is the chapter start computed at
-// finalize.
+// milliseconds. The offset is provisional: it is measured against the capture
+// anchor at mark time, while the authoritative value is the chapter start
+// computed at finalize.
 //
 // Returns ErrNotRecording if the recording isn't actively running and
 // ErrInvalidMarkerName if the name is empty or exceeds maxMarkerNameLen.
@@ -499,13 +510,47 @@ func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
 	}
 
 	name = strings.TrimSpace(name)
-	if name == "" || len(name) > maxMarkerNameLen {
+	if name == "" || utf8.RuneCountInString(name) > maxMarkerNameLen {
 		return "", 0, ErrInvalidMarkerName
 	}
 
 	now := time.Now()
 	fr.markers = append(fr.markers, Marker{Name: name, At: now})
-	return name, now.Sub(fr.startTime).Milliseconds(), nil
+	return name, now.Sub(fr.anchorLocked()).Milliseconds(), nil
+}
+
+// watchCaptureStart stamps captureAnchor with the moment ffmpeg writes its
+// first output bytes. The muxer only writes them once the capture pipeline is
+// fully initialized (input opened, encoder ready, first frame in flight), so
+// this tracks media t=0 far more closely than startTime, which is stamped
+// before the process is even spawned. If no bytes ever appear the anchor
+// stays zero and callers fall back to startTime.
+func (fr *FFmpegRecorder) watchCaptureStart() {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-fr.exited:
+			return
+		case <-ticker.C:
+			if info, err := os.Stat(fr.outputPath); err == nil && info.Size() > 0 {
+				now := time.Now()
+				fr.mu.Lock()
+				fr.captureAnchor = now
+				fr.mu.Unlock()
+				return
+			}
+		}
+	}
+}
+
+// anchorLocked returns the reference time chapter offsets are measured from:
+// captureAnchor when detected, otherwise startTime. Callers must hold fr.mu.
+func (fr *FFmpegRecorder) anchorLocked() time.Time {
+	if !fr.captureAnchor.IsZero() {
+		return fr.captureAnchor
+	}
+	return fr.startTime
 }
 
 // remuxArgs assembles the finalize remux arguments: copy streams without

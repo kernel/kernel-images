@@ -3,6 +3,7 @@ package recorder
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -276,4 +277,82 @@ func TestFinalize_RetriesWithoutChaptersOnRemuxFailure(t *testing.T) {
 
 	_, statErr := os.Stat(outputPath + ".ffmeta")
 	assert.True(t, os.IsNotExist(statErr), "metadata temp file should be removed")
+}
+
+func TestMark_NameLimitCountsCharactersNotBytes(t *testing.T) {
+	tempDir := t.TempDir()
+	rec := &FFmpegRecorder{
+		id:         "mark-runes",
+		binaryPath: mockBin,
+		params:     defaultParams(tempDir),
+		outputPath: filepath.Join(tempDir, "mark-runes.mp4"),
+		stz:        scaletozero.NewOncer(scaletozero.NewNoopController()),
+	}
+	require.NoError(t, rec.Start(t.Context()))
+	t.Cleanup(func() { _ = rec.ForceStop(t.Context()) })
+
+	// 200 multibyte characters (600 bytes) is within the 200-character limit.
+	name, _, err := rec.Mark(strings.Repeat("日", maxMarkerNameLen))
+	require.NoError(t, err)
+	assert.Equal(t, strings.Repeat("日", maxMarkerNameLen), name)
+
+	// 201 characters is over the limit, multibyte or not.
+	_, _, err = rec.Mark(strings.Repeat("日", maxMarkerNameLen+1))
+	assert.ErrorIs(t, err, ErrInvalidMarkerName)
+}
+
+func TestWatchCaptureStart_AnchorsToFirstOutputBytes(t *testing.T) {
+	rec := &FFmpegRecorder{
+		id:         "anchor-watch",
+		outputPath: filepath.Join(t.TempDir(), "anchor-watch.mp4"),
+		exited:     make(chan struct{}),
+	}
+	defer close(rec.exited)
+	go rec.watchCaptureStart()
+
+	// No output yet: the anchor must stay zero.
+	time.Sleep(50 * time.Millisecond)
+	rec.mu.Lock()
+	assert.True(t, rec.captureAnchor.IsZero(), "anchor set before any output bytes")
+	rec.mu.Unlock()
+
+	// First bytes appear: the anchor is stamped at/after the write.
+	beforeWrite := time.Now()
+	require.NoError(t, os.WriteFile(rec.outputPath, []byte("ftyp"), 0o644))
+	require.Eventually(t, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return !rec.captureAnchor.IsZero()
+	}, 2*time.Second, 5*time.Millisecond)
+	rec.mu.Lock()
+	assert.False(t, rec.captureAnchor.Before(beforeWrite), "anchor stamped at/after first write")
+	rec.mu.Unlock()
+}
+
+func TestWatchCaptureStart_StopsOnExitWithoutOutput(t *testing.T) {
+	rec := &FFmpegRecorder{
+		id:         "anchor-exit",
+		outputPath: filepath.Join(t.TempDir(), "never.mp4"),
+		exited:     make(chan struct{}),
+	}
+	close(rec.exited)
+	rec.watchCaptureStart() // must return promptly instead of polling forever
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.True(t, rec.captureAnchor.IsZero())
+}
+
+func TestMark_OffsetUsesCaptureAnchor(t *testing.T) {
+	start := time.Now()
+	rec := &FFmpegRecorder{
+		id:            "anchor-offset",
+		cmd:           &exec.Cmd{},
+		exitCode:      exitCodeInitValue,
+		startTime:     start.Add(-10 * time.Second),
+		captureAnchor: start.Add(-1 * time.Second),
+	}
+	_, offset, err := rec.Mark("m")
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, offset, int64(1000))
+	assert.Less(t, offset, int64(5000), "offset measured from captureAnchor, not startTime")
 }
