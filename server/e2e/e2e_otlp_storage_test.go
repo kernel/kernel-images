@@ -247,4 +247,7 @@ func TestOTLPExportForkIdentityRefresh(t *testing.T) {
 	for _, a := range auths {
 		assert.Contains(t, []string{"", "Bearer fresh-fork-jwt"}, a, "only empty or the fresh fork JWT expected")
 	}
+	// The resource identity is also refreshed from the applied payload, not left
+	// at the empty boot INST_NAME.
+	assert.Contains(t, instanceName, "browser-fork-e2e", "resource instance_name should come from the applied fork payload")
 }

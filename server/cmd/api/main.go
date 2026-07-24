@@ -141,10 +141,14 @@ func main() {
 	var otlpMetrics *events.OTLPMetrics
 	if config.OTLPEndpoint != "" {
 		// The relay authenticates the VM by its instance JWT, sent as a bearer
-		// token. The credential is resolved per request: on a forked VM the boot
-		// env JWT is stale, so it is re-read from the applied fork-identity
-		// payload (see instanceJWTProvider).
-		jwtProvider := newInstanceJWTProvider(config.InstanceJWT)
+		// token. Identity (JWT + resource attrs) is resolved dynamically: on a
+		// forked VM the boot env is stale, so it is re-read from the applied
+		// fork-identity payload (see otlpIdentityProvider).
+		identity := newOTLPIdentityProvider(otlpIdentity{
+			jwt:          config.InstanceJWT,
+			instanceName: config.InstanceName,
+			metro:        config.MetroName,
+		}, slogger)
 		slogger.Info("OTLP export available", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		// The OTel log SDK reports batch-queue drops through its global logger at
 		// logr V(1), which slog renders just below Info, so a default Info handler
@@ -154,17 +158,17 @@ func main() {
 		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
 		otel.SetLogger(logr.FromSlogHandler(events.NewDropCountingHandler(otelDiag, otlpMetrics)))
 		otlpExporter = events.NewOTLPExportController(eventStream, events.OTLPConfig{
-			Endpoint:       config.OTLPEndpoint,
-			URLPath:        config.OTLPPath,
-			Insecure:       config.OTLPInsecure,
-			AuthTokenFunc:  jwtProvider.Token,
-			ServiceName:    config.OTLPServiceName,
-			InstanceName:   config.InstanceName,
-			Metro:          config.MetroName,
-			MaxQueueSize:   config.OTLPMaxQueueSize,
-			ExportInterval: config.OTLPExportInterval,
-			ExportTimeout:  config.OTLPExportTimeout,
-			Metrics:        otlpMetrics,
+			Endpoint:         config.OTLPEndpoint,
+			URLPath:          config.OTLPPath,
+			Insecure:         config.OTLPInsecure,
+			AuthTokenFunc:    identity.Token,
+			ServiceName:      config.OTLPServiceName,
+			InstanceNameFunc: identity.InstanceName,
+			MetroFunc:        identity.Metro,
+			MaxQueueSize:     config.OTLPMaxQueueSize,
+			ExportInterval:   config.OTLPExportInterval,
+			ExportTimeout:    config.OTLPExportTimeout,
+			Metrics:          otlpMetrics,
 		}, slogger)
 	}
 

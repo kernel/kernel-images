@@ -57,6 +57,14 @@ type OTLPConfig struct {
 	ServiceName  string
 	InstanceName string
 	Metro        string
+	// InstanceNameFunc and MetroFunc, when set, resolve the resource identity at
+	// exporter-build time and take precedence over the static InstanceName/Metro.
+	// Like AuthTokenFunc, this lets a forked VM stamp the fresh identity from its
+	// applied fork-identity payload instead of stale boot env. Since export is
+	// started per session after identity applies, build time sees the applied
+	// values.
+	InstanceNameFunc func() string
+	MetroFunc        func() string
 
 	// Batch tuning. Zero values fall back to the SDK defaults.
 	MaxQueueSize   int
@@ -204,12 +212,20 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 		return nil, fmt.Errorf("otlp storage: new exporter: %w", err)
 	}
 
-	attrs := []attribute.KeyValue{semconv.ServiceName(cfg.ServiceName)}
-	if cfg.InstanceName != "" {
-		attrs = append(attrs, attribute.String("kernel.instance_name", cfg.InstanceName))
+	instanceName := cfg.InstanceName
+	if cfg.InstanceNameFunc != nil {
+		instanceName = cfg.InstanceNameFunc()
 	}
-	if cfg.Metro != "" {
-		attrs = append(attrs, attribute.String("kernel.metro", cfg.Metro))
+	metro := cfg.Metro
+	if cfg.MetroFunc != nil {
+		metro = cfg.MetroFunc()
+	}
+	attrs := []attribute.KeyValue{semconv.ServiceName(cfg.ServiceName)}
+	if instanceName != "" {
+		attrs = append(attrs, attribute.String("kernel.instance_name", instanceName))
+	}
+	if metro != "" {
+		attrs = append(attrs, attribute.String("kernel.metro", metro))
 	}
 	res := resource.NewSchemaless(attrs...)
 
