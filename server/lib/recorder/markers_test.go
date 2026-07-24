@@ -106,12 +106,11 @@ func TestBuildChapterMetadata_EscapesSpecialChars(t *testing.T) {
 	assert.Contains(t, readMeta(t, path), `title=a\=b\;c\#d\\e`)
 }
 
-func TestBuildChapterMetadata_DropsMarkersAtOrPastDuration(t *testing.T) {
+func TestBuildChapterMetadata_ClampsMarkersPastDurationToEnd(t *testing.T) {
 	start := time.Unix(1000, 0)
 	out := filepath.Join(t.TempDir(), "rec.mp4")
 	markers := []Marker{
 		{Name: "kept", At: start.Add(1 * time.Second)},
-		{Name: "at-duration", At: start.Add(4 * time.Second)},
 		{Name: "past-duration", At: start.Add(9 * time.Second)},
 	}
 
@@ -119,18 +118,27 @@ func TestBuildChapterMetadata_DropsMarkersAtOrPastDuration(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
+	// A marker timestamped past the media end (e.g. marked during the stop
+	// drain) is clamped to a zero-length chapter at the end rather than
+	// silently lost: Mark already returned 201 for it.
 	meta := readMeta(t, path)
-	assert.Contains(t, meta, "title=kept")
-	assert.NotContains(t, meta, "at-duration")
-	assert.NotContains(t, meta, "past-duration")
-	// Sentinel + kept marker; the kept chapter still ends at durationMs.
-	assert.Equal(t, 2, strings.Count(meta, "[CHAPTER]"))
 	assert.Contains(t, meta, "START=1000\nEND=4000\ntitle=kept")
+	assert.Contains(t, meta, "START=4000\nEND=4000\ntitle=past-duration")
+	// Sentinel + the two markers.
+	assert.Equal(t, 3, strings.Count(meta, "[CHAPTER]"))
+}
 
-	// All markers at/past the duration leave nothing usable: fall back.
-	_, ok, err = buildChapterMetadata(out, markers[1:], start, 4000)
-	require.NoError(t, err)
-	assert.False(t, ok)
+func TestBuildChapterMetadata_NonPositiveDurationFallsBack(t *testing.T) {
+	start := time.Unix(1000, 0)
+	out := filepath.Join(t.TempDir(), "rec.mp4")
+	markers := []Marker{{Name: "m", At: start.Add(1 * time.Second)}}
+
+	for _, durationMs := range []int64{0, -250} {
+		path, ok, err := buildChapterMetadata(out, markers, start, durationMs)
+		require.NoError(t, err)
+		assert.False(t, ok, "duration %d must fall back to the plain remux", durationMs)
+		assert.Empty(t, path)
+	}
 }
 
 func TestBuildChapterMetadata_NoUsableMarkers(t *testing.T) {
@@ -332,6 +340,7 @@ func TestWatchCaptureStart_AnchorsToFirstOutputBytes(t *testing.T) {
 	rec := &FFmpegRecorder{
 		id:         "anchor-watch",
 		outputPath: filepath.Join(t.TempDir(), "anchor-watch.mp4"),
+		exitCode:   exitCodeInitValue,
 		exited:     make(chan struct{}),
 	}
 	defer close(rec.exited)
@@ -360,6 +369,7 @@ func TestWatchCaptureStart_StopsOnExitWithoutOutput(t *testing.T) {
 	rec := &FFmpegRecorder{
 		id:         "anchor-exit",
 		outputPath: filepath.Join(t.TempDir(), "never.mp4"),
+		exitCode:   exitCodeInitValue,
 		exited:     make(chan struct{}),
 	}
 	close(rec.exited)
@@ -367,6 +377,25 @@ func TestWatchCaptureStart_StopsOnExitWithoutOutput(t *testing.T) {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	assert.True(t, rec.captureAnchor.IsZero())
+}
+
+func TestWatchCaptureStart_NeverStampsAfterExit(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "late.mp4")
+	require.NoError(t, os.WriteFile(outputPath, []byte("bytes"), 0o644))
+
+	// Process already reaped (exitCode set, exited closed) but the file has
+	// bytes: stamping now would postdate endTime and zero out the duration.
+	rec := &FFmpegRecorder{
+		id:         "anchor-late",
+		outputPath: outputPath,
+		exitCode:   0,
+		exited:     make(chan struct{}),
+	}
+	close(rec.exited)
+	rec.watchCaptureStart()
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	assert.True(t, rec.captureAnchor.IsZero(), "anchor must never be stamped after exit")
 }
 
 func TestMark_OffsetUsesCaptureAnchor(t *testing.T) {

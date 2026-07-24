@@ -23,30 +23,37 @@ const sentinelChapterName = "_recording_start"
 
 // buildChapterMetadata writes an ffmetadata file describing one MP4 chapter per
 // marker and returns its path. Each marker's chapter starts at its offset from
-// startTime; markers before startTime are clamped to the start of the media
-// timeline (they marked a real moment, e.g. between process spawn and the
-// first captured frame) and markers at/after durationMs are dropped.
-// durationMs is the recording length and becomes the END of the final chapter.
-// Chapter ENDs are clamped to never precede their START, since ffmpeg rejects
-// an END-before-START chapter outright and would fail the whole remux.
+// startTime, clamped into [0, durationMs]: a marker can be timestamped
+// slightly outside the media timeline (e.g. between process spawn and the
+// first captured frame, or after capture stopped but before the process was
+// reaped), and once Mark returned 201 its chapter must never be silently
+// lost. durationMs is the recording length and becomes the END of the final
+// chapter. Chapter ENDs are clamped to never precede their START, since
+// ffmpeg rejects an END-before-START chapter outright and would fail the
+// whole remux.
 //
-// ok is false when there are no usable markers (all dropped or none supplied),
-// signalling the caller to fall back to the normal no-chapter remux. The
-// metadata file is written next to outputPath with a ".ffmeta" suffix.
+// ok is false when there are no chapters to write (no markers supplied, or a
+// degenerate non-positive duration), signalling the caller to fall back to
+// the normal no-chapter remux. The metadata file is written next to
+// outputPath with a ".ffmeta" suffix.
 func buildChapterMetadata(outputPath string, markers []Marker, startTime time.Time, durationMs int64) (string, bool, error) {
 	type chapter struct {
 		startMs int64
 		title   string
 	}
 
+	if durationMs <= 0 {
+		return "", false, nil
+	}
+
 	chapters := make([]chapter, 0, len(markers))
 	for _, m := range markers {
 		startMs := m.At.Sub(startTime).Milliseconds()
-		if startMs >= durationMs {
-			continue
-		}
 		if startMs < 0 {
 			startMs = 0
+		}
+		if startMs > durationMs {
+			startMs = durationMs
 		}
 		chapters = append(chapters, chapter{startMs: startMs, title: m.Name})
 	}

@@ -542,7 +542,13 @@ func (fr *FFmpegRecorder) watchCaptureStart() {
 			if info, err := os.Stat(fr.outputPath); err == nil && info.Size() > 0 {
 				now := time.Now()
 				fr.mu.Lock()
-				fr.captureAnchor = now
+				// Only stamp while the process is still running: exitCode and
+				// endTime are set together under fr.mu, so this guarantees the
+				// anchor always precedes endTime. Stamping after exit would
+				// yield a zero/negative duration and lose every chapter.
+				if fr.exitCode < exitCodeProcessDoneMinValue {
+					fr.captureAnchor = now
+				}
 				fr.mu.Unlock()
 				return
 			}
