@@ -47,7 +47,7 @@ func TestBuildChapterMetadata_SentinelAndOrdering(t *testing.T) {
 	assert.Equal(t, expected, meta)
 }
 
-func TestBuildChapterMetadata_DropsNegativeOffsets(t *testing.T) {
+func TestBuildChapterMetadata_ClampsNegativeOffsetsToZero(t *testing.T) {
 	start := time.Unix(1000, 0)
 	out := filepath.Join(t.TempDir(), "rec.mp4")
 	markers := []Marker{
@@ -60,9 +60,9 @@ func TestBuildChapterMetadata_DropsNegativeOffsets(t *testing.T) {
 	require.True(t, ok)
 
 	meta := readMeta(t, path)
-	assert.NotContains(t, meta, "before-start")
+	assert.Contains(t, meta, "START=0\nEND=4000\ntitle=before-start")
 	assert.Contains(t, meta, "title=kept")
-	// Sentinel + one kept marker = two chapters.
+	// Two usable chapters, no sentinel needed because the first starts at 0.
 	assert.Equal(t, 2, strings.Count(meta, "[CHAPTER]"))
 }
 
@@ -326,6 +326,38 @@ func TestWatchCaptureStart_AnchorsToFirstOutputBytes(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 	rec.mu.Lock()
 	assert.False(t, rec.captureAnchor.Before(beforeWrite), "anchor stamped at/after first write")
+	rec.mu.Unlock()
+}
+
+func TestWatchCaptureStart_IgnoresPreexistingOutputUntilCurrentSessionWrite(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "anchor-stale.mp4")
+	require.NoError(t, os.WriteFile(outputPath, []byte("stale"), 0o644))
+	time.Sleep(20 * time.Millisecond) // ensure stale file mtime predates startTime
+
+	rec := &FFmpegRecorder{
+		id:         "anchor-stale",
+		outputPath: outputPath,
+		startTime:  time.Now(),
+		exited:     make(chan struct{}),
+	}
+	defer close(rec.exited)
+	go rec.watchCaptureStart()
+
+	time.Sleep(50 * time.Millisecond)
+	rec.mu.Lock()
+	assert.True(t, rec.captureAnchor.IsZero(), "stale output must not anchor this session")
+	rec.mu.Unlock()
+
+	beforeRewrite := time.Now()
+	require.NoError(t, os.WriteFile(outputPath, []byte("fresh"), 0o644))
+	require.Eventually(t, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return !rec.captureAnchor.IsZero()
+	}, 2*time.Second, 5*time.Millisecond)
+
+	rec.mu.Lock()
+	assert.False(t, rec.captureAnchor.Before(beforeRewrite), "anchor stamped at/after fresh session write")
 	rec.mu.Unlock()
 }
 

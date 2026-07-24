@@ -71,12 +71,12 @@ type FFmpegRecorder struct {
 	// chapter offsets to the media timeline; zero means never detected and
 	// callers fall back to startTime (stamped before the process spawned).
 	captureAnchor time.Time
-	ffmpegErr  error
-	exitCode   int
-	exited     chan struct{}
-	deleted    bool
-	markers    []Marker
-	stz        *scaletozero.Oncer
+	ffmpegErr     error
+	exitCode      int
+	exited        chan struct{}
+	deleted       bool
+	markers       []Marker
+	stz           *scaletozero.Oncer
 
 	// flight coordinates concurrent operations using different keys:
 	// - "stop": prevents multiple SIGINTs from being sent to ffmpeg
@@ -520,12 +520,16 @@ func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
 }
 
 // watchCaptureStart stamps captureAnchor with the moment ffmpeg writes its
-// first output bytes. The muxer only writes them once the capture pipeline is
-// fully initialized (input opened, encoder ready, first frame in flight), so
-// this tracks media t=0 far more closely than startTime, which is stamped
-// before the process is even spawned. If no bytes ever appear the anchor
-// stays zero and callers fall back to startTime.
+// first output bytes for the current Start() session. The muxer only writes
+// them once the capture pipeline is fully initialized (input opened, encoder
+// ready, first frame in flight), so this tracks media t=0 far more closely
+// than startTime, which is stamped before the process is even spawned. If no
+// bytes ever appear the anchor stays zero and callers fall back to startTime.
 func (fr *FFmpegRecorder) watchCaptureStart() {
+	fr.mu.Lock()
+	sessionStart := fr.startTime
+	fr.mu.Unlock()
+
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -534,6 +538,12 @@ func (fr *FFmpegRecorder) watchCaptureStart() {
 			return
 		case <-ticker.C:
 			if info, err := os.Stat(fr.outputPath); err == nil && info.Size() > 0 {
+				// Ignore stale bytes from a previous recording session that used the
+				// same output path. We only anchor once this file has been updated
+				// after the current Start() timestamp.
+				if !sessionStart.IsZero() && info.ModTime().Before(sessionStart) {
+					continue
+				}
 				now := time.Now()
 				fr.mu.Lock()
 				fr.captureAnchor = now
