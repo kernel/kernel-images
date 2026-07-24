@@ -70,11 +70,11 @@ type Config struct {
 	OTLPMaxQueueSize   int           `envconfig:"BTEL_OTLP_MAX_QUEUE_SIZE" default:"2048"`
 	OTLPExportInterval time.Duration `envconfig:"BTEL_OTLP_EXPORT_INTERVAL" default:"1s"`
 	OTLPExportTimeout  time.Duration `envconfig:"BTEL_OTLP_EXPORT_TIMEOUT"  default:"30s"`
-	// Platform-injected identity: InstanceName is sent to the relay as x-api-key
-	// and, with MetroName, stamps the OTLP Resource. Same envs the VM already
-	// receives.
-	InstanceName string `envconfig:"INST_NAME"   default:""`
-	MetroName    string `envconfig:"METRO_NAME"  default:""`
+	// Platform-injected identity, reused to stamp the OTLP Resource. These are
+	// the same envs the VM already receives.
+	InstanceJWT  string `envconfig:"KERNEL_INSTANCE_JWT" default:""`
+	InstanceName string `envconfig:"INST_NAME"           default:""`
+	MetroName    string `envconfig:"METRO_NAME"          default:""`
 }
 
 // LogValue implements slog.LogValuer, redacting secret fields.
@@ -82,6 +82,10 @@ func (c *Config) LogValue() slog.Value {
 	s2AccessToken := ""
 	if c.S2AccessToken != "" {
 		s2AccessToken = "[redacted]"
+	}
+	otlpJWT := ""
+	if c.InstanceJWT != "" {
+		otlpJWT = "[redacted]"
 	}
 	return slog.GroupValue(
 		slog.Int("port", c.Port),
@@ -105,6 +109,7 @@ func (c *Config) LogValue() slog.Value {
 		slog.String("otlp_endpoint", c.OTLPEndpoint),
 		slog.String("otlp_path", c.OTLPPath),
 		slog.Bool("otlp_insecure", c.OTLPInsecure),
+		slog.String("otlp_instance_jwt", otlpJWT),
 		slog.String("otlp_service_name", c.OTLPServiceName),
 		slog.Int("otlp_max_queue_size", c.OTLPMaxQueueSize),
 		slog.Duration("otlp_export_interval", c.OTLPExportInterval),

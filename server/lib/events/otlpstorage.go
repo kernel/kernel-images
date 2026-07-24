@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -43,8 +44,14 @@ type OTLPConfig struct {
 	URLPath string
 	// Insecure sends over plaintext HTTP. Development only.
 	Insecure bool
-	// Headers are attached to every export request (e.g. the instance JWT).
+	// Headers are attached to every export request.
 	Headers map[string]string
+	// AuthTokenFunc, when set, is called on every export request to resolve the
+	// bearer credential, set as "Authorization: Bearer <token>". It is read per
+	// request (not captured once) so a credential that changes after start, e.g.
+	// the instance JWT refreshed from an applied fork-identity payload, takes
+	// effect without restarting the process. An empty return sends no header.
+	AuthTokenFunc func() string
 
 	// ServiceName, InstanceName, and Metro populate the OTLP Resource.
 	ServiceName  string
@@ -152,6 +159,25 @@ type otlpStorage struct {
 	logger   log.Logger
 }
 
+// bearerRoundTripper sets the Authorization header from token() on each request,
+// so a credential that changes after the exporter is built (the fork-refreshed
+// instance JWT) is picked up per request rather than frozen at construction.
+type bearerRoundTripper struct {
+	base  http.RoundTripper
+	token func() string
+}
+
+func (t *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	tok := t.token()
+	if tok == "" {
+		return t.base.RoundTrip(req)
+	}
+	// RoundTrip must not mutate the caller's request; clone before setting.
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+tok)
+	return t.base.RoundTrip(req)
+}
+
 func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otlpStorage, error) {
 	if cfg.Endpoint == "" {
 		return nil, fmt.Errorf("otlp storage: endpoint is required")
@@ -166,6 +192,11 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 	}
 	if len(cfg.Headers) > 0 {
 		opts = append(opts, otlploghttp.WithHeaders(cfg.Headers))
+	}
+	if cfg.AuthTokenFunc != nil {
+		opts = append(opts, otlploghttp.WithHTTPClient(&http.Client{
+			Transport: &bearerRoundTripper{base: http.DefaultTransport, token: cfg.AuthTokenFunc},
+		}))
 	}
 
 	exporter, err := otlploghttp.New(ctx, opts...)

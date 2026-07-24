@@ -140,13 +140,11 @@ func main() {
 	var otlpExporter api.OTLPExporter
 	var otlpMetrics *events.OTLPMetrics
 	if config.OTLPEndpoint != "" {
-		// The relay authenticates the VM by its instance name (checked against
-		// active sessions), mirroring the capmonster/hcaptcha relays. Sent as
-		// x-api-key, not a bearer token.
-		headers := map[string]string{}
-		if config.InstanceName != "" {
-			headers["x-api-key"] = config.InstanceName
-		}
+		// The relay authenticates the VM by its instance JWT, sent as a bearer
+		// token. The credential is resolved per request: on a forked VM the boot
+		// env JWT is stale, so it is re-read from the applied fork-identity
+		// payload (see instanceJWTProvider).
+		jwtProvider := newInstanceJWTProvider(config.InstanceJWT)
 		slogger.Info("OTLP export available", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		// The OTel log SDK reports batch-queue drops through its global logger at
 		// logr V(1), which slog renders just below Info, so a default Info handler
@@ -159,7 +157,7 @@ func main() {
 			Endpoint:       config.OTLPEndpoint,
 			URLPath:        config.OTLPPath,
 			Insecure:       config.OTLPInsecure,
-			Headers:        headers,
+			AuthTokenFunc:  jwtProvider.Token,
 			ServiceName:    config.OTLPServiceName,
 			InstanceName:   config.InstanceName,
 			Metro:          config.MetroName,

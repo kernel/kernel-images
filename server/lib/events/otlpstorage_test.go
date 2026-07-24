@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestLoggingExporter_CountsExportFailures(t *testing.T) {
 // that an excluded category (screenshot) never reaches the receiver.
 func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	var mu sync.Mutex
-	var paths, apiKeys, eventNames []string
+	var paths, auths, eventNames []string
 	attrStr := map[string]string{}
 	var statusAttr int64
 	var bodyIsMap bool
@@ -62,7 +63,7 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 		require.NoError(t, proto.Unmarshal(body, &req))
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
-		apiKeys = append(apiKeys, r.Header.Get("x-api-key"))
+		auths = append(auths, r.Header.Get("Authorization"))
 		for _, rl := range req.ResourceLogs {
 			for _, sl := range rl.ScopeLogs {
 				for _, lr := range sl.LogRecords {
@@ -89,13 +90,13 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := OTLPConfig{
-		Endpoint:     strings.TrimPrefix(srv.URL, "http://"),
-		URLPath:      "/otlp-relay/v1/logs",
-		Insecure:     true,
-		Headers:      map[string]string{"x-api-key": "browser-1"},
-		ServiceName:  "kernel-browser",
-		InstanceName: "browser-1",
-		Metro:        "dev-iad",
+		Endpoint:      strings.TrimPrefix(srv.URL, "http://"),
+		URLPath:       "/otlp-relay/v1/logs",
+		Insecure:      true,
+		AuthTokenFunc: func() string { return "test-jwt" },
+		ServiceName:   "kernel-browser",
+		InstanceName:  "browser-1",
+		Metro:         "dev-iad",
 	}
 	wtr := NewOTLPStorageWriter(es, cfg, slog.Default())
 
@@ -115,8 +116,8 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	defer mu.Unlock()
 	require.NotEmpty(t, paths, "expected at least one export request")
 	assert.Equal(t, "/otlp-relay/v1/logs", paths[0])
-	// The relay authenticates the VM by instance name sent as x-api-key.
-	assert.Equal(t, "browser-1", apiKeys[0])
+	// The relay authenticates the VM by its instance JWT, sent as a bearer token.
+	assert.Equal(t, "Bearer test-jwt", auths[0])
 	// The excluded screenshot must not reach the receiver; only the network event does.
 	assert.Equal(t, []string{"network_response"}, eventNames)
 	// Promoted attributes and the structured body survive the SDK to protobuf translation.
@@ -239,4 +240,65 @@ func TestChunkBySize(t *testing.T) {
 		require.Len(t, chunks, 1)
 		assert.Len(t, chunks[0], 1)
 	})
+}
+
+// TestOTLPStorageWriter_RefreshesAuthToken confirms AuthTokenFunc is read per
+// request, not captured once: a token that changes after the exporter starts is
+// reflected on later requests. This is what lets a forked VM export with the
+// fresh instance JWT from its applied identity payload without a restart.
+func TestOTLPStorageWriter_RefreshesAuthToken(t *testing.T) {
+	var mu sync.Mutex
+	var auths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auths = append(auths, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var token atomic.Value
+	token.Store("jwt-1")
+
+	es, err := NewEventStream(EventStreamConfig{RingCapacity: 64})
+	require.NoError(t, err)
+
+	cfg := OTLPConfig{
+		Endpoint:       strings.TrimPrefix(srv.URL, "http://"),
+		URLPath:        "/otlp-relay/v1/logs",
+		Insecure:       true,
+		AuthTokenFunc:  func() string { return token.Load().(string) },
+		ServiceName:    "kernel-browser",
+		ExportInterval: 20 * time.Millisecond,
+	}
+	wtr := NewOTLPStorageWriter(es, cfg, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, wtr.Start(ctx))
+
+	seen := func(want string) func() bool {
+		return func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, a := range auths {
+				if a == want {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
+	es.Publish(Envelope{Event: Event{Ts: 1, Type: "network_response", Category: Network,
+		Data: []byte(`{"method":"GET","url":"https://x","status":200}`)}})
+	require.Eventually(t, seen("Bearer jwt-1"), 3*time.Second, 10*time.Millisecond, "first export should use jwt-1")
+
+	token.Store("jwt-2")
+	es.Publish(Envelope{Event: Event{Ts: 2, Type: "network_response", Category: Network,
+		Data: []byte(`{"method":"GET","url":"https://y","status":200}`)}})
+	require.Eventually(t, seen("Bearer jwt-2"), 3*time.Second, 10*time.Millisecond, "later export should pick up the refreshed jwt-2")
+
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	require.NoError(t, wtr.Stop(stopCtx))
 }
