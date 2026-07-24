@@ -268,7 +268,6 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	// ensure internal state
 	fr.ffmpegErr = nil
 	fr.exitCode = exitCodeInitValue
-	fr.startTime = time.Now()
 	fr.exited = make(chan struct{})
 
 	args, err := ffmpegArgs(fr.params, fr.outputPath)
@@ -287,7 +286,6 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
-	fr.cmd = cmd
 	fr.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
@@ -299,6 +297,12 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 		fr.mu.Unlock()
 		return fmt.Errorf("failed to start ffmpeg process: %w", err)
 	}
+	fr.mu.Lock()
+	fr.cmd = cmd
+	// Anchor recording time to ffmpeg startup so marker/chapter offsets align
+	// with the media timeline, especially when audio inputs use input timestamps.
+	fr.startTime = time.Now()
+	fr.mu.Unlock()
 
 	// Launch background waiter to capture process completion.
 	go fr.waitForCommand(ctx)
