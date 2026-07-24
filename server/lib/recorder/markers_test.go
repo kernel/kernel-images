@@ -47,7 +47,7 @@ func TestBuildChapterMetadata_SentinelAndOrdering(t *testing.T) {
 	assert.Equal(t, expected, meta)
 }
 
-func TestBuildChapterMetadata_DropsNegativeOffsets(t *testing.T) {
+func TestBuildChapterMetadata_ClampsNegativeOffsetsToZero(t *testing.T) {
 	start := time.Unix(1000, 0)
 	out := filepath.Join(t.TempDir(), "rec.mp4")
 	markers := []Marker{
@@ -59,11 +59,38 @@ func TestBuildChapterMetadata_DropsNegativeOffsets(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
+	// The early marker is clamped to media t=0 instead of silently dropped,
+	// and takes the sentinel's place as the first chapter.
 	meta := readMeta(t, path)
-	assert.NotContains(t, meta, "before-start")
-	assert.Contains(t, meta, "title=kept")
-	// Sentinel + one kept marker = two chapters.
+	assert.Contains(t, meta, "START=0\nEND=4000\ntitle=before-start")
+	assert.Contains(t, meta, "START=4000\nEND=8000\ntitle=kept")
+	assert.NotContains(t, meta, sentinelChapterName)
 	assert.Equal(t, 2, strings.Count(meta, "[CHAPTER]"))
+}
+
+func TestStart_RemovesStaleOutput(t *testing.T) {
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "stale.mp4")
+	require.NoError(t, os.WriteFile(outputPath, []byte("leftover from a previous run"), 0o644))
+
+	rec := &FFmpegRecorder{
+		id:         "stale-output",
+		binaryPath: mockBin,
+		params:     defaultParams(tempDir),
+		outputPath: outputPath,
+		stz:        scaletozero.NewOncer(scaletozero.NewNoopController()),
+	}
+	require.NoError(t, rec.Start(t.Context()))
+	t.Cleanup(func() { _ = rec.ForceStop(t.Context()) })
+
+	// The stale file is gone (the mock ffmpeg never writes one), so the
+	// capture anchor cannot be stamped from leftover bytes.
+	_, statErr := os.Stat(outputPath)
+	assert.True(t, os.IsNotExist(statErr), "stale output should be removed at start")
+	time.Sleep(50 * time.Millisecond)
+	rec.mu.Lock()
+	assert.True(t, rec.captureAnchor.IsZero(), "anchor must not come from stale bytes")
+	rec.mu.Unlock()
 }
 
 func TestBuildChapterMetadata_EscapesSpecialChars(t *testing.T) {

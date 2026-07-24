@@ -289,6 +289,12 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	}
 	log.Info(fmt.Sprintf("%s %s", fr.binaryPath, strings.Join(args, " ")))
 
+	// Remove any stale output from a previous process so watchCaptureStart
+	// can't anchor on leftover bytes; ffmpeg recreates the file (-y).
+	if err := os.Remove(fr.outputPath); err != nil && !os.IsNotExist(err) {
+		log.Warn("failed to remove stale recording output", "path", fr.outputPath, "err", err)
+	}
+
 	cmd := exec.Command(fr.binaryPath, args...)
 	// create process group to ensure all processes are signaled together
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
