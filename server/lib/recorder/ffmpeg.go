@@ -440,29 +440,31 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		}
 
 		// Remux: copy streams without re-encoding, move moov atom to start with faststart
-		args := []string{"-i", outputPath}
-		args = append(args, chapterInputArgs(metaPath)...)
-		args = append(args,
-			"-c", "copy",
-			"-movflags", "+faststart",
-			"-f", "mp4", // Explicitly specify format since .tmp extension isn't recognized
-			"-y",
-			tempPath,
-		)
+		runRemux := func(metaPath string) error {
+			args := remuxArgs(outputPath, tempPath, metaPath)
+			log.Info("finalizing recording", "cmd", fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " ")))
+			// Use WithoutCancel to prevent context cancellation from aborting finalization,
+			// which would leave the recording in a corrupted/incomplete state.
+			cmd := exec.CommandContext(context.WithoutCancel(ctx), binaryPath, args...)
+			cmd.Stderr = os.Stderr
+			cmd.Stdout = os.Stdout
+			return cmd.Run()
+		}
 
-		log.Info("finalizing recording", "cmd", fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " ")))
-
-		// Use WithoutCancel to prevent context cancellation from aborting finalization,
-		// which would leave the recording in a corrupted/incomplete state.
-		cmd := exec.CommandContext(context.WithoutCancel(ctx), binaryPath, args...)
-		cmd.Stderr = os.Stderr
-		cmd.Stdout = os.Stdout
+		remuxErr := runRemux(metaPath)
+		if remuxErr != nil && metaPath != "" {
+			// The chapter input must never cost us the recording: retry once as a
+			// plain no-chapter remux before caching a finalize failure.
+			log.Warn("chaptered remux failed, retrying without chapters", "err", remuxErr)
+			os.Remove(tempPath)
+			remuxErr = runRemux("")
+		}
 
 		var result error
-		if err := cmd.Run(); err != nil {
+		if remuxErr != nil {
 			// Clean up temp file on error
 			os.Remove(tempPath)
-			result = fmt.Errorf("failed to finalize recording: %w", err)
+			result = fmt.Errorf("failed to finalize recording: %w", remuxErr)
 		} else if err := os.Rename(tempPath, outputPath); err != nil {
 			os.Remove(tempPath)
 			result = fmt.Errorf("failed to replace recording with finalized version: %w", err)
@@ -504,6 +506,24 @@ func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
 	now := time.Now()
 	fr.markers = append(fr.markers, Marker{Name: name, At: now})
 	return name, now.Sub(fr.startTime).Milliseconds(), nil
+}
+
+// remuxArgs assembles the finalize remux arguments: copy streams without
+// re-encoding and move the moov atom to the start with faststart. When
+// metaPath is non-empty the chapter metadata input is injected via
+// chapterInputArgs; when empty the arguments are byte-identical to the
+// pre-marker remux command.
+func remuxArgs(outputPath, tempPath, metaPath string) []string {
+	args := []string{"-i", outputPath}
+	args = append(args, chapterInputArgs(metaPath)...)
+	args = append(args,
+		"-c", "copy",
+		"-movflags", "+faststart",
+		"-f", "mp4", // Explicitly specify format since .tmp extension isn't recognized
+		"-y",
+		tempPath,
+	)
+	return args
 }
 
 // chapterInputArgs returns the extra remux arguments that pull MP4 chapters

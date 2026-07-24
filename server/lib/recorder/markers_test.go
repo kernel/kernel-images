@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,33 @@ func TestBuildChapterMetadata_EscapesSpecialChars(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Contains(t, readMeta(t, path), `title=a\=b\;c\#d\\e`)
+}
+
+func TestBuildChapterMetadata_DropsMarkersAtOrPastDuration(t *testing.T) {
+	start := time.Unix(1000, 0)
+	out := filepath.Join(t.TempDir(), "rec.mp4")
+	markers := []Marker{
+		{Name: "kept", At: start.Add(1 * time.Second)},
+		{Name: "at-duration", At: start.Add(4 * time.Second)},
+		{Name: "past-duration", At: start.Add(9 * time.Second)},
+	}
+
+	path, ok, err := buildChapterMetadata(out, markers, start, 4000)
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	meta := readMeta(t, path)
+	assert.Contains(t, meta, "title=kept")
+	assert.NotContains(t, meta, "at-duration")
+	assert.NotContains(t, meta, "past-duration")
+	// Sentinel + kept marker; the kept chapter still ends at durationMs.
+	assert.Equal(t, 2, strings.Count(meta, "[CHAPTER]"))
+	assert.Contains(t, meta, "START=1000\nEND=4000\ntitle=kept")
+
+	// All markers at/past the duration leave nothing usable: fall back.
+	_, ok, err = buildChapterMetadata(out, markers[1:], start, 4000)
+	require.NoError(t, err)
+	assert.False(t, ok)
 }
 
 func TestBuildChapterMetadata_NoUsableMarkers(t *testing.T) {
@@ -194,22 +222,7 @@ func TestChapterInputArgs(t *testing.T) {
 	assert.Equal(t, []string{"-f", "ffmetadata", "-i", "/tmp/x.ffmeta", "-map", "0", "-map_chapters", "1"}, chapterInputArgs("/tmp/x.ffmeta"))
 }
 
-// finalizeRemuxArgs mirrors how finalizeRecording assembles the remux command
-// so the backward-compat assertion below can lock both shapes.
-func finalizeRemuxArgs(outputPath, tempPath, metaPath string) []string {
-	args := []string{"-i", outputPath}
-	args = append(args, chapterInputArgs(metaPath)...)
-	args = append(args,
-		"-c", "copy",
-		"-movflags", "+faststart",
-		"-f", "mp4",
-		"-y",
-		tempPath,
-	)
-	return args
-}
-
-func TestFinalizeRemuxArgs_BackwardsCompat(t *testing.T) {
+func TestRemuxArgs_BackwardsCompat(t *testing.T) {
 	// No markers: byte-identical to the pre-feature remux command.
 	preFeature := []string{
 		"-i", "/r/out.mp4",
@@ -219,10 +232,48 @@ func TestFinalizeRemuxArgs_BackwardsCompat(t *testing.T) {
 		"-y",
 		"/r/out.mp4.tmp",
 	}
-	assert.Equal(t, preFeature, finalizeRemuxArgs("/r/out.mp4", "/r/out.mp4.tmp", ""))
+	assert.Equal(t, preFeature, remuxArgs("/r/out.mp4", "/r/out.mp4.tmp", ""))
 
 	// Markers present: the chapter input and mapping are injected.
-	withChapters := finalizeRemuxArgs("/r/out.mp4", "/r/out.mp4.tmp", "/r/out.mp4.ffmeta")
+	withChapters := remuxArgs("/r/out.mp4", "/r/out.mp4.tmp", "/r/out.mp4.ffmeta")
 	assert.Contains(t, withChapters, "-map_chapters")
 	assert.Contains(t, withChapters, "/r/out.mp4.ffmeta")
+}
+
+// TestFinalize_RetriesWithoutChaptersOnRemuxFailure uses a fake ffmpeg that
+// rejects the chaptered remux but succeeds on the plain one, proving a bad
+// chapter input can never cost the recording its finalize.
+func TestFinalize_RetriesWithoutChaptersOnRemuxFailure(t *testing.T) {
+	tempDir := t.TempDir()
+	outputPath := filepath.Join(tempDir, "rec.mp4")
+	require.NoError(t, os.WriteFile(outputPath, []byte("recording"), 0o644))
+
+	// Fails when the chapter metadata input is present, otherwise writes the
+	// output file (the last argument) like the real remux would.
+	script := "#!/usr/bin/env bash\n" +
+		"for a in \"$@\"; do if [[ \"$a\" == ffmetadata ]]; then exit 1; fi; done\n" +
+		"printf remuxed > \"${@: -1}\"\n"
+	bin := filepath.Join(tempDir, "fake_ffmpeg.sh")
+	require.NoError(t, os.WriteFile(bin, []byte(script), 0o755))
+
+	start := time.Now()
+	rec := &FFmpegRecorder{
+		id:         "retry-no-chapters",
+		binaryPath: bin,
+		outputPath: outputPath,
+		startTime:  start,
+		endTime:    start.Add(4 * time.Second),
+		exitCode:   0,
+		markers:    []Marker{{Name: "m", At: start.Add(1 * time.Second)}},
+		stz:        scaletozero.NewOncer(scaletozero.NewNoopController()),
+	}
+
+	require.NoError(t, rec.finalizeRecording(context.Background()))
+
+	b, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	assert.Equal(t, "remuxed", string(b), "plain retry output should replace the recording")
+
+	_, statErr := os.Stat(outputPath + ".ffmeta")
+	assert.True(t, os.IsNotExist(statErr), "metadata temp file should be removed")
 }

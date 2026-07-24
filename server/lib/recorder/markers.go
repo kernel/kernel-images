@@ -23,8 +23,10 @@ const sentinelChapterName = "_recording_start"
 
 // buildChapterMetadata writes an ffmetadata file describing one MP4 chapter per
 // marker and returns its path. Each marker's chapter starts at its offset from
-// startTime; markers before startTime are dropped. durationMs is the recording
-// length and becomes the END of the final chapter.
+// startTime; markers before startTime or at/after durationMs are dropped.
+// durationMs is the recording length and becomes the END of the final chapter.
+// Chapter ENDs are clamped to never precede their START, since ffmpeg rejects
+// an END-before-START chapter outright and would fail the whole remux.
 //
 // ok is false when there are no usable markers (all dropped or none supplied),
 // signalling the caller to fall back to the normal no-chapter remux. The
@@ -38,7 +40,7 @@ func buildChapterMetadata(outputPath string, markers []Marker, startTime time.Ti
 	chapters := make([]chapter, 0, len(markers))
 	for _, m := range markers {
 		startMs := m.At.Sub(startTime).Milliseconds()
-		if startMs < 0 {
+		if startMs < 0 || startMs >= durationMs {
 			continue
 		}
 		chapters = append(chapters, chapter{startMs: startMs, title: m.Name})
@@ -62,6 +64,9 @@ func buildChapterMetadata(outputPath string, markers []Marker, startTime time.Ti
 		endMs := durationMs
 		if i+1 < len(chapters) {
 			endMs = chapters[i+1].startMs
+		}
+		if endMs < c.startMs {
+			endMs = c.startMs
 		}
 		b.WriteString("[CHAPTER]\n")
 		b.WriteString("TIMEBASE=1/1000\n")
