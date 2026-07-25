@@ -232,7 +232,7 @@ paths:
       parameters:
         - name: id
           in: query
-          description: Optional recorder identifier. When omitted, the server uses the default recorder.
+          description: Identifier of the recording session to download, as passed to /recording/start. When omitted, the default recording session is downloaded.
           schema:
             type: string
             pattern: "^[a-zA-Z0-9-]+$"
@@ -3192,7 +3192,7 @@ components:
           default: false
         id:
           type: string
-          description: Optional identifier for the recording session. Alphanumeric or hyphen.
+          description: Optional identifier for this recording session, used to target it from the other /recording endpoints (stop, mark, download, delete) and allowing multiple concurrent recordings. Alphanumeric or hyphen. When omitted, the default recording session is started.
           pattern: "^[a-zA-Z0-9-]+$"
       additionalProperties: false
     StopRecordingRequest:
@@ -3204,7 +3204,7 @@ components:
           default: false
         id:
           type: string
-          description: Identifier of the recorder to stop. Alphanumeric or hyphen.
+          description: Identifier of the recording session to stop, as passed to /recording/start. Alphanumeric or hyphen. When omitted, the default recording session is stopped.
           pattern: "^[a-zA-Z0-9-]+$"
       additionalProperties: false
     Error:
@@ -3544,7 +3544,7 @@ components:
       properties:
         id:
           type: string
-          description: Identifier of the recording to delete. Alphanumeric or hyphen.
+          description: Identifier of the recording session to delete, as passed to /recording/start. Alphanumeric or hyphen. When omitted, the default recording session is deleted.
           pattern: "^[a-zA-Z0-9-]+$"
       additionalProperties: false
     MarkRecordingRequest:
@@ -3558,7 +3558,7 @@ components:
           maxLength: 200
         id:
           type: string
-          description: Identifier of the recorder to mark. Alphanumeric or hyphen.
+          description: Identifier of the recording session to mark, as passed to /recording/start. Alphanumeric or hyphen. When omitted, the marker is added to the default recording session.
           pattern: "^[a-zA-Z0-9-]+$"
       additionalProperties: false
     MarkRecordingResult:
