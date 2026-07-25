@@ -266,7 +266,7 @@ func (s *ApiService) MarkRecording(ctx context.Context, req oapi.MarkRecordingRe
 	rec, exists := s.recordManager.GetRecorder(recorderID)
 	if !exists {
 		log.Error("attempted to mark non-existent recording", "recorder_id", recorderID)
-		return oapi.MarkRecording409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: "no active recording to mark"}}, nil
+		return oapi.MarkRecording400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no active recording to mark"}}, nil
 	}
 
 	name, offsetMs, err := rec.Mark(req.Body.Name)
