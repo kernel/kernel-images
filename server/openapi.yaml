@@ -3563,12 +3563,12 @@ components:
       additionalProperties: false
     MarkRecordingResult:
       type: object
-      required: [name, offsetMs]
+      required: [name, offset_ms]
       properties:
         name:
           type: string
           description: Name of the recorded marker.
-        offsetMs:
+        offset_ms:
           type: integer
           format: int64
           description: >-
