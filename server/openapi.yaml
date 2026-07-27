@@ -330,8 +330,11 @@ paths:
                 $ref: "#/components/schemas/MarkRecordingResult"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "404":
+          description: No recording session exists with the given identifier
+          $ref: "#/components/responses/NotFoundError"
         "409":
-          description: No recording is currently in progress
+          description: The recording session exists but is not actively recording
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"

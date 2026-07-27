@@ -130,14 +130,14 @@ func TestApiService_MarkRecording(t *testing.T) {
 	ctx := context.Background()
 	name := "checkpoint"
 
-	t.Run("no recorder maps to 409", func(t *testing.T) {
+	t.Run("unknown session maps to 404", func(t *testing.T) {
 		mgr := recorder.NewFFmpegManager()
 		svc, err := newSvc(t, mgr)
 		require.NoError(t, err)
 
 		resp, err := svc.MarkRecording(ctx, oapi.MarkRecordingRequestObject{Body: &oapi.MarkRecordingJSONRequestBody{Name: name}})
 		require.NoError(t, err)
-		require.IsType(t, oapi.MarkRecording409JSONResponse{}, resp)
+		require.IsType(t, oapi.MarkRecording404JSONResponse{}, resp)
 	})
 
 	t.Run("missing body maps to 400", func(t *testing.T) {
