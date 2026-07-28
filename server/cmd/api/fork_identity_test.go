@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/cmd/config"
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -200,4 +201,47 @@ func writeForkIdentityPayloadForTest(t *testing.T, payload forkidentity.Payload)
 	data, err := json.Marshal(payload)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(forkidentity.PayloadFile, data, 0o600))
+}
+
+func TestSinkIdentityPrefersAppliedForkIdentity(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed", MetroName: "seed-metro"}
+
+	// Nothing applied yet: the env this process started with is all there is.
+	identity, applied := sinkIdentity(cfg)
+	assert.False(t, applied)
+	assert.Equal(t, eventSinkIdentity{stream: "seed-stream", instanceName: "seed", metro: "seed-metro"}, identity)
+
+	// A payload written but not yet applied is not the instance's identity.
+	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
+		"instance_name":     "fork",
+		"session_intel_url": "https://intel.example.test",
+		"s2_stream":         "fork-stream",
+		"metro_name":        "fork-metro",
+	})
+	identity, applied = sinkIdentity(cfg)
+	assert.False(t, applied)
+	assert.Equal(t, "seed-stream", identity.stream)
+
+	// Once applied it survives a restart of this process, which is the point.
+	require.NoError(t, forkidentity.WriteAppliedMarker("fork"))
+	identity, applied = sinkIdentity(cfg)
+	assert.True(t, applied)
+	assert.Equal(t, eventSinkIdentity{stream: "fork-stream", instanceName: "fork", metro: "fork-metro"}, identity)
+}
+
+func TestSinkIdentityIgnoresMarkerForAnotherInstance(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed"}
+
+	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
+		"instance_name":     "fork",
+		"session_intel_url": "https://intel.example.test",
+		"s2_stream":         "fork-stream",
+	})
+	require.NoError(t, forkidentity.WriteAppliedMarker("someone-else"))
+
+	identity, applied := sinkIdentity(cfg)
+	assert.False(t, applied)
+	assert.Equal(t, "seed-stream", identity.stream)
 }

@@ -129,6 +129,9 @@ func main() {
 		slogger.Error("invalid fork identity configuration", "err", err)
 		os.Exit(1)
 	}
+	// An instance that already took a fork identity keeps it across a restart of
+	// this process, which the env captured at boot does not reflect.
+	identity, identityApplied := sinkIdentity(config)
 
 	// Optional S2 storage sink. The append session is bound to one stream when
 	// it starts, and an instance still holding for a fork identity is carrying
@@ -144,10 +147,15 @@ func main() {
 			return nil
 		}
 		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", streamName)
-		return w.Start(ctx)
+		if err := w.Start(ctx); err != nil {
+			// Leave the slot empty so a later identity can still open a writer.
+			s2Writer.CompareAndSwap(w, nil)
+			return err
+		}
+		return nil
 	}
-	if !forkIdentityWait {
-		if err := startS2Writer(config.S2Stream); err != nil {
+	if !forkIdentityWait || identityApplied {
+		if err := startS2Writer(identity.stream); err != nil {
 			slogger.Error("failed to start S2 storage writer", "err", err)
 			os.Exit(1)
 		}
@@ -179,8 +187,8 @@ func main() {
 			Insecure:       config.OTLPInsecure,
 			Headers:        headers,
 			ServiceName:    config.OTLPServiceName,
-			InstanceName:   config.InstanceName,
-			Metro:          config.MetroName,
+			InstanceName:   identity.instanceName,
+			Metro:          identity.metro,
 			MaxQueueSize:   config.OTLPMaxQueueSize,
 			ExportInterval: config.OTLPExportInterval,
 			ExportTimeout:  config.OTLPExportTimeout,
@@ -197,9 +205,14 @@ func main() {
 		if otlpController != nil {
 			otlpController.SetIdentity(env["INSTANCE_NAME"], env["METRO_NAME"])
 		}
-		if err := startS2Writer(forkidentity.FirstNonEmpty(env["S2_STREAM"], config.S2Stream)); err != nil {
-			slogger.Error("failed to start S2 storage writer for fork identity", "err", err)
-		}
+		// Opening the S2 append session dials the network with no deadline, so
+		// it runs off the handoff's critical path.
+		stream := forkidentity.FirstNonEmpty(env["S2_STREAM"], config.S2Stream)
+		go func() {
+			if err := startS2Writer(stream); err != nil {
+				slogger.Error("failed to start S2 storage writer for fork identity", "err", err)
+			}
+		}()
 	}
 
 	apiService, err := api.New(
@@ -444,6 +457,38 @@ func mustFFmpeg() {
 	if err := cmd.Run(); err != nil {
 		panic(fmt.Errorf("ffmpeg not found or not executable: %w", err))
 	}
+}
+
+// eventSinkIdentity is what the event sinks label events with.
+type eventSinkIdentity struct {
+	stream       string
+	instanceName string
+	metro        string
+}
+
+// sinkIdentity resolves that identity, preferring a fork identity the guest has
+// already taken over the env this process was started with. The env belongs to
+// the instance this one was forked from, and it is what a restarted api would
+// otherwise fall back to for the rest of the instance's life. Reports whether
+// an applied fork identity was found.
+func sinkIdentity(cfg *config.Config) (eventSinkIdentity, bool) {
+	identity := eventSinkIdentity{stream: cfg.S2Stream, instanceName: cfg.InstanceName, metro: cfg.MetroName}
+
+	applied, err := forkidentity.ReadAppliedMarker()
+	if err != nil || applied == "" {
+		return identity, false
+	}
+	payload, err := forkidentity.ReadPayload()
+	if err != nil || payload.InstanceName() != applied {
+		return identity, false
+	}
+
+	env := forkidentity.Env(payload)
+	return eventSinkIdentity{
+		stream:       forkidentity.FirstNonEmpty(env["S2_STREAM"], identity.stream),
+		instanceName: forkidentity.FirstNonEmpty(env["INSTANCE_NAME"], identity.instanceName),
+		metro:        forkidentity.FirstNonEmpty(env["METRO_NAME"], identity.metro),
+	}, true
 }
 
 // chromeJSONProxyHandler returns a handler that proxies a JSON endpoint from
