@@ -188,11 +188,14 @@ func useTempForkIdentityFiles(t *testing.T) {
 	dir := t.TempDir()
 	oldPayloadFile := forkidentity.PayloadFile
 	oldAppliedFile := forkidentity.AppliedFile
+	oldReadyFile := forkidentity.ReadyFile
 	forkidentity.PayloadFile = filepath.Join(dir, "fork-identity.json")
 	forkidentity.AppliedFile = filepath.Join(dir, "fork-identity-applied")
+	forkidentity.ReadyFile = filepath.Join(dir, "fork-identity-ready")
 	t.Cleanup(func() {
 		forkidentity.PayloadFile = oldPayloadFile
 		forkidentity.AppliedFile = oldAppliedFile
+		forkidentity.ReadyFile = oldReadyFile
 	})
 }
 
@@ -205,6 +208,7 @@ func writeForkIdentityPayloadForTest(t *testing.T, payload forkidentity.Payload)
 
 func TestSinkIdentityPrefersAppliedForkIdentity(t *testing.T) {
 	useTempForkIdentityFiles(t)
+	markForkIdentityWaitArmed(t)
 	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed", MetroName: "seed-metro"}
 
 	// Nothing applied yet: the env this process started with is all there is.
@@ -232,6 +236,7 @@ func TestSinkIdentityPrefersAppliedForkIdentity(t *testing.T) {
 
 func TestSinkIdentityIgnoresMarkerForAnotherInstance(t *testing.T) {
 	useTempForkIdentityFiles(t)
+	markForkIdentityWaitArmed(t)
 	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed"}
 
 	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
@@ -244,4 +249,29 @@ func TestSinkIdentityIgnoresMarkerForAnotherInstance(t *testing.T) {
 	identity, applied := sinkIdentity(cfg)
 	assert.False(t, applied)
 	assert.Equal(t, "seed-stream", identity.stream)
+}
+
+func TestSinkIdentityIgnoresMarkerFromBeforeThisBoot(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed"}
+
+	// Applied files with no ready file: the wrapper has not entered the wait in
+	// this boot yet, so it is about to clear these and hold for a new handoff.
+	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
+		"instance_name":     "stale-fork",
+		"session_intel_url": "https://intel.example.test",
+		"s2_stream":         "stale-stream",
+	})
+	require.NoError(t, forkidentity.WriteAppliedMarker("stale-fork"))
+
+	identity, applied := sinkIdentity(cfg)
+	assert.False(t, applied)
+	assert.Equal(t, "seed-stream", identity.stream)
+}
+
+// markForkIdentityWaitArmed stands in for the wrapper having entered the wait,
+// which is what makes an applied identity current for this boot.
+func markForkIdentityWaitArmed(t *testing.T) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(forkidentity.ReadyFile, []byte("waiting\n"), 0o644))
 }

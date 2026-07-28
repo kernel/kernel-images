@@ -495,6 +495,14 @@ type eventSinkIdentity struct {
 func sinkIdentity(cfg *config.Config) (eventSinkIdentity, bool) {
 	identity := eventSinkIdentity{stream: cfg.S2Stream, instanceName: cfg.InstanceName, metro: cfg.MetroName}
 
+	// This process starts before the wrapper enters the wait, and entering it
+	// clears the applied marker and then writes the ready file. So a marker
+	// without a ready file predates this boot's wait: the wrapper is about to
+	// drop it and hold for a new handoff, and binding to it would pin the sinks
+	// to an identity nothing is going to use.
+	if _, err := os.Stat(forkidentity.ReadyFile); err != nil {
+		return identity, false
+	}
 	applied, err := forkidentity.ReadAppliedMarker()
 	if err != nil || applied == "" {
 		return identity, false
