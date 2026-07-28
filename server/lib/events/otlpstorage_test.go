@@ -239,3 +239,16 @@ func TestChunkBySize(t *testing.T) {
 		assert.Len(t, chunks[0], 1)
 	})
 }
+
+func TestOTLPExportControllerSetIdentity(t *testing.T) {
+	c := NewOTLPExportController(nil, OTLPConfig{InstanceName: "seed", Metro: "seed-metro"}, slog.Default())
+
+	c.SetIdentity("fork", "fork-metro")
+	assert.Equal(t, "fork", c.cfg.InstanceName)
+	assert.Equal(t, "fork-metro", c.cfg.Metro)
+
+	// A payload that omits a value must not blank out the identity in place.
+	c.SetIdentity("", "")
+	assert.Equal(t, "fork", c.cfg.InstanceName)
+	assert.Equal(t, "fork-metro", c.cfg.Metro)
+}

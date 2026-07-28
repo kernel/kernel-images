@@ -361,3 +361,19 @@ func (c *OTLPExportController) Running() bool {
 	defer c.mu.Unlock()
 	return c.writer != nil
 }
+
+// SetIdentity replaces the instance identity attached to exported events, for
+// instances that learn theirs after boot through the fork identity handoff.
+// Empty values are ignored. The OTLP Resource carrying the identity is built
+// when export starts, so this affects subsequent Starts — which covers the
+// fork case, where export stays off until a session turns it on.
+func (c *OTLPExportController) SetIdentity(instanceName, metro string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if instanceName != "" {
+		c.cfg.InstanceName = instanceName
+	}
+	if metro != "" {
+		c.cfg.Metro = metro
+	}
+}

@@ -96,7 +96,7 @@ func TestForkIdentityHandlerReturnsConflictWhenDisabled(t *testing.T) {
 		"session_intel_url": "https://intel.example.test"
 	}`))
 	rec := httptest.NewRecorder()
-	forkIdentityHandler(slog.Default()).ServeHTTP(rec, req)
+	forkIdentityHandler(slog.Default(), nil).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusConflict, rec.Code)
 }
@@ -107,7 +107,7 @@ func TestForkIdentityHandlerRejectsBadPayload(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/internal/fork-identity", strings.NewReader(`{}`))
 	rec := httptest.NewRecorder()
-	forkIdentityHandler(slog.Default()).ServeHTTP(rec, req)
+	forkIdentityHandler(slog.Default(), nil).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
@@ -122,7 +122,7 @@ func TestForkIdentityHandlerRejectsAfterApplied(t *testing.T) {
 		"session_intel_url": "https://intel.example.test"
 	}`))
 	rec := httptest.NewRecorder()
-	forkIdentityHandler(slog.Default()).ServeHTTP(rec, req)
+	forkIdentityHandler(slog.Default(), nil).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusConflict, rec.Code)
 }
@@ -136,9 +136,10 @@ func TestForkIdentityHandlerWritesPayloadAndWaitsForAppliedMarker(t *testing.T) 
 		"session_intel_url": "https://intel.example.test"
 	}`))
 	rec := httptest.NewRecorder()
+	applied := make(chan forkidentity.Payload, 1)
 	done := make(chan struct{})
 	go func() {
-		forkIdentityHandler(slog.Default()).ServeHTTP(rec, req)
+		forkIdentityHandler(slog.Default(), func(p forkidentity.Payload) { applied <- p }).ServeHTTP(rec, req)
 		close(done)
 	}()
 
@@ -157,6 +158,28 @@ func TestForkIdentityHandlerWritesPayloadAndWaitsForAppliedMarker(t *testing.T) 
 		t.Fatal("handler did not return after applied marker")
 	}
 	assert.Equal(t, http.StatusNoContent, rec.Code)
+
+	// The callback is what lets this process retarget the sinks that label
+	// events with the instance identity.
+	select {
+	case p := <-applied:
+		assert.Equal(t, "browser-1", p.InstanceName())
+	default:
+		t.Fatal("applied callback did not run")
+	}
+}
+
+func TestForkIdentityHandlerSkipsCallbackWhenNotApplied(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	t.Setenv(forkidentity.WaitEnv, "true")
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/fork-identity", strings.NewReader(`{}`))
+	rec := httptest.NewRecorder()
+	called := false
+	forkIdentityHandler(slog.Default(), func(forkidentity.Payload) { called = true }).ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.False(t, called)
 }
 
 func useTempForkIdentityFiles(t *testing.T) {

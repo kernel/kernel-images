@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,6 +29,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/metrics"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
@@ -122,12 +124,30 @@ func main() {
 		slogger.Error("sysmon: kmsg OOM monitor disabled", "err", err)
 	}
 
-	// Optional S2 storage sink.
-	var s2Writer *events.S2StorageWriter
-	if config.S2Basin != "" && config.S2AccessToken != "" && config.S2Stream != "" {
-		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", config.S2Stream)
-		s2Writer = events.NewS2StorageWriter(eventStream, config.S2Basin, config.S2AccessToken, config.S2Stream, events.S2Config{}, slogger)
-		if err := s2Writer.Start(ctx); err != nil {
+	forkIdentityWait, err := forkidentity.WaitEnabled()
+	if err != nil {
+		slogger.Error("invalid fork identity configuration", "err", err)
+		os.Exit(1)
+	}
+
+	// Optional S2 storage sink. The append session is bound to one stream when
+	// it starts, and an instance still holding for a fork identity is carrying
+	// the stream name of the instance it was forked from, so defer the writer
+	// until the identity that owns the events arrives.
+	var s2Writer atomic.Pointer[events.S2StorageWriter]
+	startS2Writer := func(streamName string) error {
+		if config.S2Basin == "" || config.S2AccessToken == "" || streamName == "" || s2Writer.Load() != nil {
+			return nil
+		}
+		w := events.NewS2StorageWriter(eventStream, config.S2Basin, config.S2AccessToken, streamName, events.S2Config{}, slogger)
+		if !s2Writer.CompareAndSwap(nil, w) {
+			return nil
+		}
+		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", streamName)
+		return w.Start(ctx)
+	}
+	if !forkIdentityWait {
+		if err := startS2Writer(config.S2Stream); err != nil {
 			slogger.Error("failed to start S2 storage writer", "err", err)
 			os.Exit(1)
 		}
@@ -138,6 +158,7 @@ func main() {
 	// off until turned on per-session via the telemetry API, so a VM that always
 	// has the relay injected does not export (and get dropped) by default.
 	var otlpExporter api.OTLPExporter
+	var otlpController *events.OTLPExportController
 	var otlpMetrics *events.OTLPMetrics
 	if config.OTLPEndpoint != "" {
 		headers := map[string]string{}
@@ -152,7 +173,7 @@ func main() {
 		otlpMetrics = &events.OTLPMetrics{}
 		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
 		otel.SetLogger(logr.FromSlogHandler(events.NewDropCountingHandler(otelDiag, otlpMetrics)))
-		otlpExporter = events.NewOTLPExportController(eventStream, events.OTLPConfig{
+		otlpController = events.NewOTLPExportController(eventStream, events.OTLPConfig{
 			Endpoint:       config.OTLPEndpoint,
 			URLPath:        config.OTLPPath,
 			Insecure:       config.OTLPInsecure,
@@ -165,6 +186,20 @@ func main() {
 			ExportTimeout:  config.OTLPExportTimeout,
 			Metrics:        otlpMetrics,
 		}, slogger)
+		otlpExporter = otlpController
+	}
+
+	// A forked instance boots carrying the identity of the instance it came
+	// from, so the sinks that label events with it are retargeted here, once
+	// the guest has taken an identity of its own.
+	onForkIdentityApplied := func(payload forkidentity.Payload) {
+		env := forkidentity.Env(payload)
+		if otlpController != nil {
+			otlpController.SetIdentity(env["INSTANCE_NAME"], env["METRO_NAME"])
+		}
+		if err := startS2Writer(forkidentity.FirstNonEmpty(env["S2_STREAM"], config.S2Stream)); err != nil {
+			slogger.Error("failed to start S2 storage writer for fork identity", "err", err)
+		}
 	}
 
 	apiService, err := api.New(
@@ -191,7 +226,7 @@ func main() {
 	oapi.HandlerFromMux(strictHandler, r)
 
 	// Fork identity endpoints - not part of OpenAPI spec.
-	r.Post("/internal/fork-identity", forkIdentityHandler(slogger))
+	r.Post("/internal/fork-identity", forkIdentityHandler(slogger, onForkIdentityApplied))
 	r.Get("/internal/fork-identity/config", forkIdentityConfigHandler(slogger))
 
 	// endpoints to expose the spec
@@ -384,10 +419,10 @@ func main() {
 
 	// s2Writer shuts down after the servers above, since they might produce events we
 	// want to capture into the stream; we must let them finish before closing the writer.
-	if s2Writer != nil {
+	if w := s2Writer.Load(); w != nil {
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer stopCancel()
-		if err := s2Writer.Stop(stopCtx); err != nil {
+		if err := w.Stop(stopCtx); err != nil {
 			slogger.Error("s2 storage writer stop failed", "err", err)
 		}
 	}
