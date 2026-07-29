@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
@@ -43,13 +44,27 @@ type OTLPConfig struct {
 	URLPath string
 	// Insecure sends over plaintext HTTP. Development only.
 	Insecure bool
-	// Headers are attached to every export request (e.g. the instance JWT).
+	// Headers are attached to every export request.
 	Headers map[string]string
+	// AuthTokenFunc, when set, is called on every export request to resolve the
+	// bearer credential, set as "Authorization: Bearer <token>". It is read per
+	// request (not captured once) so a credential that changes after start, e.g.
+	// the instance JWT refreshed from an applied fork-identity payload, takes
+	// effect without restarting the process. An empty return sends no header.
+	AuthTokenFunc func() string
 
 	// ServiceName, InstanceName, and Metro populate the OTLP Resource.
 	ServiceName  string
 	InstanceName string
 	Metro        string
+	// InstanceNameFunc and MetroFunc, when set, resolve the resource identity at
+	// exporter-build time and take precedence over the static InstanceName/Metro.
+	// Like AuthTokenFunc, this lets a forked VM stamp the fresh identity from its
+	// applied fork-identity payload instead of stale boot env. Since export is
+	// started per session after identity applies, build time sees the applied
+	// values.
+	InstanceNameFunc func() string
+	MetroFunc        func() string
 
 	// Batch tuning. Zero values fall back to the SDK defaults.
 	MaxQueueSize   int
@@ -152,6 +167,25 @@ type otlpStorage struct {
 	logger   log.Logger
 }
 
+// bearerRoundTripper sets the Authorization header from token() on each request,
+// so a credential that changes after the exporter is built (the fork-refreshed
+// instance JWT) is picked up per request rather than frozen at construction.
+type bearerRoundTripper struct {
+	base  http.RoundTripper
+	token func() string
+}
+
+func (t *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	tok := t.token()
+	if tok == "" {
+		return t.base.RoundTrip(req)
+	}
+	// RoundTrip must not mutate the caller's request; clone before setting.
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", "Bearer "+tok)
+	return t.base.RoundTrip(req)
+}
+
 func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otlpStorage, error) {
 	if cfg.Endpoint == "" {
 		return nil, fmt.Errorf("otlp storage: endpoint is required")
@@ -167,18 +201,31 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 	if len(cfg.Headers) > 0 {
 		opts = append(opts, otlploghttp.WithHeaders(cfg.Headers))
 	}
+	if cfg.AuthTokenFunc != nil {
+		opts = append(opts, otlploghttp.WithHTTPClient(&http.Client{
+			Transport: &bearerRoundTripper{base: http.DefaultTransport, token: cfg.AuthTokenFunc},
+		}))
+	}
 
 	exporter, err := otlploghttp.New(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("otlp storage: new exporter: %w", err)
 	}
 
-	attrs := []attribute.KeyValue{semconv.ServiceName(cfg.ServiceName)}
-	if cfg.InstanceName != "" {
-		attrs = append(attrs, attribute.String("kernel.instance_name", cfg.InstanceName))
+	instanceName := cfg.InstanceName
+	if cfg.InstanceNameFunc != nil {
+		instanceName = cfg.InstanceNameFunc()
 	}
-	if cfg.Metro != "" {
-		attrs = append(attrs, attribute.String("kernel.metro", cfg.Metro))
+	metro := cfg.Metro
+	if cfg.MetroFunc != nil {
+		metro = cfg.MetroFunc()
+	}
+	attrs := []attribute.KeyValue{semconv.ServiceName(cfg.ServiceName)}
+	if instanceName != "" {
+		attrs = append(attrs, attribute.String("kernel.instance_name", instanceName))
+	}
+	if metro != "" {
+		attrs = append(attrs, attribute.String("kernel.metro", metro))
 	}
 	res := resource.NewSchemaless(attrs...)
 
@@ -360,20 +407,4 @@ func (c *OTLPExportController) Running() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.writer != nil
-}
-
-// SetIdentity replaces the instance identity attached to exported events, for
-// instances that learn theirs after boot through the fork identity handoff.
-// Empty values are ignored. The OTLP Resource carrying the identity is built
-// when export starts, so this affects subsequent Starts — which covers the
-// fork case, where export stays off until a session turns it on.
-func (c *OTLPExportController) SetIdentity(instanceName, metro string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if instanceName != "" {
-		c.cfg.InstanceName = instanceName
-	}
-	if metro != "" {
-		c.cfg.Metro = metro
-	}
 }

@@ -15,6 +15,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
@@ -41,6 +42,18 @@ var ErrRecordingFinalizing = errors.New("recording is being finalized")
 // can use errors.Is to surface a client-facing error instead of a 500.
 var ErrInvalidParams = errors.New("invalid recording parameters")
 
+// ErrNotRecording is returned by Mark when no recording is actively running.
+// Callers can use errors.Is to surface a 409.
+var ErrNotRecording = errors.New("no active recording")
+
+// ErrInvalidMarkerName is returned by Mark when the marker name is empty or too
+// long. Callers can use errors.Is to surface a 400.
+var ErrInvalidMarkerName = errors.New("invalid marker name")
+
+// maxMarkerNameLen bounds marker names (in characters) so a chapter title
+// can't be abused to bloat the metadata file.
+const maxMarkerNameLen = 200
+
 // FFmpegRecorder encapsulates an FFmpeg recording session with platform-specific screen capture.
 // It manages the lifecycle of a single FFmpeg process and provides thread-safe operations.
 type FFmpegRecorder struct {
@@ -53,10 +66,16 @@ type FFmpegRecorder struct {
 	outputPath string
 	startTime  time.Time
 	endTime    time.Time
+	// captureAnchor is the moment ffmpeg wrote its first output bytes, i.e.
+	// when the capture pipeline actually started producing media. It anchors
+	// chapter offsets to the media timeline; zero means never detected and
+	// callers fall back to startTime (stamped before the process spawned).
+	captureAnchor time.Time
 	ffmpegErr  error
 	exitCode   int
 	exited     chan struct{}
 	deleted    bool
+	markers    []Marker
 	stz        *scaletozero.Oncer
 
 	// flight coordinates concurrent operations using different keys:
@@ -256,6 +275,7 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	fr.ffmpegErr = nil
 	fr.exitCode = exitCodeInitValue
 	fr.startTime = time.Now()
+	fr.captureAnchor = time.Time{}
 	fr.exited = make(chan struct{})
 
 	args, err := ffmpegArgs(fr.params, fr.outputPath)
@@ -268,6 +288,12 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 		return err
 	}
 	log.Info(fmt.Sprintf("%s %s", fr.binaryPath, strings.Join(args, " ")))
+
+	// Remove any stale output from a previous process so watchCaptureStart
+	// can't anchor on leftover bytes; ffmpeg recreates the file (-y).
+	if err := os.Remove(fr.outputPath); err != nil && !os.IsNotExist(err) {
+		log.Warn("failed to remove stale recording output", "path", fr.outputPath, "err", err)
+	}
 
 	cmd := exec.Command(fr.binaryPath, args...)
 	// create process group to ensure all processes are signaled together
@@ -289,6 +315,10 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 
 	// Launch background waiter to capture process completion.
 	go fr.waitForCommand(ctx)
+
+	// Watch for ffmpeg's first output bytes to anchor chapter offsets to the
+	// media timeline rather than the pre-spawn startTime.
+	go fr.watchCaptureStart()
 
 	// Check for startup errors before returning
 	if err := waitForChan(ctx, 250*time.Millisecond, fr.exited); err == nil {
@@ -394,6 +424,9 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		}
 		outputPath := fr.outputPath
 		binaryPath := fr.binaryPath
+		markers := fr.markers
+		anchor := fr.anchorLocked()
+		durationMs := fr.endTime.Sub(anchor).Milliseconds()
 		fr.mu.Unlock()
 
 		// Check if the recording file exists
@@ -409,29 +442,46 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		// Create temp file for the remuxed output
 		tempPath := outputPath + ".tmp"
 
-		// Remux: copy streams without re-encoding, move moov atom to start with faststart
-		args := []string{
-			"-i", outputPath,
-			"-c", "copy",
-			"-movflags", "+faststart",
-			"-f", "mp4", // Explicitly specify format since .tmp extension isn't recognized
-			"-y",
-			tempPath,
+		// When markers exist, build an ffmetadata file and inject it as a second
+		// input so the remux carries MP4 chapters. A failure here must never fail
+		// or corrupt the recording: fall back to the plain no-chapter remux.
+		metaPath := ""
+		if len(markers) > 0 {
+			path, ok, err := buildChapterMetadata(outputPath, markers, anchor, durationMs)
+			if err != nil {
+				log.Warn("failed to build chapter metadata, finalizing without chapters", "err", err)
+			} else if ok {
+				metaPath = path
+				defer os.Remove(metaPath)
+			}
 		}
 
-		log.Info("finalizing recording", "cmd", fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " ")))
+		// Remux: copy streams without re-encoding, move moov atom to start with faststart
+		runRemux := func(metaPath string) error {
+			args := remuxArgs(outputPath, tempPath, metaPath)
+			log.Info("finalizing recording", "cmd", fmt.Sprintf("%s %s", binaryPath, strings.Join(args, " ")))
+			// Use WithoutCancel to prevent context cancellation from aborting finalization,
+			// which would leave the recording in a corrupted/incomplete state.
+			cmd := exec.CommandContext(context.WithoutCancel(ctx), binaryPath, args...)
+			cmd.Stderr = os.Stderr
+			cmd.Stdout = os.Stdout
+			return cmd.Run()
+		}
 
-		// Use WithoutCancel to prevent context cancellation from aborting finalization,
-		// which would leave the recording in a corrupted/incomplete state.
-		cmd := exec.CommandContext(context.WithoutCancel(ctx), binaryPath, args...)
-		cmd.Stderr = os.Stderr
-		cmd.Stdout = os.Stdout
+		remuxErr := runRemux(metaPath)
+		if remuxErr != nil && metaPath != "" {
+			// The chapter input must never cost us the recording: retry once as a
+			// plain no-chapter remux before caching a finalize failure.
+			log.Warn("chaptered remux failed, retrying without chapters", "err", remuxErr)
+			os.Remove(tempPath)
+			remuxErr = runRemux("")
+		}
 
 		var result error
-		if err := cmd.Run(); err != nil {
+		if remuxErr != nil {
 			// Clean up temp file on error
 			os.Remove(tempPath)
-			result = fmt.Errorf("failed to finalize recording: %w", err)
+			result = fmt.Errorf("failed to finalize recording: %w", remuxErr)
 		} else if err := os.Rename(tempPath, outputPath); err != nil {
 			os.Remove(tempPath)
 			result = fmt.Errorf("failed to replace recording with finalized version: %w", err)
@@ -447,6 +497,104 @@ func (fr *FFmpegRecorder) finalizeRecording(ctx context.Context) error {
 		return nil, result
 	})
 	return err
+}
+
+// Mark records a named marker at the current time. It returns the stored
+// (trimmed) marker name and the offset from the recording start in
+// milliseconds. The offset is provisional: it is measured against the capture
+// anchor at mark time, while the authoritative value is the chapter start
+// computed at finalize.
+//
+// Returns ErrNotRecording if the recording isn't actively running and
+// ErrInvalidMarkerName if the name is empty or exceeds maxMarkerNameLen.
+func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
+	fr.mu.Lock()
+	defer fr.mu.Unlock()
+
+	if fr.cmd == nil || fr.exitCode >= exitCodeProcessDoneMinValue {
+		return "", 0, ErrNotRecording
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > maxMarkerNameLen {
+		return "", 0, ErrInvalidMarkerName
+	}
+
+	now := time.Now()
+	fr.markers = append(fr.markers, Marker{Name: name, At: now})
+	return name, now.Sub(fr.anchorLocked()).Milliseconds(), nil
+}
+
+// watchCaptureStart stamps captureAnchor with the moment ffmpeg writes its
+// first output bytes. The muxer only writes them once the capture pipeline is
+// fully initialized (input opened, encoder ready, first frame in flight), so
+// this tracks media t=0 far more closely than startTime, which is stamped
+// before the process is even spawned. If no bytes ever appear the anchor
+// stays zero and callers fall back to startTime.
+func (fr *FFmpegRecorder) watchCaptureStart() {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-fr.exited:
+			return
+		case <-ticker.C:
+			if info, err := os.Stat(fr.outputPath); err == nil && info.Size() > 0 {
+				now := time.Now()
+				fr.mu.Lock()
+				// Only stamp while the process is still running: exitCode and
+				// endTime are set together under fr.mu, so this guarantees the
+				// anchor always precedes endTime. Stamping after exit would
+				// yield a zero/negative duration and lose every chapter.
+				if fr.exitCode < exitCodeProcessDoneMinValue {
+					fr.captureAnchor = now
+				}
+				fr.mu.Unlock()
+				return
+			}
+		}
+	}
+}
+
+// anchorLocked returns the reference time chapter offsets are measured from:
+// captureAnchor when detected, otherwise startTime. Callers must hold fr.mu.
+func (fr *FFmpegRecorder) anchorLocked() time.Time {
+	if !fr.captureAnchor.IsZero() {
+		return fr.captureAnchor
+	}
+	return fr.startTime
+}
+
+// remuxArgs assembles the finalize remux arguments: copy streams without
+// re-encoding and move the moov atom to the start with faststart. When
+// metaPath is non-empty the chapter metadata input is injected via
+// chapterInputArgs; when empty the arguments are byte-identical to the
+// pre-marker remux command.
+func remuxArgs(outputPath, tempPath, metaPath string) []string {
+	args := []string{"-i", outputPath}
+	args = append(args, chapterInputArgs(metaPath)...)
+	args = append(args,
+		"-c", "copy",
+		"-movflags", "+faststart",
+		"-f", "mp4", // Explicitly specify format since .tmp extension isn't recognized
+		"-y",
+		tempPath,
+	)
+	return args
+}
+
+// chapterInputArgs returns the extra remux arguments that pull MP4 chapters
+// from the ffmetadata input at metaPath: the second input plus the stream and
+// chapter mapping. When metaPath is empty it returns nil so the remux args are
+// byte-identical to the no-marker path. The ffmetadata demuxer must be named
+// explicitly with -f since the .ffmeta extension isn't auto-detected. -map 0
+// preserves all streams from the recording; -map_chapters 1 takes chapters from
+// the metadata input.
+func chapterInputArgs(metaPath string) []string {
+	if metaPath == "" {
+		return nil
+	}
+	return []string{"-f", "ffmetadata", "-i", metaPath, "-map", "0", "-map_chapters", "1"}
 }
 
 // IsRecording returns true if a recording is currently in progress.

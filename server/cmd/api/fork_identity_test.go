@@ -206,38 +206,37 @@ func writeForkIdentityPayloadForTest(t *testing.T, payload forkidentity.Payload)
 	require.NoError(t, os.WriteFile(forkidentity.PayloadFile, data, 0o600))
 }
 
-func TestSinkIdentityPrefersAppliedForkIdentity(t *testing.T) {
+func TestAppliedS2StreamPrefersForkIdentity(t *testing.T) {
 	useTempForkIdentityFiles(t)
 	markForkIdentityWaitArmed(t)
-	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed", MetroName: "seed-metro"}
+	cfg := &config.Config{S2Stream: "seed-stream"}
 
 	// Nothing applied yet: the env this process started with is all there is.
-	identity, applied := sinkIdentity(cfg)
+	stream, applied := appliedS2Stream(cfg)
 	assert.False(t, applied)
-	assert.Equal(t, eventSinkIdentity{stream: "seed-stream", instanceName: "seed", metro: "seed-metro"}, identity)
+	assert.Equal(t, "seed-stream", stream)
 
 	// A payload written but not yet applied is not the instance's identity.
 	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
 		"instance_name":     "fork",
 		"session_intel_url": "https://intel.example.test",
 		"s2_stream":         "fork-stream",
-		"metro_name":        "fork-metro",
 	})
-	identity, applied = sinkIdentity(cfg)
+	stream, applied = appliedS2Stream(cfg)
 	assert.False(t, applied)
-	assert.Equal(t, "seed-stream", identity.stream)
+	assert.Equal(t, "seed-stream", stream)
 
 	// Once applied it survives a restart of this process, which is the point.
 	require.NoError(t, forkidentity.WriteAppliedMarker("fork"))
-	identity, applied = sinkIdentity(cfg)
+	stream, applied = appliedS2Stream(cfg)
 	assert.True(t, applied)
-	assert.Equal(t, eventSinkIdentity{stream: "fork-stream", instanceName: "fork", metro: "fork-metro"}, identity)
+	assert.Equal(t, "fork-stream", stream)
 }
 
-func TestSinkIdentityIgnoresMarkerForAnotherInstance(t *testing.T) {
+func TestAppliedS2StreamIgnoresMarkerForAnotherInstance(t *testing.T) {
 	useTempForkIdentityFiles(t)
 	markForkIdentityWaitArmed(t)
-	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed"}
+	cfg := &config.Config{S2Stream: "seed-stream"}
 
 	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
 		"instance_name":     "fork",
@@ -246,14 +245,14 @@ func TestSinkIdentityIgnoresMarkerForAnotherInstance(t *testing.T) {
 	})
 	require.NoError(t, forkidentity.WriteAppliedMarker("someone-else"))
 
-	identity, applied := sinkIdentity(cfg)
+	stream, applied := appliedS2Stream(cfg)
 	assert.False(t, applied)
-	assert.Equal(t, "seed-stream", identity.stream)
+	assert.Equal(t, "seed-stream", stream)
 }
 
-func TestSinkIdentityIgnoresMarkerFromBeforeThisBoot(t *testing.T) {
+func TestAppliedS2StreamIgnoresMarkerFromBeforeThisBoot(t *testing.T) {
 	useTempForkIdentityFiles(t)
-	cfg := &config.Config{S2Stream: "seed-stream", InstanceName: "seed"}
+	cfg := &config.Config{S2Stream: "seed-stream"}
 
 	// Applied files with no ready file: the wrapper has not entered the wait in
 	// this boot yet, so it is about to clear these and hold for a new handoff.
@@ -264,9 +263,9 @@ func TestSinkIdentityIgnoresMarkerFromBeforeThisBoot(t *testing.T) {
 	})
 	require.NoError(t, forkidentity.WriteAppliedMarker("stale-fork"))
 
-	identity, applied := sinkIdentity(cfg)
+	stream, applied := appliedS2Stream(cfg)
 	assert.False(t, applied)
-	assert.Equal(t, "seed-stream", identity.stream)
+	assert.Equal(t, "seed-stream", stream)
 }
 
 // markForkIdentityWaitArmed stands in for the wrapper having entered the wait,

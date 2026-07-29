@@ -12,6 +12,10 @@ type Recorder interface {
 	Start(ctx context.Context) error
 	Stop(ctx context.Context) error
 	ForceStop(ctx context.Context) error
+	// Mark records a named marker at the current time. It returns the stored
+	// (trimmed) marker name and the provisional offset from the recording start
+	// in milliseconds.
+	Mark(name string) (string, int64, error)
 	IsRecording(ctx context.Context) bool
 	Metadata() *RecordingMetadata
 	Recording(ctx context.Context) (io.ReadCloser, *RecordingMetadata, error)

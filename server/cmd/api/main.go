@@ -125,14 +125,16 @@ func main() {
 		slogger.Error("sysmon: kmsg OOM monitor disabled", "err", err)
 	}
 
+	// Malformed flag: treat as disabled but surface it, matching how the OTLP
+	// identity provider handles the same flag. Exiting would crashloop the VM
+	// over a provisioning typo.
 	forkIdentityWait, err := forkidentity.WaitEnabled()
 	if err != nil {
-		slogger.Error("invalid fork identity configuration", "err", err)
-		os.Exit(1)
+		slogger.Warn("fork-identity wait flag invalid; treating as disabled", "err", err)
 	}
 	// An instance that already took a fork identity keeps it across a restart of
 	// this process, which the env captured at boot does not reflect.
-	identity, identityApplied := sinkIdentity(config)
+	s2Stream, s2StreamApplied := appliedS2Stream(config)
 
 	// Optional S2 storage sink. The append session is bound to one stream when
 	// it starts, and an instance still holding for a fork identity is carrying
@@ -158,11 +160,11 @@ func main() {
 		}
 		return nil
 	}
-	if !forkIdentityWait || identityApplied {
+	if !forkIdentityWait || s2StreamApplied {
 		// An optional sink that cannot open must not take the browser down: the
 		// api runs under supervisord with autorestart, so exiting here would
 		// crashloop the VM over a misconfigured basin or token.
-		if err := startS2Writer(identity.stream); err != nil {
+		if err := startS2Writer(s2Stream); err != nil {
 			slogger.Error("failed to start S2 storage writer, continuing without it", "err", err)
 		}
 	}
@@ -172,13 +174,17 @@ func main() {
 	// off until turned on per-session via the telemetry API, so a VM that always
 	// has the relay injected does not export (and get dropped) by default.
 	var otlpExporter api.OTLPExporter
-	var otlpController *events.OTLPExportController
 	var otlpMetrics *events.OTLPMetrics
 	if config.OTLPEndpoint != "" {
-		headers := map[string]string{}
-		if config.InstanceJWT != "" {
-			headers["Authorization"] = "Bearer " + config.InstanceJWT
-		}
+		// The relay authenticates the VM by its instance JWT, sent as a bearer
+		// token. Identity (JWT + resource attrs) is resolved dynamically: on a
+		// forked VM the boot env is stale, so it is re-read from the applied
+		// fork-identity payload (see otlpIdentityProvider).
+		identity := newOTLPIdentityProvider(otlpIdentity{
+			jwt:          config.InstanceJWT,
+			instanceName: config.InstanceName,
+			metro:        config.MetroName,
+		}, slogger)
 		slogger.Info("OTLP export available", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		// The OTel log SDK reports batch-queue drops through its global logger at
 		// logr V(1), which slog renders just below Info, so a default Info handler
@@ -187,33 +193,29 @@ func main() {
 		otlpMetrics = &events.OTLPMetrics{}
 		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
 		otel.SetLogger(logr.FromSlogHandler(events.NewDropCountingHandler(otelDiag, otlpMetrics)))
-		otlpController = events.NewOTLPExportController(eventStream, events.OTLPConfig{
-			Endpoint:       config.OTLPEndpoint,
-			URLPath:        config.OTLPPath,
-			Insecure:       config.OTLPInsecure,
-			Headers:        headers,
-			ServiceName:    config.OTLPServiceName,
-			InstanceName:   identity.instanceName,
-			Metro:          identity.metro,
-			MaxQueueSize:   config.OTLPMaxQueueSize,
-			ExportInterval: config.OTLPExportInterval,
-			ExportTimeout:  config.OTLPExportTimeout,
-			Metrics:        otlpMetrics,
+		otlpExporter = events.NewOTLPExportController(eventStream, events.OTLPConfig{
+			Endpoint:         config.OTLPEndpoint,
+			URLPath:          config.OTLPPath,
+			Insecure:         config.OTLPInsecure,
+			AuthTokenFunc:    identity.Token,
+			ServiceName:      config.OTLPServiceName,
+			InstanceNameFunc: identity.InstanceName,
+			MetroFunc:        identity.Metro,
+			MaxQueueSize:     config.OTLPMaxQueueSize,
+			ExportInterval:   config.OTLPExportInterval,
+			ExportTimeout:    config.OTLPExportTimeout,
+			Metrics:          otlpMetrics,
 		}, slogger)
-		otlpExporter = otlpController
 	}
 
-	// A forked instance boots carrying the identity of the instance it came
-	// from, so the sinks that label events with it are retargeted here, once
-	// the guest has taken an identity of its own.
+	// A fork boots carrying the stream of the instance it came from, and the S2
+	// writer binds a stream when it starts, so it is opened here once the guest
+	// has taken an identity of its own. OTLP needs no hook: it resolves identity
+	// per use through otlpIdentityProvider.
 	onForkIdentityApplied := func(payload forkidentity.Payload) {
-		env := forkidentity.Env(payload)
-		if otlpController != nil {
-			otlpController.SetIdentity(env["INSTANCE_NAME"], env["METRO_NAME"])
-		}
 		// Opening the S2 append session dials the network with no deadline, so
 		// it runs off the handoff's critical path.
-		stream := forkidentity.FirstNonEmpty(env["S2_STREAM"], config.S2Stream)
+		stream := forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], config.S2Stream)
 		s2Starting.Add(1)
 		go func() {
 			defer s2Starting.Done()
@@ -480,20 +482,17 @@ func mustFFmpeg() {
 	}
 }
 
-// eventSinkIdentity is what the event sinks label events with.
-type eventSinkIdentity struct {
-	stream       string
-	instanceName string
-	metro        string
-}
-
-// sinkIdentity resolves that identity, preferring a fork identity the guest has
-// already taken over the env this process was started with. The env belongs to
-// the instance this one was forked from, and it is what a restarted api would
-// otherwise fall back to for the rest of the instance's life. Reports whether
-// an applied fork identity was found.
-func sinkIdentity(cfg *config.Config) (eventSinkIdentity, bool) {
-	identity := eventSinkIdentity{stream: cfg.S2Stream, instanceName: cfg.InstanceName, metro: cfg.MetroName}
+// appliedS2Stream resolves the stream the S2 writer should bind, preferring a
+// fork identity the guest has already taken over the env this process started
+// with. The env belongs to the instance this one was forked from, and it is what
+// a restarted api would otherwise bind for the rest of the instance's life.
+// Reports whether an applied fork identity supplied it.
+//
+// OTLP resolves its identity per use instead (otlpIdentityProvider), so a stale
+// read there self-corrects; an S2 append session binds once, so this read has to
+// be right the first time.
+func appliedS2Stream(cfg *config.Config) (string, bool) {
+	stream := cfg.S2Stream
 
 	// This process starts before the wrapper enters the wait, and entering it
 	// clears the applied marker and then writes the ready file. So a marker
@@ -501,23 +500,17 @@ func sinkIdentity(cfg *config.Config) (eventSinkIdentity, bool) {
 	// drop it and hold for a new handoff, and binding to it would pin the sinks
 	// to an identity nothing is going to use.
 	if _, err := os.Stat(forkidentity.ReadyFile); err != nil {
-		return identity, false
+		return stream, false
 	}
 	applied, err := forkidentity.ReadAppliedMarker()
 	if err != nil || applied == "" {
-		return identity, false
+		return stream, false
 	}
 	payload, err := forkidentity.ReadPayload()
 	if err != nil || payload.InstanceName() != applied {
-		return identity, false
+		return stream, false
 	}
-
-	env := forkidentity.Env(payload)
-	return eventSinkIdentity{
-		stream:       forkidentity.FirstNonEmpty(env["S2_STREAM"], identity.stream),
-		instanceName: forkidentity.FirstNonEmpty(env["INSTANCE_NAME"], identity.instanceName),
-		metro:        forkidentity.FirstNonEmpty(env["METRO_NAME"], identity.metro),
-	}, true
+	return forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], stream), true
 }
 
 // chromeJSONProxyHandler returns a handler that proxies a JSON endpoint from

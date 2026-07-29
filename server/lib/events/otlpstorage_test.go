@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -89,13 +90,13 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := OTLPConfig{
-		Endpoint:     strings.TrimPrefix(srv.URL, "http://"),
-		URLPath:      "/otlp-relay/v1/logs",
-		Insecure:     true,
-		Headers:      map[string]string{"Authorization": "Bearer test-jwt"},
-		ServiceName:  "kernel-browser",
-		InstanceName: "browser-1",
-		Metro:        "dev-iad",
+		Endpoint:      strings.TrimPrefix(srv.URL, "http://"),
+		URLPath:       "/otlp-relay/v1/logs",
+		Insecure:      true,
+		AuthTokenFunc: func() string { return "test-jwt" },
+		ServiceName:   "kernel-browser",
+		InstanceName:  "browser-1",
+		Metro:         "dev-iad",
 	}
 	wtr := NewOTLPStorageWriter(es, cfg, slog.Default())
 
@@ -115,6 +116,7 @@ func TestOTLPStorageWriter_ExportsEvents(t *testing.T) {
 	defer mu.Unlock()
 	require.NotEmpty(t, paths, "expected at least one export request")
 	assert.Equal(t, "/otlp-relay/v1/logs", paths[0])
+	// The relay authenticates the VM by its instance JWT, sent as a bearer token.
 	assert.Equal(t, "Bearer test-jwt", auths[0])
 	// The excluded screenshot must not reach the receiver; only the network event does.
 	assert.Equal(t, []string{"network_response"}, eventNames)
@@ -240,15 +242,63 @@ func TestChunkBySize(t *testing.T) {
 	})
 }
 
-func TestOTLPExportControllerSetIdentity(t *testing.T) {
-	c := NewOTLPExportController(nil, OTLPConfig{InstanceName: "seed", Metro: "seed-metro"}, slog.Default())
+// TestOTLPStorageWriter_RefreshesAuthToken confirms AuthTokenFunc is read per
+// request, not captured once: a token that changes after the exporter starts is
+// reflected on later requests. This is what lets a forked VM export with the
+// fresh instance JWT from its applied identity payload without a restart.
+func TestOTLPStorageWriter_RefreshesAuthToken(t *testing.T) {
+	var mu sync.Mutex
+	var auths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		auths = append(auths, r.Header.Get("Authorization"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
 
-	c.SetIdentity("fork", "fork-metro")
-	assert.Equal(t, "fork", c.cfg.InstanceName)
-	assert.Equal(t, "fork-metro", c.cfg.Metro)
+	var token atomic.Value
+	token.Store("jwt-1")
 
-	// A payload that omits a value must not blank out the identity in place.
-	c.SetIdentity("", "")
-	assert.Equal(t, "fork", c.cfg.InstanceName)
-	assert.Equal(t, "fork-metro", c.cfg.Metro)
+	es, err := NewEventStream(EventStreamConfig{RingCapacity: 64})
+	require.NoError(t, err)
+
+	cfg := OTLPConfig{
+		Endpoint:       strings.TrimPrefix(srv.URL, "http://"),
+		URLPath:        "/otlp-relay/v1/logs",
+		Insecure:       true,
+		AuthTokenFunc:  func() string { return token.Load().(string) },
+		ServiceName:    "kernel-browser",
+		ExportInterval: 20 * time.Millisecond,
+	}
+	wtr := NewOTLPStorageWriter(es, cfg, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, wtr.Start(ctx))
+
+	seen := func(want string) func() bool {
+		return func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, a := range auths {
+				if a == want {
+					return true
+				}
+			}
+			return false
+		}
+	}
+
+	es.Publish(Envelope{Event: Event{Ts: 1, Type: "network_response", Category: Network,
+		Data: []byte(`{"method":"GET","url":"https://x","status":200}`)}})
+	require.Eventually(t, seen("Bearer jwt-1"), 3*time.Second, 10*time.Millisecond, "first export should use jwt-1")
+
+	token.Store("jwt-2")
+	es.Publish(Envelope{Event: Event{Ts: 2, Type: "network_response", Category: Network,
+		Data: []byte(`{"method":"GET","url":"https://y","status":200}`)}})
+	require.Eventually(t, seen("Bearer jwt-2"), 3*time.Second, 10*time.Millisecond, "later export should pick up the refreshed jwt-2")
+
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	require.NoError(t, wtr.Stop(stopCtx))
 }

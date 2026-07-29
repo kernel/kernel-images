@@ -126,6 +126,71 @@ func TestApiService_StopRecording(t *testing.T) {
 	})
 }
 
+func TestApiService_MarkRecording(t *testing.T) {
+	ctx := context.Background()
+	name := "checkpoint"
+
+	t.Run("unknown session maps to 404", func(t *testing.T) {
+		mgr := recorder.NewFFmpegManager()
+		svc, err := newSvc(t, mgr)
+		require.NoError(t, err)
+
+		resp, err := svc.MarkRecording(ctx, oapi.MarkRecordingRequestObject{Body: &oapi.MarkRecordingJSONRequestBody{Name: name}})
+		require.NoError(t, err)
+		require.IsType(t, oapi.MarkRecording404JSONResponse{}, resp)
+	})
+
+	t.Run("missing body maps to 400", func(t *testing.T) {
+		mgr := recorder.NewFFmpegManager()
+		svc, err := newSvc(t, mgr)
+		require.NoError(t, err)
+
+		resp, err := svc.MarkRecording(ctx, oapi.MarkRecordingRequestObject{})
+		require.NoError(t, err)
+		require.IsType(t, oapi.MarkRecording400JSONResponse{}, resp)
+	})
+
+	t.Run("not recording maps to 409", func(t *testing.T) {
+		mgr := recorder.NewFFmpegManager()
+		rec := &mockRecorder{id: "default", markErr: recorder.ErrNotRecording}
+		require.NoError(t, mgr.RegisterRecorder(ctx, rec))
+
+		svc, err := newSvc(t, mgr)
+		require.NoError(t, err)
+		resp, err := svc.MarkRecording(ctx, oapi.MarkRecordingRequestObject{Body: &oapi.MarkRecordingJSONRequestBody{Name: name}})
+		require.NoError(t, err)
+		require.IsType(t, oapi.MarkRecording409JSONResponse{}, resp)
+		require.True(t, rec.markCalled)
+	})
+
+	t.Run("invalid name maps to 400", func(t *testing.T) {
+		mgr := recorder.NewFFmpegManager()
+		rec := &mockRecorder{id: "default", markErr: recorder.ErrInvalidMarkerName}
+		require.NoError(t, mgr.RegisterRecorder(ctx, rec))
+
+		svc, err := newSvc(t, mgr)
+		require.NoError(t, err)
+		resp, err := svc.MarkRecording(ctx, oapi.MarkRecordingRequestObject{Body: &oapi.MarkRecordingJSONRequestBody{Name: "  "}})
+		require.NoError(t, err)
+		require.IsType(t, oapi.MarkRecording400JSONResponse{}, resp)
+	})
+
+	t.Run("success returns 201 with offset", func(t *testing.T) {
+		mgr := recorder.NewFFmpegManager()
+		rec := &mockRecorder{id: "default", isRecordingFlag: true, markOffsetMs: 1234}
+		require.NoError(t, mgr.RegisterRecorder(ctx, rec))
+
+		svc, err := newSvc(t, mgr)
+		require.NoError(t, err)
+		resp, err := svc.MarkRecording(ctx, oapi.MarkRecordingRequestObject{Body: &oapi.MarkRecordingJSONRequestBody{Name: name}})
+		require.NoError(t, err)
+		r, ok := resp.(oapi.MarkRecording201JSONResponse)
+		require.True(t, ok, "expected 201 response, got %T", resp)
+		assert.Equal(t, name, r.Name)
+		assert.Equal(t, int64(1234), r.OffsetMs)
+	})
+}
+
 func TestApiService_DownloadRecording(t *testing.T) {
 	ctx := context.Background()
 
@@ -226,6 +291,11 @@ type mockRecorder struct {
 	recordingErr  error
 	recordingData []byte
 	deleted       bool
+
+	markCalled   bool
+	markName     string
+	markOffsetMs int64
+	markErr      error
 }
 
 func (m *mockRecorder) ID() string { return m.id }
@@ -255,6 +325,14 @@ func (m *mockRecorder) ForceStop(ctx context.Context) error {
 	}
 	m.isRecordingFlag = false
 	return nil
+}
+
+func (m *mockRecorder) Mark(name string) (string, int64, error) {
+	m.markCalled = true
+	if m.markErr != nil {
+		return "", 0, m.markErr
+	}
+	return name, m.markOffsetMs, nil
 }
 
 func (m *mockRecorder) IsRecording(ctx context.Context) bool { return m.isRecordingFlag }
