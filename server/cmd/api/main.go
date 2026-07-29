@@ -210,8 +210,11 @@ func main() {
 
 	// A fork boots carrying the stream of the instance it came from, and the S2
 	// writer binds a stream when it starts, so it is opened here once the guest
-	// has taken an identity of its own. OTLP needs no hook: it resolves identity
-	// per use through otlpIdentityProvider.
+	// has taken an identity of its own. OTLP needs no hook here: its credential
+	// resolves per request and its resource attributes at exporter build, and
+	// export is turned on per session, which the platform does after the
+	// handoff. An export started before then keeps the source's resource
+	// attributes until it is restarted.
 	onForkIdentityApplied := func(payload forkidentity.Payload) {
 		// Opening the S2 append session dials the network with no deadline, so
 		// it runs off the handoff's critical path.
