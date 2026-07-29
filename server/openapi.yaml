@@ -232,7 +232,7 @@ paths:
       parameters:
         - name: id
           in: query
-          description: Optional recorder identifier. When omitted, the server uses the default recorder.
+          description: Identifier of the recording session to download, as passed to /recording/start. When omitted, the default recording session is downloaded.
           schema:
             type: string
             pattern: "^[a-zA-Z0-9-]+$"
@@ -305,6 +305,36 @@ paths:
         "404":
           $ref: "#/components/responses/NotFoundError"
         "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /recording/mark:
+    post:
+      summary: Add a named marker to an in-progress recording
+      description: >-
+        Records a named point in time during an active recording. At finalize
+        the markers are injected into the output MP4 as chapter markers.
+      operationId: markRecording
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkRecordingRequest"
+      responses:
+        "201":
+          description: Marker recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarkRecordingResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          description: No recording session exists with the given identifier
+          $ref: "#/components/responses/NotFoundError"
+        "409":
+          description: The recording session exists but is not actively recording
           $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
@@ -3165,7 +3195,7 @@ components:
           default: false
         id:
           type: string
-          description: Optional identifier for the recording session. Alphanumeric or hyphen.
+          description: Optional identifier for this recording session, used to target it from the other /recording endpoints (stop, mark, download, delete) and allowing multiple concurrent recordings. Alphanumeric or hyphen. When omitted, the default recording session is started.
           pattern: "^[a-zA-Z0-9-]+$"
       additionalProperties: false
     StopRecordingRequest:
@@ -3177,7 +3207,7 @@ components:
           default: false
         id:
           type: string
-          description: Identifier of the recorder to stop. Alphanumeric or hyphen.
+          description: Identifier of the recording session to stop, as passed to /recording/start. Alphanumeric or hyphen. When omitted, the default recording session is stopped.
           pattern: "^[a-zA-Z0-9-]+$"
       additionalProperties: false
     Error:
@@ -3517,8 +3547,37 @@ components:
       properties:
         id:
           type: string
-          description: Identifier of the recording to delete. Alphanumeric or hyphen.
+          description: Identifier of the recording session to delete, as passed to /recording/start. Alphanumeric or hyphen. When omitted, the default recording session is deleted.
           pattern: "^[a-zA-Z0-9-]+$"
+      additionalProperties: false
+    MarkRecordingRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: Name of the marker, used as the MP4 chapter title.
+          minLength: 1
+          maxLength: 200
+        id:
+          type: string
+          description: Identifier of the recording session to mark, as passed to /recording/start. Alphanumeric or hyphen. When omitted, the marker is added to the default recording session.
+          pattern: "^[a-zA-Z0-9-]+$"
+      additionalProperties: false
+    MarkRecordingResult:
+      type: object
+      required: [name, offset_ms]
+      properties:
+        name:
+          type: string
+          description: Name of the recorded marker.
+        offset_ms:
+          type: integer
+          format: int64
+          description: >-
+            Provisional offset of the marker from the recording start, in
+            milliseconds, measured against the start time at mark time. The
+            authoritative offset is the chapter start written at finalize.
       additionalProperties: false
     FileInfo:
       type: object

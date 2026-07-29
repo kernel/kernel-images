@@ -251,6 +251,42 @@ func (s *ApiService) StopRecording(ctx context.Context, req oapi.StopRecordingRe
 	return oapi.StopRecording200Response{}, nil
 }
 
+func (s *ApiService) MarkRecording(ctx context.Context, req oapi.MarkRecordingRequestObject) (oapi.MarkRecordingResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	if req.Body == nil {
+		return oapi.MarkRecording400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body is required"}}, nil
+	}
+
+	recorderID := s.defaultRecorderID
+	if req.Body.Id != nil && *req.Body.Id != "" {
+		recorderID = *req.Body.Id
+	}
+
+	rec, exists := s.recordManager.GetRecorder(recorderID)
+	if !exists {
+		log.Warn("attempted to mark non-existent recording session", "recorder_id", recorderID)
+		return oapi.MarkRecording404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "no such recording session"}}, nil
+	}
+
+	name, offsetMs, err := rec.Mark(req.Body.Name)
+	if err != nil {
+		switch {
+		case errors.Is(err, recorder.ErrNotRecording):
+			log.Warn("attempted to mark recording session that is not recording", "recorder_id", recorderID)
+			return oapi.MarkRecording409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: "recording session is not active"}}, nil
+		case errors.Is(err, recorder.ErrInvalidMarkerName):
+			log.Warn("invalid marker name", "recorder_id", recorderID)
+			return oapi.MarkRecording400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "marker name must be non-empty and at most 200 characters"}}, nil
+		default:
+			log.Error("failed to mark recording", "err", err, "recorder_id", recorderID)
+			return oapi.MarkRecording500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to mark recording"}}, nil
+		}
+	}
+
+	return oapi.MarkRecording201JSONResponse{Name: name, OffsetMs: offsetMs}, nil
+}
+
 const (
 	minRecordingSizeInBytes = 100
 )
