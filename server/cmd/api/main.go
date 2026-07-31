@@ -34,6 +34,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/metrics"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
+	"github.com/kernel/kernel-images/server/lib/neterror"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
@@ -297,6 +298,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Tallies net::ERR_* failures seen on relayed CDP traffic. Shared by every
+	// proxy session and read by the metrics endpoint, so it lives for the
+	// process and its counts are cumulative per VM.
+	netErrorTracker := neterror.NewTracker(slogger)
+
 	rDevtools := chi.NewRouter()
 	rDevtools.Use(
 		chiMiddleware.Logger,
@@ -322,7 +328,7 @@ func main() {
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry, netErrorTracker).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
@@ -364,6 +370,7 @@ func main() {
 	rMetrics.Use(chiMiddleware.Recoverer)
 	metricsCollectors := []metrics.Collector{
 		metrics.NewChromeCollector(upstreamMgr),
+		metrics.NewNetErrorCollector(netErrorTracker),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),
 	}
