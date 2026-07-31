@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/stretchr/testify/assert"
@@ -37,20 +39,22 @@ func (rp *recordingPublisher) snapshot() []events.Event {
 	return out
 }
 
-// Mirrors the oapi-codegen strict dispatcher: middleware chain -> inner
-// handler -> response write.
-func fakeStrictHandler(operationID string, status int, mws []oapi.StrictMiddlewareFunc) http.Handler {
+// Mirrors the oapi-codegen strict dispatcher, running body inside the handler so
+// a test can act on the request context the way a real handler does.
+func fakeStrictHandlerFunc(operationID string, status int, body func(ctx context.Context)) http.Handler {
 	inner := oapi.StrictHandlerFunc(func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
+		body(ctx)
 		return nil, nil
 	})
-	for _, mw := range mws {
-		inner = mw(inner, operationID)
-	}
+	inner = TelemetryStrictMiddleware()(inner, operationID)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = inner(r.Context(), w, r, nil)
 		w.WriteHeader(status)
 	})
 }
+
+// noBody is the handler body for tests that only exercise the middleware.
+func noBody(context.Context) {}
 
 // Flips the package-level toggle on for the test, restoring prior state
 // via t.Cleanup.
@@ -70,9 +74,9 @@ func withTelemetryMiddlewareEnabled(t *testing.T) {
 func TestTelemetryMiddleware_EmitsApiCallEventOnDocumentedRoute(t *testing.T) {
 	withTelemetryMiddlewareEnabled(t)
 	rp := &recordingPublisher{}
-	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusOK)
+	chain := chiHandler(t, rp.publish, "ClickMouse", http.StatusOK, noBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/process/exec", nil)
+	req := httptest.NewRequest(http.MethodPost, "/computer/click_mouse", nil)
 	rec := httptest.NewRecorder()
 	chain.ServeHTTP(rec, req)
 
@@ -88,18 +92,98 @@ func TestTelemetryMiddleware_EmitsApiCallEventOnDocumentedRoute(t *testing.T) {
 		OperationID string  `json:"operation_id"`
 		Status      int     `json:"status"`
 		DurationMs  float64 `json:"duration_ms"`
+		Code        *string `json:"code"`
 	}
 	require.NoError(t, json.Unmarshal(ev.Data, &data))
 	assert.NotEmpty(t, data.RequestID, "request_id should be set by chi RequestID middleware")
-	assert.Equal(t, "ProcessExec", data.OperationID)
+	assert.Equal(t, "ClickMouse", data.OperationID)
 	assert.Equal(t, http.StatusOK, data.Status)
 	assert.GreaterOrEqual(t, data.DurationMs, 0.0)
+	assert.Nil(t, data.Code, "code is only recorded by handlers that submit code")
+}
+
+func TestTelemetryMiddleware_EmitsPlatformApiCallForVMOperations(t *testing.T) {
+	withTelemetryMiddlewareEnabled(t)
+	rp := &recordingPublisher{}
+	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusOK, noBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/process/exec", nil)
+	chain.ServeHTTP(httptest.NewRecorder(), req)
+
+	captured := rp.snapshot()
+	require.Len(t, captured, 1)
+	assert.Equal(t, "platform_api_call", captured[0].Type)
+	assert.Equal(t, events.Platform, captured[0].Category)
+}
+
+// An operation the generated map does not know about must not land in control,
+// which is the stream callers read to see what the agent did.
+func TestTelemetryMiddleware_UnknownOperationIsPlatform(t *testing.T) {
+	withTelemetryMiddlewareEnabled(t)
+	rp := &recordingPublisher{}
+	chain := chiHandler(t, rp.publish, "SomeRouteAddedLater", http.StatusOK, noBody)
+
+	chain.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/whatever", nil))
+
+	captured := rp.snapshot()
+	require.Len(t, captured, 1)
+	assert.Equal(t, events.Platform, captured[0].Category)
+}
+
+func TestTelemetryMiddleware_RecordsSubmittedCode(t *testing.T) {
+	withTelemetryMiddlewareEnabled(t)
+	rp := &recordingPublisher{}
+	code := "await page.goto('https://example.com')"
+	chain := chiHandler(t, rp.publish, "ExecutePlaywrightCode", http.StatusOK, func(ctx context.Context) {
+		RecordTelemetryCode(ctx, code)
+	})
+
+	chain.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/playwright/execute", nil))
+
+	captured := rp.snapshot()
+	require.Len(t, captured, 1)
+	assert.Equal(t, events.Control, captured[0].Category)
+	assert.False(t, captured[0].Truncated)
+	var data struct {
+		Code *string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(captured[0].Data, &data))
+	require.NotNil(t, data.Code)
+	assert.Equal(t, code, *data.Code)
+}
+
+func TestTelemetryMiddleware_ClipsOversizedCode(t *testing.T) {
+	withTelemetryMiddlewareEnabled(t)
+	rp := &recordingPublisher{}
+	// Ends on a multi-byte rune straddling the cap so the clip has to back off.
+	oversized := strings.Repeat("x", events.CapturedFieldCap-1) + strings.Repeat("é", 10)
+	chain := chiHandler(t, rp.publish, "ExecutePlaywrightCode", http.StatusOK, func(ctx context.Context) {
+		RecordTelemetryCode(ctx, oversized)
+	})
+
+	chain.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/playwright/execute", nil))
+
+	captured := rp.snapshot()
+	require.Len(t, captured, 1)
+	var data struct {
+		Code string `json:"code"`
+	}
+	require.NoError(t, json.Unmarshal(captured[0].Data, &data))
+	assert.True(t, strings.HasSuffix(data.Code, events.TruncatedSuffix), "clipped code is not marked: %q", data.Code[max(0, len(data.Code)-40):])
+	assert.LessOrEqual(t, len(data.Code), events.CapturedFieldCap)
+	assert.True(t, utf8.ValidString(data.Code))
+}
+
+// RecordTelemetryCode is called from handlers that also serve requests the
+// middleware is not tracking, so it must tolerate a bare context.
+func TestRecordTelemetryCode_NoopWithoutRequestScratch(t *testing.T) {
+	RecordTelemetryCode(context.Background(), "await page.goto('https://example.com')")
 }
 
 func TestTelemetryMiddleware_CapturesNonOKStatus(t *testing.T) {
 	withTelemetryMiddlewareEnabled(t)
 	rp := &recordingPublisher{}
-	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusInternalServerError)
+	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusInternalServerError, noBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/process/exec", nil)
 	rec := httptest.NewRecorder()
@@ -131,7 +215,7 @@ func TestTelemetryMiddleware_SkipsUndocumentedRoutes(t *testing.T) {
 func TestTelemetryMiddleware_ShortCircuitsWhenDisabled(t *testing.T) {
 	DisableTelemetryMiddleware()
 	rp := &recordingPublisher{}
-	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusOK)
+	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusOK, noBody)
 
 	req := httptest.NewRequest(http.MethodPost, "/process/exec", nil)
 	rec := httptest.NewRecorder()
@@ -142,9 +226,9 @@ func TestTelemetryMiddleware_ShortCircuitsWhenDisabled(t *testing.T) {
 
 // Builds the same middleware stack as main.go: RequestID -> HTTP middleware ->
 // strict dispatch -> inner handler.
-func chiHandler(t *testing.T, publish func(events.Event) (events.Envelope, bool), operationID string, status int) http.Handler {
+func chiHandler(t *testing.T, publish func(events.Event) (events.Envelope, bool), operationID string, status int, body func(ctx context.Context)) http.Handler {
 	t.Helper()
-	inner := fakeStrictHandler(operationID, status, []oapi.StrictMiddlewareFunc{TelemetryStrictMiddleware()})
+	inner := fakeStrictHandlerFunc(operationID, status, body)
 	telemetry := TelemetryHTTPMiddleware(publish)(inner)
 	return chiMiddleware.RequestID(telemetry)
 }

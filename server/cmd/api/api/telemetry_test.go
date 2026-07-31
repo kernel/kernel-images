@@ -29,6 +29,7 @@ func allCategoriesDisabled() *oapi.BrowserTelemetryCategoriesConfig {
 		Page:        off(),
 		Interaction: off(),
 		Control:     off(),
+		Platform:    off(),
 		Connection:  off(),
 		System:      off(),
 		Screenshot:  off(),

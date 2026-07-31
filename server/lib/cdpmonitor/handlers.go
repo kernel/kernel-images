@@ -580,7 +580,7 @@ func (m *Monitor) fetchResponseBody(ctx context.Context, requestID, sessionID st
 		}
 		body = string(decoded)
 	}
-	return truncateBody(body, bodyCapFor(state.mimeType))
+	return events.TruncateCaptured(body, bodyCapFor(state.mimeType))
 }
 
 func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID string) {

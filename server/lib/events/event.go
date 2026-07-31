@@ -1,6 +1,6 @@
 package events
 
-//go:generate go run github.com/kernel/kernel-images/server/scripts/categorygen -openapi ../../openapi.yaml -out category_gen.go
+//go:generate go run github.com/kernel/kernel-images/server/scripts/categorygen -openapi ../../openapi.yaml -handlers ../oapi/oapi.go -out category_gen.go
 
 import (
 	"encoding/json"
@@ -18,6 +18,7 @@ const (
 	Page        = oapi.TelemetryEventCategory("page")
 	Interaction = oapi.TelemetryEventCategory("interaction")
 	Control     = oapi.TelemetryEventCategory("control")
+	Platform    = oapi.TelemetryEventCategory("platform")
 	Connection  = oapi.TelemetryEventCategory("connection")
 	System      = oapi.TelemetryEventCategory("system")
 	Screenshot  = oapi.TelemetryEventCategory("screenshot")
@@ -34,6 +35,7 @@ var UserCategories = []oapi.TelemetryEventCategory{
 	Page,
 	Interaction,
 	Control,
+	Platform,
 	Connection,
 	System,
 	Screenshot,
@@ -44,6 +46,8 @@ var UserCategories = []oapi.TelemetryEventCategory{
 // per-category settings: the lightweight operational signals. CDP categories
 // (console/network/page/interaction) and screenshot are excluded so the default
 // never starts the CDP collector or emits high-volume streams; they are opt-in.
+// Platform is excluded too: those calls are mostly platform-induced bookkeeping
+// (recording, profile save) that drowns out the agent's own actions.
 var DefaultCategories = []oapi.TelemetryEventCategory{
 	Control,
 	Connection,

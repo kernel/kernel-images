@@ -7,6 +7,7 @@ paths:
     post:
       summary: Start a screen recording. Only one recording per ID can be registered at a time.
       operationId: startRecording
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -27,6 +28,7 @@ paths:
     post:
       summary: Execute a command synchronously
       operationId: processExec
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -48,6 +50,7 @@ paths:
     post:
       summary: Execute a command asynchronously
       operationId: processSpawn
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -69,6 +72,7 @@ paths:
     get:
       summary: Get process status
       operationId: processStatus
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -93,6 +97,7 @@ paths:
     get:
       summary: Stream process stdout over SSE
       operationId: processStdoutStream
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -123,6 +128,7 @@ paths:
     post:
       summary: Write to process stdin
       operationId: processStdin
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -153,6 +159,7 @@ paths:
     post:
       summary: Send signal to process
       operationId: processKill
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -183,6 +190,7 @@ paths:
     post:
       summary: Resize a PTY-backed process
       operationId: processResize
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -213,6 +221,7 @@ paths:
     post:
       summary: Stop the recording
       operationId: stopRecording
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -237,6 +246,7 @@ paths:
             type: string
             pattern: "^[a-zA-Z0-9-]+$"
       operationId: downloadRecording
+      x-telemetry-category: platform
       responses:
         "200":
           description: Recording file
@@ -276,6 +286,7 @@ paths:
     get:
       summary: List all recorders
       operationId: listRecorders
+      x-telemetry-category: platform
       responses:
         "200":
           description: List of recorders
@@ -291,6 +302,7 @@ paths:
     post:
       summary: Delete a previously recorded video file
       operationId: deleteRecording
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -315,6 +327,7 @@ paths:
         Records a named point in time during an active recording. At finalize
         the markers are injected into the output MP4 as chapter markers.
       operationId: markRecording
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -342,6 +355,7 @@ paths:
     post:
       summary: Simulate a mouse click action on the host computer
       operationId: clickMouse
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -359,6 +373,7 @@ paths:
     post:
       summary: Move the mouse cursor to the specified coordinates on the host computer
       operationId: moveMouse
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -376,6 +391,7 @@ paths:
     post:
       summary: Capture a screenshot of the host computer
       operationId: takeScreenshot
+      x-telemetry-category: control
       requestBody:
         required: false
         content:
@@ -398,6 +414,7 @@ paths:
     post:
       summary: Hide or show the cursor
       operationId: setCursor
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -419,6 +436,7 @@ paths:
     post:
       summary: Get the current mouse cursor position on the host computer
       operationId: getMousePosition
+      x-telemetry-category: control
       responses:
         "200":
           description: Current mouse position
@@ -432,6 +450,7 @@ paths:
     post:
       summary: Type text on the host computer
       operationId: typeText
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -454,6 +473,7 @@ paths:
         the X11 keysym definitions at https://cgit.freedesktop.org/xorg/proto/x11proto/plain/keysymdef.h
         The server honors millisecond-level durations using fractional sleeps under the hood.
       operationId: pressKey
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -476,6 +496,7 @@ paths:
         When both horizontal and vertical deltas are provided, the server applies them sequentially (vertical then horizontal)
         and batches wheel events using `xdotool click --repeat N --delay 0 <button>`.
       operationId: scroll
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -496,6 +517,7 @@ paths:
         Press and hold a mouse button, optionally wait for a short delay, then move along the given path and release.
         The path is a list of [x, y] coordinate pairs.
       operationId: dragMouse
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -519,6 +541,7 @@ paths:
         This is useful for chaining deterministic sequences of mouse and keyboard actions
         without paying network round-trip latency for each individual action.
       operationId: batchComputerAction
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -536,6 +559,7 @@ paths:
     post:
       summary: Read text from the system clipboard
       operationId: readClipboard
+      x-telemetry-category: control
       responses:
         "200":
           description: Clipboard content read successfully
@@ -549,6 +573,7 @@ paths:
     post:
       summary: Write text to the system clipboard
       operationId: writeClipboard
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -566,6 +591,7 @@ paths:
     get:
       summary: Stream logs over SSE
       operationId: logsStream
+      x-telemetry-category: platform
       parameters:
         - in: query
           name: source
@@ -609,6 +635,7 @@ paths:
     get:
       summary: Read file contents
       operationId: readFile
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -637,6 +664,7 @@ paths:
       summary: Download a directory as a ZIP archive
       description: Returns a ZIP file containing the contents of the specified directory.
       operationId: downloadDirZip
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -664,6 +692,7 @@ paths:
     put:
       summary: Write or create a file
       operationId: writeFile
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -701,6 +730,7 @@ paths:
       summary: Upload one or more files
       description: Allows uploading single or multiple files to the remote filesystem.
       operationId: uploadFiles
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -737,6 +767,7 @@ paths:
       summary: Upload a zip archive and extract it
       description: Upload a zip file and extract its contents to the specified destination path.
       operationId: uploadZip
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -770,6 +801,7 @@ paths:
         of the specified directory. Zstd offers significantly faster compression and
         decompression compared to zip while achieving better compression ratios.
       operationId: downloadDirZstd
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -814,6 +846,7 @@ paths:
         to the specified destination path. Zstd offers significantly faster decompression
         compared to zip.
       operationId: uploadZstd
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -849,6 +882,7 @@ paths:
     get:
       summary: List files in a directory
       operationId: listFiles
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -875,6 +909,7 @@ paths:
     put:
       summary: Create a new directory
       operationId: createDirectory
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -893,6 +928,7 @@ paths:
     put:
       summary: Delete a file
       operationId: deleteFile
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -913,6 +949,7 @@ paths:
     put:
       summary: Delete a directory
       operationId: deleteDirectory
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -933,6 +970,7 @@ paths:
     put:
       summary: Set file or directory permissions/ownership
       operationId: setFilePermissions
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -953,6 +991,7 @@ paths:
     get:
       summary: Get information about a file or directory
       operationId: fileInfo
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -979,6 +1018,7 @@ paths:
     put:
       summary: Move or rename a file or directory
       operationId: movePath
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -999,6 +1039,7 @@ paths:
     post:
       summary: Watch a directory for changes
       operationId: startFsWatch
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1027,6 +1068,7 @@ paths:
     get:
       summary: Stream filesystem events for a watch
       operationId: streamFsEvents
+      x-telemetry-category: platform
       parameters:
         - name: watch_id
           in: path
@@ -1057,6 +1099,7 @@ paths:
     delete:
       summary: Stop watching a directory
       operationId: stopFsWatch
+      x-telemetry-category: platform
       parameters:
         - name: watch_id
           in: path
@@ -1076,6 +1119,7 @@ paths:
     patch:
       summary: Update display configuration
       operationId: patchDisplay
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1104,6 +1148,7 @@ paths:
         set runtime extension flags in /chromium/flags, restart Chromium via supervisord, and wait
         until the Chromium DevTools "listening" log line is observed before returning success.
       operationId: uploadExtensionsAndRestart
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1146,6 +1191,7 @@ paths:
         proxy-related policies, and policies required for CDP/automation) are blocked
         from override.
       operationId: patchChromiumPolicies
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1179,6 +1225,7 @@ paths:
         Merge new flags with existing ones, update /chromium/flags, restart Chromium via supervisord,
         and wait until the Chromium DevTools "listening" log line is observed before returning success.
       operationId: patchChromiumFlags
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1216,6 +1263,7 @@ paths:
         Prefer this over separate `/chromium/*` and `/display` calls when multiple restart-triggering
         steps apply in one session configure.
       operationId: chromiumConfigure
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1291,6 +1339,7 @@ paths:
         on localhost:9222. The code has access to 'page', 'context', and 'browser' variables.
         The result of the code execution is returned in the response.
       operationId: executePlaywrightCode
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -1315,6 +1364,7 @@ paths:
         Returns the current telemetry configuration. Returns 404 if telemetry
         is not configured.
       operationId: getTelemetry
+      x-telemetry-category: platform
       responses:
         "200":
           description: Telemetry configuration
@@ -1333,6 +1383,7 @@ paths:
         true, or every category disabled) clears the configuration; this is
         idempotent when telemetry is not configured.
       operationId: putTelemetry
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -1364,6 +1415,7 @@ paths:
         current settings. Returns 404 if telemetry is not configured. Setting
         every configurable category to enabled: false clears the configuration.
       operationId: patchTelemetry
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1392,6 +1444,7 @@ paths:
         event is admitted, 204 when the event is filtered (no active session
         or the event's category is disabled), or 400 on validation failure.
       operationId: publishTelemetryEvent
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1428,6 +1481,7 @@ paths:
         the event's `data` conforms to the matching `Browser*EventData`
         schema, selected by `type`.
       operationId: streamTelemetryEvents
+      x-telemetry-category: platform
       parameters:
         - in: header
           name: Last-Event-ID
@@ -1470,6 +1524,7 @@ paths:
         Prevents the VM from scaling to zero, regardless of HTTP traffic on it.
         Calling the API on this VM will wake it because Unikraft will automatically wake for any request to the VM.
       operationId: disableScaleToZero
+      x-telemetry-category: platform
       responses:
         "204":
           description: Scale-to-zero disabled
@@ -1482,6 +1537,7 @@ paths:
         Restores normal scale-to-zero behavior on this VM, allowing it to
         scale to zero again when idle. Call this when the VM no longer needs to be held awake.
       operationId: enableScaleToZero
+      x-telemetry-category: platform
       responses:
         "204":
           description: Scale-to-zero enabled
@@ -1516,6 +1572,7 @@ components:
             - page
             - interaction
             - control
+            - platform
             - connection
             - system
             - screenshot
@@ -1578,6 +1635,7 @@ components:
             - page
             - interaction
             - control
+            - platform
             - connection
             - system
             - screenshot
@@ -1614,8 +1672,8 @@ components:
         lightweight operational signals (control, connection, system, captcha).
         Within `browser`, only the categories you set enabled: true are
         captured; anything omitted is off. The CDP categories (console, network,
-        page, interaction) and `screenshot` are off by default and must be
-        opted into. A `browser` config with nothing enabled clears the
+        page, interaction), `screenshot` and `platform` are off by default and
+        must be opted into. A `browser` config with nothing enabled clears the
         telemetry configuration. The `monitor` category (CDP collector health)
         is not configurable here; it flows automatically whenever a CDP category
         is captured.
@@ -1666,7 +1724,10 @@ components:
           description: HTTP request/response metadata.
         control:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
-          description: Agent-driven actions against the browser, such as inbound calls to the kernel-images-api server.
+          description: Agent-driven actions against the browser — computer-control calls, Playwright code execution, screenshots and clipboard access.
+        platform:
+          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          description: Calls that manage the VM rather than drive the browser (recording, filesystem, process, telemetry and browser configuration). Mostly platform-induced; off by default and opt-in.
         connection:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: Client attach/detach lifecycle for the CDP proxy and live view.
@@ -2682,16 +2743,23 @@ components:
           description: Per-request identifier from the kernel-images-api request middleware.
         operation_id:
           type: string
-          description: OpenAPI operationId of the matched route (e.g. `processExec`, `takeScreenshot`).
+          description: Matched route's operation, named as the server names its handler (e.g. `ProcessExec`, `TakeScreenshot`).
         status:
           type: integer
           description: HTTP response status code.
         duration_ms:
           type: number
           description: Wall-clock duration of the handler in milliseconds.
+        code:
+          type: string
+          description: Source submitted to `executePlaywrightCode`, capped at 8192 bytes like every other captured string. A capped value is cut on a character boundary and ends in `...[truncated]`. Absent for every other operation.
     BrowserApiCallEvent:
       type: object
-      description: An HTTP call handled by the kernel-images-api server.
+      description: >
+        A call that drives the browser, handled by the kernel-images-api server:
+        computer-control actions, Playwright code execution, screenshots and
+        clipboard access. Calls that manage the VM instead emit
+        `platform_api_call`.
       required: [ts, type, category, source]
       properties:
         ts:
@@ -2704,6 +2772,33 @@ components:
         category:
           type: string
           const: control
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserApiCallEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserPlatformApiCallEvent:
+      type: object
+      description: >
+        A call that manages the browser VM rather than driving the browser,
+        handled by the kernel-images-api server: recording lifecycle, filesystem
+        and process management, telemetry and browser configuration. These are
+        mostly platform-induced (e.g. profile save, replay capture) rather than
+        agent actions.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: platform_api_call
+        category:
+          type: string
+          const: platform
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
@@ -3108,6 +3203,7 @@ components:
         - $ref: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
         - $ref: "#/components/schemas/BrowserMonitorInitFailedEvent"
         - $ref: "#/components/schemas/BrowserApiCallEvent"
+        - $ref: "#/components/schemas/BrowserPlatformApiCallEvent"
         - $ref: "#/components/schemas/BrowserCdpConnectEvent"
         - $ref: "#/components/schemas/BrowserCdpDisconnectEvent"
         - $ref: "#/components/schemas/BrowserLiveViewConnectEvent"
@@ -3142,6 +3238,7 @@ components:
           monitor_reconnect_failed: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
           monitor_init_failed: "#/components/schemas/BrowserMonitorInitFailedEvent"
           api_call: "#/components/schemas/BrowserApiCallEvent"
+          platform_api_call: "#/components/schemas/BrowserPlatformApiCallEvent"
           cdp_connect: "#/components/schemas/BrowserCdpConnectEvent"
           cdp_disconnect: "#/components/schemas/BrowserCdpDisconnectEvent"
           live_view_connect: "#/components/schemas/BrowserLiveViewConnectEvent"

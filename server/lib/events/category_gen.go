@@ -34,6 +34,7 @@ var categoryByType = map[string]oapi.TelemetryEventCategory{
 	"page_navigation":            oapi.TelemetryEventCategory("page"),
 	"page_navigation_settled":    oapi.TelemetryEventCategory("page"),
 	"page_tab_opened":            oapi.TelemetryEventCategory("page"),
+	"platform_api_call":          oapi.TelemetryEventCategory("platform"),
 	"service_crashed":            oapi.TelemetryEventCategory("system"),
 	"system_oom_kill":            oapi.TelemetryEventCategory("system"),
 }
@@ -42,5 +43,72 @@ var categoryByType = map[string]oapi.TelemetryEventCategory{
 // type. ok is false for an unknown type.
 func CategoryForType(eventType string) (oapi.TelemetryEventCategory, bool) {
 	c, ok := categoryByType[eventType]
+	return c, ok
+}
+
+var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
+	"BatchComputerAction":        oapi.TelemetryEventCategory("control"),
+	"ChromiumConfigure":          oapi.TelemetryEventCategory("platform"),
+	"ClickMouse":                 oapi.TelemetryEventCategory("control"),
+	"CreateDirectory":            oapi.TelemetryEventCategory("platform"),
+	"DeleteDirectory":            oapi.TelemetryEventCategory("platform"),
+	"DeleteFile":                 oapi.TelemetryEventCategory("platform"),
+	"DeleteRecording":            oapi.TelemetryEventCategory("platform"),
+	"DisableScaleToZero":         oapi.TelemetryEventCategory("platform"),
+	"DownloadDirZip":             oapi.TelemetryEventCategory("platform"),
+	"DownloadDirZstd":            oapi.TelemetryEventCategory("platform"),
+	"DownloadRecording":          oapi.TelemetryEventCategory("platform"),
+	"DragMouse":                  oapi.TelemetryEventCategory("control"),
+	"EnableScaleToZero":          oapi.TelemetryEventCategory("platform"),
+	"ExecutePlaywrightCode":      oapi.TelemetryEventCategory("control"),
+	"FileInfo":                   oapi.TelemetryEventCategory("platform"),
+	"GetMousePosition":           oapi.TelemetryEventCategory("control"),
+	"GetTelemetry":               oapi.TelemetryEventCategory("platform"),
+	"ListFiles":                  oapi.TelemetryEventCategory("platform"),
+	"ListRecorders":              oapi.TelemetryEventCategory("platform"),
+	"LogsStream":                 oapi.TelemetryEventCategory("platform"),
+	"MarkRecording":              oapi.TelemetryEventCategory("platform"),
+	"MoveMouse":                  oapi.TelemetryEventCategory("control"),
+	"MovePath":                   oapi.TelemetryEventCategory("platform"),
+	"PatchChromiumFlags":         oapi.TelemetryEventCategory("platform"),
+	"PatchChromiumPolicies":      oapi.TelemetryEventCategory("platform"),
+	"PatchDisplay":               oapi.TelemetryEventCategory("platform"),
+	"PatchTelemetry":             oapi.TelemetryEventCategory("platform"),
+	"PressKey":                   oapi.TelemetryEventCategory("control"),
+	"ProcessExec":                oapi.TelemetryEventCategory("platform"),
+	"ProcessKill":                oapi.TelemetryEventCategory("platform"),
+	"ProcessResize":              oapi.TelemetryEventCategory("platform"),
+	"ProcessSpawn":               oapi.TelemetryEventCategory("platform"),
+	"ProcessStatus":              oapi.TelemetryEventCategory("platform"),
+	"ProcessStdin":               oapi.TelemetryEventCategory("platform"),
+	"ProcessStdoutStream":        oapi.TelemetryEventCategory("platform"),
+	"PublishTelemetryEvent":      oapi.TelemetryEventCategory("platform"),
+	"PutTelemetry":               oapi.TelemetryEventCategory("platform"),
+	"ReadClipboard":              oapi.TelemetryEventCategory("control"),
+	"ReadFile":                   oapi.TelemetryEventCategory("platform"),
+	"Scroll":                     oapi.TelemetryEventCategory("control"),
+	"SetCursor":                  oapi.TelemetryEventCategory("control"),
+	"SetFilePermissions":         oapi.TelemetryEventCategory("platform"),
+	"StartFsWatch":               oapi.TelemetryEventCategory("platform"),
+	"StartRecording":             oapi.TelemetryEventCategory("platform"),
+	"StopFsWatch":                oapi.TelemetryEventCategory("platform"),
+	"StopRecording":              oapi.TelemetryEventCategory("platform"),
+	"StreamFsEvents":             oapi.TelemetryEventCategory("platform"),
+	"StreamTelemetryEvents":      oapi.TelemetryEventCategory("platform"),
+	"TakeScreenshot":             oapi.TelemetryEventCategory("control"),
+	"TypeText":                   oapi.TelemetryEventCategory("control"),
+	"UploadExtensionsAndRestart": oapi.TelemetryEventCategory("platform"),
+	"UploadFiles":                oapi.TelemetryEventCategory("platform"),
+	"UploadZip":                  oapi.TelemetryEventCategory("platform"),
+	"UploadZstd":                 oapi.TelemetryEventCategory("platform"),
+	"WriteClipboard":             oapi.TelemetryEventCategory("control"),
+	"WriteFile":                  oapi.TelemetryEventCategory("platform"),
+}
+
+// CategoryForOperation returns the category an api_call event carries for
+// the given operation, keyed by the generated handler name the event
+// reports. ok is false for an unknown operation.
+func CategoryForOperation(operationID string) (oapi.TelemetryEventCategory, bool) {
+	c, ok := categoryByOperationID[operationID]
 	return c, ok
 }

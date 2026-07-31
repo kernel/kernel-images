@@ -3,8 +3,8 @@ package cdpmonitor
 import (
 	"encoding/json"
 	"strings"
-	"unicode/utf8"
 
+	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
@@ -97,8 +97,8 @@ var structuredPrefixes = []string{
 // Vendor types with +json, +xml, or +csv suffixes are also treated as structured,
 // matching the allow-list in isCapturedMIME.
 func bodyCapFor(mime string) int {
-	const fullCap = 8 * 1024
-	const contextCap = 4 * 1024
+	const fullCap = events.CapturedFieldCap
+	const contextCap = events.CapturedFieldCap / 2
 	for _, p := range structuredPrefixes {
 		if strings.HasPrefix(mime, p) {
 			return fullCap
@@ -111,33 +111,4 @@ func bodyCapFor(mime string) int {
 		}
 	}
 	return contextCap
-}
-
-const truncatedSuffix = "...[truncated]"
-
-// truncateBody caps body at the given limit on a valid UTF-8 boundary.
-// The result never splits a multi-byte rune. A truncation suffix is appended
-// when the body is cut so callers can distinguish truncated from full content.
-func truncateBody(body string, maxBody int) string {
-	if len(body) <= maxBody {
-		return body
-	}
-	if maxBody <= 0 {
-		return ""
-	}
-	// Reserve room for the truncation suffix within the limit.
-	cutAt := maxBody - len(truncatedSuffix)
-	if cutAt <= 0 {
-		return truncatedSuffix[:maxBody]
-	}
-	// Walk forward through complete runes, stopping before we exceed cutAt.
-	end := 0
-	for end < cutAt {
-		_, size := utf8.DecodeRuneInString(body[end:])
-		if end+size > cutAt {
-			break
-		}
-		end += size
-	}
-	return body[:end] + truncatedSuffix
 }

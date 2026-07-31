@@ -99,7 +99,8 @@ func (c *otlpMockCollector) snapshot() (auths, instanceName, eventNames []string
 }
 
 // enableControlExport turns on the control category (so api_call events flow)
-// and OTLP export, then makes a few API calls to generate exportable events.
+// and OTLP export, then makes a few browser-control calls to generate
+// exportable events.
 func enableControlExport(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
 	t.Helper()
 	tr := true
@@ -113,9 +114,9 @@ func enableControlExport(t *testing.T, ctx context.Context, client *instanceoapi
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, resp.StatusCode(), "put telemetry: %s", string(resp.Body))
-	// Each API call emits an api_call (control) event, which OTLP exports.
+	// Browser-control calls emit api_call (control) events, which OTLP exports.
 	for i := 0; i < 3; i++ {
-		_, _ = client.GetTelemetryWithResponse(ctx)
+		_, _ = client.TakeScreenshotWithResponse(ctx, instanceoapi.TakeScreenshotJSONRequestBody{})
 		time.Sleep(50 * time.Millisecond)
 	}
 }
