@@ -114,6 +114,8 @@ It remains stable across calls and Chromium reconnects. It changes after:
 
 A timeout response contains the terminated REPL's ID and sets `repl_terminated: true`. No replacement is started until the next API request.
 
+Every failure path — execution errors, timeouts, crashes/OOM, and protocol corruption — populates the same optional response fields (`duration_ms`, `result_truncated`, `content_truncated`) so clients can read them unconditionally. Partial `content` is returned whenever the daemon answered before termination (the timeout path); a child that dies mid-execution cannot flush buffered output, so crash responses carry no content.
+
 ### Content Items
 
 Use an ordered discriminated union so writes, console messages, and images retain their relative order.
@@ -190,7 +192,7 @@ The v1 runtime exposes all of the following functions:
 | `type_text` | Inserts text through CDP input. |
 | `fill_input` | Fills a framework-managed input and dispatches the expected DOM events. |
 | `press_key` | Dispatches keyboard events, including modifiers and navigation keys. Modifiers are an array drawn from Alt, Control, Meta, Shift or the object sugar `{ctrl: true}`; anything else is a clear validation error. |
-| `scroll` | Dispatches a mouse-wheel event at a viewport coordinate. |
+| `scroll` | Dispatches a mouse-wheel event at a viewport coordinate. Known upstream limitation: in new headless mode Chromium ignores mouse-wheel input on `data:` URL pages (the scroll position never changes, even via raw CDP); scroll works on http(s) pages. Test scrolling against a real or `http:` page, not a `data:` URL. |
 | `capture_screenshot` | Saves a PNG in the VM and returns its path. Supports viewport/full-page capture and `max_dim`. |
 | `list_tabs` | Lists browser page targets, optionally including internal pages. |
 | `current_tab` | Returns metadata for the attached target. |
@@ -214,6 +216,8 @@ The v1 runtime exposes all of the following functions:
 Where Kernel already has first-class recording or file APIs, these helpers should delegate to the existing implementation rather than create a second recording or storage system.
 
 Wait-style helpers (`wait_for_load`, `wait_for_element`, `wait_for_network_idle`) clamp their internal deadline to just below the executing request's deadline, so a routine helper timeout surfaces the helper's own error instead of tying the destructive execution timeout and killing the REPL.
+
+Individual CDP commands are clamped the same way: every command's effective timeout is bounded to just below the executing request's deadline, and domain enables during attach run under a bounded budget. A renderer frozen behind a modal JavaScript dialog never answers session-routed commands; the clamp turns that into a clean error (with a recovery hint) instead of a destructive execution timeout, and the REPL survives. Browser-level commands (e.g. `Target.*`) are unaffected, and `Page.handleJavaScriptDialog` / `Page.reload` remain answerable because Chromium handles them browser-side.
 
 ### REPL Helpers
 
@@ -316,6 +320,16 @@ The runtime maintains:
 
 A Chromium restart clears only browser connection/session state. The REPL reconnects and reattaches on the next helper call without changing `repl_id` or JavaScript bindings.
 
+### Stale dialogs at attach
+
+A modal JavaScript dialog freezes its renderer's main thread, and a dialog left open by a REPL that was subsequently killed has no live execution that could ever handle it. On attach the runtime therefore:
+
+1. Enables domains under a bounded budget; a renderer that never answers marks the session as unresponsive instead of consuming the whole execution deadline.
+2. Attempts a best-effort `Page.handleJavaScriptDialog` (accept) when a dialog is detected at attach (Chromium re-emits `Page.javascriptDialogOpening` on `Page.enable` in many versions) or when the renderer was unresponsive during domain enable. A successful dismissal is surfaced as a `stderr` content item, and domain enables are retried.
+3. Retries domain enables on the next session command when they previously failed, so the session recovers in place once the renderer unfreezes.
+
+Some Chromium builds drop the browser-side dialog record when the owning DevTools session disconnects while leaving the renderer frozen; in that case no dismissal is possible and `Page.handleJavaScriptDialog` answers "No dialog is showing". The tab stays frozen but the endpoint does not: session commands fail cleanly (the error message names the recovery options), browser-level helpers such as `list_tabs` keep working, and the caller recovers without restarting Chromium via `cdp("Page.reload")`, `new_tab()`, or `close_tab()` of the frozen tab.
+
 ## Evaluation Semantics
 
 The runtime supports:
@@ -326,7 +340,7 @@ The runtime supports:
 - TypeScript syntax through the existing esbuild installation
 - implicit final-expression results
 
-Static top-level imports need not be supported in v1; callers can use dynamic imports.
+Static top-level imports need not be supported in v1; callers can use dynamic imports. Every static `import`/`export` form — used or unused — is rejected with the same clear error. The esbuild TypeScript transform runs with `preserveValueImports` so its unused-import elision cannot drop the statement, and the check runs on the transformed output, so the rejection is unconditional even when TypeScript-only syntax precedes the import. Type-only imports (`import type ...`) are erased by the transform and remain allowed.
 
 Redeclaration follows JavaScript semantics. In particular, a prior top-level `const` cannot be redeclared. `reset: true` is the recovery mechanism when names cannot be reused safely.
 
@@ -470,6 +484,11 @@ Bundle the runtime in both headful and headless Dockerfiles. Reuse the existing 
 - Verify DOM input, keyboard, upload, iframe, dialog, event, and network-idle semantics.
 - Verify screenshot path retrieval and explicit image emission.
 - Verify recording helpers delegate to the existing recording implementation.
+
+## Known Limitations
+
+- **Mouse-wheel scroll on `data:` URLs.** In new headless mode Chromium ignores mouse-wheel input on `data:` URL pages (confirmed via raw CDP: `window.scrollY` never changes). This is upstream behavior, not a `scroll()` helper bug; test scrolling on http(s) pages.
+- **Stale dialogs from a killed REPL.** See "Stale dialogs at attach": on Chromium builds that drop the browser-side dialog record on session disconnect, the frozen tab cannot be dismissed and must be recovered with `cdp("Page.reload")`, `new_tab()`, or `close_tab()`.
 
 ## Milestones
 

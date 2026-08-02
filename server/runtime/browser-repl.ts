@@ -180,6 +180,26 @@ function isImageMime(mime: unknown): mime is string {
   return typeof mime === 'string' && /^image\//.test(mime);
 }
 
+/**
+ * Convert a Buffer / TypedArray / DataView / ArrayBuffer to a Buffer.
+ * Cross-realm safe: user values are constructed in the vm context's realm,
+ * whose intrinsics differ from the daemon's, so `instanceof Uint8Array` /
+ * `instanceof ArrayBuffer` reject legitimate inputs. ArrayBuffer.isView and
+ * util.types inspect internal slots and work across realms.
+ */
+function bytesToBuffer(raw: unknown): Buffer {
+  if (Buffer.isBuffer(raw)) {
+    return raw;
+  }
+  if (ArrayBuffer.isView(raw)) {
+    return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+  }
+  if (util.types.isArrayBuffer(raw)) {
+    return Buffer.from(new Uint8Array(raw));
+  }
+  throw new Error('repl.emitImage: bytes must be a Buffer, Uint8Array, or ArrayBuffer');
+}
+
 async function normalizeImageInput(input: unknown): Promise<{ bytes: Buffer; mime: string }> {
   if (typeof input === 'string') {
     const match = /^data:([^;,]+);base64,(.*)$/s.exec(input);
@@ -193,14 +213,8 @@ async function normalizeImageInput(input: unknown): Promise<{ bytes: Buffer; mim
     return { bytes: Buffer.from(match[2], 'base64'), mime };
   }
 
-  if (Buffer.isBuffer(input)) {
-    const mime = sniffImageMime(input);
-    if (!mime) throw new Error('repl.emitImage: unrecognized image data (expected PNG, JPEG, or WebP)');
-    return { bytes: input, mime };
-  }
-
-  if (input instanceof Uint8Array || input instanceof ArrayBuffer) {
-    const bytes = Buffer.from(input instanceof ArrayBuffer ? new Uint8Array(input) : input);
+  if (Buffer.isBuffer(input) || ArrayBuffer.isView(input) || util.types.isArrayBuffer(input)) {
+    const bytes = bytesToBuffer(input);
     const mime = sniffImageMime(bytes);
     if (!mime) throw new Error('repl.emitImage: unrecognized image data (expected PNG, JPEG, or WebP)');
     return { bytes, mime };
@@ -213,10 +227,7 @@ async function normalizeImageInput(input: unknown): Promise<{ bytes: Buffer; mim
       throw new Error(`repl.emitImage: MIME type must be image/*, got ${String(explicitMime)}`);
     }
     if (obj.bytes !== undefined) {
-      const raw = obj.bytes as Buffer | Uint8Array | ArrayBuffer;
-      const bytes = Buffer.isBuffer(raw)
-        ? raw
-        : Buffer.from(raw instanceof ArrayBuffer ? new Uint8Array(raw) : raw);
+      const bytes = bytesToBuffer(obj.bytes);
       const mime = (explicitMime as string | undefined) ?? sniffImageMime(bytes);
       if (!mime) throw new Error('repl.emitImage: unrecognized image data (expected PNG, JPEG, or WebP)');
       return { bytes, mime };
@@ -276,6 +287,17 @@ const consoleCapture = {
 const cdpClient = new CdpClient(CDP_ENDPOINT);
 const helpers = new BrowserHelpers(cdpClient);
 
+// A dialog dismissed at attach time was left open before the runtime
+// attached (typically by a previous REPL that was killed); surface the
+// automatic dismissal so it is visible in the execution's output.
+cdpClient.onDialogAutoDismissed = (dialog) => {
+  const detail = dialog.message ? `, message: ${JSON.stringify(dialog.message)}` : '';
+  writeOutput(
+    'stderr',
+    `browser-repl: dismissed a pre-existing JavaScript dialog (type: ${dialog.type}${detail}) left open before attach`,
+  );
+};
+
 // Holder for the promise produced by the top-level-await wrapper. Defined in
 // the daemon realm so context code cannot interfere with it.
 const evalHolder: { promise: Promise<unknown> | null } = { promise: null };
@@ -326,6 +348,35 @@ const scriptOptions: vm.ScriptOptions = {
   importModuleDynamically: vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER,
 };
 
+const STATIC_IMPORT_ERROR =
+  'static import/export is not supported in the browser REPL; use dynamic import() instead';
+
+/**
+ * Reject static import/export syntax in the esbuild-transformed output. The
+ * transform runs with preserveValueImports so esbuild's TypeScript loader
+ * cannot elide unused imports before this check: every import/export
+ * statement survives into the transformed JavaScript, where it is a syntax
+ * error in acorn's script mode. That makes the rejection unconditional for
+ * every form, used or unused, even when TypeScript-only syntax precedes the
+ * import (a raw-source acorn scan cannot parse such input and would miss
+ * it). Type-only imports (`import type ...`) are erased by the transform
+ * and remain allowed. Other parse failures are ignored here; the vm
+ * compiler reports those.
+ */
+function rejectStaticImports(transformed: string): void {
+  try {
+    acorn.parse(transformed, {
+      ecmaVersion: 'latest',
+      allowAwaitOutsideFunction: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch (err: any) {
+    if (typeof err?.message === 'string' && err.message.includes('sourceType: module')) {
+      throw new Error(STATIC_IMPORT_ERROR);
+    }
+  }
+}
+
 async function transformCode(code: string): Promise<string> {
   // No `format`: esm output makes esbuild wrap top-level returns in a
   // CommonJS shim, and cjs output would break dynamic import(). Leaving it
@@ -333,7 +384,11 @@ async function transformCode(code: string): Promise<string> {
   const result = await transform(code, {
     loader: 'ts',
     target: 'es2022',
+    // Preserve unused imports so the static-import check below sees them;
+    // esbuild's TypeScript loader would otherwise elide them.
+    tsconfigRaw: { compilerOptions: { preserveValueImports: true } },
   });
+  rejectStaticImports(result.code);
   // esbuild drops expression statements it considers side-effect-free (e.g.
   // a bare `NaN` or `undefined`). In a REPL those expressions ARE the result,
   // so when the whole program was elided, evaluate the original source (it
@@ -368,7 +423,7 @@ function rewriteForAsyncBody(source: string): string {
     });
   } catch (err: any) {
     if (typeof err?.message === 'string' && err.message.includes('sourceType: module')) {
-      throw new Error('static import/export is not supported in the browser REPL; use dynamic import() instead');
+      throw new Error(STATIC_IMPORT_ERROR);
     }
     throw err;
   }
@@ -408,7 +463,7 @@ function rewriteForAsyncBody(source: string): string {
     }
 
     if (st.type === 'ImportDeclaration' || st.type.startsWith('Export')) {
-      throw new Error('static import/export is not supported in the browser REPL; use dynamic import() instead');
+      throw new Error(STATIC_IMPORT_ERROR);
     }
 
     if (isLast && st.type === 'ExpressionStatement') {
@@ -652,10 +707,12 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
 
   activeCollector = collector;
   const timeoutMs = request.timeout_ms ?? 60_000;
-  // Let wait-style helpers clamp their internal deadlines to just below
-  // this execution's deadline, so a routine helper timeout surfaces as a
+  // Let wait-style helpers and the CDP client clamp their internal
+  // deadlines to just below this execution's deadline, so a routine helper
+  // timeout (or a renderer frozen behind a modal dialog) surfaces as a
   // clean error instead of tying the destructive execution timeout.
   helpers.executionDeadlineMs = start + timeoutMs;
+  cdpClient.executionDeadlineMs = start + timeoutMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
 
@@ -698,6 +755,7 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
   } finally {
     if (timer) clearTimeout(timer);
     helpers.executionDeadlineMs = null;
+    cdpClient.executionDeadlineMs = null;
     activeCollector = null;
   }
 }

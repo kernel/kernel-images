@@ -380,15 +380,22 @@ func isTimeoutErr(err error) bool {
 }
 
 // browserReplTerminatedResponse builds the 200 response for a request that
-// destroyed the REPL (timeout, crash, or protocol corruption).
-func browserReplTerminatedResponse(replID string, err error) oapi.ExecuteBrowserCode200JSONResponse {
+// destroyed the REPL (timeout, crash, or protocol corruption). It populates
+// the same optional fields as other failure paths (duration_ms and the
+// truncation flags) so clients can read them unconditionally; partial
+// content is never available here because the child died without answering.
+func browserReplTerminatedResponse(replID string, err error, durationMs int) oapi.ExecuteBrowserCode200JSONResponse {
 	errMsg := err.Error()
 	terminated := true
+	notTruncated := false
 	return oapi.ExecuteBrowserCode200JSONResponse{
-		Success:        false,
-		ReplId:         replID,
-		Error:          &errMsg,
-		ReplTerminated: &terminated,
+		Success:          false,
+		ReplId:           replID,
+		Error:            &errMsg,
+		ReplTerminated:   &terminated,
+		DurationMs:       &durationMs,
+		ResultTruncated:  &notTruncated,
+		ContentTruncated: &notTruncated,
 	}
 }
 
@@ -489,6 +496,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 		}, nil
 	}
 
+	execStart := time.Now()
 	resp, err := s.executeOnBrowserReplLocked(ctx, code, timeout)
 	if err != nil {
 		// Any transport or protocol failure is fatal to the child: kill the
@@ -505,7 +513,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 			// killer near the heap cap) instead of a bare transport error.
 			err = fmt.Errorf("browser REPL process terminated during execution (%v): %w", waitErr, err)
 		}
-		return browserReplTerminatedResponse(replID, err), nil
+		return browserReplTerminatedResponse(replID, err, int(time.Since(execStart).Milliseconds())), nil
 	}
 
 	mapped, err := browserReplMapResponse(resp)
@@ -514,7 +522,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 		// corruption; do not risk state from this child.
 		log.Error("browser REPL returned an undecodable response; terminating child", "repl_id", replID, "error", err)
 		s.terminateBrowserReplLocked(ctx, "protocol corruption")
-		return browserReplTerminatedResponse(replID, err), nil
+		return browserReplTerminatedResponse(replID, err, int(time.Since(execStart).Milliseconds())), nil
 	}
 
 	if resp.TimedOut {

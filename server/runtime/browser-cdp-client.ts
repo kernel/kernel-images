@@ -47,6 +47,33 @@ const CONNECT_TIMEOUT_MS = 10_000;
 // serialized execution queue until the outer execution timeout kills the
 // whole REPL.
 const COMMAND_TIMEOUT_MS = 30_000;
+// COMMAND_DEADLINE_MARGIN_MS is how far below the executing request's
+// deadline a CDP command's effective timeout is clamped, leaving room for
+// the error to unwind and the response to be written before the daemon's
+// execution timer fires and destructively kills the REPL. A renderer frozen
+// behind a modal JavaScript dialog never answers session-routed commands;
+// without this clamp every such command burned a whole REPL per attempt.
+const COMMAND_DEADLINE_MARGIN_MS = 500;
+// ENABLE_DOMAINS_BUDGET_MS bounds the total time attach() spends enabling
+// CDP domains, and ENABLE_DOMAIN_COMMAND_TIMEOUT_MS each individual enable.
+// A frozen renderer never answers Page.enable, so without a budget attach
+// alone could consume the entire execution deadline and the command the
+// caller actually wanted (e.g. Page.handleJavaScriptDialog or Page.reload,
+// both answered browser-side) would never be sent.
+const ENABLE_DOMAINS_BUDGET_MS = 10_000;
+const ENABLE_DOMAIN_COMMAND_TIMEOUT_MS = 5_000;
+// DIALOG_DISMISS_TIMEOUT_MS bounds the best-effort dismissal of a dialog
+// that was already open when the runtime attached.
+const DIALOG_DISMISS_TIMEOUT_MS = 5_000;
+
+/** CdpCommandTimeoutError marks a command that exceeded its time budget. */
+export class CdpCommandTimeoutError extends Error {
+  readonly cdpCommandTimeout = true;
+}
+
+function isCdpCommandTimeout(err: unknown): boolean {
+  return err instanceof CdpCommandTimeoutError || (err as any)?.cdpCommandTimeout === true;
+}
 
 /** URL prefixes considered "internal" browser pages. */
 const INTERNAL_URL_PREFIXES = [
@@ -77,6 +104,28 @@ export class CdpClient {
 
   /** Pending JavaScript dialog for the attached session, if any. */
   pendingDialog: PendingDialog | null = null;
+
+  /**
+   * Deadline (epoch ms) of the in-flight REPL execution, set by the daemon
+   * around each execution. Every command's effective timeout is clamped to
+   * just below it, so a renderer frozen behind a modal dialog surfaces a
+   * clean error instead of tying the destructive execution timeout.
+   */
+  executionDeadlineMs: number | null = null;
+
+  /**
+   * Whether the attached target's renderer answered domain enables. False
+   * after an attach that hit a frozen renderer (e.g. a dialog left open by
+   * a previous REPL); sessionCommand retries the enables so the session
+   * recovers automatically once the renderer unfreezes.
+   */
+  private rendererResponsive = true;
+
+  /**
+   * Invoked when attach() dismisses a JavaScript dialog that was already
+   * open on the target. Wired by the daemon to surface a stderr note.
+   */
+  onDialogAutoDismissed?: (dialog: PendingDialog) => void;
 
   /** Network in-flight tracking for wait_for_network_idle. */
   private inFlightRequests = new Set<string>();
@@ -175,6 +224,7 @@ export class CdpClient {
     this.sessionId = null;
     this.targetId = null;
     this.pendingDialog = null;
+    this.rendererResponsive = true;
     this.inFlightRequests.clear();
     const err = new Error('CDP connection closed');
     for (const [, p] of this.pending) {
@@ -259,23 +309,47 @@ export class CdpClient {
   /** Send a command on the attached page session. */
   async sessionCommand<T = any>(method: string, params?: unknown): Promise<T> {
     await this.ensureAttached();
+    if (!this.rendererResponsive) {
+      // The previous attach hit a frozen renderer (e.g. a dialog left open
+      // by a previous REPL). Retry the domain enables: once the renderer
+      // unfreezes (dialog dismissed, page reloaded) the session recovers
+      // without a reattach.
+      this.rendererResponsive = await this.enableDomains(this.sessionId!);
+    }
     return this.send<T>(method, params, this.sessionId!);
   }
 
   /** Send a raw command. sessionId === null forces browser-level routing. */
-  async send<T = any>(method: string, params?: unknown, sessionId?: string): Promise<T> {
+  async send<T = any>(method: string, params?: unknown, sessionId?: string, timeoutMs?: number): Promise<T> {
     await this.ensureConnected();
     const id = this.nextId++;
     const payload: Record<string, unknown> = { id, method };
     if (params !== undefined) payload.params = params;
     if (sessionId) payload.sessionId = sessionId;
 
+    const { timeout, clampedByDeadline } = this.effectiveCommandTimeout(timeoutMs);
+    const rendererHint =
+      sessionId && !this.rendererResponsive
+        ? ' (the page renderer is unresponsive — a modal JavaScript dialog may be blocking it; ' +
+          'recover with cdp("Page.handleJavaScriptDialog", { accept: true }) or cdp("Page.reload"))'
+        : '';
+    if (timeout <= 0) {
+      throw new CdpCommandTimeoutError(
+        `CDP ${method} could not run: the execution deadline has already been reached${rendererHint}`,
+      );
+    }
+
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) {
-          reject(new Error(`CDP ${method} timed out after ${COMMAND_TIMEOUT_MS}ms`));
+          let message = `CDP ${method} timed out after ${timeout}ms`;
+          if (clampedByDeadline) {
+            message += ' (bounded by the execution timeout)';
+          }
+          message += rendererHint;
+          reject(new CdpCommandTimeoutError(message));
         }
-      }, COMMAND_TIMEOUT_MS);
+      }, timeout);
       if (typeof timer.unref === 'function') timer.unref();
       this.pending.set(id, { resolve: resolve as (v: unknown) => void, reject, method, timer });
       try {
@@ -286,6 +360,23 @@ export class CdpClient {
         reject(new Error(`failed to send CDP ${method}: ${err?.message ?? err}`));
       }
     });
+  }
+
+  /**
+   * Effective timeout for one command: the caller's override (or the
+   * default), clamped to just below the executing request's deadline so a
+   * hung command loses to the daemon's destructive execution timer.
+   */
+  private effectiveCommandTimeout(overrideMs?: number): { timeout: number; clampedByDeadline: boolean } {
+    let timeout = overrideMs ?? COMMAND_TIMEOUT_MS;
+    const exec = this.executionDeadlineMs;
+    if (exec !== null) {
+      const remaining = exec - COMMAND_DEADLINE_MARGIN_MS - Date.now();
+      if (remaining < timeout) {
+        return { timeout: remaining, clampedByDeadline: true };
+      }
+    }
+    return { timeout, clampedByDeadline: false };
   }
 
   /** List all targets from the browser. */
@@ -311,15 +402,69 @@ export class CdpClient {
     this.sessionId = res.sessionId;
     this.targetId = targetId;
     this.pendingDialog = null;
-    await this.enableDomains(this.sessionId);
+    this.rendererResponsive = await this.enableDomains(this.sessionId);
+    await this.dismissStaleDialog();
   }
 
-  private async enableDomains(sessionId: string): Promise<void> {
+  /**
+   * Enable the CDP domains the runtime relies on. Returns false when a
+   * command timed out (or the budget ran out), which means the target's
+   * renderer is unresponsive; CDP errors are ignored because some targets
+   * (e.g. OOPIFs) do not support every domain.
+   */
+  private async enableDomains(sessionId: string): Promise<boolean> {
+    const start = Date.now();
     for (const method of ['Page.enable', 'DOM.enable', 'Runtime.enable', 'Network.enable']) {
+      const remaining = ENABLE_DOMAINS_BUDGET_MS - (Date.now() - start);
+      if (remaining <= 0) {
+        return false;
+      }
       try {
-        await this.send(method, undefined, sessionId);
-      } catch {
-        // Some targets (e.g. OOPIFs) do not support every domain; ignore.
+        await this.send(method, undefined, sessionId, Math.min(remaining, ENABLE_DOMAIN_COMMAND_TIMEOUT_MS));
+      } catch (err) {
+        if (isCdpCommandTimeout(err)) {
+          return false;
+        }
+        // Domain unsupported on this target; ignore.
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Best-effort dismissal of a JavaScript dialog that was already open when
+   * the runtime attached. A modal dialog freezes the renderer main thread
+   * and no live execution owns a dialog that predates the attach (the REPL
+   * that opened it is gone), so leaving it would brick every session-routed
+   * command until the caller recovers manually. Chromium re-emits
+   * Page.javascriptDialogOpening on Page.enable in many versions (captured
+   * into pendingDialog); when the renderer was unresponsive during domain
+   * enable we also probe unconditionally, since Page.handleJavaScriptDialog
+   * is answered browser-side and simply errors when no dialog is showing.
+   */
+  private async dismissStaleDialog(): Promise<void> {
+    if (!this.sessionId) return;
+    if (this.rendererResponsive && !this.pendingDialog) return;
+    let dismissed: PendingDialog | null = null;
+    try {
+      await this.send(
+        'Page.handleJavaScriptDialog',
+        { accept: true },
+        this.sessionId,
+        DIALOG_DISMISS_TIMEOUT_MS,
+      );
+      dismissed = this.pendingDialog ?? { type: 'unknown', message: '', since: Date.now() };
+    } catch {
+      // No dialog is showing (or the command could not be answered in
+      // time). Leave pendingDialog untouched so page_info still reports a
+      // detected dialog and the caller can retry the dismissal explicitly.
+    }
+    if (dismissed) {
+      this.pendingDialog = null;
+      this.onDialogAutoDismissed?.(dismissed);
+      if (!this.rendererResponsive) {
+        // The dismissed dialog may have been what froze the renderer.
+        this.rendererResponsive = await this.enableDomains(this.sessionId);
       }
     }
   }

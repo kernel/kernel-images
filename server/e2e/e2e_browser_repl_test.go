@@ -197,6 +197,79 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		}
 	})
 
+	t.Run("stale pre-attach dialog does not brick the endpoint", func(t *testing.T) {
+		// QA finding: a modal dialog left open by a REPL that is then killed
+		// freezes the tab's renderer, and this Chromium build no longer
+		// tracks the dialog browser-side, so it cannot be dismissed. Every
+		// fresh REPL used to hang in session attach until the destructive
+		// execution timeout — burning a REPL per attempt with no in-API
+		// recovery short of restarting Chromium. Session-routed commands must
+		// now fail cleanly below the execution deadline, the REPL must
+		// survive, browser-level commands must keep working, and a
+		// browser-side Page.reload must recover the tab.
+		timeoutSec := 60
+		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			TimeoutSec: &timeoutSec,
+			Code: `
+				await ensure_real_tab();
+				await goto_url("data:text/html,<title>stale-dialog</title><p>x</p>");
+				await js("setTimeout(() => alert('stale'), 50)");
+				await wait(0.5);
+				"dialog-open"
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+
+		// Kill the REPL child, leaving the dialog open on the tab.
+		killArgs := []string{"-f", "browser-repl.js"}
+		killRsp, err := client.ProcessExecWithResponse(ctx, instanceoapi.ProcessExecJSONRequestBody{
+			Command: "pkill",
+			Args:    &killArgs,
+		})
+		require.NoError(t, err, "pkill request error: %v", err)
+		require.Equal(t, http.StatusOK, killRsp.StatusCode(), "pkill unexpected status: %s", killRsp.Status())
+		// Let the API's wait goroutine reap the child so the next request
+		// lazily starts a fresh REPL instead of racing the stale handle.
+		time.Sleep(time.Second)
+
+		// A fresh REPL attaches to the frozen tab: session commands fail
+		// with a clean error instead of a destructive timeout.
+		shortTimeout := 10
+		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			TimeoutSec: &shortTimeout,
+			Code:       `await page_info()`,
+		})
+		require.False(t, r2.Success, "page_info on a frozen renderer must fail")
+		require.NotNil(t, r2.Error)
+		require.True(t, r2.ReplTerminated == nil || !*r2.ReplTerminated,
+			"a frozen renderer must not destroy the REPL: %s", replError(r2))
+
+		// Browser-level commands keep working on the same REPL.
+		r3 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			Code: `(await list_tabs()).length`,
+		})
+		require.True(t, r3.Success, "error: %s", replError(r3))
+		require.Equal(t, r2.ReplId, r3.ReplId, "the REPL must survive the frozen renderer")
+
+		// Recovery without restarting Chromium: Page.reload is answered
+		// browser-side and unfreezes the renderer; the same REPL then serves
+		// session commands again.
+		r4 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			TimeoutSec: &timeoutSec,
+			Code: `
+				await cdp("Page.reload");
+				await wait(1);
+				const info = await page_info();
+				({ url: info.url, title: info.title })
+			`,
+		})
+		require.True(t, r4.Success, "error: %s", replError(r4))
+		require.Equal(t, r2.ReplId, r4.ReplId, "recovery must not replace the REPL")
+		recovered, ok := r4.Result.(map[string]interface{})
+		require.True(t, ok, "expected object result, got %T", r4.Result)
+		require.Contains(t, recovered["url"], "data:text/html")
+	})
+
 	t.Run("recording with custom recorder ids", func(t *testing.T) {
 		// Custom recorder ids delegate to the existing recording API. (The
 		// recording API does not support reusing an id after stop+delete

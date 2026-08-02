@@ -515,20 +515,24 @@ export class BrowserHelpers {
     if (want === -1) {
       throw new Error(`unknown ready state: ${state} (expected loading, interactive, or complete)`);
     }
+    let current = 'loading';
     for (;;) {
-      const res = await this.client.sessionCommand<any>('Runtime.evaluate', {
-        expression: 'document.readyState',
-        returnByValue: true,
-      });
-      const current: string = res.result?.value ?? 'loading';
-      if (order.indexOf(current) >= want) {
-        return current;
-      }
+      // Check the deadline before issuing another CDP command: near the
+      // deadline the command's own clamped timeout would otherwise
+      // preempt this helper's (clearer) timeout error.
       if (Date.now() > deadline) {
         throw new Error(
           `timed out waiting for readyState ${state} (still ${current})` +
             (clamped ? ' (bounded by the execution timeout)' : ''),
         );
+      }
+      const res = await this.client.sessionCommand<any>('Runtime.evaluate', {
+        expression: 'document.readyState',
+        returnByValue: true,
+      });
+      current = res.result?.value ?? 'loading';
+      if (order.indexOf(current) >= want) {
+        return current;
       }
       await this.wait(0.1);
     }
@@ -545,6 +549,15 @@ export class BrowserHelpers {
     const timeoutMs = (opts?.timeout_sec ?? 30) * 1000;
     const { deadline, clamped } = this.waitDeadline(timeoutMs);
     for (;;) {
+      // Check the deadline before issuing another CDP command: near the
+      // deadline the command's own clamped timeout would otherwise
+      // preempt this helper's (clearer) timeout error.
+      if (Date.now() > deadline) {
+        throw new Error(
+          `timed out waiting for element: ${selector}` +
+            (clamped ? ' (bounded by the execution timeout)' : ''),
+        );
+      }
       const found = await this.evaluateInPage(
         `(function (selector, requireVisible) {
           const el = document.querySelector(selector);
@@ -556,12 +569,6 @@ export class BrowserHelpers {
         })(${JSON.stringify(selector)}, ${opts?.visible === true})`,
       );
       if (found) return true;
-      if (Date.now() > deadline) {
-        throw new Error(
-          `timed out waiting for element: ${selector}` +
-            (clamped ? ' (bounded by the execution timeout)' : ''),
-        );
-      }
       await this.wait(0.1);
     }
   };
@@ -598,6 +605,12 @@ export class BrowserHelpers {
    * JSON-compatible value of the expression.
    */
   js = async (code: string, targetId?: string): Promise<unknown> => {
+    if (targetId !== undefined && targetId !== null && typeof targetId !== 'string') {
+      // A natural mistake is passing an options object ({target: id}) given
+      // other helpers take opts objects; that used to surface a raw CDP
+      // 'Invalid parameters' error from Target.attachToTarget.
+      throw new Error('js: target must be a target id string (see iframe_target/list_tabs)');
+    }
     if (targetId) {
       return this.client.evaluateOnTarget(targetId, code);
     }

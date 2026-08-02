@@ -428,6 +428,34 @@ func TestBrowserReplImageValidation(t *testing.T) {
 	require.False(t, r.Success)
 	require.Contains(t, *r.Error, "unrecognized image data")
 
+	// The documented ImageInput forms are accepted even though user code
+	// constructs them in the vm context's realm, whose Uint8Array and
+	// ArrayBuffer intrinsics differ from the daemon's (a cross-realm
+	// instanceof check previously rejected a direct Uint8Array).
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: fmt.Sprintf(`
+			const png = Buffer.from(%q, "base64");
+			const u8 = new Uint8Array(png);                       // context-realm Uint8Array
+			await repl.emitImage(u8);                             // direct Uint8Array
+			await repl.emitImage(u8.buffer);                      // direct ArrayBuffer (context realm)
+			await repl.emitImage(new DataView(u8.buffer));        // DataView
+			await repl.emitImage({ bytes: new Uint8Array(png) }); // bytes form
+			await repl.emitImage({ bytes: u8.buffer, mimeType: "image/png" });
+			"image-inputs-ok"
+		`, fakeCDPTinyPNG),
+	})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "image-inputs-ok", r.Result)
+	require.NotNil(t, r.Content)
+	imageCount := 0
+	for _, item := range *r.Content {
+		if img, err := item.AsBrowserExecutionImageContent(); err == nil && img.Type == "image" {
+			imageCount++
+			require.Equal(t, "image/png", img.MimeType)
+		}
+	}
+	require.Equal(t, 5, imageCount, "every documented ImageInput form must emit an image")
+
 	// The REPL survives user-code exceptions.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'alive'"})
 	require.True(t, r.Success)
@@ -645,6 +673,11 @@ type fakeCDPServer struct {
 	// Runtime.evaluate commands fail instead of hanging (a real renderer
 	// would never answer; failing fast keeps tests quick).
 	frozen atomic.Bool
+	// hangSession simulates a renderer frozen behind a modal dialog more
+	// faithfully: session-routed commands are never answered (browser-level
+	// commands still are), matching real Chromium behavior for a tab with a
+	// stale pre-attach dialog.
+	hangSession atomic.Bool
 	// failNextAttach makes the next N Target.attachToTarget commands fail
 	// with the stale-target error, simulating a target destroyed between
 	// listing and attaching.
@@ -731,6 +764,10 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 			SessionID string          `json:"sessionId"`
 		}
 		if err := json.Unmarshal(msg, &req); err != nil || req.ID == 0 {
+			continue
+		}
+		if req.SessionID != "" && f.hangSession.Load() {
+			// A frozen renderer never answers session-routed commands.
 			continue
 		}
 		result, events, dispatchErr := f.dispatch(req.Method, req.Params)
@@ -1089,6 +1126,19 @@ func TestBrowserReplHelperErgonomics(t *testing.T) {
 	require.NotNil(t, r.Error)
 	require.Contains(t, *r.Error, "press_key: unknown modifier")
 
+	// js rejects a non-string target (a natural mistake given other helpers
+	// take opts objects) with a clear validation error instead of a raw CDP
+	// 'Invalid parameters' failure from Target.attachToTarget.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await js("1", {target: "target-page-1"})`})
+	require.False(t, r.Success)
+	require.NotNil(t, r.Error)
+	require.Contains(t, *r.Error, "js: target must be a target id string")
+
+	// A valid target id string still routes to the target.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await js("via-target", "target-page-1")`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "via-target", r.Result)
+
 	// wait_for_element rejects a non-object opts argument immediately
 	// instead of silently ignoring it and waiting out the default timeout.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await wait_for_element("#never", false, 2)`})
@@ -1116,6 +1166,150 @@ func TestBrowserReplHelperErgonomics(t *testing.T) {
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)
+}
+
+// TestBrowserReplFrozenRendererRecovery covers the QA finding that a modal
+// JavaScript dialog left open by a killed REPL bricked /browser/execute:
+// every fresh REPL hung in session attach until the destructive execution
+// timeout, burning a REPL per attempt, with no in-API recovery short of a
+// Chromium restart. Session-routed CDP commands must instead be bounded
+// below the execution deadline, so the caller gets a clean error, the REPL
+// survives, browser-level commands keep working, and the session recovers
+// once the renderer unfreezes.
+func TestBrowserReplFrozenRendererRecovery(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	// Baseline: helpers work against a healthy renderer.
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await page_info()).title`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "Example Domain", r.Result)
+
+	// Freeze the renderer (session-routed commands are never answered) and
+	// force a fresh REPL, reproducing the stale pre-attach dialog scenario.
+	fake.hangSession.Store(true)
+	reset := true
+	timeoutSec := 5
+	start := time.Now()
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code:       `await page_info()`,
+		TimeoutSec: &timeoutSec,
+		Reset:      &reset,
+	})
+	require.Less(t, time.Since(start), 6*time.Second,
+		"the frozen renderer must surface a clean error at the deadline margin, "+
+			"not hang past the socket read deadline (timeout + grace)")
+	require.False(t, r.Success)
+	require.NotNil(t, r.Error)
+	require.Contains(t, *r.Error, "renderer is unresponsive",
+		"the error should point at the recovery path, got: %s", *r.Error)
+	require.True(t, r.ReplTerminated == nil || !*r.ReplTerminated,
+		"a frozen renderer must not destroy the REPL")
+	frozenID := r.ReplId
+
+	// Browser-level commands keep working on the same REPL while the
+	// renderer is frozen.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await list_tabs()).length`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, frozenID, r.ReplId, "the REPL must survive the frozen renderer")
+
+	// A second session command also fails cleanly (no per-attempt REPL burn).
+	timeoutSec2 := 3
+	start = time.Now()
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code:       `await js("1")`,
+		TimeoutSec: &timeoutSec2,
+	})
+	require.Less(t, time.Since(start), 3*time.Second)
+	require.False(t, r.Success)
+	require.True(t, r.ReplTerminated == nil || !*r.ReplTerminated)
+	require.Equal(t, frozenID, r.ReplId)
+
+	// Unfreeze: the session retries domain enables and recovers in place,
+	// without a reattach, a new repl_id, or any JavaScript state loss.
+	fake.hangSession.Store(false)
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await page_info()).title`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "Example Domain", r.Result)
+	require.Equal(t, frozenID, r.ReplId, "recovery must not replace the REPL")
+}
+
+// TestBrowserReplCrashDuringExecutionResponse covers the QA finding that
+// crash/OOM error responses omitted duration_ms and the truncation flags
+// while the timeout path included them. All failure paths must populate the
+// same optional fields so clients can read them unconditionally.
+func TestBrowserReplCrashDuringExecutionResponse(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+
+	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+	require.True(t, r1.Success)
+
+	// The child SIGKILLs itself mid-execution (stand-in for an OOM kill):
+	// the socket read fails and the API reports the terminated REPL.
+	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: `process.kill(process.pid, "SIGKILL")`,
+	})
+	require.False(t, r2.Success)
+	require.Equal(t, r1.ReplId, r2.ReplId, "the response carries the terminated REPL's ID")
+	require.NotNil(t, r2.ReplTerminated)
+	require.True(t, *r2.ReplTerminated)
+	require.NotNil(t, r2.Error)
+	require.Contains(t, *r2.Error, "terminated during execution")
+	require.NotNil(t, r2.DurationMs, "crash responses must include duration_ms")
+	require.GreaterOrEqual(t, *r2.DurationMs, 0)
+	require.NotNil(t, r2.ResultTruncated, "crash responses must include result_truncated")
+	require.NotNil(t, r2.ContentTruncated, "crash responses must include content_truncated")
+
+	// The next request lazily starts a fresh REPL.
+	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
+	require.True(t, r3.Success)
+	require.NotEqual(t, r1.ReplId, r3.ReplId)
+}
+
+// TestBrowserReplStaticImportRejected covers the QA finding that an unused
+// static import was silently elided by esbuild's TypeScript transform
+// before the static-import check, while a used static import produced the
+// documented error. Every static import/export form must produce the same
+// clear error, and dynamic import() must keep working.
+func TestBrowserReplStaticImportRejected(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+
+	for name, code := range map[string]string{
+		"unused default import": `import path from "node:path"; 1`,
+		"used default import":   `import path from "node:path"; path.basename("/x")`,
+		"namespace import":      `import * as fs from "node:fs"`,
+		"named import":          `import { basename } from "node:path"`,
+		"side-effect import":    `import "node:path"`,
+		"export declaration":    `export const x = 1`,
+		// TypeScript-only syntax preceding the import must not let esbuild's
+		// unused-import elision drop the statement before the check.
+		"unused import after type annotation": `const x: number = 1; import path from "node:path"; 2`,
+		"unused import after interface":       "interface Foo { a: number }\nimport p from \"node:path\"\n1",
+		"unused import before type annotation": `import p from "node:path"; const x: number = 1`,
+	} {
+		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+		require.False(t, r.Success, "%s must be rejected", name)
+		require.NotNil(t, r.Error)
+		require.Contains(t, *r.Error, "static import/export is not supported", name)
+		require.True(t, r.ReplTerminated == nil || !*r.ReplTerminated,
+			"a static import error must not destroy the REPL")
+	}
+
+	// Dynamic import keeps working, and the REPL survived the rejections.
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: `(await import("node:path")).basename("/a/b")`,
+	})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "b", r.Result)
+
+	// Type-only imports are erased by the transform and remain allowed.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: `import type { Socket } from "net"; "type-import-ok"`,
+	})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "type-import-ok", r.Result)
 }
 
 // TestBrowserReplHeapCapConfigurable verifies the BROWSER_REPL_HEAP_MB knob
