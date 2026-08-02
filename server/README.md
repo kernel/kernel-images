@@ -110,6 +110,11 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   `upload_file`, `http_get`, `start_recording`, `stop_recording`,
   `recording_dir`, `drain_events`, `cdp`) and on the frozen `browser`
   namespace. Recording helpers delegate to the Kernel recording API.
+  `press_key` accepts modifiers as an array (`["Control"]`) or an object
+  (`{ctrl: true}`). Wait-style helpers (`wait_for_load`, `wait_for_element`,
+  `wait_for_network_idle`) clamp their internal deadline to just below the
+  request's `timeout_sec`, so a routine wait miss returns the helper's own
+  error instead of tying the destructive execution timeout.
 - The REPL connects to the browser through the DevTools proxy on
   `ws://127.0.0.1:9222`, lazily on the first browser helper call; pure
   Node.js code runs fine while Chromium is down, and the connection is

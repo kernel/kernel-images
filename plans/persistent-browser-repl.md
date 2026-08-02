@@ -189,7 +189,7 @@ The v1 runtime exposes all of the following functions:
 | `click_at_xy` | Dispatches mouse press/release events in CSS viewport coordinates. |
 | `type_text` | Inserts text through CDP input. |
 | `fill_input` | Fills a framework-managed input and dispatches the expected DOM events. |
-| `press_key` | Dispatches keyboard events, including modifiers and navigation keys. |
+| `press_key` | Dispatches keyboard events, including modifiers and navigation keys. Modifiers are an array drawn from Alt, Control, Meta, Shift or the object sugar `{ctrl: true}`; anything else is a clear validation error. |
 | `scroll` | Dispatches a mouse-wheel event at a viewport coordinate. |
 | `capture_screenshot` | Saves a PNG in the VM and returns its path. Supports viewport/full-page capture and `max_dim`. |
 | `list_tabs` | Lists browser page targets, optionally including internal pages. |
@@ -201,7 +201,7 @@ The v1 runtime exposes all of the following functions:
 | `iframe_target` | Finds an out-of-process iframe target by URL substring. |
 | `wait` | Promise-based sleep using seconds for API compatibility. |
 | `wait_for_load` | Waits for the document ready state. |
-| `wait_for_element` | Waits for a selector, optionally requiring visibility. |
+| `wait_for_element` | Waits for a selector, optionally requiring visibility. A non-object `opts` argument is a clear validation error. |
 | `wait_for_network_idle` | Uses buffered Network events to detect an idle interval. |
 | `js` | Evaluates JavaScript in the attached page or specified iframe target. |
 | `dispatch_key` | Dispatches a DOM `KeyboardEvent` against a selected element. |
@@ -212,6 +212,8 @@ The v1 runtime exposes all of the following functions:
 | `recording_dir` | Returns the active recording directory or null. |
 
 Where Kernel already has first-class recording or file APIs, these helpers should delegate to the existing implementation rather than create a second recording or storage system.
+
+Wait-style helpers (`wait_for_load`, `wait_for_element`, `wait_for_network_idle`) clamp their internal deadline to just below the executing request's deadline, so a routine helper timeout surfaces the helper's own error instead of tying the destructive execution timeout and killing the REPL.
 
 ### REPL Helpers
 

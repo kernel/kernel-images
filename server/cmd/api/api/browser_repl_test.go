@@ -637,6 +637,10 @@ type fakeCDPServer struct {
 	// response, avoiding concurrent writes on the websocket.
 	queuedEvents []map[string]any
 
+	// lastKeyEvent records the params of the most recent
+	// Input.dispatchKeyEvent command so tests can verify modifier bits.
+	lastKeyEvent map[string]any
+
 	// frozen simulates a renderer stuck behind a modal JavaScript dialog:
 	// Runtime.evaluate commands fail instead of hanging (a real renderer
 	// would never answer; failing fast keeps tests quick).
@@ -689,6 +693,14 @@ func (f *fakeCDPServer) connCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return len(f.conns)
+}
+
+// lastKeyEventParams returns the params of the most recent
+// Input.dispatchKeyEvent command, or nil if none was dispatched.
+func (f *fakeCDPServer) lastKeyEventParams() map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastKeyEvent
 }
 
 func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -839,7 +851,14 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage) (any, []
 		}, nil, nil
 	case "Page.captureScreenshot":
 		return map[string]any{"data": fakeCDPTinyPNG}, nil, nil
-	case "Input.dispatchMouseEvent", "Input.insertText", "Input.dispatchKeyEvent":
+	case "Input.dispatchMouseEvent", "Input.insertText":
+		return map[string]any{}, nil, nil
+	case "Input.dispatchKeyEvent":
+		var p map[string]any
+		_ = json.Unmarshal(params, &p)
+		f.mu.Lock()
+		f.lastKeyEvent = p
+		f.mu.Unlock()
 		return map[string]any{}, nil, nil
 	case "DOM.getDocument":
 		return map[string]any{"root": map[string]any{"nodeId": 1}}, nil, nil
@@ -878,10 +897,12 @@ func (f *fakeCDPServer) evalExpression(expr string) any {
 		}
 	case expr == "document.readyState":
 		return "complete"
+	case strings.HasPrefix(expr, "(function (selector, requireVisible)"):
+		// wait_for_element IIFE: the "#never" selector never matches.
+		return !strings.Contains(expr, `"#never"`)
 	case strings.HasPrefix(expr, "(function (selector, value)"),
-		strings.HasPrefix(expr, "(function (selector, key, opts)"),
-		strings.HasPrefix(expr, "(function (selector, requireVisible)"):
-		// fill_input, dispatch_key, wait_for_element IIFEs.
+		strings.HasPrefix(expr, "(function (selector, key, opts)"):
+		// fill_input, dispatch_key IIFEs.
 		return true
 	default:
 		return expr
@@ -1033,6 +1054,115 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)
+}
+
+// TestBrowserReplHelperErgonomics covers the QA findings on helper
+// argument validation and wait-helper deadlines: bad arguments must produce
+// clear errors (not cryptic TypeErrors or silent ignores), and a wait
+// helper's default timeout must lose to the execution deadline so a routine
+// miss is a clean error instead of a destructive execution timeout.
+func TestBrowserReplHelperErgonomics(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	// press_key rejects non-array/non-object modifiers with a clear error
+	// instead of a cryptic "(modifiers ?? []) is not iterable" TypeError.
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await press_key("a", "Control")`})
+	require.False(t, r.Success)
+	require.NotNil(t, r.Error)
+	require.Contains(t, *r.Error, "press_key: modifiers must be an array")
+
+	// press_key accepts the {ctrl: true} object sugar and dispatches the
+	// Control modifier bit (2) to CDP.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await press_key("a", {ctrl: true}); "ok"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "ok", r.Result)
+	keyEv := fake.lastKeyEventParams()
+	require.NotNil(t, keyEv, "press_key must dispatch key events")
+	require.Equal(t, float64(2), keyEv["modifiers"], "ctrl sugar maps to the Control modifier bit")
+
+	// Unknown keys in the modifiers object are rejected with a clear error.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await press_key("a", {bogus: true})`})
+	require.False(t, r.Success)
+	require.NotNil(t, r.Error)
+	require.Contains(t, *r.Error, "press_key: unknown modifier")
+
+	// wait_for_element rejects a non-object opts argument immediately
+	// instead of silently ignoring it and waiting out the default timeout.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await wait_for_element("#never", false, 2)`})
+	require.False(t, r.Success)
+	require.NotNil(t, r.Error)
+	require.Contains(t, *r.Error, "wait_for_element: opts must be an object")
+
+	// A wait helper's default timeout (30s) is clamped below the execution
+	// deadline, so a routine element-wait miss surfaces the helper's clean
+	// error and the REPL survives; previously this tied the execution
+	// timeout and destructively killed the REPL.
+	timeoutSec := 3
+	start := time.Now()
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code:       `await wait_for_element("#never")`,
+		TimeoutSec: &timeoutSec,
+	})
+	require.Less(t, time.Since(start), 3*time.Second, "the helper error must beat the execution timeout")
+	require.False(t, r.Success)
+	require.NotNil(t, r.Error)
+	require.Contains(t, *r.Error, "timed out waiting for element")
+	require.Nil(t, r.ReplTerminated, "a helper timeout must not destroy the REPL")
+
+	// The REPL survived all of the above on a single repl_id.
+	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	require.True(t, r2.Success)
+	require.Equal(t, r.ReplId, r2.Result)
+}
+
+// TestBrowserReplHeapCapConfigurable verifies the BROWSER_REPL_HEAP_MB knob
+// reaches the node child's --max-old-space-size argument.
+func TestBrowserReplHeapCapConfigurable(t *testing.T) {
+	t.Setenv("BROWSER_REPL_HEAP_MB", "256")
+
+	svc := newBrowserReplSvc(t)
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1 + 1"})
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	svc.browserReplMu.Lock()
+	args := svc.browserRepl.cmd.Args
+	svc.browserReplMu.Unlock()
+	require.Contains(t, args, "--max-old-space-size=256")
+}
+
+// TestBrowserReplEventRingBounded floods the daemon with more CDP events
+// than the event ring capacity (500) and verifies old events are dropped
+// instead of growing the buffer unboundedly.
+func TestBrowserReplEventRingBounded(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "attached"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	// Queue 600 session events; they flush to the daemon after the next
+	// command response.
+	for i := 0; i < 600; i++ {
+		fake.queueEvent(map[string]any{
+			"method":    "Network.requestWillBeSent",
+			"params":    map[string]any{"requestId": fmt.Sprintf("flood-%d", i)},
+			"sessionId": "session-target-page-1",
+		})
+	}
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
+		await js("flush"); // command round-trip flushes the queued events
+		await wait(0.5);   // let the daemon process the flooded socket
+		const evs = await drain_events();
+		evs.length
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, float64(500), r.Result, "old events are dropped at the ring capacity")
 }
 
 // TestBrowserReplReconnectPreservesState simulates a Chromium restart by

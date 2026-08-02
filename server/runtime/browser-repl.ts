@@ -652,6 +652,10 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
 
   activeCollector = collector;
   const timeoutMs = request.timeout_ms ?? 60_000;
+  // Let wait-style helpers clamp their internal deadlines to just below
+  // this execution's deadline, so a routine helper timeout surfaces as a
+  // clean error instead of tying the destructive execution timeout.
+  helpers.executionDeadlineMs = start + timeoutMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
 
@@ -693,6 +697,7 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
     };
   } finally {
     if (timer) clearTimeout(timer);
+    helpers.executionDeadlineMs = null;
     activeCollector = null;
   }
 }

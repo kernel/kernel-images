@@ -11,6 +11,14 @@ import { writeFileSync } from 'fs';
 import { CdpClient, CdpTarget, isInternalUrl } from './browser-cdp-client';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+// EXECUTION_DEADLINE_MARGIN_MS is how far below the executing request's
+// deadline a wait-style helper places its own deadline when the helper's
+// timeout would otherwise tie or exceed it. The margin leaves room for the
+// helper's error to unwind and the response to be written before the
+// daemon's execution timer fires and destructively kills the REPL.
+const EXECUTION_DEADLINE_MARGIN_MS = 500;
+
 const API_PORT = process.env.KERNEL_API_PORT || process.env.PORT || '10001';
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
 
@@ -19,12 +27,78 @@ export interface RecordingState {
   dir: string | null;
 }
 
+// MODIFIER_SUGAR maps the object-sugar modifier keys accepted by press_key
+// ({ctrl: true}) to their canonical CDP names.
+const MODIFIER_SUGAR: Record<string, string> = {
+  alt: 'Alt',
+  ctrl: 'Control',
+  control: 'Control',
+  meta: 'Meta',
+  shift: 'Shift',
+};
+
+/**
+ * Normalize the modifiers argument of press_key: an array drawn from Alt,
+ * Control, Meta, Shift, or the object sugar {ctrl/alt/shift/meta: true}.
+ * Anything else is a usage error and must say so clearly — a bare object
+ * used to fail with a cryptic "(modifiers ?? []) is not iterable" TypeError
+ * and a bare string was iterated character by character.
+ */
+function normalizeKeyModifiers(modifiers?: string[] | Record<string, boolean>): string[] {
+  if (modifiers === undefined || modifiers === null) {
+    return [];
+  }
+  if (Array.isArray(modifiers)) {
+    return modifiers;
+  }
+  if (typeof modifiers === 'object') {
+    const out: string[] = [];
+    for (const [name, on] of Object.entries(modifiers)) {
+      if (!on) continue;
+      const canonical = MODIFIER_SUGAR[name.toLowerCase()];
+      if (canonical === undefined) {
+        throw new Error(`press_key: unknown modifier: ${name} (expected Alt, Control, Meta, or Shift)`);
+      }
+      if (!out.includes(canonical)) {
+        out.push(canonical);
+      }
+    }
+    return out;
+  }
+  throw new Error(
+    'press_key: modifiers must be an array drawn from Alt, Control, Meta, Shift (or an object like {ctrl: true})',
+  );
+}
+
 export class BrowserHelpers {
   private readonly client: CdpClient;
   private activeRecording: RecordingState | null = null;
 
+  /**
+   * Deadline (epoch ms) of the in-flight REPL execution, set by the daemon
+   * around each execution. Wait-style helpers clamp their internal deadline
+   * to just below it: a routine helper timeout must surface as a clean
+   * error, not tie the execution timeout, which destructively kills the
+   * REPL.
+   */
+  executionDeadlineMs: number | null = null;
+
   constructor(client: CdpClient) {
     this.client = client;
+  }
+
+  /**
+   * Effective deadline for a wait-style helper: the helper's own timeout,
+   * clamped to just below the executing request's deadline (when one is
+   * set) so the helper's error wins over the destructive execution timeout.
+   */
+  private waitDeadline(timeoutMs: number): { deadline: number; clamped: boolean } {
+    const own = Date.now() + timeoutMs;
+    const exec = this.executionDeadlineMs;
+    if (exec !== null && exec - EXECUTION_DEADLINE_MARGIN_MS < own) {
+      return { deadline: exec - EXECUTION_DEADLINE_MARGIN_MS, clamped: true };
+    }
+    return { deadline: own, clamped: false };
   }
 
   // -----------------------------------------------------------------------
@@ -204,14 +278,15 @@ export class BrowserHelpers {
    * Dispatch keyboard events. `key` is a single printable character or a
    * navigation key name (Enter, Tab, Escape, Backspace, Delete, Arrow*,
    * Home, End, PageUp, PageDown, Space). `modifiers` is an optional array
-   * drawn from Alt, Control, Meta, Shift.
+   * drawn from Alt, Control, Meta, Shift, or the object sugar
+   * {ctrl/alt/shift/meta: true}.
    */
-  pressKey = async (key: string, modifiers?: string[]): Promise<void> => {
+  pressKey = async (key: string, modifiers?: string[] | Record<string, boolean>): Promise<void> => {
     let modifierBits = 0;
-    for (const m of modifiers ?? []) {
+    for (const m of normalizeKeyModifiers(modifiers)) {
       const bit = BrowserHelpers.MODIFIER_BITS[m];
       if (bit === undefined) {
-        throw new Error(`unknown modifier: ${m} (expected Alt, Control, Meta, or Shift)`);
+        throw new Error(`press_key: unknown modifier: ${m} (expected Alt, Control, Meta, or Shift)`);
       }
       modifierBits |= bit;
     }
@@ -434,7 +509,7 @@ export class BrowserHelpers {
 
   /** Wait for the document ready state (default 'complete'). */
   waitForLoad = async (state = 'complete', timeoutSec = 30): Promise<string> => {
-    const deadline = Date.now() + timeoutSec * 1000;
+    const { deadline, clamped } = this.waitDeadline(timeoutSec * 1000);
     const order = ['loading', 'interactive', 'complete'];
     const want = order.indexOf(state);
     if (want === -1) {
@@ -450,7 +525,10 @@ export class BrowserHelpers {
         return current;
       }
       if (Date.now() > deadline) {
-        throw new Error(`timed out waiting for readyState ${state} (still ${current})`);
+        throw new Error(
+          `timed out waiting for readyState ${state} (still ${current})` +
+            (clamped ? ' (bounded by the execution timeout)' : ''),
+        );
       }
       await this.wait(0.1);
     }
@@ -461,8 +539,11 @@ export class BrowserHelpers {
     selector: string,
     opts?: { visible?: boolean; timeout_sec?: number },
   ): Promise<boolean> => {
+    if (opts !== undefined && opts !== null && (typeof opts !== 'object' || Array.isArray(opts))) {
+      throw new Error('wait_for_element: opts must be an object {visible, timeout_sec}');
+    }
     const timeoutMs = (opts?.timeout_sec ?? 30) * 1000;
-    const deadline = Date.now() + timeoutMs;
+    const { deadline, clamped } = this.waitDeadline(timeoutMs);
     for (;;) {
       const found = await this.evaluateInPage(
         `(function (selector, requireVisible) {
@@ -476,7 +557,10 @@ export class BrowserHelpers {
       );
       if (found) return true;
       if (Date.now() > deadline) {
-        throw new Error(`timed out waiting for element: ${selector}`);
+        throw new Error(
+          `timed out waiting for element: ${selector}` +
+            (clamped ? ' (bounded by the execution timeout)' : ''),
+        );
       }
       await this.wait(0.1);
     }
@@ -487,7 +571,7 @@ export class BrowserHelpers {
    * (default 0.5s), using buffered Network domain events.
    */
   waitForNetworkIdle = async (idleSec = 0.5, timeoutSec = 30): Promise<void> => {
-    const deadline = Date.now() + timeoutSec * 1000;
+    const { deadline, clamped } = this.waitDeadline(timeoutSec * 1000);
     for (;;) {
       const { inFlight, lastActivity } = this.client.networkIdleState();
       const now = Date.now();
@@ -495,7 +579,10 @@ export class BrowserHelpers {
         return;
       }
       if (now > deadline) {
-        throw new Error(`timed out waiting for network idle (${inFlight} requests in flight)`);
+        throw new Error(
+          `timed out waiting for network idle (${inFlight} requests in flight)` +
+            (clamped ? ' (bounded by the execution timeout)' : ''),
+        );
       }
       await this.wait(0.1);
     }
