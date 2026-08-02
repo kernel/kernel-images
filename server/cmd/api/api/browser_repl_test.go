@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -227,7 +229,13 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	require.Equal(t, oldID, r2.ReplId, "a timeout response carries the terminated REPL's ID")
 	require.NotNil(t, r2.ReplTerminated)
 	require.True(t, *r2.ReplTerminated)
-	require.Less(t, elapsed, 30*time.Second, "the parent must kill an uninterruptible loop promptly")
+	require.NotNil(t, r2.Error)
+	// The uninterruptible path uses the same message as the daemon's own
+	// interruptible timeout.
+	require.Contains(t, *r2.Error, "execution timed out after 1000ms")
+	// Read deadline (timeout + grace) plus an immediate SIGKILL: well under
+	// the old SIGTERM-grace-then-SIGKILL wall time.
+	require.Less(t, elapsed, 10*time.Second, "the parent must kill an uninterruptible loop promptly")
 	require.False(t, processAlive(oldPid), "timeout must kill the REPL process")
 
 	// No replacement is started until the next request.
@@ -466,11 +474,45 @@ func TestBrowserReplResultEdgeValues(t *testing.T) {
 	require.NotNil(t, r.ResultRepr)
 	require.Contains(t, *r.ResultRepr, "Circular")
 
-	// undefined result is omitted.
+	// undefined is distinguishable from null: it surfaces via result_repr.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "undefined"})
 	require.True(t, r.Success)
 	require.Nil(t, r.Result)
+	require.NotNil(t, r.ResultRepr)
+	require.Equal(t, "undefined", *r.ResultRepr)
+
+	// null stays a plain JSON null.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "null"})
+	require.True(t, r.Success)
+	require.Nil(t, r.Result)
 	require.Nil(t, r.ResultRepr)
+
+	// Map and RegExp are not JSON-compatible: bounded repr, not a silent {}.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `new Map([["k", "v"]])`})
+	require.True(t, r.Success)
+	require.Nil(t, r.Result)
+	require.NotNil(t, r.ResultRepr)
+	require.Contains(t, *r.ResultRepr, "Map(1)")
+
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `/regex/gi`})
+	require.True(t, r.Success)
+	require.Nil(t, r.Result)
+	require.NotNil(t, r.ResultRepr)
+	require.Contains(t, *r.ResultRepr, "/regex/gi")
+
+	// Dates still serialize to ISO strings.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `new Date("2024-01-02T03:04:05Z")`})
+	require.True(t, r.Success)
+	require.Equal(t, "2024-01-02T03:04:05.000Z", r.Result)
+
+	// Plain objects and arrays round-trip through result.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `({a: [1, 2, 3], b: "str", c: {d: null}})`})
+	require.True(t, r.Success)
+	plain, ok := r.Result.(map[string]any)
+	require.True(t, ok, "expected object result, got %T", r.Result)
+	require.Equal(t, []any{float64(1), float64(2), float64(3)}, plain["a"])
+	require.Equal(t, "str", plain["b"])
+	require.Equal(t, map[string]any{"d": nil}, plain["c"])
 
 	// NaN and Infinity are not JSON-compatible (JSON.stringify would turn
 	// them into null): they must surface via result_repr instead.
@@ -591,6 +633,18 @@ type fakeCDPServer struct {
 	targets []fakeCDPTarget
 	nextSeq int
 	conns   map[*websocket.Conn]struct{}
+	// queuedEvents are flushed to the daemon after the next command
+	// response, avoiding concurrent writes on the websocket.
+	queuedEvents []map[string]any
+
+	// frozen simulates a renderer stuck behind a modal JavaScript dialog:
+	// Runtime.evaluate commands fail instead of hanging (a real renderer
+	// would never answer; failing fast keeps tests quick).
+	frozen atomic.Bool
+	// failNextAttach makes the next N Target.attachToTarget commands fail
+	// with the stale-target error, simulating a target destroyed between
+	// listing and attaching.
+	failNextAttach atomic.Int32
 
 	http *httptest.Server
 }
@@ -684,7 +738,29 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		for _, ev := range f.takeQueuedEvents() {
+			data, _ := json.Marshal(ev)
+			if err := conn.Write(ctx, websocket.MessageText, data); err != nil {
+				return
+			}
+		}
 	}
+}
+
+// queueEvent buffers a raw CDP event, flushed to the daemon after the next
+// command response.
+func (f *fakeCDPServer) queueEvent(ev map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queuedEvents = append(f.queuedEvents, ev)
+}
+
+func (f *fakeCDPServer) takeQueuedEvents() []map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	evs := f.queuedEvents
+	f.queuedEvents = nil
+	return evs
 }
 
 // dispatch handles one CDP command, returning the command result plus any
@@ -710,6 +786,10 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage) (any, []
 			TargetID string `json:"targetId"`
 		}
 		_ = json.Unmarshal(params, &p)
+		if f.failNextAttach.Load() > 0 {
+			f.failNextAttach.Add(-1)
+			return nil, nil, fmt.Errorf("No target with given id found")
+		}
 		sid := "session-" + p.TargetID
 		// Emit a session-scoped event so drain_events has something to return.
 		ev := map[string]any{
@@ -768,6 +848,9 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage) (any, []
 	case "DOM.setFileInputFiles":
 		return map[string]any{}, nil, nil
 	case "Runtime.evaluate":
+		if f.frozen.Load() {
+			return nil, nil, fmt.Errorf("renderer is frozen behind a modal dialog")
+		}
 		var p struct {
 			Expression string `json:"expression"`
 		}
@@ -985,4 +1068,260 @@ func TestBrowserReplReconnectPreservesState(t *testing.T) {
 	require.Equal(t, "pre-restart", res["token"], "bindings survive a browser reconnect")
 	require.Equal(t, "Example Domain", res["title"])
 	require.Equal(t, 1, fake.connCount(), "the daemon reconnected")
+}
+
+// TestBrowserReplResultIntegrityUnderPollution verifies that user-installed
+// global/prototype hooks (JSON.stringify replacement, toJSON pollution)
+// cannot corrupt the result payload or protocol framing.
+func TestBrowserReplResultIntegrityUnderPollution(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
+		JSON.stringify = () => "PWNED";
+		Array.prototype.toJSON = () => "PWNED";
+		Object.prototype.toJSON = () => "PWNED";
+		"polluted"
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "polluted", r.Result)
+
+	// The result payload reflects actual values, not user-installed hooks.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `({a: [1, 2, 3], b: "str"})`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	res, ok := r.Result.(map[string]any)
+	require.True(t, ok, "expected object result, got %T", r.Result)
+	require.Equal(t, []any{float64(1), float64(2), float64(3)}, res["a"])
+	require.Equal(t, "str", res["b"])
+
+	// Protocol framing still works: repl.write output arrives intact.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `repl.write("frame-ok"); "done"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "done", r.Result)
+	require.NotNil(t, r.Content)
+	require.Len(t, *r.Content, 1)
+	txt, err := (*r.Content)[0].AsBrowserExecutionTextContent()
+	require.NoError(t, err)
+	require.Equal(t, "frame-ok", txt.Text)
+}
+
+// TestBrowserReplPageInfoReportsPendingDialog verifies that page_info
+// short-circuits while a modal JavaScript dialog is pending: a real renderer
+// freezes behind the dialog, so a Runtime.evaluate would block until the CDP
+// command timeout and the dialog field would be unreachable exactly when it
+// matters.
+func TestBrowserReplPageInfoReportsPendingDialog(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "attached"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	// Simulate a modal dialog: the renderer freezes (Runtime.evaluate fails)
+	// and the browser emits Page.javascriptDialogOpening.
+	fake.frozen.Store(true)
+	fake.queueEvent(map[string]any{
+		"method":    "Page.javascriptDialogOpening",
+		"params":    map[string]any{"type": "alert", "message": "hello-dialog"},
+		"sessionId": "session-target-page-1",
+	})
+
+	// Flush the queued event with a browser-level command, then give the
+	// daemon a moment to process it.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await cdp("Target.getTargets", undefined, null); "flushed"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	time.Sleep(200 * time.Millisecond)
+
+	// page_info must return promptly with the dialog instead of issuing a
+	// Runtime.evaluate that would block behind the frozen renderer.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
+		const info = await page_info();
+		({ url: info.url, title: info.title, dialog: info.dialog })
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	res, ok := r.Result.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "https://example.com/", res["url"])
+	require.Equal(t, "Example Domain", res["title"])
+	dialog, ok := res["dialog"].(map[string]any)
+	require.True(t, ok, "expected dialog payload, got %v", res["dialog"])
+	require.Equal(t, "alert", dialog["type"])
+	require.Equal(t, "hello-dialog", dialog["message"])
+
+	// Closing the dialog restores the normal page_info path.
+	fake.frozen.Store(false)
+	fake.queueEvent(map[string]any{
+		"method":    "Page.javascriptDialogClosed",
+		"params":    map[string]any{"result": true},
+		"sessionId": "session-target-page-1",
+	})
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await cdp("Target.getTargets", undefined, null); "flushed"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	time.Sleep(200 * time.Millisecond)
+
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await page_info()).dialog`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Nil(t, r.Result)
+	require.Nil(t, r.ResultRepr)
+}
+
+// TestBrowserReplAttachRetriesStaleTarget verifies that a target destroyed
+// between listing and attaching (a target-swap race) is absorbed by the
+// runtime instead of surfacing a raw CDP error.
+func TestBrowserReplAttachRetriesStaleTarget(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "attached"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	// Drop the browser connection so the next helper call must re-attach,
+	// and make the first attach attempt fail with the stale-target error a
+	// target swap produces.
+	fake.Restart()
+	require.Eventually(t, func() bool { return fake.connCount() == 0 },
+		5*time.Second, 10*time.Millisecond, "daemon connection must close")
+	fake.failNextAttach.Store(1)
+
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await page_info()).title`})
+	require.True(t, r.Success, "a transient stale-target attach must be retried: %v", r.Error)
+	require.Equal(t, "Example Domain", r.Result)
+	require.Equal(t, int32(0), fake.failNextAttach.Load(), "the first attach attempt failed as planned")
+}
+
+// fakeReplDaemonJS is a minimal Unix-socket daemon used to inject protocol
+// failures the real daemon never produces. FAKE_REPL_MODE selects the
+// failure mode.
+const fakeReplDaemonJS = `
+const net = require('net');
+const fs = require('fs');
+const sock = process.env.BROWSER_REPL_SOCKET;
+try { fs.unlinkSync(sock); } catch (e) {}
+const mode = process.env.FAKE_REPL_MODE || 'ok';
+net.createServer((conn) => {
+  let buf = '';
+  conn.on('data', (d) => {
+    buf += d.toString();
+    const idx = buf.indexOf('\n');
+    if (idx === -1) return;
+    const line = buf.slice(0, idx);
+    buf = buf.slice(idx + 1);
+    let req = {};
+    try { req = JSON.parse(line); } catch (e) {}
+    const base = {
+      id: req.id,
+      repl_id: process.env.BROWSER_REPL_ID,
+      success: true,
+      result: 1,
+      content: [],
+      result_truncated: false,
+      content_truncated: false,
+      duration_ms: 1,
+    };
+    if (mode === 'bad-request-id') {
+      conn.write(JSON.stringify({ ...base, id: 'wrong-id' }) + '\n');
+    } else if (mode === 'bad-repl-id') {
+      conn.write(JSON.stringify({ ...base, repl_id: 'wrong-repl' }) + '\n');
+    } else if (mode === 'garbage') {
+      conn.write('this is not json\n');
+    } else if (mode === 'die') {
+      process.exit(1);
+    } else {
+      conn.write(JSON.stringify(base) + '\n');
+    }
+  });
+}).listen(sock);
+`
+
+// TestBrowserReplProtocolCorruptionTerminates verifies that mismatched
+// request/repl IDs, malformed daemon responses, and a child dying
+// mid-execution all terminate the child and surface repl_terminated: true.
+func TestBrowserReplProtocolCorruptionTerminates(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skipf("node not available: %v", err)
+	}
+	script := filepath.Join(t.TempDir(), "fake-repl.js")
+	require.NoError(t, os.WriteFile(script, []byte(fakeReplDaemonJS), 0o644))
+
+	for _, tc := range []struct {
+		mode        string
+		wantErrPart string
+	}{
+		{"bad-request-id", "response ID mismatch"},
+		{"bad-repl-id", "repl_id mismatch"},
+		{"garbage", "failed to parse response"},
+		// A child dying mid-execution must surface its exit reason (e.g.
+		// SIGKILL from the OOM killer near the heap cap), not a bare
+		// transport error.
+		{"die", "terminated during execution (exit status 1)"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			t.Setenv("BROWSER_REPL_SCRIPT", script)
+			t.Setenv("BROWSER_REPL_SOCKET", filepath.Join(t.TempDir(), "browser-repl.sock"))
+			t.Setenv("FAKE_REPL_MODE", tc.mode)
+
+			svc, err := newSvc(t, recorder.NewFFmpegManager())
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				svc.browserReplMu.Lock()
+				svc.terminateBrowserReplLocked(context.Background(), "test cleanup")
+				svc.browserReplMu.Unlock()
+			})
+
+			resp, err := svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
+				Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"},
+			})
+			require.NoError(t, err)
+			typed, ok := resp.(oapi.ExecuteBrowserCode200JSONResponse)
+			require.True(t, ok, "expected 200 response, got %T", resp)
+			require.False(t, typed.Success)
+			require.NotNil(t, typed.ReplTerminated)
+			require.True(t, *typed.ReplTerminated, "protocol corruption must terminate the REPL")
+			require.NotNil(t, typed.Error)
+			require.Contains(t, *typed.Error, tc.wantErrPart)
+			require.Nil(t, svc.browserRepl, "no replacement starts until the next request")
+		})
+	}
+}
+
+// TestStrictBrowserExecuteBodyMiddleware verifies that unknown request
+// fields are rejected per the schema's additionalProperties: false, while
+// valid and otherwise-malformed requests pass through to the strict
+// handler's own decoding.
+func TestStrictBrowserExecuteBodyMiddleware(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(body)
+	})
+	handler := StrictBrowserExecuteBodyMiddleware(next)
+
+	// Unknown fields are rejected.
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(`{"code":"1","bogus":1}`)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), `unknown field \"bogus\"`)
+
+	// A valid body passes through intact.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(`{"code":"1","timeout_sec":5,"reset":false}`)))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"code":"1","timeout_sec":5,"reset":false}`, rec.Body.String())
+
+	// Malformed JSON is left for the strict handler's own 400 path.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(`{nope`)))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	// Other methods and paths pass through untouched.
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/browser/execute", nil))
+	require.Equal(t, http.StatusOK, rec.Code)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/playwright/execute", strings.NewReader(`{"code":"1","bogus":1}`)))
+	require.Equal(t, http.StatusOK, rec.Code)
 }

@@ -333,20 +333,80 @@ export class CdpClient {
     if (this.sessionId && this.targetId) {
       return;
     }
-    const targets = await this.listTargets();
-    const pages = targets.filter((t) => t.type === 'page');
-    const pick =
-      pages.find((t) => t.targetId === this.targetId) ??
-      pages.find((t) => !isInternalUrl(t.url)) ??
-      pages[0];
-    if (pick) {
-      await this.attach(pick.targetId);
-      return;
+    // A target can be destroyed between listing and attaching (target swap
+    // during navigation); re-list and retry once instead of surfacing the
+    // raw CDP error to the caller.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const targets = await this.listTargets();
+      const pages = targets.filter((t) => t.type === 'page');
+      const pick =
+        pages.find((t) => t.targetId === this.targetId) ??
+        pages.find((t) => !isInternalUrl(t.url)) ??
+        pages[0];
+      if (!pick) {
+        break;
+      }
+      try {
+        await this.attach(pick.targetId);
+        return;
+      } catch (err: any) {
+        if (attempt === 0 && String(err?.message ?? err).includes('No target with given id found')) {
+          continue;
+        }
+        throw err;
+      }
     }
     const created = await this.browserCommand<{ targetId: string }>('Target.createTarget', {
       url: 'about:blank',
     });
     await this.attach(created.targetId);
+  }
+
+  /**
+   * Best-effort wait until a target's URL has committed away from
+   * about:blank (or the target disappeared). Used by new_tab so immediate
+   * follow-up calls observe the requested URL. Never throws.
+   */
+  async waitForNavigationCommit(targetId: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        const targets = await this.listTargets();
+        const target = targets.find((t) => t.targetId === targetId);
+        if (!target || (target.url !== '' && target.url !== 'about:blank')) {
+          return;
+        }
+      } catch {
+        return;
+      }
+      if (Date.now() > deadline) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+
+  /**
+   * Best-effort wait until a target no longer appears in the target list.
+   * Used by close_tab so immediate follow-up calls observe the closure.
+   * Never throws.
+   */
+  async waitForTargetGone(targetId: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      try {
+        const targets = await this.listTargets();
+        if (!targets.some((t) => t.targetId === targetId)) {
+          return;
+        }
+      } catch {
+        return;
+      }
+      if (Date.now() > deadline) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /**

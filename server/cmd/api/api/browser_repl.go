@@ -2,14 +2,17 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,7 +39,7 @@ const (
 	// interruptible executions before the API kills the process. The daemon
 	// reports daemon-side timeouts with timed_out: true at the requested
 	// timeout, so this only covers unwind and transport time.
-	browserReplResponseGrace = 3 * time.Second
+	browserReplResponseGrace = 2 * time.Second
 
 	// browserReplMinTimeoutSec / browserReplMaxTimeoutSec bound timeout_sec
 	// per the OpenAPI schema (minimum 1, maximum 300, default 60).
@@ -185,11 +188,13 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 // terminateBrowserReplLocked stops the REPL child's process group (SIGTERM,
 // escalating to SIGKILL), waits for exit, removes the socket, and clears the
 // in-memory handle. The next request lazily starts a fresh REPL with a new
-// CUID2. Callers must hold s.browserReplMu.
-func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason string) {
+// CUID2. Returns the child's exit error when observed (nil for a clean exit
+// or when the exit could not be observed within the grace period). Callers
+// must hold s.browserReplMu.
+func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason string) error {
 	child := s.browserRepl
 	if child == nil {
-		return
+		return nil
 	}
 	log := logger.FromContext(ctx)
 	log.Info("terminating browser REPL", "repl_id", child.id, "reason", reason)
@@ -201,11 +206,38 @@ func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason stri
 	case err := <-child.done:
 		child.done = closedWaitChannel(err)
 		s.clearBrowserReplLocked(child)
-		return
+		return err
 	case <-time.After(browserReplShutdownGrace):
 	}
 
 	log.Warn("browser REPL did not exit on SIGTERM; escalating to SIGKILL", "repl_id", child.id)
+	_ = signalBrowserReplGroup(child.cmd, killSignal)
+
+	var waitErr error
+	select {
+	case err := <-child.done:
+		child.done = closedWaitChannel(err)
+		waitErr = err
+	case <-time.After(browserReplShutdownGrace):
+		log.Error("browser REPL did not exit after SIGKILL", "repl_id", child.id)
+	}
+	s.clearBrowserReplLocked(child)
+	return waitErr
+}
+
+// killBrowserReplLocked SIGKILLs the REPL process group without a SIGTERM
+// grace period. Use when the daemon's event loop is known to be blocked
+// (e.g. an uninterruptible execution that never answered before the socket
+// read deadline): a graceful signal could never be handled and would only
+// add browserReplShutdownGrace of dead time to every such timeout. Callers
+// must hold s.browserReplMu.
+func (s *ApiService) killBrowserReplLocked(ctx context.Context, reason string) {
+	child := s.browserRepl
+	if child == nil {
+		return
+	}
+	log := logger.FromContext(ctx)
+	log.Info("killing browser REPL", "repl_id", child.id, "reason", reason)
 	_ = signalBrowserReplGroup(child.cmd, killSignal)
 
 	select {
@@ -304,7 +336,7 @@ func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, code string
 				return nil, errors.New("browser REPL response exceeds maximum size")
 			}
 			if errors.Is(res.err, os.ErrDeadlineExceeded) || isTimeoutErr(res.err) {
-				return nil, errBrowserReplTimeout
+				return nil, &browserReplTimeoutError{timeout: timeout}
 			}
 			return nil, fmt.Errorf("failed to read response: %w", res.err)
 		}
@@ -330,7 +362,17 @@ func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, code string
 	return &resp, nil
 }
 
-var errBrowserReplTimeout = errors.New("browser REPL execution timed out")
+// browserReplTimeoutError reports an execution that never answered before
+// the API's socket read deadline (an uninterruptible execution, e.g.
+// `while (true) {}`). The message matches the daemon's own timeout wording
+// so both timeout paths read identically to the caller.
+type browserReplTimeoutError struct {
+	timeout time.Duration
+}
+
+func (e *browserReplTimeoutError) Error() string {
+	return fmt.Sprintf("execution timed out after %dms", e.timeout.Milliseconds())
+}
 
 func isTimeoutErr(err error) bool {
 	var netErr net.Error
@@ -348,6 +390,41 @@ func browserReplTerminatedResponse(replID string, err error) oapi.ExecuteBrowser
 		Error:          &errMsg,
 		ReplTerminated: &terminated,
 	}
+}
+
+// StrictBrowserExecuteBodyMiddleware enforces additionalProperties: false on
+// POST /browser/execute. The generated strict-server decoder silently drops
+// unknown fields, so without this middleware a request like
+// {"code":"1","bogus":1} would be accepted despite the published schema.
+// Malformed JSON and type errors are left to the strict handler's own 400
+// handling; only unknown fields are policed here.
+func StrictBrowserExecuteBodyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/browser/execute" || r.Body == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		if err != nil {
+			http.Error(w, "failed to read request body", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+
+		dec := json.NewDecoder(bytes.NewReader(body))
+		dec.DisallowUnknownFields()
+		var probe oapi.ExecuteBrowserCodeRequest
+		if err := dec.Decode(&probe); err != nil && strings.HasPrefix(err.Error(), "json: unknown field") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(oapi.BadRequestError{
+				Message: fmt.Sprintf("invalid request body: %s", err.Error()),
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // ExecuteBrowserCode implements POST /browser/execute. The API process owns
@@ -418,7 +495,16 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 		// process group, wait for exit, remove the stale socket, and clear the
 		// handle. The next request lazily starts a fresh REPL with a new ID.
 		log.Error("browser REPL execution failed; terminating child", "repl_id", replID, "error", err)
-		s.terminateBrowserReplLocked(ctx, "execution failure")
+		var timeoutErr *browserReplTimeoutError
+		if errors.As(err, &timeoutErr) {
+			// The daemon never answered, so its event loop is blocked and a
+			// graceful SIGTERM could never be handled; kill immediately.
+			s.killBrowserReplLocked(ctx, "execution timeout")
+		} else if waitErr := s.terminateBrowserReplLocked(ctx, "execution failure"); waitErr != nil {
+			// Surface the child's exit reason (e.g. SIGKILL from the OOM
+			// killer near the heap cap) instead of a bare transport error.
+			err = fmt.Errorf("browser REPL process terminated during execution (%v): %w", waitErr, err)
+		}
 		return browserReplTerminatedResponse(replID, err), nil
 	}
 

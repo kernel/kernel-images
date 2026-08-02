@@ -75,6 +75,28 @@ export class BrowserHelpers {
 
   /** URL, title, viewport, scroll position, page dimensions, pending dialog. */
   pageInfo = async (): Promise<Record<string, unknown>> => {
+    // A pending modal JavaScript dialog freezes the renderer main thread, so
+    // Runtime.evaluate would block until the CDP command timeout and the
+    // dialog field would be unreachable exactly when it matters. Report the
+    // dialog plus last-known target metadata (from the browser-level target
+    // list, which does not block) instead of evaluating in the page.
+    const pending = this.client.pendingDialog;
+    if (pending) {
+      const info: Record<string, unknown> = {
+        dialog: { type: pending.type, message: pending.message },
+      };
+      try {
+        const targets = await this.client.listTargets();
+        const current = targets.find((t) => t.targetId === this.client.targetId);
+        if (current) {
+          info.url = current.url;
+          info.title = current.title;
+        }
+      } catch {
+        // Best effort: the dialog itself is the critical payload.
+      }
+      return info;
+    }
     const evalRes = await this.client.sessionCommand<any>('Runtime.evaluate', {
       expression: `(() => ({
         url: location.href,
@@ -354,6 +376,12 @@ export class BrowserHelpers {
       url: url ?? 'about:blank',
     });
     await this.client.attach(created.targetId);
+    // Target.createTarget resolves before the initial navigation commits;
+    // wait (best effort) so an immediate page_info/list_tabs observes the
+    // requested URL rather than about:blank.
+    if (url && url !== 'about:blank') {
+      await this.client.waitForNavigationCommit(created.targetId, 5_000);
+    }
     return this.currentTab();
   };
 
@@ -369,6 +397,10 @@ export class BrowserHelpers {
       this.client.sessionId = null;
       this.client.targetId = null;
     }
+    // Target.closeTarget resolves before the target is fully destroyed;
+    // wait (best effort) so an immediate list_tabs no longer counts the
+    // closed tab.
+    await this.client.waitForTargetGone(id, 5_000);
   };
 
   /** Ensure the runtime is attached to a non-internal page. */

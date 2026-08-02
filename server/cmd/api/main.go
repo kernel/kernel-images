@@ -246,6 +246,8 @@ func main() {
 
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
+	// Enforce additionalProperties: false on POST /browser/execute.
+	r.Use(api.StrictBrowserExecuteBodyMiddleware)
 	strictHandler := oapi.NewStrictHandler(apiService, []oapi.StrictMiddlewareFunc{
 		api.TelemetryStrictMiddleware(),
 	})

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,6 +147,94 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		require.True(t, sawImage, "expected an emitted screenshot image in content")
 	})
 
+	t.Run("pending dialogs reported by page_info", func(t *testing.T) {
+		// A modal JavaScript dialog freezes the renderer main thread, so a
+		// Runtime.evaluate-based page_info would block until the CDP command
+		// timeout. page_info must instead return promptly with the dialog
+		// payload for alert, confirm, and prompt alike.
+		timeoutSec := 60
+		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			TimeoutSec: &timeoutSec,
+			Code: `
+				await ensure_real_tab();
+				await goto_url("data:text/html,<title>dlg</title><p>x</p>");
+				const seen = [];
+				for (const [type, source] of [
+					["alert", 'alert("hello-alert")'],
+					["confirm", 'confirm("hello-confirm")'],
+					["prompt", 'prompt("hello-prompt")'],
+				]) {
+					await cdp("Runtime.evaluate", { expression: "setTimeout(() => { " + source + "; }, 100)" });
+					// Let the dialog open before the first page_info so its
+					// Runtime.evaluate never races the dialog opening.
+					await wait(1);
+					let info = null;
+					for (let i = 0; i < 20; i++) {
+						info = await page_info();
+						if (info.dialog) break;
+						await wait(0.2);
+					}
+					seen.push({ want: type, got: info.dialog && info.dialog.type, message: info.dialog && info.dialog.message, url: info.url });
+					if (info.dialog) {
+						await cdp("Page.handleJavaScriptDialog", { accept: true });
+						await wait(0.3);
+					}
+				}
+				seen;
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		seen, ok := r.Result.([]interface{})
+		require.True(t, ok, "expected array result, got %T", r.Result)
+		require.Len(t, seen, 3)
+		for i, want := range []string{"alert", "confirm", "prompt"} {
+			entry, ok := seen[i].(map[string]interface{})
+			require.True(t, ok)
+			require.Equal(t, want, entry["want"])
+			require.Equal(t, want, entry["got"], "page_info must report the pending %s dialog", want)
+			require.Contains(t, entry["message"], "hello-"+want)
+			require.Contains(t, entry["url"], "data:text/html", "page_info still reports last-known target metadata")
+		}
+	})
+
+	t.Run("recording with custom recorder ids", func(t *testing.T) {
+		// Custom recorder ids delegate to the existing recording API. (The
+		// recording API does not support reusing an id after stop+delete
+		// within one API process lifetime, so each cycle uses a fresh id.)
+		timeoutSec := 60
+		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			TimeoutSec: &timeoutSec,
+			Code: `
+				const first = await start_recording({ id: "e2e-custom-a" });
+				await wait(0.5);
+				const stopped1 = await stop_recording({ id: "e2e-custom-a" });
+				const second = await start_recording({ id: "e2e-custom-b" });
+				await wait(0.5);
+				const stopped2 = await stop_recording({ id: "e2e-custom-b" });
+				({ first: first.recorder_id, stopped1: stopped1.recorder_id, second: second.recorder_id, stopped2: stopped2.recorder_id });
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		res, ok := r.Result.(map[string]interface{})
+		require.True(t, ok, "expected object result, got %T", r.Result)
+		require.Equal(t, "e2e-custom-a", res["first"])
+		require.Equal(t, "e2e-custom-a", res["stopped1"])
+		require.Equal(t, "e2e-custom-b", res["second"])
+		require.Equal(t, "e2e-custom-b", res["stopped2"])
+	})
+
+	t.Run("unknown request fields are rejected", func(t *testing.T) {
+		// The schema declares additionalProperties: false.
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			c.APIBaseURL()+"/browser/execute", strings.NewReader(`{"code":"1","bogus":1}`))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		rsp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer rsp.Body.Close()
+		require.Equal(t, http.StatusBadRequest, rsp.StatusCode, "unknown fields must be rejected")
+	})
+
 	t.Run("chromium restart preserves repl id and bindings", func(t *testing.T) {
 		r1 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			Code: `var restartToken = "pre-restart"; await ensure_real_tab(); restartToken`,
@@ -246,7 +335,9 @@ func runBrowserReplTimeoutTerminates(t *testing.T, image string) {
 		require.Equal(t, warm.ReplId, r.ReplId, "timeout response carries the terminated REPL's ID")
 		require.NotNil(t, r.ReplTerminated)
 		require.True(t, *r.ReplTerminated)
-		require.Less(t, elapsed, 30*time.Second, "timeout must kill the REPL promptly")
+		require.NotNil(t, r.Error)
+		require.Contains(t, *r.Error, "execution timed out after 2000ms", "timeout paths share one message")
+		require.Less(t, elapsed, 15*time.Second, "timeout must kill the REPL promptly")
 
 		fresh := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
 		require.True(t, fresh.Success)

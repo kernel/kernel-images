@@ -74,7 +74,8 @@ ExecuteBrowserCodeRequest:
   additionalProperties: false
 ```
 
-`code` may be empty only when `reset` is true.
+`code` may be empty only when `reset` is true. Unknown request fields are
+rejected with a 400, matching `additionalProperties: false`.
 
 ### Response
 
@@ -150,8 +151,15 @@ BrowserExecutionImageContent:
 
 The response also supports:
 
-- `result`: JSON-compatible value of the final expression.
+- `result`: JSON-compatible value of the final expression. Serialization
+  never invokes user code: `toJSON` hooks and other prototype pollution
+  installed inside the context cannot corrupt the payload. Only primitives,
+  plain objects, arrays, and Dates are JSON-compatible.
 - `result_repr`: bounded `util.inspect` output when the value is not JSON-compatible.
+  This includes `undefined` (repr `"undefined"`, keeping it distinguishable
+  from `null`), non-finite numbers and `-0`, `BigInt`, circular structures,
+  and values JSON would serialize lossily such as `Map`, `RegExp`, and class
+  instances.
 - `error` and `stack`: execution failure details.
 - truncation flags rather than silently returning partial content.
 
@@ -177,7 +185,7 @@ The v1 runtime exposes all of the following functions:
 | `cdp` | `await cdp(method, params?, session_id?)` sends an unrestricted CDP command. |
 | `drain_events` | Returns and clears buffered CDP events for the attached session. |
 | `goto_url` | Navigates the attached tab. |
-| `page_info` | Returns URL, title, viewport, scroll position, page dimensions, or a pending dialog. |
+| `page_info` | Returns URL, title, viewport, scroll position, page dimensions, or a pending dialog. While a modal dialog is open the renderer is frozen, so the helper short-circuits: it returns the pending dialog plus last-known target metadata (URL, title) without evaluating in the page. |
 | `click_at_xy` | Dispatches mouse press/release events in CSS viewport coordinates. |
 | `type_text` | Inserts text through CDP input. |
 | `fill_input` | Fills a framework-managed input and dispatches the expected DOM events. |
@@ -187,8 +195,8 @@ The v1 runtime exposes all of the following functions:
 | `list_tabs` | Lists browser page targets, optionally including internal pages. |
 | `current_tab` | Returns metadata for the attached target. |
 | `switch_tab` | Attaches the runtime to another page target. |
-| `new_tab` | Creates and attaches to a new page target. |
-| `close_tab` | Closes a page target. |
+| `new_tab` | Creates and attaches to a new page target. When a URL is given, waits (best effort) for the initial navigation to commit so immediate follow-up calls observe it. |
+| `close_tab` | Closes a page target, waiting (best effort) for the target to be destroyed so an immediate `list_tabs` no longer counts it. |
 | `ensure_real_tab` | Ensures the runtime is attached to a non-internal page. |
 | `iframe_target` | Finds an out-of-process iframe target by URL substring. |
 | `wait` | Promise-based sleep using seconds for API compatibility. |
@@ -199,7 +207,7 @@ The v1 runtime exposes all of the following functions:
 | `dispatch_key` | Dispatches a DOM `KeyboardEvent` against a selected element. |
 | `upload_file` | Sets files on an `<input type=file>` using VM-local paths. |
 | `http_get` | Performs an HTTP GET from the VM and returns the response body. |
-| `start_recording` | Starts a Kernel browser recording and returns its identifier or path. |
+| `start_recording` | Starts a Kernel browser recording and returns its identifier or path. Recorder IDs cannot be reused after stop+delete within one API process lifetime (existing recording API behavior); use a fresh ID per recording. |
 | `stop_recording` | Stops the active Kernel browser recording. |
 | `recording_dir` | Returns the active recording directory or null. |
 
@@ -374,7 +382,7 @@ Response:
 
 When the daemon-side `timeout_ms` fires on an interruptible execution, the daemon responds with `success: false` and `timed_out: true` plus the partial content produced before the deadline. The abandoned execution is still running inside the child, so the API treats `timed_out` exactly like a transport failure: it kills the process group and returns the terminated ID with `repl_terminated: true`. This keeps every timeout destructive while still returning partial output promptly; an uninterruptible execution (e.g. `while (true) {}`) never answers and is killed at the API's socket read deadline.
 
-The API validates both request ID and `repl_id`. A mismatch terminates the child rather than risking responses from stale state.
+The API validates both request ID and `repl_id`. A mismatch terminates the child rather than risking responses from stale state. Both timeout paths use the same error message (`execution timed out after <N>ms`); the uninterruptible path skips the SIGTERM grace period (the blocked event loop could never handle it) and SIGKILLs the process group at the read deadline. A child that dies mid-execution (e.g. OOM-killed near the heap cap) reports its exit reason in the error instead of a bare transport error.
 
 The child serializes executions internally as defense in depth even though the Go handler also holds `browserReplMu`.
 

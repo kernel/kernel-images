@@ -56,10 +56,15 @@ const MAX_REQUEST_BYTES = 8 * 1024 * 1024; // incoming request line
 const MAX_STRAY_ITEMS = 1000; // buffered output produced outside an execution
 
 // Private references retained before any user code runs so global/prototype
-// modification inside the context cannot corrupt protocol framing.
+// modification inside the context cannot corrupt protocol framing or result
+// serialization.
 const safeStringify = JSON.stringify;
+const safeParse = JSON.parse;
 const safeInspect = util.inspect;
 const safeFormat = util.format;
+const safeDateToISOString = Date.prototype.toISOString;
+const safeGetPrototypeOf = Object.getPrototypeOf;
+const safeKeys = Object.keys;
 
 // ---------------------------------------------------------------------------
 // Content collection
@@ -307,6 +312,11 @@ const context: vm.Context = vm.createContext(
   { name: `browser-repl-${REPL_ID}` },
 );
 
+// The context realm's Object.prototype. User values are created in the vm
+// context's realm, whose intrinsics differ from the daemon's, so plain-object
+// detection must compare against the context realm's prototype.
+const contextObjectPrototype: object = vm.runInContext('Object.prototype', context) as object;
+
 // ---------------------------------------------------------------------------
 // Evaluation
 // ---------------------------------------------------------------------------
@@ -477,9 +487,107 @@ function isErrorLike(value: unknown): value is Error {
   );
 }
 
+/**
+ * Serialize a value to JSON text without ever invoking user code.
+ * JSON.stringify consults toJSON hooks on the value's (context-realm)
+ * prototypes, so user code like `Array.prototype.toJSON = () => 'PWNED'`
+ * would otherwise corrupt the reported result payload.
+ *
+ * Only primitives, plain objects, arrays, and Dates are JSON-compatible;
+ * anything else (Map, RegExp, class instances, functions, bigint, circular
+ * structures, throwing getters, ...) returns undefined and the caller falls
+ * back to the bounded repr. Serialization otherwise follows JSON.stringify:
+ * undefined/function/symbol array elements become null and object properties
+ * with such values are skipped.
+ */
+function toJsonText(value: unknown): string | undefined {
+  const seen = new Set<object>();
+
+  const write = (v: unknown): string | undefined => {
+    if (v === null) return 'null';
+    switch (typeof v) {
+      case 'boolean':
+        return v ? 'true' : 'false';
+      case 'number':
+        // Nested non-finite numbers follow JSON.stringify and become null;
+        // top-level non-finite numbers are routed to the repr by the caller.
+        return Number.isFinite(v) ? safeStringify(v) : 'null';
+      case 'string':
+        return safeStringify(v);
+      case 'bigint':
+        // JSON.stringify throws on bigint anywhere; route the whole value
+        // to the repr.
+        throw new Error('bigint is not JSON-compatible');
+      default:
+        // undefined, function, symbol: not representable; the caller
+        // decides between skip (object property), null (array element),
+        // and the repr fallback (top level).
+        if (typeof v !== 'object') return undefined;
+        break;
+    }
+
+    const obj = v as object;
+    // Dates serialize through the pristine toISOString. Cross-realm safe:
+    // the method reads internal slots, not context-realm prototypes. Throws
+    // for non-Dates and invalid Dates, which fall through to the plain
+    // object check (a Date's prototype is not Object.prototype, so invalid
+    // Dates end up in the repr as "Invalid Date").
+    try {
+      return safeStringify(safeDateToISOString.call(obj));
+    } catch {
+      // Not a Date; continue.
+    }
+
+    const isArray = Array.isArray(obj);
+    const proto = safeGetPrototypeOf(obj);
+    const isPlain = proto === null || proto === contextObjectPrototype || proto === Object.prototype;
+    if (!isArray && !isPlain) {
+      // Map, RegExp, class instances, etc.: JSON.stringify would silently
+      // produce {} or lossy output; route the whole value to the repr.
+      throw new Error('non-plain object is not JSON-compatible');
+    }
+    if (seen.has(obj)) {
+      // JSON.stringify throws on circular structures; route to the repr.
+      throw new Error('circular structure is not JSON-compatible');
+    }
+    seen.add(obj);
+    try {
+      if (isArray) {
+        const arr = obj as unknown[];
+        const parts: string[] = [];
+        for (let i = 0; i < arr.length; i++) {
+          const text = write(arr[i]);
+          // JSON.stringify serializes undefined/function/symbol array
+          // elements as null.
+          parts.push(text === undefined ? 'null' : text);
+        }
+        return `[${parts.join(',')}]`;
+      }
+      const parts: string[] = [];
+      for (const key of safeKeys(obj)) {
+        const text = write((obj as Record<string, unknown>)[key]);
+        // JSON.stringify skips undefined/function/symbol properties.
+        if (text === undefined) continue;
+        parts.push(`${safeStringify(key)}:${text}`);
+      }
+      return `{${parts.join(',')}}`;
+    } finally {
+      seen.delete(obj);
+    }
+  };
+
+  try {
+    return write(value);
+  } catch {
+    // Proxy traps, throwing getters, etc.
+    return undefined;
+  }
+}
+
 function serializeResult(value: unknown): SerializedResult {
   if (value === undefined) {
-    return { result_truncated: false };
+    // Surface undefined explicitly so it is distinguishable from null.
+    return { result_repr: 'undefined', result_truncated: false };
   }
   if (isErrorLike(value)) {
     return { result_repr: String((value as any).stack ?? (value as any).message), result_truncated: false };
@@ -489,20 +597,18 @@ function serializeResult(value: unknown): SerializedResult {
   if (typeof value === 'number' && (!Number.isFinite(value) || Object.is(value, -0))) {
     return { result_repr: boundedInspect(value), result_truncated: false };
   }
-  try {
-    const json = safeStringify(value);
-    if (json === undefined) {
-      // Functions, symbols, etc.
-      return { result_repr: boundedInspect(value), result_truncated: false };
-    }
-    if (Buffer.byteLength(json) > MAX_RESULT_BYTES) {
-      return { result_repr: boundedInspect(value), result_truncated: true };
-    }
-    return { result: value, result_truncated: false };
-  } catch {
-    // BigInt, circular structures, throwing toJSON, etc.
+  const json = toJsonText(value);
+  if (json === undefined) {
+    // Not JSON-compatible: functions, symbols, bigint, Map, RegExp, class
+    // instances, circular structures, throwing getters, etc.
     return { result_repr: boundedInspect(value), result_truncated: false };
   }
+  if (Buffer.byteLength(json) > MAX_RESULT_BYTES) {
+    return { result_repr: boundedInspect(value), result_truncated: true };
+  }
+  // Re-parse with the pristine parser so the framing serializer never sees
+  // context-realm objects (and their potentially polluted prototypes).
+  return { result: safeParse(json), result_truncated: false };
 }
 
 // ---------------------------------------------------------------------------
