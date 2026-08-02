@@ -34,9 +34,14 @@ const (
 	// browserReplResponseGrace is added to the execution timeout when
 	// setting the socket read deadline, giving the daemon a chance to answer
 	// interruptible executions before the API kills the process. The daemon
-	// stops work at the requested timeout, so this only covers unwind and
-	// transport time.
+	// reports daemon-side timeouts with timed_out: true at the requested
+	// timeout, so this only covers unwind and transport time.
 	browserReplResponseGrace = 3 * time.Second
+
+	// browserReplMinTimeoutSec / browserReplMaxTimeoutSec bound timeout_sec
+	// per the OpenAPI schema (minimum 1, maximum 300, default 60).
+	browserReplMinTimeoutSec = 1
+	browserReplMaxTimeoutSec = 300
 
 	// browserReplMaxResponseBytes caps a single daemon response line. The
 	// daemon caps image data at 16 MiB decoded (~21.3 MiB base64) plus text
@@ -231,7 +236,11 @@ type browserReplDaemonResponse struct {
 	Content          []json.RawMessage `json:"content,omitempty"`
 	ResultTruncated  bool              `json:"result_truncated"`
 	ContentTruncated bool              `json:"content_truncated"`
-	DurationMs       int               `json:"duration_ms"`
+	// TimedOut marks a daemon-side execution timeout. The daemon cannot
+	// interrupt the abandoned execution, so the API must kill the child
+	// before serving another request (destructive timeout semantics).
+	TimedOut   bool `json:"timed_out,omitempty"`
+	DurationMs int  `json:"duration_ms"`
 }
 
 // executeOnBrowserReplLocked sends one execution to the current child and
@@ -369,7 +378,14 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 	}
 
 	timeout := 60 * time.Second
-	if request.Body.TimeoutSec != nil && *request.Body.TimeoutSec > 0 {
+	if request.Body.TimeoutSec != nil {
+		if *request.Body.TimeoutSec < browserReplMinTimeoutSec || *request.Body.TimeoutSec > browserReplMaxTimeoutSec {
+			return oapi.ExecuteBrowserCode400JSONResponse{
+				BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
+					Message: fmt.Sprintf("timeout_sec must be between %d and %d", browserReplMinTimeoutSec, browserReplMaxTimeoutSec),
+				},
+			}, nil
+		}
 		timeout = time.Duration(*request.Body.TimeoutSec) * time.Second
 	}
 
@@ -413,6 +429,19 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 		log.Error("browser REPL returned an undecodable response; terminating child", "repl_id", replID, "error", err)
 		s.terminateBrowserReplLocked(ctx, "protocol corruption")
 		return browserReplTerminatedResponse(replID, err), nil
+	}
+
+	if resp.TimedOut {
+		// A timeout is destructive: the daemon only abandoned the execution,
+		// so its code is still running inside the child. Kill the process
+		// group, wait for exit, and clear the handle; the next request lazily
+		// starts a fresh REPL with a new CUID2. The response carries the
+		// terminated ID, repl_terminated: true, and the partial content the
+		// execution produced before the deadline.
+		log.Warn("browser REPL execution timed out; terminating child", "repl_id", replID)
+		s.terminateBrowserReplLocked(ctx, "execution timeout")
+		terminated := true
+		mapped.ReplTerminated = &terminated
 	}
 	return mapped, nil
 }

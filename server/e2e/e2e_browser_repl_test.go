@@ -28,9 +28,27 @@ func executeBrowserCode(t *testing.T, ctx context.Context, client *instanceoapi.
 	return rsp.JSON200
 }
 
-// TestBrowserReplExecuteAPI covers the persistent runtime end to end:
-// binding persistence, repl_id stability, browser helpers, typed content,
-// explicit reset, and timeout termination.
+// restartChromium restarts the chromium supervisord service and waits for
+// the DevTools proxy to serve the new browser.
+func restartChromium(t *testing.T, ctx context.Context, c *TestContainer, client *instanceoapi.ClientWithResponses) {
+	t.Helper()
+	args := []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"}
+	rsp, err := client.ProcessExecWithResponse(ctx, instanceoapi.ProcessExecJSONRequestBody{
+		Command: "supervisorctl",
+		Args:    &args,
+	})
+	require.NoError(t, err, "supervisorctl restart request error: %v", err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode(), "supervisorctl restart unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+	require.NotNil(t, rsp.JSON200)
+	if rsp.JSON200.ExitCode != nil {
+		require.Equal(t, 0, *rsp.JSON200.ExitCode, "supervisorctl restart chromium failed: stderr=%v", rsp.JSON200.StderrB64)
+	}
+	require.NoError(t, c.WaitDevTools(ctx), "DevTools not ready after chromium restart")
+}
+
+// TestBrowserReplExecuteAPI covers the persistent runtime end to end on both
+// images: binding persistence, repl_id stability (including across a
+// Chromium restart), browser helpers, typed content, and explicit reset.
 func TestBrowserReplExecuteAPI(t *testing.T) {
 	t.Parallel()
 
@@ -38,10 +56,25 @@ func TestBrowserReplExecuteAPI(t *testing.T) {
 		t.Skipf("docker not available: %v", err)
 	}
 
+	for _, image := range []struct {
+		name  string
+		image string
+	}{
+		{"Headless", headlessImage},
+		{"Headful", headfulImage},
+	} {
+		t.Run(image.name, func(t *testing.T) {
+			t.Parallel()
+			runBrowserReplExecuteAPI(t, image.image)
+		})
+	}
+}
+
+func runBrowserReplExecuteAPI(t *testing.T, image string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	c := NewTestContainer(t, headlessImage)
+	c := NewTestContainer(t, image)
 	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
 	defer c.Stop(ctx)
 
@@ -104,13 +137,36 @@ func TestBrowserReplExecuteAPI(t *testing.T) {
 		require.NotNil(t, r.Content)
 		var sawImage bool
 		for _, item := range *r.Content {
-			if img, err := item.AsBrowserExecutionImageContent(); err == nil {
+			if img, err := item.AsBrowserExecutionImageContent(); err == nil && img.Type == "image" {
 				sawImage = true
 				require.Equal(t, "image/png", img.MimeType)
 				require.NotEmpty(t, img.DataB64)
 			}
 		}
 		require.True(t, sawImage, "expected an emitted screenshot image in content")
+	})
+
+	t.Run("chromium restart preserves repl id and bindings", func(t *testing.T) {
+		r1 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			Code: `var restartToken = "pre-restart"; await ensure_real_tab(); restartToken`,
+		})
+		require.True(t, r1.Success, "error: %s", replError(r1))
+		require.Equal(t, "pre-restart", r1.Result)
+
+		restartChromium(t, ctx, c, client)
+
+		// The next helper call reconnects through the DevTools proxy and
+		// reattaches; repl_id and JavaScript bindings survive the restart.
+		timeoutSec := 60
+		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			Code:       `const info = await page_info(); ({ token: restartToken, url: info.url })`,
+			TimeoutSec: &timeoutSec,
+		})
+		require.True(t, r2.Success, "error: %s", replError(r2))
+		require.Equal(t, r1.ReplId, r2.ReplId, "a Chromium restart must not change repl_id")
+		res, ok := r2.Result.(map[string]interface{})
+		require.True(t, ok, "expected object result, got %T", r2.Result)
+		require.Equal(t, "pre-restart", res["token"], "bindings survive a Chromium restart")
 	})
 
 	t.Run("reset clears bindings and changes repl id", func(t *testing.T) {
@@ -135,9 +191,11 @@ func TestBrowserReplExecuteAPI(t *testing.T) {
 	})
 }
 
-// TestBrowserReplTimeoutTerminates verifies that an uninterruptible loop is
-// killed by the API parent, the response carries the terminated repl_id, and
-// the next request lazily starts a fresh REPL.
+// TestBrowserReplTimeoutTerminates verifies on both images that timeouts are
+// destructive: an uninterruptible loop is killed by the API parent, an
+// interruptible unresolved promise is reported by the daemon and still
+// killed, each response carries the terminated repl_id with
+// repl_terminated: true, and the next request lazily starts a fresh REPL.
 func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	t.Parallel()
 
@@ -145,10 +203,25 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 		t.Skipf("docker not available: %v", err)
 	}
 
+	for _, image := range []struct {
+		name  string
+		image string
+	}{
+		{"Headless", headlessImage},
+		{"Headful", headfulImage},
+	} {
+		t.Run(image.name, func(t *testing.T) {
+			t.Parallel()
+			runBrowserReplTimeoutTerminates(t, image.image)
+		})
+	}
+}
+
+func runBrowserReplTimeoutTerminates(t *testing.T, image string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	c := NewTestContainer(t, headlessImage)
+	c := NewTestContainer(t, image)
 	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
 	defer c.Stop(ctx)
 
@@ -157,25 +230,50 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	warm := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
-	require.True(t, warm.Success)
+	t.Run("uninterruptible loop", func(t *testing.T) {
+		warm := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+		require.True(t, warm.Success)
 
-	timeoutSec := 2
-	start := time.Now()
-	r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-		Code:       "while (true) {}",
-		TimeoutSec: &timeoutSec,
+		timeoutSec := 2
+		start := time.Now()
+		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			Code:       "while (true) {}",
+			TimeoutSec: &timeoutSec,
+		})
+		elapsed := time.Since(start)
+
+		require.False(t, r.Success)
+		require.Equal(t, warm.ReplId, r.ReplId, "timeout response carries the terminated REPL's ID")
+		require.NotNil(t, r.ReplTerminated)
+		require.True(t, *r.ReplTerminated)
+		require.Less(t, elapsed, 30*time.Second, "timeout must kill the REPL promptly")
+
+		fresh := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
+		require.True(t, fresh.Success)
+		require.NotEqual(t, warm.ReplId, fresh.ReplId, "the next request starts a fresh REPL with a new ID")
+		fmt.Println("timeout recovery complete, new repl_id:", fresh.ReplId)
 	})
-	elapsed := time.Since(start)
 
-	require.False(t, r.Success)
-	require.Equal(t, warm.ReplId, r.ReplId, "timeout response carries the terminated REPL's ID")
-	require.NotNil(t, r.ReplTerminated)
-	require.True(t, *r.ReplTerminated)
-	require.Less(t, elapsed, 30*time.Second, "timeout must kill the REPL promptly")
+	t.Run("unresolved promise", func(t *testing.T) {
+		warm := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+		require.True(t, warm.Success)
 
-	fresh := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
-	require.True(t, fresh.Success)
-	require.NotEqual(t, warm.ReplId, fresh.ReplId, "the next request starts a fresh REPL with a new ID")
-	fmt.Println("timeout recovery complete, new repl_id:", fresh.ReplId)
+		timeoutSec := 2
+		start := time.Now()
+		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			Code:       "await new Promise(() => {})",
+			TimeoutSec: &timeoutSec,
+		})
+		elapsed := time.Since(start)
+
+		require.False(t, r.Success)
+		require.Equal(t, warm.ReplId, r.ReplId, "timeout response carries the terminated REPL's ID")
+		require.NotNil(t, r.ReplTerminated)
+		require.True(t, *r.ReplTerminated, "an interruptible timeout is still destructive")
+		require.Less(t, elapsed, 30*time.Second, "timeout must kill the REPL promptly")
+
+		fresh := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
+		require.True(t, fresh.Success)
+		require.NotEqual(t, warm.ReplId, fresh.ReplId, "the next request starts a fresh REPL with a new ID")
+	})
 }

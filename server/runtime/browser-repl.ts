@@ -16,8 +16,18 @@
  *   "error"?: string, "stack"?: string,
  *   "content": Array<text|image item>,
  *   "result_truncated": boolean, "content_truncated": boolean,
+ *   "timed_out"?: boolean,
  *   "duration_ms": number
  * }
+ *
+ * `timed_out: true` marks a daemon-side execution timeout. JavaScript cannot
+ * be reliably interrupted inside this process, so the abandoned execution
+ * would keep running concurrently with later ones and leak its output into
+ * their responses. The API parent therefore treats `timed_out` exactly like a
+ * transport failure: it kills the process group and reports
+ * `repl_terminated: true` with the terminated repl_id. The flag exists so the
+ * caller still receives the partial content produced before the deadline
+ * instead of a bare kill.
  */
 
 import { createServer, Socket } from 'net';
@@ -474,6 +484,11 @@ function serializeResult(value: unknown): SerializedResult {
   if (isErrorLike(value)) {
     return { result_repr: String((value as any).stack ?? (value as any).message), result_truncated: false };
   }
+  // JSON.stringify silently converts NaN/Infinity to null and -0 to 0;
+  // surface them through the repr instead of dropping the value.
+  if (typeof value === 'number' && (!Number.isFinite(value) || Object.is(value, -0))) {
+    return { result_repr: boundedInspect(value), result_truncated: false };
+  }
   try {
     const json = safeStringify(value);
     if (json === undefined) {
@@ -511,6 +526,7 @@ interface ExecuteResponse {
   content: ContentItem[];
   result_truncated: boolean;
   content_truncated: boolean;
+  timed_out?: boolean;
   duration_ms: number;
 }
 
@@ -518,8 +534,10 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
   const start = Date.now();
   const collector = new Collector();
 
-  // Drain output produced outside any execution (e.g. late console callbacks)
-  // into this execution, preserving order ahead of new output.
+  // Drain output produced outside any execution (e.g. timers scheduled by a
+  // completed execution) into this execution, preserving order ahead of new
+  // output. Output from a timed-out execution can never reach this buffer:
+  // the API parent kills the process on timed_out before the next request.
   for (const item of strayCollector.items) {
     collector.adopt(item);
   }
@@ -529,10 +547,12 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
   activeCollector = collector;
   const timeoutMs = request.timeout_ms ?? 60_000;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
 
   try {
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
+        timedOut = true;
         reject(new Error(`execution timed out after ${timeoutMs}ms`));
       }, timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
@@ -558,6 +578,11 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
       content: collector.items,
       result_truncated: false,
       content_truncated: collector.truncated,
+      // A timed-out execution is merely abandoned, not interrupted: its code
+      // is still running. The API parent must kill this process (it does,
+      // destructively, per the spec's timeout semantics) before serving
+      // another execution.
+      timed_out: timedOut || undefined,
       duration_ms: Date.now() - start,
     };
   } finally {

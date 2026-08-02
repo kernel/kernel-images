@@ -372,6 +372,8 @@ Response:
 }
 ```
 
+When the daemon-side `timeout_ms` fires on an interruptible execution, the daemon responds with `success: false` and `timed_out: true` plus the partial content produced before the deadline. The abandoned execution is still running inside the child, so the API treats `timed_out` exactly like a transport failure: it kills the process group and returns the terminated ID with `repl_terminated: true`. This keeps every timeout destructive while still returning partial output promptly; an uninterruptible execution (e.g. `while (true) {}`) never answers and is killed at the API's socket read deadline.
+
 The API validates both request ID and `repl_id`. A mismatch terminates the child rather than risking responses from stale state.
 
 The child serializes executions internally as defense in depth even though the Go handler also holds `browserReplMu`.
