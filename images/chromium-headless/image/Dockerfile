@@ -276,4 +276,18 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:esbuild \
     && rm /tmp/playwright-daemon.ts
 
+# Copy and compile the persistent browser REPL daemon. esbuild stays
+# external: the daemon transforms user TypeScript at runtime and esbuild is
+# installed globally (resolvable from /usr/local/lib/node_modules).
+COPY server/runtime/ /tmp/browser-repl/
+RUN esbuild /tmp/browser-repl/browser-repl.ts \
+    --bundle \
+    --platform=node \
+    --target=node22 \
+    --format=cjs \
+    --supported:dynamic-import=true \
+    --outfile=/usr/local/lib/browser-repl.js \
+    --external:esbuild \
+    && rm -rf /tmp/browser-repl
+
 ENTRYPOINT [ "/wrapper" ]

@@ -73,6 +73,57 @@ export OUTPUT_DIR=/tmp/recordings
 - **YAML Spec**: `GET /spec.yaml`
 - **JSON Spec**: `GET /spec.json`
 
+### Persistent Browser REPL
+
+`POST /browser/execute` evaluates JavaScript/TypeScript in a persistent Node.js
+runtime that is preloaded with browser-control helpers and an unrestricted
+`cdp()` escape hatch.
+
+- The runtime starts lazily on the first request and is owned directly by the
+  API process. API restart/shutdown kills it (with Linux parent-death
+  signaling as a backstop); an API restart therefore loses all REPL state.
+- Each REPL process gets a CUID2 `repl_id`, returned in every response. It is
+  stable across calls and Chromium reconnects, and changes after an API
+  restart, `reset: true`, an execution timeout, or a REPL crash.
+- Top-level `await`, persistent `let`/`const`/`var`/function/class bindings,
+  dynamic `import()`, and TypeScript syntax (via esbuild) are supported.
+  Static top-level imports are not; use dynamic imports. When top-level
+  `await`/`return` is used, the implicit result is the value of the final
+  expression statement, so end the snippet with an expression (or an explicit
+  `return`) to return a value.
+- A timeout is destructive (JavaScript cannot be interrupted safely): the API
+  kills the REPL process group and responds with `repl_terminated: true` and
+  the terminated REPL's ID. The next request lazily starts a fresh REPL.
+- Output is an ordered `content` array of typed items: text (`write` =
+  `repl.write`, `stdout` = `console.log/info/debug`, `stderr` =
+  `console.warn/error`) and images (`repl.emitImage`, base64 with MIME
+  sniffing). Limits: 8 MiB per image, 16 MiB aggregate image data, 256 KiB
+  combined text, and 256 KiB serialized result per response; violations set
+  `content_truncated` / `result_truncated` instead of failing silently.
+- `capture_screenshot()` stays file-oriented (returns a VM path); emit it
+  explicitly with `await repl.emitImage({ path })`.
+- Helpers are exposed both as bare globals (`goto_url`, `page_info`,
+  `click_at_xy`, `type_text`, `fill_input`, `press_key`, `scroll`,
+  `capture_screenshot`, `list_tabs`, `current_tab`, `switch_tab`, `new_tab`,
+  `close_tab`, `ensure_real_tab`, `iframe_target`, `wait`, `wait_for_load`,
+  `wait_for_element`, `wait_for_network_idle`, `js`, `dispatch_key`,
+  `upload_file`, `http_get`, `start_recording`, `stop_recording`,
+  `recording_dir`, `drain_events`, `cdp`) and on the frozen `browser`
+  namespace. Recording helpers delegate to the Kernel recording API.
+- The REPL connects to the browser through the DevTools proxy on
+  `ws://127.0.0.1:9222`, lazily on the first browser helper call; pure
+  Node.js code runs fine while Chromium is down, and the connection is
+  re-established automatically after a Chromium restart.
+
+**Security**: this endpoint is unrestricted code execution inside the browser
+VM (filesystem, network, processes, environment), equivalent in trust level
+to the process and Playwright execution APIs. The `vm` context is a state
+container, not a sandbox.
+
+The daemon sources live in `server/runtime/` (`browser-repl.ts`,
+`browser-cdp-client.ts`, `browser-helpers.ts`) and are bundled to
+`/usr/local/lib/browser-repl.js` in both browser images.
+
 ## 🔧 Development
 
 ### Code Generation
