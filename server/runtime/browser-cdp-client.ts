@@ -71,7 +71,7 @@ export class CdpCommandTimeoutError extends Error {
   readonly cdpCommandTimeout = true;
 }
 
-function isCdpCommandTimeout(err: unknown): boolean {
+export function isCdpCommandTimeout(err: unknown): boolean {
   return err instanceof CdpCommandTimeoutError || (err as any)?.cdpCommandTimeout === true;
 }
 
@@ -307,7 +307,7 @@ export class CdpClient {
   }
 
   /** Send a command on the attached page session. */
-  async sessionCommand<T = any>(method: string, params?: unknown): Promise<T> {
+  async sessionCommand<T = any>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
     await this.ensureAttached();
     if (!this.rendererResponsive) {
       // The previous attach hit a frozen renderer (e.g. a dialog left open
@@ -316,7 +316,7 @@ export class CdpClient {
       // without a reattach.
       this.rendererResponsive = await this.enableDomains(this.sessionId!);
     }
-    return this.send<T>(method, params, this.sessionId!);
+    return this.send<T>(method, params, this.sessionId!, timeoutMs);
   }
 
   /** Send a raw command. sessionId === null forces browser-level routing. */
@@ -508,21 +508,38 @@ export class CdpClient {
   }
 
   /**
-   * Best-effort wait until a target's URL has committed away from
-   * about:blank (or the target disappeared). Used by new_tab so immediate
-   * follow-up calls observe the requested URL. Never throws.
+   * Best-effort wait until a target's initial navigation has committed in
+   * the renderer (location.href moved away from about:blank), or the target
+   * disappeared. Target.getTargets reports the requested URL as soon as the
+   * navigation starts — before the renderer commits — so polling target
+   * metadata is not enough: an immediate page_info() or js() would still
+   * observe about:blank. Polls the attached session's location.href
+   * instead. Used by new_tab so immediate follow-up calls observe the
+   * requested URL. Never throws.
    */
   async waitForNavigationCommit(targetId: string, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       try {
-        const targets = await this.listTargets();
-        const target = targets.find((t) => t.targetId === targetId);
-        if (!target || (target.url !== '' && target.url !== 'about:blank')) {
-          return;
+        if (this.targetId === targetId && this.sessionId) {
+          const res = await this.send<any>(
+            'Runtime.evaluate',
+            { expression: 'location.href', returnByValue: true },
+            this.sessionId,
+            1_000,
+          );
+          const href = res?.result?.value;
+          if (typeof href === 'string' && href !== '' && href !== 'about:blank') {
+            return;
+          }
+        } else {
+          const targets = await this.listTargets();
+          if (!targets.some((t) => t.targetId === targetId)) {
+            return;
+          }
         }
       } catch {
-        return;
+        // Renderer busy or target gone; keep polling until the deadline.
       }
       if (Date.now() > deadline) {
         return;

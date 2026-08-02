@@ -192,12 +192,12 @@ The v1 runtime exposes all of the following functions:
 | `type_text` | Inserts text through CDP input. |
 | `fill_input` | Fills a framework-managed input and dispatches the expected DOM events. |
 | `press_key` | Dispatches keyboard events, including modifiers and navigation keys. Modifiers are an array drawn from Alt, Control, Meta, Shift or the object sugar `{ctrl: true}`; anything else is a clear validation error. |
-| `scroll` | Dispatches a mouse-wheel event at a viewport coordinate. Known upstream limitation: in new headless mode Chromium ignores mouse-wheel input on `data:` URL pages (the scroll position never changes, even via raw CDP); scroll works on http(s) pages. Test scrolling against a real or `http:` page, not a `data:` URL. |
+| `scroll` | Dispatches a mouse-wheel event at a viewport coordinate, bounded by a short dispatch timeout. Rarely, a new-headless Chromium instance wedges its mouseWheel path (the command is never answered while every other command answers fine); on dispatch timeout the helper falls back to an in-page `window.scrollBy` and surfaces the fallback as a stderr content item. Known upstream limitation: in new headless mode Chromium ignores mouse-wheel input on `data:` URL pages (the scroll position never changes, even via raw CDP); scroll works on http(s) pages. Test scrolling against a real or `http:` page, not a `data:` URL. |
 | `capture_screenshot` | Saves a PNG in the VM and returns its path. Supports viewport/full-page capture and `max_dim`. |
 | `list_tabs` | Lists browser page targets, optionally including internal pages. |
 | `current_tab` | Returns metadata for the attached target. |
 | `switch_tab` | Attaches the runtime to another page target. |
-| `new_tab` | Creates and attaches to a new page target. When a URL is given, waits (best effort) for the initial navigation to commit so immediate follow-up calls observe it. |
+| `new_tab` | Creates and attaches to a new page target. When a URL is given, waits (best effort) for the initial navigation to commit in the renderer — target metadata shows the URL as soon as the navigation starts, which is too early — so immediate follow-up calls observe it. |
 | `close_tab` | Closes a page target, waiting (best effort) for the target to be destroyed so an immediate `list_tabs` no longer counts it. |
 | `ensure_real_tab` | Ensures the runtime is attached to a non-internal page. |
 | `iframe_target` | Finds an out-of-process iframe target by URL substring. |
@@ -209,8 +209,8 @@ The v1 runtime exposes all of the following functions:
 | `dispatch_key` | Dispatches a DOM `KeyboardEvent` against a selected element. |
 | `upload_file` | Sets files on an `<input type=file>` using VM-local paths. |
 | `http_get` | Performs an HTTP GET from the VM and returns the response body. |
-| `start_recording` | Starts a Kernel browser recording and returns its identifier or path. Recorder IDs cannot be reused after stop+delete within one API process lifetime (existing recording API behavior); use a fresh ID per recording. |
-| `stop_recording` | Stops the active Kernel browser recording. |
+| `start_recording` | Starts a Kernel browser recording and returns its identifier or path. Recorder IDs cannot be reused after stop+delete within one API process lifetime (existing recording API behavior); use a fresh ID per recording. Options accept the recording API's `id` field or the `recorder_id` alias (matching the response shape); `id` wins when both are given. |
+| `stop_recording` | Stops the active Kernel browser recording. Accepts the same `id` / `recorder_id` alias as `start_recording`. |
 | `recording_dir` | Returns the active recording directory or null. |
 
 Where Kernel already has first-class recording or file APIs, these helpers should delegate to the existing implementation rather than create a second recording or storage system.
@@ -369,6 +369,32 @@ The same reset behavior applies after:
 
 Ordinary user-code exceptions return `success: false` without terminating the child.
 
+### Process-Level User-Code Failures
+
+Code evaluated in the REPL can also fail *outside* the execution that
+submitted it (timers, floating promises). The daemon splits these by Node
+lifecycle semantics:
+
+- **Unhandled promise rejections** leave no inconsistent in-flight state —
+  the promise has already settled — and Node sanctions keeping the process
+  alive when a handler is installed. The daemon surfaces the rejection as a
+  bounded `stderr` content item (into the active execution, or drained into
+  the next one) and the REPL, including all bindings, survives. This
+  matters because floating promises are common in agent-authored code
+  (e.g. `js("alert('x')")` without `await`, whose CDP timeout rejection
+  would otherwise kill the REPL 30s later, mid-unrelated-request).
+- **Uncaught exceptions** (e.g. a throwing `setTimeout` callback) are
+  different: Node documentation is explicit that resuming after one is
+  unsafe because the process may be in an undefined state. The daemon
+  therefore terminates deterministically rather than blindly staying alive
+  in a possibly-corrupt state: it logs the exception, answers the
+  in-flight execution (when one exists) with `success: false`, the
+  exception details, partial content, and `exiting: true`, and exits
+  non-zero. The API maps `exiting` to `repl_terminated: true`, so the
+  caller sees the state loss explicitly instead of as a bare EOF, and the
+  next request lazily starts a fresh REPL with a new `repl_id` — the
+  documented signal that all prior bindings were lost.
+
 ## Daemon Protocol
 
 Continue using newline-delimited JSON over a Unix socket, with one socket connection per API call.
@@ -397,6 +423,13 @@ Response:
 ```
 
 When the daemon-side `timeout_ms` fires on an interruptible execution, the daemon responds with `success: false` and `timed_out: true` plus the partial content produced before the deadline. The abandoned execution is still running inside the child, so the API treats `timed_out` exactly like a transport failure: it kills the process group and returns the terminated ID with `repl_terminated: true`. This keeps every timeout destructive while still returning partial output promptly; an uninterruptible execution (e.g. `while (true) {}`) never answers and is killed at the API's socket read deadline.
+
+The incoming request line is capped at 8 MiB per accumulated line,
+independent of how the request was chunked across writes; an oversized
+line is rejected and the connection closed. The server runs with
+`allowHalfOpen`, so a client that half-closes (`SHUT_WR`) after sending
+its request still receives the execution response; the daemon ends its own
+side once the final queued response is flushed.
 
 The API validates both request ID and `repl_id`. A mismatch terminates the child rather than risking responses from stale state. Both timeout paths use the same error message (`execution timed out after <N>ms`); the uninterruptible path skips the SIGTERM grace period (the blocked event loop could never handle it) and SIGKILLs the process group at the read deadline. A child that dies mid-execution (e.g. OOM-killed near the heap cap) reports its exit reason in the error instead of a bare transport error.
 
@@ -488,6 +521,7 @@ Bundle the runtime in both headful and headless Dockerfiles. Reuse the existing 
 ## Known Limitations
 
 - **Mouse-wheel scroll on `data:` URLs.** In new headless mode Chromium ignores mouse-wheel input on `data:` URL pages (confirmed via raw CDP: `window.scrollY` never changes). This is upstream behavior, not a `scroll()` helper bug; test scrolling on http(s) pages.
+- **Wedged mouseWheel path (rare, upstream).** QA observed one new-headless Chromium instance where `Input.dispatchMouseEvent` mouseWheel commands were never answered (a ~5-minute window on one process; not reproducible after a Chromium restart) while every other command on the same session answered fine. The signature is a `CDP Input.dispatchMouseEvent timed out` error with `window.scrollY` unchanged. `scroll()` bounds the dispatch to a short timeout and falls back to an in-page `window.scrollBy` (surfaced as a stderr content item), so the wedge costs one bounded fallback instead of a 30s hang per attempt. The fallback is DOM scrolling, not synthetic input; it does not trigger wheel event listeners.
 - **Stale dialogs from a killed REPL.** See "Stale dialogs at attach": on Chromium builds that drop the browser-side dialog record on session disconnect, the frozen tab cannot be dismissed and must be recovered with `cdp("Page.reload")`, `new_tab()`, or `close_tab()`.
 
 ## Milestones

@@ -28,6 +28,26 @@
  * `repl_terminated: true` with the terminated repl_id. The flag exists so the
  * caller still receives the partial content produced before the deadline
  * instead of a bare kill.
+ *
+ * `exiting: true` marks a deterministic daemon shutdown after an uncaught
+ * exception (see the process-level handlers at the bottom of this file). The
+ * in-flight caller receives the exception as a normal execution failure; the
+ * API parent treats `exiting` like `timed_out` and reports
+ * `repl_terminated: true`, so state loss is explicit rather than silent.
+ *
+ * Process-level user-code failures are split by Node lifecycle semantics:
+ *  - unhandledRejection: the rejected promise has already settled, so no
+ *    in-flight operation is left inconsistent. Node sanctions keeping the
+ *    process alive when a handler is installed. The rejection is surfaced
+ *    as a bounded stderr content item (into the active execution, or the
+ *    next one) and the REPL — and all of its state — survives.
+ *  - uncaughtException: Node documentation is explicit that resuming after
+ *    an uncaught exception is unsafe because the process may be in an
+ *    undefined state. The daemon therefore terminates deterministically:
+ *    it logs the error, answers the in-flight execution (when one exists)
+ *    with `exiting: true`, and exits non-zero. The next request lazily
+ *    starts a fresh REPL with a new repl_id — the documented signal that
+ *    all prior state was lost.
  */
 
 import { createServer, Socket } from 'net';
@@ -286,6 +306,10 @@ const consoleCapture = {
 
 const cdpClient = new CdpClient(CDP_ENDPOINT);
 const helpers = new BrowserHelpers(cdpClient);
+
+// Operational notes from helpers (e.g. a fallback activating) surface as
+// stderr content items in the active (or next) execution.
+helpers.onLog = (message) => writeOutput('stderr', `browser-repl: ${message}`);
 
 // A dialog dismissed at attach time was left open before the runtime
 // attached (typically by a previous REPL that was killed); surface the
@@ -688,12 +712,20 @@ interface ExecuteResponse {
   result_truncated: boolean;
   content_truncated: boolean;
   timed_out?: boolean;
+  exiting?: boolean;
   duration_ms: number;
 }
 
-async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse> {
+async function executeRequest(
+  request: ExecuteRequest,
+  respond: (response: ExecuteResponse) => void,
+): Promise<ExecuteResponse> {
   const start = Date.now();
   const collector = new Collector();
+  // Track the in-flight execution so the uncaughtException handler can
+  // answer it with a deterministic failure (including partial content)
+  // before exiting, instead of leaving the caller with a bare EOF.
+  activeExecution = { request, collector, respond, start };
 
   // Drain output produced outside any execution (e.g. timers scheduled by a
   // completed execution) into this execution, preserving order ahead of new
@@ -757,6 +789,7 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
     helpers.executionDeadlineMs = null;
     cdpClient.executionDeadlineMs = null;
     activeCollector = null;
+    activeExecution = null;
   }
 }
 
@@ -764,11 +797,25 @@ async function executeRequest(request: ExecuteRequest): Promise<ExecuteResponse>
 // mutex, but the daemon must never interleave two executions.
 let executionChain: Promise<void> = Promise.resolve();
 
-function enqueueExecution(request: ExecuteRequest, socket: Socket): void {
+// The execution currently running, so the uncaughtException handler can
+// deliver a deterministic failure response (with partial content) before
+// exiting instead of leaving the caller with a bare EOF.
+let activeExecution: {
+  request: ExecuteRequest;
+  collector: Collector;
+  respond: (response: ExecuteResponse) => void;
+  start: number;
+} | null = null;
+
+// Set once the daemon has decided to exit (uncaughtException): queued
+// execution continuations must not write further responses.
+let processExiting = false;
+
+function enqueueExecution(request: ExecuteRequest, respond: (response: ExecuteResponse) => void): void {
   executionChain = executionChain.then(async () => {
     let response: ExecuteResponse;
     try {
-      response = await executeRequest(request);
+      response = await executeRequest(request, respond);
     } catch (err: any) {
       response = {
         id: request.id,
@@ -781,79 +828,121 @@ function enqueueExecution(request: ExecuteRequest, socket: Socket): void {
         duration_ms: 0,
       };
     }
-    try {
-      socket.write(safeStringify(response) + '\n');
-    } catch (err: any) {
-      process.stderr.write(`[browser-repl] failed to write response: ${err?.message ?? err}\n`);
+    if (!processExiting) {
+      respond(response);
     }
   });
 }
 
 function handleConnection(socket: Socket): void {
   let buffer = '';
+  // The server sets allowHalfOpen, so a client that half-closes (SHUT_WR)
+  // after sending its request still receives the execution response. The
+  // daemon ends its own side once the client has ended and every queued
+  // response has been flushed.
+  let clientEnded = false;
+  let pendingWrites = 0;
+  // Requests accepted but whose response has not been flushed yet. The
+  // client's FIN arrives while its execution is still queued, so the
+  // socket must stay open until that response is written.
+  let pendingRequests = 0;
+
+  const maybeEnd = () => {
+    if (clientEnded && pendingWrites === 0 && pendingRequests === 0) {
+      socket.end();
+    }
+  };
+
+  const respond = (response: ExecuteResponse, onFlushed?: () => void) => {
+    pendingWrites++;
+    try {
+      socket.write(safeStringify(response) + '\n', () => {
+        pendingWrites--;
+        onFlushed?.();
+        maybeEnd();
+      });
+    } catch (err: any) {
+      pendingWrites--;
+      onFlushed?.();
+      process.stderr.write(`[browser-repl] failed to write response: ${err?.message ?? err}\n`);
+    }
+  };
+
+  const rejectOversized = () => {
+    // end() flushes the rejection before closing (unlike destroy()).
+    respond({
+      id: 'unknown',
+      repl_id: REPL_ID,
+      success: false,
+      error: `request exceeds the ${MAX_REQUEST_BYTES} byte limit`,
+      content: [],
+      result_truncated: false,
+      content_truncated: false,
+      duration_ms: 0,
+    });
+    socket.end();
+  };
 
   socket.on('data', (data) => {
     buffer += data.toString();
-    if (buffer.length > MAX_REQUEST_BYTES && buffer.indexOf('\n') === -1) {
-      socket.write(
-        safeStringify({
-          id: 'unknown',
-          repl_id: REPL_ID,
-          success: false,
-          error: `request exceeds the ${MAX_REQUEST_BYTES} byte limit`,
-          content: [],
-          result_truncated: false,
-          content_truncated: false,
-          duration_ms: 0,
-        }) + '\n',
-      );
-      socket.destroy();
-      return;
-    }
 
     let newlineIndex: number;
     while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
       const line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
+      // The size cap applies per accumulated line, independent of how the
+      // request was chunked: a single write containing the newline is
+      // rejected exactly like a slow flood that never sends one.
+      if (Buffer.byteLength(line) > MAX_REQUEST_BYTES) {
+        rejectOversized();
+        return;
+      }
       if (!line.trim()) continue;
 
       let request: ExecuteRequest;
       try {
         request = JSON.parse(line);
       } catch {
-        socket.write(
-          safeStringify({
-            id: 'unknown',
-            repl_id: REPL_ID,
-            success: false,
-            error: 'invalid JSON request',
-            content: [],
-            result_truncated: false,
-            content_truncated: false,
-            duration_ms: 0,
-          }) + '\n',
-        );
+        respond({
+          id: 'unknown',
+          repl_id: REPL_ID,
+          success: false,
+          error: 'invalid JSON request',
+          content: [],
+          result_truncated: false,
+          content_truncated: false,
+          duration_ms: 0,
+        });
         continue;
       }
 
       if (!request.id || typeof request.code !== 'string') {
-        socket.write(
-          safeStringify({
-            id: (request as any)?.id || 'unknown',
-            repl_id: REPL_ID,
-            success: false,
-            error: 'invalid request: missing id or code',
-            content: [],
-            result_truncated: false,
-            content_truncated: false,
-            duration_ms: 0,
-          }) + '\n',
-        );
+        respond({
+          id: (request as any)?.id || 'unknown',
+          repl_id: REPL_ID,
+          success: false,
+          error: 'invalid request: missing id or code',
+          content: [],
+          result_truncated: false,
+          content_truncated: false,
+          duration_ms: 0,
+        });
         continue;
       }
 
-      enqueueExecution(request, socket);
+      pendingRequests++;
+      enqueueExecution(request, (response) => respond(response, () => pendingRequests--));
     }
+
+    if (Buffer.byteLength(buffer) > MAX_REQUEST_BYTES) {
+      rejectOversized();
+      return;
+    }
+  });
+
+  socket.on('end', () => {
+    clientEnded = true;
+    maybeEnd();
   });
 
   socket.on('error', (err) => {
@@ -864,6 +953,87 @@ function handleConnection(socket: Socket): void {
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
+
+/**
+ * An unhandled promise rejection leaves no inconsistent in-flight state:
+ * the promise has already settled and Node sanctions keeping the process
+ * alive when a handler is installed (without one, Node >= 15 crashes the
+ * process). Floating promises are extremely common in agent-authored code
+ * (e.g. `js("alert('x')")` without await, whose CDP timeout rejection would
+ * otherwise kill the REPL 30s later mid-unrelated-request), so the
+ * rejection is surfaced as a bounded stderr content item — into the active
+ * execution, or drained into the next one — and the REPL and all of its
+ * state survive.
+ */
+function onUnhandledRejection(reason: unknown): void {
+  let detail: string;
+  try {
+    const stack = (reason as any)?.stack;
+    detail = typeof stack === 'string' ? stack : boundedInspect(reason);
+  } catch {
+    try {
+      detail = String(reason);
+    } catch {
+      detail = '<unprintable rejection reason>';
+    }
+  }
+  writeOutput(
+    'stderr',
+    'browser-repl: unhandled promise rejection (the REPL survives; only the rejected promise is settled):\n' +
+      detail,
+  );
+}
+
+/**
+ * Node documentation is explicit that resuming after an uncaught exception
+ * is unsafe: the throw may have originated anywhere, leaving the process in
+ * an undefined state. Rather than blindly keeping a possibly-corrupt
+ * state-holding process alive, the daemon terminates deterministically and
+ * preserves evidence:
+ *
+ *  1. the exception is logged to stderr (container logs);
+ *  2. the in-flight execution, when one exists, is answered with
+ *     success: false, the exception details, partial content, and
+ *     exiting: true — the API maps that to repl_terminated: true, so the
+ *     caller sees the state loss explicitly instead of a bare EOF;
+ *  3. the process exits non-zero; the next request lazily starts a fresh
+ *     REPL with a new repl_id, the documented signal that all prior
+ *     bindings were lost.
+ */
+function onUncaughtException(err: unknown): void {
+  processExiting = true;
+  const stack = (err as any)?.stack;
+  const message = String((err as any)?.message ?? err);
+  process.stderr.write(
+    `[browser-repl] uncaught exception; terminating deterministically (repl_id=${REPL_ID}): ${
+      typeof stack === 'string' ? stack : message
+    }\n`,
+  );
+  const inFlight = activeExecution;
+  activeExecution = null;
+  if (inFlight) {
+    try {
+      inFlight.respond({
+        id: inFlight.request.id,
+        repl_id: REPL_ID,
+        success: false,
+        error: `uncaught exception in browser REPL process: ${message}`,
+        stack: typeof stack === 'string' ? stack : undefined,
+        content: inFlight.collector.items,
+        result_truncated: false,
+        content_truncated: inFlight.collector.truncated,
+        exiting: true,
+        duration_ms: Date.now() - inFlight.start,
+      });
+    } catch {
+      // The socket is gone; the API reports the child exit instead.
+    }
+  }
+  // Give the stderr log and the in-flight response a bounded window to
+  // flush, then exit non-zero. The socket server keeps the event loop
+  // alive, so the unref'd timer always fires.
+  setTimeout(() => process.exit(1), 100).unref();
+}
 
 function shutdown(signal: string): void {
   process.stderr.write(`[browser-repl] received ${signal}, shutting down (repl_id=${REPL_ID})\n`);
@@ -893,8 +1063,13 @@ async function main(): Promise<void> {
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('unhandledRejection', onUnhandledRejection);
+  process.on('uncaughtException', onUncaughtException);
 
-  const server = createServer(handleConnection);
+  // allowHalfOpen: a client that half-closes (SHUT_WR) after sending its
+  // request still receives the execution response; handleConnection ends
+  // the server side once the final queued response is flushed.
+  const server = createServer({ allowHalfOpen: true }, handleConnection);
   server.on('error', (err) => {
     process.stderr.write(`[browser-repl] server error: ${err.message}\n`);
     process.exit(1);

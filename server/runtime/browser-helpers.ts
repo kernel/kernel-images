@@ -8,9 +8,16 @@
  */
 
 import { writeFileSync } from 'fs';
-import { CdpClient, CdpTarget, isInternalUrl } from './browser-cdp-client';
+import { CdpClient, CdpTarget, isCdpCommandTimeout, isInternalUrl } from './browser-cdp-client';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+// SCROLL_COMMAND_TIMEOUT_MS bounds the CDP mouse-wheel dispatch. On rare
+// wedged Chromium instances (observed in new headless mode) a mouseWheel
+// command is never answered while every other command on the same session
+// answers fine; the short timeout triggers scroll()'s in-page fallback
+// instead of burning the default 30s command timeout per scroll attempt.
+const SCROLL_COMMAND_TIMEOUT_MS = 5_000;
 
 // EXECUTION_DEADLINE_MARGIN_MS is how far below the executing request's
 // deadline a wait-style helper places its own deadline when the helper's
@@ -25,6 +32,22 @@ const API_BASE = `http://127.0.0.1:${API_PORT}`;
 export interface RecordingState {
   recorderId: string;
   dir: string | null;
+}
+
+/**
+ * Normalize recording helper options. The Kernel recording API's request
+ * field is `id`, but the helpers return `recorder_id`, so accepting
+ * `recorder_id` as an alias keeps the documented "fresh ID per recording"
+ * workaround discoverable. `id` wins when both are given. Never mutates
+ * the caller's object.
+ */
+function normalizeRecordingOpts(opts?: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = { ...(opts ?? {}) };
+  if (body.id === undefined && typeof body.recorder_id === 'string') {
+    body.id = body.recorder_id;
+  }
+  delete body.recorder_id;
+  return body;
 }
 
 // MODIFIER_SUGAR maps the object-sugar modifier keys accepted by press_key
@@ -82,6 +105,12 @@ export class BrowserHelpers {
    * REPL.
    */
   executionDeadlineMs: number | null = null;
+
+  /**
+   * Optional sink for operational notes (e.g. a fallback activating). The
+   * daemon wires this to stderr content so the notes reach the caller.
+   */
+  onLog?: (message: string) => void;
 
   constructor(client: CdpClient) {
     this.client = client;
@@ -323,15 +352,41 @@ export class BrowserHelpers {
     await this.client.sessionCommand('Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
   };
 
-  /** Dispatch a mouse-wheel event at a viewport coordinate. */
+  /**
+   * Dispatch a mouse-wheel event at a viewport coordinate. Rarely, a
+   * Chromium instance (new headless mode) wedges its mouseWheel path: the
+   * command is never answered while every other command on the same
+   * session answers fine. When the dispatch times out, fall back to an
+   * in-page window.scrollBy so the helper still scrolls, and surface the
+   * fallback so callers can tell DOM scrolling from synthetic input.
+   */
   scroll = async (x: number, y: number, deltaX = 0, deltaY = 0): Promise<void> => {
-    await this.client.sessionCommand('Input.dispatchMouseEvent', {
-      type: 'mouseWheel',
-      x,
-      y,
-      deltaX,
-      deltaY,
-    });
+    try {
+      await this.client.sessionCommand(
+        'Input.dispatchMouseEvent',
+        {
+          type: 'mouseWheel',
+          x,
+          y,
+          deltaX,
+          deltaY,
+        },
+        SCROLL_COMMAND_TIMEOUT_MS,
+      );
+    } catch (err) {
+      if (!isCdpCommandTimeout(err)) {
+        throw err;
+      }
+      this.onLog?.(
+        'scroll: CDP Input.dispatchMouseEvent (mouseWheel) timed out; ' +
+          `falling back to window.scrollBy(${deltaX}, ${deltaY})`,
+      );
+      await this.evaluateInPage(
+        `(function (dx, dy) { window.scrollBy(dx, dy); return true; })(${
+          JSON.stringify(Number(deltaX) || 0)
+        }, ${JSON.stringify(Number(deltaY) || 0)})`,
+      );
+    }
   };
 
   /**
@@ -655,7 +710,7 @@ export class BrowserHelpers {
 
   /** Start a Kernel browser recording; returns its identifier. */
   startRecording = async (opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const body = (opts ?? {}) as Record<string, unknown>;
+    const body = normalizeRecordingOpts(opts);
     const res = await fetch(`${API_BASE}/recording/start`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -675,7 +730,7 @@ export class BrowserHelpers {
 
   /** Stop the active Kernel browser recording. */
   stopRecording = async (opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const body = (opts ?? {}) as Record<string, unknown>;
+    const body = normalizeRecordingOpts(opts);
     const res = await fetch(`${API_BASE}/recording/stop`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

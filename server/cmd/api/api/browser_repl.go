@@ -271,7 +271,13 @@ type browserReplDaemonResponse struct {
 	// TimedOut marks a daemon-side execution timeout. The daemon cannot
 	// interrupt the abandoned execution, so the API must kill the child
 	// before serving another request (destructive timeout semantics).
-	TimedOut   bool `json:"timed_out,omitempty"`
+	TimedOut bool `json:"timed_out,omitempty"`
+	// Exiting marks a deterministic daemon shutdown after an uncaught
+	// exception: the daemon answered the in-flight execution with the
+	// exception details and is exiting non-zero. The API treats it like a
+	// timeout — terminate the handle and report repl_terminated — so the
+	// state loss is explicit to the caller.
+	Exiting    bool `json:"exiting,omitempty"`
 	DurationMs int  `json:"duration_ms"`
 }
 
@@ -525,15 +531,25 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 		return browserReplTerminatedResponse(replID, err, int(time.Since(execStart).Milliseconds())), nil
 	}
 
-	if resp.TimedOut {
-		// A timeout is destructive: the daemon only abandoned the execution,
-		// so its code is still running inside the child. Kill the process
-		// group, wait for exit, and clear the handle; the next request lazily
-		// starts a fresh REPL with a new CUID2. The response carries the
-		// terminated ID, repl_terminated: true, and the partial content the
-		// execution produced before the deadline.
-		log.Warn("browser REPL execution timed out; terminating child", "repl_id", replID)
-		s.terminateBrowserReplLocked(ctx, "execution timeout")
+	if resp.TimedOut || resp.Exiting {
+		if resp.Exiting {
+			// The daemon hit an uncaught exception, answered this execution
+			// with the exception details, and is exiting non-zero (resuming
+			// after an uncaught exception is unsafe per Node semantics).
+			// Reap the child and report repl_terminated so the state loss is
+			// explicit; the next request lazily starts a fresh REPL.
+			log.Warn("browser REPL reported an uncaught exception and is exiting; terminating child", "repl_id", replID)
+			s.terminateBrowserReplLocked(ctx, "uncaught exception in REPL process")
+		} else {
+			// A timeout is destructive: the daemon only abandoned the
+			// execution, so its code is still running inside the child. Kill
+			// the process group, wait for exit, and clear the handle; the next
+			// request lazily starts a fresh REPL with a new CUID2. The
+			// response carries the terminated ID, repl_terminated: true, and
+			// the partial content the execution produced before the deadline.
+			log.Warn("browser REPL execution timed out; terminating child", "repl_id", replID)
+			s.terminateBrowserReplLocked(ctx, "execution timeout")
+		}
 		terminated := true
 		mapped.ReplTerminated = &terminated
 	}
