@@ -73,6 +73,15 @@ type ApiService struct {
 	// playwrightDaemonCmd holds the daemon process for cleanup
 	playwrightDaemonCmd *exec.Cmd
 
+	// browserReplMu serializes browser REPL execution and lifecycle operations
+	// (only one execution at a time). It also guards browserRepl.
+	browserReplMu sync.Mutex
+
+	// browserRepl is the owned REPL child process, or nil when no REPL is
+	// running. The API process is the child's direct parent and sole
+	// supervisor; it never adopts orphaned REPLs from earlier API processes.
+	browserRepl *browserReplChild
+
 	// policy management
 	policy *policy.Policy
 
@@ -417,6 +426,12 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	// Explicitly terminate the browser REPL child. Pdeathsig backstops this
+	// on Linux, but graceful shutdown must not rely on it.
+	s.browserReplMu.Lock()
+	s.terminateBrowserReplLocked(ctx, "api shutdown")
+	s.browserReplMu.Unlock()
+
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()

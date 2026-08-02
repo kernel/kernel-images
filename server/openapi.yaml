@@ -1308,6 +1308,42 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /browser/execute:
+    post:
+      summary: Execute JavaScript/TypeScript in a persistent browser REPL
+      description: |
+        Execute code in a persistent Node.js runtime preloaded with browser-control
+        helpers (goto_url, page_info, click_at_xy, capture_screenshot, tab management,
+        and more) plus an unrestricted `cdp()` escape hatch. Top-level bindings persist
+        across calls until the API process exits, the REPL is reset, or the REPL is
+        terminated after a crash or timeout.
+
+        The runtime starts lazily on the first request and is owned directly by the API
+        process: an API restart kills it, and the next request starts a fresh REPL with a
+        new CUID2 `repl_id`. A timeout is destructive (JavaScript cannot be interrupted
+        safely), so a timed-out execution terminates the REPL and the next request lazily
+        starts a new one.
+
+        This endpoint is unrestricted code execution inside the browser VM, equivalent in
+        trust level to the process and Playwright execution APIs. It is not sandboxed.
+      operationId: executeBrowserCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExecuteBrowserCodeRequest"
+      responses:
+        "200":
+          description: Code executed (success or structured failure)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExecuteBrowserCodeResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /telemetry:
     get:
       summary: Get telemetry configuration
@@ -3924,6 +3960,115 @@ components:
         stderr:
           type: string
           description: Standard error from the execution
+      additionalProperties: false
+    ExecuteBrowserCodeRequest:
+      type: object
+      description: Request to execute code in the persistent browser REPL
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: |
+            JavaScript or TypeScript evaluated in a persistent Node.js runtime.
+            Top-level bindings persist until the API process exits, the REPL is
+            reset, or the REPL is terminated after a crash or timeout.
+            May be empty only when reset is true.
+        timeout_sec:
+          type: integer
+          description: Maximum execution time in seconds. Default is 60.
+          default: 60
+          minimum: 1
+          maximum: 300
+        reset:
+          type: boolean
+          description: Terminate the current REPL, start a fresh one, and then evaluate code.
+          default: false
+      additionalProperties: false
+    ExecuteBrowserCodeResult:
+      type: object
+      description: Result of code execution in the persistent browser REPL
+      required: [success, repl_id]
+      properties:
+        success:
+          type: boolean
+          description: Whether the code executed successfully
+        repl_id:
+          type: string
+          description: |
+            CUID2 identifying the exact state-holding REPL process used for this
+            execution. Stable across calls and Chromium reconnects; changes after
+            an API restart, explicit reset, execution timeout, or REPL crash.
+        result:
+          description: JSON-compatible value of the final expression (if any)
+        result_repr:
+          type: string
+          description: Bounded util.inspect rendering when the final value is not JSON-compatible
+        error:
+          type: string
+          description: Error message if execution failed
+        stack:
+          type: string
+          description: Stack trace if execution failed
+        content:
+          type: array
+          description: Ordered text/image output produced by the execution
+          items:
+            $ref: "#/components/schemas/BrowserExecutionContent"
+        result_truncated:
+          type: boolean
+          description: True if the serialized result exceeded the response limit and was replaced by result_repr
+        content_truncated:
+          type: boolean
+          description: True if text or image output was dropped or truncated due to response limits
+        repl_terminated:
+          type: boolean
+          description: |
+            True if the REPL identified by repl_id was terminated by this request
+            (timeout or protocol corruption). The next request lazily starts a
+            fresh REPL with a new repl_id.
+        duration_ms:
+          type: integer
+          description: Wall-clock execution time in milliseconds
+      additionalProperties: false
+    BrowserExecutionContent:
+      description: Ordered discriminated union of execution output items.
+      oneOf:
+        - $ref: "#/components/schemas/BrowserExecutionTextContent"
+        - $ref: "#/components/schemas/BrowserExecutionImageContent"
+      discriminator:
+        propertyName: type
+        mapping:
+          text: "#/components/schemas/BrowserExecutionTextContent"
+          image: "#/components/schemas/BrowserExecutionImageContent"
+    BrowserExecutionTextContent:
+      type: object
+      required: [type, channel, text]
+      properties:
+        type:
+          type: string
+          enum: [text]
+        channel:
+          type: string
+          description: >-
+            write = repl.write, stdout = console.log/info/debug,
+            stderr = console.warn/error
+          enum: [write, stdout, stderr]
+        text:
+          type: string
+      additionalProperties: false
+    BrowserExecutionImageContent:
+      type: object
+      required: [type, mime_type, data_b64]
+      properties:
+        type:
+          type: string
+          enum: [image]
+        mime_type:
+          type: string
+          pattern: "^image/"
+        data_b64:
+          type: string
+          contentEncoding: base64
       additionalProperties: false
     SleepAction:
       type: object
