@@ -686,6 +686,14 @@ type fakeCDPServer struct {
 	// with the stale-target error, simulating a target destroyed between
 	// listing and attaching.
 	failNextAttach atomic.Int32
+	// closeNextConnsAfterFirstCommand makes the next N accepted WebSocket
+	// connections close without answering as soon as the first command
+	// arrives, simulating the DevTools proxy accepting a connection and
+	// then dropping it while Chromium is still coming up after a restart.
+	closeNextConnsAfterFirstCommand atomic.Int32
+	// totalConns counts every accepted WebSocket connection, so tests can
+	// verify a reconnect-and-retry actually happened.
+	totalConns atomic.Int32
 
 	// rendererHrefs is the href each target's renderer reports for
 	// location.href. Target metadata shows a created target's URL
@@ -783,6 +791,7 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
+	f.totalConns.Add(1)
 	f.mu.Lock()
 	f.conns[conn] = struct{}{}
 	f.mu.Unlock()
@@ -807,6 +816,13 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := json.Unmarshal(msg, &req); err != nil || req.ID == 0 {
 			continue
+		}
+		if f.closeNextConnsAfterFirstCommand.Load() > 0 {
+			// The proxy accepted the connection but the browser behind it is
+			// not up yet: drop the connection mid-first-command without
+			// answering. The daemon must reconnect and retry.
+			f.closeNextConnsAfterFirstCommand.Add(-1)
+			return
 		}
 		if req.SessionID != "" && f.hangSession.Load() {
 			// A frozen renderer never answers session-routed commands.
@@ -1647,6 +1663,46 @@ func TestBrowserReplAttachRetriesStaleTarget(t *testing.T) {
 	require.True(t, r.Success, "a transient stale-target attach must be retried: %v", r.Error)
 	require.Equal(t, "Example Domain", r.Result)
 	require.Equal(t, int32(0), fake.failNextAttach.Load(), "the first attach attempt failed as planned")
+}
+
+// TestBrowserReplRetriesCommandOnFreshConnectionClose reproduces the flaky
+// e2e failure where the first browser-helper call after a Chromium restart
+// hit "CDP connection closed": the DevTools proxy accepts the WebSocket and
+// then closes it while the browser behind it is still coming up. A command
+// whose connection died before answering anything must be retried once on a
+// fresh connection.
+func TestBrowserReplRetriesCommandOnFreshConnectionClose(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: `var retryToken = "pre-restart"; await ensure_real_tab(); retryToken`,
+	})
+	require.True(t, r1.Success, "error: %v", r1.Error)
+	require.Equal(t, int32(1), fake.totalConns.Load())
+
+	// Simulate a Chromium restart, then a proxy that accepts the next
+	// connection and drops it mid-first-command because the browser behind
+	// it is not up yet.
+	fake.Restart()
+	require.Eventually(t, func() bool { return fake.connCount() == 0 },
+		5*time.Second, 10*time.Millisecond, "daemon connection must close")
+	fake.closeNextConnsAfterFirstCommand.Store(1)
+
+	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: `const info = await page_info(); ({ token: retryToken, title: info.title })`,
+	})
+	require.True(t, r2.Success, "a command on a fresh connection that died unanswered must be retried: %v", r2.Error)
+	require.Equal(t, r1.ReplId, r2.ReplId, "the transient close must not change repl_id")
+	res, ok := r2.Result.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "pre-restart", res["token"], "bindings survive the reconnect-and-retry")
+	require.Equal(t, "Example Domain", res["title"])
+	require.Equal(t, int32(0), fake.closeNextConnsAfterFirstCommand.Load(), "the fresh connection was dropped as planned")
+	require.Equal(t, int32(3), fake.totalConns.Load(), "initial + dropped + retried connections")
+	require.Equal(t, 1, fake.connCount(), "the retried connection is still open")
 }
 
 // fakeReplDaemonJS is a minimal Unix-socket daemon used to inject protocol

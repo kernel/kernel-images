@@ -65,6 +65,10 @@ const ENABLE_DOMAIN_COMMAND_TIMEOUT_MS = 5_000;
 // DIALOG_DISMISS_TIMEOUT_MS bounds the best-effort dismissal of a dialog
 // that was already open when the runtime attached.
 const DIALOG_DISMISS_TIMEOUT_MS = 5_000;
+// RECONNECT_RETRY_DELAY_MS gives a just-restarted Chromium (or the DevTools
+// proxy in front of it) a beat before the single reconnect-and-retry of a
+// command whose connection died before answering anything.
+const RECONNECT_RETRY_DELAY_MS = 150;
 
 /** CdpCommandTimeoutError marks a command that exceeded its time budget. */
 export class CdpCommandTimeoutError extends Error {
@@ -96,6 +100,17 @@ export class CdpClient {
   private nextId = 1;
   private pending = new Map<number, PendingCommand>();
   private events: CdpEvent[] = [];
+
+  /**
+   * Commands answered (result or CDP error) on the current connection.
+   * Used to tag connection-closed failures: when a connection dies before
+   * answering a single command — typical for the first command after a
+   * Chromium restart, where the DevTools proxy accepts the WebSocket and
+   * then closes it while the browser is still coming up — the command
+   * almost certainly never reached the browser and is safe to retry once
+   * on a fresh connection.
+   */
+  private answeredInConnection = 0;
 
   /** Currently attached page session. */
   sessionId: string | null = null;
@@ -203,6 +218,7 @@ export class CdpClient {
       ws.addEventListener('open', () => {
         clearTimeout(timer);
         this.ws = ws;
+        this.answeredInConnection = 0;
         resolve();
       });
       ws.addEventListener('error', () => {
@@ -227,6 +243,7 @@ export class CdpClient {
     this.rendererResponsive = true;
     this.inFlightRequests.clear();
     const err = new Error('CDP connection closed');
+    (err as any).connectionNeverAnswered = this.answeredInConnection === 0;
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       p.reject(err);
@@ -248,6 +265,7 @@ export class CdpClient {
       if (!p) return;
       this.pending.delete(msg.id);
       clearTimeout(p.timer);
+      this.answeredInConnection++;
       if (msg.error) {
         p.reject(new Error(`CDP ${p.method} failed: ${msg.error.message} (code ${msg.error.code})`));
       } else {
@@ -308,6 +326,20 @@ export class CdpClient {
 
   /** Send a command on the attached page session. */
   async sessionCommand<T = any>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
+    try {
+      return await this.sessionCommandOnce<T>(method, params, timeoutMs);
+    } catch (err: any) {
+      if (!err?.connectionNeverAnswered) {
+        throw err;
+      }
+      // The connection died before answering a single command (e.g. the
+      // first call after a Chromium restart racing the DevTools proxy).
+      // The attached session died with it; re-attach and retry once.
+      return this.sessionCommandOnce<T>(method, params, timeoutMs);
+    }
+  }
+
+  private async sessionCommandOnce<T = any>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
     await this.ensureAttached();
     if (!this.rendererResponsive) {
       // The previous attach hit a frozen renderer (e.g. a dialog left open
@@ -321,6 +353,24 @@ export class CdpClient {
 
   /** Send a raw command. sessionId === null forces browser-level routing. */
   async send<T = any>(method: string, params?: unknown, sessionId?: string, timeoutMs?: number): Promise<T> {
+    try {
+      return await this.sendOnce<T>(method, params, sessionId, timeoutMs);
+    } catch (err: any) {
+      // Session-routed commands belong to the dead connection's session;
+      // their retry (with re-attach) is sessionCommand's job. Foreign
+      // sessions (evaluateOnTarget) surface the error unchanged.
+      if (sessionId !== undefined || !err?.connectionNeverAnswered) {
+        throw err;
+      }
+      // The connection died before answering a single command, so the
+      // browser almost certainly never saw this one: reconnect and retry
+      // exactly once.
+      await new Promise((resolve) => setTimeout(resolve, RECONNECT_RETRY_DELAY_MS));
+      return this.sendOnce<T>(method, params, sessionId, timeoutMs);
+    }
+  }
+
+  private async sendOnce<T = any>(method: string, params?: unknown, sessionId?: string, timeoutMs?: number): Promise<T> {
     await this.ensureConnected();
     const id = this.nextId++;
     const payload: Record<string, unknown> = { id, method };
@@ -357,7 +407,9 @@ export class CdpClient {
       } catch (err: any) {
         clearTimeout(timer);
         this.pending.delete(id);
-        reject(new Error(`failed to send CDP ${method}: ${err?.message ?? err}`));
+        const sendErr = new Error(`failed to send CDP ${method}: ${err?.message ?? err}`);
+        (sendErr as any).connectionNeverAnswered = this.answeredInConnection === 0;
+        reject(sendErr);
       }
     });
   }
