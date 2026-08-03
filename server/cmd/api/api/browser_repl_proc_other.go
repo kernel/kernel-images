@@ -17,6 +17,13 @@ var (
 
 func configureBrowserReplCmd(cmd *exec.Cmd) {}
 
+// killOrphanedBrowserRepl is a no-op off Linux: orphaned REPL processes are
+// not discoverable without /proc. The stale socket file is still removed,
+// so the orphan leaks (harmlessly for local development) until it exits.
+func killOrphanedBrowserRepl(socketPath string) []int {
+	return nil
+}
+
 func signalBrowserReplGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil

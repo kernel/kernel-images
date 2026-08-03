@@ -134,8 +134,18 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 	socketPath := browserReplSocketPath()
 
-	// Never adopt state from a previous process: remove any stale socket
-	// before starting the new child.
+	// Never adopt state from a previous process. If something we do not own
+	// is still listening on the socket (an orphaned daemon started outside
+	// this API process — pdeathsig covers children the API itself spawned),
+	// kill it before removing the socket file so the orphan cannot leak for
+	// the container lifetime.
+	if conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
+		conn.Close()
+		if killed := killOrphanedBrowserRepl(socketPath); len(killed) > 0 {
+			log.Warn("killed orphaned browser REPL process(es) holding the socket",
+				"pids", killed, "socket", socketPath)
+		}
+	}
 	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Warn("failed to remove stale browser REPL socket", "path", socketPath, "err", err)
 	}

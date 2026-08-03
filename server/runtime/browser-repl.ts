@@ -326,6 +326,11 @@ cdpClient.onDialogAutoDismissed = (dialog) => {
 // the daemon realm so context code cannot interfere with it.
 const evalHolder: { promise: Promise<unknown> | null } = { promise: null };
 
+// Cross-realm handles captured right after context creation; the injected
+// __replDefine__ closure reads them lazily when invoked from context code.
+let contextGlobal: Record<PropertyKey, unknown>;
+let ContextTypeError: new (message: string) => Error;
+
 const context: vm.Context = vm.createContext(
   {
     console: consoleCapture,
@@ -354,9 +359,37 @@ const context: vm.Context = vm.createContext(
     __replRun__: (fn: () => Promise<unknown>) => {
       evalHolder.promise = fn();
     },
+    // Exports a binding declared inside the async wrapper onto the context
+    // global with real mutability semantics (see rewriteForAsyncBody):
+    // const is backed by an accessor whose setter throws the same TypeError
+    // V8 raises for a lexical const, let/class produce a writable
+    // non-configurable data property. Redeclaration conflicts are rejected
+    // earlier, at rewrite time, via replDeclaredNames.
+    __replDefine__: (kind: 'let' | 'const' | 'class', name: string, value: unknown) => {
+      if (kind === 'const') {
+        Object.defineProperty(contextGlobal, name, {
+          enumerable: true,
+          configurable: false,
+          get: () => value,
+          set: () => {
+            throw new ContextTypeError('Assignment to constant variable.');
+          },
+        });
+      } else {
+        Object.defineProperty(contextGlobal, name, {
+          value,
+          writable: true,
+          enumerable: true,
+          configurable: false,
+        });
+      }
+    },
   },
   { name: `browser-repl-${REPL_ID}` },
 );
+
+contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, unknown>;
+ContextTypeError = vm.runInContext('TypeError', context) as new (message: string) => Error;
 
 // The context realm's Object.prototype. User values are created in the vm
 // context's realm, whose intrinsics differ from the daemon's, so plain-object
@@ -376,20 +409,24 @@ const STATIC_IMPORT_ERROR =
   'static import/export is not supported in the browser REPL; use dynamic import() instead';
 
 /**
- * Reject static import/export syntax in the esbuild-transformed output. The
- * transform runs with preserveValueImports so esbuild's TypeScript loader
- * cannot elide unused imports before this check: every import/export
- * statement survives into the transformed JavaScript, where it is a syntax
- * error in acorn's script mode. That makes the rejection unconditional for
- * every form, used or unused, even when TypeScript-only syntax precedes the
- * import (a raw-source acorn scan cannot parse such input and would miss
- * it). Type-only imports (`import type ...`) are erased by the transform
- * and remain allowed. Other parse failures are ignored here; the vm
- * compiler reports those.
+ * Parse transformed JavaScript for the evaluation pipeline. Tolerates
+ * top-level await and return (the async-wrapper path compiles those
+ * separately).
+ *
+ * Static import/export is rejected here: the transform runs with
+ * preserveValueImports so esbuild's TypeScript loader cannot elide unused
+ * imports before this check — every import/export statement survives into
+ * the transformed JavaScript, where it is a syntax error in acorn's script
+ * mode. That makes the rejection unconditional for every form, used or
+ * unused, even when TypeScript-only syntax precedes the import (a
+ * raw-source acorn scan cannot parse such input and would miss it).
+ * Type-only imports (`import type ...`) are erased by the transform and
+ * remain allowed. Other parse failures return null; the vm compiler (fast
+ * path) or the async-wrapper rewrite (fallback) reports those.
  */
-function rejectStaticImports(transformed: string): void {
+function parseScript(js: string): any | null {
   try {
-    acorn.parse(transformed, {
+    return acorn.parse(js, {
       ecmaVersion: 'latest',
       allowAwaitOutsideFunction: true,
       allowReturnOutsideFunction: true,
@@ -398,10 +435,11 @@ function rejectStaticImports(transformed: string): void {
     if (typeof err?.message === 'string' && err.message.includes('sourceType: module')) {
       throw new Error(STATIC_IMPORT_ERROR);
     }
+    return null;
   }
 }
 
-async function transformCode(code: string): Promise<string> {
+async function transformCode(code: string): Promise<{ js: string; ast: any | null }> {
   // No `format`: esm output makes esbuild wrap top-level returns in a
   // CommonJS shim, and cjs output would break dynamic import(). Leaving it
   // unset preserves the input module syntax.
@@ -412,15 +450,132 @@ async function transformCode(code: string): Promise<string> {
     // esbuild's TypeScript loader would otherwise elide them.
     tsconfigRaw: { compilerOptions: { preserveValueImports: true } },
   });
-  rejectStaticImports(result.code);
   // esbuild drops expression statements it considers side-effect-free (e.g.
   // a bare `NaN` or `undefined`). In a REPL those expressions ARE the result,
   // so when the whole program was elided, evaluate the original source (it
   // is guaranteed to be valid JavaScript at this point).
-  if (result.code.trim() === '' && code.trim() !== '') {
-    return code;
+  const js = result.code.trim() === '' && code.trim() !== '' ? code : result.code;
+  const ast = parseScript(js);
+  return { js, ast };
+}
+
+// ---------------------------------------------------------------------------
+// Cross-call declaration tracking
+// ---------------------------------------------------------------------------
+
+type DeclKind = 'var' | 'function' | 'let' | 'const' | 'class';
+
+interface DeclaredName {
+  name: string;
+  kind: DeclKind;
+}
+
+// replDeclaredNames tracks every top-level binding the REPL has created, on
+// either evaluation path, so redeclaration rules hold across calls no matter
+// which path declared the name. The vm enforces conflicts among
+// classic-script (fast-path) declarations on its own; this registry extends
+// the same rules to bindings the async wrapper exports onto the context
+// global via __replDefine__, which the vm cannot see. Executions are
+// serialized, so no locking is needed.
+const replDeclaredNames = new Map<string, DeclKind>();
+
+function isLexicalKind(kind: DeclKind): boolean {
+  return kind === 'let' || kind === 'const' || kind === 'class';
+}
+
+// canRedeclare mirrors top-level script semantics: var and function
+// declarations may redeclare each other freely; let/const/class conflict
+// with any prior declaration of the same name (and vice versa).
+function canRedeclare(existing: DeclKind, incoming: DeclKind): boolean {
+  return !isLexicalKind(existing) && !isLexicalKind(incoming);
+}
+
+function alreadyDeclaredError(name: string): SyntaxError {
+  return new SyntaxError(`Identifier '${name}' has already been declared`);
+}
+
+function collectPatternNames(pattern: any, out: string[]): void {
+  if (!pattern) return;
+  switch (pattern.type) {
+    case 'Identifier':
+      out.push(pattern.name);
+      return;
+    case 'ObjectPattern':
+      for (const prop of pattern.properties) {
+        if (prop.type === 'RestElement') collectPatternNames(prop.argument, out);
+        else collectPatternNames(prop.value, out);
+      }
+      return;
+    case 'ArrayPattern':
+      for (const el of pattern.elements) collectPatternNames(el, out);
+      return;
+    case 'AssignmentPattern':
+      collectPatternNames(pattern.left, out);
+      return;
+    case 'RestElement':
+      collectPatternNames(pattern.argument, out);
+      return;
+    default:
+      return;
   }
-  return result.code;
+}
+
+function collectTopLevelDeclarations(ast: any): DeclaredName[] {
+  const out: DeclaredName[] = [];
+  for (const st of ast?.body ?? []) {
+    if (st.type === 'VariableDeclaration') {
+      const names: string[] = [];
+      for (const decl of st.declarations) {
+        collectPatternNames(decl.id, names);
+      }
+      for (const name of names) {
+        out.push({ name, kind: st.kind as DeclKind });
+      }
+    } else if (st.type === 'FunctionDeclaration' && st.id) {
+      out.push({ name: st.id.name, kind: 'function' });
+    } else if (st.type === 'ClassDeclaration' && st.id) {
+      out.push({ name: st.id.name, kind: 'class' });
+    }
+  }
+  return out;
+}
+
+/**
+ * Enforce cross-call redeclaration rules before any user code runs.
+ * JavaScript reports redeclaration as an early error: no statement of the
+ * program executes, so this check must run ahead of both evaluation paths.
+ */
+function precheckDeclarations(declared: DeclaredName[]): void {
+  for (const { name, kind } of declared) {
+    const existing = replDeclaredNames.get(name);
+    if (existing !== undefined && !canRedeclare(existing, kind)) {
+      throw alreadyDeclaredError(name);
+    }
+  }
+}
+
+/**
+ * Record bindings a submission is about to instantiate. Returns an undo
+ * closure for the case where script execution fails during global
+ * declaration instantiation (a redeclaration the registry could not see,
+ * e.g. a prior declaration written in syntax acorn could not parse), which
+ * leaves no bindings behind.
+ */
+function registerDeclarations(declared: DeclaredName[]): () => void {
+  const previous: DeclaredName[] = [];
+  for (const { name, kind } of declared) {
+    const existing = replDeclaredNames.get(name);
+    if (existing !== undefined) previous.push({ name, kind: existing });
+    replDeclaredNames.set(name, kind);
+  }
+  return () => {
+    for (const { name, kind } of [...declared].reverse()) {
+      replDeclaredNames.delete(name);
+    }
+    for (const { name, kind } of previous) {
+      replDeclaredNames.set(name, kind);
+    }
+  };
 }
 
 function isThenable(value: unknown): value is Promise<unknown> {
@@ -434,23 +589,44 @@ function isThenable(value: unknown): value is Promise<unknown> {
 /**
  * Rewrite top-level declarations so bindings persist on the context global
  * when the code must run inside an async wrapper (top-level await or
- * top-level return). Mirrors the approach of Node's own REPL, which uses
- * acorn with the same parser options.
+ * top-level return). Parses with acorn using the same options as Node's own
+ * REPL.
+ *
+ * Persistence semantics match the classic-script (fast) path as closely as
+ * a function scope allows:
+ *
+ *  - var and function declarations become ordinary global assignments and
+ *    stay freely redeclarable.
+ *  - let/const/class bindings are exported via __replDefine__: const is
+ *    backed by an accessor whose setter throws TypeError on assignment
+ *    (matching V8's "Assignment to constant variable."), let/class produce
+ *    writable non-configurable data properties.
+ *  - redeclaration is an early error enforced by replDeclaredNames before
+ *    any user code runs, so a prior const cannot be redeclared no matter
+ *    which evaluation path declared it.
+ *
+ * Registration happens here, before execution: script-level declarations
+ * instantiate before the first statement runs, so the names stay reserved
+ * even when an initializer later throws.
  */
-function rewriteForAsyncBody(source: string): string {
-  let ast: any;
-  try {
-    ast = acorn.parse(source, {
-      ecmaVersion: 'latest',
-      allowAwaitOutsideFunction: true,
-      allowReturnOutsideFunction: true,
-    });
-  } catch (err: any) {
-    if (typeof err?.message === 'string' && err.message.includes('sourceType: module')) {
-      throw new Error(STATIC_IMPORT_ERROR);
-    }
-    throw err;
-  }
+function rewriteForAsyncBody(source: string, parsedAst: any | null): string {
+  const ast =
+    parsedAst ??
+    (() => {
+      try {
+        return acorn.parse(source, {
+          ecmaVersion: 'latest',
+          allowAwaitOutsideFunction: true,
+          allowReturnOutsideFunction: true,
+        });
+      } catch (err: any) {
+        if (typeof err?.message === 'string' && err.message.includes('sourceType: module')) {
+          throw new Error(STATIC_IMPORT_ERROR);
+        }
+        throw err;
+      }
+    })();
+  registerDeclarations(collectTopLevelDeclarations(ast));
   const statements: any[] = ast.body;
   const parts: string[] = [];
 
@@ -459,30 +635,58 @@ function rewriteForAsyncBody(source: string): string {
     const text = source.slice(st.start, st.end);
 
     if (st.type === 'VariableDeclaration') {
-      const assignments: string[] = [];
-      for (const decl of st.declarations) {
-        if (!decl.init) continue;
-        const nameText = source.slice(decl.id.start, decl.id.end);
-        const initText = source.slice(decl.init.start, decl.init.end);
-        if (decl.id.type === 'Identifier') {
-          assignments.push(`${nameText} = ${initText}`);
-        } else {
-          // Destructuring patterns need parentheses as expression statements.
-          assignments.push(`(${nameText} = ${initText})`);
+      const kind = st.kind as DeclKind;
+      if (kind === 'var') {
+        const assignments: string[] = [];
+        for (const decl of st.declarations) {
+          if (!decl.init) continue;
+          const nameText = source.slice(decl.id.start, decl.id.end);
+          const initText = source.slice(decl.init.start, decl.init.end);
+          if (decl.id.type === 'Identifier') {
+            assignments.push(`${nameText} = ${initText}`);
+          } else {
+            // Destructuring patterns need parentheses as expression statements.
+            assignments.push(`(${nameText} = ${initText})`);
+          }
         }
+        if (assignments.length > 0) {
+          parts.push(assignments.join(',\n  ') + ';');
+        }
+        return;
       }
-      if (assignments.length > 0) {
-        parts.push(assignments.join(',\n  ') + ';');
+      // let/const: export each binding to the context global with real
+      // mutability semantics. Same-body references resolve through the
+      // global, which __replDefine__ populates before the next statement.
+      for (const decl of st.declarations) {
+        const initText = decl.init ? source.slice(decl.init.start, decl.init.end) : 'undefined';
+        if (decl.id.type === 'Identifier') {
+          parts.push(`__replDefine__(${JSON.stringify(kind)}, ${JSON.stringify(decl.id.name)}, (${initText}));`);
+        } else {
+          const nameText = source.slice(decl.id.start, decl.id.end);
+          const names: string[] = [];
+          collectPatternNames(decl.id, names);
+          parts.push(`(${nameText} = (${initText}));`);
+          for (const name of names) {
+            parts.push(`__replDefine__(${JSON.stringify(kind)}, ${JSON.stringify(name)}, ${name});`);
+          }
+        }
       }
       return;
     }
 
-    if ((st.type === 'FunctionDeclaration' || st.type === 'ClassDeclaration') && st.id) {
+    if (st.type === 'FunctionDeclaration' && st.id) {
       parts.push(text);
       // Assign to globalThis explicitly: a plain `Name = Name` assignment
       // would resolve to the function-local binding and never reach the
       // persistent context global.
       parts.push(`globalThis.${st.id.name} = ${st.id.name};`);
+      return;
+    }
+
+    if (st.type === 'ClassDeclaration' && st.id) {
+      parts.push(text);
+      // Classes get let-like mutability on the persistent global.
+      parts.push(`__replDefine__('class', ${JSON.stringify(st.id.name)}, ${st.id.name});`);
       return;
     }
 
@@ -502,7 +706,12 @@ function rewriteForAsyncBody(source: string): string {
 }
 
 async function evaluate(code: string): Promise<unknown> {
-  const js = await transformCode(code);
+  const { js, ast } = await transformCode(code);
+
+  // Cross-call redeclaration is an early error on both evaluation paths;
+  // check before any user code runs.
+  const declared = ast ? collectTopLevelDeclarations(ast) : [];
+  precheckDeclarations(declared);
 
   // Fast path: run as a classic script in the persistent context. Top-level
   // let/const/class bindings live in the context's global lexical scope, so
@@ -517,11 +726,24 @@ async function evaluate(code: string): Promise<unknown> {
   }
 
   if (script) {
-    let value: unknown = script.runInContext(context);
-    if (isThenable(value)) {
-      value = await value;
+    const undoRegistration = registerDeclarations(declared);
+    try {
+      let value: unknown = script.runInContext(context);
+      if (isThenable(value)) {
+        value = await value;
+      }
+      return value;
+    } catch (err) {
+      // A redeclaration SyntaxError here means global declaration
+      // instantiation failed (a conflict the registry could not see, e.g.
+      // a prior binding written in syntax acorn could not parse): no
+      // bindings were created, so roll the registry back. Runtime errors
+      // leave the instantiated bindings — and their registration — in
+      // place.
+      if (err instanceof SyntaxError && /already been declared/.test(String(err?.message)))
+        undoRegistration();
+      throw err;
     }
-    return value;
   }
 
   if (!(compileError instanceof SyntaxError)) {
@@ -529,11 +751,12 @@ async function evaluate(code: string): Promise<unknown> {
   }
 
   // Fallback: top-level await or return requires an async wrapper. Rewrite
-  // top-level declarations into global assignments so bindings still
-  // persist. Note that in this mode the implicit result is the value of the
-  // final expression statement (or an explicit return); a trailing block
-  // statement (try/if/for) yields no implicit result.
-  const body = rewriteForAsyncBody(js);
+  // top-level declarations into persistent global bindings (see
+  // rewriteForAsyncBody for the semantics). Note that in this mode the
+  // implicit result is the value of the final expression statement (or an
+  // explicit return); a trailing block statement (try/if/for) yields no
+  // implicit result.
+  const body = rewriteForAsyncBody(js, ast);
   const wrapped = `__replRun__(async () => {\n${body}\n})`;
   const wrappedScript = new vm.Script(wrapped, scriptOptions);
   evalHolder.promise = null;

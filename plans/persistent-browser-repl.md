@@ -302,7 +302,7 @@ On lazy startup it:
 
 On graceful API shutdown it closes the socket, terminates the process group, waits with a short deadline, and escalates to `SIGKILL` if needed.
 
-The API must not reconnect to or adopt an orphaned REPL from an earlier API process. A stale socket or child is terminated and replaced.
+The API must not reconnect to or adopt an orphaned REPL from an earlier API process. A stale socket or child is terminated and replaced: when lazy startup finds a live listener on the socket that it does not own (parent-death signaling covers only children the API itself spawned), the owning daemon process is located via `/proc/net/unix` and `/proc/<pid>/fd` and SIGKILLed before the socket file is removed, so an orphaned REPL cannot leak for the container lifetime.
 
 ### Browser Connection
 
@@ -343,6 +343,14 @@ The runtime supports:
 Static top-level imports need not be supported in v1; callers can use dynamic imports. Every static `import`/`export` form — used or unused — is rejected with the same clear error. The esbuild TypeScript transform runs with `preserveValueImports` so its unused-import elision cannot drop the statement, and the check runs on the transformed output, so the rejection is unconditional even when TypeScript-only syntax precedes the import. Type-only imports (`import type ...`) are erased by the transform and remain allowed.
 
 Redeclaration follows JavaScript semantics. In particular, a prior top-level `const` cannot be redeclared. `reset: true` is the recovery mechanism when names cannot be reused safely.
+
+This holds on both evaluation paths. The synchronous path runs as a classic script, so the vm enforces it natively. The async-wrapper path (any code using top-level `await` or `return`) cannot rely on the context's global lexical scope, so the runtime enforces the same rules itself:
+
+- A registry tracks every top-level binding created on either path. Declaring a name that conflicts with an existing binding is an early error (`SyntaxError: Identifier '<name>' has already been declared`) raised before any user code runs — no matter which path declared the name first. As in classic scripts, `var` and `function` may redeclare each other; `let`/`const`/`class` conflict with any prior declaration of the same name.
+- `let`/`const`/`class` bindings declared in async-wrapper mode are exported to the context global with real mutability semantics: `const` is backed by an accessor whose setter throws `TypeError: Assignment to constant variable.` on either path, and `let`/`class` become writable, non-configurable properties. Script-level declarations instantiate before the first statement runs, so a name stays reserved even when its initializer throws.
+- One corner is approximate: a fast-path `let x;` left `undefined` is invisible to the cross-path check, so an async-wrapper redeclaration of that exact name would shadow it instead of throwing.
+
+When code uses top-level `await` or `return`, the implicit result is the value of the final expression statement (or an explicit `return`). A trailing block statement (`try`/`if`/`for`/`while`) yields no implicit result in that mode (`undefined`), unlike the synchronous path, which reports the block's completion value. End the submission with an explicit expression to observe a value.
 
 A failed execution does not automatically reset the REPL. Bindings initialized before the failure may remain available, matching normal persistent-runtime behavior.
 
@@ -521,6 +529,7 @@ Bundle the runtime in both headful and headless Dockerfiles. Reuse the existing 
 ## Known Limitations
 
 - **Mouse-wheel scroll on `data:` URLs.** In new headless mode Chromium ignores mouse-wheel input on `data:` URL pages (confirmed via raw CDP: `window.scrollY` never changes). This is upstream behavior, not a `scroll()` helper bug; test scrolling on http(s) pages.
+- **First wheel event after a navigation is swallowed (upstream).** On both headless variants, Chromium silently drops the first `Input.dispatchMouseEvent` mouseWheel after each navigation: the command answers normally but the page never scrolls (verified via raw CDP; a `wait()` after navigation does not prevent it). `scroll()` therefore probes the window scroll offset around each dispatch and, when the window itself is scrollable in a requested direction and the offset did not change, retries the dispatch once (surfaced as a stderr content item). Verification is skipped when the window cannot scroll in the requested direction (unscrollable document, already at the edge, or a wheel targeted at an inner scrollable element), so those dispatches behave exactly as before. If the page still has not scrolled after one retry, a stderr note says so (the page may intercept wheel events).
 - **Wedged mouseWheel path (rare, upstream).** QA observed one new-headless Chromium instance where `Input.dispatchMouseEvent` mouseWheel commands were never answered (a ~5-minute window on one process; not reproducible after a Chromium restart) while every other command on the same session answered fine. The signature is a `CDP Input.dispatchMouseEvent timed out` error with `window.scrollY` unchanged. `scroll()` bounds the dispatch to a short timeout and falls back to an in-page `window.scrollBy` (surfaced as a stderr content item), so the wedge costs one bounded fallback instead of a 30s hang per attempt. The fallback is DOM scrolling, not synthetic input; it does not trigger wheel event listeners.
 - **Stale dialogs from a killed REPL.** See "Stale dialogs at attach": on Chromium builds that drop the browser-side dialog record on session disconnect, the frozen tab cannot be dismissed and must be recovered with `cdp("Page.reload")`, `new_tab()`, or `close_tab()`.
 

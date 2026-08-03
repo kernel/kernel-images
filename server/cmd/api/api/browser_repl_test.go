@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -704,6 +705,16 @@ type fakeCDPServer struct {
 	hangMouseWheel atomic.Bool
 	// sawScrollBy records that the in-page window.scrollBy fallback ran.
 	sawScrollBy atomic.Bool
+	// swallowNextWheel simulates the upstream first-wheel-after-navigation
+	// quirk: the mouseWheel command is answered normally but the page never
+	// scrolls (window.scrollY stays put).
+	swallowNextWheel bool
+	// scrollY is the fake page's current scroll offset; maxScrollY is how
+	// far the fake document can scroll (0 = unscrollable).
+	scrollY    int64
+	maxScrollY int64
+	// wheelDispatchCount counts answered mouseWheel dispatches.
+	wheelDispatchCount int
 
 	http *httptest.Server
 }
@@ -926,6 +937,21 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 	case "Page.captureScreenshot":
 		return map[string]any{"data": fakeCDPTinyPNG}, nil, nil
 	case "Input.dispatchMouseEvent", "Input.insertText":
+		if method == "Input.dispatchMouseEvent" && strings.Contains(string(params), "mouseWheel") {
+			var p struct {
+				DeltaY float64 `json:"deltaY"`
+			}
+			_ = json.Unmarshal(params, &p)
+			f.mu.Lock()
+			f.wheelDispatchCount++
+			if f.swallowNextWheel {
+				// Answered normally, but the page never scrolls.
+				f.swallowNextWheel = false
+			} else {
+				f.scrollY += int64(p.DeltaY)
+			}
+			f.mu.Unlock()
+		}
 		return map[string]any{}, nil, nil
 	case "Input.dispatchKeyEvent":
 		var p map[string]any
@@ -986,6 +1012,16 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 			return href
 		}
 		return "about:blank"
+	case strings.Contains(expr, "scrollingElement"):
+		// scroll()'s offset probe for no-op dispatch detection.
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return map[string]any{
+			"x":    0,
+			"y":    f.scrollY,
+			"maxX": 0,
+			"maxY": f.maxScrollY,
+		}
 	case strings.Contains(expr, "window.scrollBy"):
 		// scroll()'s in-page fallback for a wedged mouseWheel path.
 		f.sawScrollBy.Store(true)
@@ -1907,6 +1943,242 @@ func TestBrowserReplScrollFallback(t *testing.T) {
 	require.True(t, sawNote, "the fallback must be surfaced as a stderr content item, got %v", r.Content)
 
 	// The REPL survives on the same repl_id.
+	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	require.True(t, r2.Success)
+	require.Equal(t, r.ReplId, r2.Result)
+}
+
+// TestBrowserReplAsyncConstLetSemantics covers the QA finding that const/let
+// declarations silently degraded to mutable, redeclarable global assignments
+// whenever the submitting code contained a top-level await (the async-wrapper
+// path). Bindings must keep real JavaScript semantics no matter which
+// evaluation path declared them.
+func TestBrowserReplAsyncConstLetSemantics(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	await_ := "await new Promise(r => setTimeout(r, 1)); "
+
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+	expectErr := func(code string, substr string) {
+		t.Helper()
+		r := exec(code)
+		require.False(t, r.Success, "expected failure for %q", code)
+		require.NotNil(t, r.Error)
+		require.Contains(t, *r.Error, substr, "code: %q", code)
+	}
+	expectResult := func(code string, want interface{}) {
+		t.Helper()
+		r := exec(code)
+		require.True(t, r.Success, "code %q failed: %v", code, r.Error)
+		require.Equal(t, want, r.Result, "code: %q", code)
+	}
+
+	// const declared in async mode keeps redeclaration protection and
+	// immutability on both paths.
+	exec(`const qaConst = 1; ` + await_ + `'declared'`)
+	expectErr(`const qaConst = 2; `+await_+`qaConst`, "Identifier 'qaConst' has already been declared")
+	expectErr(`qaConst = 99; `+await_+`qaConst`, "Assignment to constant variable.")
+	expectErr(`qaConst = 99`, "Assignment to constant variable.")
+	expectResult(`qaConst`, float64(1))
+
+	// let stays mutable but cannot be redeclared.
+	expectResult(`let qaLet = 10; `+await_+`qaLet`, float64(10))
+	expectErr(`let qaLet = 11; `+await_+`qaLet`, "Identifier 'qaLet' has already been declared")
+	expectResult(`qaLet = 42; `+await_+`qaLet`, float64(42))
+	expectResult(`qaLet`, float64(42))
+
+	// class declarations get let-like protection.
+	expectResult(`class QaClass { hi() { return 'hi' } }; `+await_+`new QaClass().hi()`, "hi")
+	expectErr(`class QaClass {}; `+await_+`1`, "Identifier 'QaClass' has already been declared")
+
+	// var and function declarations stay freely redeclarable.
+	expectResult(`var qaVar = 1; `+await_+`qaVar`, float64(1))
+	expectResult(`var qaVar = 2; `+await_+`qaVar`, float64(2))
+	expectResult(`function qaFn() { return 1 }; `+await_+`qaFn()`, float64(1))
+	expectResult(`function qaFn() { return 2 }; `+await_+`qaFn()`, float64(2))
+
+	// Destructured const bindings persist and are protected.
+	expectResult(`const { a: qaA, b: qaB } = { a: 1, b: 2 }; `+await_+`qaA + qaB`, float64(3))
+	expectErr(`qaA = 5`, "Assignment to constant variable.")
+
+	// Cross-path conflicts: a fast-path declaration cannot be redeclared in
+	// async mode, and an async-mode declaration cannot be redeclared on the
+	// fast path.
+	exec(`const qaFastConst = 'fc'`)
+	expectErr(`const qaFastConst = 'x'; `+await_+`1`, "Identifier 'qaFastConst' has already been declared")
+	exec(`const qaAsyncConst = 'ac'; ` + await_ + `1`)
+	expectErr(`const qaAsyncConst = 'x'`, "Identifier 'qaAsyncConst' has already been declared")
+	expectResult(`qaAsyncConst`, "ac")
+
+	// A failed initializer still reserves the name (script declarations
+	// instantiate before the first statement runs).
+	expectErr(`let qaFailLet = (() => { throw new Error('initfail') })(); 1`, "initfail")
+	expectErr(`let qaFailLet = 2; 2`, "Identifier 'qaFailLet' has already been declared")
+
+	// None of the failures above terminated the REPL.
+	r := exec(`repl.id`)
+	require.True(t, r.Success)
+}
+
+// TestBrowserReplAsyncTrailingBlockResult pins the documented divergence:
+// with top-level await (async-wrapper mode) only a trailing expression
+// statement yields an implicit result; a trailing block statement yields
+// undefined, unlike the synchronous path's completion value.
+func TestBrowserReplAsyncTrailingBlockResult(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: `try { await new Promise(r => setTimeout(r, 1)); 'after' } catch { 'caught' }`,
+	})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.NotNil(t, r.ResultRepr)
+	require.Equal(t, "undefined", *r.ResultRepr)
+
+	// Synchronous path keeps completion-value semantics.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `try { 42 } catch {}`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, float64(42), r.Result)
+
+	// A trailing expression after the await still yields an implicit result.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+		Code: `await new Promise(r => setTimeout(r, 1)); 'tail'`,
+	})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "tail", r.Result)
+}
+
+// TestBrowserReplScrollRetriesSwallowedWheel covers the QA finding that
+// Chromium silently swallows the first mouseWheel dispatch after a
+// navigation: the command answers normally but the page never scrolls, so
+// the dispatch-timeout fallback cannot detect it. scroll() must detect a
+// no-op dispatch on a scrollable page and retry once.
+func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	fake.mu.Lock()
+	fake.maxScrollY = 2000
+	fake.swallowNextWheel = true
+	fake.mu.Unlock()
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	fake.mu.Lock()
+	count := fake.wheelDispatchCount
+	y := fake.scrollY
+	fake.mu.Unlock()
+	require.Equal(t, 2, count, "the swallowed dispatch must be retried exactly once")
+	require.Equal(t, int64(700), y, "the retry must actually scroll")
+	require.NotNil(t, r.Content)
+	sawNote := false
+	for _, item := range *r.Content {
+		txt, err := item.AsBrowserExecutionTextContent()
+		if err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once") {
+			sawNote = true
+		}
+	}
+	require.True(t, sawNote, "the retry must be surfaced as a stderr content item, got %v", r.Content)
+
+	// Once the input pipeline is awake the next scroll dispatches exactly
+	// once and moves without a retry.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done2"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	fake.mu.Lock()
+	count = fake.wheelDispatchCount
+	y = fake.scrollY
+	fake.mu.Unlock()
+	require.Equal(t, 3, count)
+	require.Equal(t, int64(1400), y)
+	if r.Content != nil {
+		for _, item := range *r.Content {
+			txt, err := item.AsBrowserExecutionTextContent()
+			require.False(t, err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once"),
+				"no retry expected once the pipeline is awake")
+		}
+	}
+
+	// An unscrollable page is left unverified: a single dispatch, no retry.
+	fake.mu.Lock()
+	fake.maxScrollY = 0
+	fake.swallowNextWheel = true
+	fake.mu.Unlock()
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done3"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	fake.mu.Lock()
+	count = fake.wheelDispatchCount
+	fake.mu.Unlock()
+	require.Equal(t, 4, count, "unscrollable pages must not be retried")
+}
+
+// TestBrowserReplOrphanedDaemonKilled covers the QA finding that an
+// orphaned REPL daemon (started outside the API process) was unlinked but
+// never killed, leaking for the container lifetime. Lazy start must kill
+// the orphan holding the socket before replacing it.
+func TestBrowserReplOrphanedDaemonKilled(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("orphan detection requires /proc")
+	}
+	script := ensureBrowserReplBundle(t)
+	svc := newBrowserReplSvc(t)
+	socketPath := browserReplSocketPath()
+
+	// Start a rogue daemon on the API's socket path, outside the API's
+	// supervision (the pdeathsig path cannot cover it).
+	rogue := exec.Command("node", script)
+	rogue.Env = append(os.Environ(),
+		"BROWSER_REPL_SOCKET="+socketPath,
+		"BROWSER_REPL_ID=rogue0000000000000000000",
+	)
+	require.NoError(t, rogue.Start())
+	t.Cleanup(func() {
+		_ = rogue.Process.Kill()
+		_, _ = rogue.Process.Wait()
+	})
+
+	// Wait until the rogue is listening on the socket.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		require.False(t, time.Now().After(deadline), "rogue daemon never started listening")
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The next execution must refuse adoption, kill the orphan, and serve
+	// from a fresh child with a different repl_id.
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1 + 1"})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, float64(2), r.Result)
+	require.NotEqual(t, "rogue0000000000000000000", r.ReplId)
+
+	// The rogue process must be dead (zombie until this test reaps it).
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", rogue.Process.Pid))
+		if err != nil {
+			break // gone
+		}
+		state := ""
+		if idx := strings.LastIndex(string(data), ")"); idx >= 0 {
+			if fields := strings.Fields(string(data)[idx+1:]); len(fields) > 0 {
+				state = fields[0]
+			}
+		}
+		if state == "Z" {
+			break
+		}
+		require.False(t, time.Now().After(deadline), "orphaned REPL process %d still alive", rogue.Process.Pid)
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The fresh child keeps serving with the same new repl_id.
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)

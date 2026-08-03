@@ -320,8 +320,11 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		// The next helper call reconnects through the DevTools proxy and
 		// reattaches; repl_id and JavaScript bindings survive the restart.
 		timeoutSec := 60
+		// Note: a fresh top-level name is required here — a prior subtest
+		// already declared `info` in this REPL, and const redeclaration is an
+		// early error on both evaluation paths.
 		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			Code:       `const info = await page_info(); ({ token: restartToken, url: info.url })`,
+			Code:       `const restartInfo = await page_info(); ({ token: restartToken, url: restartInfo.url })`,
 			TimeoutSec: &timeoutSec,
 		})
 		require.True(t, r2.Success, "error: %s", replError(r2))

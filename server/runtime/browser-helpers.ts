@@ -34,6 +34,32 @@ export interface RecordingState {
   dir: string | null;
 }
 
+// ScrollProbe is the window's scroll position plus how far the document can
+// scroll in each axis, read around a mouseWheel dispatch.
+interface ScrollProbe {
+  x: number;
+  y: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * Report whether the window itself could have scrolled in a requested
+ * direction. When it could not (unscrollable document, or already at the
+ * edge — e.g. the wheel targets an inner scrollable element), the dispatch
+ * is left unverified so those cases keep their exact previous behavior.
+ */
+function scrollShouldHaveMoved(before: ScrollProbe, deltaX: number, deltaY: number): boolean {
+  const canX = deltaX !== 0 && before.maxX > 0 && (deltaX > 0 ? before.x < before.maxX : before.x > 0);
+  const canY = deltaY !== 0 && before.maxY > 0 && (deltaY > 0 ? before.y < before.maxY : before.y > 0);
+  return canX || canY;
+}
+
+/** Report whether the scroll offset moved in any requested direction. */
+function scrollOffsetChanged(before: ScrollProbe, after: ScrollProbe): boolean {
+  return after.x !== before.x || after.y !== before.y;
+}
+
 /**
  * Normalize recording helper options. The Kernel recording API's request
  * field is `id`, but the helpers return `recorder_id`, so accepting
@@ -359,35 +385,115 @@ export class BrowserHelpers {
    * session answers fine. When the dispatch times out, fall back to an
    * in-page window.scrollBy so the helper still scrolls, and surface the
    * fallback so callers can tell DOM scrolling from synthetic input.
+   *
+   * A second upstream quirk (both headless variants, verified via raw
+   * CDP): Chromium silently swallows the FIRST mouseWheel dispatch after
+   * each navigation — the command answers normally but the page never
+   * scrolls, so the timeout fallback cannot detect it. When the window
+   * itself is scrollable in a requested direction, the scroll offset is
+   * probed around the dispatch and a no-op dispatch is retried once (by
+   * then the input pipeline is awake). Verification is skipped when the
+   * window cannot scroll in the requested direction — e.g. an
+   * unscrollable document, already at the edge, or a wheel targeted at an
+   * inner scrollable element — so those dispatches keep their exact
+   * previous behavior.
    */
   scroll = async (x: number, y: number, deltaX = 0, deltaY = 0): Promise<void> => {
-    try {
-      await this.client.sessionCommand(
-        'Input.dispatchMouseEvent',
-        {
-          type: 'mouseWheel',
-          x,
-          y,
-          deltaX,
-          deltaY,
-        },
-        SCROLL_COMMAND_TIMEOUT_MS,
-      );
-    } catch (err) {
-      if (!isCdpCommandTimeout(err)) {
-        throw err;
+    const dispatch = async (): Promise<boolean> => {
+      try {
+        await this.client.sessionCommand(
+          'Input.dispatchMouseEvent',
+          {
+            type: 'mouseWheel',
+            x,
+            y,
+            deltaX,
+            deltaY,
+          },
+          SCROLL_COMMAND_TIMEOUT_MS,
+        );
+        return true;
+      } catch (err) {
+        if (!isCdpCommandTimeout(err)) {
+          throw err;
+        }
+        this.onLog?.(
+          'scroll: CDP Input.dispatchMouseEvent (mouseWheel) timed out; ' +
+            `falling back to window.scrollBy(${deltaX}, ${deltaY})`,
+        );
+        await this.evaluateInPage(
+          `(function (dx, dy) { window.scrollBy(dx, dy); return true; })(${
+            JSON.stringify(Number(deltaX) || 0)
+          }, ${JSON.stringify(Number(deltaY) || 0)})`,
+        );
+        return false;
       }
+    };
+
+    const wantsScroll = deltaX !== 0 || deltaY !== 0;
+    const before = wantsScroll ? await this.probeScrollState() : null;
+
+    if (!(await dispatch())) {
+      return;
+    }
+    if (!before || !scrollShouldHaveMoved(before, deltaX, deltaY)) {
+      return;
+    }
+
+    const after = await this.probeScrollState();
+    if (!after || scrollOffsetChanged(before, after)) {
+      return;
+    }
+
+    this.onLog?.(
+      'scroll: mouseWheel dispatch had no effect on a scrollable page ' +
+        '(Chromium can swallow the first wheel event after a navigation); retrying once',
+    );
+    if (!(await dispatch())) {
+      return;
+    }
+    const retried = await this.probeScrollState();
+    if (retried && !scrollOffsetChanged(before, retried)) {
       this.onLog?.(
-        'scroll: CDP Input.dispatchMouseEvent (mouseWheel) timed out; ' +
-          `falling back to window.scrollBy(${deltaX}, ${deltaY})`,
-      );
-      await this.evaluateInPage(
-        `(function (dx, dy) { window.scrollBy(dx, dy); return true; })(${
-          JSON.stringify(Number(deltaX) || 0)
-        }, ${JSON.stringify(Number(deltaY) || 0)})`,
+        'scroll: page still did not scroll after one retry; ' +
+          'the page may intercept wheel events or the coordinates may target an unscrollable element',
       );
     }
   };
+
+  /**
+   * Read the window scroll offset and how far the document can scroll, for
+   * scroll()'s no-op dispatch detection. Returns null when the page cannot
+   * be evaluated (the dispatch then goes unverified).
+   */
+  private async probeScrollState(): Promise<ScrollProbe | null> {
+    try {
+      const state = await this.evaluateInPage(
+        `(function () {
+          var se = document.scrollingElement || document.documentElement;
+          if (!se) return null;
+          return {
+            x: window.scrollX,
+            y: window.scrollY,
+            maxX: Math.max(0, se.scrollWidth - se.clientWidth),
+            maxY: Math.max(0, se.scrollHeight - se.clientHeight),
+          };
+        })()`,
+      );
+      if (
+        !state ||
+        typeof state.x !== 'number' ||
+        typeof state.y !== 'number' ||
+        typeof state.maxX !== 'number' ||
+        typeof state.maxY !== 'number'
+      ) {
+        return null;
+      }
+      return state as ScrollProbe;
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Dispatch DOM KeyboardEvents (keydown + keyup) against a selected
