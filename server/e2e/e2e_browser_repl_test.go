@@ -334,6 +334,40 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		require.Equal(t, "pre-restart", res["token"], "bindings survive a Chromium restart")
 	})
 
+	t.Run("dialogs stay pending after a chromium restart", func(t *testing.T) {
+		// QA finding: after a Chromium restart the re-attached tab could be
+		// hidden, and headless Chromium auto-cancels hidden tabs' dialogs
+		// (javascriptDialogClosed result:false ~5ms after opening), so
+		// page_info never reported them and renderers never froze. Attach
+		// activates the target, so a dialog opened after a restart must pend
+		// and be reported.
+		restartChromium(t, ctx, c, client)
+
+		timeoutSec := 60
+		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+			TimeoutSec: &timeoutSec,
+			Code: `
+				await ensure_real_tab();
+				await goto_url("data:text/html,<title>dlg-restart</title><p>x</p>");
+				await cdp("Runtime.evaluate", { expression: "setTimeout(() => { alert('post-restart'); }, 100)" });
+				await wait(1);
+				let restartDlgInfo = null;
+				for (let i = 0; i < 20; i++) {
+					restartDlgInfo = await page_info();
+					if (restartDlgInfo.dialog) break;
+					await wait(0.2);
+				}
+				const restartDlgType = restartDlgInfo.dialog && restartDlgInfo.dialog.type;
+				if (restartDlgInfo.dialog) {
+					await cdp("Page.handleJavaScriptDialog", { accept: true });
+				}
+				restartDlgType;
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		require.Equal(t, "alert", r.Result, "page_info must report a dialog opened after a chromium restart")
+	})
+
 	t.Run("reset clears bindings and changes repl id", func(t *testing.T) {
 		before := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			Code: `repl.id`,

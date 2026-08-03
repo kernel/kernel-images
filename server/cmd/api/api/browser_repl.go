@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -101,7 +102,7 @@ func (s *ApiService) ensureBrowserReplLocked(ctx context.Context) error {
 			log.Warn("browser REPL child exited unexpectedly; starting a fresh REPL",
 				"repl_id", child.id, "exit_err", err)
 			child.done = closedWaitChannel(err)
-			s.clearBrowserReplLocked(child)
+			s.clearBrowserReplLocked(ctx, child)
 		default:
 			return nil
 		}
@@ -118,13 +119,32 @@ func closedWaitChannel(err error) chan error {
 	return ch
 }
 
-// clearBrowserReplLocked detaches the child handle and removes the stale
+// clearBrowserReplLocked detaches the child handle and reaps the stale
 // socket. Callers must hold s.browserReplMu.
-func (s *ApiService) clearBrowserReplLocked(child *browserReplChild) {
+func (s *ApiService) clearBrowserReplLocked(ctx context.Context, child *browserReplChild) {
 	if s.browserRepl == child {
 		s.browserRepl = nil
 	}
-	_ = os.Remove(browserReplSocketPath())
+	reapBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
+}
+
+// reapBrowserReplSocket kills any orphaned REPL daemon still listening on
+// the socket (one not spawned by this API process — pdeathsig covers
+// children the API itself spawned) and removes the socket file. The kill
+// must happen before the unlink: orphan detection matches the socket by
+// path in /proc/net/unix, so once the file is removed an orphan becomes
+// undetectable and would leak for the container lifetime.
+func reapBrowserReplSocket(log *slog.Logger, socketPath string) {
+	if conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
+		conn.Close()
+		if killed := killOrphanedBrowserRepl(socketPath); len(killed) > 0 {
+			log.Warn("killed orphaned browser REPL process(es) holding the socket",
+				"pids", killed, "socket", socketPath)
+		}
+	}
+	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Warn("failed to remove stale browser REPL socket", "path", socketPath, "err", err)
+	}
 }
 
 // startBrowserReplLocked spawns a new REPL child with a fresh CUID2 and
@@ -139,16 +159,7 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 	// this API process — pdeathsig covers children the API itself spawned),
 	// kill it before removing the socket file so the orphan cannot leak for
 	// the container lifetime.
-	if conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
-		conn.Close()
-		if killed := killOrphanedBrowserRepl(socketPath); len(killed) > 0 {
-			log.Warn("killed orphaned browser REPL process(es) holding the socket",
-				"pids", killed, "socket", socketPath)
-		}
-	}
-	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Warn("failed to remove stale browser REPL socket", "path", socketPath, "err", err)
-	}
+	reapBrowserReplSocket(log, socketPath)
 
 	replID := cuid2.Generate()
 
@@ -183,7 +194,7 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 		select {
 		case waitErr := <-child.done:
 			child.done = closedWaitChannel(waitErr)
-			s.clearBrowserReplLocked(child)
+			s.clearBrowserReplLocked(ctx, child)
 			return fmt.Errorf("browser REPL exited during startup: %w", waitErr)
 		default:
 		}
@@ -215,7 +226,7 @@ func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason stri
 	select {
 	case err := <-child.done:
 		child.done = closedWaitChannel(err)
-		s.clearBrowserReplLocked(child)
+		s.clearBrowserReplLocked(ctx, child)
 		return err
 	case <-time.After(browserReplShutdownGrace):
 	}
@@ -231,7 +242,7 @@ func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason stri
 	case <-time.After(browserReplShutdownGrace):
 		log.Error("browser REPL did not exit after SIGKILL", "repl_id", child.id)
 	}
-	s.clearBrowserReplLocked(child)
+	s.clearBrowserReplLocked(ctx, child)
 	return waitErr
 }
 
@@ -256,7 +267,7 @@ func (s *ApiService) killBrowserReplLocked(ctx context.Context, reason string) {
 	case <-time.After(browserReplShutdownGrace):
 		log.Error("browser REPL did not exit after SIGKILL", "repl_id", child.id)
 	}
-	s.clearBrowserReplLocked(child)
+	s.clearBrowserReplLocked(ctx, child)
 }
 
 // browserReplDaemonRequest is the wire format sent to the REPL daemon.

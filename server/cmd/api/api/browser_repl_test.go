@@ -709,6 +709,13 @@ type fakeCDPServer struct {
 	// quirk: the mouseWheel command is answered normally but the page never
 	// scrolls (window.scrollY stays put).
 	swallowNextWheel bool
+	// delayedWheelMs, when > 0, simulates Chromium's asynchronous wheel
+	// application: the mouseWheel command is answered normally but the
+	// scroll offset only moves after the given delay.
+	delayedWheelMs atomic.Int64
+	// activatedTargets records every Target.activateTarget target id, in
+	// order, so tests can verify attach foregrounds the attached tab.
+	activatedTargets []string
 	// scrollY is the fake page's current scroll offset; maxScrollY is how
 	// far the fake document can scroll (0 = unscrollable).
 	scrollY    int64
@@ -889,6 +896,15 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		return map[string]any{"sessionId": sid}, []map[string]any{ev}, nil
 	case "Target.detachFromTarget":
 		return map[string]any{}, nil, nil
+	case "Target.activateTarget":
+		var p struct {
+			TargetID string `json:"targetId"`
+		}
+		_ = json.Unmarshal(params, &p)
+		f.mu.Lock()
+		f.activatedTargets = append(f.activatedTargets, p.TargetID)
+		f.mu.Unlock()
+		return map[string]any{}, nil, nil
 	case "Target.createTarget":
 		var p struct {
 			URL string `json:"url"`
@@ -944,13 +960,27 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 			_ = json.Unmarshal(params, &p)
 			f.mu.Lock()
 			f.wheelDispatchCount++
-			if f.swallowNextWheel {
+			swallow := f.swallowNextWheel
+			if swallow {
 				// Answered normally, but the page never scrolls.
 				f.swallowNextWheel = false
-			} else {
+			}
+			delayMs := f.delayedWheelMs.Load()
+			if !swallow && delayMs <= 0 {
 				f.scrollY += int64(p.DeltaY)
 			}
 			f.mu.Unlock()
+			if !swallow && delayMs > 0 {
+				// Chromium applies the wheel asynchronously after the CDP
+				// command answers; scroll() must wait out a settle window
+				// instead of false-positive retrying (a double scroll).
+				delta := int64(p.DeltaY)
+				time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+					f.mu.Lock()
+					f.scrollY += delta
+					f.mu.Unlock()
+				})
+			}
 		}
 		return map[string]any{}, nil, nil
 	case "Input.dispatchKeyEvent":
@@ -2114,6 +2144,78 @@ func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
 	require.Equal(t, 4, count, "unscrollable pages must not be retried")
 }
 
+// TestBrowserReplScrollWaitsForAsyncWheelApplication covers the QA finding
+// that scroll() probed the scroll offset before Chromium asynchronously
+// applied the wheel, so the swallowed-wheel retry false-positived on every
+// scroll and the page landed 2x past its target. scroll() must poll the
+// offset through a settle window before declaring a dispatch had no effect.
+func TestBrowserReplScrollWaitsForAsyncWheelApplication(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	fake.mu.Lock()
+	fake.maxScrollY = 5000
+	fake.mu.Unlock()
+	fake.delayedWheelMs.Store(100)
+
+	scrollY := func() int64 {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return fake.scrollY
+	}
+	wheelCount := func() int {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return fake.wheelDispatchCount
+	}
+
+	// The wheel applies ~100ms after the command answers. scroll() must not
+	// mistake the not-yet-applied offset for a swallowed dispatch: exactly
+	// one dispatch, no retry, no double scroll.
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Eventually(t, func() bool { return scrollY() == 700 }, 3*time.Second, 20*time.Millisecond,
+		"the wheel must apply exactly once")
+	require.Equal(t, 1, wheelCount(), "an asynchronously-applied wheel must not be retried")
+	if r.Content != nil {
+		for _, item := range *r.Content {
+			txt, err := item.AsBrowserExecutionTextContent()
+			require.False(t, err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once"),
+				"no retry expected when the wheel applies within the settle window")
+		}
+	}
+
+	// A second scroll lands exactly one more delta (cumulative 1400).
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done2"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Eventually(t, func() bool { return scrollY() == 1400 }, 3*time.Second, 20*time.Millisecond,
+		"the second scroll must move the offset by exactly one delta")
+	require.Equal(t, 2, wheelCount())
+}
+
+// TestBrowserReplAttachActivatesTarget covers the QA finding that JS
+// dialogs were non-deterministically auto-cancelled after a Chromium
+// restart: which tab is foreground is not deterministic across restarts,
+// and headless Chromium auto-cancels hidden tabs' dialogs
+// (Page.javascriptDialogClosed result:false immediately after opening).
+// Attach must activate the target so dialog semantics are stable.
+func TestBrowserReplAttachActivatesTarget(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "done"`})
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	fake.mu.Lock()
+	activated := append([]string(nil), fake.activatedTargets...)
+	fake.mu.Unlock()
+	require.Contains(t, activated, "target-page-1", "attach must activate the attached target")
+}
+
 // TestBrowserReplOrphanedDaemonKilled covers the QA finding that an
 // orphaned REPL daemon (started outside the API process) was unlinked but
 // never killed, leaking for the container lifetime. Lazy start must kill
@@ -2182,6 +2284,86 @@ func TestBrowserReplOrphanedDaemonKilled(t *testing.T) {
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)
+}
+
+// TestBrowserReplOrphanedDaemonKilledOnChildDeath covers the QA finding
+// that the orphan kill only ran on the API-restart path: when the owned
+// child died and a foreign daemon took the socket before the next request,
+// the stale socket was unlinked before the orphan-detection dial, so the
+// orphan leaked for the container lifetime. The kill must run before the
+// unlink on every lazy-start path.
+func TestBrowserReplOrphanedDaemonKilledOnChildDeath(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("orphan detection requires /proc")
+	}
+	script := ensureBrowserReplBundle(t)
+	svc := newBrowserReplSvc(t)
+	socketPath := browserReplSocketPath()
+
+	// Start the owned child.
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1 + 1"})
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	// Kill the API's child out from under it and give the wait goroutine a
+	// moment to reap it.
+	svc.browserReplMu.Lock()
+	child := svc.browserRepl
+	svc.browserReplMu.Unlock()
+	require.NotNil(t, child)
+	require.NoError(t, child.cmd.Process.Kill())
+	time.Sleep(300 * time.Millisecond)
+
+	// A foreign daemon takes the socket before the next request.
+	require.NoError(t, os.Remove(socketPath))
+	rogue := exec.Command("node", script)
+	rogue.Env = append(os.Environ(),
+		"BROWSER_REPL_SOCKET="+socketPath,
+		"BROWSER_REPL_ID=rogue0000000000000000000",
+	)
+	require.NoError(t, rogue.Start())
+	t.Cleanup(func() {
+		_ = rogue.Process.Kill()
+		_, _ = rogue.Process.Wait()
+	})
+
+	// Wait until the rogue is listening on the socket.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		require.False(t, time.Now().After(deadline), "rogue daemon never started listening")
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The next execution must kill the orphan (not just unlink its socket)
+	// and serve from a fresh child with a different repl_id.
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1 + 1"})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, float64(2), r.Result)
+	require.NotEqual(t, "rogue0000000000000000000", r.ReplId)
+
+	// The rogue process must be dead (zombie until this test reaps it).
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", rogue.Process.Pid))
+		if err != nil {
+			break // gone
+		}
+		state := ""
+		if idx := strings.LastIndex(string(data), ")"); idx >= 0 {
+			if fields := strings.Fields(string(data)[idx+1:]); len(fields) > 0 {
+				state = fields[0]
+			}
+		}
+		if state == "Z" {
+			break
+		}
+		require.False(t, time.Now().After(deadline), "orphaned REPL process %d still alive", rogue.Process.Pid)
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // TestBrowserReplRecordingIDAlias covers the QA finding that

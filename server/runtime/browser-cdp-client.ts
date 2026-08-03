@@ -402,6 +402,17 @@ export class CdpClient {
     this.sessionId = res.sessionId;
     this.targetId = targetId;
     this.pendingDialog = null;
+    // Make the attached target the foreground tab. In headless Chromium a
+    // hidden tab's JavaScript dialogs are auto-cancelled
+    // (Page.javascriptDialogClosed with result:false fires immediately
+    // after opening), which breaks the documented dialog semantics — and
+    // which tab is active after a Chromium restart is not deterministic.
+    // Best-effort: activation can be rejected for some target types.
+    try {
+      await this.browserCommand('Target.activateTarget', { targetId });
+    } catch {
+      // Ignore: dialog semantics degrade to Chromium's default for the tab.
+    }
     this.rendererResponsive = await this.enableDomains(this.sessionId);
     await this.dismissStaleDialog();
   }

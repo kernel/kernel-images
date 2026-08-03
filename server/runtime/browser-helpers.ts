@@ -19,6 +19,16 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 // instead of burning the default 30s command timeout per scroll attempt.
 const SCROLL_COMMAND_TIMEOUT_MS = 5_000;
 
+// SCROLL_SETTLE_TIMEOUT_MS bounds how long scroll() waits for Chromium to
+// asynchronously apply a mouseWheel dispatch before concluding the dispatch
+// had no effect. The CDP command answers before the compositor/main thread
+// applies the wheel, so an immediate offset probe reads the pre-scroll
+// offset and false-positives the swallowed-wheel detection — the retry then
+// double-scrolls. SCROLL_SETTLE_POLL_MS is the probe interval within that
+// window.
+const SCROLL_SETTLE_TIMEOUT_MS = 250;
+const SCROLL_SETTLE_POLL_MS = 25;
+
 // EXECUTION_DEADLINE_MARGIN_MS is how far below the executing request's
 // deadline a wait-style helper places its own deadline when the helper's
 // timeout would otherwise tie or exceed it. The margin leaves room for the
@@ -397,6 +407,12 @@ export class BrowserHelpers {
    * unscrollable document, already at the edge, or a wheel targeted at an
    * inner scrollable element — so those dispatches keep their exact
    * previous behavior.
+   *
+   * Chromium applies a wheel dispatch asynchronously: the CDP command
+   * answers before the scroll offset moves, so the no-effect probe polls
+   * the offset for a short settle window before concluding the dispatch
+   * was swallowed. Without the settle window every scroll false-positives
+   * and the retry lands the page 2x past its target.
    */
   scroll = async (x: number, y: number, deltaX = 0, deltaY = 0): Promise<void> => {
     const dispatch = async (): Promise<boolean> => {
@@ -440,7 +456,7 @@ export class BrowserHelpers {
       return;
     }
 
-    const after = await this.probeScrollState();
+    const after = await this.probeScrollSettled(before);
     if (!after || scrollOffsetChanged(before, after)) {
       return;
     }
@@ -452,7 +468,7 @@ export class BrowserHelpers {
     if (!(await dispatch())) {
       return;
     }
-    const retried = await this.probeScrollState();
+    const retried = await this.probeScrollSettled(before);
     if (retried && !scrollOffsetChanged(before, retried)) {
       this.onLog?.(
         'scroll: page still did not scroll after one retry; ' +
@@ -460,6 +476,25 @@ export class BrowserHelpers {
       );
     }
   };
+
+  /**
+   * Poll the window scroll offset until it moves away from `before` or the
+   * settle window elapses. Chromium applies a wheel dispatch asynchronously
+   * after the CDP command answers, so a single immediate probe can read the
+   * pre-scroll offset and false-positive the swallowed-wheel detection (the
+   * retry then double-scrolls). Returns the last probe, or null when the
+   * page cannot be evaluated (the dispatch then goes unverified).
+   */
+  private async probeScrollSettled(before: ScrollProbe): Promise<ScrollProbe | null> {
+    const deadline = Date.now() + SCROLL_SETTLE_TIMEOUT_MS;
+    for (;;) {
+      const after = await this.probeScrollState();
+      if (!after || scrollOffsetChanged(before, after) || Date.now() >= deadline) {
+        return after;
+      }
+      await new Promise((resolve) => setTimeout(resolve, SCROLL_SETTLE_POLL_MS));
+    }
+  }
 
   /**
    * Read the window scroll offset and how far the document can scroll, for
