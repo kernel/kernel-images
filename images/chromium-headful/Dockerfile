@@ -380,18 +380,22 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:esbuild \
     && rm /tmp/playwright-daemon.ts
 
-# Copy and compile the persistent browser REPL daemon. esbuild stays
-# external: the daemon transforms user TypeScript at runtime and esbuild is
-# installed globally (resolvable from /usr/local/lib/node_modules).
+# Copy and install the browser REPL's pinned dependencies before bundling.
+# Acorn is bundled into the daemon; esbuild stays external because the daemon
+# transforms user TypeScript at runtime.
 COPY server/runtime/ /tmp/browser-repl/
-RUN esbuild /tmp/browser-repl/browser-repl.ts \
-    --bundle \
-    --platform=node \
-    --target=node22 \
-    --format=cjs \
-    --supported:dynamic-import=true \
-    --outfile=/usr/local/lib/browser-repl.js \
-    --external:esbuild \
+RUN npm ci --ignore-scripts --no-audit --no-fund --omit=dev --prefix /tmp/browser-repl \
+    && mkdir -p /usr/local/share/doc/kernel-images/acorn \
+    && cp /tmp/browser-repl/node_modules/acorn/LICENSE /usr/local/share/doc/kernel-images/acorn/LICENSE \
+    && cp /tmp/browser-repl/node_modules/acorn/package.json /usr/local/share/doc/kernel-images/acorn/package.json \
+    && esbuild /tmp/browser-repl/browser-repl.ts \
+      --bundle \
+      --platform=node \
+      --target=node22 \
+      --format=cjs \
+      --supported:dynamic-import=true \
+      --outfile=/usr/local/lib/browser-repl.js \
+      --external:esbuild \
     && rm -rf /tmp/browser-repl
 
 RUN useradd -m -s /bin/bash kernel

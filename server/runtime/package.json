@@ -1,0 +1,7 @@
+{
+  "name": "@kernel/browser-repl-runtime",
+  "private": true,
+  "dependencies": {
+    "acorn": "8.18.0"
+  }
+}

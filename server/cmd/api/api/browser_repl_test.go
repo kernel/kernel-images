@@ -53,8 +53,48 @@ func ensureBrowserReplBundle(t *testing.T) string {
 			return
 		}
 		browserReplBundlePath = filepath.Join(dir, "browser-repl.js")
+
+		// Stage the runtime package and sources exactly like the Docker builds.
+		// This keeps Acorn a normal, pinned local dependency instead of relying
+		// on a package installed globally on the developer or test host.
+		stagingDir, err := os.MkdirTemp("", "browser-repl-runtime")
+		if err != nil {
+			browserReplBundleErr = err
+			return
+		}
+		defer os.RemoveAll(stagingDir)
+		entries, err := os.ReadDir(filepath.Join(serverRootDir(), "runtime"))
+		if err != nil {
+			browserReplBundleErr = err
+			return
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".ts") && name != "package.json" && name != "package-lock.json" {
+				continue
+			}
+			data, readErr := os.ReadFile(filepath.Join(serverRootDir(), "runtime", name))
+			if readErr != nil {
+				browserReplBundleErr = readErr
+				return
+			}
+			if writeErr := os.WriteFile(filepath.Join(stagingDir, name), data, 0o644); writeErr != nil {
+				browserReplBundleErr = writeErr
+				return
+			}
+		}
+		npm := exec.Command("npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund", "--omit=dev")
+		npm.Dir = stagingDir
+		if out, err := npm.CombinedOutput(); err != nil {
+			browserReplBundleErr = fmt.Errorf("npm ci failed: %w\n%s", err, out)
+			return
+		}
+
 		cmd := exec.Command("esbuild",
-			"runtime/browser-repl.ts",
+			"browser-repl.ts",
 			"--bundle",
 			"--platform=node",
 			"--target=node22",
@@ -63,7 +103,7 @@ func ensureBrowserReplBundle(t *testing.T) string {
 			"--outfile="+browserReplBundlePath,
 			"--external:esbuild",
 		)
-		cmd.Dir = serverRootDir()
+		cmd.Dir = stagingDir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			browserReplBundleErr = fmt.Errorf("esbuild failed: %w\n%s", err, out)
 		}

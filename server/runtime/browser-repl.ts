@@ -57,11 +57,9 @@ import util from 'util';
 import { transform } from 'esbuild';
 import { CdpClient } from './browser-cdp-client';
 import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
-// Vendored acorn (MIT); used to parse user code for the top-level-await
-// rewrite. Bundled into the daemon at image build time.
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore - no type declarations for the vendored single-file build
-import * as acorn from './vendor/acorn.mjs';
+// Acorn is bundled into the daemon at image build time. Keep esbuild external
+// because it is also loaded dynamically to transform user TypeScript.
+import * as acorn from 'acorn';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
 const REPL_ID = process.env.BROWSER_REPL_ID || 'unknown';
