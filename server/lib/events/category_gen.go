@@ -7,6 +7,7 @@ import oapi "github.com/kernel/kernel-images/server/lib/oapi"
 var categoryByType = map[string]oapi.TelemetryEventCategory{
 	"api_call":                   oapi.TelemetryEventCategory("control"),
 	"captcha_solve_result":       oapi.TelemetryEventCategory("captcha"),
+	"cdp_command":                oapi.TelemetryEventCategory("control"),
 	"cdp_connect":                oapi.TelemetryEventCategory("connection"),
 	"cdp_disconnect":             oapi.TelemetryEventCategory("connection"),
 	"console_error":              oapi.TelemetryEventCategory("console"),

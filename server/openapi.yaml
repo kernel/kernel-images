@@ -1724,7 +1724,7 @@ components:
           description: HTTP request/response metadata.
         control:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
-          description: Agent-driven actions against the browser — computer-control calls, Playwright code execution, screenshots and clipboard access.
+          description: Agent-driven actions against the browser — computer-control calls, Playwright code execution, screenshots, clipboard access, and browser-control commands sent over the CDP proxy.
         platform:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: Calls that manage the VM rather than drive the browser (recording, filesystem, process, telemetry and browser configuration). Mostly platform-induced; off by default and opt-in.
@@ -2806,6 +2806,70 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserCdpCommandEventData:
+      type: object
+      description: Per-command payload for `cdp_command` events.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          description: CDP method the client invoked (e.g. `Input.dispatchMouseEvent`, `Page.navigate`).
+        session_id:
+          type: string
+          description: CDP session identifier the command was addressed to. Absent for browser-level commands.
+        event_type:
+          type: string
+          description: The command's `type` parameter for input dispatches (e.g. `mousePressed`, `keyDown`, `touchStart`).
+        x:
+          type: number
+          description: Viewport x coordinate, for commands that carry one.
+        y:
+          type: number
+          description: Viewport y coordinate, for commands that carry one.
+        button:
+          type: string
+          description: Mouse button named by the command (e.g. `left`, `right`, `middle`, `none`).
+        text_length:
+          type: integer
+          description: >
+            Number of characters the command submitted, for text and key
+            dispatches. The submitted text itself is never captured.
+        named_key:
+          type: string
+          description: >
+            Key that commands the page rather than typing into it (e.g. `Enter`,
+            `Tab`, `ArrowDown`, `F5`). Keys that produce a character are never
+            captured; those are counted by `text_length`. Distinct from
+            `interaction_key.key`, which does report the character typed.
+    BrowserCdpCommandEvent:
+      type: object
+      description: >
+        A browser-control command a client sent over the CDP WebSocket proxy:
+        input gestures, navigation, dialog handling, file selection and
+        screenshots. Configuration commands and the DOM/Runtime traffic a client
+        library issues on the caller's behalf are not reported, and the phases
+        that add nothing (`mouseMoved`, `keyUp`, `char`) are dropped, so a click
+        reads as a press and a release rather than three frames.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: cdp_command
+        category:
+          type: string
+          const: control
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCdpCommandEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     BrowserCdpConnectEvent:
       type: object
       description: An external client (e.g. customer SDK, Playwright, Puppeteer) connected to the CDP WebSocket proxy on this VM.
@@ -3204,6 +3268,7 @@ components:
         - $ref: "#/components/schemas/BrowserMonitorInitFailedEvent"
         - $ref: "#/components/schemas/BrowserApiCallEvent"
         - $ref: "#/components/schemas/BrowserPlatformApiCallEvent"
+        - $ref: "#/components/schemas/BrowserCdpCommandEvent"
         - $ref: "#/components/schemas/BrowserCdpConnectEvent"
         - $ref: "#/components/schemas/BrowserCdpDisconnectEvent"
         - $ref: "#/components/schemas/BrowserLiveViewConnectEvent"
@@ -3239,6 +3304,7 @@ components:
           monitor_init_failed: "#/components/schemas/BrowserMonitorInitFailedEvent"
           api_call: "#/components/schemas/BrowserApiCallEvent"
           platform_api_call: "#/components/schemas/BrowserPlatformApiCallEvent"
+          cdp_command: "#/components/schemas/BrowserCdpCommandEvent"
           cdp_connect: "#/components/schemas/BrowserCdpConnectEvent"
           cdp_disconnect: "#/components/schemas/BrowserCdpDisconnectEvent"
           live_view_connect: "#/components/schemas/BrowserLiveViewConnectEvent"

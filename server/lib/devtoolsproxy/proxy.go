@@ -319,6 +319,11 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 				logCDPMessage(logger, direction, mt, msg)
 			}
 			msgCount.Add(1)
+			// Client-to-upstream only: commands are what the caller drives the
+			// browser with, and upstream frames are events and command results.
+			if direction == "->" && mt == websocket.MessageText {
+				publishCdpCommand(publish, msg)
+			}
 			return msg
 		}
 
