@@ -205,6 +205,7 @@ func main() {
 			}
 			fatalf("prepare snapshot start page: %v", err)
 		}
+		armForkIdentityWait(true)
 		startAll("kernel-images-api")
 	}
 	waitForSocket(dbusSocket, 10*time.Second)
@@ -216,7 +217,7 @@ func main() {
 	}
 	browserDone := time.Now()
 
-	forkIdentity, ok := waitForForkIdentityIfEnabled(startupCtx, forkIdentityWait)
+	forkIdentity, identityDeadline, ok := waitForForkIdentityIfEnabled(startupCtx, forkIdentityWait)
 	if !ok {
 		if err := supCmd.Wait(); err != nil {
 			logf("supervisord exited: %v", err)
@@ -240,7 +241,10 @@ func main() {
 	// concurrently and logs as soon as its target is reachable.
 	readyTimeout := 60 * time.Second
 	if forkIdentityWait {
-		readyTimeout = forkidentity.ApplyTimeout - 5*time.Second
+		readyTimeout = time.Until(identityDeadline)
+		if readyTimeout <= 0 {
+			fatalf("fork identity readiness deadline exceeded during identity startup")
+		}
 	}
 	probeDurations, allReady := waitAllReady(t0, webrtc, readyTimeout)
 	if forkIdentityWait {

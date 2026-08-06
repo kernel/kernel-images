@@ -2,12 +2,41 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestArmForkIdentityWaitClearsStaleState(t *testing.T) {
+	dir := t.TempDir()
+	oldPayloadFile := forkidentity.PayloadFile
+	oldAppliedFile := forkidentity.AppliedFile
+	oldReadyFile := forkidentity.ReadyFile
+	forkidentity.PayloadFile = filepath.Join(dir, "fork-identity.json")
+	forkidentity.AppliedFile = filepath.Join(dir, "fork-identity-applied")
+	forkidentity.ReadyFile = filepath.Join(dir, "fork-identity-ready")
+	t.Cleanup(func() {
+		forkidentity.PayloadFile = oldPayloadFile
+		forkidentity.AppliedFile = oldAppliedFile
+		forkidentity.ReadyFile = oldReadyFile
+	})
+
+	require.NoError(t, os.WriteFile(forkidentity.PayloadFile, []byte("stale"), 0o600))
+	require.NoError(t, os.WriteFile(forkidentity.AppliedFile, []byte("stale"), 0o644))
+
+	armForkIdentityWait(true)
+
+	_, err := os.Stat(forkidentity.PayloadFile)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(forkidentity.AppliedFile)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	ready, err := os.ReadFile(forkidentity.ReadyFile)
+	require.NoError(t, err)
+	assert.Equal(t, "waiting\n", string(ready))
+}
 
 func TestApplyForkIdentityPayloadSetsAndClearsEnv(t *testing.T) {
 	t.Setenv("METRO_NAME", "old-metro")

@@ -497,11 +497,10 @@ func mustFFmpeg() {
 func appliedS2Stream(cfg *config.Config) (string, bool) {
 	stream := cfg.S2Stream
 
-	// This process starts before the wrapper enters the wait, and entering it
-	// clears the applied marker and then writes the ready file. So a marker
-	// without a ready file predates this boot's wait: the wrapper is about to
-	// drop it and hold for a new handoff, and binding to it would pin the sinks
-	// to an identity nothing is going to use.
+	// The wrapper clears stale identity state and writes the ready file before
+	// starting this process. Its presence distinguishes a fork-wait boot; once
+	// the fork is applied, the marker and payload survive API restarts and must
+	// take precedence over the seed identity in the boot environment.
 	if _, err := os.Stat(forkidentity.ReadyFile); err != nil {
 		return stream, false
 	}
