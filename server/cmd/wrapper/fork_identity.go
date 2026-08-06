@@ -14,9 +14,9 @@ func forkIdentityWaitEnabled() (bool, error) {
 	return forkidentity.WaitEnabled()
 }
 
-func waitForForkIdentityIfEnabled(ctx context.Context, enabled bool) bool {
+func waitForForkIdentityIfEnabled(ctx context.Context, enabled bool) (forkidentity.Payload, bool) {
 	if !enabled {
-		return true
+		return nil, true
 	}
 	stopAll("envoy")
 
@@ -37,18 +37,15 @@ func waitForForkIdentityIfEnabled(ctx context.Context, enabled bool) bool {
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			logf("fork identity wait canceled")
-			return false
+			return nil, false
 		}
 		fatalf("fork identity payload wait: %v", err)
 	}
 	if err := applyForkIdentityPayload(payload); err != nil {
 		fatalf("fork identity apply: %v", err)
 	}
-	if err := forkidentity.WriteAppliedMarker(payload.InstanceName()); err != nil {
-		fatalf("fork identity applied file: %v", err)
-	}
-	logf("fork identity applied instance=%s", payload.InstanceName())
-	return true
+	logf("fork identity environment applied instance=%s", payload.InstanceName())
+	return payload, true
 }
 
 func waitForForkIdentityPayload(ctx context.Context) (forkidentity.Payload, error) {

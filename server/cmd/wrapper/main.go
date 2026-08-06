@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kernel/kernel-images/server/lib/forkidentity"
 )
 
 const (
@@ -192,6 +195,16 @@ func main() {
 	startAll("chromium")
 	if forkIdentityWait {
 		waitForHTTPProbe("chromium devtools", "http://127.0.0.1:"+os.Getenv("INTERNAL_PORT")+"/json/version", 30*time.Second)
+		if err := prepareSnapshotStartPage(startupCtx, os.Getenv("INTERNAL_PORT")); err != nil {
+			if errors.Is(err, context.Canceled) {
+				logf("snapshot start page preparation canceled")
+				if err := supCmd.Wait(); err != nil {
+					logf("supervisord exited: %v", err)
+				}
+				return
+			}
+			fatalf("prepare snapshot start page: %v", err)
+		}
 		startAll("kernel-images-api")
 	}
 	waitForSocket(dbusSocket, 10*time.Second)
@@ -203,7 +216,8 @@ func main() {
 	}
 	browserDone := time.Now()
 
-	if !waitForForkIdentityIfEnabled(startupCtx, forkIdentityWait) {
+	forkIdentity, ok := waitForForkIdentityIfEnabled(startupCtx, forkIdentityWait)
+	if !ok {
 		if err := supCmd.Wait(); err != nil {
 			logf("supervisord exited: %v", err)
 		}
@@ -224,7 +238,20 @@ func main() {
 
 	// Wait for the union of caller-visible ready signals. Each probe runs
 	// concurrently and logs as soon as its target is reachable.
-	probeDurations := waitAllReady(t0, webrtc)
+	readyTimeout := 60 * time.Second
+	if forkIdentityWait {
+		readyTimeout = forkidentity.ApplyTimeout - 5*time.Second
+	}
+	probeDurations, allReady := waitAllReady(t0, webrtc, readyTimeout)
+	if forkIdentityWait {
+		if !allReady {
+			fatalf("fork identity services did not become ready")
+		}
+		if err := forkidentity.WriteAppliedMarker(forkIdentity.InstanceName()); err != nil {
+			fatalf("fork identity applied file: %v", err)
+		}
+		logf("fork identity ready instance=%s", forkIdentity.InstanceName())
+	}
 	logf("ready in %s (browser=%s identity=%s; %s)",
 		since(t0),
 		browserDone.Sub(browserStart).Truncate(time.Millisecond),
@@ -250,7 +277,7 @@ func main() {
 //     when api itself is up, which CDP readiness already implies)
 //   - neko         : TCP on neko's HTTP port (8080), only when ENABLE_WEBRTC=true
 //   - envoy        : TCP on envoy's listener (3128), only when envoy is enabled
-func waitAllReady(t0 time.Time, webrtc bool) map[string]time.Duration {
+func waitAllReady(t0 time.Time, webrtc bool, timeout time.Duration) (map[string]time.Duration, bool) {
 	chromePort := os.Getenv("CHROME_PORT")
 	probes := []probe{
 		{"cdp", func() bool { return httpProbeOK("http://127.0.0.1:" + chromePort + "/json/version") }},
@@ -272,7 +299,7 @@ func waitAllReady(t0 time.Time, webrtc bool) map[string]time.Duration {
 	for _, p := range probes {
 		go func(name string, fn func() bool) {
 			start := time.Now()
-			deadline := start.Add(60 * time.Second)
+			deadline := start.Add(timeout)
 			for time.Now().Before(deadline) {
 				if fn() {
 					d := since(t0)
@@ -282,18 +309,21 @@ func waitAllReady(t0 time.Time, webrtc bool) map[string]time.Duration {
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-			logf("[ready] WARNING: %s never became ready", name)
+			logf("[ready] WARNING: %s never became ready after %s", name, timeout)
 			done <- result{name, since(t0), false}
 		}(p.name, p.fn)
 	}
 	durations := make(map[string]time.Duration, len(probes))
+	allReady := true
 	for range probes {
 		r := <-done
 		if r.ok {
 			durations[r.name] = r.dur
+		} else {
+			allReady = false
 		}
 	}
-	return durations
+	return durations, allReady
 }
 
 func waitForHTTPProbe(name, url string, timeout time.Duration) {

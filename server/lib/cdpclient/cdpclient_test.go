@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/stretchr/testify/assert"
@@ -30,6 +31,11 @@ type fakeCDP struct {
 	getVersionCalled    bool
 	failGetVersion      bool
 	productResponse     string
+	navigateCalled      bool
+	navigateCalls       int
+	navigateURL         string
+	pageStates          []string
+	pageStateIndex      int
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +109,22 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 					"jsVersion":       "1.2.3",
 				}
 			}
+		case "Page.navigate":
+			f.navigateCalled = true
+			f.navigateCalls++
+			var params map[string]any
+			_ = json.Unmarshal(req.Params, &params)
+			f.navigateURL, _ = params["url"].(string)
+			result = map[string]any{"frameId": "frame-1"}
+		case "Runtime.evaluate":
+			state := `{"url":"about:blank","readyState":"loading"}`
+			if len(f.pageStates) > 0 {
+				state = f.pageStates[f.pageStateIndex]
+				if f.pageStateIndex < len(f.pageStates)-1 {
+					f.pageStateIndex++
+				}
+			}
+			result = map[string]any{"result": map[string]any{"type": "string", "value": state}}
 		}
 
 		resp := map[string]any{"id": req.ID}
@@ -211,6 +233,77 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		_, err := Dial(ctx, url)
 		require.Error(t, err)
 	})
+}
+
+func TestDispatchStartURLAndWait(t *testing.T) {
+	t.Run("waits for loaded destination", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID: "target-123",
+			sessionID:    "session-abc",
+			pageStates: []string{
+				`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`,
+				`{"url":"https://start.duckduckgo.com/","readyState":"loading"}`,
+				`{"url":"https://duckduckgo.com/","readyState":"complete"}`,
+			},
+		}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := DispatchStartURLAndWait(ctx, url, "https://start.duckduckgo.com/")
+		require.NoError(t, err)
+		assert.True(t, f.navigateCalled)
+		assert.Equal(t, "https://start.duckduckgo.com/", f.navigateURL)
+	})
+
+	t.Run("retries a failed initial navigation", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID: "target-123",
+			sessionID:    "session-abc",
+			pageStates: []string{
+				`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`,
+				`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`,
+				`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`,
+				`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`,
+				`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`,
+				`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`,
+				`{"url":"https://start.duckduckgo.com/","readyState":"complete"}`,
+			},
+		}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		err := DispatchStartURLAndWait(ctx, url, "https://start.duckduckgo.com/")
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, f.navigateCalls, 2)
+	})
+
+	t.Run("times out on Chrome error page", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID: "target-123",
+			sessionID:    "session-abc",
+			pageStates:   []string{`{"url":"chrome-error://chromewebdata/","readyState":"complete"}`},
+		}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := DispatchStartURLAndWait(ctx, url, "https://start.duckduckgo.com/")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "chrome-error://chromewebdata/")
+	})
+}
+
+func TestBrowserWebSocketURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"webSocketDebuggerUrl":"ws://127.0.0.1/devtools/browser/test"}`))
+	}))
+	defer srv.Close()
+
+	got, err := BrowserWebSocketURL(context.Background(), srv.URL)
+	require.NoError(t, err)
+	assert.Equal(t, "ws://127.0.0.1/devtools/browser/test", got)
 }
 
 func TestDial(t *testing.T) {

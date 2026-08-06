@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 )
@@ -58,7 +57,7 @@ func forkIdentityHandler(log *slog.Logger, onApplied func(forkidentity.Payload))
 			http.Error(w, "failed to write fork identity", http.StatusInternalServerError)
 			return
 		}
-		if err := forkidentity.WaitAppliedMarker(payload.InstanceName(), 30*time.Second); err != nil {
+		if err := forkidentity.WaitAppliedMarker(payload.InstanceName(), forkidentity.ApplyTimeout); err != nil {
 			log.Error("fork identity apply wait failed", "err", err)
 			http.Error(w, "fork identity not applied", http.StatusInternalServerError)
 			return

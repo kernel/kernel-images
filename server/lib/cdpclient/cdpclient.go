@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -37,6 +40,32 @@ func (e *cdpError) Error() string {
 type Client struct {
 	conn   *websocket.Conn
 	nextID atomic.Int64
+}
+
+// BrowserWebSocketURL reads Chrome's browser-level DevTools WebSocket URL.
+func BrowserWebSocketURL(ctx context.Context, versionURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("get DevTools version: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("get DevTools version: %s", resp.Status)
+	}
+	var version struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+		return "", fmt.Errorf("decode DevTools version: %w", err)
+	}
+	if version.WebSocketDebuggerURL == "" {
+		return "", fmt.Errorf("DevTools version response has no browser WebSocket URL")
+	}
+	return version.WebSocketDebuggerURL, nil
 }
 
 // Dial opens a WebSocket connection to the given DevTools URL.
@@ -271,6 +300,93 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 		return fmt.Errorf("Page.navigate: %w", err)
 	}
 	return nil
+}
+
+// DispatchStartURLAndWait navigates the user-facing page and waits until the
+// destination has loaded without resolving to Chrome's network error page.
+func DispatchStartURLAndWait(ctx context.Context, devtoolsURL, destination string) error {
+	if err := DispatchStartURL(ctx, devtoolsURL, destination); err != nil {
+		return err
+	}
+
+	want, err := url.Parse(destination)
+	if err != nil {
+		return fmt.Errorf("parse destination: %w", err)
+	}
+	c, err := Dial(ctx, devtoolsURL)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	targetID, err := c.firstPageTargetID(ctx)
+	if err != nil {
+		return err
+	}
+	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": targetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Target.attachToTarget: %w", err)
+	}
+	var attach struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(attachResult, &attach); err != nil {
+		return fmt.Errorf("unmarshal attach: %w", err)
+	}
+	defer func() {
+		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = c.send(detachCtx, "Target.detachFromTarget", map[string]any{
+			"sessionId": attach.SessionID,
+		}, "")
+	}()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	var lastState struct {
+		URL        string `json:"url"`
+		ReadyState string `json:"readyState"`
+	}
+	lastNavigate := time.Now()
+	for {
+		raw, evalErr := c.send(ctx, "Runtime.evaluate", map[string]any{
+			"expression":    `JSON.stringify({url: location.href, readyState: document.readyState})`,
+			"returnByValue": true,
+		}, attach.SessionID)
+		if evalErr == nil {
+			var evaluated struct {
+				Result struct {
+					Value string `json:"value"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(raw, &evaluated); err == nil {
+				_ = json.Unmarshal([]byte(evaluated.Result.Value), &lastState)
+				current, parseErr := url.Parse(lastState.URL)
+				if parseErr == nil && relatedHosts(current.Hostname(), want.Hostname()) && lastState.ReadyState == "complete" {
+					return nil
+				}
+				if strings.HasPrefix(lastState.URL, "chrome-error://") && time.Since(lastNavigate) >= 250*time.Millisecond {
+					_, _ = c.send(ctx, "Page.navigate", map[string]any{"url": destination}, attach.SessionID)
+					lastNavigate = time.Now()
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for %s to load (last URL %q, state %q): %w", destination, lastState.URL, lastState.ReadyState, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func relatedHosts(a, b string) bool {
+	a = strings.ToLower(strings.TrimSuffix(a, "."))
+	b = strings.ToLower(strings.TrimSuffix(b, "."))
+	return a == b || strings.HasSuffix(a, "."+b) || strings.HasSuffix(b, "."+a)
 }
 
 // firstPageTargetID returns the targetId of the first page target reported
