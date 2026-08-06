@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	MaxPayloadBytes = 64 * 1024
-	ApplyTimeout    = 30 * time.Second
+	MaxPayloadBytes     = 64 * 1024
+	ApplyTimeout        = 30 * time.Second
+	ApplyResponseMargin = 5 * time.Second
 )
 
 type Payload map[string]string

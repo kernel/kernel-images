@@ -47,7 +47,7 @@ func waitForForkIdentityIfEnabled(ctx context.Context, enabled bool) (forkidenti
 		}
 		fatalf("fork identity payload wait: %v", err)
 	}
-	deadline := time.Now().Add(forkidentity.ApplyTimeout - 5*time.Second)
+	deadline := time.Now().Add(forkidentity.ApplyTimeout - forkidentity.ApplyResponseMargin)
 	if err := applyForkIdentityPayload(payload); err != nil {
 		fatalf("fork identity apply: %v", err)
 	}
@@ -73,6 +73,13 @@ func waitForForkIdentityPayload(ctx context.Context) (forkidentity.Payload, erro
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+}
+
+func writeForkIdentityAppliedMarker(instanceName string, allReady bool) error {
+	if !allReady {
+		return errors.New("services did not become ready")
+	}
+	return forkidentity.WriteAppliedMarker(instanceName)
 }
 
 func applyForkIdentityPayload(payload forkidentity.Payload) error {

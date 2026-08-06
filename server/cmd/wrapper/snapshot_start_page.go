@@ -15,8 +15,15 @@ const (
 	envoyBootstrapPath   = "/etc/envoy/bootstrap.yaml"
 )
 
-func prepareSnapshotStartPage(ctx context.Context, internalPort string) error {
+func prepareSnapshotStartPage(ctx context.Context, internalPort string) (retErr error) {
 	seedEnvoyStarted := false
+	seedEnvoyCleaned := false
+	defer func() {
+		if !seedEnvoyCleaned {
+			retErr = errors.Join(retErr, cleanupSeedEnvoyIfStarted(seedEnvoyStarted))
+		}
+	}()
+
 	if envoyEnabled() {
 		if !isExecutable("/usr/local/bin/init-envoy.sh") {
 			return fmt.Errorf("envoy is enabled but init-envoy.sh is unavailable")
@@ -26,21 +33,23 @@ func prepareSnapshotStartPage(ctx context.Context, internalPort string) error {
 		}
 		seedEnvoyStarted = true
 		if err := waitForTCP(ctx, "127.0.0.1", "3128", 25*time.Second); err != nil {
-			return errors.Join(err, cleanupSeedEnvoy())
+			return err
 		}
 	}
 
 	versionURL := "http://127.0.0.1:" + internalPort + "/json/version"
 	devtoolsURL, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
 	if err != nil {
-		return errors.Join(err, cleanupSeedEnvoyIfStarted(seedEnvoyStarted))
+		return err
 	}
 	navCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	navErr := cdpclient.DispatchStartURLAndWait(navCtx, devtoolsURL, snapshotStartPageURL)
 	cancel()
 
-	if err := cleanupSeedEnvoyIfStarted(seedEnvoyStarted); err != nil {
-		return err
+	cleanupErr := cleanupSeedEnvoyIfStarted(seedEnvoyStarted)
+	seedEnvoyCleaned = true
+	if cleanupErr != nil {
+		return cleanupErr
 	}
 	if navErr == nil {
 		logf("snapshot start page ready url=%s", snapshotStartPageURL)
@@ -67,11 +76,19 @@ func cleanupSeedEnvoyIfStarted(started bool) error {
 }
 
 func cleanupSeedEnvoy() error {
-	stopAll("envoy")
+	return cleanupSeedEnvoyWith(
+		envoyBootstrapPath,
+		func() { stopAll("envoy") },
+		func() bool { return tcpOK("127.0.0.1", "3128") },
+	)
+}
+
+func cleanupSeedEnvoyWith(bootstrapPath string, stop func(), running func() bool) error {
+	stop()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if !tcpOK("127.0.0.1", "3128") {
-			if err := os.Remove(envoyBootstrapPath); err != nil && !os.IsNotExist(err) {
+		if !running() {
+			if err := os.Remove(bootstrapPath); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("remove seed envoy bootstrap: %w", err)
 			}
 			return nil

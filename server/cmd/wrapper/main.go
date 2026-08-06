@@ -23,8 +23,6 @@ import (
 	"strings"
 	"syscall"
 	"time"
-
-	"github.com/kernel/kernel-images/server/lib/forkidentity"
 )
 
 const (
@@ -248,11 +246,8 @@ func main() {
 	}
 	probeDurations, allReady := waitAllReady(t0, webrtc, readyTimeout)
 	if forkIdentityWait {
-		if !allReady {
-			fatalf("fork identity services did not become ready")
-		}
-		if err := forkidentity.WriteAppliedMarker(forkIdentity.InstanceName()); err != nil {
-			fatalf("fork identity applied file: %v", err)
+		if err := writeForkIdentityAppliedMarker(forkIdentity.InstanceName(), allReady); err != nil {
+			fatalf("fork identity readiness: %v", err)
 		}
 		logf("fork identity ready instance=%s", forkIdentity.InstanceName())
 	}
@@ -294,6 +289,10 @@ func waitAllReady(t0 time.Time, webrtc bool, timeout time.Duration) (map[string]
 		probes = append(probes, probe{"envoy", func() bool { return tcpOK("127.0.0.1", "3128") }})
 	}
 
+	return waitProbesReady(t0, probes, timeout)
+}
+
+func waitProbesReady(t0 time.Time, probes []probe, timeout time.Duration) (map[string]time.Duration, bool) {
 	type result struct {
 		name string
 		dur  time.Duration
