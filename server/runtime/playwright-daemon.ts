@@ -73,6 +73,18 @@ async function transformCode(code: string): Promise<string> {
   return transformed.slice(bodyStart, bodyEnd).trim();
 }
 
+async function disconnectBrowser(): Promise<void> {
+  const connectedBrowser = browser;
+  browser = null;
+  if (!connectedBrowser) return;
+
+  try {
+    await connectedBrowser.close();
+  } catch {
+    // The timeout may have already torn down the transport.
+  }
+}
+
 async function ensureBrowserConnection(): Promise<Browser> {
   if (browser && browser.isConnected()) {
     return browser;
@@ -214,6 +226,9 @@ function handleConnection(socket: Socket): void {
       try {
         response = await withTimeout(executeCode(request, signal), signal);
       } catch (error: any) {
+        if (signal.aborted) {
+          await disconnectBrowser();
+        }
         response = {
           id: request.id,
           success: false,
