@@ -121,7 +121,7 @@ func Unzip(zipFilePath, destDir string) error {
 		destPath := filepath.Join(cleanDestDir, entryPath)
 
 		// Check for directory traversal vulnerabilities
-		if !isPathWithinDir(cleanDestDir, destPath) {
+		if destPath == cleanDestDir || !isPathWithinDir(cleanDestDir, destPath) {
 			return fmt.Errorf("illegal file path: %s", file.Name)
 		}
 		resolvedParentPath, err := resolvePathWithSymlinks(cleanDestDir, filepath.Dir(entryPath))
@@ -158,14 +158,15 @@ func Unzip(zipFilePath, destDir string) error {
 				return fmt.Errorf("failed to read symlink target: %w", err)
 			}
 			targetPath := string(target)
-			if !filepath.IsAbs(targetPath) {
-				resolvedTarget, err := resolvePathWithSymlinks(resolvedParentPath, targetPath)
-				if err != nil {
-					return fmt.Errorf("failed to resolve symlink target: %w", err)
-				}
-				if !isPathWithinDir(cleanDestDir, resolvedTarget) {
-					return fmt.Errorf("illegal symlink target: %s -> %s", file.Name, targetPath)
-				}
+			if filepath.IsAbs(targetPath) {
+				return fmt.Errorf("illegal symlink target: %s -> %s", file.Name, targetPath)
+			}
+			resolvedTarget, err := resolvePathWithSymlinks(resolvedParentPath, targetPath)
+			if err != nil {
+				return fmt.Errorf("failed to resolve symlink target: %w", err)
+			}
+			if !isPathWithinDir(cleanDestDir, resolvedTarget) {
+				return fmt.Errorf("illegal symlink target: %s -> %s", file.Name, targetPath)
 			}
 			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
 				return fmt.Errorf("failed to remove existing symlink path: %w", err)

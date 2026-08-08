@@ -53,6 +53,35 @@ func TestUnzipRejectsSymlinkChainEscape(t *testing.T) {
 	assert.Contains(t, err.Error(), "illegal symlink target")
 }
 
+func TestUnzipRejectsAbsoluteSymlink(t *testing.T) {
+	zipPath := createSymlinkZip(t, filepath.Join(t.TempDir(), "target.txt"))
+
+	err := Unzip(zipPath, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "illegal symlink target")
+}
+
+func TestUnzipRejectsRootEntry(t *testing.T) {
+	zipPath := createNamedSymlinkZip(t, ".", "target.txt")
+	destDir := t.TempDir()
+
+	err := Unzip(zipPath, destDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "illegal file path")
+}
+
+func TestUnzipRejectsEntryUnderExistingSymlink(t *testing.T) {
+	zipPath := createFileZip(t, "link/file.txt")
+	destDir := t.TempDir()
+	outsideDir := t.TempDir()
+	require.NoError(t, os.Symlink(outsideDir, filepath.Join(destDir, "link")))
+
+	err := Unzip(zipPath, destDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "illegal file path")
+	require.NoFileExists(t, filepath.Join(outsideDir, "file.txt"))
+}
+
 func TestUnzipOverwritesFileWithSymlink(t *testing.T) {
 	zipPath := createSymlinkZip(t, "target.txt")
 	destDir := t.TempDir()
@@ -71,13 +100,18 @@ func TestUnzipOverwritesFileWithSymlink(t *testing.T) {
 
 func createSymlinkZip(t *testing.T, target string) string {
 	t.Helper()
+	return createNamedSymlinkZip(t, "link.txt", target)
+}
+
+func createNamedSymlinkZip(t *testing.T, name, target string) string {
+	t.Helper()
 
 	zipPath := filepath.Join(t.TempDir(), "symlink.zip")
 	zipFile, err := os.Create(zipPath)
 	require.NoError(t, err)
 
 	zipWriter := zip.NewWriter(zipFile)
-	header := &zip.FileHeader{Name: "link.txt", Method: zip.Store}
+	header := &zip.FileHeader{Name: name, Method: zip.Store}
 	header.SetMode(os.ModeSymlink | 0777)
 	writer, err := zipWriter.CreateHeader(header)
 	require.NoError(t, err)
@@ -86,6 +120,22 @@ func createSymlinkZip(t *testing.T, target string) string {
 	require.NoError(t, zipWriter.Close())
 	require.NoError(t, zipFile.Close())
 
+	return zipPath
+}
+
+func createFileZip(t *testing.T, name string) string {
+	t.Helper()
+
+	zipPath := filepath.Join(t.TempDir(), "file.zip")
+	zipFile, err := os.Create(zipPath)
+	require.NoError(t, err)
+	zipWriter := zip.NewWriter(zipFile)
+	writer, err := zipWriter.Create(name)
+	require.NoError(t, err)
+	_, err = writer.Write([]byte("contents"))
+	require.NoError(t, err)
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, zipFile.Close())
 	return zipPath
 }
 
