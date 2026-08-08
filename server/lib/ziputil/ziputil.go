@@ -104,13 +104,15 @@ func Unzip(zipFilePath, destDir string) error {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
+	cleanDestDir := filepath.Clean(destDir)
+
 	// Extract each file
 	for _, file := range reader.File {
 		// Create the full destination path
 		destPath := filepath.Join(destDir, file.Name)
 
 		// Check for directory traversal vulnerabilities
-		if !strings.HasPrefix(destPath, filepath.Clean(destDir)+string(os.PathSeparator)) {
+		if !strings.HasPrefix(destPath, cleanDestDir+string(os.PathSeparator)) {
 			return fmt.Errorf("illegal file path: %s", file.Name)
 		}
 
@@ -139,7 +141,17 @@ func Unzip(zipFilePath, destDir string) error {
 			if err != nil {
 				return fmt.Errorf("failed to read symlink target: %w", err)
 			}
-			if err := os.Symlink(string(target), destPath); err != nil {
+			targetPath := string(target)
+			if !filepath.IsAbs(targetPath) {
+				resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(destPath), targetPath))
+				if resolvedTarget != cleanDestDir && !strings.HasPrefix(resolvedTarget, cleanDestDir+string(os.PathSeparator)) {
+					return fmt.Errorf("illegal symlink target: %s -> %s", file.Name, targetPath)
+				}
+			}
+			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove existing symlink path: %w", err)
+			}
+			if err := os.Symlink(targetPath, destPath); err != nil {
 				return fmt.Errorf("failed to create symlink: %w", err)
 			}
 			continue

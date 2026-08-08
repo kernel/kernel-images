@@ -36,6 +36,50 @@ func TestZipDirPreservesSymlinks(t *testing.T) {
 	assert.Equal(t, "target.txt", target)
 }
 
+func TestUnzipRejectsEscapingSymlink(t *testing.T) {
+	zipPath := createSymlinkZip(t, "../outside.txt")
+
+	err := Unzip(zipPath, t.TempDir())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "illegal symlink target")
+}
+
+func TestUnzipOverwritesFileWithSymlink(t *testing.T) {
+	zipPath := createSymlinkZip(t, "target.txt")
+	destDir := t.TempDir()
+	linkPath := filepath.Join(destDir, "link.txt")
+	require.NoError(t, os.WriteFile(linkPath, []byte("old contents"), 0644))
+
+	require.NoError(t, Unzip(zipPath, destDir))
+
+	info, err := os.Lstat(linkPath)
+	require.NoError(t, err)
+	assert.True(t, info.Mode()&os.ModeSymlink != 0)
+	target, err := os.Readlink(linkPath)
+	require.NoError(t, err)
+	assert.Equal(t, "target.txt", target)
+}
+
+func createSymlinkZip(t *testing.T, target string) string {
+	t.Helper()
+
+	zipPath := filepath.Join(t.TempDir(), "symlink.zip")
+	zipFile, err := os.Create(zipPath)
+	require.NoError(t, err)
+
+	zipWriter := zip.NewWriter(zipFile)
+	header := &zip.FileHeader{Name: "link.txt", Method: zip.Store}
+	header.SetMode(os.ModeSymlink | 0777)
+	writer, err := zipWriter.CreateHeader(header)
+	require.NoError(t, err)
+	_, err = writer.Write([]byte(target))
+	require.NoError(t, err)
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, zipFile.Close())
+
+	return zipPath
+}
+
 func TestUnzipFile(t *testing.T) {
 	// Create a temporary directory for test files
 	sourceDir, err := os.MkdirTemp("", "zip-source-*")
