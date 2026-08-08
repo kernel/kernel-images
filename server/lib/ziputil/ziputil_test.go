@@ -53,12 +53,15 @@ func TestUnzipRejectsSymlinkChainEscape(t *testing.T) {
 	assert.Contains(t, err.Error(), "illegal symlink target")
 }
 
-func TestUnzipRejectsAbsoluteSymlink(t *testing.T) {
-	zipPath := createSymlinkZip(t, filepath.Join(t.TempDir(), "target.txt"))
+func TestUnzipPreservesAbsoluteSymlink(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "target.txt")
+	zipPath := createSymlinkZip(t, target)
+	destDir := t.TempDir()
 
-	err := Unzip(zipPath, t.TempDir())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "illegal symlink target")
+	require.NoError(t, Unzip(zipPath, destDir))
+	actualTarget, err := os.Readlink(filepath.Join(destDir, "link.txt"))
+	require.NoError(t, err)
+	assert.Equal(t, target, actualTarget)
 }
 
 func TestUnzipRejectsRootEntry(t *testing.T) {
