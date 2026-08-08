@@ -104,15 +104,31 @@ func Unzip(zipFilePath, destDir string) error {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
-	cleanDestDir := filepath.Clean(destDir)
+	cleanDestDir, err := filepath.Abs(destDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve destination directory: %w", err)
+	}
+	cleanDestDir, err = filepath.EvalSymlinks(cleanDestDir)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate destination directory: %w", err)
+	}
 
 	// Extract each file
 	for _, file := range reader.File {
+		entryPath := filepath.FromSlash(file.Name)
+
 		// Create the full destination path
-		destPath := filepath.Join(destDir, file.Name)
+		destPath := filepath.Join(cleanDestDir, entryPath)
 
 		// Check for directory traversal vulnerabilities
-		if !strings.HasPrefix(destPath, cleanDestDir+string(os.PathSeparator)) {
+		if !isPathWithinDir(cleanDestDir, destPath) {
+			return fmt.Errorf("illegal file path: %s", file.Name)
+		}
+		resolvedParentPath, err := resolvePathWithSymlinks(cleanDestDir, filepath.Dir(entryPath))
+		if err != nil {
+			return fmt.Errorf("failed to resolve destination path %s: %w", file.Name, err)
+		}
+		if !isPathWithinDir(cleanDestDir, resolvedParentPath) {
 			return fmt.Errorf("illegal file path: %s", file.Name)
 		}
 
@@ -143,8 +159,11 @@ func Unzip(zipFilePath, destDir string) error {
 			}
 			targetPath := string(target)
 			if !filepath.IsAbs(targetPath) {
-				resolvedTarget := filepath.Clean(filepath.Join(filepath.Dir(destPath), targetPath))
-				if resolvedTarget != cleanDestDir && !strings.HasPrefix(resolvedTarget, cleanDestDir+string(os.PathSeparator)) {
+				resolvedTarget, err := resolvePathWithSymlinks(resolvedParentPath, targetPath)
+				if err != nil {
+					return fmt.Errorf("failed to resolve symlink target: %w", err)
+				}
+				if !isPathWithinDir(cleanDestDir, resolvedTarget) {
 					return fmt.Errorf("illegal symlink target: %s -> %s", file.Name, targetPath)
 				}
 			}
@@ -155,6 +174,12 @@ func Unzip(zipFilePath, destDir string) error {
 				return fmt.Errorf("failed to create symlink: %w", err)
 			}
 			continue
+		}
+
+		if info, err := os.Lstat(destPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(destPath); err != nil {
+				return fmt.Errorf("failed to remove existing symlink: %w", err)
+			}
 		}
 
 		// Create the destination file
@@ -171,4 +196,34 @@ func Unzip(zipFilePath, destDir string) error {
 	}
 
 	return nil
+}
+
+func isPathWithinDir(dir, path string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
+}
+
+func resolvePathWithSymlinks(baseDir, relativePath string) (string, error) {
+	currentPath := filepath.Clean(baseDir)
+	for _, part := range strings.Split(filepath.FromSlash(relativePath), string(os.PathSeparator)) {
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			currentPath = filepath.Dir(currentPath)
+			continue
+		}
+
+		nextPath := filepath.Join(currentPath, part)
+		resolvedPath, err := filepath.EvalSymlinks(nextPath)
+		if err == nil {
+			currentPath = resolvedPath
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("evaluate symlinks for %s: %w", nextPath, err)
+		}
+		currentPath = nextPath
+	}
+
+	return filepath.Clean(currentPath), nil
 }

@@ -44,6 +44,15 @@ func TestUnzipRejectsEscapingSymlink(t *testing.T) {
 	assert.Contains(t, err.Error(), "illegal symlink target")
 }
 
+func TestUnzipRejectsSymlinkChainEscape(t *testing.T) {
+	zipPath := createSymlinkChainEscapeZip(t)
+	destDir := filepath.Join(t.TempDir(), "extract")
+
+	err := Unzip(zipPath, destDir)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "illegal symlink target")
+}
+
 func TestUnzipOverwritesFileWithSymlink(t *testing.T) {
 	zipPath := createSymlinkZip(t, "target.txt")
 	destDir := t.TempDir()
@@ -77,6 +86,33 @@ func createSymlinkZip(t *testing.T, target string) string {
 	require.NoError(t, zipWriter.Close())
 	require.NoError(t, zipFile.Close())
 
+	return zipPath
+}
+
+func createSymlinkChainEscapeZip(t *testing.T) string {
+	t.Helper()
+
+	zipPath := filepath.Join(t.TempDir(), "chain-escape.zip")
+	zipFile, err := os.Create(zipPath)
+	require.NoError(t, err)
+
+	zipWriter := zip.NewWriter(zipFile)
+	linkHeader := &zip.FileHeader{Name: "link", Method: zip.Store}
+	linkHeader.SetMode(os.ModeSymlink | 0777)
+	linkWriter, err := zipWriter.CreateHeader(linkHeader)
+	require.NoError(t, err)
+	_, err = linkWriter.Write([]byte("."))
+	require.NoError(t, err)
+
+	escapeHeader := &zip.FileHeader{Name: "escape", Method: zip.Store}
+	escapeHeader.SetMode(os.ModeSymlink | 0777)
+	escapeWriter, err := zipWriter.CreateHeader(escapeHeader)
+	require.NoError(t, err)
+	_, err = escapeWriter.Write([]byte("link/.."))
+	require.NoError(t, err)
+
+	require.NoError(t, zipWriter.Close())
+	require.NoError(t, zipFile.Close())
 	return zipPath
 }
 
