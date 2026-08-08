@@ -10,6 +10,32 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestZipDirPreservesSymlinks(t *testing.T) {
+	sourceDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(sourceDir, "target.txt"), []byte("target contents"), 0644))
+	require.NoError(t, os.Symlink("target.txt", filepath.Join(sourceDir, "link.txt")))
+
+	zipContent, err := ZipDir(sourceDir)
+	require.NoError(t, err)
+
+	zipFile, err := os.CreateTemp(t.TempDir(), "archive-*.zip")
+	require.NoError(t, err)
+	_, err = zipFile.Write(zipContent)
+	require.NoError(t, err)
+	require.NoError(t, zipFile.Close())
+
+	destDir := t.TempDir()
+	require.NoError(t, Unzip(zipFile.Name(), destDir))
+
+	linkPath := filepath.Join(destDir, "link.txt")
+	info, err := os.Lstat(linkPath)
+	require.NoError(t, err)
+	assert.True(t, info.Mode()&os.ModeSymlink != 0)
+	target, err := os.Readlink(linkPath)
+	require.NoError(t, err)
+	assert.Equal(t, "target.txt", target)
+}
+
 func TestUnzipFile(t *testing.T) {
 	// Create a temporary directory for test files
 	sourceDir, err := os.MkdirTemp("", "zip-source-*")
