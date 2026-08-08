@@ -53,6 +53,17 @@ func ZipDir(sourceDir string) ([]byte, error) {
 			return nil
 		}
 
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("read symlink %s: %w", path, err)
+			}
+			if _, err := writer.Write([]byte(target)); err != nil {
+				return fmt.Errorf("write symlink %s: %w", path, err)
+			}
+			return nil
+		}
+
 		// Only include regular files. Skip sockets, devices, FIFOs, etc.
 		if !info.Mode().IsRegular() {
 			return nil
@@ -122,6 +133,17 @@ func Unzip(zipFilePath, destDir string) error {
 			return fmt.Errorf("failed to open file in zip: %w", err)
 		}
 		defer fileReader.Close()
+
+		if file.Mode()&os.ModeSymlink != 0 {
+			target, err := io.ReadAll(fileReader)
+			if err != nil {
+				return fmt.Errorf("failed to read symlink target: %w", err)
+			}
+			if err := os.Symlink(string(target), destPath); err != nil {
+				return fmt.Errorf("failed to create symlink: %w", err)
+			}
+			continue
+		}
 
 		// Create the destination file
 		destFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
