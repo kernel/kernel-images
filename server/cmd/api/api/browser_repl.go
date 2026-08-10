@@ -163,7 +163,7 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 
 	replID := cuid2.Generate()
 
-	cmd := exec.Command("node", "--max-old-space-size="+browserReplHeapMB(), browserReplScriptPath())
+	cmd := exec.Command("node", "--experimental-vm-modules", "--max-old-space-size="+browserReplHeapMB(), browserReplScriptPath())
 	cmd.Stdout = os.Stderr // protocol lives on the socket; child diagnostics only
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),

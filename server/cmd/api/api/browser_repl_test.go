@@ -28,8 +28,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// browserReplBundlePath is built once per test run from the TypeScript
-// runtime sources, mirroring how the Docker images bundle the daemon.
+// browserReplBundlePath is built once per test run from the runtime sources,
+// mirroring how the Docker images bundle the daemon.
 var (
 	browserReplBundleOnce sync.Once
 	browserReplBundlePath string
@@ -55,8 +55,7 @@ func ensureBrowserReplBundle(t *testing.T) string {
 		browserReplBundlePath = filepath.Join(dir, "browser-repl.js")
 
 		// Stage the runtime package and sources exactly like the Docker builds.
-		// This keeps Acorn a normal, pinned local dependency instead of relying
-		// on a package installed globally on the developer or test host.
+		// Meriyah is installed from the exact package lock, never globally.
 		stagingDir, err := os.MkdirTemp("", "browser-repl-runtime")
 		if err != nil {
 			browserReplBundleErr = err
@@ -101,7 +100,6 @@ func ensureBrowserReplBundle(t *testing.T) string {
 			"--format=cjs",
 			"--supported:dynamic-import=true",
 			"--outfile="+browserReplBundlePath,
-			"--external:esbuild",
 		)
 		cmd.Dir = stagingDir
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -1457,11 +1455,8 @@ func TestBrowserReplCrashDuringExecutionResponse(t *testing.T) {
 	require.NotEqual(t, r1.ReplId, r3.ReplId)
 }
 
-// TestBrowserReplStaticImportRejected covers the QA finding that an unused
-// static import was silently elided by esbuild's TypeScript transform
-// before the static-import check, while a used static import produced the
-// documented error. Every static import/export form must produce the same
-// clear error, and dynamic import() must keep working.
+// TestBrowserReplStaticImportRejected verifies that the JavaScript-only cell
+// runtime rejects static module syntax while retaining dynamic import().
 func TestBrowserReplStaticImportRejected(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -1472,11 +1467,6 @@ func TestBrowserReplStaticImportRejected(t *testing.T) {
 		"named import":          `import { basename } from "node:path"`,
 		"side-effect import":    `import "node:path"`,
 		"export declaration":    `export const x = 1`,
-		// TypeScript-only syntax preceding the import must not let esbuild's
-		// unused-import elision drop the statement before the check.
-		"unused import after type annotation":  `const x: number = 1; import path from "node:path"; 2`,
-		"unused import after interface":        "interface Foo { a: number }\nimport p from \"node:path\"\n1",
-		"unused import before type annotation": `import p from "node:path"; const x: number = 1`,
 	} {
 		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
 		require.False(t, r.Success, "%s must be rejected", name)
@@ -1486,19 +1476,15 @@ func TestBrowserReplStaticImportRejected(t *testing.T) {
 			"a static import error must not destroy the REPL")
 	}
 
-	// Dynamic import keeps working, and the REPL survived the rejections.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: `(await import("node:path")).basename("/a/b")`,
 	})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "b", r.Result)
 
-	// Type-only imports are erased by the transform and remain allowed.
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
-		Code: `import type { Socket } from "net"; "type-import-ok"`,
-	})
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "type-import-ok", r.Result)
+	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `return 1`})
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "top-level return is not supported")
 }
 
 // TestBrowserReplHeapCapConfigurable verifies the BROWSER_REPL_HEAP_MB knob
@@ -2074,10 +2060,8 @@ func TestBrowserReplScrollFallback(t *testing.T) {
 	require.Equal(t, r.ReplId, r2.Result)
 }
 
-// TestBrowserReplAsyncConstLetSemantics covers the QA finding that const/let
-// declarations silently degraded to mutable, redeclarable global assignments
-// whenever the submitting code contained a top-level await (the async-wrapper
-// path). Bindings must keep real JavaScript semantics no matter which
+// TestBrowserReplAsyncConstLetSemantics covers const/let behavior across
+// module cells containing top-level await. Bindings must keep real JavaScript semantics no matter which
 // evaluation path declared them.
 func TestBrowserReplAsyncConstLetSemantics(t *testing.T) {
 	svc := newBrowserReplSvc(t)
@@ -2148,11 +2132,9 @@ func TestBrowserReplAsyncConstLetSemantics(t *testing.T) {
 	require.True(t, r.Success)
 }
 
-// TestBrowserReplAsyncTrailingBlockResult pins the documented divergence:
-// with top-level await (async-wrapper mode) only a trailing expression
-// statement yields an implicit result; a trailing block statement yields
-// undefined, unlike the synchronous path's completion value.
-func TestBrowserReplAsyncTrailingBlockResult(t *testing.T) {
+// TestBrowserReplTrailingBlockResult verifies that every SourceTextModule cell
+// reports only an implicit final expression, never a block completion value.
+func TestBrowserReplTrailingBlockResult(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
@@ -2162,10 +2144,10 @@ func TestBrowserReplAsyncTrailingBlockResult(t *testing.T) {
 	require.NotNil(t, r.ResultRepr)
 	require.Equal(t, "undefined", *r.ResultRepr)
 
-	// Synchronous path keeps completion-value semantics.
+	// A block has no implicit result on the module-cell path either.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `try { 42 } catch {}`})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, float64(42), r.Result)
+	require.Equal(t, "undefined", *r.ResultRepr)
 
 	// A trailing expression after the await still yields an implicit result.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
@@ -2549,4 +2531,46 @@ func TestStrictBrowserExecuteBodyMiddleware(t *testing.T) {
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/playwright/execute", strings.NewReader(`{"code":"1","bogus":1}`)))
 	require.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestBrowserReplSourceTextModuleCells covers the JavaScript-only evaluator
+// contract independently of browser connection behavior.
+func TestBrowserReplSourceTextModuleCells(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+
+	r := exec(`var cellVar = 1; let cellLet = 2; const cellConst = 3;
+		function cellFn() { return cellVar + cellLet; }
+		class CellClass {}
+		({ cellVar, cellLet, cellConst, fn: cellFn(), className: new CellClass().constructor.name })`)
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	r = exec(`cellVar++; cellLet += 2; cellFn = () => 99; cellVar + cellLet + cellFn()`)
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, float64(105), r.Result)
+
+	r = exec(`cellConst = 4`)
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "Assignment to constant variable")
+
+	r = exec(`const cellLet = 9`)
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "Identifier 'cellLet' has already been declared")
+
+	r = exec(`let initializedBeforeFailure = 7; throw new Error("cell failure")`)
+	require.False(t, r.Success)
+	r = exec(`initializedBeforeFailure`)
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, float64(7), r.Result)
+
+	r = exec(`(await import("node:path")).basename("/tmp/cell")`)
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, "cell", r.Result)
+
+	r = exec(`return 1`)
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "top-level return is not supported")
 }

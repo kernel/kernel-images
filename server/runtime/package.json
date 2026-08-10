@@ -2,6 +2,6 @@
   "name": "@kernel/browser-repl-runtime",
   "private": true,
   "dependencies": {
-    "acorn": "8.18.0"
+    "meriyah": "7.3.1"
   }
 }
