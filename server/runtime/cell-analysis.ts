@@ -106,7 +106,7 @@ function globalPattern(
       return `[${pattern.elements.map((element) => element ? globalPattern(asPattern(element), source, initialize, initializationTarget) : '').join(', ')}]`;
     case 'ObjectPattern':
       return `{${pattern.properties.map((property) => {
-        if (property.type === 'RestElement') return globalPattern(asPattern(property.argument), source, initialize, initializationTarget);
+        if (property.type === 'RestElement') return globalPattern(asPattern(property), source, initialize, initializationTarget);
         if (property.type !== 'Property') throw new Error(`unsupported object pattern property: ${property.type}`);
         const key = propertyText(property, source);
         const target = globalPattern(asPattern(property.value), source, initialize, initializationTarget);

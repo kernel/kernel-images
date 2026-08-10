@@ -238,6 +238,43 @@ func TestBrowserReplErrorStackUsesCellLines(t *testing.T) {
 	require.True(t, strings.Contains(*r.Stack, "browser-repl-cell-") && strings.Contains(*r.Stack, ".mjs:2:"), *r.Stack)
 }
 
+func TestBrowserReplObjectRestDestructuring(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		want interface{}
+	}{
+		{
+			name: "var",
+			code: `var { a, ...rest } = { a: 1, b: 2, c: 3 }; a + rest.b + rest.c`,
+			want: float64(6),
+		},
+		{
+			name: "let",
+			code: `let { a, ...rest } = { a: 1, b: 2 }; a + rest.b`,
+			want: float64(3),
+		},
+		{
+			name: "const",
+			code: `const { a, ...rest } = { a: 1, b: 2 }; a + rest.b`,
+			want: float64(3),
+		},
+		{
+			name: "var for-of head",
+			code: `for (var { a, ...rest } of [{ a: 4, b: 5 }]) {} a + rest.b`,
+			want: float64(9),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			svc := newBrowserReplSvc(t)
+			r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: test.code})
+			require.True(t, r.Success, "code failed: %v", r.Error)
+			require.Equal(t, test.want, r.Result)
+		})
+	}
+}
+
 func TestBrowserReplConstLetSemantics(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	await_ := "await new Promise(r => setTimeout(r, 1)); "

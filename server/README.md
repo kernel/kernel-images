@@ -90,8 +90,9 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   Persistent names are live context-global accessors, so closures and timers
   observe later-cell assignments. Function declarations are lowered through
   those accessors too, including same-cell closures and assignments. `var`
-  declarations in top-level nested
-  statements persist; locals inside functions or nested lexical blocks do not.
+  declarations in top-level nested statements persist, including object/array
+  rest destructuring and `for...of` declaration heads; locals inside functions
+  or nested lexical blocks do not.
   Braceless multi-declarator `var` statements retain their single-statement
   control-flow semantics. Lexical names are reserved after linking: retry a
   failed declaration with a new name or use `reset: true`. Function `.name` is

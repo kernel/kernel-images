@@ -353,7 +353,8 @@ are backed by accessor properties on the context's `globalThis`. The accessor
 is the single binding for a name, so a closure created in one cell, a later
 cell, and a timer all observe the same value. Persistent top-level declarations
 and top-level `var` declarations in nested statements are lowered to those
-accessors; function declarations are renamed to module-local aliases and
+accessors, including object/array rest destructuring and `for...of` declaration
+heads; function declarations are renamed to module-local aliases and
 initialized through the accessor prelude, so same-cell closures and assignments
 cannot capture a shadow binding. The declared function `.name` is preserved;
 `Function.prototype.toString()` may expose the generated internal alias.
