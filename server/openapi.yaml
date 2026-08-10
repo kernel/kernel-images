@@ -1317,7 +1317,8 @@ paths:
         and more) plus an unrestricted `cdp()` escape hatch. Top-level bindings persist
         across calls until the API process exits, the REPL is reset, or the REPL is
         terminated after a crash or timeout. Persistent names are live context-global
-        accessors, so closures and timers observe later-cell assignments; `var` in
+        accessors, so closures and timers observe later-cell assignments; function declarations
+        use the same accessor path, including same-cell closures and assignments. `var` in
         top-level nested statements persists, while function and nested-block locals do not.
         Lexical names are reserved after linking, so retry a failed declaration with a new
         name or reset the REPL.
@@ -3977,8 +3978,9 @@ components:
             Top-level bindings persist until the API process exits, the REPL is
             reset, or the REPL is terminated after a crash or timeout. Persistent names
             are live context-global accessors: closures and timers observe later-cell
-            assignments. `var` in top-level nested statements persists; function and
-            nested-block locals do not. Lexical names are reserved after linking, so
+            assignments. Function declarations use the same accessor path, including
+            same-cell closures and assignments. `var` in top-level nested statements
+            persists; function and nested-block locals do not. Lexical names are reserved after linking, so
             retry a failed declaration with a new name or reset the REPL. A failed
             lexical initializer leaves that name in the TDZ; assignments cannot
             initialize it. Static top-level imports are rejected; use dynamic `import()`.

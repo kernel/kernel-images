@@ -50,6 +50,52 @@ func TestBrowserReplPersistentClosureIdentity(t *testing.T) {
 	require.Equal(t, float64(16), r.Result)
 }
 
+func TestBrowserReplFunctionDeclarationsUsePersistentAccessor(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+
+	r := exec(`function replFunctionValue() { return 1; } function replFunctionClosure() { return replFunctionValue(); } replFunctionValue = () => 3; replFunctionClosure()`)
+	require.True(t, r.Success, "same-cell assignment failed: %v", r.Error)
+	require.Equal(t, float64(3), r.Result)
+	r = exec(`function replFunctionValue() { return 2; }`)
+	require.True(t, r.Success, "redefinition failed: %v", r.Error)
+	r = exec(`replFunctionClosure()`)
+	require.True(t, r.Success, "closure did not observe redefinition: %v", r.Error)
+	require.Equal(t, float64(2), r.Result)
+
+	// Duplicate function declarations are valid and initialize the accessor
+	// exactly once with the last declaration.
+	r = exec(`function replDuplicate() { return 1; } function replDuplicate() { return 2; } replDuplicate()`)
+	require.True(t, r.Success, "duplicate declaration failed: %v", r.Error)
+	require.Equal(t, float64(2), r.Result)
+}
+
+func TestBrowserReplBracelessVarWithoutInitializerPreservesControlFlow(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+
+	cases := []struct {
+		code string
+		want interface{}
+	}{
+		{`var replVarLog = []; if (false) var replIfNoInit; replVarLog.push('ran'); replVarLog`, []interface{}{"ran"}},
+		{`do var replDoNoInit; while (false); typeof replDoNoInit`, "undefined"},
+		{`for (let replForIndex = 0; replForIndex < 1; replForIndex++) var replForNoInit; typeof replForNoInit`, "undefined"},
+		{`for (const replForOfIndex of [1]) var replForOfNoInit; typeof replForOfNoInit`, "undefined"},
+	}
+	for _, test := range cases {
+		r := exec(test.code)
+		require.True(t, r.Success, "code %q failed: %v", test.code, r.Error)
+		require.Equal(t, test.want, r.Result, "code: %q", test.code)
+	}
+}
+
 func TestBrowserReplNestedVarBindingsPersist(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
@@ -108,6 +154,14 @@ func TestBrowserReplErrorStackUsesCellLines(t *testing.T) {
 		require.False(t, r.Success)
 		require.NotNil(t, r.Stack)
 		require.Contains(t, *r.Stack, ".mjs:2:", *r.Stack)
+	})
+
+	t.Run("inside second multiline declarator", func(t *testing.T) {
+		svc := newBrowserReplSvc(t)
+		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "let stackDeclaratorA = 1,\n    stackDeclaratorB = (() => { throw new Error(\"line2boom\") })();"})
+		require.False(t, r.Success)
+		require.NotNil(t, r.Stack)
+		require.Contains(t, *r.Stack, ".mjs:2:")
 	})
 
 	// A cell without a declaration still uses the same one-line offset.
@@ -190,6 +244,12 @@ func TestBrowserReplConstLetSemantics(t *testing.T) {
 	// a later assignment.
 	expectErr(`const qaFailConst = (() => { throw new Error('constinitfail') })()`, "constinitfail")
 	expectErr(`qaFailConst = 7`, "before initialization")
+
+	// The initialization target is per-cell, revoked, and removed after
+	// evaluation, even if user code discovers and retains the proxy.
+	exec(`const qaInitEscape = globalThis[Object.getOwnPropertyNames(globalThis).find(name => name.startsWith('__browser_repl_init_'))]`)
+	expectErr(`qaInitEscape.qaConst = 2`, "revoked")
+	expectResult(`typeof globalThis["__browser_repl_init_target"]`, "undefined")
 
 	// None of the failures above terminated the REPL.
 	r := exec(`repl.id`)

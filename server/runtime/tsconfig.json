@@ -7,5 +7,11 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["cell-analysis.ts", "cell-runtime.ts"]
+  "include": [
+    "browser-cdp-client.ts",
+    "browser-helpers.ts",
+    "browser-repl.ts",
+    "cell-analysis.ts",
+    "cell-runtime.ts"
+  ]
 }

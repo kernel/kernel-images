@@ -353,11 +353,14 @@ are backed by accessor properties on the context's `globalThis`. The accessor
 is the single binding for a name, so a closure created in one cell, a later
 cell, and a timer all observe the same value. Persistent top-level declarations
 and top-level `var` declarations in nested statements are lowered to those
-accessors; declarations inside nested functions or blocks remain ordinary
-locals.
+accessors; function declarations are renamed to module-local aliases and
+initialized through the accessor prelude, so same-cell closures and assignments
+cannot capture a shadow binding. Declarations inside nested functions or blocks
+remain ordinary locals.
 
-Initializer writes use a private initialization target, so ordinary writes
-before a lexical declaration throw the same TDZ `ReferenceError` as JavaScript.
+Initializer writes use a nonce-named initialization target that exists only
+for the active cell, so ordinary writes before a lexical declaration throw the
+same TDZ `ReferenceError` as JavaScript and user code cannot retain the target.
 A failed multi-declarator cell retains every initializer that completed before
 the failure, while failed lexical initializers remain uninitialized and cannot
 be repaired by assignment. Lexical names are reserved after linking, so a

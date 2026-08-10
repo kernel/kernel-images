@@ -1,4 +1,5 @@
 import vm from 'vm';
+import { randomBytes } from 'node:crypto';
 import {
   alreadyDeclaredError,
   analyzeCell,
@@ -26,41 +27,27 @@ type PersistentBinding = CellBinding & { initialized: boolean; value?: unknown }
 export class CellRuntime {
   private readonly declarations = new Map<string, CellBindingKind>();
   private readonly values = new Map<string, PersistentBinding>();
-  private readonly initializationTarget: Record<PropertyKey, unknown>;
   private sequence = 0;
 
   constructor(
     private readonly context: vm.Context,
     private readonly contextGlobal: Record<PropertyKey, unknown>,
-  ) {
-    this.initializationTarget = new Proxy({}, {
-      set: (_target, property, value) => {
-        if (typeof property !== 'string') return false;
-        const binding = this.values.get(property);
-        if (!binding) throw new ReferenceError(`Unknown persistent binding '${property}'`);
-        binding.value = value;
-        binding.initialized = true;
-        return true;
-      },
-    });
-    Object.defineProperty(this.contextGlobal, '__browser_repl_init_target', {
-      configurable: false,
-      enumerable: false,
-      value: this.initializationTarget,
-    });
-  }
+  ) {}
 
   async evaluate(source: string): Promise<CellEvaluation> {
-    const analysis = analyzeCell(source);
+    const cellSequence = this.sequence++;
+    const initializationTargetName = `__browser_repl_init_${cellSequence}_${randomBytes(16).toString('hex')}`;
+    const initializationTarget = `globalThis[${JSON.stringify(initializationTargetName)}]`;
+    const analysis = analyzeCell(source, initializationTarget);
     this.precheck(analysis.bindings);
 
     const currentNames = bindingNames(analysis.bindings);
     const resultName = analysis.finalExpression ? this.freshResultName(currentNames) : undefined;
-    const generated = this.buildSource(analysis, resultName);
+    const generated = this.buildSource(analysis, resultName, initializationTarget);
 
     const module = new vm.SourceTextModule(generated, {
       context: this.context,
-      identifier: `browser-repl-cell-${this.sequence++}.mjs`,
+      identifier: `browser-repl-cell-${cellSequence}.mjs`,
       // buildSource keeps its accessor prelude on one physical line. This
       // makes generated line 2 correspond to user line 1.
       lineOffset: -1,
@@ -87,7 +74,20 @@ export class CellRuntime {
 
     this.prepareBindings(analysis.bindings);
     this.register(analysis.bindings);
-    await module.evaluate();
+    const initialization = this.createInitializationTarget(analysis.bindings);
+    Object.defineProperty(this.contextGlobal, initializationTargetName, {
+      configurable: true,
+      enumerable: false,
+      value: initialization.target,
+    });
+    try {
+      await module.evaluate();
+    } finally {
+      // Revoke before deleting the property so code that retained the proxy
+      // during evaluation cannot repair a failed lexical initializer later.
+      initialization.revoke();
+      delete this.contextGlobal[initializationTargetName];
+    }
 
     const value = resultName ? Reflect.get(module.namespace, resultName) : undefined;
     return { value };
@@ -108,6 +108,28 @@ export class CellRuntime {
     for (const binding of bindings) this.declarations.set(binding.name, binding.kind);
   }
 
+  private createInitializationTarget(bindings: CellBinding[]): {
+    target: Record<PropertyKey, unknown>;
+    revoke: () => void;
+  } {
+    const pending = new Set(
+      bindings.filter((binding) => binding.kind !== 'var').map((binding) => binding.name),
+    );
+    const { proxy, revoke } = Proxy.revocable(Object.create(null), {
+      set: (_target, property, value) => {
+        if (typeof property !== 'string') return false;
+        if (!pending.has(property)) throw new TypeError('persistent binding initialization target is internal');
+        const binding = this.values.get(property);
+        if (!binding) throw new ReferenceError(`Unknown persistent binding '${property}'`);
+        pending.delete(property);
+        binding.value = value;
+        binding.initialized = true;
+        return true;
+      },
+    });
+    return { target: proxy, revoke };
+  }
+
   private prepareBindings(bindings: CellBinding[]): void {
     const current = new Map<string, CellBindingKind>();
     for (const binding of bindings) current.set(binding.name, binding.kind);
@@ -116,9 +138,9 @@ export class CellRuntime {
       const old = this.values.get(name);
       if (old) {
         old.kind = kind;
-        // A var redeclaration does not reset an existing value. Function
-        // declarations are assigned by the hoisted generated prelude.
-        if (kind === 'function' || kind === 'class' || (kind !== 'var' && !old.initialized)) {
+        // A var redeclaration does not reset an existing value. Function and
+        // class declarations are initialized by generated module code.
+        if (kind === 'function' || kind === 'class') {
           old.initialized = false;
           old.value = undefined;
         }
@@ -143,7 +165,11 @@ export class CellRuntime {
     return candidate;
   }
 
-  private buildSource(analysis: CellAnalysis, resultName: string | undefined): string {
+  private buildSource(
+    analysis: CellAnalysis,
+    resultName: string | undefined,
+    initializationTarget: string,
+  ): string {
     const edits = [...analysis.edits];
     if (analysis.finalExpression && resultName) {
       const { statementStart, statementEnd, expressionStart, expressionEnd } = analysis.finalExpression;
@@ -154,8 +180,8 @@ export class CellRuntime {
       });
     }
     const body = applyEdits(analysis.source, edits);
-    const prelude = analysis.hoistedFunctionNames
-      .map((name) => `globalThis["__browser_repl_init_target"][${JSON.stringify(name)}] = ${name};`)
+    const prelude = analysis.hoistedFunctions
+      .map(({ name, alias }) => `${initializationTarget}[${JSON.stringify(name)}] = ${alias};`)
       .join(' ');
     return `${prelude}\n${body}${resultName ? `\nexport { ${resultName} };` : ''}`;
   }

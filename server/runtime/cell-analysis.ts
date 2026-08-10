@@ -17,7 +17,7 @@ export interface CellAnalysis {
   source: string;
   bindings: CellBinding[];
   edits: SourceEdit[];
-  hoistedFunctionNames: string[];
+  hoistedFunctions: Array<{ name: string; alias: string }>;
   finalExpression?: { statementStart: number; statementEnd: number; expressionStart: number; expressionEnd: number };
 }
 
@@ -86,25 +86,30 @@ function asPattern(node: ESTree.Node): ESTree.Pattern {
   }
 }
 
-const GLOBAL_TARGET = 'globalThis["__browser_repl_init_target"]';
+const DEFAULT_INITIALIZATION_TARGET = 'globalThis["__browser_repl_init_target"]';
 
 /** Turn a binding pattern into an assignment target backed by a runtime accessor. */
-function globalPattern(pattern: ESTree.Pattern, source: string, initialize: boolean): string {
+function globalPattern(
+  pattern: ESTree.Pattern,
+  source: string,
+  initialize: boolean,
+  initializationTarget: string,
+): string {
   switch (pattern.type) {
     case 'Identifier':
-      return `${initialize ? GLOBAL_TARGET : 'globalThis'}[${JSON.stringify(pattern.name)}]`;
+      return `${initialize ? initializationTarget : 'globalThis'}[${JSON.stringify(pattern.name)}]`;
     case 'AssignmentPattern':
-      return `${globalPattern(asPattern(pattern.left), source, initialize)} = ${source.slice(...range(pattern.right!))}`;
+      return `${globalPattern(asPattern(pattern.left), source, initialize, initializationTarget)} = ${source.slice(...range(pattern.right!))}`;
     case 'RestElement':
-      return `...${globalPattern(asPattern(pattern.argument), source, initialize)}`;
+      return `...${globalPattern(asPattern(pattern.argument), source, initialize, initializationTarget)}`;
     case 'ArrayPattern':
-      return `[${pattern.elements.map((element) => element ? globalPattern(asPattern(element), source, initialize) : '').join(', ')}]`;
+      return `[${pattern.elements.map((element) => element ? globalPattern(asPattern(element), source, initialize, initializationTarget) : '').join(', ')}]`;
     case 'ObjectPattern':
       return `{${pattern.properties.map((property) => {
-        if (property.type === 'RestElement') return globalPattern(asPattern(property.argument), source, initialize);
+        if (property.type === 'RestElement') return globalPattern(asPattern(property.argument), source, initialize, initializationTarget);
         if (property.type !== 'Property') throw new Error(`unsupported object pattern property: ${property.type}`);
         const key = propertyText(property, source);
-        const target = globalPattern(asPattern(property.value), source, initialize);
+        const target = globalPattern(asPattern(property.value), source, initialize, initializationTarget);
         return `${property.computed ? `[${key}]` : key}: ${target}`;
       }).join(', ')}}`;
     case 'MemberExpression':
@@ -112,21 +117,72 @@ function globalPattern(pattern: ESTree.Pattern, source: string, initialize: bool
   }
 }
 
+function declaratorReplacement(
+  declaration: ESTree.VariableDeclarator,
+  statement: ESTree.VariableDeclaration,
+  source: string,
+  initialize: boolean,
+  initializationTarget: string,
+): string {
+  // A `var x;` has already been initialized by prepareBindings and is a
+  // no-op. It still needs a statement-shaped replacement when it is used as
+  // the braceless body of a control-flow statement.
+  if (!declaration.init && statement.kind === 'var') return '';
+  const target = globalPattern(asPattern(declaration.id), source, initialize, initializationTarget);
+  const value = declaration.init ? source.slice(...range(declaration.init)) : 'undefined';
+  return `(${target} = ${value})`;
+}
+
 function variableReplacement(
   statement: ESTree.VariableDeclaration,
   source: string,
   expressionPosition: boolean,
   initialize: boolean,
+  initializationTarget: string,
 ): string {
-  const assignments: string[] = [];
-  for (const declaration of statement.declarations) {
-    if (!declaration.init && statement.kind === 'var') continue;
-    const target = globalPattern(asPattern(declaration.id), source, initialize);
-    const value = declaration.init ? source.slice(...range(declaration.init)) : 'undefined';
-    assignments.push(`(${target} = ${value})`);
+  const assignments = statement.declarations
+    .map((declaration) => declaratorReplacement(declaration, statement, source, initialize, initializationTarget))
+    .filter((assignment) => assignment !== '');
+  return expressionPosition ? assignments.join(', ') : `${assignments.join('; ')};`;
+}
+
+/**
+ * Lower a statement-position declaration with edits anchored to each
+ * declarator. Keeping the original gaps (especially newlines) makes stack
+ * locations line-neutral instead of collapsing a multi-line declaration.
+ */
+function variableEdits(
+  statement: ESTree.VariableDeclaration,
+  source: string,
+  edits: SourceEdit[],
+  initialize: boolean,
+  initializationTarget: string,
+): void {
+  const first = statement.declarations[0];
+  if (!first) return;
+  edits.push({ start: statement.start!, end: first.start!, text: '' });
+  for (let index = 0; index < statement.declarations.length; index++) {
+    const declaration = statement.declarations[index];
+    edits.push({
+      start: declaration.start!,
+      end: declaration.end!,
+      text: declaratorReplacement(declaration, statement, source, initialize, initializationTarget),
+    });
+    const next = statement.declarations[index + 1];
+    if (next) {
+      const gapStart = declaration.end!;
+      const gap = source.slice(gapStart, next.start!);
+      const comma = gap.indexOf(',');
+      if (comma < 0) throw new Error('variable declarators are missing their separator');
+      edits.push({ start: gapStart + comma, end: gapStart + comma + 1, text: ';' });
+    }
   }
-  if (expressionPosition) return assignments.join(', ');
-  return assignments.length ? `${assignments.join('; ')};` : '';
+  // Meriyah includes an explicit semicolon in the declaration range. If the
+  // source used ASI, add the terminator needed by a statement-position
+  // assignment while leaving all original line breaks untouched.
+  if (source[statement.end! - 1] !== ';') {
+    edits.push({ start: statement.end!, end: statement.end!, text: ';' });
+  }
 }
 
 function addStatement(
@@ -134,24 +190,21 @@ function addStatement(
   source: string,
   bindings: CellBinding[],
   edits: SourceEdit[],
+  initializationTarget: string,
 ): void {
   switch (statement.type) {
     case 'VariableDeclaration':
       if (statement.kind === 'var') {
         addVariableBindings(statement, bindings);
-        edits.push({
-          start: range(statement)[0],
-          end: range(statement)[1],
-          text: variableReplacement(statement, source, false, false),
-        });
+        variableEdits(statement, source, edits, false, initializationTarget);
       }
       return;
     case 'BlockStatement':
-      for (const child of statement.body) addStatement(child, source, bindings, edits);
+      for (const child of statement.body) addStatement(child, source, bindings, edits, initializationTarget);
       return;
     case 'IfStatement':
-      addStatement(statement.consequent, source, bindings, edits);
-      if (statement.alternate) addStatement(statement.alternate, source, bindings, edits);
+      addStatement(statement.consequent, source, bindings, edits, initializationTarget);
+      if (statement.alternate) addStatement(statement.alternate, source, bindings, edits, initializationTarget);
       return;
     case 'ForStatement':
       if (statement.init?.type === 'VariableDeclaration' && statement.init.kind === 'var') {
@@ -159,41 +212,39 @@ function addStatement(
         edits.push({
           start: range(statement.init)[0],
           end: range(statement.init)[1],
-          text: variableReplacement(statement.init, source, true, false),
+          text: variableReplacement(statement.init, source, true, false, initializationTarget),
         });
       }
-      addStatement(statement.body, source, bindings, edits);
+      addStatement(statement.body, source, bindings, edits, initializationTarget);
       return;
     case 'ForInStatement':
     case 'ForOfStatement':
       if (statement.left.type === 'VariableDeclaration' && statement.left.kind === 'var') {
         addVariableBindings(statement.left, bindings);
-        // `for (var x of values)` is an assignment target, not an
-        // initializer. The declaration is already hoisted by the runtime.
-        const target = statement.left.declarations.length === 1
-          ? globalPattern(asPattern(statement.left.declarations[0].id), source, false)
-          : variableReplacement(statement.left, source, true, false);
+        // The parser rejects multi-declarator for-in/of heads, so this is
+        // always a single assignment target.
+        const target = globalPattern(asPattern(statement.left.declarations[0].id), source, false, initializationTarget);
         edits.push({ start: range(statement.left)[0], end: range(statement.left)[1], text: target });
       }
-      addStatement(statement.body, source, bindings, edits);
+      addStatement(statement.body, source, bindings, edits, initializationTarget);
       return;
     case 'WhileStatement':
     case 'DoWhileStatement':
     case 'WithStatement':
-      addStatement(statement.body, source, bindings, edits);
+      addStatement(statement.body, source, bindings, edits, initializationTarget);
       return;
     case 'SwitchStatement':
       for (const clause of statement.cases) {
-        for (const child of clause.consequent) addStatement(child, source, bindings, edits);
+        for (const child of clause.consequent) addStatement(child, source, bindings, edits, initializationTarget);
       }
       return;
     case 'TryStatement':
-      addStatement(statement.block, source, bindings, edits);
-      if (statement.handler) addStatement(statement.handler.body, source, bindings, edits);
-      if (statement.finalizer) addStatement(statement.finalizer, source, bindings, edits);
+      addStatement(statement.block, source, bindings, edits, initializationTarget);
+      if (statement.handler) addStatement(statement.handler.body, source, bindings, edits, initializationTarget);
+      if (statement.finalizer) addStatement(statement.finalizer, source, bindings, edits, initializationTarget);
       return;
     case 'LabeledStatement':
-      addStatement(statement.body, source, bindings, edits);
+      addStatement(statement.body, source, bindings, edits, initializationTarget);
       return;
     case 'FunctionDeclaration':
     case 'ClassDeclaration':
@@ -221,16 +272,19 @@ function assertNever(value: never): never {
   throw new Error(`Unhandled Meriyah statement: ${(value as { type: string }).type}`);
 }
 
-function declarationEdit(statement: ESTree.ClassDeclaration, source: string): SourceEdit {
+function declarationEdit(statement: ESTree.ClassDeclaration, source: string, initializationTarget: string): SourceEdit {
   const [start, end] = range(statement);
   return {
     start,
     end,
-    text: `globalThis["__browser_repl_init_target"][${JSON.stringify(statement.id!.name)}] = (${source.slice(start, end)});`,
+    text: `${initializationTarget}[${JSON.stringify(statement.id!.name)}] = (${source.slice(start, end)});`,
   };
 }
 
-export function analyzeCell(source: string): CellAnalysis {
+export function analyzeCell(
+  source: string,
+  initializationTarget = DEFAULT_INITIALIZATION_TARGET,
+): CellAnalysis {
   let ast: ESTree.Program;
   try {
     ast = parseModule(source, { next: true, ranges: true });
@@ -250,35 +304,47 @@ export function analyzeCell(source: string): CellAnalysis {
 
   const bindings: CellBinding[] = [];
   const edits: SourceEdit[] = [];
-  const hoistedFunctionNames: string[] = [];
+  const functionDeclarations: ESTree.FunctionDeclaration[] = [];
   for (const statement of ast.body) {
     if (statement.type === 'VariableDeclaration') {
       addVariableBindings(statement, bindings);
-      edits.push({
-        start: range(statement)[0],
-        end: range(statement)[1],
-        text: variableReplacement(statement, source, false, statement.kind !== 'var'),
-      });
+      if (statement.kind === 'var') variableEdits(statement, source, edits, false, initializationTarget);
+      else variableEdits(statement, source, edits, true, initializationTarget);
     } else if (statement.type === 'FunctionDeclaration' && statement.id) {
       bindings.push({ name: statement.id.name, kind: 'function' });
-      // Leave the declaration in the module body. Module instantiation makes
-      // it callable before statements run; only its persistent accessor needs
-      // a single-line prelude assignment.
-      hoistedFunctionNames.push(statement.id.name);
+      functionDeclarations.push(statement);
     } else if (statement.type === 'ClassDeclaration' && statement.id) {
       bindings.push({ name: statement.id.name, kind: 'class' });
-      edits.push(declarationEdit(statement, source));
+      edits.push(declarationEdit(statement, source, initializationTarget));
     } else {
-      addStatement(statement, source, bindings, edits);
+      addStatement(statement, source, bindings, edits, initializationTarget);
     }
   }
+
+  // A module-local function binding would shadow the persistent accessor.
+  // Rename only the declaration identifier: references in bodies remain free
+  // identifiers and therefore resolve through the accessor at call time.
+  const usedNames = bindingNames(bindings);
+  const hoistedByName = new Map<string, { name: string; alias: string }>();
+  for (const statement of functionDeclarations) {
+    if (!statement.id) throw new Error('function declaration disappeared during analysis');
+    const aliasBase = `__browser_repl_function_${statement.id.name}`;
+    let alias = aliasBase;
+    while (usedNames.has(alias)) alias += '_';
+    usedNames.add(alias);
+    edits.push({ start: statement.id.start!, end: statement.id.end!, text: alias });
+    // Duplicate function declarations are valid; only the last declaration
+    // should initialize the single persistent binding.
+    hoistedByName.set(statement.id.name, { name: statement.id.name, alias });
+  }
+  const hoistedFunctions = [...hoistedByName.values()];
 
   const last = ast.body[ast.body.length - 1];
   return {
     source,
     bindings,
     edits,
-    hoistedFunctionNames,
+    hoistedFunctions,
     finalExpression:
       last?.type === 'ExpressionStatement'
         ? {
