@@ -1,39 +1,15 @@
-/**
- * Browser-control helper surface for the persistent browser REPL.
- *
- * Every helper is exposed twice in the REPL context: as a bare global
- * (e.g. `goto_url`) and as a method on the frozen `browser` namespace
- * (e.g. `browser.goto_url`). Helpers are implemented with raw CDP today but
- * the endpoint contract does not guarantee any particular implementation.
- */
 
 import { writeFileSync } from 'fs';
 import { CdpClient, CdpTarget, isCdpCommandTimeout, isInternalUrl } from './browser-cdp-client';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-// SCROLL_COMMAND_TIMEOUT_MS bounds the CDP mouse-wheel dispatch. On rare
-// wedged Chromium instances (observed in new headless mode) a mouseWheel
-// command is never answered while every other command on the same session
-// answers fine; the short timeout triggers scroll()'s in-page fallback
-// instead of burning the default 30s command timeout per scroll attempt.
+// Bound wedged wheel commands and wait briefly for asynchronous application.
 const SCROLL_COMMAND_TIMEOUT_MS = 5_000;
-
-// SCROLL_SETTLE_TIMEOUT_MS bounds how long scroll() waits for Chromium to
-// asynchronously apply a mouseWheel dispatch before concluding the dispatch
-// had no effect. The CDP command answers before the compositor/main thread
-// applies the wheel, so an immediate offset probe reads the pre-scroll
-// offset and false-positives the swallowed-wheel detection — the retry then
-// double-scrolls. SCROLL_SETTLE_POLL_MS is the probe interval within that
-// window.
 const SCROLL_SETTLE_TIMEOUT_MS = 250;
 const SCROLL_SETTLE_POLL_MS = 25;
 
-// EXECUTION_DEADLINE_MARGIN_MS is how far below the executing request's
-// deadline a wait-style helper places its own deadline when the helper's
-// timeout would otherwise tie or exceed it. The margin leaves room for the
-// helper's error to unwind and the response to be written before the
-// daemon's execution timer fires and destructively kills the REPL.
+// Leave time for helper errors to beat the destructive execution deadline.
 const EXECUTION_DEADLINE_MARGIN_MS = 500;
 
 const API_PORT = process.env.KERNEL_API_PORT || process.env.PORT || '10001';
@@ -44,8 +20,6 @@ export interface RecordingState {
   dir: string | null;
 }
 
-// ScrollProbe is the window's scroll position plus how far the document can
-// scroll in each axis, read around a mouseWheel dispatch.
 interface ScrollProbe {
   x: number;
   y: number;
@@ -53,30 +27,18 @@ interface ScrollProbe {
   maxY: number;
 }
 
-/**
- * Report whether the window itself could have scrolled in a requested
- * direction. When it could not (unscrollable document, or already at the
- * edge — e.g. the wheel targets an inner scrollable element), the dispatch
- * is left unverified so those cases keep their exact previous behavior.
- */
+// Do not verify wheels that may target an inner scroller or document edge.
 function scrollShouldHaveMoved(before: ScrollProbe, deltaX: number, deltaY: number): boolean {
   const canX = deltaX !== 0 && before.maxX > 0 && (deltaX > 0 ? before.x < before.maxX : before.x > 0);
   const canY = deltaY !== 0 && before.maxY > 0 && (deltaY > 0 ? before.y < before.maxY : before.y > 0);
   return canX || canY;
 }
 
-/** Report whether the scroll offset moved in any requested direction. */
 function scrollOffsetChanged(before: ScrollProbe, after: ScrollProbe): boolean {
   return after.x !== before.x || after.y !== before.y;
 }
 
-/**
- * Normalize recording helper options. The Kernel recording API's request
- * field is `id`, but the helpers return `recorder_id`, so accepting
- * `recorder_id` as an alias keeps the documented "fresh ID per recording"
- * workaround discoverable. `id` wins when both are given. Never mutates
- * the caller's object.
- */
+// The recording API accepts `id`; helper responses expose `recorder_id`.
 function normalizeRecordingOpts(opts?: Record<string, unknown>): Record<string, unknown> {
   const body: Record<string, unknown> = { ...(opts ?? {}) };
   if (body.id === undefined && typeof body.recorder_id === 'string') {
@@ -86,8 +48,6 @@ function normalizeRecordingOpts(opts?: Record<string, unknown>): Record<string, 
   return body;
 }
 
-// MODIFIER_SUGAR maps the object-sugar modifier keys accepted by press_key
-// ({ctrl: true}) to their canonical CDP names.
 const MODIFIER_SUGAR: Record<string, string> = {
   alt: 'Alt',
   ctrl: 'Control',
@@ -96,13 +56,6 @@ const MODIFIER_SUGAR: Record<string, string> = {
   shift: 'Shift',
 };
 
-/**
- * Normalize the modifiers argument of press_key: an array drawn from Alt,
- * Control, Meta, Shift, or the object sugar {ctrl/alt/shift/meta: true}.
- * Anything else is a usage error and must say so clearly — a bare object
- * used to fail with a cryptic "(modifiers ?? []) is not iterable" TypeError
- * and a bare string was iterated character by character.
- */
 function normalizeKeyModifiers(modifiers?: string[] | Record<string, boolean>): string[] {
   if (modifiers === undefined || modifiers === null) {
     return [];
@@ -133,30 +86,13 @@ export class BrowserHelpers {
   private readonly client: CdpClient;
   private activeRecording: RecordingState | null = null;
 
-  /**
-   * Deadline (epoch ms) of the in-flight REPL execution, set by the daemon
-   * around each execution. Wait-style helpers clamp their internal deadline
-   * to just below it: a routine helper timeout must surface as a clean
-   * error, not tie the execution timeout, which destructively kills the
-   * REPL.
-   */
   executionDeadlineMs: number | null = null;
-
-  /**
-   * Optional sink for operational notes (e.g. a fallback activating). The
-   * daemon wires this to stderr content so the notes reach the caller.
-   */
   onLog?: (message: string) => void;
 
   constructor(client: CdpClient) {
     this.client = client;
   }
 
-  /**
-   * Effective deadline for a wait-style helper: the helper's own timeout,
-   * clamped to just below the executing request's deadline (when one is
-   * set) so the helper's error wins over the destructive execution timeout.
-   */
   private waitDeadline(timeoutMs: number): { deadline: number; clamped: boolean } {
     const own = Date.now() + timeoutMs;
     const exec = this.executionDeadlineMs;
@@ -166,16 +102,8 @@ export class BrowserHelpers {
     return { deadline: own, clamped: false };
   }
 
-  // -----------------------------------------------------------------------
   // Escape hatch + events
-  // -----------------------------------------------------------------------
 
-  /**
-   * Send an unrestricted CDP command. By default commands are routed to the
-   * attached page session; pass session_id === null for browser-level
-   * commands (e.g. Target.createTarget) or a session ID string to route to a
-   * specific session.
-   */
   cdp = async (method: string, params?: unknown, sessionId?: string | null): Promise<unknown> => {
     if (sessionId === null) {
       return this.client.browserCommand(method, params);
@@ -193,17 +121,13 @@ export class BrowserHelpers {
     return this.client.sessionCommand(method, params);
   };
 
-  /** Return and clear buffered CDP events for the attached session. */
   drainEvents = async (): Promise<unknown[]> => {
     await this.client.ensureAttached();
     return this.client.drainEvents();
   };
 
-  // -----------------------------------------------------------------------
   // Navigation + page state
-  // -----------------------------------------------------------------------
 
-  /** Navigate the attached tab. */
   gotoUrl = async (url: string): Promise<unknown> => {
     const res = await this.client.sessionCommand<any>('Page.navigate', { url });
     if (res.errorText) {
@@ -212,7 +136,6 @@ export class BrowserHelpers {
     return { url, frame_id: res.frameId, loader_id: res.loaderId ?? null };
   };
 
-  /** URL, title, viewport, scroll position, page dimensions, pending dialog. */
   pageInfo = async (): Promise<Record<string, unknown>> => {
     // A pending modal JavaScript dialog freezes the renderer main thread, so
     // Runtime.evaluate would block until the CDP command timeout and the
@@ -258,11 +181,8 @@ export class BrowserHelpers {
     };
   };
 
-  // -----------------------------------------------------------------------
   // Input
-  // -----------------------------------------------------------------------
 
-  /** Dispatch mouse press/release at CSS viewport coordinates. */
   clickAtXy = async (x: number, y: number): Promise<void> => {
     await this.client.sessionCommand('Input.dispatchMouseEvent', {
       type: 'mousePressed',
@@ -280,16 +200,10 @@ export class BrowserHelpers {
     });
   };
 
-  /** Insert text through CDP input (as if typed/pasted into the focused element). */
   typeText = async (text: string): Promise<void> => {
     await this.client.sessionCommand('Input.insertText', { text });
   };
 
-  /**
-   * Fill a framework-managed input: focuses the element, sets the value via
-   * the native setter (so React/Vue/Angular detect the change), and
-   * dispatches the expected DOM events.
-   */
   fillInput = async (selector: string, value: string): Promise<void> => {
     await this.evaluateInPage(
       `(function (selector, value) {
@@ -339,13 +253,6 @@ export class BrowserHelpers {
     Space: { windowsVirtualKeyCode: 32, code: 'Space', key: ' ', text: ' ' },
   };
 
-  /**
-   * Dispatch keyboard events. `key` is a single printable character or a
-   * navigation key name (Enter, Tab, Escape, Backspace, Delete, Arrow*,
-   * Home, End, PageUp, PageDown, Space). `modifiers` is an optional array
-   * drawn from Alt, Control, Meta, Shift, or the object sugar
-   * {ctrl/alt/shift/meta: true}.
-   */
   pressKey = async (key: string, modifiers?: string[] | Record<string, boolean>): Promise<void> => {
     let modifierBits = 0;
     for (const m of normalizeKeyModifiers(modifiers)) {
@@ -388,32 +295,6 @@ export class BrowserHelpers {
     await this.client.sessionCommand('Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
   };
 
-  /**
-   * Dispatch a mouse-wheel event at a viewport coordinate. Rarely, a
-   * Chromium instance (new headless mode) wedges its mouseWheel path: the
-   * command is never answered while every other command on the same
-   * session answers fine. When the dispatch times out, fall back to an
-   * in-page window.scrollBy so the helper still scrolls, and surface the
-   * fallback so callers can tell DOM scrolling from synthetic input.
-   *
-   * A second upstream quirk (both headless variants, verified via raw
-   * CDP): Chromium silently swallows the FIRST mouseWheel dispatch after
-   * each navigation — the command answers normally but the page never
-   * scrolls, so the timeout fallback cannot detect it. When the window
-   * itself is scrollable in a requested direction, the scroll offset is
-   * probed around the dispatch and a no-op dispatch is retried once (by
-   * then the input pipeline is awake). Verification is skipped when the
-   * window cannot scroll in the requested direction — e.g. an
-   * unscrollable document, already at the edge, or a wheel targeted at an
-   * inner scrollable element — so those dispatches keep their exact
-   * previous behavior.
-   *
-   * Chromium applies a wheel dispatch asynchronously: the CDP command
-   * answers before the scroll offset moves, so the no-effect probe polls
-   * the offset for a short settle window before concluding the dispatch
-   * was swallowed. Without the settle window every scroll false-positives
-   * and the retry lands the page 2x past its target.
-   */
   scroll = async (x: number, y: number, deltaX = 0, deltaY = 0): Promise<void> => {
     const dispatch = async (): Promise<boolean> => {
       try {
@@ -477,14 +358,6 @@ export class BrowserHelpers {
     }
   };
 
-  /**
-   * Poll the window scroll offset until it moves away from `before` or the
-   * settle window elapses. Chromium applies a wheel dispatch asynchronously
-   * after the CDP command answers, so a single immediate probe can read the
-   * pre-scroll offset and false-positive the swallowed-wheel detection (the
-   * retry then double-scrolls). Returns the last probe, or null when the
-   * page cannot be evaluated (the dispatch then goes unverified).
-   */
   private async probeScrollSettled(before: ScrollProbe): Promise<ScrollProbe | null> {
     const deadline = Date.now() + SCROLL_SETTLE_TIMEOUT_MS;
     for (;;) {
@@ -496,11 +369,6 @@ export class BrowserHelpers {
     }
   }
 
-  /**
-   * Read the window scroll offset and how far the document can scroll, for
-   * scroll()'s no-op dispatch detection. Returns null when the page cannot
-   * be evaluated (the dispatch then goes unverified).
-   */
   private async probeScrollState(): Promise<ScrollProbe | null> {
     try {
       const state = await this.evaluateInPage(
@@ -530,11 +398,6 @@ export class BrowserHelpers {
     }
   }
 
-  /**
-   * Dispatch DOM KeyboardEvents (keydown + keyup) against a selected
-   * element. Unlike press_key this does not require focus and is visible
-   * only to JavaScript listeners.
-   */
   dispatchKey = async (
     selector: string,
     key: string,
@@ -552,15 +415,8 @@ export class BrowserHelpers {
     );
   };
 
-  // -----------------------------------------------------------------------
   // Screenshots
-  // -----------------------------------------------------------------------
 
-  /**
-   * Save a PNG screenshot inside the VM and return its path. When
-   * full_page is true the full scrollable page is captured; max_dim scales
-   * the capture down so neither dimension exceeds max_dim pixels.
-   */
   captureScreenshot = async (
     path?: string,
     fullPage = false,
@@ -598,11 +454,8 @@ export class BrowserHelpers {
     return outPath;
   };
 
-  // -----------------------------------------------------------------------
   // Tabs
-  // -----------------------------------------------------------------------
 
-  /** List browser page targets; internal pages excluded unless requested. */
   listTabs = async (includeInternal = false): Promise<Record<string, unknown>[]> => {
     const targets = await this.client.listTargets();
     return targets
@@ -617,7 +470,6 @@ export class BrowserHelpers {
       }));
   };
 
-  /** Metadata for the attached target. */
   currentTab = async (): Promise<Record<string, unknown>> => {
     await this.client.ensureAttached();
     const targets = await this.client.listTargets();
@@ -634,13 +486,11 @@ export class BrowserHelpers {
     };
   };
 
-  /** Attach the runtime to another page target. */
   switchTab = async (targetId: string): Promise<Record<string, unknown>> => {
     await this.client.attach(targetId);
     return this.currentTab();
   };
 
-  /** Create and attach to a new page target, optionally navigating it. */
   newTab = async (url?: string): Promise<Record<string, unknown>> => {
     await this.client.ensureConnected();
     const created = await this.client.browserCommand<{ targetId: string }>('Target.createTarget', {
@@ -656,7 +506,6 @@ export class BrowserHelpers {
     return this.currentTab();
   };
 
-  /** Close a page target (the attached tab when no id is given). */
   closeTab = async (targetId?: string): Promise<void> => {
     await this.client.ensureConnected();
     const id = targetId ?? this.client.targetId;
@@ -674,7 +523,6 @@ export class BrowserHelpers {
     await this.client.waitForTargetGone(id, 5_000);
   };
 
-  /** Ensure the runtime is attached to a non-internal page. */
   ensureRealTab = async (): Promise<Record<string, unknown>> => {
     const target: CdpTarget = await this.client.ensureRealTab();
     return {
@@ -686,7 +534,6 @@ export class BrowserHelpers {
     };
   };
 
-  /** Find an out-of-process iframe target by URL substring. */
   iframeTarget = async (urlSubstring: string): Promise<Record<string, unknown> | null> => {
     const targets = await this.client.listTargets();
     const match = targets.find((t) => t.type === 'iframe' && t.url.includes(urlSubstring));
@@ -694,16 +541,12 @@ export class BrowserHelpers {
     return { id: match.targetId, url: match.url, title: match.title, type: match.type };
   };
 
-  // -----------------------------------------------------------------------
   // Waiting
-  // -----------------------------------------------------------------------
 
-  /** Promise-based sleep; seconds for API compatibility. */
   wait = async (seconds: number): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
   };
 
-  /** Wait for the document ready state (default 'complete'). */
   waitForLoad = async (state = 'complete', timeoutSec = 30): Promise<string> => {
     const { deadline, clamped } = this.waitDeadline(timeoutSec * 1000);
     const order = ['loading', 'interactive', 'complete'];
@@ -734,7 +577,6 @@ export class BrowserHelpers {
     }
   };
 
-  /** Wait for a selector, optionally requiring visibility. */
   waitForElement = async (
     selector: string,
     opts?: { visible?: boolean; timeout_sec?: number },
@@ -769,10 +611,6 @@ export class BrowserHelpers {
     }
   };
 
-  /**
-   * Wait until no Network requests have been in flight for idle_sec
-   * (default 0.5s), using buffered Network domain events.
-   */
   waitForNetworkIdle = async (idleSec = 0.5, timeoutSec = 30): Promise<void> => {
     const { deadline, clamped } = this.waitDeadline(timeoutSec * 1000);
     for (;;) {
@@ -791,15 +629,8 @@ export class BrowserHelpers {
     }
   };
 
-  // -----------------------------------------------------------------------
   // JavaScript evaluation + uploads
-  // -----------------------------------------------------------------------
 
-  /**
-   * Evaluate JavaScript in the attached page, or in the page/iframe target
-   * identified by target_id (see iframe_target / list_tabs). Returns the
-   * JSON-compatible value of the expression.
-   */
   js = async (code: string, targetId?: string): Promise<unknown> => {
     if (targetId !== undefined && targetId !== null && typeof targetId !== 'string') {
       // A natural mistake is passing an options object ({target: id}) given
@@ -813,7 +644,6 @@ export class BrowserHelpers {
     return this.evaluateInPage(code);
   };
 
-  /** Set files on an <input type=file> using VM-local paths. */
   uploadFile = async (selector: string, paths: string[]): Promise<void> => {
     if (!Array.isArray(paths) || paths.length === 0) {
       throw new Error('upload_file requires a non-empty array of VM-local file paths');
@@ -832,11 +662,8 @@ export class BrowserHelpers {
     });
   };
 
-  // -----------------------------------------------------------------------
   // HTTP
-  // -----------------------------------------------------------------------
 
-  /** Perform an HTTP GET from inside the VM and return the response body. */
   httpGet = async (url: string): Promise<string> => {
     const res = await fetch(url);
     if (!res.ok) {
@@ -845,11 +672,8 @@ export class BrowserHelpers {
     return res.text();
   };
 
-  // -----------------------------------------------------------------------
   // Recording (delegates to the Kernel recording API)
-  // -----------------------------------------------------------------------
 
-  /** Start a Kernel browser recording; returns its identifier. */
   startRecording = async (opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const body = normalizeRecordingOpts(opts);
     const res = await fetch(`${API_BASE}/recording/start`, {
@@ -869,7 +693,6 @@ export class BrowserHelpers {
     return { recorder_id: recorderId };
   };
 
-  /** Stop the active Kernel browser recording. */
   stopRecording = async (opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const body = normalizeRecordingOpts(opts);
     const res = await fetch(`${API_BASE}/recording/stop`, {
@@ -886,14 +709,11 @@ export class BrowserHelpers {
     return { recorder_id: recorderId };
   };
 
-  /** The active recording directory, or null when no recording is active. */
   recordingDir = async (): Promise<string | null> => {
     return this.activeRecording ? this.activeRecording.dir : null;
   };
 
-  // -----------------------------------------------------------------------
   // Internals
-  // -----------------------------------------------------------------------
 
   private async evaluateInPage(expression: string): Promise<any> {
     const res = await this.client.sessionCommand<any>('Runtime.evaluate', {
@@ -910,10 +730,6 @@ export class BrowserHelpers {
   }
 }
 
-/**
- * Build the seeded globals for a REPL context: the frozen `browser`
- * namespace plus bare aliases for concise agent-authored code.
- */
 export function buildBrowserGlobals(helpers: BrowserHelpers): Record<string, unknown> {
   const namespace = {
     cdp: helpers.cdp,

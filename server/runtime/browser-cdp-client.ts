@@ -1,15 +1,3 @@
-/**
- * Minimal raw CDP client for the persistent browser REPL.
- *
- * Maintains a single browser-level WebSocket to the DevTools proxy
- * (ws://127.0.0.1:9222) and one attached page session. The connection is
- * established lazily and re-established automatically after a Chromium
- * restart; a dropped connection only clears browser/session state, never
- * JavaScript bindings in the REPL context.
- *
- * Uses Node 22's built-in WebSocket (undici) so no extra dependencies are
- * required in the image.
- */
 
 export interface CdpEvent {
   method: string;
@@ -70,7 +58,6 @@ const DIALOG_DISMISS_TIMEOUT_MS = 5_000;
 // command whose connection died before answering anything.
 const RECONNECT_RETRY_DELAY_MS = 150;
 
-/** CdpCommandTimeoutError marks a command that exceeded its time budget. */
 export class CdpCommandTimeoutError extends Error {
   readonly cdpCommandTimeout = true;
 }
@@ -79,7 +66,6 @@ export function isCdpCommandTimeout(err: unknown): boolean {
   return err instanceof CdpCommandTimeoutError || (err as any)?.cdpCommandTimeout === true;
 }
 
-/** URL prefixes considered "internal" browser pages. */
 const INTERNAL_URL_PREFIXES = [
   'chrome://',
   'chrome-extension://',
@@ -101,48 +87,19 @@ export class CdpClient {
   private pending = new Map<number, PendingCommand>();
   private events: CdpEvent[] = [];
 
-  /**
-   * Commands answered (result or CDP error) on the current connection.
-   * Used to tag connection-closed failures: when a connection dies before
-   * answering a single command — typical for the first command after a
-   * Chromium restart, where the DevTools proxy accepts the WebSocket and
-   * then closes it while the browser is still coming up — the command
-   * almost certainly never reached the browser and is safe to retry once
-   * on a fresh connection.
-   */
   private answeredInConnection = 0;
 
-  /** Currently attached page session. */
   sessionId: string | null = null;
-  /** Target ID for the attached session. */
   targetId: string | null = null;
 
-  /** Pending JavaScript dialog for the attached session, if any. */
   pendingDialog: PendingDialog | null = null;
 
-  /**
-   * Deadline (epoch ms) of the in-flight REPL execution, set by the daemon
-   * around each execution. Every command's effective timeout is clamped to
-   * just below it, so a renderer frozen behind a modal dialog surfaces a
-   * clean error instead of tying the destructive execution timeout.
-   */
   executionDeadlineMs: number | null = null;
 
-  /**
-   * Whether the attached target's renderer answered domain enables. False
-   * after an attach that hit a frozen renderer (e.g. a dialog left open by
-   * a previous REPL); sessionCommand retries the enables so the session
-   * recovers automatically once the renderer unfreezes.
-   */
   private rendererResponsive = true;
 
-  /**
-   * Invoked when attach() dismisses a JavaScript dialog that was already
-   * open on the target. Wired by the daemon to surface a stderr note.
-   */
   onDialogAutoDismissed?: (dialog: PendingDialog) => void;
 
-  /** Network in-flight tracking for wait_for_network_idle. */
   private inFlightRequests = new Set<string>();
   private lastNetworkActivity = 0;
 
@@ -150,17 +107,10 @@ export class CdpClient {
     this.endpoint = endpoint;
   }
 
-  /** Whether the browser-level WebSocket is currently open. */
   get connected(): boolean {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
 
-  /**
-   * Resolve the browser-level WebSocket URL. The Kernel DevTools proxy
-   * routes every WebSocket connection to the browser endpoint regardless of
-   * path, but a raw Chromium requires /devtools/browser/<id>; discover it
-   * via /json/version when the configured endpoint has no path.
-   */
   private async resolveBrowserWsUrl(): Promise<string> {
     let parsed: URL;
     try {
@@ -186,7 +136,6 @@ export class CdpClient {
     return this.endpoint;
   }
 
-  /** Connect the browser-level WebSocket if not already connected. */
   async ensureConnected(): Promise<void> {
     if (this.connected) return;
     if (this.connecting) return this.connecting;
@@ -319,12 +268,10 @@ export class CdpClient {
     }
   }
 
-  /** Send a browser-level command (no session). */
   async browserCommand<T = any>(method: string, params?: unknown): Promise<T> {
     return this.send<T>(method, params, undefined);
   }
 
-  /** Send a command on the attached page session. */
   async sessionCommand<T = any>(method: string, params?: unknown, timeoutMs?: number): Promise<T> {
     try {
       return await this.sessionCommandOnce<T>(method, params, timeoutMs);
@@ -351,7 +298,6 @@ export class CdpClient {
     return this.send<T>(method, params, this.sessionId!, timeoutMs);
   }
 
-  /** Send a raw command. sessionId === null forces browser-level routing. */
   async send<T = any>(method: string, params?: unknown, sessionId?: string, timeoutMs?: number): Promise<T> {
     try {
       return await this.sendOnce<T>(method, params, sessionId, timeoutMs);
@@ -414,11 +360,6 @@ export class CdpClient {
     });
   }
 
-  /**
-   * Effective timeout for one command: the caller's override (or the
-   * default), clamped to just below the executing request's deadline so a
-   * hung command loses to the daemon's destructive execution timer.
-   */
   private effectiveCommandTimeout(overrideMs?: number): { timeout: number; clampedByDeadline: boolean } {
     let timeout = overrideMs ?? COMMAND_TIMEOUT_MS;
     const exec = this.executionDeadlineMs;
@@ -431,7 +372,6 @@ export class CdpClient {
     return { timeout, clampedByDeadline: false };
   }
 
-  /** List all targets from the browser. */
   async listTargets(): Promise<CdpTarget[]> {
     await this.ensureConnected();
     const res = await this.browserCommand<{ targetInfos: any[] }>('Target.getTargets');
@@ -444,7 +384,6 @@ export class CdpClient {
     }));
   }
 
-  /** Attach to a page target, replacing any current attachment. */
   async attach(targetId: string): Promise<void> {
     await this.ensureConnected();
     const res = await this.browserCommand<{ sessionId: string }>('Target.attachToTarget', {
@@ -469,12 +408,6 @@ export class CdpClient {
     await this.dismissStaleDialog();
   }
 
-  /**
-   * Enable the CDP domains the runtime relies on. Returns false when a
-   * command timed out (or the budget ran out), which means the target's
-   * renderer is unresponsive; CDP errors are ignored because some targets
-   * (e.g. OOPIFs) do not support every domain.
-   */
   private async enableDomains(sessionId: string): Promise<boolean> {
     const start = Date.now();
     for (const method of ['Page.enable', 'DOM.enable', 'Runtime.enable', 'Network.enable']) {
@@ -494,17 +427,6 @@ export class CdpClient {
     return true;
   }
 
-  /**
-   * Best-effort dismissal of a JavaScript dialog that was already open when
-   * the runtime attached. A modal dialog freezes the renderer main thread
-   * and no live execution owns a dialog that predates the attach (the REPL
-   * that opened it is gone), so leaving it would brick every session-routed
-   * command until the caller recovers manually. Chromium re-emits
-   * Page.javascriptDialogOpening on Page.enable in many versions (captured
-   * into pendingDialog); when the renderer was unresponsive during domain
-   * enable we also probe unconditionally, since Page.handleJavaScriptDialog
-   * is answered browser-side and simply errors when no dialog is showing.
-   */
   private async dismissStaleDialog(): Promise<void> {
     if (!this.sessionId) return;
     if (this.rendererResponsive && !this.pendingDialog) return;
@@ -532,10 +454,6 @@ export class CdpClient {
     }
   }
 
-  /**
-   * Ensure a page session is attached. Prefers the existing target, then any
-   * non-internal page, then any page; creates a new tab if no page exists.
-   */
   async ensureAttached(): Promise<void> {
     await this.ensureConnected();
     if (this.sessionId && this.targetId) {
@@ -570,16 +488,6 @@ export class CdpClient {
     await this.attach(created.targetId);
   }
 
-  /**
-   * Best-effort wait until a target's initial navigation has committed in
-   * the renderer (location.href moved away from about:blank), or the target
-   * disappeared. Target.getTargets reports the requested URL as soon as the
-   * navigation starts — before the renderer commits — so polling target
-   * metadata is not enough: an immediate page_info() or js() would still
-   * observe about:blank. Polls the attached session's location.href
-   * instead. Used by new_tab so immediate follow-up calls observe the
-   * requested URL. Never throws.
-   */
   async waitForNavigationCommit(targetId: string, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
@@ -611,11 +519,6 @@ export class CdpClient {
     }
   }
 
-  /**
-   * Best-effort wait until a target no longer appears in the target list.
-   * Used by close_tab so immediate follow-up calls observe the closure.
-   * Never throws.
-   */
   async waitForTargetGone(targetId: string, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
@@ -634,10 +537,6 @@ export class CdpClient {
     }
   }
 
-  /**
-   * Ensure the attached target is a non-internal page, switching away from
-   * internal pages (e.g. chrome://newtab) if necessary.
-   */
   async ensureRealTab(): Promise<CdpTarget> {
     await this.ensureAttached();
     const targets = await this.listTargets();
@@ -666,7 +565,6 @@ export class CdpClient {
     );
   }
 
-  /** Evaluate an expression against an arbitrary target (e.g. an OOPIF). */
   async evaluateOnTarget<T = any>(targetId: string, expression: string): Promise<T> {
     await this.ensureConnected();
     const res = await this.browserCommand<{ sessionId: string }>('Target.attachToTarget', {
@@ -697,7 +595,6 @@ export class CdpClient {
     }
   }
 
-  /** Return and clear buffered events for the attached session. */
   drainEvents(): CdpEvent[] {
     const mine: CdpEvent[] = [];
     const rest: CdpEvent[] = [];
@@ -712,12 +609,10 @@ export class CdpClient {
     return mine;
   }
 
-  /** Network idle state for wait_for_network_idle. */
   networkIdleState(): { inFlight: number; lastActivity: number } {
     return { inFlight: this.inFlightRequests.size, lastActivity: this.lastNetworkActivity };
   }
 
-  /** Close the browser connection. Session state is cleared. */
   close(): void {
     if (this.ws) {
       try {

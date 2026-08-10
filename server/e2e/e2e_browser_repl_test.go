@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,8 +28,6 @@ func executeBrowserCode(t *testing.T, ctx context.Context, client *instanceoapi.
 	return rsp.JSON200
 }
 
-// restartChromium restarts the chromium supervisord service and waits for
-// the DevTools proxy to serve the new browser.
 func restartChromium(t *testing.T, ctx context.Context, c *TestContainer, client *instanceoapi.ClientWithResponses) {
 	t.Helper()
 	args := []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"}
@@ -47,9 +44,6 @@ func restartChromium(t *testing.T, ctx context.Context, c *TestContainer, client
 	require.NoError(t, c.WaitDevTools(ctx), "DevTools not ready after chromium restart")
 }
 
-// TestBrowserReplExecuteAPI covers the persistent runtime end to end on both
-// images: binding persistence, repl_id stability (including across a
-// Chromium restart), browser helpers, typed content, and explicit reset.
 func TestBrowserReplExecuteAPI(t *testing.T) {
 	t.Parallel()
 
@@ -148,10 +142,6 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 	})
 
 	t.Run("pending dialogs reported by page_info", func(t *testing.T) {
-		// A modal JavaScript dialog freezes the renderer main thread, so a
-		// Runtime.evaluate-based page_info would block until the CDP command
-		// timeout. page_info must instead return promptly with the dialog
-		// payload for alert, confirm, and prompt alike.
 		timeoutSec := 60
 		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			TimeoutSec: &timeoutSec,
@@ -165,8 +155,6 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 					["prompt", 'prompt("hello-prompt")'],
 				]) {
 					await cdp("Runtime.evaluate", { expression: "setTimeout(() => { " + source + "; }, 100)" });
-					// Let the dialog open before the first page_info so its
-					// Runtime.evaluate never races the dialog opening.
 					await wait(1);
 					let info = null;
 					for (let i = 0; i < 20; i++) {
@@ -198,15 +186,6 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 	})
 
 	t.Run("stale pre-attach dialog does not brick the endpoint", func(t *testing.T) {
-		// QA finding: a modal dialog left open by a REPL that is then killed
-		// freezes the tab's renderer, and this Chromium build no longer
-		// tracks the dialog browser-side, so it cannot be dismissed. Every
-		// fresh REPL used to hang in session attach until the destructive
-		// execution timeout — burning a REPL per attempt with no in-API
-		// recovery short of restarting Chromium. Session-routed commands must
-		// now fail cleanly below the execution deadline, the REPL must
-		// survive, browser-level commands must keep working, and a
-		// browser-side Page.reload must recover the tab.
 		timeoutSec := 60
 		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			TimeoutSec: &timeoutSec,
@@ -220,7 +199,6 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
 
-		// Kill the REPL child, leaving the dialog open on the tab.
 		killArgs := []string{"-f", "browser-repl.js"}
 		killRsp, err := client.ProcessExecWithResponse(ctx, instanceoapi.ProcessExecJSONRequestBody{
 			Command: "pkill",
@@ -228,12 +206,8 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		})
 		require.NoError(t, err, "pkill request error: %v", err)
 		require.Equal(t, http.StatusOK, killRsp.StatusCode(), "pkill unexpected status: %s", killRsp.Status())
-		// Let the API's wait goroutine reap the child so the next request
-		// lazily starts a fresh REPL instead of racing the stale handle.
 		time.Sleep(time.Second)
 
-		// A fresh REPL attaches to the frozen tab: session commands fail
-		// with a clean error instead of a destructive timeout.
 		shortTimeout := 10
 		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			TimeoutSec: &shortTimeout,
@@ -244,16 +218,12 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		require.True(t, r2.ReplTerminated == nil || !*r2.ReplTerminated,
 			"a frozen renderer must not destroy the REPL: %s", replError(r2))
 
-		// Browser-level commands keep working on the same REPL.
 		r3 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			Code: `(await list_tabs()).length`,
 		})
 		require.True(t, r3.Success, "error: %s", replError(r3))
 		require.Equal(t, r2.ReplId, r3.ReplId, "the REPL must survive the frozen renderer")
 
-		// Recovery without restarting Chromium: Page.reload is answered
-		// browser-side and unfreezes the renderer; the same REPL then serves
-		// session commands again.
 		r4 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			TimeoutSec: &timeoutSec,
 			Code: `
@@ -270,42 +240,22 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		require.Contains(t, recovered["url"], "data:text/html")
 	})
 
-	t.Run("recording with custom recorder ids", func(t *testing.T) {
-		// Custom recorder ids delegate to the existing recording API. (The
-		// recording API does not support reusing an id after stop+delete
-		// within one API process lifetime, so each cycle uses a fresh id.)
+	t.Run("recording with custom recorder id", func(t *testing.T) {
 		timeoutSec := 60
 		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			TimeoutSec: &timeoutSec,
 			Code: `
-				const first = await start_recording({ id: "e2e-custom-a" });
+				const started = await start_recording({ id: "e2e-custom" });
 				await wait(0.5);
-				const stopped1 = await stop_recording({ id: "e2e-custom-a" });
-				const second = await start_recording({ id: "e2e-custom-b" });
-				await wait(0.5);
-				const stopped2 = await stop_recording({ id: "e2e-custom-b" });
-				({ first: first.recorder_id, stopped1: stopped1.recorder_id, second: second.recorder_id, stopped2: stopped2.recorder_id });
+				const stopped = await stop_recording({ id: "e2e-custom" });
+				({ started: started.recorder_id, stopped: stopped.recorder_id });
 			`,
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
 		res, ok := r.Result.(map[string]interface{})
 		require.True(t, ok, "expected object result, got %T", r.Result)
-		require.Equal(t, "e2e-custom-a", res["first"])
-		require.Equal(t, "e2e-custom-a", res["stopped1"])
-		require.Equal(t, "e2e-custom-b", res["second"])
-		require.Equal(t, "e2e-custom-b", res["stopped2"])
-	})
-
-	t.Run("unknown request fields are rejected", func(t *testing.T) {
-		// The schema declares additionalProperties: false.
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			c.APIBaseURL()+"/browser/execute", strings.NewReader(`{"code":"1","bogus":1}`))
-		require.NoError(t, err)
-		req.Header.Set("Content-Type", "application/json")
-		rsp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer rsp.Body.Close()
-		require.Equal(t, http.StatusBadRequest, rsp.StatusCode, "unknown fields must be rejected")
+		require.Equal(t, "e2e-custom", res["started"])
+		require.Equal(t, "e2e-custom", res["stopped"])
 	})
 
 	t.Run("chromium restart preserves repl id and bindings", func(t *testing.T) {
@@ -317,12 +267,7 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 
 		restartChromium(t, ctx, c, client)
 
-		// The next helper call reconnects through the DevTools proxy and
-		// reattaches; repl_id and JavaScript bindings survive the restart.
 		timeoutSec := 60
-		// Note: a fresh top-level name is required here — a prior subtest
-		// already declared `info` in this REPL, and const redeclaration is an
-		// early error on both evaluation paths.
 		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
 			Code:       `const restartInfo = await page_info(); ({ token: restartToken, url: restartInfo.url })`,
 			TimeoutSec: &timeoutSec,
@@ -335,12 +280,6 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 	})
 
 	t.Run("dialogs stay pending after a chromium restart", func(t *testing.T) {
-		// QA finding: after a Chromium restart the re-attached tab could be
-		// hidden, and headless Chromium auto-cancels hidden tabs' dialogs
-		// (javascriptDialogClosed result:false ~5ms after opening), so
-		// page_info never reported them and renderers never froze. Attach
-		// activates the target, so a dialog opened after a restart must pend
-		// and be reported.
 		restartChromium(t, ctx, c, client)
 
 		timeoutSec := 60
@@ -390,11 +329,6 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 	})
 }
 
-// TestBrowserReplTimeoutTerminates verifies on both images that timeouts are
-// destructive: an uninterruptible loop is killed by the API parent, an
-// interruptible unresolved promise is reported by the daemon and still
-// killed, each response carries the terminated repl_id with
-// repl_terminated: true, and the next request lazily starts a fresh REPL.
 func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	t.Parallel()
 

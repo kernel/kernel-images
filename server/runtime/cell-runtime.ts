@@ -17,13 +17,6 @@ export interface CellEvaluation {
 
 type PersistentBinding = CellBinding & { initialized: boolean; value?: unknown };
 
-/**
- * Evaluates each request as a SourceTextModule while keeping bindings in the
- * context global object. A global accessor is the one binding for a name: old
- * closures, new cells, timers, and direct reads all observe the same value.
- * Persistent bindings are backed entirely by these accessors; modules do not
- * import or snapshot state from earlier cells.
- */
 export class CellRuntime {
   private readonly declarations = new Map<string, CellBindingKind>();
   private readonly values = new Map<string, PersistentBinding>();

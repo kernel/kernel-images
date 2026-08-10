@@ -1,58 +1,5 @@
-/**
- * Persistent Browser REPL Daemon
- *
- * Owned and supervised directly by the kernel-images API process. Listens on
- * a Unix socket for code execution requests and evaluates them in a
- * persistent Node.js `vm` context preloaded with browser-control helpers.
- *
- * IMPORTANT: the vm context is a state container, not a security boundary.
- * User code is unrestricted (Node built-ins, filesystem, network, processes).
- *
- * Protocol (newline-delimited JSON, one connection per request):
- * Request:  { "id": string, "code": string, "timeout_ms"?: number }
- * Response: {
- *   "id": string, "repl_id": string, "success": boolean,
- *   "result"?: any, "result_repr"?: string,
- *   "error"?: string, "stack"?: string,
- *   "content": Array<text|image item>,
- *   "result_truncated": boolean, "content_truncated": boolean,
- *   "timed_out"?: boolean,
- *   "duration_ms": number
- * }
- *
- * Incoming request lines are capped at 8 MiB. Output produced outside an
- * execution is buffered for at most 1,000 items; trimming older items marks
- * the next drained response as `content_truncated`.
- *
- * `timed_out: true` marks a daemon-side execution timeout. JavaScript cannot
- * be reliably interrupted inside this process, so the abandoned execution
- * would keep running concurrently with later ones and leak its output into
- * their responses. The API parent therefore treats `timed_out` exactly like a
- * transport failure: it kills the process group and reports
- * `repl_terminated: true` with the terminated repl_id. The flag exists so the
- * caller still receives the partial content produced before the deadline
- * instead of a bare kill.
- *
- * `exiting: true` marks a deterministic daemon shutdown after an uncaught
- * exception (see the process-level handlers at the bottom of this file). The
- * in-flight caller receives the exception as a normal execution failure; the
- * API parent treats `exiting` like `timed_out` and reports
- * `repl_terminated: true`, so state loss is explicit rather than silent.
- *
- * Process-level user-code failures are split by Node lifecycle semantics:
- *  - unhandledRejection: the rejected promise has already settled, so no
- *    in-flight operation is left inconsistent. Node sanctions keeping the
- *    process alive when a handler is installed. The rejection is surfaced
- *    as a bounded stderr content item (into the active execution, or the
- *    next one) and the REPL — and all of its state — survives.
- *  - uncaughtException: Node documentation is explicit that resuming after
- *    an uncaught exception is unsafe because the process may be in an
- *    undefined state. The daemon therefore terminates deterministically:
- *    it logs the error, answers the in-flight execution (when one exists)
- *    with `exiting: true`, and exits non-zero. The next request lazily
- *    starts a fresh REPL with a new repl_id — the documented signal that
- *    all prior state was lost.
- */
+// Persistent, unrestricted JavaScript daemon owned by the API process.
+// Protocol and lifecycle invariants are documented in plans/persistent-browser-repl.md.
 
 import { createServer, Socket } from 'net';
 import { unlinkSync, existsSync, promises as fsp } from 'fs';
@@ -85,9 +32,7 @@ const safeDateToISOString = Date.prototype.toISOString;
 const safeGetPrototypeOf = Object.getPrototypeOf;
 const safeKeys = Object.keys;
 
-// ---------------------------------------------------------------------------
 // Content collection
-// ---------------------------------------------------------------------------
 
 type TextChannel = 'write' | 'stdout' | 'stderr';
 
@@ -134,7 +79,6 @@ class Collector {
     this.enforceItemLimit();
   }
 
-  /** Returns false when the image was dropped due to the aggregate limit. */
   addImage(mimeType: string, bytes: Buffer): boolean {
     if (this.imageBytes + bytes.length > MAX_TOTAL_IMAGE_BYTES) {
       this.truncated = true;
@@ -192,9 +136,7 @@ function writeOutput(channel: TextChannel, text: string): void {
   currentCollector().addText(channel, text);
 }
 
-// ---------------------------------------------------------------------------
 // repl namespace + console capture
-// ---------------------------------------------------------------------------
 
 const IMAGE_MAGIC: Array<{ mime: string; matches: (b: Buffer) => boolean }> = [
   { mime: 'image/png', matches: (b) => b.length > 8 && b.readUInt32BE(0) === 0x89504e47 },
@@ -216,13 +158,7 @@ function isImageMime(mime: unknown): mime is string {
   return typeof mime === 'string' && /^image\//.test(mime);
 }
 
-/**
- * Convert a Buffer / TypedArray / DataView / ArrayBuffer to a Buffer.
- * Cross-realm safe: user values are constructed in the vm context's realm,
- * whose intrinsics differ from the daemon's, so `instanceof Uint8Array` /
- * `instanceof ArrayBuffer` reject legitimate inputs. ArrayBuffer.isView and
- * util.types inspect internal slots and work across realms.
- */
+// ArrayBuffer slot checks work across the VM and daemon realms.
 function bytesToBuffer(raw: unknown): Buffer {
   if (Buffer.isBuffer(raw)) {
     return raw;
@@ -316,9 +252,7 @@ const consoleCapture = {
   table: (...args: unknown[]) => writeOutput('stdout', safeFormat(...args)),
 };
 
-// ---------------------------------------------------------------------------
 // Persistent evaluation context
-// ---------------------------------------------------------------------------
 
 const cdpClient = new CdpClient(CDP_ENDPOINT);
 const helpers = new BrowserHelpers(cdpClient);
@@ -378,9 +312,7 @@ contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, un
 // detection must compare against the context realm's prototype.
 const contextObjectPrototype: object = vm.runInContext('Object.prototype', context) as object;
 
-// ---------------------------------------------------------------------------
 // Evaluation
-// ---------------------------------------------------------------------------
 
 const cellRuntime = new CellRuntime(context, contextGlobal);
 
@@ -389,9 +321,7 @@ async function evaluate(code: string): Promise<unknown> {
   return result.value;
 }
 
-// ---------------------------------------------------------------------------
 // Result serialization
-// ---------------------------------------------------------------------------
 
 interface SerializedResult {
   result?: unknown;
@@ -409,19 +339,7 @@ function isErrorLike(value: unknown): value is Error {
   );
 }
 
-/**
- * Serialize a value to JSON text without ever invoking user code.
- * JSON.stringify consults toJSON hooks on the value's (context-realm)
- * prototypes, so user code like `Array.prototype.toJSON = () => 'PWNED'`
- * would otherwise corrupt the reported result payload.
- *
- * Only primitives, plain objects, arrays, and Dates are JSON-compatible;
- * anything else (Map, RegExp, class instances, functions, bigint, circular
- * structures, throwing getters, ...) returns undefined and the caller falls
- * back to the bounded repr. Serialization otherwise follows JSON.stringify:
- * undefined/function/symbol array elements become null and object properties
- * with such values are skipped.
- */
+// Serialize without invoking user-controlled toJSON hooks or getters.
 function toJsonText(value: unknown): string | undefined {
   const seen = new Set<object>();
 
@@ -533,9 +451,7 @@ function serializeResult(value: unknown): SerializedResult {
   return { result: safeParse(json), result_truncated: false };
 }
 
-// ---------------------------------------------------------------------------
 // Request handling
-// ---------------------------------------------------------------------------
 
 interface ExecuteRequest {
   id: string;
@@ -791,21 +707,9 @@ function handleConnection(socket: Socket): void {
   });
 }
 
-// ---------------------------------------------------------------------------
 // Lifecycle
-// ---------------------------------------------------------------------------
 
-/**
- * An unhandled promise rejection leaves no inconsistent in-flight state:
- * the promise has already settled and Node sanctions keeping the process
- * alive when a handler is installed (without one, Node >= 15 crashes the
- * process). Floating promises are extremely common in agent-authored code
- * (e.g. `js("alert('x')")` without await, whose CDP timeout rejection would
- * otherwise kill the REPL 30s later mid-unrelated-request), so the
- * rejection is surfaced as a bounded stderr content item — into the active
- * execution, or drained into the next one — and the REPL and all of its
- * state survive.
- */
+// Settled rejections are reportable without invalidating process state.
 function onUnhandledRejection(reason: unknown): void {
   let detail: string;
   try {
@@ -825,22 +729,7 @@ function onUnhandledRejection(reason: unknown): void {
   );
 }
 
-/**
- * Node documentation is explicit that resuming after an uncaught exception
- * is unsafe: the throw may have originated anywhere, leaving the process in
- * an undefined state. Rather than blindly keeping a possibly-corrupt
- * state-holding process alive, the daemon terminates deterministically and
- * preserves evidence:
- *
- *  1. the exception is logged to stderr (container logs);
- *  2. the in-flight execution, when one exists, is answered with
- *     success: false, the exception details, partial content, and
- *     exiting: true — the API maps that to repl_terminated: true, so the
- *     caller sees the state loss explicitly instead of a bare EOF;
- *  3. the process exits non-zero; the next request lazily starts a fresh
- *     REPL with a new repl_id, the documented signal that all prior
- *     bindings were lost.
- */
+// Continuing after an uncaught exception is unsafe; preserve evidence and exit.
 function onUncaughtException(err: unknown): void {
   processExiting = true;
   const stack = (err as any)?.stack;

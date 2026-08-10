@@ -25,8 +25,6 @@ import (
 func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	fake := newFakeCDPServer(t)
 
-	// Recording and HTTP endpoints used by start_recording, stop_recording,
-	// and http_get.
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/recording/start", "/recording/stop":
@@ -46,7 +44,6 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 
 	svc := newBrowserReplSvc(t)
 
-	// Navigation, page state, and the cdp escape hatch.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
 		const tab = await ensure_real_tab();
 		const nav = await goto_url("https://example.com/");
@@ -75,7 +72,6 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	require.Equal(t, "complete", nav["ready"])
 	require.Equal(t, float64(3), nav["targetCount"])
 
-	// Input helpers.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
 		await click_at_xy(10, 20);
 		await type_text("hello");
@@ -89,7 +85,6 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "input-ok", r.Result)
 
-	// Tab management.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
 		const before = (await list_tabs()).length;
 		const created = await new_tab("https://example.com/2");
@@ -109,7 +104,6 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	require.Equal(t, "target-page-1", tabs["switchedTo"])
 	require.Equal(t, float64(1), tabs["after"])
 
-	// Waiting, in-page JS, iframes, and event draining.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
 		await wait(0.05);
 		const found = await wait_for_element("#thing", { visible: true, timeout_sec: 2 });
@@ -133,7 +127,6 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	require.Nil(t, waits["noFrame"])
 	require.GreaterOrEqual(t, waits["eventCount"], float64(1), "drain_events returns buffered session events")
 
-	// Screenshots, uploads, HTTP, and recording delegation.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: fmt.Sprintf(`
 		const shot = await capture_screenshot("/tmp/fake-cdp-shot.png", false, 400);
 		await repl.emitImage({ path: shot });
@@ -161,108 +154,46 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	}
 	require.True(t, sawImage, "the captured screenshot is emitted as image content")
 
-	// The REPL survives all of the above on a single repl_id.
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)
 }
 
-// TestBrowserReplHelperErgonomics covers the QA findings on helper
-// argument validation and wait-helper deadlines: bad arguments must produce
-// clear errors (not cryptic TypeErrors or silent ignores), and a wait
-// helper's default timeout must lose to the execution deadline so a routine
-// miss is a clean error instead of a destructive execution timeout.
 func TestBrowserReplHelperErgonomics(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
-
 	svc := newBrowserReplSvc(t)
 
-	// press_key rejects non-array/non-object modifiers with a clear error
-	// instead of a cryptic "(modifiers ?? []) is not iterable" TypeError.
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await press_key("a", "Control")`})
-	require.False(t, r.Success)
-	require.NotNil(t, r.Error)
-	require.Contains(t, *r.Error, "press_key: modifiers must be an array")
-
-	// press_key accepts the {ctrl: true} object sugar and dispatches the
-	// Control modifier bit (2) to CDP.
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await press_key("a", {ctrl: true}); "ok"`})
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "ok", r.Result)
+	requireExecError(t, svc, `await press_key("a", "Control")`, "press_key: modifiers must be an array")
+	requireExec(t, svc, `await press_key("a", {ctrl: true}); "ok"`, "ok")
 	keyEv := fake.lastKeyEventParams()
-	require.NotNil(t, keyEv, "press_key must dispatch key events")
-	require.Equal(t, float64(2), keyEv["modifiers"], "ctrl sugar maps to the Control modifier bit")
+	require.NotNil(t, keyEv)
+	require.Equal(t, float64(2), keyEv["modifiers"])
+	requireExecError(t, svc, `await press_key("a", {bogus: true})`, "press_key: unknown modifier")
+	requireExecError(t, svc, `await js("1", {target: "target-page-1"})`, "js: target must be a target id string")
+	requireExec(t, svc, `await js("via-target", "target-page-1")`, "via-target")
+	requireExecError(t, svc, `await wait_for_element("#never", false, 2)`, "wait_for_element: opts must be an object")
 
-	// Unknown keys in the modifiers object are rejected with a clear error.
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await press_key("a", {bogus: true})`})
-	require.False(t, r.Success)
-	require.NotNil(t, r.Error)
-	require.Contains(t, *r.Error, "press_key: unknown modifier")
-
-	// js rejects a non-string target (a natural mistake given other helpers
-	// take opts objects) with a clear validation error instead of a raw CDP
-	// 'Invalid parameters' failure from Target.attachToTarget.
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await js("1", {target: "target-page-1"})`})
-	require.False(t, r.Success)
-	require.NotNil(t, r.Error)
-	require.Contains(t, *r.Error, "js: target must be a target id string")
-
-	// A valid target id string still routes to the target.
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await js("via-target", "target-page-1")`})
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "via-target", r.Result)
-
-	// wait_for_element rejects a non-object opts argument immediately
-	// instead of silently ignoring it and waiting out the default timeout.
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await wait_for_element("#never", false, 2)`})
-	require.False(t, r.Success)
-	require.NotNil(t, r.Error)
-	require.Contains(t, *r.Error, "wait_for_element: opts must be an object")
-
-	// A wait helper's default timeout (30s) is clamped below the execution
-	// deadline, so a routine element-wait miss surfaces the helper's clean
-	// error and the REPL survives; previously this tied the execution
-	// timeout and destructively killed the REPL.
 	timeoutSec := 3
 	start := time.Now()
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
-		Code:       `await wait_for_element("#never")`,
-		TimeoutSec: &timeoutSec,
-	})
-	require.Less(t, time.Since(start), 3*time.Second, "the helper error must beat the execution timeout")
+	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await wait_for_element("#never")`, TimeoutSec: &timeoutSec})
+	require.Less(t, time.Since(start), 3*time.Second)
 	require.False(t, r.Success)
-	require.NotNil(t, r.Error)
 	require.Contains(t, *r.Error, "timed out waiting for element")
-	require.Nil(t, r.ReplTerminated, "a helper timeout must not destroy the REPL")
-
-	// The REPL survived all of the above on a single repl_id.
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
-	require.True(t, r2.Success)
-	require.Equal(t, r.ReplId, r2.Result)
+	require.Nil(t, r.ReplTerminated)
+	requireExec(t, svc, "repl.id", r.ReplId)
 }
 
-// TestBrowserReplFrozenRendererRecovery covers the QA finding that a modal
-// JavaScript dialog left open by a killed REPL bricked /browser/execute:
-// every fresh REPL hung in session attach until the destructive execution
-// timeout, burning a REPL per attempt, with no in-API recovery short of a
-// Chromium restart. Session-routed CDP commands must instead be bounded
-// below the execution deadline, so the caller gets a clean error, the REPL
-// survives, browser-level commands keep working, and the session recovers
-// once the renderer unfreezes.
 func TestBrowserReplFrozenRendererRecovery(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
 
 	svc := newBrowserReplSvc(t)
 
-	// Baseline: helpers work against a healthy renderer.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await page_info()).title`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "Example Domain", r.Result)
 
-	// Freeze the renderer (session-routed commands are never answered) and
-	// force a fresh REPL, reproducing the stale pre-attach dialog scenario.
 	fake.hangSession.Store(true)
 	reset := true
 	timeoutSec := 5
@@ -283,13 +214,10 @@ func TestBrowserReplFrozenRendererRecovery(t *testing.T) {
 		"a frozen renderer must not destroy the REPL")
 	frozenID := r.ReplId
 
-	// Browser-level commands keep working on the same REPL while the
-	// renderer is frozen.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await list_tabs()).length`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, frozenID, r.ReplId, "the REPL must survive the frozen renderer")
 
-	// A second session command also fails cleanly (no per-attempt REPL burn).
 	timeoutSec2 := 3
 	start = time.Now()
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
@@ -301,8 +229,6 @@ func TestBrowserReplFrozenRendererRecovery(t *testing.T) {
 	require.True(t, r.ReplTerminated == nil || !*r.ReplTerminated)
 	require.Equal(t, frozenID, r.ReplId)
 
-	// Unfreeze: the session retries domain enables and recovers in place,
-	// without a reattach, a new repl_id, or any JavaScript state loss.
 	fake.hangSession.Store(false)
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `(await page_info()).title`})
 	require.True(t, r.Success, "error: %v", r.Error)
@@ -310,18 +236,12 @@ func TestBrowserReplFrozenRendererRecovery(t *testing.T) {
 	require.Equal(t, frozenID, r.ReplId, "recovery must not replace the REPL")
 }
 
-// TestBrowserReplCrashDuringExecutionResponse covers the QA finding that
-// crash/OOM error responses omitted duration_ms and the truncation flags
-// while the timeout path included them. All failure paths must populate the
-// same optional fields so clients can read them unconditionally.
 func TestBrowserReplCrashDuringExecutionResponse(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
 	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
 	require.True(t, r1.Success)
 
-	// The child SIGKILLs itself mid-execution (stand-in for an OOM kill):
-	// the socket read fails and the API reports the terminated REPL.
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: `process.kill(process.pid, "SIGKILL")`,
 	})
@@ -336,14 +256,11 @@ func TestBrowserReplCrashDuringExecutionResponse(t *testing.T) {
 	require.NotNil(t, r2.ResultTruncated, "crash responses must include result_truncated")
 	require.NotNil(t, r2.ContentTruncated, "crash responses must include content_truncated")
 
-	// The next request lazily starts a fresh REPL.
 	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
 	require.True(t, r3.Success)
 	require.NotEqual(t, r1.ReplId, r3.ReplId)
 }
 
-// TestBrowserReplStaticImportRejected verifies that the JavaScript-only cell
-// runtime rejects static module syntax while retaining dynamic import().
 func TestBrowserReplStaticImportRejected(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -374,8 +291,6 @@ func TestBrowserReplStaticImportRejected(t *testing.T) {
 	require.Contains(t, *r.Error, "top-level return is not supported")
 }
 
-// TestBrowserReplHeapCapConfigurable verifies the BROWSER_REPL_HEAP_MB knob
-// reaches the node child's --max-old-space-size argument.
 func TestBrowserReplHeapCapConfigurable(t *testing.T) {
 	t.Setenv("BROWSER_REPL_HEAP_MB", "256")
 
@@ -390,9 +305,6 @@ func TestBrowserReplHeapCapConfigurable(t *testing.T) {
 	require.Contains(t, args, "--max-old-space-size=256")
 }
 
-// TestBrowserReplEventRingBounded floods the daemon with more CDP events
-// than the event ring capacity (500) and verifies old events are dropped
-// instead of growing the buffer unboundedly.
 func TestBrowserReplEventRingBounded(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
@@ -402,8 +314,6 @@ func TestBrowserReplEventRingBounded(t *testing.T) {
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "attached"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 
-	// Queue 600 session events; they flush to the daemon after the next
-	// command response.
 	for i := 0; i < 600; i++ {
 		fake.queueEvent(map[string]any{
 			"method":    "Network.requestWillBeSent",
@@ -421,9 +331,6 @@ func TestBrowserReplEventRingBounded(t *testing.T) {
 	require.Equal(t, float64(500), r.Result, "old events are dropped at the ring capacity")
 }
 
-// TestBrowserReplReconnectPreservesState simulates a Chromium restart by
-// dropping the daemon's browser connection: the next helper call must
-// reconnect and reattach without changing repl_id or losing bindings.
 func TestBrowserReplReconnectPreservesState(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
@@ -437,13 +344,10 @@ func TestBrowserReplReconnectPreservesState(t *testing.T) {
 	require.Equal(t, "pre-restart", r1.Result)
 	require.Equal(t, 1, fake.connCount())
 
-	// Simulate a Chromium restart: the browser connection drops.
 	fake.Restart()
 	require.Eventually(t, func() bool { return fake.connCount() == 0 },
 		5*time.Second, 10*time.Millisecond, "daemon connection must close")
 
-	// The next helper call reconnects and reattaches; repl_id and JavaScript
-	// bindings survive.
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: `const info = await page_info(); ({ token: restartToken, title: info.title })`,
 	})
@@ -456,9 +360,6 @@ func TestBrowserReplReconnectPreservesState(t *testing.T) {
 	require.Equal(t, 1, fake.connCount(), "the daemon reconnected")
 }
 
-// TestBrowserReplResultIntegrityUnderPollution verifies that user-installed
-// global/prototype hooks (JSON.stringify replacement, toJSON pollution)
-// cannot corrupt the result payload or protocol framing.
 func TestBrowserReplResultIntegrityUnderPollution(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -471,7 +372,6 @@ func TestBrowserReplResultIntegrityUnderPollution(t *testing.T) {
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "polluted", r.Result)
 
-	// The result payload reflects actual values, not user-installed hooks.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `({a: [1, 2, 3], b: "str"})`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	res, ok := r.Result.(map[string]any)
@@ -479,7 +379,6 @@ func TestBrowserReplResultIntegrityUnderPollution(t *testing.T) {
 	require.Equal(t, []any{float64(1), float64(2), float64(3)}, res["a"])
 	require.Equal(t, "str", res["b"])
 
-	// Protocol framing still works: repl.write output arrives intact.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `repl.write("frame-ok"); "done"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "done", r.Result)
@@ -490,11 +389,6 @@ func TestBrowserReplResultIntegrityUnderPollution(t *testing.T) {
 	require.Equal(t, "frame-ok", txt.Text)
 }
 
-// TestBrowserReplPageInfoReportsPendingDialog verifies that page_info
-// short-circuits while a modal JavaScript dialog is pending: a real renderer
-// freezes behind the dialog, so a Runtime.evaluate would block until the CDP
-// command timeout and the dialog field would be unreachable exactly when it
-// matters.
 func TestBrowserReplPageInfoReportsPendingDialog(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
@@ -504,8 +398,6 @@ func TestBrowserReplPageInfoReportsPendingDialog(t *testing.T) {
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "attached"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 
-	// Simulate a modal dialog: the renderer freezes (Runtime.evaluate fails)
-	// and the browser emits Page.javascriptDialogOpening.
 	fake.frozen.Store(true)
 	fake.queueEvent(map[string]any{
 		"method":    "Page.javascriptDialogOpening",
@@ -513,14 +405,10 @@ func TestBrowserReplPageInfoReportsPendingDialog(t *testing.T) {
 		"sessionId": "session-target-page-1",
 	})
 
-	// Flush the queued event with a browser-level command, then give the
-	// daemon a moment to process it.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await cdp("Target.getTargets", undefined, null); "flushed"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	time.Sleep(200 * time.Millisecond)
 
-	// page_info must return promptly with the dialog instead of issuing a
-	// Runtime.evaluate that would block behind the frozen renderer.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
 		const info = await page_info();
 		({ url: info.url, title: info.title, dialog: info.dialog })
@@ -535,7 +423,6 @@ func TestBrowserReplPageInfoReportsPendingDialog(t *testing.T) {
 	require.Equal(t, "alert", dialog["type"])
 	require.Equal(t, "hello-dialog", dialog["message"])
 
-	// Closing the dialog restores the normal page_info path.
 	fake.frozen.Store(false)
 	fake.queueEvent(map[string]any{
 		"method":    "Page.javascriptDialogClosed",
@@ -552,9 +439,6 @@ func TestBrowserReplPageInfoReportsPendingDialog(t *testing.T) {
 	require.Nil(t, r.ResultRepr)
 }
 
-// TestBrowserReplAttachRetriesStaleTarget verifies that a target destroyed
-// between listing and attaching (a target-swap race) is absorbed by the
-// runtime instead of surfacing a raw CDP error.
 func TestBrowserReplAttachRetriesStaleTarget(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
@@ -564,9 +448,6 @@ func TestBrowserReplAttachRetriesStaleTarget(t *testing.T) {
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "attached"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 
-	// Drop the browser connection so the next helper call must re-attach,
-	// and make the first attach attempt fail with the stale-target error a
-	// target swap produces.
 	fake.Restart()
 	require.Eventually(t, func() bool { return fake.connCount() == 0 },
 		5*time.Second, 10*time.Millisecond, "daemon connection must close")
@@ -578,12 +459,6 @@ func TestBrowserReplAttachRetriesStaleTarget(t *testing.T) {
 	require.Equal(t, int32(0), fake.failNextAttach.Load(), "the first attach attempt failed as planned")
 }
 
-// TestBrowserReplRetriesCommandOnFreshConnectionClose reproduces the flaky
-// e2e failure where the first browser-helper call after a Chromium restart
-// hit "CDP connection closed": the DevTools proxy accepts the WebSocket and
-// then closes it while the browser behind it is still coming up. A command
-// whose connection died before answering anything must be retried once on a
-// fresh connection.
 func TestBrowserReplRetriesCommandOnFreshConnectionClose(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
@@ -596,9 +471,6 @@ func TestBrowserReplRetriesCommandOnFreshConnectionClose(t *testing.T) {
 	require.True(t, r1.Success, "error: %v", r1.Error)
 	require.Equal(t, int32(1), fake.totalConns.Load())
 
-	// Simulate a Chromium restart, then a proxy that accepts the next
-	// connection and drops it mid-first-command because the browser behind
-	// it is not up yet.
 	fake.Restart()
 	require.Eventually(t, func() bool { return fake.connCount() == 0 },
 		5*time.Second, 10*time.Millisecond, "daemon connection must close")
@@ -618,9 +490,6 @@ func TestBrowserReplRetriesCommandOnFreshConnectionClose(t *testing.T) {
 	require.Equal(t, 1, fake.connCount(), "the retried connection is still open")
 }
 
-// fakeReplDaemonJS is a minimal Unix-socket daemon used to inject protocol
-// failures the real daemon never produces. FAKE_REPL_MODE selects the
-// failure mode.
 const fakeReplDaemonJS = `
 const net = require('net');
 const fs = require('fs');
@@ -662,9 +531,6 @@ net.createServer((conn) => {
 }).listen(sock);
 `
 
-// TestBrowserReplProtocolCorruptionTerminates verifies that mismatched
-// request/repl IDs, malformed daemon responses, and a child dying
-// mid-execution all terminate the child and surface repl_terminated: true.
 func TestBrowserReplProtocolCorruptionTerminates(t *testing.T) {
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skipf("node not available: %v", err)
@@ -679,9 +545,6 @@ func TestBrowserReplProtocolCorruptionTerminates(t *testing.T) {
 		{"bad-request-id", "response ID mismatch"},
 		{"bad-repl-id", "repl_id mismatch"},
 		{"garbage", "failed to parse response"},
-		// A child dying mid-execution must surface its exit reason (e.g.
-		// SIGKILL from the OOM killer near the heap cap), not a bare
-		// transport error.
 		{"die", "terminated during execution (exit status 1)"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
@@ -713,12 +576,6 @@ func TestBrowserReplProtocolCorruptionTerminates(t *testing.T) {
 	}
 }
 
-// TestBrowserReplUnhandledRejectionSurvives covers the high-severity QA
-// finding that a floating rejected promise in user code crashed the whole
-// REPL child (Node >= 15 crashes on unhandled rejections by default). A
-// settled rejection leaves no inconsistent in-flight state, so the daemon
-// must surface it as a stderr content item and keep the REPL — and all of
-// its bindings — alive.
 func TestBrowserReplUnhandledRejectionSurvives(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -730,9 +587,6 @@ func TestBrowserReplUnhandledRejectionSurvives(t *testing.T) {
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "submitted", r.Result)
 
-	// The rejection surfaces as a stderr content item — either drained from
-	// the stray buffer into this execution or captured while it runs — and
-	// the REPL (and its bindings) survive.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await wait(0.3); kept`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "state-kept", r.Result)
@@ -748,20 +602,11 @@ func TestBrowserReplUnhandledRejectionSurvives(t *testing.T) {
 	}
 	require.True(t, sawRejection, "the floating rejection must surface as a stderr content item, got %v", r.Content)
 
-	// Same repl_id throughout: no state was lost.
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)
 }
 
-// TestBrowserReplUncaughtExceptionTerminates covers the high-severity QA
-// finding that an uncaught exception in user code (e.g. a throwing
-// setTimeout callback) crashed the REPL child with only a bare EOF for the
-// in-flight caller. Resuming after an uncaught exception is unsafe per
-// Node semantics, so the daemon must terminate deterministically: the
-// in-flight execution is answered with the exception and repl_terminated,
-// and the next request lazily starts a fresh REPL — explicit state loss,
-// never silent.
 func TestBrowserReplUncaughtExceptionTerminates(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -774,9 +619,6 @@ func TestBrowserReplUncaughtExceptionTerminates(t *testing.T) {
 	require.Equal(t, "scheduled", r.Result)
 	doomedID := r.ReplId
 
-	// The throw fires from a timer while this execution is deterministically
-	// in flight: the daemon answers it with the exception and exiting: true
-	// (mapped to repl_terminated), then exits non-zero.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
 		setTimeout(() => boom(), 10);
 		await wait(5);
@@ -790,15 +632,11 @@ func TestBrowserReplUncaughtExceptionTerminates(t *testing.T) {
 	require.True(t, *r.ReplTerminated, "an uncaught exception must report repl_terminated explicitly")
 	require.Equal(t, doomedID, r.ReplId, "the terminated response carries the dead REPL's ID")
 
-	// The next request lazily starts a fresh REPL: new repl_id, prior
-	// bindings gone.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `typeof doomed`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "undefined", r.Result)
 	require.NotEqual(t, doomedID, r.ReplId)
 
-	// An uncaught exception with no execution in flight also terminates the
-	// child deterministically; the next request recovers with a fresh ID.
 	idleID := r.ReplId
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
 		setTimeout(() => { throw new Error('boom-idle') }, 20);
@@ -811,10 +649,6 @@ func TestBrowserReplUncaughtExceptionTerminates(t *testing.T) {
 	require.NotEqual(t, idleID, r.ReplId, "an idle-time uncaught exception must cost the REPL its ID")
 }
 
-// TestBrowserReplRequestLineCapEnforced covers the QA finding that the
-// 8 MiB incoming-request cap was bypassed when the request arrived in a
-// single write containing the newline. The cap must apply per accumulated
-// line regardless of chunking, and the REPL must survive the rejection.
 func TestBrowserReplRequestLineCapEnforced(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -825,8 +659,6 @@ func TestBrowserReplRequestLineCapEnforced(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	// One write containing the trailing newline: previously parsed and
-	// executed instead of rejected.
 	payload := []byte(`{"id":"big","code":"` + strings.Repeat("A", 8*1024*1024+1000) + `"}` + "\n")
 	_, err = conn.Write(payload)
 	require.NoError(t, err)
@@ -838,17 +670,11 @@ func TestBrowserReplRequestLineCapEnforced(t *testing.T) {
 	require.Equal(t, false, resp["success"])
 	require.Contains(t, resp["error"], "byte limit")
 
-	// The REPL survives the rejection on the same repl_id.
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)
 }
 
-// TestBrowserReplHalfClosedClientReceivesResponse covers the QA finding
-// that a client half-closing (SHUT_WR) after sending a valid request lost
-// the execution response: the server socket self-destroyed on the client
-// FIN before the async response was written. With allowHalfOpen the
-// response must still be delivered, after which the daemon ends its side.
 func TestBrowserReplHalfClosedClientReceivesResponse(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -874,11 +700,6 @@ func TestBrowserReplHalfClosedClientReceivesResponse(t *testing.T) {
 	require.Equal(t, float64(42), resp["result"])
 }
 
-// TestBrowserReplNewTabWaitsForRendererCommit covers the QA finding that
-// new_tab(url) returned before the initial navigation committed in the
-// renderer: target metadata shows the URL as soon as the navigation
-// starts, so an immediate page_info()/js() still observed about:blank.
-// new_tab must wait for the renderer-level commit.
 func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	fake.delayCommit.Store(true)
@@ -898,27 +719,17 @@ func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 		"new_tab must wait for the renderer-level navigation commit, not just target metadata")
 }
 
-// TestBrowserReplScrollFallback covers the QA finding that CDP mouseWheel
-// commands intermittently hang (never answered) on rare new-headless
-// Chromium instances while every other command answers fine, costing the
-// full 30s default command timeout per attempt. scroll() must bound the
-// dispatch, fall back to an in-page window.scrollBy, surface the fallback,
-// and keep the REPL alive.
 func TestBrowserReplScrollFallback(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
 
 	svc := newBrowserReplSvc(t)
 
-	// Baseline: the normal mouseWheel dispatch works.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 240); "ok"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Equal(t, "ok", r.Result)
 	require.False(t, fake.sawScrollBy.Load(), "no fallback when mouseWheel answers")
 
-	// Wedge the mouseWheel path: the command is never answered. scroll()
-	// must fail fast (its bounded dispatch timeout, not the 30s default)
-	// and fall back to window.scrollBy.
 	fake.hangMouseWheel.Store(true)
 	timeoutSec := 30
 	start := time.Now()
@@ -941,7 +752,6 @@ func TestBrowserReplScrollFallback(t *testing.T) {
 	}
 	require.True(t, sawNote, "the fallback must be surfaced as a stderr content item, got %v", r.Content)
 
-	// The REPL survives on the same repl_id.
 	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)

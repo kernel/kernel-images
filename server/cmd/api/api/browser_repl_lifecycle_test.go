@@ -33,39 +33,18 @@ func TestBrowserReplValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, oapi.ExecuteBrowserCode400JSONResponse{}, resp)
 
-	// No REPL should have been started for invalid requests.
 	require.Nil(t, svc.browserRepl)
 }
 
 func TestBrowserReplPersistenceAndStableID(t *testing.T) {
 	svc := newBrowserReplSvc(t)
-
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "var counter = 40; counter + 2"})
-	require.True(t, r1.Success, "error: %v", r1.Error)
-	require.Equal(t, float64(42), r1.Result)
-	require.NotEmpty(t, r1.ReplId)
-
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "counter"})
-	require.True(t, r2.Success)
-	require.Equal(t, float64(40), r2.Result)
-	require.Equal(t, r1.ReplId, r2.ReplId, "repl_id must remain stable across calls")
-
-	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "const added = await Promise.resolve(5); added"})
-	require.True(t, r3.Success, "top-level await failed: %v", r3.Error)
-	require.Equal(t, float64(5), r3.Result)
-
-	r4 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "added + counter"})
-	require.True(t, r4.Success)
-	require.Equal(t, float64(45), r4.Result)
-
-	r5 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `const { readFileSync } = await import("fs"); typeof readFileSync`})
-	require.True(t, r5.Success, "dynamic import failed: %v", r5.Error)
-	require.Equal(t, "function", r5.Result)
-
-	// repl.id exposes the same ID the API reports.
-	r6 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
-	require.True(t, r6.Success)
-	require.Equal(t, r1.ReplId, r6.Result)
+	r := requireExec(t, svc, "var counter = 40; counter + 2", float64(42))
+	require.NotEmpty(t, r.ReplId)
+	require.Equal(t, r.ReplId, requireExec(t, svc, "counter", float64(40)).ReplId)
+	requireExec(t, svc, "const added = await Promise.resolve(5); added", float64(5))
+	requireExec(t, svc, "added + counter", float64(45))
+	requireExec(t, svc, `const { readFileSync } = await import("fs"); typeof readFileSync`, "function")
+	requireExec(t, svc, "repl.id", r.ReplId)
 }
 
 func TestBrowserReplReset(t *testing.T) {
@@ -91,17 +70,9 @@ func TestBrowserReplReset(t *testing.T) {
 
 func TestBrowserReplErrorKeepsREPL(t *testing.T) {
 	svc := newBrowserReplSvc(t)
-
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "var survives = true; throw new Error('boom')"})
-	require.False(t, r1.Success)
-	require.NotNil(t, r1.Error)
-	require.Contains(t, *r1.Error, "boom")
-	require.True(t, r1.ReplTerminated == nil || !*r1.ReplTerminated, "ordinary exceptions must not terminate the REPL")
-
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "survives"})
-	require.True(t, r2.Success)
-	require.Equal(t, true, r2.Result, "bindings initialized before the failure remain available")
-	require.Equal(t, r1.ReplId, r2.ReplId)
+	failed := requireExecError(t, svc, "var survives = true; throw new Error('boom')", "boom")
+	require.True(t, failed.ReplTerminated == nil || !*failed.ReplTerminated)
+	require.Equal(t, failed.ReplId, requireExec(t, svc, "survives", true).ReplId)
 }
 
 func TestBrowserReplTimeoutTerminates(t *testing.T) {
@@ -125,15 +96,10 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	require.NotNil(t, r2.ReplTerminated)
 	require.True(t, *r2.ReplTerminated)
 	require.NotNil(t, r2.Error)
-	// The uninterruptible path uses the same message as the daemon's own
-	// interruptible timeout.
 	require.Contains(t, *r2.Error, "execution timed out after 1000ms")
-	// Read deadline (timeout + grace) plus an immediate SIGKILL: well under
-	// the old SIGTERM-grace-then-SIGKILL wall time.
 	require.Less(t, elapsed, 10*time.Second, "the parent must kill an uninterruptible loop promptly")
 	require.False(t, processAlive(oldPid), "timeout must kill the REPL process")
 
-	// No replacement is started until the next request.
 	require.Nil(t, svc.browserRepl)
 
 	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
@@ -141,12 +107,6 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	require.NotEqual(t, oldID, r3.ReplId, "the next request lazily starts a fresh REPL")
 }
 
-// TestBrowserReplInterruptibleTimeoutTerminates covers the spec's
-// destructive-timeout contract for executions the daemon CAN interrupt at the
-// event-loop level (e.g. an unresolved promise). The daemon reports
-// timed_out and the API must still kill the process group, return the
-// terminated repl_id with repl_terminated: true, and guarantee that output
-// from the abandoned execution cannot leak into a later one.
 func TestBrowserReplInterruptibleTimeoutTerminates(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -173,8 +133,6 @@ func TestBrowserReplInterruptibleTimeoutTerminates(t *testing.T) {
 	require.False(t, processAlive(oldPid), "timeout must kill the REPL process")
 	require.Nil(t, svc.browserRepl, "no replacement starts until the next request")
 
-	// Let the (now dead) timer fire; its output must not leak into the next
-	// execution's content.
 	time.Sleep(2500 * time.Millisecond)
 	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
 	require.True(t, r3.Success)
@@ -195,7 +153,6 @@ func TestBrowserReplCrashRecovery(t *testing.T) {
 	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "var before = 1"})
 	require.True(t, r1.Success)
 
-	// Simulate an OOM kill of the child.
 	require.NoError(t, svc.browserRepl.cmd.Process.Kill())
 	deadline := time.Now().Add(5 * time.Second)
 	for processAlive(svc.browserRepl.cmd.Process.Pid) && time.Now().Before(deadline) {
@@ -251,7 +208,6 @@ func TestBrowserReplSerializesConcurrentRequests(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Strict serialization: the pushed values form a dense 0..n-1 sequence.
 	seen := map[int]bool{}
 	for _, v := range results {
 		seen[int(v)] = true
@@ -309,24 +265,18 @@ func TestBrowserReplContentOrdering(t *testing.T) {
 func TestBrowserReplImageValidation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	// Non-image data URLs are rejected.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: `await repl.emitImage("data:text/html;base64,PGI+eDwvYj4=")`,
 	})
 	require.False(t, r.Success)
 	require.Contains(t, *r.Error, "image/*")
 
-	// Non-image bytes are rejected by MIME sniffing.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: `await repl.emitImage(Buffer.from("not an image at all"))`,
 	})
 	require.False(t, r.Success)
 	require.Contains(t, *r.Error, "unrecognized image data")
 
-	// The documented ImageInput forms are accepted even though user code
-	// constructs them in the vm context's realm, whose Uint8Array and
-	// ArrayBuffer intrinsics differ from the daemon's (a cross-realm
-	// instanceof check previously rejected a direct Uint8Array).
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: fmt.Sprintf(`
 			const png = Buffer.from(%q, "base64");
@@ -351,7 +301,6 @@ func TestBrowserReplImageValidation(t *testing.T) {
 	}
 	require.Equal(t, 5, imageCount, "every documented ImageInput form must emit an image")
 
-	// The REPL survives user-code exceptions.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'alive'"})
 	require.True(t, r.Success)
 }
@@ -359,7 +308,6 @@ func TestBrowserReplImageValidation(t *testing.T) {
 func TestBrowserReplTruncation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	// Text output beyond 256 KiB is truncated and flagged.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: `repl.write("x".repeat(400 * 1024)); "ok"`,
 	})
@@ -371,7 +319,6 @@ func TestBrowserReplTruncation(t *testing.T) {
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(v.Text), 256*1024)
 
-	// Oversized results fall back to a bounded repr and are flagged.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: `"y".repeat(400 * 1024)`,
 	})
@@ -384,33 +331,28 @@ func TestBrowserReplTruncation(t *testing.T) {
 func TestBrowserReplResultEdgeValues(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	// BigInt is not JSON-compatible: bounded repr, no crash.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "10n"})
 	require.True(t, r.Success)
 	require.Nil(t, r.Result)
 	require.NotNil(t, r.ResultRepr)
 	require.Contains(t, *r.ResultRepr, "10n")
 
-	// Circular values fall back to repr.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "const c = {}; c.self = c; c"})
 	require.True(t, r.Success)
 	require.NotNil(t, r.ResultRepr)
 	require.Contains(t, *r.ResultRepr, "Circular")
 
-	// undefined is distinguishable from null: it surfaces via result_repr.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "undefined"})
 	require.True(t, r.Success)
 	require.Nil(t, r.Result)
 	require.NotNil(t, r.ResultRepr)
 	require.Equal(t, "undefined", *r.ResultRepr)
 
-	// null stays a plain JSON null.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "null"})
 	require.True(t, r.Success)
 	require.Nil(t, r.Result)
 	require.Nil(t, r.ResultRepr)
 
-	// Map and RegExp are not JSON-compatible: bounded repr, not a silent {}.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `new Map([["k", "v"]])`})
 	require.True(t, r.Success)
 	require.Nil(t, r.Result)
@@ -423,12 +365,10 @@ func TestBrowserReplResultEdgeValues(t *testing.T) {
 	require.NotNil(t, r.ResultRepr)
 	require.Contains(t, *r.ResultRepr, "/regex/gi")
 
-	// Dates still serialize to ISO strings.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `new Date("2024-01-02T03:04:05Z")`})
 	require.True(t, r.Success)
 	require.Equal(t, "2024-01-02T03:04:05.000Z", r.Result)
 
-	// Plain objects and arrays round-trip through result.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `({a: [1, 2, 3], b: "str", c: {d: null}})`})
 	require.True(t, r.Success)
 	plain, ok := r.Result.(map[string]any)
@@ -437,8 +377,6 @@ func TestBrowserReplResultEdgeValues(t *testing.T) {
 	require.Equal(t, "str", plain["b"])
 	require.Equal(t, map[string]any{"d": nil}, plain["c"])
 
-	// NaN and Infinity are not JSON-compatible (JSON.stringify would turn
-	// them into null): they must surface via result_repr instead.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "NaN"})
 	require.True(t, r.Success)
 	require.Nil(t, r.Result)
@@ -457,7 +395,6 @@ func TestBrowserReplResultEdgeValues(t *testing.T) {
 	require.NotNil(t, r.ResultRepr)
 	require.Equal(t, "-Infinity", *r.ResultRepr)
 
-	// An error value as the result surfaces via its stack repr.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `const resultErr = new Error("result-eval-error"); resultErr`})
 	require.True(t, r.Success)
 	require.Nil(t, r.Result)
@@ -465,14 +402,11 @@ func TestBrowserReplResultEdgeValues(t *testing.T) {
 	require.Contains(t, *r.ResultRepr, "result-eval-error")
 }
 
-// TestBrowserReplImageSizeLimits covers the 8 MiB per-image and 16 MiB
-// aggregate image limits from the spec.
 func TestBrowserReplImageSizeLimits(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
 	const pngHeader = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
-	// Per-image limit: an image over 8 MiB decoded is rejected.
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: fmt.Sprintf(`const big = Buffer.concat([Buffer.from("%s", "base64"), Buffer.alloc(9 * 1024 * 1024)]); await repl.emitImage(big)`, pngHeader),
 	})
@@ -480,8 +414,6 @@ func TestBrowserReplImageSizeLimits(t *testing.T) {
 	require.NotNil(t, r.Error)
 	require.Contains(t, *r.Error, "per-image limit")
 
-	// Aggregate limit: images totaling over 16 MiB drop the overflow, note
-	// the drop on stderr, and flag content truncation.
 	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
 		Code: fmt.Sprintf(`
 			const mk = () => Buffer.concat([Buffer.from("%s", "base64"), Buffer.alloc(6 * 1024 * 1024)]);
@@ -498,8 +430,6 @@ func TestBrowserReplImageSizeLimits(t *testing.T) {
 	images := 0
 	sawDropNote := false
 	for _, item := range *r.Content {
-		// The generated union accessors do not enforce the discriminator, so
-		// check Type explicitly.
 		if img, err := item.AsBrowserExecutionImageContent(); err == nil && img.Type == "image" {
 			images++
 		}
@@ -517,9 +447,6 @@ func TestBrowserReplRequestWireLimitIsNonDestructive(t *testing.T) {
 	initial := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
 	require.True(t, initial.Success, "initial request failed: %v", initial.Error)
 
-	// This body is within the HTTP middleware's 8 MiB limit, but the daemon
-	// envelope (request ID, timeout, and JSON framing) would exceed its line
-	// limit. It must be rejected before dialing or changing the child.
 	maxBodyCode := strings.Repeat("a", maxBrowserExecuteBodyBytes-64)
 	body, err := json.Marshal(oapi.ExecuteBrowserCodeJSONRequestBody{Code: maxBodyCode})
 	require.NoError(t, err)
@@ -537,9 +464,6 @@ func TestBrowserReplRequestWireLimitIsNonDestructive(t *testing.T) {
 	require.Equal(t, initial.Result, stillAlive.Result)
 	require.Equal(t, initial.ReplId, stillAlive.ReplId)
 
-	// Literal HTML brackets are not escaped in the daemon envelope. A raw JSON
-	// HTTP body containing this code remains under the HTTP cap and executes
-	// without the historical 6x wire-size inflation.
 	htmlCode := `"` + strings.Repeat("<", 1_300_000) + `"`
 	htmlBody := []byte(`{"code":` + strconv.Quote(htmlCode) + `}`)
 	require.LessOrEqual(t, len(htmlBody), maxBrowserExecuteBodyBytes)
@@ -550,9 +474,6 @@ func TestBrowserReplRequestWireLimitIsNonDestructive(t *testing.T) {
 	require.True(t, htmlResult.Success, "HTML-heavy request failed: %v", htmlResult.Error)
 	require.Equal(t, initial.ReplId, htmlResult.ReplId)
 
-	// A maximal raw HTTP body made of HTML brackets is also accepted by the
-	// body cap, but its fully encoded daemon line is too large. It must take
-	// the same clean, non-destructive 400 path.
 	oversizedHTMLCode := strings.Repeat("<", maxBrowserExecuteBodyBytes-64)
 	rawHTMLBody := []byte(`{"code":"` + oversizedHTMLCode + `"}`)
 	require.LessOrEqual(t, len(rawHTMLBody), maxBrowserExecuteBodyBytes)
@@ -568,8 +489,6 @@ func TestBrowserReplRequestWireLimitIsNonDestructive(t *testing.T) {
 	require.Equal(t, initial.ReplId, stillAlive.ReplId)
 }
 
-// TestBrowserReplTimeoutSecValidation enforces the schema's timeout_sec
-// bounds (minimum 1, maximum 300) server-side.
 func TestBrowserReplTimeoutSecValidation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -582,18 +501,12 @@ func TestBrowserReplTimeoutSecValidation(t *testing.T) {
 	}
 	require.Nil(t, svc.browserRepl, "invalid requests must not start a REPL")
 
-	// Bounds are inclusive.
 	for _, v := range []int{1, 300} {
 		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1", TimeoutSec: &v})
 		require.True(t, r.Success, "timeout_sec=%d must be accepted: %v", v, r.Error)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Fake CDP endpoint for browser-helper coverage
-// ---------------------------------------------------------------------------
-
-// fakeCDPTarget is one entry in the fake browser's target list.
 type fakeCDPTarget struct {
 	ID    string
 	Type  string
@@ -601,89 +514,38 @@ type fakeCDPTarget struct {
 	URL   string
 }
 
-// fakeCDPServer is a minimal fake of the browser-level CDP WebSocket
-// endpoint. It implements just enough of the protocol (target management,
-// domain enables, navigation, input, screenshots, DOM queries, and canned
-// Runtime.evaluate responses) to exercise every seeded browser helper
-// without a real Chromium.
 type fakeCDPServer struct {
 	t *testing.T
 
-	mu      sync.Mutex
-	targets []fakeCDPTarget
-	nextSeq int
-	conns   map[*websocket.Conn]struct{}
-	// queuedEvents are flushed to the daemon after the next command
-	// response, avoiding concurrent writes on the websocket.
+	mu           sync.Mutex
+	targets      []fakeCDPTarget
+	nextSeq      int
+	conns        map[*websocket.Conn]struct{}
 	queuedEvents []map[string]any
 
-	// lastKeyEvent records the params of the most recent
-	// Input.dispatchKeyEvent command so tests can verify modifier bits.
 	lastKeyEvent map[string]any
 
-	// frozen simulates a renderer stuck behind a modal JavaScript dialog:
-	// Runtime.evaluate commands fail instead of hanging (a real renderer
-	// would never answer; failing fast keeps tests quick).
-	frozen atomic.Bool
-	// hangSession simulates a renderer frozen behind a modal dialog more
-	// faithfully: session-routed commands are never answered (browser-level
-	// commands still are), matching real Chromium behavior for a tab with a
-	// stale pre-attach dialog.
-	hangSession atomic.Bool
-	// failNextAttach makes the next N Target.attachToTarget commands fail
-	// with the stale-target error, simulating a target destroyed between
-	// listing and attaching.
-	failNextAttach atomic.Int32
-	// closeNextConnsAfterFirstCommand makes the next N accepted WebSocket
-	// connections close without answering as soon as the first command
-	// arrives, simulating the DevTools proxy accepting a connection and
-	// then dropping it while Chromium is still coming up after a restart.
+	frozen                          atomic.Bool
+	hangSession                     atomic.Bool
+	failNextAttach                  atomic.Int32
 	closeNextConnsAfterFirstCommand atomic.Int32
-	// totalConns counts every accepted WebSocket connection, so tests can
-	// verify a reconnect-and-retry actually happened.
-	totalConns atomic.Int32
+	totalConns                      atomic.Int32
 
-	// rendererHrefs is the href each target's renderer reports for
-	// location.href. Target metadata shows a created target's URL
-	// immediately, but the renderer commits the navigation later (the
-	// new_tab QA finding), so the two are tracked separately.
-	rendererHrefs map[string]string
-	// pendingHrefPolls counts how many location.href evaluations still
-	// report about:blank before the target's navigation commits in the
-	// renderer.
-	pendingHrefPolls map[string]int
-	// delayCommit makes Target.createTarget leave the renderer on
-	// about:blank for the first few location.href polls.
-	delayCommit atomic.Bool
-	// hangMouseWheel simulates the wedged mouseWheel path observed on rare
-	// new-headless Chromium instances: mouseWheel commands are never
-	// answered while every other command answers fine.
-	hangMouseWheel atomic.Bool
-	// sawScrollBy records that the in-page window.scrollBy fallback ran.
-	sawScrollBy atomic.Bool
-	// swallowNextWheel simulates the upstream first-wheel-after-navigation
-	// quirk: the mouseWheel command is answered normally but the page never
-	// scrolls (window.scrollY stays put).
-	swallowNextWheel bool
-	// delayedWheelMs, when > 0, simulates Chromium's asynchronous wheel
-	// application: the mouseWheel command is answered normally but the
-	// scroll offset only moves after the given delay.
-	delayedWheelMs atomic.Int64
-	// activatedTargets records every Target.activateTarget target id, in
-	// order, so tests can verify attach foregrounds the attached tab.
-	activatedTargets []string
-	// scrollY is the fake page's current scroll offset; maxScrollY is how
-	// far the fake document can scroll (0 = unscrollable).
-	scrollY    int64
-	maxScrollY int64
-	// wheelDispatchCount counts answered mouseWheel dispatches.
+	rendererHrefs      map[string]string
+	pendingHrefPolls   map[string]int
+	delayCommit        atomic.Bool
+	hangMouseWheel     atomic.Bool
+	sawScrollBy        atomic.Bool
+	swallowNextWheel   bool
+	delayedWheelMs     atomic.Int64
+	activatedTargets   []string
+	scrollY            int64
+	maxScrollY         int64
 	wheelDispatchCount int
 
 	http *httptest.Server
 }
 
-// fakeCDPTinyPNG is a valid 1x1 PNG; capture_screenshot writes it to disk
-// and repl.emitImage sniffs its magic bytes.
 const fakeCDPTinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
 func newFakeCDPServer(t *testing.T) *fakeCDPServer {
@@ -704,14 +566,10 @@ func newFakeCDPServer(t *testing.T) *fakeCDPServer {
 	return f
 }
 
-// wsURL returns a browser-level WebSocket URL with an explicit path so the
-// daemon skips its /json/version discovery.
 func (f *fakeCDPServer) wsURL() string {
 	return "ws" + strings.TrimPrefix(f.http.URL, "http") + "/devtools/browser/fake"
 }
 
-// Restart closes every active daemon connection, simulating a Chromium
-// restart. The daemon reconnects on its next browser helper call.
 func (f *fakeCDPServer) Restart() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -726,8 +584,6 @@ func (f *fakeCDPServer) connCount() int {
 	return len(f.conns)
 }
 
-// lastKeyEventParams returns the params of the most recent
-// Input.dispatchKeyEvent command, or nil if none was dispatched.
 func (f *fakeCDPServer) lastKeyEventParams() map[string]any {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -766,19 +622,14 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		if f.closeNextConnsAfterFirstCommand.Load() > 0 {
-			// The proxy accepted the connection but the browser behind it is
-			// not up yet: drop the connection mid-first-command without
-			// answering. The daemon must reconnect and retry.
 			f.closeNextConnsAfterFirstCommand.Add(-1)
 			return
 		}
 		if req.SessionID != "" && f.hangSession.Load() {
-			// A frozen renderer never answers session-routed commands.
 			continue
 		}
 		if req.Method == "Input.dispatchMouseEvent" && f.hangMouseWheel.Load() &&
 			strings.Contains(string(req.Params), "mouseWheel") {
-			// The wedged mouseWheel path never answers.
 			continue
 		}
 		result, events, dispatchErr := f.dispatch(req.Method, req.Params, req.SessionID)
@@ -807,8 +658,6 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// queueEvent buffers a raw CDP event, flushed to the daemon after the next
-// command response.
 func (f *fakeCDPServer) queueEvent(ev map[string]any) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -823,8 +672,6 @@ func (f *fakeCDPServer) takeQueuedEvents() []map[string]any {
 	return evs
 }
 
-// dispatch handles one CDP command, returning the command result plus any
-// events to emit after the response.
 func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionID string) (any, []map[string]any, error) {
 	switch method {
 	case "Target.getTargets":
@@ -851,7 +698,6 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 			return nil, nil, fmt.Errorf("No target with given id found")
 		}
 		sid := "session-" + p.TargetID
-		// Emit a session-scoped event so drain_events has something to return.
 		ev := map[string]any{
 			"method":    "Page.loadEventFired",
 			"params":    map[string]any{"timestamp": 1},
@@ -882,8 +728,6 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		id := fmt.Sprintf("target-created-%d", f.nextSeq)
 		f.targets = append(f.targets, fakeCDPTarget{ID: id, Type: "page", Title: p.URL, URL: p.URL})
 		if f.delayCommit.Load() {
-			// Target metadata shows the URL immediately; the renderer
-			// commits the navigation a few polls later.
 			f.rendererHrefs[id] = "about:blank"
 			f.pendingHrefPolls[id] = 3
 		} else {
@@ -926,7 +770,6 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 			f.wheelDispatchCount++
 			swallow := f.swallowNextWheel
 			if swallow {
-				// Answered normally, but the page never scrolls.
 				f.swallowNextWheel = false
 			}
 			delayMs := f.delayedWheelMs.Load()
@@ -935,9 +778,6 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 			}
 			f.mu.Unlock()
 			if !swallow && delayMs > 0 {
-				// Chromium applies the wheel asynchronously after the CDP
-				// command answers; scroll() must wait out a settle window
-				// instead of false-positive retrying (a double scroll).
 				delta := int64(p.DeltaY)
 				time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
 					f.mu.Lock()
@@ -975,14 +815,9 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 	return nil, nil, fmt.Errorf("fake CDP: unhandled method %s", method)
 }
 
-// evalExpression returns canned values for the expressions the helpers
-// evaluate in the page, and echoes anything else so js() round-trips can be
-// verified.
 func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 	switch {
 	case expr == "location.href":
-		// The renderer-level href for the session's target, honoring a
-		// delayed navigation commit (see delayCommit).
 		targetID := strings.TrimPrefix(sessionID, "session-")
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -1007,7 +842,6 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 		}
 		return "about:blank"
 	case strings.Contains(expr, "scrollingElement"):
-		// scroll()'s offset probe for no-op dispatch detection.
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return map[string]any{
@@ -1017,7 +851,6 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 			"maxY": f.maxScrollY,
 		}
 	case strings.Contains(expr, "window.scrollBy"):
-		// scroll()'s in-page fallback for a wedged mouseWheel path.
 		f.sawScrollBy.Store(true)
 		return true
 	case strings.Contains(expr, "location.href"):
@@ -1032,16 +865,11 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 	case expr == "document.readyState":
 		return "complete"
 	case strings.HasPrefix(expr, "(function (selector, requireVisible)"):
-		// wait_for_element IIFE: the "#never" selector never matches.
 		return !strings.Contains(expr, `"#never"`)
 	case strings.HasPrefix(expr, "(function (selector, value)"),
 		strings.HasPrefix(expr, "(function (selector, key, opts)"):
-		// fill_input, dispatch_key IIFEs.
 		return true
 	default:
 		return expr
 	}
 }
-
-// TestBrowserReplHelpersWithFakeCDP exercises every seeded browser helper at
-// least once against a fake CDP endpoint, per the spec's test plan.

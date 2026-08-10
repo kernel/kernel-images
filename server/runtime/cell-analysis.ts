@@ -88,7 +88,6 @@ function asPattern(node: ESTree.Node): ESTree.Pattern {
 
 const DEFAULT_INITIALIZATION_TARGET = 'globalThis["__browser_repl_init_target"]';
 
-/** Turn a binding pattern into an assignment target backed by a runtime accessor. */
 function globalPattern(
   pattern: ESTree.Pattern,
   source: string,
@@ -146,12 +145,6 @@ function variableReplacement(
   return expressionPosition ? assignments.join(', ') : `${assignments.join(', ')};`;
 }
 
-/**
- * Lower a statement-position declaration to one comma sequence. Keeping the
- * edits anchored to each declarator preserves the original gaps (especially
- * newlines) and, importantly, leaves the parser-owned separator commas and
- * comments untouched.
- */
 function variableEdits(
   statement: ESTree.VariableDeclaration,
   source: string,

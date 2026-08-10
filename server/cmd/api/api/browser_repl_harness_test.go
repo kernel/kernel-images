@@ -16,8 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// browserReplBundlePath is built once per test run from the runtime sources,
-// mirroring how the Docker images bundle the daemon.
 var (
 	browserReplBundleOnce sync.Once
 	browserReplBundlePath string
@@ -42,8 +40,6 @@ func ensureBrowserReplBundle(t *testing.T) string {
 		}
 		browserReplBundlePath = filepath.Join(dir, "browser-repl.js")
 
-		// Stage the runtime package and sources exactly like the Docker builds.
-		// Meriyah is installed from the exact package lock, never globally.
 		stagingDir, err := os.MkdirTemp("", "browser-repl-runtime")
 		if err != nil {
 			browserReplBundleErr = err
@@ -101,13 +97,10 @@ func ensureBrowserReplBundle(t *testing.T) string {
 }
 
 func serverRootDir() string {
-	// cmd/api/api -> server root is three directories up.
 	wd, _ := os.Getwd()
 	return filepath.Join(wd, "..", "..", "..")
 }
 
-// newBrowserReplSvc builds an ApiService wired to a freshly built REPL
-// bundle on a unique socket, and registers cleanup that kills the child.
 func newBrowserReplSvc(t *testing.T) *ApiService {
 	t.Helper()
 	script := ensureBrowserReplBundle(t)
@@ -117,7 +110,6 @@ func newBrowserReplSvc(t *testing.T) *ApiService {
 	if os.Getenv("NODE_PATH") == "" {
 		if out, err := exec.Command("npm", "root", "-g").Output(); err == nil {
 			root := string(out)
-			// trim trailing newline
 			for len(root) > 0 && (root[len(root)-1] == '\n' || root[len(root)-1] == '\r') {
 				root = root[:len(root)-1]
 			}
@@ -144,6 +136,28 @@ func execBrowserCode(t *testing.T, svc *ApiService, body *oapi.ExecuteBrowserCod
 	typed, ok := resp.(oapi.ExecuteBrowserCode200JSONResponse)
 	require.True(t, ok, "expected 200 response, got %T", resp)
 	return typed
+}
+
+func execCode(t *testing.T, svc *ApiService, code string) oapi.ExecuteBrowserCode200JSONResponse {
+	t.Helper()
+	return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+}
+
+func requireExec(t *testing.T, svc *ApiService, code string, want any) oapi.ExecuteBrowserCode200JSONResponse {
+	t.Helper()
+	resp := execCode(t, svc, code)
+	require.True(t, resp.Success, "code %q failed: %v", code, resp.Error)
+	require.Equal(t, want, resp.Result, "code: %q", code)
+	return resp
+}
+
+func requireExecError(t *testing.T, svc *ApiService, code, contains string) oapi.ExecuteBrowserCode200JSONResponse {
+	t.Helper()
+	resp := execCode(t, svc, code)
+	require.False(t, resp.Success, "expected code %q to fail", code)
+	require.NotNil(t, resp.Error)
+	require.Contains(t, *resp.Error, contains, "code: %q", code)
+	return resp
 }
 
 func processAlive(pid int) bool {
