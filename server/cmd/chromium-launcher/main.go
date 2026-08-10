@@ -25,6 +25,8 @@ const (
 	// pulseSink is the null sink chromium plays into; the recorder captures
 	// its .monitor source.
 	pulseSink = "KernelOutput"
+
+	defaultPrivateNetworkBypassFlag = "--proxy-bypass-list=10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7"
 )
 
 func main() {
@@ -78,7 +80,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed reading runtime flags: %v\n", err)
 		os.Exit(1)
 	}
-	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
+	final := mergeChromiumFlags(baseFlags, runtimeTokens)
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
@@ -156,6 +158,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "exec runuser failed: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func mergeChromiumFlags(baseFlags string, runtimeTokens []string) []string {
+	configured := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
+	// Chromium applies only the last --proxy-bypass-list flag. Keep the image
+	// default first so a runtime list, including an empty one, replaces it.
+	flags := []string{defaultPrivateNetworkBypassFlag}
+	for _, flag := range configured {
+		if flag != defaultPrivateNetworkBypassFlag {
+			flags = append(flags, flag)
+		}
+	}
+	return flags
 }
 
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.

@@ -4,8 +4,64 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestMergeChromiumFlags(t *testing.T) {
+	tests := []struct {
+		name          string
+		baseFlags     string
+		runtimeTokens []string
+		want          []string
+	}{
+		{
+			name: "image default",
+			want: []string{defaultPrivateNetworkBypassFlag},
+		},
+		{
+			name:      "base list replaces image default",
+			baseFlags: "--proxy-bypass-list=preview.internal",
+			want: []string{
+				defaultPrivateNetworkBypassFlag,
+				"--proxy-bypass-list=preview.internal",
+			},
+		},
+		{
+			name:          "runtime list replaces image and base lists",
+			baseFlags:     "--proxy-bypass-list=base.internal --kiosk",
+			runtimeTokens: []string{"--proxy-bypass-list=runtime.internal"},
+			want: []string{
+				defaultPrivateNetworkBypassFlag,
+				"--proxy-bypass-list=base.internal",
+				"--kiosk",
+				"--proxy-bypass-list=runtime.internal",
+			},
+		},
+		{
+			name:          "explicit empty runtime list clears image default",
+			runtimeTokens: []string{"--proxy-bypass-list="},
+			want: []string{
+				defaultPrivateNetworkBypassFlag,
+				"--proxy-bypass-list=",
+			},
+		},
+		{
+			name:      "duplicate image default is removed",
+			baseFlags: defaultPrivateNetworkBypassFlag,
+			want:      []string{defaultPrivateNetworkBypassFlag},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeChromiumFlags(tt.baseFlags, tt.runtimeTokens)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeChromiumFlags() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestExecLookPath(t *testing.T) {
 	dir := t.TempDir()
