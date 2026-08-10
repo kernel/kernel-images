@@ -1316,7 +1316,11 @@ paths:
         helpers (goto_url, page_info, click_at_xy, capture_screenshot, tab management,
         and more) plus an unrestricted `cdp()` escape hatch. Top-level bindings persist
         across calls until the API process exits, the REPL is reset, or the REPL is
-        terminated after a crash or timeout.
+        terminated after a crash or timeout. Persistent names are live context-global
+        accessors, so closures and timers observe later-cell assignments; `var` in
+        top-level nested statements persists, while function and nested-block locals do not.
+        Lexical names are reserved after linking, so retry a failed declaration with a new
+        name or reset the REPL.
 
         The runtime starts lazily on the first request and is owned directly by the API
         process: an API restart kills it, and the next request starts a fresh REPL with a
@@ -3971,7 +3975,11 @@ components:
           description: |
             JavaScript evaluated in a persistent Node.js runtime.
             Top-level bindings persist until the API process exits, the REPL is
-            reset, or the REPL is terminated after a crash or timeout.
+            reset, or the REPL is terminated after a crash or timeout. Persistent names
+            are live context-global accessors: closures and timers observe later-cell
+            assignments. `var` in top-level nested statements persists; function and
+            nested-block locals do not. Lexical names are reserved after linking, so
+            retry a failed declaration with a new name or reset the REPL.
             May be empty only when reset is true.
         timeout_sec:
           type: integer

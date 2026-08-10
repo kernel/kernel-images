@@ -87,7 +87,12 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   restart, `reset: true`, an execution timeout, or a REPL crash.
 - Top-level `await`, persistent `let`/`const`/`var`/function/class bindings,
   dynamic `import()`, and implicit final-expression results are supported.
-  Static top-level imports are not; use dynamic imports. When top-level
+  Persistent names are live context-global accessors, so closures and timers
+  observe later-cell assignments. `var` declarations in top-level nested
+  statements persist; locals inside functions or nested lexical blocks do not.
+  Lexical names are reserved after linking: retry a failed declaration with a
+  new name or use `reset: true`. Static top-level imports are not; use dynamic
+  imports. When top-level
   `await` is used, the implicit result is the value of the final expression
   statement, so end the snippet with an expression to return a value. Top-level
   `return` is rejected.

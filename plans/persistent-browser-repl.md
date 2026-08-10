@@ -348,17 +348,22 @@ Meriyah is the exact-pinned normal dependency used for cell metadata: declaratio
 kinds, binding names, static-module rejection, and the final expression are
 identified before module construction. A declaration registry performs the
 cross-cell early-error check before effects. `var` and `function` may redeclare
-each other; `let`/`const`/`class` conflict with every prior declaration. A fresh
-module imports prior values from `@prev`, creates module-local mutable or
-immutable bindings as appropriate, and exports initialized bindings back into
-the next cell. `const` remains immutable, while `let`/`var`/function/class
-mutations are committed after evaluation.
+each other; `let`/`const`/`class` conflict with every prior declaration. Each
+fresh module links the previous values through the internal SyntheticModule
+`@prev`, while persistent names are backed by accessor properties on the
+context's `globalThis`. The accessor is the single binding for a name, so a
+closure created in one cell, a later cell, and a timer all observe the same
+value. Persistent top-level declarations and top-level `var` declarations in
+nested statements are lowered to those accessors; declarations inside nested
+functions or blocks remain ordinary locals.
 
-If evaluation fails, initialized exports are committed in execution order and
-uninitialized declarations remain reserved, matching the state JavaScript has
-actually established before the failure. The REPL process is not reset for an
-ordinary exception. Reset and destructive timeout/crash recovery still create
-a new process.
+Accessor writes record initialization immediately. Therefore a failed
+multi-declarator cell retains every initializer that completed before the
+failure, while later lexical names remain in the TDZ. Lexical names are
+reserved after linking, so a failed `let`/`const`/`class` cell cannot be retried
+verbatim; use a new name or reset the REPL. The REPL process is not reset for
+an ordinary exception. Reset and destructive timeout/crash recovery still
+create a new process.
 
 ## Timeout and Failure Semantics
 

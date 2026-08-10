@@ -3339,7 +3339,11 @@ type Error struct {
 type ExecuteBrowserCodeRequest struct {
 	// Code JavaScript or TypeScript evaluated in a persistent Node.js runtime.
 	// Top-level bindings persist until the API process exits, the REPL is
-	// reset, or the REPL is terminated after a crash or timeout.
+	// reset, or the REPL is terminated after a crash or timeout. Persistent
+	// names are live context-global accessors, so closures and timers observe
+	// later-cell assignments. var in top-level nested statements persists;
+	// function and nested-block locals do not. Lexical names are reserved after
+	// linking, so retry a failed declaration with a new name or reset the REPL.
 	// May be empty only when reset is true.
 	Code string `json:"code"`
 
