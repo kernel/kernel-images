@@ -27,9 +27,11 @@ const (
 	defaultBrowserReplScript = "/usr/local/lib/browser-repl.js"
 	defaultBrowserReplHeapMB = 512
 
+	// The daemon caps each newline-delimited request line at this size.
+	// API requests are marshaled into this wire format before they are sent.
+	maxBrowserReplRequestLineBytes = 8 * 1024 * 1024
 	// Keep the HTTP envelope bounded before it is copied for strict decoding.
-	// The daemon independently caps each newline-delimited request at 8 MiB.
-	maxBrowserExecuteBodyBytes = 8 * 1024 * 1024
+	maxBrowserExecuteBodyBytes = maxBrowserReplRequestLineBytes
 
 	// browserReplStartupTimeout is how long the API waits for a freshly
 	// spawned REPL child to begin accepting socket connections.
@@ -306,11 +308,40 @@ type browserReplDaemonResponse struct {
 	DurationMs int  `json:"duration_ms"`
 }
 
-// executeOnBrowserReplLocked sends one execution to the current child and
-// reads its response. The returned error is a transport/protocol failure;
-// execution failures are reported inside the response. Callers must hold
-// s.browserReplMu.
-func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, code string, timeout time.Duration) (*browserReplDaemonResponse, error) {
+// browserReplRequest is the already-encoded request sent over the daemon
+// socket. Preparing it before touching the child makes the wire-size check a
+// non-destructive API validation rather than a protocol failure after dialing.
+type browserReplRequest struct {
+	id    string
+	bytes []byte
+}
+
+// prepareBrowserReplRequest encodes the daemon request with HTML escaping
+// disabled. The daemon's limit applies to the line without its trailing
+// newline, so the encoded request must fit before it is sent.
+func prepareBrowserReplRequest(code string, timeout time.Duration) (*browserReplRequest, error) {
+	id := uuid.New().String()
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(browserReplDaemonRequest{
+		ID:        id,
+		Code:      code,
+		TimeoutMs: int(timeout.Milliseconds()),
+	}); err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	if requestLineBytes := buf.Len() - 1; requestLineBytes > maxBrowserReplRequestLineBytes {
+		return nil, fmt.Errorf("code too large: encoded request is %d bytes, maximum is %d", requestLineBytes, maxBrowserReplRequestLineBytes)
+	}
+	return &browserReplRequest{id: id, bytes: buf.Bytes()}, nil
+}
+
+// executeOnBrowserReplLocked sends one prepared execution to the current
+// child and reads its response. The returned error is a transport/protocol
+// failure; execution failures are reported inside the response. Callers must
+// hold s.browserReplMu.
+func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, request *browserReplRequest, timeout time.Duration) (*browserReplDaemonResponse, error) {
 	child := s.browserRepl
 	if child == nil {
 		return nil, errors.New("no browser REPL child")
@@ -331,16 +362,7 @@ func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, code string
 		return nil, fmt.Errorf("failed to set deadline: %w", err)
 	}
 
-	reqID := uuid.New().String()
-	reqBytes, err := json.Marshal(browserReplDaemonRequest{
-		ID:        reqID,
-		Code:      code,
-		TimeoutMs: int(timeout.Milliseconds()),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
-	if _, err := conn.Write(append(reqBytes, '\n')); err != nil {
+	if _, err := conn.Write(request.bytes); err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
@@ -383,8 +405,8 @@ func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, code string
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if resp.ID != reqID {
-		return nil, fmt.Errorf("response ID mismatch: expected %s, got %s", reqID, resp.ID)
+	if resp.ID != request.id {
+		return nil, fmt.Errorf("response ID mismatch: expected %s, got %s", request.id, resp.ID)
 	}
 	if resp.ReplID != child.id {
 		return nil, fmt.Errorf("response repl_id mismatch: expected %s, got %s", child.id, resp.ReplID)
@@ -510,6 +532,19 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 		timeout = time.Duration(*request.Body.TimeoutSec) * time.Second
 	}
 
+	var preparedRequest *browserReplRequest
+	if code != "" {
+		var err error
+		preparedRequest, err = prepareBrowserReplRequest(code, timeout)
+		if err != nil {
+			return oapi.ExecuteBrowserCode400JSONResponse{
+				BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
+					Message: err.Error(),
+				},
+			}, nil
+		}
+	}
+
 	if reset {
 		s.terminateBrowserReplLocked(ctx, "explicit reset")
 	}
@@ -534,7 +569,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 	}
 
 	execStart := time.Now()
-	resp, err := s.executeOnBrowserReplLocked(ctx, code, timeout)
+	resp, err := s.executeOnBrowserReplLocked(ctx, preparedRequest, timeout)
 	if err != nil {
 		// Any transport or protocol failure is fatal to the child: kill the
 		// process group, wait for exit, remove the stale socket, and clear the

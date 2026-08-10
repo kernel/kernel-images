@@ -260,6 +260,8 @@ Image bytes are base64-encoded only inside typed image content. They are never e
 
 Initial limits:
 
+- 1,000 buffered stray content items; trimming older items sets
+  `content_truncated` on the next drained response
 - 8 MiB decoded per emitted image
 - 16 MiB decoded image data per response
 - 256 KiB combined text output per response
@@ -451,7 +453,10 @@ When the daemon-side `timeout_ms` fires on an interruptible execution, the daemo
 
 The incoming request line is capped at 8 MiB per accumulated line,
 independent of how the request was chunked across writes; an oversized
-line is rejected and the connection closed. The server runs with
+line is rejected and the connection closed. The API also measures the fully
+marshaled daemon envelope before dialing, rejects an over-limit request as a
+non-destructive 400, and disables JSON HTML escaping so code containing `<`,
+`>` or `&` does not inflate on the wire. The server runs with
 `allowHalfOpen`, so a client that half-closes (`SHUT_WR`) after sending
 its request still receives the execution response; the daemon ends its own
 side once the final queued response is flushed.

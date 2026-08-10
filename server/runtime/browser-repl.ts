@@ -20,6 +20,10 @@
  *   "duration_ms": number
  * }
  *
+ * Incoming request lines are capped at 8 MiB. Output produced outside an
+ * execution is buffered for at most 1,000 items; trimming older items marks
+ * the next drained response as `content_truncated`.
+ *
  * `timed_out: true` marks a daemon-side execution timeout. JavaScript cannot
  * be reliably interrupted inside this process, so the abandoned execution
  * would keep running concurrently with later ones and leak its output into
@@ -152,6 +156,7 @@ class Collector {
 
   trimTo(maxItems: number): void {
     if (this.items.length <= maxItems) return;
+    this.truncated = true;
     this.items.splice(0, this.items.length - maxItems);
     this.textBytes = 0;
     this.imageBytes = 0;

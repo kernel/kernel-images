@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -508,6 +509,63 @@ func TestBrowserReplImageSizeLimits(t *testing.T) {
 	}
 	require.Equal(t, 2, images, "the third 6 MiB image exceeds the 16 MiB aggregate limit")
 	require.True(t, sawDropNote, "a stderr note records the dropped image")
+}
+
+func TestBrowserReplRequestWireLimitIsNonDestructive(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+
+	initial := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	require.True(t, initial.Success, "initial request failed: %v", initial.Error)
+
+	// This body is within the HTTP middleware's 8 MiB limit, but the daemon
+	// envelope (request ID, timeout, and JSON framing) would exceed its line
+	// limit. It must be rejected before dialing or changing the child.
+	maxBodyCode := strings.Repeat("a", maxBrowserExecuteBodyBytes-64)
+	body, err := json.Marshal(oapi.ExecuteBrowserCodeJSONRequestBody{Code: maxBodyCode})
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(body), maxBrowserExecuteBodyBytes)
+	resp, err := svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
+		Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: maxBodyCode},
+	})
+	require.NoError(t, err)
+	badRequest, ok := resp.(oapi.ExecuteBrowserCode400JSONResponse)
+	require.True(t, ok, "expected a clean 400, got %T", resp)
+	require.Contains(t, badRequest.Message, "code too large")
+
+	stillAlive := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	require.True(t, stillAlive.Success, "REPL did not survive oversized request: %v", stillAlive.Error)
+	require.Equal(t, initial.Result, stillAlive.Result)
+	require.Equal(t, initial.ReplId, stillAlive.ReplId)
+
+	// Literal HTML brackets are not escaped in the daemon envelope. A raw JSON
+	// HTTP body containing this code remains under the HTTP cap and executes
+	// without the historical 6x wire-size inflation.
+	htmlCode := `"` + strings.Repeat("<", 1_300_000) + `"`
+	htmlBody := []byte(`{"code":` + strconv.Quote(htmlCode) + `}`)
+	require.LessOrEqual(t, len(htmlBody), maxBrowserExecuteBodyBytes)
+	prepared, err := prepareBrowserReplRequest(htmlCode, 60*time.Second)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(prepared.bytes)-1, maxBrowserReplRequestLineBytes)
+	htmlResult := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: htmlCode})
+	require.True(t, htmlResult.Success, "HTML-heavy request failed: %v", htmlResult.Error)
+	require.Equal(t, initial.ReplId, htmlResult.ReplId)
+
+	// A maximal raw HTTP body made of HTML brackets is also accepted by the
+	// body cap, but its fully encoded daemon line is too large. It must take
+	// the same clean, non-destructive 400 path.
+	oversizedHTMLCode := strings.Repeat("<", maxBrowserExecuteBodyBytes-64)
+	rawHTMLBody := []byte(`{"code":"` + oversizedHTMLCode + `"}`)
+	require.LessOrEqual(t, len(rawHTMLBody), maxBrowserExecuteBodyBytes)
+	resp, err = svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
+		Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: oversizedHTMLCode},
+	})
+	require.NoError(t, err)
+	badRequest, ok = resp.(oapi.ExecuteBrowserCode400JSONResponse)
+	require.True(t, ok, "expected a clean HTML-heavy 400, got %T", resp)
+	require.Contains(t, badRequest.Message, "code too large")
+	stillAlive = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	require.True(t, stillAlive.Success, "REPL did not survive HTML-heavy request: %v", stillAlive.Error)
+	require.Equal(t, initial.ReplId, stillAlive.ReplId)
 }
 
 // TestBrowserReplTimeoutSecValidation enforces the schema's timeout_sec

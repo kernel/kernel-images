@@ -162,6 +162,28 @@ func TestBrowserReplStrayOutputBufferResetsAndPropagatesTruncation(t *testing.T)
 	require.Len(t, content.Text, largeOutput)
 }
 
+func TestBrowserReplStrayItemLimitPropagatesTruncation(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+
+	r := exec(`setTimeout(() => { for (let i = 0; i < 1500; i++) repl.write("s" + i); }, 10); "scheduled"`)
+	require.True(t, r.Success, "schedule failed: %v", r.Error)
+	time.Sleep(50 * time.Millisecond)
+
+	r = exec(`"drain"`)
+	require.True(t, r.Success, "drain failed: %v", r.Error)
+	require.NotNil(t, r.ContentTruncated)
+	require.True(t, *r.ContentTruncated, "dropped stray items must be reported")
+	require.NotNil(t, r.Content)
+	require.Len(t, *r.Content, 1000)
+	first, err := (*r.Content)[0].AsBrowserExecutionTextContent()
+	require.NoError(t, err)
+	require.Equal(t, "s500", first.Text, "the oldest stray items should be trimmed")
+}
+
 func TestBrowserReplNestedVarBindingsPersist(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {

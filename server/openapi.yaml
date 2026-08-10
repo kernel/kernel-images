@@ -1333,7 +1333,7 @@ paths:
         trust level to the process and Playwright execution APIs. It is not sandboxed.
       operationId: executeBrowserCode
       requestBody:
-        description: JSON request bodies are limited to 8 MiB before strict decoding.
+        description: JSON request bodies are limited to 8 MiB before strict decoding. The API rejects a marshaled daemon request over the daemon's 8 MiB newline-delimited request-line limit as a non-destructive 400.
         required: true
         content:
           application/json:
@@ -3989,7 +3989,9 @@ components:
             A failed lexical initializer leaves that name in the TDZ; assignments
             cannot initialize it. Static top-level imports are rejected; use dynamic
             `import()`. The implicit result is always the value of the final expression statement.
-            May be empty only when reset is true.
+            May be empty only when reset is true. The HTTP body is limited to 8 MiB,
+            and the API rejects a fully encoded daemon request over the daemon's 8 MiB
+            request-line limit without terminating the REPL.
         timeout_sec:
           type: integer
           description: Maximum execution time in seconds. Default is 60.
