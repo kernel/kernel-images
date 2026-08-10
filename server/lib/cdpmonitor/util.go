@@ -98,7 +98,7 @@ var structuredPrefixes = []string{
 // matching the allow-list in isCapturedMIME.
 func bodyCapFor(mime string) int {
 	const fullCap = events.CapturedFieldCap
-	const contextCap = events.CapturedFieldCap / 2
+	const contextCap = 4 * 1024
 	for _, p := range structuredPrefixes {
 		if strings.HasPrefix(mime, p) {
 			return fullCap

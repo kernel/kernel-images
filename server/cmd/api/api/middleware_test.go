@@ -114,6 +114,9 @@ func TestTelemetryMiddleware_EmitsPlatformApiCallForVMOperations(t *testing.T) {
 	require.Len(t, captured, 1)
 	assert.Equal(t, "platform_api_call", captured[0].Type)
 	assert.Equal(t, events.Platform, captured[0].Category)
+	// BrowserPlatformApiCallEventData has no code field, so the key must be
+	// absent rather than null for the payload to match the published schema.
+	assert.NotContains(t, string(captured[0].Data), `"code"`)
 }
 
 // An operation the generated map does not know about must not land in control,

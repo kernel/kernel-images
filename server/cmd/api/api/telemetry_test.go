@@ -231,6 +231,47 @@ func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
 	assert.False(t, TelemetryMiddlewareEnabled(), "all-disabled PUT should leave middleware off")
 }
 
+// The middleware is the sole producer of platform_api_call as well as api_call,
+// so a reader who migrates from control to platform must still get events.
+func TestTelemetryHandlersEnableMiddlewareForPlatformOnly(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(DisableTelemetryMiddleware)
+
+	svc := newTestService(t, newMockRecordManager())
+
+	DisableTelemetryMiddleware()
+	tr, f := true, false
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Platform: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, TelemetryMiddlewareEnabled(), "PUT with platform=true should enable middleware")
+
+	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Control: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, TelemetryMiddlewareEnabled(), "dropping control should leave the middleware on for platform")
+
+	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Platform: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, TelemetryMiddlewareEnabled(), "dropping platform too should disable middleware")
+}
+
 func TestGetTelemetry(t *testing.T) {
 	ctx := context.Background()
 
