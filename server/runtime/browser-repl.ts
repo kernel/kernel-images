@@ -111,6 +111,8 @@ class Collector {
   private textBytes = 0;
   private imageBytes = 0;
 
+  constructor(private readonly maxItems?: number) {}
+
   addText(channel: TextChannel, text: string): void {
     const bytes = Buffer.byteLength(text);
     if (this.textBytes + bytes > MAX_TEXT_BYTES) {
@@ -122,12 +124,14 @@ class Collector {
           text: Buffer.from(text, 'utf8').subarray(0, remaining).toString('utf8'),
         });
         this.textBytes = MAX_TEXT_BYTES;
+        this.enforceItemLimit();
       }
       this.truncated = true;
       return;
     }
     this.textBytes += bytes;
     this.items.push({ type: 'text', channel, text });
+    this.enforceItemLimit();
   }
 
   /** Returns false when the image was dropped due to the aggregate limit. */
@@ -138,6 +142,7 @@ class Collector {
     }
     this.imageBytes += bytes.length;
     this.items.push({ type: 'image', mime_type: mimeType, data_b64: bytes.toString('base64') });
+    this.enforceItemLimit();
     return true;
   }
 
@@ -154,21 +159,20 @@ class Collector {
     target.truncated ||= this.truncated;
   }
 
-  trimTo(maxItems: number): void {
-    if (this.items.length <= maxItems) return;
-    this.truncated = true;
-    this.items.splice(0, this.items.length - maxItems);
-    this.textBytes = 0;
-    this.imageBytes = 0;
-    for (const item of this.items) {
-      if (item.type === 'text') this.textBytes += Buffer.byteLength(item.text);
-      else this.imageBytes += Buffer.from(item.data_b64, 'base64').length;
+  private enforceItemLimit(): void {
+    if (this.maxItems === undefined) return;
+    while (this.items.length > this.maxItems) {
+      const removed = this.items.shift();
+      if (!removed) return;
+      this.truncated = true;
+      if (removed.type === 'text') this.textBytes -= Buffer.byteLength(removed.text);
+      else this.imageBytes -= Buffer.from(removed.data_b64, 'base64').length;
     }
   }
 }
 
 let activeCollector: Collector | null = null;
-let strayCollector = new Collector();
+let strayCollector = new Collector(MAX_STRAY_ITEMS);
 
 function currentCollector(): Collector {
   return activeCollector ?? strayCollector;
@@ -185,9 +189,7 @@ function boundedInspect(value: unknown): string {
 }
 
 function writeOutput(channel: TextChannel, text: string): void {
-  const collector = currentCollector();
-  collector.addText(channel, text);
-  if (collector === strayCollector) collector.trimTo(MAX_STRAY_ITEMS);
+  currentCollector().addText(channel, text);
 }
 
 // ---------------------------------------------------------------------------
@@ -573,7 +575,7 @@ async function executeRequest(
   // collector owns its counters and truncation bit, so draining cannot leave
   // cumulative limits behind or hide dropped output.
   const drainedStray = strayCollector;
-  strayCollector = new Collector();
+  strayCollector = new Collector(MAX_STRAY_ITEMS);
   drainedStray.drainInto(collector);
 
   activeCollector = collector;

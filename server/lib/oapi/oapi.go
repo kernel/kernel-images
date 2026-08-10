@@ -3368,7 +3368,7 @@ type ExecuteBrowserCodeResult struct {
 	// Content Ordered text/image output produced by the execution
 	Content *[]BrowserExecutionContent `json:"content,omitempty"`
 
-	// ContentTruncated True if text or image output was dropped or truncated due to response limits
+	// ContentTruncated True if text or image output was dropped or truncated due to response limits, including the 1,000-item cap on stray output buffered between executions
 	ContentTruncated *bool `json:"content_truncated,omitempty"`
 
 	// DurationMs Wall-clock execution time in milliseconds

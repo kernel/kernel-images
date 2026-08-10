@@ -184,6 +184,32 @@ func TestBrowserReplStrayItemLimitPropagatesTruncation(t *testing.T) {
 	require.Equal(t, "s500", first.Text, "the oldest stray items should be trimmed")
 }
 
+func TestBrowserReplStrayImageItemLimitPropagatesTruncation(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+
+	// The runtime only needs the PNG signature for MIME sniffing, so keep the
+	// payload tiny while exercising the item limit rather than the byte limit.
+	r := exec(`const png = Buffer.from([137, 80, 78, 71, 0, 0, 0, 0, 0]); setTimeout(async () => { for (let i = 0; i < 1500; i++) await repl.emitImage(png); }, 10); "scheduled"`)
+	require.True(t, r.Success, "schedule failed: %v", r.Error)
+	time.Sleep(50 * time.Millisecond)
+
+	r = exec(`"drain"`)
+	require.True(t, r.Success, "drain failed: %v", r.Error)
+	require.NotNil(t, r.ContentTruncated)
+	require.True(t, *r.ContentTruncated, "dropped stray images must be reported")
+	require.NotNil(t, r.Content)
+	require.Len(t, *r.Content, 1000)
+	for _, item := range *r.Content {
+		image, err := item.AsBrowserExecutionImageContent()
+		require.NoError(t, err)
+		require.Equal(t, oapi.BrowserExecutionImageContentType("image"), image.Type)
+	}
+}
+
 func TestBrowserReplNestedVarBindingsPersist(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {

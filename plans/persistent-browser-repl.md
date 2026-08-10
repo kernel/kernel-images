@@ -260,8 +260,9 @@ Image bytes are base64-encoded only inside typed image content. They are never e
 
 Initial limits:
 
-- 1,000 buffered stray content items; trimming older items sets
-  `content_truncated` on the next drained response
+- 1,000 buffered stray content items (including images emitted between
+  executions); trimming older items sets `content_truncated` on the next
+  drained response
 - 8 MiB decoded per emitted image
 - 16 MiB decoded image data per response
 - 256 KiB combined text output per response

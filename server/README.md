@@ -110,9 +110,10 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   sniffing). Limits: 8 MiB per image, 16 MiB aggregate image data, 256 KiB
   combined text, and 256 KiB serialized result per response; violations set
   `content_truncated` / `result_truncated` instead of failing silently; stray
-  output is also capped at 1,000 items and reports `content_truncated` when
-  older items are discarded. Request bodies are limited to 8 MiB before strict
-  decoding, and the API rejects any marshaled daemon request that would exceed
+  output, including images emitted between executions, is capped at 1,000
+  items and reports `content_truncated` when older items are discarded.
+  Request bodies are limited to 8 MiB before strict decoding, and the API
+  rejects any marshaled daemon request that would exceed
   the daemon's 8 MiB newline-delimited request-line limit without terminating
   the REPL. HTML-sensitive code is sent without JSON HTML escaping.
 - `capture_screenshot()` stays file-oriented (returns a VM path); emit it

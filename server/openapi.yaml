@@ -4038,7 +4038,7 @@ components:
           description: True if the serialized result exceeded the response limit and was replaced by result_repr
         content_truncated:
           type: boolean
-          description: True if text or image output was dropped or truncated due to response limits
+          description: True if text or image output was dropped or truncated due to response limits, including the 1,000-item cap on stray output buffered between executions
         repl_terminated:
           type: boolean
           description: |
