@@ -946,7 +946,3 @@ func TestBrowserReplScrollFallback(t *testing.T) {
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.Result)
 }
-
-// TestBrowserReplAsyncConstLetSemantics covers const/let behavior across
-// module cells containing top-level await. Bindings must keep real JavaScript semantics no matter which
-// evaluation path declared them.

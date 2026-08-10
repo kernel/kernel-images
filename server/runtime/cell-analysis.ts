@@ -17,7 +17,7 @@ export interface CellAnalysis {
   source: string;
   bindings: CellBinding[];
   edits: SourceEdit[];
-  hoistedFunctions: string[];
+  hoistedFunctionNames: string[];
   finalExpression?: { statementStart: number; statementEnd: number; expressionStart: number; expressionEnd: number };
 }
 
@@ -39,20 +39,20 @@ function collectPatternNames(pattern: ESTree.Pattern | null, out: string[]): voi
       return;
     case 'ObjectPattern':
       for (const property of pattern.properties) {
-        if (property.type === 'RestElement') collectPatternNames(property.argument as ESTree.Pattern, out);
-        else if (property.type === 'Property') collectPatternNames(property.value as ESTree.Pattern, out);
+        if (property.type === 'RestElement') collectPatternNames(asPattern(property.argument), out);
+        else if (property.type === 'Property') collectPatternNames(asPattern(property.value), out);
       }
       return;
     case 'ArrayPattern':
       for (const element of pattern.elements) {
-        if (element) collectPatternNames(element as ESTree.Pattern, out);
+        if (element) collectPatternNames(asPattern(element), out);
       }
       return;
     case 'AssignmentPattern':
-      collectPatternNames(pattern.left as ESTree.Pattern, out);
+      collectPatternNames(asPattern(pattern.left), out);
       return;
     case 'RestElement':
-      collectPatternNames(pattern.argument as ESTree.Pattern, out);
+      collectPatternNames(asPattern(pattern.argument), out);
       return;
     case 'MemberExpression':
       return;
@@ -62,7 +62,7 @@ function collectPatternNames(pattern: ESTree.Pattern | null, out: string[]): voi
 function addVariableBindings(statement: ESTree.VariableDeclaration, bindings: CellBinding[]): void {
   for (const declaration of statement.declarations) {
     const names: string[] = [];
-    collectPatternNames(declaration.id, names);
+    collectPatternNames(asPattern(declaration.id), names);
     for (const name of names) bindings.push({ name, kind: statement.kind as CellBindingKind });
   }
 }
@@ -72,23 +72,39 @@ function propertyText(property: ESTree.Property, source: string): string {
   return source.slice(start, end);
 }
 
-/** Turn a binding pattern into an assignment target backed by globalThis. */
-function globalPattern(pattern: ESTree.Pattern, source: string): string {
+function asPattern(node: ESTree.Node): ESTree.Pattern {
+  switch (node.type) {
+    case 'Identifier':
+    case 'ObjectPattern':
+    case 'ArrayPattern':
+    case 'AssignmentPattern':
+    case 'RestElement':
+    case 'MemberExpression':
+      return node;
+    default:
+      throw new Error(`unsupported binding pattern: ${node.type}`);
+  }
+}
+
+const GLOBAL_TARGET = 'globalThis["__browser_repl_init_target"]';
+
+/** Turn a binding pattern into an assignment target backed by a runtime accessor. */
+function globalPattern(pattern: ESTree.Pattern, source: string, initialize: boolean): string {
   switch (pattern.type) {
     case 'Identifier':
-      return `globalThis[${JSON.stringify(pattern.name)}]`;
+      return `${initialize ? GLOBAL_TARGET : 'globalThis'}[${JSON.stringify(pattern.name)}]`;
     case 'AssignmentPattern':
-      return `${globalPattern(pattern.left as ESTree.Pattern, source)} = ${source.slice(...range(pattern.right!))}`;
+      return `${globalPattern(asPattern(pattern.left), source, initialize)} = ${source.slice(...range(pattern.right!))}`;
     case 'RestElement':
-      return `...${globalPattern(pattern.argument as ESTree.Pattern, source)}`;
+      return `...${globalPattern(asPattern(pattern.argument), source, initialize)}`;
     case 'ArrayPattern':
-      return `[${pattern.elements.map((element) => element ? globalPattern(element as ESTree.Pattern, source) : '').join(', ')}]`;
+      return `[${pattern.elements.map((element) => element ? globalPattern(asPattern(element), source, initialize) : '').join(', ')}]`;
     case 'ObjectPattern':
       return `{${pattern.properties.map((property) => {
-        if (property.type === 'RestElement') return globalPattern(property, source);
+        if (property.type === 'RestElement') return globalPattern(asPattern(property.argument), source, initialize);
         if (property.type !== 'Property') throw new Error(`unsupported object pattern property: ${property.type}`);
         const key = propertyText(property, source);
-        const target = globalPattern(property.value as ESTree.Pattern, source);
+        const target = globalPattern(asPattern(property.value), source, initialize);
         return `${property.computed ? `[${key}]` : key}: ${target}`;
       }).join(', ')}}`;
     case 'MemberExpression':
@@ -96,20 +112,21 @@ function globalPattern(pattern: ESTree.Pattern, source: string): string {
   }
 }
 
-function variableReplacement(statement: ESTree.VariableDeclaration, source: string, expressionPosition: boolean): string {
+function variableReplacement(
+  statement: ESTree.VariableDeclaration,
+  source: string,
+  expressionPosition: boolean,
+  initialize: boolean,
+): string {
   const assignments: string[] = [];
   for (const declaration of statement.declarations) {
     if (!declaration.init && statement.kind === 'var') continue;
-    const target = globalPattern(declaration.id, source);
+    const target = globalPattern(asPattern(declaration.id), source, initialize);
     const value = declaration.init ? source.slice(...range(declaration.init)) : 'undefined';
     assignments.push(`(${target} = ${value})`);
   }
   if (expressionPosition) return assignments.join(', ');
   return assignments.length ? `${assignments.join('; ')};` : '';
-}
-
-function preserveLines(source: string): string {
-  return source.replace(/[^\n]/g, ' ');
 }
 
 function addStatement(
@@ -122,7 +139,11 @@ function addStatement(
     case 'VariableDeclaration':
       if (statement.kind === 'var') {
         addVariableBindings(statement, bindings);
-        edits.push({ start: range(statement)[0], end: range(statement)[1], text: variableReplacement(statement, source, false) });
+        edits.push({
+          start: range(statement)[0],
+          end: range(statement)[1],
+          text: variableReplacement(statement, source, false, false),
+        });
       }
       return;
     case 'BlockStatement':
@@ -135,7 +156,11 @@ function addStatement(
     case 'ForStatement':
       if (statement.init?.type === 'VariableDeclaration' && statement.init.kind === 'var') {
         addVariableBindings(statement.init, bindings);
-        edits.push({ start: range(statement.init)[0], end: range(statement.init)[1], text: variableReplacement(statement.init, source, true) });
+        edits.push({
+          start: range(statement.init)[0],
+          end: range(statement.init)[1],
+          text: variableReplacement(statement.init, source, true, false),
+        });
       }
       addStatement(statement.body, source, bindings, edits);
       return;
@@ -146,8 +171,8 @@ function addStatement(
         // `for (var x of values)` is an assignment target, not an
         // initializer. The declaration is already hoisted by the runtime.
         const target = statement.left.declarations.length === 1
-          ? globalPattern(statement.left.declarations[0].id, source)
-          : variableReplacement(statement.left, source, true);
+          ? globalPattern(asPattern(statement.left.declarations[0].id), source, false)
+          : variableReplacement(statement.left, source, true, false);
         edits.push({ start: range(statement.left)[0], end: range(statement.left)[1], text: target });
       }
       addStatement(statement.body, source, bindings, edits);
@@ -180,6 +205,12 @@ function addStatement(
     case 'ReturnStatement':
     case 'ThrowStatement':
     case 'ImportDeclaration':
+    // Meriyah's broad ESTree Statement union includes these declaration forms,
+    // but analyzeCell rejects them before traversal. Keep the boundary explicit.
+    case 'ClassExpression':
+    case 'ExportAllDeclaration':
+    case 'ExportDefaultDeclaration':
+    case 'ExportNamedDeclaration':
       return;
     default:
       assertNever(statement);
@@ -192,7 +223,11 @@ function assertNever(value: never): never {
 
 function declarationEdit(statement: ESTree.ClassDeclaration, source: string): SourceEdit {
   const [start, end] = range(statement);
-  return { start, end, text: `globalThis[${JSON.stringify(statement.id!.name)}] = (${source.slice(start, end)});` };
+  return {
+    start,
+    end,
+    text: `globalThis["__browser_repl_init_target"][${JSON.stringify(statement.id!.name)}] = (${source.slice(start, end)});`,
+  };
 }
 
 export function analyzeCell(source: string): CellAnalysis {
@@ -215,16 +250,21 @@ export function analyzeCell(source: string): CellAnalysis {
 
   const bindings: CellBinding[] = [];
   const edits: SourceEdit[] = [];
-  const hoistedFunctions: string[] = [];
+  const hoistedFunctionNames: string[] = [];
   for (const statement of ast.body) {
     if (statement.type === 'VariableDeclaration') {
       addVariableBindings(statement, bindings);
-      edits.push({ start: range(statement)[0], end: range(statement)[1], text: variableReplacement(statement, source, false) });
+      edits.push({
+        start: range(statement)[0],
+        end: range(statement)[1],
+        text: variableReplacement(statement, source, false, statement.kind !== 'var'),
+      });
     } else if (statement.type === 'FunctionDeclaration' && statement.id) {
       bindings.push({ name: statement.id.name, kind: 'function' });
-      const [start, end] = range(statement);
-      hoistedFunctions.push(`globalThis[${JSON.stringify(statement.id.name)}] = (${source.slice(start, end)})`);
-      edits.push({ start, end, text: preserveLines(source.slice(start, end)) });
+      // Leave the declaration in the module body. Module instantiation makes
+      // it callable before statements run; only its persistent accessor needs
+      // a single-line prelude assignment.
+      hoistedFunctionNames.push(statement.id.name);
     } else if (statement.type === 'ClassDeclaration' && statement.id) {
       bindings.push({ name: statement.id.name, kind: 'class' });
       edits.push(declarationEdit(statement, source));
@@ -238,7 +278,7 @@ export function analyzeCell(source: string): CellAnalysis {
     source,
     bindings,
     edits,
-    hoistedFunctions,
+    hoistedFunctionNames,
     finalExpression:
       last?.type === 'ExpressionStatement'
         ? {

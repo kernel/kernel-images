@@ -20,23 +20,39 @@ type PersistentBinding = CellBinding & { initialized: boolean; value?: unknown }
  * Evaluates each request as a SourceTextModule while keeping bindings in the
  * context global object. A global accessor is the one binding for a name: old
  * closures, new cells, timers, and direct reads all observe the same value.
- * @prev remains the module-link boundary between cells, but it is no longer a
- * lossy value snapshot used to manufacture competing lexical bindings.
+ * Persistent bindings are backed entirely by these accessors; modules do not
+ * import or snapshot state from earlier cells.
  */
 export class CellRuntime {
   private readonly declarations = new Map<string, CellBindingKind>();
   private readonly values = new Map<string, PersistentBinding>();
+  private readonly initializationTarget: Record<PropertyKey, unknown>;
   private sequence = 0;
 
   constructor(
     private readonly context: vm.Context,
     private readonly contextGlobal: Record<PropertyKey, unknown>,
-  ) {}
+  ) {
+    this.initializationTarget = new Proxy({}, {
+      set: (_target, property, value) => {
+        if (typeof property !== 'string') return false;
+        const binding = this.values.get(property);
+        if (!binding) throw new ReferenceError(`Unknown persistent binding '${property}'`);
+        binding.value = value;
+        binding.initialized = true;
+        return true;
+      },
+    });
+    Object.defineProperty(this.contextGlobal, '__browser_repl_init_target', {
+      configurable: false,
+      enumerable: false,
+      value: this.initializationTarget,
+    });
+  }
 
   async evaluate(source: string): Promise<CellEvaluation> {
     const analysis = analyzeCell(source);
     this.precheck(analysis.bindings);
-    const previousModule = this.makePreviousModule();
 
     const currentNames = bindingNames(analysis.bindings);
     const resultName = analysis.finalExpression ? this.freshResultName(currentNames) : undefined;
@@ -45,8 +61,8 @@ export class CellRuntime {
     const module = new vm.SourceTextModule(generated, {
       context: this.context,
       identifier: `browser-repl-cell-${this.sequence++}.mjs`,
-      // buildSource keeps its import and function prelude on one physical line.
-      // This makes generated line 2 correspond to user line 1.
+      // buildSource keeps its accessor prelude on one physical line. This
+      // makes generated line 2 correspond to user line 1.
       lineOffset: -1,
       initializeImportMeta(meta) {
         meta.url = 'file:///browser-repl-cell.mjs';
@@ -65,16 +81,15 @@ export class CellRuntime {
       },
     });
 
-    await module.link(async (specifier) => {
-      if (specifier === '@prev') return previousModule;
-      throw new Error(`static import is not supported in the browser REPL: ${specifier}`);
+    await module.link(() => {
+      throw new Error('static import is not supported in the browser REPL');
     });
 
     this.prepareBindings(analysis.bindings);
     this.register(analysis.bindings);
     await module.evaluate();
 
-    const value = resultName ? this.readExport(module, resultName).value : undefined;
+    const value = resultName ? Reflect.get(module.namespace, resultName) : undefined;
     return { value };
   }
 
@@ -114,8 +129,8 @@ export class CellRuntime {
       const binding: PersistentBinding = {
         name,
         kind,
-        initialized: kind === 'var' ? true : false,
-        value: kind === 'var' ? undefined : undefined,
+        initialized: kind === 'var',
+        value: undefined,
       };
       this.values.set(name, binding);
       this.exposeGlobal(binding);
@@ -126,14 +141,6 @@ export class CellRuntime {
     let candidate = `__browser_repl_result_${this.sequence}`;
     while (names.has(candidate) || this.declarations.has(candidate) || this.values.has(candidate)) candidate += '_';
     return candidate;
-  }
-
-  private makePreviousModule(): vm.SyntheticModule {
-    const previous = new Map(this.values);
-    const names = [...previous.keys()];
-    return new vm.SyntheticModule(names, function () {
-      for (const name of names) this.setExport(name, previous.get(name)?.value);
-    }, { context: this.context, identifier: 'browser-repl-@prev' });
   }
 
   private buildSource(analysis: CellAnalysis, resultName: string | undefined): string {
@@ -147,19 +154,10 @@ export class CellRuntime {
       });
     }
     const body = applyEdits(analysis.source, edits);
-    const prelude = [
-      'import * as __prev from "@prev"; void __prev;',
-      ...analysis.hoistedFunctions.map((functionSource) => `${functionSource};`),
-    ].join(' ');
+    const prelude = analysis.hoistedFunctionNames
+      .map((name) => `globalThis["__browser_repl_init_target"][${JSON.stringify(name)}] = ${name};`)
+      .join(' ');
     return `${prelude}\n${body}${resultName ? `\nexport { ${resultName} };` : ''}`;
-  }
-
-  private readExport(module: vm.SourceTextModule, name: string): { initialized: boolean; value?: unknown } {
-    try {
-      return { initialized: true, value: module.namespace[name] };
-    } catch {
-      return { initialized: false };
-    }
   }
 
   private exposeGlobal(binding: PersistentBinding): void {
@@ -177,6 +175,9 @@ export class CellRuntime {
         return binding.value;
       },
       set: (value: unknown) => {
+        if (binding.kind !== 'var' && !binding.initialized) {
+          throw new ReferenceError(`Cannot access '${binding.name}' before initialization`);
+        }
         if (binding.kind === 'const' && binding.initialized) {
           throw new TypeError('Assignment to constant variable.');
         }

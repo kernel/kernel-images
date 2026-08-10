@@ -94,6 +94,23 @@ func TestBrowserReplPartialDeclaratorInitialization(t *testing.T) {
 }
 
 func TestBrowserReplErrorStackUsesCellLines(t *testing.T) {
+	t.Run("after multiline function", func(t *testing.T) {
+		svc := newBrowserReplSvc(t)
+		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "function stackLineHelper() {\n  return 1;\n}\nconst stackLineValue = stackLineHelper();\nthrow new Error(\"line probe\");"})
+		require.False(t, r.Success)
+		require.NotNil(t, r.Stack)
+		require.Contains(t, *r.Stack, ".mjs:5:", *r.Stack)
+	})
+
+	t.Run("inside multiline function", func(t *testing.T) {
+		svc := newBrowserReplSvc(t)
+		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "function stackLineHelper() {\n  throw new Error(\"line probe\");\n}\nstackLineHelper();"})
+		require.False(t, r.Success)
+		require.NotNil(t, r.Stack)
+		require.Contains(t, *r.Stack, ".mjs:2:", *r.Stack)
+	})
+
+	// A cell without a declaration still uses the same one-line offset.
 	svc := newBrowserReplSvc(t)
 	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "let stackLineProbe = 1;\nthrow new Error(\"line probe\");"})
 	require.False(t, r.Success)
@@ -101,7 +118,7 @@ func TestBrowserReplErrorStackUsesCellLines(t *testing.T) {
 	require.True(t, strings.Contains(*r.Stack, "browser-repl-cell-") && strings.Contains(*r.Stack, ".mjs:2:"), *r.Stack)
 }
 
-func TestBrowserReplAsyncConstLetSemantics(t *testing.T) {
+func TestBrowserReplConstLetSemantics(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	await_ := "await new Promise(r => setTimeout(r, 1)); "
 
@@ -123,8 +140,8 @@ func TestBrowserReplAsyncConstLetSemantics(t *testing.T) {
 		require.Equal(t, want, r.Result, "code: %q", code)
 	}
 
-	// const declared in async mode keeps redeclaration protection and
-	// immutability on both paths.
+	// const keeps redeclaration protection and immutability with and without
+	// top-level await.
 	exec(`const qaConst = 1; ` + await_ + `'declared'`)
 	expectErr(`const qaConst = 2; `+await_+`qaConst`, "Identifier 'qaConst' has already been declared")
 	expectErr(`qaConst = 99; `+await_+`qaConst`, "Assignment to constant variable.")
@@ -151,19 +168,28 @@ func TestBrowserReplAsyncConstLetSemantics(t *testing.T) {
 	expectResult(`const { a: qaA, b: qaB } = { a: 1, b: 2 }; `+await_+`qaA + qaB`, float64(3))
 	expectErr(`qaA = 5`, "Assignment to constant variable.")
 
-	// Cross-path conflicts: a fast-path declaration cannot be redeclared in
-	// async mode, and an async-mode declaration cannot be redeclared on the
-	// fast path.
+	// Redeclaration protection is consistent with and without top-level await.
 	exec(`const qaFastConst = 'fc'`)
 	expectErr(`const qaFastConst = 'x'; `+await_+`1`, "Identifier 'qaFastConst' has already been declared")
 	exec(`const qaAsyncConst = 'ac'; ` + await_ + `1`)
 	expectErr(`const qaAsyncConst = 'x'`, "Identifier 'qaAsyncConst' has already been declared")
 	expectResult(`qaAsyncConst`, "ac")
 
-	// A failed initializer still reserves the name (script declarations
-	// instantiate before the first statement runs).
+	// A failed initializer still reserves the name and leaves it in the TDZ
+	// (module declarations instantiate before the first statement runs).
 	expectErr(`let qaFailLet = (() => { throw new Error('initfail') })(); 1`, "initfail")
 	expectErr(`let qaFailLet = 2; 2`, "Identifier 'qaFailLet' has already been declared")
+
+	// Writes before a lexical declaration are also TDZ errors, rather than
+	// initialization through the persistent accessor.
+	expectErr(`qaWriteTdz = 1; let qaWriteTdz = 2`, "before initialization")
+	expectErr(`qaWriteTdz = 3`, "before initialization")
+	expectErr(`qaConstWriteTdz = 1; const qaConstWriteTdz = 2`, "before initialization")
+
+	// A failed const initializer remains uninitialized and cannot be repaired by
+	// a later assignment.
+	expectErr(`const qaFailConst = (() => { throw new Error('constinitfail') })()`, "constinitfail")
+	expectErr(`qaFailConst = 7`, "before initialization")
 
 	// None of the failures above terminated the REPL.
 	r := exec(`repl.id`)

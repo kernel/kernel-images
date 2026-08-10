@@ -3979,7 +3979,10 @@ components:
             are live context-global accessors: closures and timers observe later-cell
             assignments. `var` in top-level nested statements persists; function and
             nested-block locals do not. Lexical names are reserved after linking, so
-            retry a failed declaration with a new name or reset the REPL.
+            retry a failed declaration with a new name or reset the REPL. A failed
+            lexical initializer leaves that name in the TDZ; assignments cannot
+            initialize it. Static top-level imports are rejected; use dynamic `import()`.
+            The implicit result is always the value of the final expression statement.
             May be empty only when reset is true.
         timeout_sec:
           type: integer
@@ -4032,8 +4035,8 @@ components:
           type: boolean
           description: |
             True if the REPL identified by repl_id was terminated by this request
-            (timeout or protocol corruption). The next request lazily starts a
-            fresh REPL with a new repl_id.
+            (timeout, protocol corruption, or a REPL crash/uncaught exception).
+            The next request lazily starts a fresh REPL with a new repl_id.
         duration_ms:
           type: integer
           description: Wall-clock execution time in milliseconds

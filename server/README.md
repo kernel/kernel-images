@@ -91,11 +91,10 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   observe later-cell assignments. `var` declarations in top-level nested
   statements persist; locals inside functions or nested lexical blocks do not.
   Lexical names are reserved after linking: retry a failed declaration with a
-  new name or use `reset: true`. Static top-level imports are not; use dynamic
-  imports. When top-level
-  `await` is used, the implicit result is the value of the final expression
-  statement, so end the snippet with an expression to return a value. Top-level
-  `return` is rejected.
+  new name or use `reset: true`. Static top-level imports are rejected; use dynamic
+  `import()` instead. The implicit result is always the value of the final expression
+  statement, so end the snippet with an expression to return a value. Top-level `return`
+  is rejected.
 - A timeout is destructive (JavaScript cannot be interrupted safely): the API
   kills the REPL process group and responds with `repl_terminated: true` and
   the terminated REPL's ID. The next request lazily starts a fresh REPL.
