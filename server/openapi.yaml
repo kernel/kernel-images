@@ -1310,7 +1310,7 @@ paths:
           $ref: "#/components/responses/InternalError"
   /browser/execute:
     post:
-      summary: Execute JavaScript/TypeScript in a persistent browser REPL
+      summary: Execute JavaScript in a persistent browser REPL
       description: |
         Execute code in a persistent Node.js runtime preloaded with browser-control
         helpers (goto_url, page_info, click_at_xy, capture_screenshot, tab management,
@@ -3969,7 +3969,7 @@ components:
         code:
           type: string
           description: |
-            JavaScript or TypeScript evaluated in a persistent Node.js runtime.
+            JavaScript evaluated in a persistent Node.js runtime.
             Top-level bindings persist until the API process exits, the REPL is
             reset, or the REPL is terminated after a crash or timeout.
             May be empty only when reset is true.

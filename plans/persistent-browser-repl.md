@@ -59,7 +59,7 @@ ExecuteBrowserCodeRequest:
     code:
       type: string
       description: |
-        JavaScript or TypeScript evaluated in a persistent Node.js runtime.
+        JavaScript evaluated in a persistent Node.js runtime.
         Top-level bindings persist until the API process exits, the REPL is
         reset, or the REPL is terminated after a crash or timeout.
     timeout_sec:
@@ -336,25 +336,29 @@ Some Chromium builds drop the browser-side dialog record when the owning DevTool
 
 The runtime supports:
 
-- top-level `await`
-- persistent `var`, `let`, `const`, function, and class declarations
+- one complete JavaScript cell per request, evaluated as a fresh `vm.SourceTextModule`
+- top-level `await` and implicit final-expression results
+- persistent `var`, `let`, `const`, function, and class bindings
 - dynamic `import()`
-- TypeScript syntax through the existing esbuild installation
-- implicit final-expression results
+- an internal `vm.SyntheticModule` named `@prev` carrying prior-cell values
 
-Static top-level imports need not be supported in v1; callers can use dynamic imports. Every static `import`/`export` form — used or unused — is rejected with the same clear error. The esbuild TypeScript transform runs with `preserveValueImports` so its unused-import elision cannot drop the statement, and the check runs on the transformed output, so the rejection is unconditional even when TypeScript-only syntax precedes the import. Type-only imports (`import type ...`) are erased by the transform and remain allowed.
+Static top-level imports and exports are rejected; callers use dynamic `import()`. Top-level `return` is rejected.
 
-Redeclaration follows JavaScript semantics. In particular, a prior top-level `const` cannot be redeclared. `reset: true` is the recovery mechanism when names cannot be reused safely.
+Meriyah is the exact-pinned normal dependency used for cell metadata: declaration
+kinds, binding names, static-module rejection, and the final expression are
+identified before module construction. A declaration registry performs the
+cross-cell early-error check before effects. `var` and `function` may redeclare
+each other; `let`/`const`/`class` conflict with every prior declaration. A fresh
+module imports prior values from `@prev`, creates module-local mutable or
+immutable bindings as appropriate, and exports initialized bindings back into
+the next cell. `const` remains immutable, while `let`/`var`/function/class
+mutations are committed after evaluation.
 
-This holds on both evaluation paths. The synchronous path runs as a classic script, so the vm enforces it natively. The async-wrapper path (any code using top-level `await` or `return`) cannot rely on the context's global lexical scope, so the runtime enforces the same rules itself:
-
-- A registry tracks every top-level binding created on either path. Declaring a name that conflicts with an existing binding is an early error (`SyntaxError: Identifier '<name>' has already been declared`) raised before any user code runs — no matter which path declared the name first. As in classic scripts, `var` and `function` may redeclare each other; `let`/`const`/`class` conflict with any prior declaration of the same name.
-- `let`/`const`/`class` bindings declared in async-wrapper mode are exported to the context global with real mutability semantics: `const` is backed by an accessor whose setter throws `TypeError: Assignment to constant variable.` on either path, and `let`/`class` become writable, non-configurable properties. Script-level declarations instantiate before the first statement runs, so a name stays reserved even when its initializer throws.
-- One corner is approximate: a fast-path `let x;` left `undefined` is invisible to the cross-path check, so an async-wrapper redeclaration of that exact name would shadow it instead of throwing.
-
-When code uses top-level `await` or `return`, the implicit result is the value of the final expression statement (or an explicit `return`). A trailing block statement (`try`/`if`/`for`/`while`) yields no implicit result in that mode (`undefined`), unlike the synchronous path, which reports the block's completion value. End the submission with an explicit expression to observe a value.
-
-A failed execution does not automatically reset the REPL. Bindings initialized before the failure may remain available, matching normal persistent-runtime behavior.
+If evaluation fails, initialized exports are committed in execution order and
+uninitialized declarations remain reserved, matching the state JavaScript has
+actually established before the failure. The REPL process is not reset for an
+ordinary exception. Reset and destructive timeout/crash recovery still create
+a new process.
 
 ## Timeout and Failure Semantics
 
@@ -492,7 +496,7 @@ Do not refactor `/playwright/execute` during the initial implementation. Shared 
 
 ### Images
 
-Bundle the runtime in both headful and headless Dockerfiles. Reuse the existing Node and esbuild installations. Add an image-resizing dependency only if CDP screenshot scaling cannot implement `max_dim` accurately.
+Bundle the runtime in both headful and headless Dockerfiles with the exact-pinned Meriyah dependency. Launch the daemon with `--experimental-vm-modules` on Node 22. The image build may continue using its existing bundler for build-time compilation; the browser REPL has no runtime bundler or TypeScript dependency. Add an image-resizing dependency only if CDP screenshot scaling cannot implement `max_dim` accurately.
 
 ## Test Plan
 

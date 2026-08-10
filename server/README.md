@@ -75,7 +75,7 @@ export OUTPUT_DIR=/tmp/recordings
 
 ### Persistent Browser REPL
 
-`POST /browser/execute` evaluates JavaScript/TypeScript in a persistent Node.js
+`POST /browser/execute` evaluates JavaScript in a persistent Node.js
 runtime that is preloaded with browser-control helpers and an unrestricted
 `cdp()` escape hatch.
 
@@ -86,11 +86,11 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   stable across calls and Chromium reconnects, and changes after an API
   restart, `reset: true`, an execution timeout, or a REPL crash.
 - Top-level `await`, persistent `let`/`const`/`var`/function/class bindings,
-  dynamic `import()`, and TypeScript syntax (via esbuild) are supported.
+  dynamic `import()`, and implicit final-expression results are supported.
   Static top-level imports are not; use dynamic imports. When top-level
-  `await`/`return` is used, the implicit result is the value of the final
-  expression statement, so end the snippet with an expression (or an explicit
-  `return`) to return a value.
+  `await` is used, the implicit result is the value of the final expression
+  statement, so end the snippet with an expression to return a value. Top-level
+  `return` is rejected.
 - A timeout is destructive (JavaScript cannot be interrupted safely): the API
   kills the REPL process group and responds with `repl_terminated: true` and
   the terminated REPL's ID. The next request lazily starts a fresh REPL.
