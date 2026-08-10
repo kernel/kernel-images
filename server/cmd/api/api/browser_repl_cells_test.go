@@ -71,6 +71,33 @@ func TestBrowserReplFunctionDeclarationsUsePersistentAccessor(t *testing.T) {
 	r = exec(`function replDuplicate() { return 1; } function replDuplicate() { return 2; } replDuplicate()`)
 	require.True(t, r.Success, "duplicate declaration failed: %v", r.Error)
 	require.Equal(t, float64(2), r.Result)
+
+	r = exec(`function replFunctionNameProbe() {} replFunctionNameProbe.name`)
+	require.True(t, r.Success, "function name probe failed: %v", r.Error)
+	require.Equal(t, "replFunctionNameProbe", r.Result)
+}
+
+func TestBrowserReplBracelessMultiDeclaratorVarPreservesControlFlow(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+
+	cases := []struct {
+		code string
+		want interface{}
+	}{
+		{`if (false) var bracelessIfX = 1, bracelessIfY = 2; typeof bracelessIfY`, "undefined"},
+		{`do var bracelessDoX = 1, bracelessDoY = 2; while (false); bracelessDoX + bracelessDoY`, float64(3)},
+		{`for (const bracelessForElement of [1, 2]) var bracelessForX = bracelessForElement, bracelessForY = bracelessForElement * 2; bracelessForY`, float64(4)},
+		{`var bracelessCommentX = 1 /* comma, stays */, bracelessCommentY = 2; bracelessCommentX + bracelessCommentY`, float64(3)},
+	}
+	for _, test := range cases {
+		r := exec(test.code)
+		require.True(t, r.Success, "code %q failed: %v", test.code, r.Error)
+		require.Equal(t, test.want, r.Result, "code: %q", test.code)
+	}
 }
 
 func TestBrowserReplBracelessVarWithoutInitializerPreservesControlFlow(t *testing.T) {
@@ -94,6 +121,45 @@ func TestBrowserReplBracelessVarWithoutInitializerPreservesControlFlow(t *testin
 		require.True(t, r.Success, "code %q failed: %v", test.code, r.Error)
 		require.Equal(t, test.want, r.Result, "code: %q", test.code)
 	}
+}
+
+func TestBrowserReplStrayOutputBufferResetsAndPropagatesTruncation(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	exec := func(code string) oapi.ExecuteBrowserCode200JSONResponse {
+		t.Helper()
+		return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	}
+	largeOutput := 256 * 1024
+	schedule := fmt.Sprintf(`setTimeout(() => { repl.write("a".repeat(%d)); repl.write("dropped"); }, 10); "scheduled"`, largeOutput)
+
+	r := exec(schedule)
+	require.True(t, r.Success, "schedule failed: %v", r.Error)
+	time.Sleep(50 * time.Millisecond)
+
+	r = exec(`"drain"`)
+	require.True(t, r.Success, "drain failed: %v", r.Error)
+	require.NotNil(t, r.ContentTruncated)
+	require.True(t, *r.ContentTruncated, "dropped stray output must be reported")
+	require.NotNil(t, r.Content)
+	require.Len(t, *r.Content, 1)
+	content, err := (*r.Content)[0].AsBrowserExecutionTextContent()
+	require.NoError(t, err)
+	require.Len(t, content.Text, largeOutput)
+
+	// The first drain must reset the collector's private byte budget. A second
+	// max-sized stray item should therefore survive into the next execution.
+	r = exec(fmt.Sprintf(`setTimeout(() => repl.write("b".repeat(%d)), 10); "scheduled"`, largeOutput))
+	require.True(t, r.Success, "second schedule failed: %v", r.Error)
+	time.Sleep(50 * time.Millisecond)
+	r = exec(`"second drain"`)
+	require.True(t, r.Success, "second drain failed: %v", r.Error)
+	require.NotNil(t, r.ContentTruncated)
+	require.False(t, *r.ContentTruncated)
+	require.NotNil(t, r.Content)
+	require.Len(t, *r.Content, 1)
+	content, err = (*r.Content)[0].AsBrowserExecutionTextContent()
+	require.NoError(t, err)
+	require.Len(t, content.Text, largeOutput)
 }
 
 func TestBrowserReplNestedVarBindingsPersist(t *testing.T) {
@@ -642,6 +708,13 @@ func TestStrictBrowserExecuteBodyMiddleware(t *testing.T) {
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(`{"code":"1","timeout_sec":5,"reset":false}`)))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, `{"code":"1","timeout_sec":5,"reset":false}`, rec.Body.String())
+
+	// The middleware bounds its own buffering before strict decoding.
+	rec = httptest.NewRecorder()
+	huge := `{"code":"` + strings.Repeat("x", maxBrowserExecuteBodyBytes) + `"}`
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(huge)))
+	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	require.Contains(t, rec.Body.String(), "request body exceeds")
 
 	// Malformed JSON is left for the strict handler's own 400 path.
 	rec = httptest.NewRecorder()

@@ -181,7 +181,10 @@ export class CellRuntime {
     }
     const body = applyEdits(analysis.source, edits);
     const prelude = analysis.hoistedFunctions
-      .map(({ name, alias }) => `${initializationTarget}[${JSON.stringify(name)}] = ${alias};`)
+      .map(({ name, alias }) =>
+        `Object.defineProperty(${alias}, "name", { value: ${JSON.stringify(name)}, configurable: true }); ` +
+        `${initializationTarget}[${JSON.stringify(name)}] = ${alias};`,
+      )
       .join(' ');
     return `${prelude}\n${body}${resultName ? `\nexport { ${resultName} };` : ''}`;
   }

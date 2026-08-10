@@ -92,11 +92,14 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   those accessors too, including same-cell closures and assignments. `var`
   declarations in top-level nested
   statements persist; locals inside functions or nested lexical blocks do not.
-  Lexical names are reserved after linking: retry a failed declaration with a
-  new name or use `reset: true`. Static top-level imports are rejected; use dynamic
-  `import()` instead. The implicit result is always the value of the final expression
-  statement, so end the snippet with an expression to return a value. Top-level `return`
-  is rejected.
+  Braceless multi-declarator `var` statements retain their single-statement
+  control-flow semantics. Lexical names are reserved after linking: retry a
+  failed declaration with a new name or use `reset: true`. Function `.name` is
+  preserved; `Function.prototype.toString()` may expose the generated internal
+  alias. Static top-level imports are rejected; use dynamic `import()` instead.
+  The implicit result is always the value of the final expression statement, so
+  end the snippet with an expression to return a value. Top-level `return` is
+  rejected.
 - A timeout is destructive (JavaScript cannot be interrupted safely): the API
   kills the REPL process group and responds with `repl_terminated: true` and
   the terminated REPL's ID. The next request lazily starts a fresh REPL.
@@ -105,7 +108,8 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   `console.warn/error`) and images (`repl.emitImage`, base64 with MIME
   sniffing). Limits: 8 MiB per image, 16 MiB aggregate image data, 256 KiB
   combined text, and 256 KiB serialized result per response; violations set
-  `content_truncated` / `result_truncated` instead of failing silently.
+  `content_truncated` / `result_truncated` instead of failing silently. Request
+  bodies are limited to 8 MiB before strict decoding.
 - `capture_screenshot()` stays file-oriented (returns a VM path); emit it
   explicitly with `await repl.emitImage({ path })`.
 - Helpers are exposed both as bare globals (`goto_url`, `page_info`,

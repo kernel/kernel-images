@@ -27,6 +27,10 @@ const (
 	defaultBrowserReplScript = "/usr/local/lib/browser-repl.js"
 	defaultBrowserReplHeapMB = 512
 
+	// Keep the HTTP envelope bounded before it is copied for strict decoding.
+	// The daemon independently caps each newline-delimited request at 8 MiB.
+	maxBrowserExecuteBodyBytes = 8 * 1024 * 1024
+
 	// browserReplStartupTimeout is how long the API waits for a freshly
 	// spawned REPL child to begin accepting socket connections.
 	browserReplStartupTimeout = 15 * time.Second
@@ -438,9 +442,15 @@ func StrictBrowserExecuteBodyMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		body, err := io.ReadAll(r.Body)
+		limitedBody := http.MaxBytesReader(w, r.Body, maxBrowserExecuteBodyBytes)
+		body, err := io.ReadAll(limitedBody)
 		_ = r.Body.Close()
 		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				http.Error(w, fmt.Sprintf("request body exceeds %d bytes", maxBrowserExecuteBodyBytes), http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "failed to read request body", http.StatusBadRequest)
 			return
 		}

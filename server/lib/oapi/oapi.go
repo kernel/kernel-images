@@ -3341,12 +3341,16 @@ type ExecuteBrowserCodeRequest struct {
 	// Top-level bindings persist until the API process exits, the REPL is
 	// reset, or the REPL is terminated after a crash or timeout. Persistent names
 	// are live context-global accessors: closures and timers observe later-cell
-	// assignments. `var` in top-level nested statements persists; function and
-	// nested-block locals do not. Lexical names are reserved after linking, so
-	// retry a failed declaration with a new name or reset the REPL. A failed
-	// lexical initializer leaves that name in the TDZ; assignments cannot
-	// initialize it. Static top-level imports are rejected; use dynamic `import()`.
-	// The implicit result is always the value of the final expression statement.
+	// assignments. Function declarations use the same accessor path, including
+	// same-cell closures and assignments. Braceless multi-declarator `var`
+	// statements retain their single-statement control-flow semantics. `var` in
+	// top-level nested statements persists; function and nested-block locals do
+	// not. Function `.name` is preserved; `Function.prototype.toString()` may
+	// expose the generated internal alias. Lexical names are reserved after
+	// linking, so retry a failed declaration with a new name or reset the REPL.
+	// A failed lexical initializer leaves that name in the TDZ; assignments
+	// cannot initialize it. Static top-level imports are rejected; use dynamic
+	// `import()`. The implicit result is always the value of the final expression statement.
 	// May be empty only when reset is true.
 	Code string `json:"code"`
 

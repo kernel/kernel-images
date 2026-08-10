@@ -144,10 +144,26 @@ class Collector {
       this.addImage(item.mime_type, Buffer.from(item.data_b64, 'base64'));
     }
   }
+
+  drainInto(target: Collector): void {
+    for (const item of this.items) target.adopt(item);
+    target.truncated ||= this.truncated;
+  }
+
+  trimTo(maxItems: number): void {
+    if (this.items.length <= maxItems) return;
+    this.items.splice(0, this.items.length - maxItems);
+    this.textBytes = 0;
+    this.imageBytes = 0;
+    for (const item of this.items) {
+      if (item.type === 'text') this.textBytes += Buffer.byteLength(item.text);
+      else this.imageBytes += Buffer.from(item.data_b64, 'base64').length;
+    }
+  }
 }
 
 let activeCollector: Collector | null = null;
-const strayCollector = new Collector();
+let strayCollector = new Collector();
 
 function currentCollector(): Collector {
   return activeCollector ?? strayCollector;
@@ -166,9 +182,7 @@ function boundedInspect(value: unknown): string {
 function writeOutput(channel: TextChannel, text: string): void {
   const collector = currentCollector();
   collector.addText(channel, text);
-  if (collector === strayCollector && strayCollector.items.length > MAX_STRAY_ITEMS) {
-    strayCollector.items.splice(0, strayCollector.items.length - MAX_STRAY_ITEMS);
-  }
+  if (collector === strayCollector) collector.trimTo(MAX_STRAY_ITEMS);
 }
 
 // ---------------------------------------------------------------------------
@@ -549,15 +563,13 @@ async function executeRequest(
   // before exiting, instead of leaving the caller with a bare EOF.
   activeExecution = { request, collector, respond, start };
 
-  // Drain output produced outside any execution (e.g. timers scheduled by a
-  // completed execution) into this execution, preserving order ahead of new
-  // output. Output from a timed-out execution can never reach this buffer:
-  // the API parent kills the process on timed_out before the next request.
-  for (const item of strayCollector.items) {
-    collector.adopt(item);
-  }
-  strayCollector.items.length = 0;
-  strayCollector.truncated = false;
+  // Swap the buffer before adopting it so output produced after this point
+  // belongs to the next execution, never to a stale drained collector. The
+  // collector owns its counters and truncation bit, so draining cannot leave
+  // cumulative limits behind or hide dropped output.
+  const drainedStray = strayCollector;
+  strayCollector = new Collector();
+  drainedStray.drainInto(collector);
 
   activeCollector = collector;
   const timeoutMs = request.timeout_ms ?? 60_000;

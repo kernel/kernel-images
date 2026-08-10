@@ -125,9 +125,9 @@ function declaratorReplacement(
   initializationTarget: string,
 ): string {
   // A `var x;` has already been initialized by prepareBindings and is a
-  // no-op. It still needs a statement-shaped replacement when it is used as
-  // the braceless body of a control-flow statement.
-  if (!declaration.init && statement.kind === 'var') return '';
+  // no-op. Keep a syntactic expression for it: statement-position lowering
+  // must remain one statement even when the declaration has no initializer.
+  if (!declaration.init && statement.kind === 'var') return '(void 0)';
   const target = globalPattern(asPattern(declaration.id), source, initialize, initializationTarget);
   const value = declaration.init ? source.slice(...range(declaration.init)) : 'undefined';
   return `(${target} = ${value})`;
@@ -140,16 +140,17 @@ function variableReplacement(
   initialize: boolean,
   initializationTarget: string,
 ): string {
-  const assignments = statement.declarations
-    .map((declaration) => declaratorReplacement(declaration, statement, source, initialize, initializationTarget))
-    .filter((assignment) => assignment !== '');
-  return expressionPosition ? assignments.join(', ') : `${assignments.join('; ')};`;
+  const assignments = statement.declarations.map((declaration) =>
+    declaratorReplacement(declaration, statement, source, initialize, initializationTarget),
+  );
+  return expressionPosition ? assignments.join(', ') : `${assignments.join(', ')};`;
 }
 
 /**
- * Lower a statement-position declaration with edits anchored to each
- * declarator. Keeping the original gaps (especially newlines) makes stack
- * locations line-neutral instead of collapsing a multi-line declaration.
+ * Lower a statement-position declaration to one comma sequence. Keeping the
+ * edits anchored to each declarator preserves the original gaps (especially
+ * newlines) and, importantly, leaves the parser-owned separator commas and
+ * comments untouched.
  */
 function variableEdits(
   statement: ESTree.VariableDeclaration,
@@ -168,14 +169,6 @@ function variableEdits(
       end: declaration.end!,
       text: declaratorReplacement(declaration, statement, source, initialize, initializationTarget),
     });
-    const next = statement.declarations[index + 1];
-    if (next) {
-      const gapStart = declaration.end!;
-      const gap = source.slice(gapStart, next.start!);
-      const comma = gap.indexOf(',');
-      if (comma < 0) throw new Error('variable declarators are missing their separator');
-      edits.push({ start: gapStart + comma, end: gapStart + comma + 1, text: ';' });
-    }
   }
   // Meriyah includes an explicit semicolon in the declaration range. If the
   // source used ASI, add the terminator needed by a statement-position
