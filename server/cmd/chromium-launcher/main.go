@@ -80,7 +80,8 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed reading runtime flags: %v\n", err)
 		os.Exit(1)
 	}
-	final := mergeChromiumFlags(baseFlags, runtimeTokens)
+	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
+	final = withDefaultPrivateNetworkBypass(final)
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
@@ -160,17 +161,13 @@ func main() {
 	}
 }
 
-func mergeChromiumFlags(baseFlags string, runtimeTokens []string) []string {
-	configured := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
-	// Chromium applies only the last --proxy-bypass-list flag. Keep the image
-	// default first so a runtime list, including an empty one, replaces it.
-	flags := []string{defaultPrivateNetworkBypassFlag}
-	for _, flag := range configured {
-		if flag != defaultPrivateNetworkBypassFlag {
-			flags = append(flags, flag)
+func withDefaultPrivateNetworkBypass(flags []string) []string {
+	for _, flag := range flags {
+		if flag == "--proxy-bypass-list" || strings.HasPrefix(flag, "--proxy-bypass-list=") {
+			return flags
 		}
 	}
-	return flags
+	return append(flags, defaultPrivateNetworkBypassFlag)
 }
 
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.

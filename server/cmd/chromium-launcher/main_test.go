@@ -6,60 +6,64 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
 
-func TestMergeChromiumFlags(t *testing.T) {
+func TestWithDefaultPrivateNetworkBypass(t *testing.T) {
 	tests := []struct {
-		name          string
-		baseFlags     string
-		runtimeTokens []string
-		want          []string
+		name  string
+		flags []string
+		want  []string
 	}{
 		{
 			name: "image default",
 			want: []string{defaultPrivateNetworkBypassFlag},
 		},
 		{
-			name:      "base list replaces image default",
-			baseFlags: "--proxy-bypass-list=preview.internal",
-			want: []string{
-				defaultPrivateNetworkBypassFlag,
-				"--proxy-bypass-list=preview.internal",
-			},
+			name:  "default follows unrelated flags",
+			flags: []string{"--kiosk"},
+			want:  []string{"--kiosk", defaultPrivateNetworkBypassFlag},
 		},
 		{
-			name:          "runtime list replaces image and base lists",
-			baseFlags:     "--proxy-bypass-list=base.internal --kiosk",
-			runtimeTokens: []string{"--proxy-bypass-list=runtime.internal"},
-			want: []string{
-				defaultPrivateNetworkBypassFlag,
-				"--proxy-bypass-list=base.internal",
-				"--kiosk",
-				"--proxy-bypass-list=runtime.internal",
-			},
+			name:  "custom list replaces image default",
+			flags: []string{"--proxy-bypass-list=preview.internal"},
+			want:  []string{"--proxy-bypass-list=preview.internal"},
 		},
 		{
-			name:          "explicit empty runtime list clears image default",
-			runtimeTokens: []string{"--proxy-bypass-list="},
-			want: []string{
-				defaultPrivateNetworkBypassFlag,
-				"--proxy-bypass-list=",
-			},
+			name:  "explicit empty list clears image default",
+			flags: []string{"--proxy-bypass-list="},
+			want:  []string{"--proxy-bypass-list="},
 		},
 		{
-			name:      "duplicate image default is removed",
-			baseFlags: defaultPrivateNetworkBypassFlag,
-			want:      []string{defaultPrivateNetworkBypassFlag},
+			name:  "bare empty list clears image default",
+			flags: []string{"--proxy-bypass-list"},
+			want:  []string{"--proxy-bypass-list"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := mergeChromiumFlags(tt.baseFlags, tt.runtimeTokens)
+			got := withDefaultPrivateNetworkBypass(tt.flags)
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("mergeChromiumFlags() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+				t.Fatalf("withDefaultPrivateNetworkBypass() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultPrivateNetworkBypassPreservesRuntimePrecedence(t *testing.T) {
+	configured := chromiumflags.MergeFlagsWithRuntimeTokens(
+		"--proxy-bypass-list=preview.internal",
+		[]string{defaultPrivateNetworkBypassFlag},
+	)
+	got := withDefaultPrivateNetworkBypass(configured)
+	want := []string{
+		"--proxy-bypass-list=preview.internal",
+		defaultPrivateNetworkBypassFlag,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime precedence changed:\n got: %#v\nwant: %#v", got, want)
 	}
 }
 
