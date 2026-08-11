@@ -200,7 +200,7 @@ func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
 	resp := oapi.TelemetryState{
 		Config:        telemetryConfigToOAPI(s.telemetrySession.Config()),
 		Seq:           int64(s.telemetrySession.Seq()),
-		DroppedEvents: int64(s.telemetrySession.DroppedEvents()),
+		DroppedEvents: lo.ToPtr(int64(s.telemetrySession.DroppedEvents())),
 	}
 	if appliedAt := s.telemetrySession.AppliedAt(); !appliedAt.IsZero() {
 		resp.AppliedAt = &appliedAt
@@ -214,7 +214,7 @@ func (s *ApiService) stoppedTelemetryResponse() oapi.TelemetryState {
 	return oapi.TelemetryState{
 		Config:        disabledConfig(),
 		Seq:           int64(s.telemetrySession.Seq()),
-		DroppedEvents: int64(s.telemetrySession.DroppedEvents()),
+		DroppedEvents: lo.ToPtr(int64(s.telemetrySession.DroppedEvents())),
 	}
 }
 

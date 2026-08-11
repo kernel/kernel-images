@@ -253,6 +253,10 @@ func TestGetTelemetry(t *testing.T) {
 		r200, ok := resp.(oapi.GetTelemetry200JSONResponse)
 		require.True(t, ok)
 		assert.Equal(t, started.Config, r200.Config)
+		// Optional in the schema so an older image's response still validates,
+		// but always set here: absent would mean "not reported", not zero.
+		require.NotNil(t, r200.DroppedEvents)
+		assert.Zero(t, *r200.DroppedEvents)
 	})
 }
 
@@ -639,4 +643,23 @@ func TestCdpExcludedMethodsRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, svc.telemetrySession.ExcludedCdpMethods())
 	})
+}
+
+// dropped_events was added to TelemetryState after it shipped, so it stays
+// optional: a response from an image that predates it must still decode, and
+// an old client's control block must still be a valid request.
+func TestTelemetryStateStaysCompatibleWithOlderImages(t *testing.T) {
+	var state oapi.TelemetryState
+	err := json.Unmarshal([]byte(`{"config":{},"seq":42}`), &state)
+	require.NoError(t, err)
+	assert.Nil(t, state.DroppedEvents, "absent means not reported, which is not zero")
+	assert.EqualValues(t, 42, state.Seq)
+
+	// A client that predates control.cdp sends only enabled, and still parses.
+	var cfg oapi.BrowserTelemetryConfig
+	err = json.Unmarshal([]byte(`{"browser":{"control":{"enabled":true}}}`), &cfg)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Browser.Control)
+	assert.True(t, *cfg.Browser.Control.Enabled)
+	assert.Nil(t, cfg.Browser.Control.Cdp)
 }

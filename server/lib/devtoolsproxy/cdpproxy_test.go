@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
@@ -138,6 +139,11 @@ func TestProxyEmitsOneEventPerClientControlCommand(t *testing.T) {
 	}
 	if data["telemetry_dropped"] != 0.0 {
 		t.Fatalf("telemetry_dropped = %v, want 0", data["telemetry_dropped"])
+	}
+	// Optional in the schema for compatibility, but this image always sets it,
+	// so a reader can tell "nothing lost" from "not reported".
+	if _, ok := data["telemetry_dropped"]; !ok {
+		t.Fatal("cdp_disconnect omitted telemetry_dropped")
 	}
 }
 
@@ -273,5 +279,22 @@ func TestBinaryFramesAreForwardedAndNotClassified(t *testing.T) {
 	waitForDisconnect(t, rp)
 	if got := len(commandEvents(rp.snapshot())); got != 0 {
 		t.Fatalf("cdp_command count = %d for binary traffic, want 0", got)
+	}
+}
+
+// telemetry_dropped was added to cdp_disconnect after the event type shipped,
+// so it stays optional: a payload from an image that predates it must still
+// decode, and must be distinguishable from one reporting zero.
+func TestDisconnectPayloadFromAnOlderImageStillDecodes(t *testing.T) {
+	old := `{"duration_ms":12.5,"message_count":3,"reason":"client_close"}`
+	var data oapi.BrowserCdpDisconnectEventData
+	if err := json.Unmarshal([]byte(old), &data); err != nil {
+		t.Fatalf("payload without telemetry_dropped failed to decode: %v", err)
+	}
+	if data.TelemetryDropped != nil {
+		t.Fatalf("telemetry_dropped = %v, want absent", *data.TelemetryDropped)
+	}
+	if data.MessageCount != 3 || data.Reason != oapi.ClientClose {
+		t.Fatalf("decoded the rest wrong: %+v", data)
 	}
 }

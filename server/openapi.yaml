@@ -3642,12 +3642,9 @@ components:
           type: string
           description: >
             Scheme of the destination URL (e.g. `https`, `about`, `data`).
-            The rest of the URL is never captured.
-        url_host:
-          type: string
-          description: >
-            Host of the destination URL. Path, query and fragment are never
-            captured; a reset token lives in those.
+            The rest of the URL — host, path, query and fragment — is never
+            captured. Enable the `page` category for navigation events that
+            carry the URL itself.
         transition_type:
           type: string
           description: >
@@ -3948,12 +3945,9 @@ components:
           type: string
           description: >
             Scheme of the destination URL (e.g. `https`, `about`, `data`).
-            The rest of the URL is never captured.
-        url_host:
-          type: string
-          description: >
-            Host of the destination URL. Path, query and fragment are never
-            captured; a reset token lives in those.
+            The rest of the URL — host, path, query and fragment — is never
+            captured. Enable the `page` category for navigation events that
+            carry the URL itself.
         left:
           type: integer
           description: >
@@ -4360,7 +4354,7 @@ components:
       type: object
       description: Per-disconnect payload for `cdp_disconnect` events.
       additionalProperties: false
-      required: [duration_ms, message_count, telemetry_dropped, reason]
+      required: [duration_ms, message_count, reason]
       properties:
         duration_ms:
           type: number
@@ -4375,6 +4369,9 @@ components:
             `cdp_command` event because classification could not keep up, the
             frame exceeded the telemetry size limit, or classification failed.
             Telemetry loss only; every command was still relayed to the browser.
+            Always present on events from images that report it; absent on
+            events from an image predating the field, which is not the same as
+            zero.
         reason:
           type: string
           description: >
@@ -4791,7 +4788,6 @@ components:
       required:
         - config
         - seq
-        - dropped_events
       properties:
         config:
           $ref: "#/components/schemas/BrowserTelemetryConfig"
@@ -4810,6 +4806,8 @@ components:
             fell behind the ring, summed across consumers and configuration
             changes. A rising count means the stream is being produced faster
             than it is being read; a steady one means nothing has been lost.
+            Always present on images that report it; absent on an image
+            predating the field, which is not the same as zero.
           minimum: 0
         applied_at:
           type: string

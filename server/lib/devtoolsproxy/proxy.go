@@ -514,10 +514,14 @@ func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconne
 	if publish == nil {
 		return
 	}
+	// Optional in the schema so an event from an image that predates the field
+	// still validates, but always set here: absent means "not reported", which
+	// is not the same as zero.
+	dropped := int(telemetryDropped)
 	data, _ := json.Marshal(oapi.BrowserCdpDisconnectEventData{
 		DurationMs:       float32(disconnectedAt.Sub(connectedAt).Microseconds()) / 1000.0,
 		MessageCount:     int(msgCount),
-		TelemetryDropped: int(telemetryDropped),
+		TelemetryDropped: &dropped,
 		Reason:           reason,
 	})
 	publish(events.Event{
