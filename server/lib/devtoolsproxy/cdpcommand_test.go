@@ -21,7 +21,7 @@ const testForwardTs int64 = 1_700_000_000_000_000
 // point: the payload is what a reader sees.
 func payloadOf(t *testing.T, frame string) map[string]any {
 	t.Helper()
-	ev, ok := cdpCommandEvent([]byte(frame), testForwardTs)
+	ev, ok := cdpCommandEvent([]byte(frame), testForwardTs, nil)
 	if !ok {
 		t.Fatalf("frame produced no event: %s", frame)
 	}
@@ -171,7 +171,7 @@ func TestCdpCommandEventClassification(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.want == nil {
-				if ev, ok := cdpCommandEvent([]byte(tc.frame), testForwardTs); ok {
+				if ev, ok := cdpCommandEvent([]byte(tc.frame), testForwardTs, nil); ok {
 					t.Fatalf("frame produced an event, want none: %s", ev.Data)
 				}
 				return
@@ -231,7 +231,7 @@ func TestSanitizersNeverEmitSensitiveValues(t *testing.T) {
 	for method := range sanitizers {
 		t.Run(method, func(t *testing.T) {
 			frame := fmt.Sprintf(`{"id":1,"sessionId":"S","method":%q,"params":%s}`, method, sensitiveParams)
-			ev, ok := cdpCommandEvent([]byte(frame), testForwardTs)
+			ev, ok := cdpCommandEvent([]byte(frame), testForwardTs, nil)
 			if !ok {
 				t.Fatalf("supported method produced no event")
 			}
@@ -292,7 +292,7 @@ func FuzzCdpCommandEvent(f *testing.F) {
 	f.Add("\x00\xff\xfe")
 
 	f.Fuzz(func(t *testing.T, frame string) {
-		ev, ok := cdpCommandEvent([]byte(frame), testForwardTs)
+		ev, ok := cdpCommandEvent([]byte(frame), testForwardTs, nil)
 		if !ok {
 			return
 		}
@@ -314,7 +314,7 @@ func BenchmarkCdpCommandEventClick(b *testing.B) {
 	frame := []byte(`{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2,"button":"left","clickCount":1}}`)
 	b.ReportAllocs()
 	for b.Loop() {
-		cdpCommandEvent(frame, testForwardTs)
+		cdpCommandEvent(frame, testForwardTs, nil)
 	}
 }
 
@@ -322,7 +322,7 @@ func BenchmarkCdpCommandEventUnsupported(b *testing.B) {
 	frame := []byte(`{"id":1,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"() => 1","objectId":"x"}}`)
 	b.ReportAllocs()
 	for b.Loop() {
-		cdpCommandEvent(frame, testForwardTs)
+		cdpCommandEvent(frame, testForwardTs, nil)
 	}
 }
 
@@ -352,4 +352,23 @@ func specCommandMethods(t *testing.T) []string {
 		t.Fatal("spec has no BrowserCdpCommandMethod enum")
 	}
 	return methods
+}
+
+// Excluding a method suppresses only its event. The raw command reached
+// Chromium before classification ran, so exclusion can never change what the
+// browser was told to do.
+func TestExcludedMethodsSuppressOnlyTheirOwnEvents(t *testing.T) {
+	click := `{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2}}`
+	nav := `{"id":2,"method":"Page.navigate","params":{"url":"https://example.com/"}}`
+	excluded := map[string]struct{}{"Input.dispatchMouseEvent": {}}
+
+	if _, ok := cdpCommandEvent([]byte(click), testForwardTs, excluded); ok {
+		t.Fatal("excluded method produced an event")
+	}
+	if _, ok := cdpCommandEvent([]byte(nav), testForwardTs, excluded); !ok {
+		t.Fatal("a method that was not excluded produced no event")
+	}
+	if _, ok := cdpCommandEvent([]byte(click), testForwardTs, nil); !ok {
+		t.Fatal("no exclusions configured, but the command produced no event")
+	}
 }

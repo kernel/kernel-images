@@ -25,21 +25,27 @@ func (c cdpCommand) sessionID() *string {
 }
 
 // cdpCommandEvent builds the cdp_command event for a client-to-upstream frame,
-// or reports false when the frame is not a browser-control command. ts is when
-// the command reached Chromium, passed in so time spent queued for
-// classification does not show up as event time.
+// or reports false when the frame is not a browser-control command or its
+// method is excluded by telemetry configuration. ts is when the command
+// reached Chromium, passed in so time spent queued for classification does not
+// show up as event time.
 //
 // Every supported command gets one event. Subtypes like mouseMoved and keyUp
 // are commands in their own right — a mouseMoved with buttons held is a drag
 // path, a keyUp releases a modifier — so the stream is never coalesced down to
 // what looks like the interesting phases.
-func cdpCommandEvent(msg []byte, ts int64) (events.Event, bool) {
+func cdpCommandEvent(msg []byte, ts int64, excluded map[string]struct{}) (events.Event, bool) {
 	var cmd cdpCommand
 	if err := json.Unmarshal(msg, &cmd); err != nil {
 		return events.Event{}, false
 	}
 	sanitize, ok := sanitizers[cmd.Method]
 	if !ok {
+		return events.Event{}, false
+	}
+	// Excluding a method suppresses only its event; the raw command was
+	// forwarded to Chromium before this ran.
+	if _, skip := excluded[cmd.Method]; skip {
 		return events.Event{}, false
 	}
 	data, err := sanitize(cmd)

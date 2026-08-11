@@ -12,6 +12,7 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +29,7 @@ func allCategoriesDisabled() *oapi.BrowserTelemetryCategoriesConfig {
 		Network:     off(),
 		Page:        off(),
 		Interaction: off(),
-		Control:     off(),
+		Control:     &oapi.BrowserTelemetryControlConfig{Enabled: lo.ToPtr(false)},
 		Platform:    off(),
 		Connection:  off(),
 		System:      off(),
@@ -207,7 +208,7 @@ func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
 	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
 		Body: &oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Control: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				Control: &oapi.BrowserTelemetryControlConfig{Enabled: &tr},
 			},
 		},
 	})
@@ -217,7 +218,7 @@ func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
 	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
 		Body: &oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Control: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Control: &oapi.BrowserTelemetryControlConfig{Enabled: &f},
 			},
 		},
 	})

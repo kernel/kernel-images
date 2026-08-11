@@ -106,7 +106,7 @@ func enableControlExport(t *testing.T, ctx context.Context, client *instanceoapi
 	tr := true
 	resp, err := client.PutTelemetryWithResponse(ctx, instanceoapi.PutTelemetryJSONRequestBody{
 		Browser: &instanceoapi.BrowserTelemetryCategoriesConfig{
-			Control: &instanceoapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+			Control: &instanceoapi.BrowserTelemetryControlConfig{Enabled: &tr},
 		},
 		Export: &instanceoapi.BrowserTelemetryExportConfig{
 			Otlp: &instanceoapi.BrowserTelemetryOTLPExportConfig{Enabled: &tr},

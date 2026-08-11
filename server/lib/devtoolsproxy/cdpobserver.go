@@ -12,6 +12,11 @@ import (
 // cheap: telemetry.TelemetrySession.CategoryEnabled is lock-free for this.
 type ControlEnabledFunc func() bool
 
+// ExcludedMethodsFunc returns the browser-control methods configured out of the
+// cdp_command stream, or nil when none are. Consulted on the worker once the
+// method is known, so an exclusion never costs the pump anything.
+type ExcludedMethodsFunc func() map[string]struct{}
+
 const (
 	// cdpObserverQueueDepth bounds how many forwarded frames may be waiting for
 	// classification. Deep enough to absorb a burst of input gestures, shallow
@@ -32,11 +37,12 @@ const (
 // the frame is not worth queuing; classification, sanitation and publication
 // all happen on the worker, where they cannot delay CDP or kill the process.
 type cdpObserver struct {
-	frames         chan observedFrame
-	drained        chan struct{}
-	publish        EventPublisher
-	controlEnabled ControlEnabledFunc
-	logger         *slog.Logger
+	frames          chan observedFrame
+	drained         chan struct{}
+	publish         EventPublisher
+	controlEnabled  ControlEnabledFunc
+	excludedMethods ExcludedMethodsFunc
+	logger          *slog.Logger
 
 	droppedQueued    atomic.Int64
 	droppedOversized atomic.Int64
@@ -53,16 +59,20 @@ type observedFrame struct {
 
 // newCdpObserver starts the classification worker. It stops when ctx is done.
 // A nil publish or controlEnabled disables observation entirely.
-func newCdpObserver(ctx context.Context, publish EventPublisher, controlEnabled ControlEnabledFunc, logger *slog.Logger) *cdpObserver {
+func newCdpObserver(ctx context.Context, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, logger *slog.Logger) *cdpObserver {
 	if publish == nil || controlEnabled == nil {
 		return nil
 	}
+	if excludedMethods == nil {
+		excludedMethods = func() map[string]struct{} { return nil }
+	}
 	o := &cdpObserver{
-		frames:         make(chan observedFrame, cdpObserverQueueDepth),
-		drained:        make(chan struct{}),
-		publish:        publish,
-		controlEnabled: controlEnabled,
-		logger:         logger,
+		frames:          make(chan observedFrame, cdpObserverQueueDepth),
+		drained:         make(chan struct{}),
+		publish:         publish,
+		controlEnabled:  controlEnabled,
+		excludedMethods: excludedMethods,
+		logger:          logger,
 	}
 	go o.run(ctx)
 	return o
@@ -148,7 +158,7 @@ func (o *cdpObserver) handle(f observedFrame) {
 			o.logger.Error("cdp command telemetry panicked", slog.Any("err", r))
 		}
 	}()
-	ev, ok := cdpCommandEvent(f.msg, f.ts)
+	ev, ok := cdpCommandEvent(f.msg, f.ts, o.excludedMethods())
 	if !ok {
 		return
 	}

@@ -310,8 +310,9 @@ type EventPublisher func(ev events.Event) (events.Envelope, bool)
 // If logCDPMessages is true, all CDP messages will be logged with their direction.
 // publish is invoked on accept (cdp_connect) and on teardown (cdp_disconnect); pass
 // nil to disable emission. controlEnabled gates cdp_command classification and is
-// checked once per forwarded client frame; pass nil to disable it.
-func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, reg *wsdrain.Registry) http.Handler {
+// checked once per forwarded client frame; pass nil to disable it. excludedMethods
+// names the control methods configured out of the stream; nil reports them all.
+func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, reg *wsdrain.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Counts every relayed message so cdp_disconnect can report message_count.
 		var msgCount atomic.Int64
@@ -381,7 +382,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 
 		// Classification of client commands runs behind the pump, not inside it:
 		// a frame is observed only once Chromium has accepted it.
-		observer := newCdpObserver(pumpCtx, publish, controlEnabled, logger)
+		observer := newCdpObserver(pumpCtx, publish, controlEnabled, excludedMethods, logger)
 		var observe wsproxy.Observer
 		if observer != nil {
 			observe = func(direction string, mt websocket.MessageType, msg []byte, ts int64) {

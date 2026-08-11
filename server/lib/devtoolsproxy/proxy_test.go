@@ -133,7 +133,7 @@ func TestWebSocketProxyHandler_ProxiesEcho(t *testing.T) {
 	// seed current upstream to echo server including path/query (bypass tailing)
 	mgr.setCurrent((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawQuery: u.RawQuery}).String())
 
-	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil)
+	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil, nil)
 	proxySrv := httptest.NewServer(proxy)
 	defer proxySrv.Close()
 
@@ -191,7 +191,7 @@ func TestWebSocketProxyHandler_RegistryClosesClientWithGoingAway(t *testing.T) {
 	mgr.setCurrent((&url.URL{Scheme: "ws", Host: u.Host, Path: "/echo"}).String())
 
 	reg := wsdrain.New()
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, reg))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil, reg))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -520,7 +520,7 @@ func TestWebSocketProxyHandler_EmitsConnectAndDisconnect(t *testing.T) {
 	mgr.setCurrent(u.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -695,7 +695,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -779,7 +779,7 @@ func TestWebSocketProxyHandler_KicksClientOffStaleUpstreamOnURLChange(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -831,7 +831,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 	mgr.setCurrent(deadURL)
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)

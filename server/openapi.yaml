@@ -1723,7 +1723,7 @@ components:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: HTTP request/response metadata.
         control:
-          $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
+          $ref: "#/components/schemas/BrowserTelemetryControlConfig"
           description: Agent-driven actions against the browser — computer-control calls, Playwright code execution, screenshots, clipboard access, and browser-control commands sent over the CDP proxy.
         platform:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
@@ -1754,6 +1754,42 @@ components:
             omitting this field (or sending an empty object `{}`) is a no-op; the
             category retains its current state. To enable or disable a category via
             PATCH, you must send an explicit `true` or `false`.
+      additionalProperties: false
+    BrowserTelemetryControlConfig:
+      type: object
+      description: >
+        Configuration for the control category. Same `enabled` semantics as any
+        other category, plus settings for the browser-control commands the CDP
+        proxy reports.
+      properties:
+        enabled:
+          type: boolean
+          description: >
+            Whether this category is captured. In PUT requests selection is opt-in:
+            omitting this field (or the whole category) leaves the category off, so
+            a PUT captures exactly the categories set to true. In PATCH requests,
+            omitting this field (or sending an empty object `{}`) is a no-op; the
+            category retains its current state. To enable or disable a category via
+            PATCH, you must send an explicit `true` or `false`.
+        cdp:
+          $ref: "#/components/schemas/BrowserTelemetryCdpControlConfig"
+      additionalProperties: false
+    BrowserTelemetryCdpControlConfig:
+      type: object
+      description: Settings for the `cdp_command` events the DevTools proxy reports.
+      properties:
+        excluded_methods:
+          type: array
+          description: >
+            Methods to leave out of the `cdp_command` stream. Omit the list (or
+            send an empty one) to report every supported method. Exclusion is a
+            telemetry setting only: an excluded command is still relayed to the
+            browser unchanged, it simply produces no event. Use it to drop the
+            highest-volume methods — `Input.dispatchMouseEvent` during a
+            humanized cursor path, or `Page.captureScreenshot` under a
+            screencast — without turning the whole category off.
+          items:
+            $ref: "#/components/schemas/BrowserCdpCommandMethod"
       additionalProperties: false
     BrowserCallStack:
       type: object

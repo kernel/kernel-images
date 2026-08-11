@@ -325,7 +325,7 @@ func main() {
 	// lock-free view rather than taking the telemetry lock.
 	controlEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Control) }
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, wsRegistry).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, telemetrySession.ExcludedCdpMethods, wsRegistry).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
