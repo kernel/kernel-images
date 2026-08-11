@@ -4306,8 +4306,8 @@ components:
         One event per browser-control command that reached the browser. The
         command stream is not sampled, coalesced or reordered. An event is lost
         only when the method is excluded by telemetry configuration, when
-        classification cannot keep up, or when the frame exceeds the telemetry
-        size limit; those losses are counted in `cdp_disconnect.telemetry_dropped`.
+        or when classification cannot keep up; those losses are counted in
+        `cdp_disconnect.telemetry_dropped`.
       required: [ts, type, category, source, data]
       properties:
         ts:
@@ -4362,13 +4362,14 @@ components:
         telemetry_dropped:
           type: integer
           description: >
-            Number of forwarded client commands that did not produce a
-            `cdp_command` event because classification could not keep up, the
-            frame exceeded the telemetry size limit, or classification failed.
-            Telemetry loss only; every command was still relayed to the browser.
-            Always present on events from images that report it; absent on
-            events from an image predating the field, which is not the same as
-            zero.
+            Number of forwarded client frames the classifier never saw,
+            because it could not keep up or because classification failed.
+            An upper bound on lost commands rather than a count: a saturated
+            queue turns away whatever arrives next, which may be library
+            traffic that would have produced no event. Telemetry loss only;
+            every command was still relayed to the browser. Always present on
+            events from images that report it; absent on events from an image
+            predating the field, which is not the same as zero.
         reason:
           type: string
           description: >

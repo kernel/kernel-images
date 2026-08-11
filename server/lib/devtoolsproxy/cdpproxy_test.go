@@ -222,20 +222,20 @@ func TestPanickingPublisherDoesNotBreakForwarding(t *testing.T) {
 }
 
 // Telemetry looks at frames; it must not change them. Whatever the client
-// sends — malformed JSON, binary, invalid UTF-8, a frame past the telemetry
-// size limit — the browser gets the same bytes in the same order.
+// sends — malformed JSON, binary, invalid UTF-8, a large paste — the browser
+// gets the same bytes in the same order.
 func TestForwardingPreservesBytesAndOrderForAwkwardTraffic(t *testing.T) {
 	rp := &recordingPublisher{}
 	conn, ctx := echoProxy(t, rp.publish, controlOn)
 
-	oversized := `{"id":9,"method":"Input.insertText","params":{"text":"` +
-		strings.Repeat("x", cdpObserverMaxFrameBytes) + `"}}`
+	big := `{"id":9,"method":"Input.insertText","params":{"text":"` +
+		strings.Repeat("x", 256<<10) + `"}}`
 	frames := []string{
 		`{"id":1,"method":"Input.dispatchMouseEvent","params":`,
 		`{"id":2,"method":"Input.insertText","params":{"text":"\ud800"}}`,
 		`{"id":3,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2},"method":"Page.close"}`,
 		`{"id":4,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2}}`,
-		oversized,
+		big,
 		`{"id":5,"method":"Page.reload"}`,
 	}
 	echoes := roundTrip(t, conn, ctx, frames...)
@@ -248,13 +248,13 @@ func TestForwardingPreservesBytesAndOrderForAwkwardTraffic(t *testing.T) {
 	_ = conn.Close(websocket.StatusNormalClosure, "bye")
 	disconnect := waitForDisconnect(t, rp)
 
-	// Telemetry may lose the oversized frame, but it must say so.
+	// Awkward traffic is classified or discarded, never counted as loss.
 	var data map[string]any
 	if err := json.Unmarshal(disconnect.Data, &data); err != nil {
 		t.Fatalf("unmarshal disconnect: %v", err)
 	}
-	if data["telemetry_dropped"] != 1.0 {
-		t.Fatalf("telemetry_dropped = %v, want 1 (the oversized frame)", data["telemetry_dropped"])
+	if data["telemetry_dropped"] != 0.0 {
+		t.Fatalf("telemetry_dropped = %v, want 0", data["telemetry_dropped"])
 	}
 }
 

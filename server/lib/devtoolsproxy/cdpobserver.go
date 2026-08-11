@@ -22,11 +22,13 @@ const (
 	// classification. Deep enough to absorb a burst of input gestures, shallow
 	// enough that a stalled publisher cannot accumulate unbounded garbage.
 	cdpObserverQueueDepth = 256
-	// cdpObserverMaxFrameBytes caps the frame the worker will parse. Every
-	// browser-control command is small — coordinates, enums and short strings —
-	// so anything past this is a paste or a data: URL whose event would cost
-	// megabytes of parsing to report a length. Those are dropped and counted.
-	cdpObserverMaxFrameBytes = 64 * 1024
+	// cdpObserverMaxQueuedBytes bounds the memory frames awaiting classification
+	// can hold. A per-frame cap would be the obvious bound, but the pump cannot
+	// know a frame's method without parsing it, so a cap there rejects a large
+	// Runtime.callFunctionOn — which would never have produced an event — as
+	// though a command had been lost. Budgeting the queue as a whole bounds the
+	// same memory while leaving that judgement to the worker.
+	cdpObserverMaxQueuedBytes = 8 << 20
 	// cdpObserverDrainWait bounds how long connection teardown waits for the
 	// worker to finish the queue.
 	cdpObserverDrainWait = time.Second
@@ -44,9 +46,11 @@ type cdpObserver struct {
 	excludedMethods ExcludedMethodsFunc
 	logger          *slog.Logger
 
-	droppedQueued    atomic.Int64
-	droppedOversized atomic.Int64
-	droppedPanicked  atomic.Int64
+	// queuedBytes tracks what the queue is holding, so admission can be decided
+	// on bytes rather than frame count alone.
+	queuedBytes     atomic.Int64
+	droppedQueued   atomic.Int64
+	droppedPanicked atomic.Int64
 }
 
 // observedFrame is a client frame that reached Chromium, with the time the
@@ -85,25 +89,30 @@ func (o *cdpObserver) Observe(msg []byte, ts int64) {
 	if o == nil || !o.controlEnabled() {
 		return
 	}
-	if len(msg) > cdpObserverMaxFrameBytes {
-		o.droppedOversized.Add(1)
+	size := int64(len(msg))
+	if o.queuedBytes.Add(size) > cdpObserverMaxQueuedBytes {
+		o.queuedBytes.Add(-size)
+		o.droppedQueued.Add(1)
 		return
 	}
 	select {
 	case o.frames <- observedFrame{msg: msg, ts: ts}:
 	default:
+		o.queuedBytes.Add(-size)
 		o.droppedQueued.Add(1)
 	}
 }
 
-// Dropped reports how many frames were not turned into events: queue
-// saturation, oversized frames and classification panics. Reported on
-// cdp_disconnect so a reader sees the loss rather than only the VM's log.
+// Dropped reports how many forwarded frames the classifier never saw: queue
+// saturation and classification panics. Reported on cdp_disconnect so a reader
+// sees the loss rather than only the VM's log. A saturated queue rejects
+// whatever arrives next, which may be library traffic that would have produced
+// nothing, so this is an upper bound on commands lost rather than a count.
 func (o *cdpObserver) Dropped() int64 {
 	if o == nil {
 		return 0
 	}
-	return o.droppedQueued.Load() + o.droppedOversized.Load() + o.droppedPanicked.Load()
+	return o.droppedQueued.Load() + o.droppedPanicked.Load()
 }
 
 func (o *cdpObserver) run(ctx context.Context) {
@@ -152,6 +161,7 @@ func (o *cdpObserver) WaitDrained(timeout time.Duration) {
 // in a sanitizer, or a panicking publisher, from taking the VM down: the pump
 // is a bare goroutine and so is this one.
 func (o *cdpObserver) handle(f observedFrame) {
+	defer o.queuedBytes.Add(-int64(len(f.msg)))
 	defer func() {
 		if r := recover(); r != nil {
 			o.droppedPanicked.Add(1)
@@ -166,12 +176,11 @@ func (o *cdpObserver) handle(f observedFrame) {
 }
 
 func (o *cdpObserver) logDrops() {
-	queued, oversized, panicked := o.droppedQueued.Load(), o.droppedOversized.Load(), o.droppedPanicked.Load()
-	if queued+oversized+panicked == 0 {
+	queued, panicked := o.droppedQueued.Load(), o.droppedPanicked.Load()
+	if queued+panicked == 0 {
 		return
 	}
 	o.logger.Warn("cdp command telemetry dropped frames",
 		slog.Int64("queue_full", queued),
-		slog.Int64("oversized", oversized),
 		slog.Int64("panicked", panicked))
 }

@@ -106,20 +106,64 @@ func TestQueueSaturationIsCounted(t *testing.T) {
 	}
 }
 
-// A frame past the size limit costs a length check, not a megabyte of parsing.
-func TestOversizedFramesAreDroppedAndCounted(t *testing.T) {
+// A big frame is admitted on its merits, not rejected for its size: the pump
+// cannot tell a large paste from library traffic, and rejecting either as a
+// lost command is wrong. Only the queue's byte budget turns one away.
+func TestLargeFramesAreClassifiedRatherThanRejected(t *testing.T) {
 	pub := &countingPublisher{}
 	o := newTestObserver(t, pub.publish, controlOn)
 
-	huge := `{"id":1,"method":"Input.insertText","params":{"text":"` +
-		strings.Repeat("x", cdpObserverMaxFrameBytes) + `"}}`
-	o.Observe([]byte(huge), testForwardTs)
+	big := `{"id":1,"method":"Input.insertText","params":{"text":"` +
+		strings.Repeat("x", 256<<10) + `"}}`
+	o.Observe([]byte(big), testForwardTs)
+	waitFor(t, func() bool { return pub.n.Load() == 1 })
 
-	if queued := len(o.frames); queued != 0 {
-		t.Fatalf("queued an oversized frame")
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("dropped = %d, want 0: the frame was classified, not lost", got)
 	}
-	if got := o.Dropped(); got != 1 {
-		t.Fatalf("dropped = %d, want 1", got)
+}
+
+// Library traffic the classifier discards is not a loss, however large it is.
+// Counting it would make telemetry_dropped read as lost commands.
+func TestLargeLibraryTrafficIsNotCountedAsLoss(t *testing.T) {
+	pub := &countingPublisher{}
+	o := newTestObserver(t, pub.publish, controlOn)
+
+	big := `{"id":1,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"` +
+		strings.Repeat("x", 256<<10) + `","objectId":"x"}}`
+	o.Observe([]byte(big), testForwardTs)
+	waitFor(t, func() bool { return o.queuedBytes.Load() == 0 })
+
+	if got := pub.n.Load(); got != 0 {
+		t.Fatalf("published %d events for library traffic, want 0", got)
+	}
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("dropped = %d, want 0: a frame that would never be an event is not a loss", got)
+	}
+}
+
+// The byte budget is what bounds memory, since there is no per-frame cap.
+func TestQueueByteBudgetTurnsAwayWhatItCannotHold(t *testing.T) {
+	blocked := make(chan struct{})
+	var released sync.Once
+	t.Cleanup(func() { released.Do(func() { close(blocked) }) })
+
+	blocking := func(ev events.Event) (events.Envelope, bool) {
+		<-blocked
+		return events.Envelope{Event: ev}, true
+	}
+	o := newTestObserver(t, blocking, controlOn)
+
+	// Each frame is a sixteenth of the budget, so the budget binds well before
+	// the queue depth does.
+	frame := []byte(`{"id":1,"method":"Input.insertText","params":{"text":"` +
+		strings.Repeat("x", cdpObserverMaxQueuedBytes/16) + `"}}`)
+	for range 32 {
+		o.Observe(frame, testForwardTs)
+	}
+	waitFor(t, func() bool { return o.Dropped() > 0 })
+	if got := o.queuedBytes.Load(); got > cdpObserverMaxQueuedBytes {
+		t.Fatalf("queued %d bytes, over the %d budget", got, cdpObserverMaxQueuedBytes)
 	}
 }
 
