@@ -693,11 +693,10 @@ func sanitizePageReload(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error)
 		return out, err
 	}
 	return out, out.FromBrowserCdpPageReloadCommandData(oapi.BrowserCdpPageReloadCommandData{
-		SessionId:     cmd.sessionID(),
-		IgnoreCache:   p.IgnoreCache,
-		ScriptPresent: present(p.ScriptToEvaluateOnLoad),
-		ScriptLength:  runeLen(p.ScriptToEvaluateOnLoad),
-		LoaderId:      p.LoaderId,
+		SessionId:    cmd.sessionID(),
+		IgnoreCache:  p.IgnoreCache,
+		ScriptLength: runeLen(p.ScriptToEvaluateOnLoad),
+		LoaderId:     p.LoaderId,
 	})
 }
 

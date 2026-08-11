@@ -3703,15 +3703,12 @@ components:
           type: boolean
           description: >
             Whether the reload bypassed the cache.
-        script_present:
-          type: boolean
-          description: >
-            Whether an injected script was supplied. The script itself is
-            never captured.
         script_length:
           type: integer
           description: >
-            Number of characters in the injected script.
+            Number of characters in the injected script, absent when none was
+            supplied and 0 when an empty one was. The script itself is never
+            captured.
         loader_id:
           type: string
           description: >
