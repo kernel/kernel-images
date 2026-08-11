@@ -43,7 +43,7 @@ func prepareSnapshotStartPage(ctx context.Context, internalPort string) (retErr 
 		return err
 	}
 	navCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	navErr := cdpclient.DispatchStartURLAndWait(navCtx, devtoolsURL, snapshotStartPageURL)
+	navErr := cdpclient.DispatchStartURLAndWait(navCtx, devtoolsURL, "chrome://newtab/", snapshotStartPageURL)
 	cancel()
 
 	cleanupErr := cleanupSeedEnvoyIfStarted(seedEnvoyStarted)

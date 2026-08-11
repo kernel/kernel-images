@@ -53,6 +53,17 @@ func ZipDir(sourceDir string) ([]byte, error) {
 			return nil
 		}
 
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("read symlink %s: %w", path, err)
+			}
+			if _, err := writer.Write([]byte(target)); err != nil {
+				return fmt.Errorf("write symlink %s: %w", path, err)
+			}
+			return nil
+		}
+
 		// Only include regular files. Skip sockets, devices, FIFOs, etc.
 		if !info.Mode().IsRegular() {
 			return nil
@@ -93,13 +104,31 @@ func Unzip(zipFilePath, destDir string) error {
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
+	cleanDestDir, err := filepath.Abs(destDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve destination directory: %w", err)
+	}
+	cleanDestDir, err = filepath.EvalSymlinks(cleanDestDir)
+	if err != nil {
+		return fmt.Errorf("failed to evaluate destination directory: %w", err)
+	}
+
 	// Extract each file
 	for _, file := range reader.File {
+		entryPath := filepath.FromSlash(file.Name)
+
 		// Create the full destination path
-		destPath := filepath.Join(destDir, file.Name)
+		destPath := filepath.Join(cleanDestDir, entryPath)
 
 		// Check for directory traversal vulnerabilities
-		if !strings.HasPrefix(destPath, filepath.Clean(destDir)+string(os.PathSeparator)) {
+		if destPath == cleanDestDir || !isPathWithinDir(cleanDestDir, destPath) {
+			return fmt.Errorf("illegal file path: %s", file.Name)
+		}
+		resolvedParentPath, err := resolvePathWithSymlinks(cleanDestDir, filepath.Dir(entryPath))
+		if err != nil {
+			return fmt.Errorf("failed to resolve destination path %s: %w", file.Name, err)
+		}
+		if !isPathWithinDir(cleanDestDir, resolvedParentPath) {
 			return fmt.Errorf("illegal file path: %s", file.Name)
 		}
 
@@ -123,6 +152,36 @@ func Unzip(zipFilePath, destDir string) error {
 		}
 		defer fileReader.Close()
 
+		if file.Mode()&os.ModeSymlink != 0 {
+			target, err := io.ReadAll(fileReader)
+			if err != nil {
+				return fmt.Errorf("failed to read symlink target: %w", err)
+			}
+			targetPath := string(target)
+			if !filepath.IsAbs(targetPath) {
+				resolvedTarget, err := resolvePathWithSymlinks(resolvedParentPath, targetPath)
+				if err != nil {
+					return fmt.Errorf("failed to resolve symlink target: %w", err)
+				}
+				if !isPathWithinDir(cleanDestDir, resolvedTarget) {
+					return fmt.Errorf("illegal symlink target: %s -> %s", file.Name, targetPath)
+				}
+			}
+			if err := os.Remove(destPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove existing symlink path: %w", err)
+			}
+			if err := os.Symlink(targetPath, destPath); err != nil {
+				return fmt.Errorf("failed to create symlink: %w", err)
+			}
+			continue
+		}
+
+		if info, err := os.Lstat(destPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			if err := os.Remove(destPath); err != nil {
+				return fmt.Errorf("failed to remove existing symlink: %w", err)
+			}
+		}
+
 		// Create the destination file
 		destFile, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
 		if err != nil {
@@ -137,4 +196,34 @@ func Unzip(zipFilePath, destDir string) error {
 	}
 
 	return nil
+}
+
+func isPathWithinDir(dir, path string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
+}
+
+func resolvePathWithSymlinks(baseDir, relativePath string) (string, error) {
+	currentPath := filepath.Clean(baseDir)
+	for _, part := range strings.Split(filepath.FromSlash(relativePath), string(os.PathSeparator)) {
+		switch part {
+		case "", ".":
+			continue
+		case "..":
+			currentPath = filepath.Dir(currentPath)
+			continue
+		}
+
+		nextPath := filepath.Join(currentPath, part)
+		resolvedPath, err := filepath.EvalSymlinks(nextPath)
+		if err == nil {
+			currentPath = resolvedPath
+			continue
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("evaluate symlinks for %s: %w", nextPath, err)
+		}
+		currentPath = nextPath
+	}
+
+	return filepath.Clean(currentPath), nil
 }

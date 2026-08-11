@@ -100,9 +100,21 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	timeoutSec := 2
+	setupReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return await page.evaluate(() => document.body.dataset.timeoutMutation = "initial");`,
+	}
+	setupRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, setupReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, setupRsp.StatusCode())
+	require.NotNil(t, setupRsp.JSON200)
+	require.True(t, setupRsp.JSON200.Success)
+
+	timeoutSec := 1
 	timeoutReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
-		Code:       `await new Promise(r => setTimeout(r, 30000));`,
+		Code: `
+await page.waitForTimeout(2500);
+await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
+`,
 		TimeoutSec: &timeoutSec,
 	}
 
@@ -112,7 +124,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "playwright timeout request should return an API response")
-	require.Less(t, elapsed, 5*time.Second, "timeout response should arrive before the API socket read deadline")
+	require.Less(t, elapsed, 4*time.Second, "timeout response should arrive before the API socket read deadline")
 	require.Equal(t, http.StatusOK, timeoutRsp.StatusCode(), "unexpected status for timed-out playwright execute: %s body=%s", timeoutRsp.Status(), string(timeoutRsp.Body))
 	require.NotNil(t, timeoutRsp.JSON200, "expected JSON200 timeout response, got nil")
 	require.False(t, timeoutRsp.JSON200.Success, "expected success=false for timed-out playwright execution")
@@ -123,7 +135,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	require.NotContains(t, errorMsg, "i/o timeout", "daemon should return a timeout response before the API socket read deadline")
 
 	recoveryReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
-		Code: `return await page.evaluate(() => navigator.userAgent);`,
+		Code: `return await page.evaluate(() => document.body.dataset.timeoutMutation);`,
 	}
 
 	t.Log("executing normal playwright code after timed-out request")
@@ -138,6 +150,18 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 		return "nil"
 	}())
 	require.NotNil(t, recoveryRsp.JSON200.Result, "expected recovery result to be non-nil")
+	require.Equal(t, "initial", recoveryRsp.JSON200.Result)
+
+	// Wait past the abandoned script's delay. A response-only timeout lets that
+	// script wake up and mutate the page after the caller has moved on.
+	time.Sleep(2 * time.Second)
+	lateRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, recoveryReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, lateRsp.StatusCode())
+	require.NotNil(t, lateRsp.JSON200)
+	require.True(t, lateRsp.JSON200.Success)
+	require.NotNil(t, lateRsp.JSON200.Result)
+	require.Equal(t, "initial", lateRsp.JSON200.Result, "timed-out execution mutated the page after returning")
 
 	t.Log("playwright timeout regression test passed")
 }

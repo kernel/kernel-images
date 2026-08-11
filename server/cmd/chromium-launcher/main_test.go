@@ -4,8 +4,68 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
+
+func TestWithDefaultPrivateNetworkBypass(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+		want  []string
+	}{
+		{
+			name: "image default",
+			want: []string{defaultPrivateNetworkBypassFlag},
+		},
+		{
+			name:  "default follows unrelated flags",
+			flags: []string{"--kiosk"},
+			want:  []string{"--kiosk", defaultPrivateNetworkBypassFlag},
+		},
+		{
+			name:  "custom list replaces image default",
+			flags: []string{"--proxy-bypass-list=preview.internal"},
+			want:  []string{"--proxy-bypass-list=preview.internal"},
+		},
+		{
+			name:  "explicit empty list clears image default",
+			flags: []string{"--proxy-bypass-list="},
+			want:  []string{"--proxy-bypass-list="},
+		},
+		{
+			name:  "bare empty list clears image default",
+			flags: []string{"--proxy-bypass-list"},
+			want:  []string{"--proxy-bypass-list"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := withDefaultPrivateNetworkBypass(tt.flags)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("withDefaultPrivateNetworkBypass() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultPrivateNetworkBypassPreservesRuntimePrecedence(t *testing.T) {
+	configured := chromiumflags.MergeFlagsWithRuntimeTokens(
+		"--proxy-bypass-list=preview.internal",
+		[]string{defaultPrivateNetworkBypassFlag},
+	)
+	got := withDefaultPrivateNetworkBypass(configured)
+	want := []string{
+		"--proxy-bypass-list=preview.internal",
+		defaultPrivateNetworkBypassFlag,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime precedence changed:\n got: %#v\nwant: %#v", got, want)
+	}
+}
 
 func TestExecLookPath(t *testing.T) {
 	dir := t.TempDir()
