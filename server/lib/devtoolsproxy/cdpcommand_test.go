@@ -13,6 +13,10 @@ import (
 	"github.com/kernel/kernel-images/server/lib/events"
 )
 
+// bs is a single backslash, kept out of the fixtures below so an editing
+// pass cannot silently strip the escape they are testing.
+const bs = `\`
+
 // testForwardTs stands in for the time a command reached Chromium.
 const testForwardTs int64 = 1_700_000_000_000_000
 
@@ -190,10 +194,18 @@ func TestCdpCommandEventClassification(t *testing.T) {
 // frame rather than scanning it for a literal, so "Input.dispatch..."
 // cannot slip a command past the stream.
 func TestCdpCommandEventDecodesEscapedMethodNames(t *testing.T) {
-	frame := `{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2}}`
-	got := payloadOf(t, frame)
+	// The "d" arrives as a unicode escape. A byte scan for the literal method
+	// name misses this; a decode does not.
+	escaped := `{"id":1,"method":"Input.\u0064ispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2}}`
+	if !strings.Contains(escaped, bs+`u0064`) {
+		t.Fatal("the fixture lost its escape, so this test proves nothing")
+	}
+	got := payloadOf(t, escaped)
 	if got["method"] != "Input.dispatchMouseEvent" {
 		t.Fatalf("method = %v, want Input.dispatchMouseEvent", got["method"])
+	}
+	if got["event_type"] != "mousePressed" {
+		t.Fatalf("event_type = %v, want mousePressed", got["event_type"])
 	}
 }
 
