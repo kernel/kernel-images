@@ -215,3 +215,34 @@ func waitFor(t *testing.T, cond func() bool) {
 	}
 	t.Fatal("condition not met within 5s")
 }
+
+// Pump reports a disconnect as soon as one direction fails, while the other can
+// still forward, so a frame can reach the queue after the worker has drained
+// and stopped. Nothing will classify it, so it has to be counted rather than
+// quietly left behind: telemetry_dropped is what tells a reader the tail of the
+// session is incomplete.
+func TestFramesQueuedAfterTeardownAreCountedAsLoss(t *testing.T) {
+	pub := &countingPublisher{}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := newCdpObserver(ctx, pub.publish, controlOn, nil, silentLogger())
+
+	o.Observe([]byte(clickFrame), testForwardTs)
+	cancel()
+	o.WaitDrained(5 * time.Second)
+	if got := pub.n.Load(); got != 1 {
+		t.Fatalf("published %d events before teardown, want 1", got)
+	}
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("dropped = %d before the late frame, want 0", got)
+	}
+
+	// The straggler the other pump direction forwarded on its way out.
+	o.Observe([]byte(clickFrame), testForwardTs)
+
+	if got := pub.n.Load(); got != 1 {
+		t.Fatalf("published %d events, want 1: the worker has stopped", got)
+	}
+	if got := o.Dropped(); got != 1 {
+		t.Fatalf("dropped = %d, want 1: a frame nothing will read is a loss", got)
+	}
+}

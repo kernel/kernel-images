@@ -104,15 +104,26 @@ func (o *cdpObserver) Observe(msg []byte, ts int64) {
 }
 
 // Dropped reports how many forwarded frames the classifier never saw: queue
-// saturation and classification panics. Reported on cdp_disconnect so a reader
-// sees the loss rather than only the VM's log. A saturated queue rejects
-// whatever arrives next, which may be library traffic that would have produced
-// nothing, so this is an upper bound on commands lost rather than a count.
+// saturation, classification panics, and anything still queued once the worker
+// has stopped. Reported on cdp_disconnect so a reader sees the loss rather than
+// only the VM's log. A saturated queue rejects whatever arrives next, which may
+// be library traffic that would have produced nothing, so this is an upper
+// bound on commands lost rather than a count.
 func (o *cdpObserver) Dropped() int64 {
 	if o == nil {
 		return 0
 	}
-	return o.droppedQueued.Load() + o.droppedPanicked.Load()
+	dropped := o.droppedQueued.Load() + o.droppedPanicked.Load()
+	// Pump calls onClose as soon as one direction fails, while the other may
+	// still be forwarding, so a frame can be queued after the final drain. Once
+	// the worker has stopped nothing will read it, which makes it as lost as one
+	// the queue turned away — and silently so, unless it is counted here.
+	select {
+	case <-o.drained:
+		dropped += int64(len(o.frames))
+	default:
+	}
+	return dropped
 }
 
 func (o *cdpObserver) run(ctx context.Context) {
