@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -36,6 +37,11 @@ type TelemetrySession struct {
 	categories      map[oapi.TelemetryEventCategory]struct{}
 	exportOTLP      bool
 	appliedAt       time.Time
+	// active mirrors "a session is running with these categories" for callers
+	// on a hot path, who must decide whether to do any work at all before they
+	// reach Publish and its mutex. nil means no session. Written under mu;
+	// the pointed-to set is never mutated after it is stored.
+	active atomic.Pointer[map[oapi.TelemetryEventCategory]struct{}]
 }
 
 func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
@@ -43,6 +49,17 @@ func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
 		panic("telemetry: NewTelemetrySession requires a non-nil EventStream")
 	}
 	return &TelemetrySession{es: es, categories: categorySet(nil)}
+}
+
+// setActiveLocked republishes the lock-free view of the session state.
+// Requires s.mu to be held.
+func (s *TelemetrySession) setActiveLocked() {
+	if s.id == "" {
+		s.active.Store(nil)
+		return
+	}
+	cats := s.categories
+	s.active.Store(&cats)
 }
 
 // categorySet builds the active filter set from the configured categories. An
@@ -73,6 +90,7 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.appliedAt = time.Now()
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
+	s.setActiveLocked()
 }
 
 // publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
@@ -155,25 +173,24 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	defer s.mu.Unlock()
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
+	s.setActiveLocked()
 }
 
 // CategoryEnabled reports whether events in category c are currently captured.
-// It returns false when no session is active.
+// It returns false when no session is active. Lock-free, so a caller on the
+// CDP forwarding path can check it per frame; Publish re-checks under mu.
 func (s *TelemetrySession) CategoryEnabled(c oapi.TelemetryEventCategory) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.id == "" {
+	cats := s.active.Load()
+	if cats == nil {
 		return false
 	}
-	_, ok := s.categories[c]
+	_, ok := (*cats)[c]
 	return ok
 }
 
 // Active reports whether a telemetry session is currently running.
 func (s *TelemetrySession) Active() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.id != ""
+	return s.active.Load() != nil
 }
 
 // Stop ends the current telemetry session. The ring buffer is left intact so
@@ -186,4 +203,5 @@ func (s *TelemetrySession) Stop() {
 	// The session is over, so export is off; keep Config() authoritative for the
 	// desired export state after a clear.
 	s.exportOTLP = false
+	s.setActiveLocked()
 }
