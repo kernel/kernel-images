@@ -2894,7 +2894,7 @@ components:
       type: object
       description: Per-disconnect payload for `cdp_disconnect` events.
       additionalProperties: false
-      required: [duration_ms, message_count, reason]
+      required: [duration_ms, message_count, telemetry_dropped, reason]
       properties:
         duration_ms:
           type: number
@@ -2902,6 +2902,13 @@ components:
         message_count:
           type: integer
           description: Number of CDP messages relayed across the connection in either direction.
+        telemetry_dropped:
+          type: integer
+          description: >
+            Number of forwarded client commands that did not produce a
+            `cdp_command` event because classification could not keep up, the
+            frame exceeded the telemetry size limit, or classification failed.
+            Telemetry loss only; every command was still relayed to the browser.
         reason:
           type: string
           description: >

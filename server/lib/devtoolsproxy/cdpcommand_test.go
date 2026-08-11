@@ -131,7 +131,7 @@ func TestCdpCommandEvent(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ev, ok := cdpCommandEvent([]byte(tc.frame))
+			ev, ok := cdpCommandEvent([]byte(tc.frame), testForwardTs)
 			if tc.want == nil {
 				if ok {
 					t.Fatalf("frame produced an event, want none: %s", ev.Data)
@@ -167,7 +167,7 @@ func TestCdpCommandEventOmitsSubmittedText(t *testing.T) {
 		`{"id":3,"method":"Page.navigate","params":{"url":"https://example.com/reset?token=abc"}}`,
 		`{"id":4,"method":"DOM.setFileInputFiles","params":{"files":["/tmp/passport.pdf"],"objectId":"x"}}`,
 	} {
-		ev, ok := cdpCommandEvent([]byte(frame))
+		ev, ok := cdpCommandEvent([]byte(frame), testForwardTs)
 		if !ok {
 			t.Fatalf("frame produced no event: %s", frame)
 		}
@@ -211,7 +211,7 @@ func TestWebSocketProxyHandler_EmitsCdpCommandForClientControlTraffic(t *testing
 	mgr.setCurrent(u.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -282,3 +282,9 @@ func cdpCommandDataDiff(want, got oapi.BrowserCdpCommandEventData) string {
 func strPtr(s string) *string       { return &s }
 func intPtr(i int) *int             { return &i }
 func float32Ptr(f float32) *float32 { return &f }
+
+// testForwardTs stands in for the time a command reached Chromium.
+const testForwardTs int64 = 1_700_000_000_000_000
+
+// controlOn is the gate a proxy test needs to see cdp_command events at all.
+func controlOn() bool { return true }

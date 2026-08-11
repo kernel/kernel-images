@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -77,10 +76,12 @@ type cdpParams struct {
 }
 
 // cdpCommandEvent builds the cdp_command event for a client-to-upstream frame,
-// or reports false when the frame is not a browser-control command. Params are
-// reported as shape only — coordinates, button, event type and the length of
-// typed text — never the text itself, which on a login page is the password.
-func cdpCommandEvent(msg []byte) (events.Event, bool) {
+// or reports false when the frame is not a browser-control command. ts is when
+// the command reached Chromium, passed in so time spent queued for
+// classification does not show up as event time. Params are reported as shape
+// only — coordinates, button, event type and the length of typed text — never
+// the text itself, which on a login page is the password.
+func cdpCommandEvent(msg []byte, ts int64) (events.Event, bool) {
 	if !mayBeControlCommand(msg) {
 		return events.Event{}, false
 	}
@@ -118,7 +119,7 @@ func cdpCommandEvent(msg []byte) (events.Event, bool) {
 		return events.Event{}, false
 	}
 	return events.Event{
-		Ts:       time.Now().UnixMicro(),
+		Ts:       ts,
 		Type:     "cdp_command",
 		Category: events.Control,
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
@@ -166,13 +167,4 @@ func mayBeControlCommand(msg []byte) bool {
 		}
 	}
 	return false
-}
-
-func publishCdpCommand(publish EventPublisher, msg []byte) {
-	if publish == nil {
-		return
-	}
-	if ev, ok := cdpCommandEvent(msg); ok {
-		publish(ev)
-	}
 }

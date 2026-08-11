@@ -309,8 +309,9 @@ type EventPublisher func(ev events.Event) (events.Envelope, bool)
 // proxies them to the current upstream websocket URL. It expects only websocket requests.
 // If logCDPMessages is true, all CDP messages will be logged with their direction.
 // publish is invoked on accept (cdp_connect) and on teardown (cdp_disconnect); pass
-// nil to disable emission.
-func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, reg *wsdrain.Registry) http.Handler {
+// nil to disable emission. controlEnabled gates cdp_command classification and is
+// checked once per forwarded client frame; pass nil to disable it.
+func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, reg *wsdrain.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Counts every relayed message so cdp_disconnect can report message_count.
 		var msgCount atomic.Int64
@@ -319,11 +320,6 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 				logCDPMessage(logger, direction, mt, msg)
 			}
 			msgCount.Add(1)
-			// Client-to-upstream only: commands are what the caller drives the
-			// browser with, and upstream frames are events and command results.
-			if direction == "->" && mt == websocket.MessageText {
-				publishCdpCommand(publish, msg)
-			}
 			return msg
 		}
 
@@ -369,11 +365,11 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			switch {
 			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(r.Context().Err(), context.Canceled), errors.Is(r.Context().Err(), context.DeadlineExceeded):
 				clientConn.Close(websocket.StatusGoingAway, "request cancelled")
-				publishCdpDisconnect(publish, oapi.ContextCancelled, connectedAt, time.Now(), msgCount.Load())
+				publishCdpDisconnect(publish, oapi.ContextCancelled, connectedAt, time.Now(), msgCount.Load(), 0)
 			default:
 				logger.Error("failed to connect to upstream", slog.String("err", err.Error()))
 				clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
-				publishCdpDisconnect(publish, oapi.UpstreamError, connectedAt, time.Now(), msgCount.Load())
+				publishCdpDisconnect(publish, oapi.UpstreamError, connectedAt, time.Now(), msgCount.Load(), 0)
 			}
 			return
 		}
@@ -382,6 +378,20 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		logger.Debug("proxying websocket", slog.String("url", upstreamURL))
 
 		pumpCtx, pumpCancel := context.WithCancel(r.Context())
+
+		// Classification of client commands runs behind the pump, not inside it:
+		// a frame is observed only once Chromium has accepted it.
+		observer := newCdpObserver(pumpCtx, publish, controlEnabled, logger)
+		var observe wsproxy.Observer
+		if observer != nil {
+			observe = func(direction string, mt websocket.MessageType, msg []byte, ts int64) {
+				// Client-to-upstream only: commands are what the caller drives the
+				// browser with, and upstream frames are events and command results.
+				if direction == "->" && mt == websocket.MessageText {
+					observer.Observe(msg, ts)
+				}
+			}
+		}
 
 		// Force clients off a stale upstream as soon as UpstreamManager
 		// publishes a different DevTools URL. Closing upstreamConn (rather
@@ -422,11 +432,15 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 				upstreamConn.Close(websocket.StatusNormalClosure, "")
 				clientConn.Close(websocket.StatusNormalClosure, "")
 				reason := resolveDisconnectReason(cause, r.Context(), mgr, upstreamURL, restartConfirmWait, logger)
-				publishCdpDisconnect(publish, reason, connectedAt, disconnectedAt, msgCount.Load())
+				// Let the worker finish the queue before the disconnect, so the
+				// client's last commands land ahead of it and telemetry_dropped
+				// is final.
+				observer.WaitDrained(cdpObserverDrainWait)
+				publishCdpDisconnect(publish, reason, connectedAt, disconnectedAt, msgCount.Load(), observer.Dropped())
 			})
 		}
 
-		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform, nil)
+		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform, observe)
 	})
 }
 
@@ -485,14 +499,15 @@ func publishCdpConnect(publish EventPublisher) {
 	})
 }
 
-func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt, disconnectedAt time.Time, msgCount int64) {
+func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt, disconnectedAt time.Time, msgCount, telemetryDropped int64) {
 	if publish == nil {
 		return
 	}
 	data, _ := json.Marshal(oapi.BrowserCdpDisconnectEventData{
-		DurationMs:   float32(disconnectedAt.Sub(connectedAt).Microseconds()) / 1000.0,
-		MessageCount: int(msgCount),
-		Reason:       reason,
+		DurationMs:       float32(disconnectedAt.Sub(connectedAt).Microseconds()) / 1000.0,
+		MessageCount:     int(msgCount),
+		TelemetryDropped: int(telemetryDropped),
+		Reason:           reason,
 	})
 	publish(events.Event{
 		Ts:       disconnectedAt.UnixMicro(),

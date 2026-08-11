@@ -321,8 +321,11 @@ func main() {
 	rDevtools.Get("/json/", jsonTargetHandler)
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
+	// Checked once per forwarded client frame, so it reads the session's
+	// lock-free view rather than taking the telemetry lock.
+	controlEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Control) }
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, wsRegistry).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
