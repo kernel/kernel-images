@@ -302,10 +302,10 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 	return nil
 }
 
-// DispatchStartURLAndWait navigates the user-facing page and waits until the
-// destination has loaded without resolving to Chrome's network error page.
-func DispatchStartURLAndWait(ctx context.Context, devtoolsURL, destination string) error {
-	if err := DispatchStartURL(ctx, devtoolsURL, destination); err != nil {
+// DispatchStartURLAndWait navigates through navigationURL and waits for
+// destination to load without resolving to Chrome's network error page.
+func DispatchStartURLAndWait(ctx context.Context, devtoolsURL, navigationURL, destination string) error {
+	if err := DispatchStartURL(ctx, devtoolsURL, navigationURL); err != nil {
 		return err
 	}
 
@@ -369,7 +369,7 @@ func DispatchStartURLAndWait(ctx context.Context, devtoolsURL, destination strin
 					return nil
 				}
 				if strings.HasPrefix(lastState.URL, "chrome-error://") && time.Since(lastNavigate) >= 250*time.Millisecond {
-					_, _ = c.send(ctx, "Page.navigate", map[string]any{"url": destination}, attach.SessionID)
+					_, _ = c.send(ctx, "Page.navigate", map[string]any{"url": navigationURL}, attach.SessionID)
 					lastNavigate = time.Now()
 				}
 			}

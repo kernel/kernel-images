@@ -70,17 +70,8 @@ func TelemetryHTTPMiddleware(publish func(events.Event) (events.Envelope, bool))
 			if tc.operationID == "" {
 				return
 			}
-			eventData := oapi.BrowserApiCallEventData{
-				RequestId:   chiMiddleware.GetReqID(ctx),
-				OperationId: tc.operationID,
-				Status:      ww.Status(),
-				DurationMs:  float32(time.Since(start).Microseconds()) / 1000.0,
-			}
-			if tc.code != "" {
-				eventData.Code = &tc.code
-			}
-			data, _ := json.Marshal(eventData)
 			eventType, category := apiCallEvent(tc.operationID)
+			data := apiCallEventData(category, tc, chiMiddleware.GetReqID(ctx), ww.Status(), time.Since(start))
 			publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
 				Type:     eventType,
@@ -90,6 +81,34 @@ func TelemetryHTTPMiddleware(publish func(events.Event) (events.Envelope, bool))
 			})
 		})
 	}
+}
+
+// apiCallEventData marshals the payload for the resolved event type. The two
+// types have separate schemas and only api_call declares code, so a platform
+// call marshals the metadata-only type rather than a control payload that
+// happens to have the field unset.
+func apiCallEventData(category oapi.TelemetryEventCategory, tc *telemetryRequestCtx, requestID string, status int, duration time.Duration) []byte {
+	durationMs := float32(duration.Microseconds()) / 1000.0
+	if category != events.Control {
+		data, _ := json.Marshal(oapi.BrowserPlatformApiCallEventData{
+			RequestId:   requestID,
+			OperationId: tc.operationID,
+			Status:      status,
+			DurationMs:  durationMs,
+		})
+		return data
+	}
+	eventData := oapi.BrowserApiCallEventData{
+		RequestId:   requestID,
+		OperationId: tc.operationID,
+		Status:      status,
+		DurationMs:  durationMs,
+	}
+	if tc.code != "" {
+		eventData.Code = &tc.code
+	}
+	data, _ := json.Marshal(eventData)
+	return data
 }
 
 // apiCallEvent resolves the event type and category for an operation. An

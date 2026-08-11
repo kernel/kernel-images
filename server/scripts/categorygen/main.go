@@ -41,6 +41,14 @@ type operation struct {
 	Category    string `yaml:"x-telemetry-category"`
 }
 
+// apiCallCategories are the categories an operation can be classified into.
+// Only these two have an api_call event type to carry them, so any other value
+// would name a category nothing publishes.
+var apiCallCategories = map[string]struct{}{
+	"control":  {},
+	"platform": {},
+}
+
 // httpMethods are the path-item keys that describe an operation. Anything else
 // under a path (a shared `parameters` list, a description) is not one.
 var httpMethods = map[string]struct{}{
@@ -148,6 +156,10 @@ func main() {
 			route := strings.ToUpper(method) + " " + path
 			if op.Category == "" {
 				fmt.Fprintf(os.Stderr, "categorygen: %s (%s) has no x-telemetry-category\n", route, op.OperationID)
+				os.Exit(1)
+			}
+			if _, ok := apiCallCategories[op.Category]; !ok {
+				fmt.Fprintf(os.Stderr, "categorygen: %s (%s) has x-telemetry-category %q; an operation must be control or platform\n", route, op.OperationID, op.Category)
 				os.Exit(1)
 			}
 			handler, ok := handlers[route]

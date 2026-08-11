@@ -250,10 +250,10 @@ func TestDispatchStartURLAndWait(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		err := DispatchStartURLAndWait(ctx, url, "https://start.duckduckgo.com/")
+		err := DispatchStartURLAndWait(ctx, url, "chrome://newtab/", "https://start.duckduckgo.com/")
 		require.NoError(t, err)
 		assert.True(t, f.navigateCalled)
-		assert.Equal(t, "https://start.duckduckgo.com/", f.navigateURL)
+		assert.Equal(t, "chrome://newtab/", f.navigateURL)
 	})
 
 	t.Run("retries a failed initial navigation", func(t *testing.T) {
@@ -274,9 +274,10 @@ func TestDispatchStartURLAndWait(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		err := DispatchStartURLAndWait(ctx, url, "https://start.duckduckgo.com/")
+		err := DispatchStartURLAndWait(ctx, url, "chrome://newtab/", "https://start.duckduckgo.com/")
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, f.navigateCalls, 2)
+		assert.Equal(t, "chrome://newtab/", f.navigateURL)
 	})
 
 	t.Run("times out on Chrome error page", func(t *testing.T) {
@@ -289,7 +290,7 @@ func TestDispatchStartURLAndWait(t *testing.T) {
 
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
-		err := DispatchStartURLAndWait(ctx, url, "https://start.duckduckgo.com/")
+		err := DispatchStartURLAndWait(ctx, url, "chrome://newtab/", "https://start.duckduckgo.com/")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "chrome-error://chromewebdata/")
 	})

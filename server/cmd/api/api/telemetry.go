@@ -117,13 +117,14 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 }
 
 // reconcileTelemetryState reconciles the CDP collector and the api_call
-// (control) middleware to the desired category set. The collector runs iff a
-// CDP category is captured; the middleware emits iff the control category is.
-// Callers commit the session config first so the filter is live before the
-// collector emits; this returns an error only when the collector fails to
-// start, leaving the caller to roll back.
+// middleware to the desired category set. The collector runs iff a CDP category
+// is captured; the middleware emits iff control or platform is, since it is the
+// sole producer of both api_call and platform_api_call. Callers commit the
+// session config first so the filter is live before the collector emits; this
+// returns an error only when the collector fails to start, leaving the caller to
+// roll back.
 func (s *ApiService) reconcileTelemetryState(cats []oapi.TelemetryEventCategory) error {
-	if containsCategory(cats, events.Control) {
+	if containsCategory(cats, events.Control) || containsCategory(cats, events.Platform) {
 		EnableTelemetryMiddleware()
 	} else {
 		DisableTelemetryMiddleware()

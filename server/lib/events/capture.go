@@ -8,7 +8,7 @@ const TruncatedSuffix = "...[truncated]"
 
 // CapturedFieldCap is the ceiling for a single captured string on an event:
 // response bodies of structured types, and the source submitted to Playwright
-// execution. It sits three orders of magnitude below maxS2RecordBytes so no one
+// execution. It sits two orders of magnitude below maxS2RecordBytes so no one
 // field can push an envelope past the record limit, which would null the whole
 // payload rather than clip the field.
 const CapturedFieldCap = 8 * 1024

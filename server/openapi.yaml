@@ -2779,7 +2779,7 @@ components:
           description: Per-request identifier from the kernel-images-api request middleware.
         operation_id:
           type: string
-          description: Matched route's operation, named as the server names its handler (e.g. `ProcessExec`, `TakeScreenshot`).
+          description: Matched route's operation, named as the server names its handler (e.g. `TakeScreenshot`, `ExecutePlaywrightCode`).
         status:
           type: integer
           description: HTTP response status code.
@@ -2789,6 +2789,27 @@ components:
         code:
           type: string
           description: Source submitted to `executePlaywrightCode`, capped at 8192 bytes like every other captured string. A capped value is cut on a character boundary and ends in `...[truncated]`. Absent for every other operation.
+    BrowserPlatformApiCallEventData:
+      type: object
+      description: >
+        Per-call payload for `platform_api_call` events. Metadata only: a
+        platform call carries no submitted content, so there is no `code` field
+        as there is on `api_call`.
+      additionalProperties: false
+      required: [request_id, operation_id, status, duration_ms]
+      properties:
+        request_id:
+          type: string
+          description: Per-request identifier from the kernel-images-api request middleware.
+        operation_id:
+          type: string
+          description: Matched route's operation, named as the server names its handler (e.g. `ProcessExec`, `StartRecording`).
+        status:
+          type: integer
+          description: HTTP response status code.
+        duration_ms:
+          type: number
+          description: Wall-clock duration of the handler in milliseconds.
     BrowserApiCallEvent:
       type: object
       description: >
@@ -2838,7 +2859,7 @@ components:
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
-          $ref: "#/components/schemas/BrowserApiCallEventData"
+          $ref: "#/components/schemas/BrowserPlatformApiCallEventData"
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.

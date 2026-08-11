@@ -36,6 +36,16 @@ jobs:
           cache: true
           cache-dependency-path: server/go.sum
 
+      # categorygen's checks (unclassified route, category that isn't control or
+      # platform, classified route with no handler) only run when the generator
+      # does, and its only other caller is `make oapi-generate`, which needs the
+      # npm down-converter. Running it here enforces them on every change.
+      - name: Check generated event categories are current
+        run: |
+          go generate ./lib/events/...
+          git diff --exit-code -- lib/events/category_gen.go
+        working-directory: server
+
       - name: Run server unit tests
         run: make test-unit
         working-directory: server
