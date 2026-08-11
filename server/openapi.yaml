@@ -2848,9 +2848,13 @@ components:
         A browser-control command a client sent over the CDP WebSocket proxy:
         input gestures, navigation, dialog handling, file selection and
         screenshots. Configuration commands and the DOM/Runtime traffic a client
-        library issues on the caller's behalf are not reported, and the phases
-        that add nothing (`mouseMoved`, `keyUp`, `char`) are dropped, so a click
-        reads as a press and a release rather than three frames.
+        library issues on the caller's behalf are not reported.
+
+        One event per browser-control command that reached the browser. The
+        command stream is not sampled, coalesced or reordered. An event is lost
+        only when the method is excluded by telemetry configuration, when
+        classification cannot keep up, or when the frame exceeds the telemetry
+        size limit; those losses are counted in `cdp_disconnect.telemetry_dropped`.
       required: [ts, type, category, source]
       properties:
         ts:

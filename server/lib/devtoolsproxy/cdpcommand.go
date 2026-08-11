@@ -24,13 +24,6 @@ var controlMethods = lookup(`
 	DOM.setFileInputFiles
 `)
 
-// skipEventTypes drops the phases that say nothing the kept phases don't. A
-// click arrives as mouseMoved, mousePressed, mouseReleased and a keystroke as
-// rawKeyDown/keyDown, char, keyUp; press and release are worth having (a
-// long-held button is visible in the gap), the rest is filler. mouseMoved also
-// arrives in bulk from humanized cursor paths.
-var skipEventTypes = lookup(`mouseMoved keyUp char`)
-
 // namedKeys are the KeyboardEvent.key values worth reading back: keys that
 // command the page rather than type into it. This is an allowlist rather than a
 // "more than one character" rule because key for typed input can itself be
@@ -78,9 +71,13 @@ type cdpParams struct {
 // cdpCommandEvent builds the cdp_command event for a client-to-upstream frame,
 // or reports false when the frame is not a browser-control command. ts is when
 // the command reached Chromium, passed in so time spent queued for
-// classification does not show up as event time. Params are reported as shape
-// only — coordinates, button, event type and the length of typed text — never
-// the text itself, which on a login page is the password.
+// classification does not show up as event time. Every control command gets an
+// event: subtypes like mouseMoved and keyUp are commands in their own right —
+// a mouseMoved with buttons held is a drag path, a keyUp releases a modifier —
+// so the stream is never coalesced down to what looks like the interesting
+// phases. Params are reported as shape only — coordinates, button, event type
+// and the length of typed text — never the text itself, which on a login page
+// is the password.
 func cdpCommandEvent(msg []byte, ts int64) (events.Event, bool) {
 	if !mayBeControlCommand(msg) {
 		return events.Event{}, false
@@ -93,9 +90,6 @@ func cdpCommandEvent(msg []byte, ts int64) (events.Event, bool) {
 	// The parsed top-level method decides, not the scanned one: a client is free
 	// to nest a "method" key inside params ahead of its own.
 	if _, ok := controlMethods[cmd.Method]; !ok {
-		return events.Event{}, false
-	}
-	if _, skip := skipEventTypes[cmd.Params.Type]; skip {
 		return events.Event{}, false
 	}
 

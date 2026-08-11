@@ -66,16 +66,32 @@ func TestCdpCommandEvent(t *testing.T) {
 			want:  &oapi.BrowserCdpCommandEventData{Method: "Page.navigate"},
 		},
 		{
-			name:  "mouseMoved is dropped as a duplicate phase",
-			frame: `{"id":11,"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":1,"y":2}}`,
+			name:  "mouseMoved is a command, not a duplicate phase",
+			frame: `{"id":11,"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":1,"y":2,"buttons":1}}`,
+			want: &oapi.BrowserCdpCommandEventData{
+				Method:    "Input.dispatchMouseEvent",
+				EventType: strPtr("mouseMoved"),
+				X:         float32Ptr(1),
+				Y:         float32Ptr(2),
+			},
 		},
 		{
-			name:  "keyUp is dropped as a duplicate phase",
-			frame: `{"id":12,"method":"Input.dispatchKeyEvent","params":{"type":"keyUp","key":"a"}}`,
+			name:  "keyUp releases a held key",
+			frame: `{"id":12,"method":"Input.dispatchKeyEvent","params":{"type":"keyUp","key":"Shift"}}`,
+			want: &oapi.BrowserCdpCommandEventData{
+				Method:    "Input.dispatchKeyEvent",
+				EventType: strPtr("keyUp"),
+				NamedKey:  strPtr("Shift"),
+			},
 		},
 		{
-			name:  "char is dropped as a duplicate phase",
+			name:  "char is the command that inserts the character",
 			frame: `{"id":13,"method":"Input.dispatchKeyEvent","params":{"type":"char","text":"a"}}`,
+			want: &oapi.BrowserCdpCommandEventData{
+				Method:     "Input.dispatchKeyEvent",
+				EventType:  strPtr("char"),
+				TextLength: intPtr(1),
+			},
 		},
 		{
 			name:  "library bookkeeping is not browser control",
