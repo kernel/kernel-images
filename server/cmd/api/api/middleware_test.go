@@ -105,7 +105,11 @@ func TestTelemetryMiddleware_EmitsApiCallEventOnDocumentedRoute(t *testing.T) {
 func TestTelemetryMiddleware_EmitsPlatformApiCallForVMOperations(t *testing.T) {
 	withTelemetryMiddlewareEnabled(t)
 	rp := &recordingPublisher{}
-	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusOK, noBody)
+	// Records code from a platform handler, which no handler does today, to pin
+	// that the payload type and not the call sites is what keeps it out.
+	chain := chiHandler(t, rp.publish, "ProcessExec", http.StatusOK, func(ctx context.Context) {
+		RecordTelemetryCode(ctx, "await page.goto('https://example.com')")
+	})
 
 	req := httptest.NewRequest(http.MethodPost, "/process/exec", nil)
 	chain.ServeHTTP(httptest.NewRecorder(), req)
@@ -114,8 +118,8 @@ func TestTelemetryMiddleware_EmitsPlatformApiCallForVMOperations(t *testing.T) {
 	require.Len(t, captured, 1)
 	assert.Equal(t, "platform_api_call", captured[0].Type)
 	assert.Equal(t, events.Platform, captured[0].Category)
-	// BrowserPlatformApiCallEventData has no code field, so the key must be
-	// absent rather than null for the payload to match the published schema.
+	// BrowserPlatformApiCallEventData declares no code field, so the key must be
+	// absent for the payload to match the published schema.
 	assert.NotContains(t, string(captured[0].Data), `"code"`)
 }
 
