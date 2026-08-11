@@ -426,7 +426,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			})
 		}
 
-		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform)
+		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform, nil)
 	})
 }
 
