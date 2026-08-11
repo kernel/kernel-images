@@ -584,3 +584,59 @@ func (e *blockingStopExporter) Running() bool {
 	defer e.mu.Unlock()
 	return e.running
 }
+
+func TestCdpExcludedMethodsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	excluded := []oapi.BrowserCdpCommandMethod{"Input.dispatchMouseEvent", "Page.captureScreenshot"}
+	withExclusions := func() *oapi.BrowserTelemetryConfig {
+		return &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Control: &oapi.BrowserTelemetryControlConfig{
+					Enabled: lo.ToPtr(true),
+					Cdp:     &oapi.BrowserTelemetryCdpControlConfig{ExcludedMethods: &excluded},
+				},
+			},
+		}
+	}
+
+	t.Run("put stores them and the session exposes them to the proxy", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withExclusions()})
+		require.NoError(t, err)
+		created := resp.(oapi.PutTelemetry201JSONResponse)
+		require.NotNil(t, created.Config.Browser.Control.Cdp)
+		assert.Equal(t, excluded, *created.Config.Browser.Control.Cdp.ExcludedMethods)
+
+		// The proxy reads this set per command, so it has to reflect the config.
+		assert.Equal(t, map[string]struct{}{
+			"Input.dispatchMouseEvent": {},
+			"Page.captureScreenshot":   {},
+		}, svc.telemetrySession.ExcludedCdpMethods())
+	})
+
+	t.Run("patch leaves an omitted list alone and an empty list clears it", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withExclusions()})
+		require.NoError(t, err)
+
+		// Category toggle only: the exclusions are not mentioned, so they stand.
+		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				System: &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(true)},
+			},
+		}})
+		require.NoError(t, err)
+		assert.Len(t, svc.telemetrySession.ExcludedCdpMethods(), 2)
+
+		empty := []oapi.BrowserCdpCommandMethod{}
+		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Control: &oapi.BrowserTelemetryControlConfig{
+					Cdp: &oapi.BrowserTelemetryCdpControlConfig{ExcludedMethods: &empty},
+				},
+			},
+		}})
+		require.NoError(t, err)
+		assert.Empty(t, svc.telemetrySession.ExcludedCdpMethods())
+	})
+}
