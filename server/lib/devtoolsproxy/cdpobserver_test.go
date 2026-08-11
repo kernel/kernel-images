@@ -1,0 +1,173 @@
+package devtoolsproxy
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/kernel/kernel-images/server/lib/events"
+)
+
+const clickFrame = `{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2}}`
+
+// countingPublisher records how many events reached the bus.
+type countingPublisher struct {
+	n atomic.Int64
+}
+
+func (c *countingPublisher) publish(ev events.Event) (events.Envelope, bool) {
+	c.n.Add(1)
+	return events.Envelope{Event: ev}, true
+}
+
+func newTestObserver(t *testing.T, publish EventPublisher, enabled ControlEnabledFunc) *cdpObserver {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	o := newCdpObserver(ctx, publish, enabled, nil, silentLogger())
+	if o == nil {
+		t.Fatal("observer was not created")
+	}
+	return o
+}
+
+// The gate is what makes telemetry free when it is off: a frame observed with
+// control disabled must not be retained, parsed or queued.
+func TestObserverDoesNoWorkWhenControlIsDisabled(t *testing.T) {
+	pub := &countingPublisher{}
+	o := newTestObserver(t, pub.publish, func() bool { return false })
+
+	for range 100 {
+		o.Observe([]byte(clickFrame), testForwardTs)
+	}
+	if queued := len(o.frames); queued != 0 {
+		t.Fatalf("queued %d frames with control disabled, want 0", queued)
+	}
+	if got := pub.n.Load(); got != 0 {
+		t.Fatalf("published %d events with control disabled, want 0", got)
+	}
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("counted %d drops with control disabled, want 0: a frame nobody wanted is not a loss", got)
+	}
+}
+
+func TestObserveAllocatesNothingWhenControlIsDisabled(t *testing.T) {
+	o := newTestObserver(t, (&countingPublisher{}).publish, func() bool { return false })
+	frame := []byte(clickFrame)
+	allocs := testing.AllocsPerRun(1000, func() { o.Observe(frame, testForwardTs) })
+	if allocs != 0 {
+		t.Fatalf("Observe allocated %v times per call with control disabled, want 0", allocs)
+	}
+}
+
+// A panicking publisher is the failure the pump must survive: before this the
+// panic unwound through the message transform and took the process with it.
+func TestPanickingPublisherIsContainedAndCounted(t *testing.T) {
+	var published atomic.Int64
+	panicking := func(ev events.Event) (events.Envelope, bool) {
+		published.Add(1)
+		panic("publisher exploded")
+	}
+	o := newTestObserver(t, panicking, controlOn)
+
+	for range 5 {
+		o.Observe([]byte(clickFrame), testForwardTs)
+	}
+	waitFor(t, func() bool { return o.Dropped() == 5 })
+	if got := published.Load(); got != 5 {
+		t.Fatalf("publisher called %d times, want 5: the worker must keep going after a panic", got)
+	}
+}
+
+// Saturation is an acceptable loss, but only a counted one.
+func TestQueueSaturationIsCounted(t *testing.T) {
+	blocked := make(chan struct{})
+	var released sync.Once
+	t.Cleanup(func() { released.Do(func() { close(blocked) }) })
+
+	blocking := func(ev events.Event) (events.Envelope, bool) {
+		<-blocked
+		return events.Envelope{Event: ev}, true
+	}
+	o := newTestObserver(t, blocking, controlOn)
+
+	// One frame occupies the worker, the queue absorbs cdpObserverQueueDepth
+	// more, and everything past that is dropped rather than blocking the pump.
+	const overshoot = 50
+	for range cdpObserverQueueDepth + overshoot + 1 {
+		o.Observe([]byte(clickFrame), testForwardTs)
+	}
+	waitFor(t, func() bool { return o.Dropped() > 0 })
+	if got := o.Dropped(); got > overshoot+1 {
+		t.Fatalf("dropped %d frames, want at most %d: the queue should absorb the rest", got, overshoot+1)
+	}
+}
+
+// A frame past the size limit costs a length check, not a megabyte of parsing.
+func TestOversizedFramesAreDroppedAndCounted(t *testing.T) {
+	pub := &countingPublisher{}
+	o := newTestObserver(t, pub.publish, controlOn)
+
+	huge := `{"id":1,"method":"Input.insertText","params":{"text":"` +
+		strings.Repeat("x", cdpObserverMaxFrameBytes) + `"}}`
+	o.Observe([]byte(huge), testForwardTs)
+
+	if queued := len(o.frames); queued != 0 {
+		t.Fatalf("queued an oversized frame")
+	}
+	if got := o.Dropped(); got != 1 {
+		t.Fatalf("dropped = %d, want 1", got)
+	}
+}
+
+// Teardown must not lose the commands a client sent last.
+func TestObserverDrainsQueuedFramesOnShutdown(t *testing.T) {
+	pub := &countingPublisher{}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := newCdpObserver(ctx, pub.publish, controlOn, nil, silentLogger())
+
+	const sent = 20
+	for range sent {
+		o.Observe([]byte(clickFrame), testForwardTs)
+	}
+	cancel()
+	o.WaitDrained(5 * time.Second)
+
+	if got := pub.n.Load(); got != sent {
+		t.Fatalf("published %d events, want %d: queued commands must survive teardown", got, sent)
+	}
+}
+
+func TestObserverAppliesMethodExclusions(t *testing.T) {
+	pub := &countingPublisher{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	excluded := func() map[string]struct{} {
+		return map[string]struct{}{"Input.dispatchMouseEvent": {}}
+	}
+	o := newCdpObserver(ctx, pub.publish, controlOn, excluded, silentLogger())
+
+	o.Observe([]byte(clickFrame), testForwardTs)
+	o.Observe([]byte(`{"id":2,"method":"Page.reload"}`), testForwardTs)
+	waitFor(t, func() bool { return pub.n.Load() == 1 })
+
+	// An excluded method is not a drop: nothing was lost, it was configured out.
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("dropped = %d, want 0", got)
+	}
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatal("condition not met within 5s")
+}

@@ -432,7 +432,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 				pumpCancel()
 				upstreamConn.Close(websocket.StatusNormalClosure, "")
 				clientConn.Close(websocket.StatusNormalClosure, "")
-				reason := resolveDisconnectReason(cause, r.Context(), mgr, upstreamURL, restartConfirmWait, logger)
+				reason := resolveDisconnectReason(cause, r.Context(), mgr, upstreamURL, getRestartConfirmWait(), logger)
 				// Let the worker finish the queue before the disconnect, so the
 				// client's last commands land ahead of it and telemetry_dropped
 				// is final.
@@ -448,9 +448,19 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 // restartConfirmWait is how long cleanup waits for a new upstream URL after
 // the upstream side of the pump dies before classifying the disconnect as
 // upstream_error vs upstream_changed. Sized for Chromium's typical cold
-// restart (~5-8s on Unikraft Cloud) with headroom. var (not const) so tests
-// can temporarily shrink it.
-var restartConfirmWait = 10 * time.Second
+// restart (~5-8s on Unikraft Cloud) with headroom. Atomic rather than a plain
+// var because tests shrink it while other handlers are still reading it.
+var restartConfirmWait atomic.Int64
+
+func init() { setRestartConfirmWait(10 * time.Second) }
+
+func getRestartConfirmWait() time.Duration {
+	return time.Duration(restartConfirmWait.Load())
+}
+
+func setRestartConfirmWait(d time.Duration) {
+	restartConfirmWait.Store(int64(d))
+}
 
 // resolveDisconnectReason picks the cdp_disconnect reason from which side
 // caused the pump to exit. On upstream cause it polls mgr.Current() for up

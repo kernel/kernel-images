@@ -664,9 +664,9 @@ func TestResolveDisconnectReason(t *testing.T) {
 
 func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing.T) {
 	// Shorten the resolve wait so the test doesn't pay the production 10s.
-	prev := restartConfirmWait
-	restartConfirmWait = 1 * time.Second
-	defer func() { restartConfirmWait = prev }()
+	prev := getRestartConfirmWait()
+	setRestartConfirmWait(1 * time.Second)
+	defer setRestartConfirmWait(prev)
 
 	// Upstream A: echoes once, then closes (simulates Chromium dying mid-session).
 	upstreamA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -749,9 +749,9 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 }
 
 func TestWebSocketProxyHandler_KicksClientOffStaleUpstreamOnURLChange(t *testing.T) {
-	prev := restartConfirmWait
-	restartConfirmWait = 500 * time.Millisecond
-	defer func() { restartConfirmWait = prev }()
+	prev := getRestartConfirmWait()
+	setRestartConfirmWait(500 * time.Millisecond)
+	defer setRestartConfirmWait(prev)
 
 	// Upstream stays alive until the proxy closes it from the watcher path.
 	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
