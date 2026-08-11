@@ -4791,6 +4791,7 @@ components:
       required:
         - config
         - seq
+        - dropped_events
       properties:
         config:
           $ref: "#/components/schemas/BrowserTelemetryConfig"
@@ -4800,6 +4801,15 @@ components:
           description: >-
             Process-monotonic sequence number of the last published event.
             Does not reset across configuration changes.
+          minimum: 0
+        dropped_events:
+          type: integer
+          format: int64
+          description: >-
+            Cumulative number of buffered events a consumer missed because it
+            fell behind the ring, summed across consumers and configuration
+            changes. A rising count means the stream is being produced faster
+            than it is being read; a steady one means nothing has been lost.
           minimum: 0
         applied_at:
           type: string

@@ -52,7 +52,7 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 			s.telemetrySession.Stop()
 			s.stopTelemetryState()
 		}
-		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
+		return oapi.PutTelemetry200JSONResponse(s.stoppedTelemetryResponse()), nil
 	}
 
 	// Commit the config first so the filter is live before the collector emits,
@@ -102,7 +102,7 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	if allDisabled {
 		s.telemetrySession.Stop()
 		s.stopTelemetryState()
-		return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
+		return oapi.PatchTelemetry200JSONResponse(s.stoppedTelemetryResponse()), nil
 	}
 
 	// Commit first so the filter is live before the collector emits, then
@@ -198,13 +198,24 @@ func (s *ApiService) stopTelemetryState() {
 // buildTelemetryResponse constructs a TelemetryState response from the current configuration.
 func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
 	resp := oapi.TelemetryState{
-		Config: telemetryConfigToOAPI(s.telemetrySession.Config()),
-		Seq:    int64(s.telemetrySession.Seq()),
+		Config:        telemetryConfigToOAPI(s.telemetrySession.Config()),
+		Seq:           int64(s.telemetrySession.Seq()),
+		DroppedEvents: int64(s.telemetrySession.DroppedEvents()),
 	}
 	if appliedAt := s.telemetrySession.AppliedAt(); !appliedAt.IsZero() {
 		resp.AppliedAt = &appliedAt
 	}
 	return resp
+}
+
+// stoppedTelemetryResponse reports the cleared configuration. Seq and the
+// dropped count are process-scoped, so they survive a session ending.
+func (s *ApiService) stoppedTelemetryResponse() oapi.TelemetryState {
+	return oapi.TelemetryState{
+		Config:        disabledConfig(),
+		Seq:           int64(s.telemetrySession.Seq()),
+		DroppedEvents: int64(s.telemetrySession.DroppedEvents()),
+	}
 }
 
 // categoryField pairs a category with its enabled flag so the helpers can walk

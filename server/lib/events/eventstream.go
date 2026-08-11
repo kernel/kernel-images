@@ -3,6 +3,7 @@ package events
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // EventStream is the process-lifetime event bus. It owns the ring buffer and
@@ -11,6 +12,10 @@ type EventStream struct {
 	mu   sync.Mutex
 	seq  uint64
 	ring *ringBuffer
+	// dropped counts envelopes a consumer missed because it fell behind the
+	// ring, summed across consumers and sessions. Loss is per-consumer, so this
+	// is a pressure signal rather than a count of distinct lost events.
+	dropped atomic.Uint64
 }
 
 type EventStreamConfig struct {
@@ -37,6 +42,19 @@ func (es *EventStream) Publish(env Envelope) Envelope {
 	env, _ = truncateIfNeeded(env)
 	es.ring.publish(env)
 	return env
+}
+
+// RecordDropped notes that a consumer found a gap of n envelopes. Consumers
+// report it rather than the ring detecting it, because only a consumer knows
+// what it had already read.
+func (es *EventStream) RecordDropped(n uint64) {
+	es.dropped.Add(n)
+}
+
+// DroppedEvents returns the cumulative gap count across consumers, so a reader
+// can tell a quiet stream from one it is falling behind.
+func (es *EventStream) DroppedEvents() uint64 {
+	return es.dropped.Load()
 }
 
 // NewReader returns a Reader positioned after afterSeq. Pass 0 to start from

@@ -160,6 +160,16 @@ func (s *TelemetrySession) ID() string {
 	return s.id
 }
 
+// RecordDropped notes that a consumer found a gap of n envelopes in the stream.
+func (s *TelemetrySession) RecordDropped(n uint64) {
+	s.es.RecordDropped(n)
+}
+
+// DroppedEvents returns the cumulative gap count across consumers.
+func (s *TelemetrySession) DroppedEvents() uint64 {
+	return s.es.DroppedEvents()
+}
+
 // Seq returns the sequence number of the last published event.
 func (s *TelemetrySession) Seq() uint64 {
 	return s.es.Seq()
