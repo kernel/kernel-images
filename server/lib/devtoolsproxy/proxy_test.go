@@ -863,3 +863,6 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, oapi.UpstreamError)
 	}
 }
+
+// controlOn is the gate a proxy test needs to see cdp_command events at all.
+func controlOn() bool { return true }

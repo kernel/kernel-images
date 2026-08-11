@@ -2806,42 +2806,1468 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
-    BrowserCdpCommandEventData:
+    BrowserCdpCommandMethod:
+      type: string
+      description: >
+        A browser-control CDP method the proxy reports. The set covers the
+        commands an agent drives the browser with; configuration, DOM and
+        Runtime bookkeeping, and Chrome-specific UI commands are outside it.
+        Canonical definitions: devtools-protocol@2d019e73.
+      enum:
+        - Input.dispatchMouseEvent
+        - Input.dispatchKeyEvent
+        - Input.insertText
+        - Input.imeSetComposition
+        - Input.dispatchTouchEvent
+        - Input.dispatchDragEvent
+        - Input.cancelDragging
+        - Input.emulateTouchFromMouseEvent
+        - Input.synthesizePinchGesture
+        - Input.synthesizeScrollGesture
+        - Input.synthesizeTapGesture
+        - DOM.setFileInputFiles
+        - DOM.focus
+        - DOM.scrollIntoViewIfNeeded
+        - Page.bringToFront
+        - Page.captureScreenshot
+        - Page.captureSnapshot
+        - Page.handleJavaScriptDialog
+        - Page.navigate
+        - Page.navigateToHistoryEntry
+        - Page.reload
+        - Page.printToPDF
+        - Page.startScreencast
+        - Page.stopScreencast
+        - Page.stopLoading
+        - Page.close
+        - Page.setWebLifecycleState
+        - Target.activateTarget
+        - Target.closeTarget
+        - Target.createTarget
+        - Target.createBrowserContext
+        - Target.disposeBrowserContext
+        - Target.openDevTools
+        - Browser.cancelDownload
+        - Browser.close
+        - Browser.setWindowBounds
+        - Browser.setContentsSize
+        - Autofill.trigger
+    BrowserCdpInputDispatchMouseEventCommandData:
       type: object
-      description: Per-command payload for `cdp_command` events.
+      description: >
+        Sanitized `Input.dispatchMouseEvent` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.dispatchMouseEvent`.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchMouseEvent
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        event_type:
+          type: string
+          description: >
+            Mouse event phase: `mousePressed`, `mouseReleased`, `mouseMoved`
+            or `mouseWheel`.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        button:
+          type: string
+          description: >
+            Button named by the command (`none`, `left`, `middle`, `right`,
+            `back`, `forward`).
+        buttons:
+          type: integer
+          description: >
+            Bit field of buttons held down. Non-zero on a `mouseMoved` means
+            the move is a drag path.
+        click_count:
+          type: integer
+          description: >
+            Number of times the button was clicked (2 is a double click).
+        delta_x:
+          type: number
+          format: double
+          description: >
+            Horizontal scroll delta, for `mouseWheel`.
+        delta_y:
+          type: number
+          format: double
+          description: >
+            Vertical scroll delta, for `mouseWheel`.
+        pointer_type:
+          type: string
+          description: >
+            Pointer that generated the event (`mouse` or `pen`).
+        force:
+          type: number
+          format: double
+          description: >
+            Normalized pressure, 0 to 1.
+        tangential_pressure:
+          type: number
+          format: double
+          description: >
+            Normalized tangential pressure, -1 to 1.
+        tilt_x:
+          type: number
+          format: double
+          description: >
+            Pen tilt from the Y-Z plane, in degrees.
+        tilt_y:
+          type: number
+          format: double
+          description: >
+            Pen tilt from the X-Z plane, in degrees.
+        twist:
+          type: integer
+          description: >
+            Pen clockwise rotation, in degrees.
+    BrowserCdpInputDispatchKeyEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.dispatchKeyEvent` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.dispatchKeyEvent`.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchKeyEvent
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        event_type:
+          type: string
+          description: >
+            Key event phase: `keyDown`, `keyUp`, `rawKeyDown` or `char`.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        text_length:
+          type: integer
+          description: >
+            Number of characters the command submitted. The text itself is
+            never captured.
+        named_key:
+          type: string
+          description: >
+            Key that commands the page rather than typing into it (e.g.
+            `Enter`, `Tab`, `ArrowDown`, `F5`). Keys that produce a
+            character are never captured; those are counted by
+            `text_length`.
+        location:
+          type: integer
+          description: >
+            Keyboard location (1=left, 2=right, 3=numpad).
+        auto_repeat:
+          type: boolean
+          description: >
+            Whether the event was generated by key repeat.
+        is_keypad:
+          type: boolean
+          description: >
+            Whether the key is on the numeric keypad.
+        is_system_key:
+          type: boolean
+          description: >
+            Whether the event is a system key event.
+        command_count:
+          type: integer
+          description: >
+            Number of editing commands (e.g. `selectAll`) carried by the
+            event.
+    BrowserCdpInputInsertTextCommandData:
+      type: object
+      description: >
+        Sanitized `Input.insertText` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.insertText`.
+      additionalProperties: false
+      required: [method, text_length]
+      properties:
+        method:
+          type: string
+          const: Input.insertText
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        text_length:
+          type: integer
+          description: >
+            Number of characters inserted. The text itself is never
+            captured.
+    BrowserCdpInputImeSetCompositionCommandData:
+      type: object
+      description: >
+        Sanitized `Input.imeSetComposition` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.imeSetComposition`.
+      additionalProperties: false
+      required: [method, text_length]
+      properties:
+        method:
+          type: string
+          const: Input.imeSetComposition
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        text_length:
+          type: integer
+          description: >
+            Number of characters in the composition. The text itself is
+            never captured.
+        selection_start:
+          type: integer
+          description: >
+            Selection start offset within the composition.
+        selection_end:
+          type: integer
+          description: >
+            Selection end offset within the composition.
+        replacement_start:
+          type: integer
+          description: >
+            Replacement range start offset.
+        replacement_end:
+          type: integer
+          description: >
+            Replacement range end offset.
+    BrowserCdpInputDispatchTouchEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.dispatchTouchEvent` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.dispatchTouchEvent`.
+      additionalProperties: false
+      required: [method, event_type, touch_point_count]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchTouchEvent
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        event_type:
+          type: string
+          description: >
+            Touch event phase: `touchStart`, `touchEnd`, `touchMove` or
+            `touchCancel`.
+        touch_point_count:
+          type: integer
+          description: >
+            Number of active touch points the command carried.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate of the first touch point. Touch
+            coordinates live inside `touchPoints`, so this is the primary
+            point rather than a command-level argument.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate of the first touch point.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+    BrowserCdpInputDispatchDragEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.dispatchDragEvent` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.dispatchDragEvent`.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchDragEvent
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        event_type:
+          type: string
+          description: >
+            Drag event phase: `dragEnter`, `dragOver`, `drop` or
+            `dragCancel`.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        drag_item_count:
+          type: integer
+          description: >
+            Number of items in the drag payload. Item contents are never
+            captured.
+        drag_file_count:
+          type: integer
+          description: >
+            Number of files in the drag payload. File paths are never
+            captured.
+        drag_mime_categories:
+          type: array
+          items:
+            type: string
+          description: >
+            Distinct top-level MIME categories of the drag items (e.g.
+            `text`, `image`, `application`). Subtypes and contents are never
+            captured.
+        drag_operations_mask:
+          type: integer
+          description: >
+            Bit field of allowed drag operations (1=copy, 2=link, 16=move).
+    BrowserCdpInputCancelDraggingCommandData:
+      type: object
+      description: >
+        Sanitized `Input.cancelDragging` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.cancelDragging`.
       additionalProperties: false
       required: [method]
       properties:
         method:
           type: string
-          description: CDP method the client invoked (e.g. `Input.dispatchMouseEvent`, `Page.navigate`).
+          const: Input.cancelDragging
         session_id:
           type: string
-          description: CDP session identifier the command was addressed to. Absent for browser-level commands.
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+    BrowserCdpInputEmulateTouchFromMouseEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.emulateTouchFromMouseEvent` arguments. Canonical
+        input: devtools-protocol@2d019e73
+        `Input.emulateTouchFromMouseEvent`.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.emulateTouchFromMouseEvent
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
         event_type:
           type: string
-          description: The command's `type` parameter for input dispatches (e.g. `mousePressed`, `keyDown`, `touchStart`).
+          description: >
+            Mouse event phase being emulated as touch.
         x:
           type: number
-          description: Viewport x coordinate, for commands that carry one.
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
         y:
           type: number
-          description: Viewport y coordinate, for commands that carry one.
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
         button:
           type: string
-          description: Mouse button named by the command (e.g. `left`, `right`, `middle`, `none`).
-        text_length:
+          description: >
+            Button named by the command.
+        modifiers:
           type: integer
           description: >
-            Number of characters the command submitted, for text and key
-            dispatches. The submitted text itself is never captured.
-        named_key:
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        click_count:
+          type: integer
+          description: >
+            Number of times the button was clicked.
+        delta_x:
+          type: number
+          format: double
+          description: >
+            Horizontal scroll delta.
+        delta_y:
+          type: number
+          format: double
+          description: >
+            Vertical scroll delta.
+    BrowserCdpInputSynthesizePinchGestureCommandData:
+      type: object
+      description: >
+        Sanitized `Input.synthesizePinchGesture` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.synthesizePinchGesture`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Input.synthesizePinchGesture
+        session_id:
           type: string
           description: >
-            Key that commands the page rather than typing into it (e.g. `Enter`,
-            `Tab`, `ArrowDown`, `F5`). Keys that produce a character are never
-            captured; those are counted by `text_length`. Distinct from
-            `interaction_key.key`, which does report the character typed.
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        scale_factor:
+          type: number
+          format: double
+          description: >
+            Relative scale of the pinch (>1 zooms in).
+        relative_speed:
+          type: integer
+          description: >
+            Relative pointer speed, in pixels per second.
+        gesture_source_type:
+          type: string
+          description: >
+            Input source the synthesized gesture emulates.
+    BrowserCdpInputSynthesizeScrollGestureCommandData:
+      type: object
+      description: >
+        Sanitized `Input.synthesizeScrollGesture` arguments. Canonical
+        input: devtools-protocol@2d019e73 `Input.synthesizeScrollGesture`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Input.synthesizeScrollGesture
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        x_distance:
+          type: number
+          format: double
+          description: >
+            Horizontal scroll distance in CSS pixels; positive scrolls left.
+        y_distance:
+          type: number
+          format: double
+          description: >
+            Vertical scroll distance in CSS pixels; positive scrolls up.
+        x_overscroll:
+          type: number
+          format: double
+          description: >
+            Additional horizontal distance scrolled past the end.
+        y_overscroll:
+          type: number
+          format: double
+          description: >
+            Additional vertical distance scrolled past the end.
+        prevent_fling:
+          type: boolean
+          description: >
+            Whether fling was suppressed.
+        speed:
+          type: integer
+          description: >
+            Swipe speed in pixels per second.
+        gesture_source_type:
+          type: string
+          description: >
+            Input source the synthesized gesture emulates.
+        repeat_count:
+          type: integer
+          description: >
+            Number of additional repeats of the scroll.
+        repeat_delay_ms:
+          type: integer
+          description: >
+            Delay between repeats, in milliseconds.
+    BrowserCdpInputSynthesizeTapGestureCommandData:
+      type: object
+      description: >
+        Sanitized `Input.synthesizeTapGesture` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Input.synthesizeTapGesture`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Input.synthesizeTapGesture
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        duration:
+          type: integer
+          description: >
+            Duration between touchdown and touchup, in milliseconds.
+        tap_count:
+          type: integer
+          description: >
+            Number of times to tap (2 is a double tap).
+        gesture_source_type:
+          type: string
+          description: >
+            Input source the synthesized gesture emulates.
+    BrowserCdpDomSetFileInputFilesCommandData:
+      type: object
+      description: >
+        Sanitized `DOM.setFileInputFiles` arguments. Canonical input:
+        devtools-protocol@2d019e73 `DOM.setFileInputFiles`.
+      additionalProperties: false
+      required: [method, file_count]
+      properties:
+        method:
+          type: string
+          const: DOM.setFileInputFiles
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        file_count:
+          type: integer
+          description: >
+            Number of files handed to the input. File paths are never
+            captured.
+        node_id:
+          type: integer
+          description: >
+            Opaque DOM node identifier the command targeted.
+        backend_node_id:
+          type: integer
+          description: >
+            Opaque backend DOM node identifier the command targeted.
+        object_id:
+          type: string
+          description: >
+            Opaque Runtime remote object identifier the command targeted.
+    BrowserCdpDomFocusCommandData:
+      type: object
+      description: >
+        Sanitized `DOM.focus` arguments. Canonical input:
+        devtools-protocol@2d019e73 `DOM.focus`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: DOM.focus
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        node_id:
+          type: integer
+          description: >
+            Opaque DOM node identifier the command targeted.
+        backend_node_id:
+          type: integer
+          description: >
+            Opaque backend DOM node identifier the command targeted.
+        object_id:
+          type: string
+          description: >
+            Opaque Runtime remote object identifier the command targeted.
+    BrowserCdpDomScrollIntoViewIfNeededCommandData:
+      type: object
+      description: >
+        Sanitized `DOM.scrollIntoViewIfNeeded` arguments. Canonical input:
+        devtools-protocol@2d019e73 `DOM.scrollIntoViewIfNeeded`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: DOM.scrollIntoViewIfNeeded
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        node_id:
+          type: integer
+          description: >
+            Opaque DOM node identifier the command targeted.
+        backend_node_id:
+          type: integer
+          description: >
+            Opaque backend DOM node identifier the command targeted.
+        object_id:
+          type: string
+          description: >
+            Opaque Runtime remote object identifier the command targeted.
+        has_rect:
+          type: boolean
+          description: >
+            Whether the command constrained scrolling to a rect within the
+            node.
+    BrowserCdpPageBringToFrontCommandData:
+      type: object
+      description: >
+        Sanitized `Page.bringToFront` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.bringToFront`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.bringToFront
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+    BrowserCdpPageCaptureScreenshotCommandData:
+      type: object
+      description: >
+        Sanitized `Page.captureScreenshot` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.captureScreenshot`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.captureScreenshot
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        format:
+          type: string
+          description: >
+            Image format requested (`jpeg`, `png` or `webp`).
+        quality:
+          type: integer
+          description: >
+            Compression quality, 0 to 100, for lossy formats.
+        from_surface:
+          type: boolean
+          description: >
+            Whether the capture was taken from the surface rather than the
+            view.
+        capture_beyond_viewport:
+          type: boolean
+          description: >
+            Whether the capture extended past the viewport.
+        optimize_for_speed:
+          type: boolean
+          description: >
+            Whether encoding favored speed over size.
+        clip_x:
+          type: number
+          format: double
+          description: >
+            Clip region x offset in CSS pixels.
+        clip_y:
+          type: number
+          format: double
+          description: >
+            Clip region y offset in CSS pixels.
+        clip_width:
+          type: number
+          format: double
+          description: >
+            Clip region width in CSS pixels.
+        clip_height:
+          type: number
+          format: double
+          description: >
+            Clip region height in CSS pixels.
+        clip_scale:
+          type: number
+          format: double
+          description: >
+            Clip region page scale factor.
+    BrowserCdpPageCaptureSnapshotCommandData:
+      type: object
+      description: >
+        Sanitized `Page.captureSnapshot` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.captureSnapshot`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.captureSnapshot
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        format:
+          type: string
+          description: >
+            Snapshot format requested (`mhtml`).
+    BrowserCdpPageHandleJavaScriptDialogCommandData:
+      type: object
+      description: >
+        Sanitized `Page.handleJavaScriptDialog` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.handleJavaScriptDialog`.
+      additionalProperties: false
+      required: [method, accept]
+      properties:
+        method:
+          type: string
+          const: Page.handleJavaScriptDialog
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        accept:
+          type: boolean
+          description: >
+            Whether the dialog was accepted or dismissed.
+        prompt_text_length:
+          type: integer
+          description: >
+            Number of characters entered into a prompt dialog. The text
+            itself is never captured.
+    BrowserCdpPageNavigateCommandData:
+      type: object
+      description: >
+        Sanitized `Page.navigate` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.navigate`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.navigate
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        url_scheme:
+          type: string
+          description: >
+            Scheme of the destination URL (e.g. `https`, `about`, `data`).
+            The rest of the URL is never captured.
+        url_host:
+          type: string
+          description: >
+            Host of the destination URL. Path, query and fragment are never
+            captured; a reset token lives in those.
+        transition_type:
+          type: string
+          description: >
+            Navigation reason reported by the caller (e.g. `link`, `typed`,
+            `reload`).
+        referrer_present:
+          type: boolean
+          description: >
+            Whether the command carried a referrer. The referrer itself is
+            never captured.
+        referrer_policy:
+          type: string
+          description: >
+            Referrer policy named by the command.
+        frame_id:
+          type: string
+          description: >
+            Opaque frame identifier.
+    BrowserCdpPageNavigateToHistoryEntryCommandData:
+      type: object
+      description: >
+        Sanitized `Page.navigateToHistoryEntry` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.navigateToHistoryEntry`.
+      additionalProperties: false
+      required: [method, entry_id]
+      properties:
+        method:
+          type: string
+          const: Page.navigateToHistoryEntry
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        entry_id:
+          type: integer
+          description: >
+            History entry the command navigated to.
+    BrowserCdpPageReloadCommandData:
+      type: object
+      description: >
+        Sanitized `Page.reload` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.reload`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.reload
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        ignore_cache:
+          type: boolean
+          description: >
+            Whether the reload bypassed the cache.
+        script_present:
+          type: boolean
+          description: >
+            Whether an injected script was supplied. The script itself is
+            never captured.
+        script_length:
+          type: integer
+          description: >
+            Number of characters in the injected script.
+        loader_id:
+          type: string
+          description: >
+            Opaque document loader identifier.
+    BrowserCdpPagePrintToPdfCommandData:
+      type: object
+      description: >
+        Sanitized `Page.printToPDF` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.printToPDF`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.printToPDF
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        landscape:
+          type: boolean
+          description: >
+            Whether the page was laid out in landscape.
+        scale:
+          type: number
+          format: double
+          description: >
+            Page render scale.
+        paper_width:
+          type: number
+          format: double
+          description: >
+            Paper width in inches.
+        paper_height:
+          type: number
+          format: double
+          description: >
+            Paper height in inches.
+        display_header_footer:
+          type: boolean
+          description: >
+            Whether a header and footer were rendered.
+        print_background:
+          type: boolean
+          description: >
+            Whether background graphics were printed.
+        prefer_css_page_size:
+          type: boolean
+          description: >
+            Whether the CSS page size was preferred over the paper size.
+        transfer_mode:
+          type: string
+          description: >
+            How the PDF was returned (`ReturnAsBase64` or `ReturnAsStream`).
+        page_ranges_present:
+          type: boolean
+          description: >
+            Whether a page range was supplied.
+        header_template_present:
+          type: boolean
+          description: >
+            Whether a header template was supplied. The template itself is
+            never captured.
+        footer_template_present:
+          type: boolean
+          description: >
+            Whether a footer template was supplied. The template itself is
+            never captured.
+    BrowserCdpPageStartScreencastCommandData:
+      type: object
+      description: >
+        Sanitized `Page.startScreencast` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.startScreencast`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.startScreencast
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        format:
+          type: string
+          description: >
+            Frame format requested (`jpeg` or `png`).
+        quality:
+          type: integer
+          description: >
+            Compression quality, 0 to 100.
+        max_width:
+          type: integer
+          description: >
+            Maximum frame width in pixels.
+        max_height:
+          type: integer
+          description: >
+            Maximum frame height in pixels.
+        every_nth_frame:
+          type: integer
+          description: >
+            Frame sampling interval.
+    BrowserCdpPageStopScreencastCommandData:
+      type: object
+      description: >
+        Sanitized `Page.stopScreencast` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.stopScreencast`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.stopScreencast
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+    BrowserCdpPageStopLoadingCommandData:
+      type: object
+      description: >
+        Sanitized `Page.stopLoading` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.stopLoading`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.stopLoading
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+    BrowserCdpPageCloseCommandData:
+      type: object
+      description: >
+        Sanitized `Page.close` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.close`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.close
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+    BrowserCdpPageSetWebLifecycleStateCommandData:
+      type: object
+      description: >
+        Sanitized `Page.setWebLifecycleState` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Page.setWebLifecycleState`.
+      additionalProperties: false
+      required: [method, state]
+      properties:
+        method:
+          type: string
+          const: Page.setWebLifecycleState
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        state:
+          type: string
+          description: >
+            Lifecycle state applied (`frozen` or `active`).
+    BrowserCdpTargetActivateTargetCommandData:
+      type: object
+      description: >
+        Sanitized `Target.activateTarget` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Target.activateTarget`.
+      additionalProperties: false
+      required: [method, target_id]
+      properties:
+        method:
+          type: string
+          const: Target.activateTarget
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        target_id:
+          type: string
+          description: >
+            Opaque target identifier.
+    BrowserCdpTargetCloseTargetCommandData:
+      type: object
+      description: >
+        Sanitized `Target.closeTarget` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Target.closeTarget`.
+      additionalProperties: false
+      required: [method, target_id]
+      properties:
+        method:
+          type: string
+          const: Target.closeTarget
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        target_id:
+          type: string
+          description: >
+            Opaque target identifier.
+    BrowserCdpTargetCreateTargetCommandData:
+      type: object
+      description: >
+        Sanitized `Target.createTarget` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Target.createTarget`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Target.createTarget
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        url_scheme:
+          type: string
+          description: >
+            Scheme of the destination URL (e.g. `https`, `about`, `data`).
+            The rest of the URL is never captured.
+        url_host:
+          type: string
+          description: >
+            Host of the destination URL. Path, query and fragment are never
+            captured; a reset token lives in those.
+        left:
+          type: integer
+          description: >
+            Window x position in screen coordinates.
+        top:
+          type: integer
+          description: >
+            Window y position in screen coordinates.
+        width:
+          type: integer
+          description: >
+            Window width in DIP.
+        height:
+          type: integer
+          description: >
+            Window height in DIP.
+        window_state:
+          type: string
+          description: >
+            Window state requested (`normal`, `minimized`, `maximized`,
+            `fullscreen`).
+        browser_context_id:
+          type: string
+          description: >
+            Opaque browser context identifier.
+        new_window:
+          type: boolean
+          description: >
+            Whether a new window was requested.
+        background:
+          type: boolean
+          description: >
+            Whether the target was created in the background.
+        for_tab:
+          type: boolean
+          description: >
+            Whether a tab target rather than a page target was created.
+        hidden:
+          type: boolean
+          description: >
+            Whether the target was created hidden.
+        enable_begin_frame_control:
+          type: boolean
+          description: >
+            Whether BeginFrame control was enabled (headless only).
+    BrowserCdpTargetCreateBrowserContextCommandData:
+      type: object
+      description: >
+        Sanitized `Target.createBrowserContext` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Target.createBrowserContext`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Target.createBrowserContext
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        dispose_on_detach:
+          type: boolean
+          description: >
+            Whether the context is disposed when the debugging session
+            detaches.
+        proxy_server_present:
+          type: boolean
+          description: >
+            Whether a proxy was configured. The proxy address is never
+            captured.
+        proxy_bypass_list_present:
+          type: boolean
+          description: >
+            Whether a proxy bypass list was configured.
+        universal_network_access_origin_count:
+          type: integer
+          description: >
+            Number of origins granted universal network access. The origins
+            themselves are never captured.
+    BrowserCdpTargetDisposeBrowserContextCommandData:
+      type: object
+      description: >
+        Sanitized `Target.disposeBrowserContext` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Target.disposeBrowserContext`.
+      additionalProperties: false
+      required: [method, browser_context_id]
+      properties:
+        method:
+          type: string
+          const: Target.disposeBrowserContext
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        browser_context_id:
+          type: string
+          description: >
+            Opaque browser context identifier.
+    BrowserCdpTargetOpenDevToolsCommandData:
+      type: object
+      description: >
+        Sanitized `Target.openDevTools` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Target.openDevTools`.
+      additionalProperties: false
+      required: [method, target_id]
+      properties:
+        method:
+          type: string
+          const: Target.openDevTools
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        target_id:
+          type: string
+          description: >
+            Opaque target identifier.
+        panel_id:
+          type: string
+          description: >
+            DevTools panel opened.
+    BrowserCdpBrowserCancelDownloadCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.cancelDownload` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Browser.cancelDownload`.
+      additionalProperties: false
+      required: [method, download_guid]
+      properties:
+        method:
+          type: string
+          const: Browser.cancelDownload
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        download_guid:
+          type: string
+          description: >
+            Opaque identifier of the download that was cancelled.
+        browser_context_id:
+          type: string
+          description: >
+            Opaque browser context identifier.
+    BrowserCdpBrowserCloseCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.close` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Browser.close`.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Browser.close
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+    BrowserCdpBrowserSetWindowBoundsCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.setWindowBounds` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Browser.setWindowBounds`.
+      additionalProperties: false
+      required: [method, window_id]
+      properties:
+        method:
+          type: string
+          const: Browser.setWindowBounds
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        window_id:
+          type: integer
+          description: >
+            Browser window identifier.
+        left:
+          type: integer
+          description: >
+            Window x position in screen coordinates.
+        top:
+          type: integer
+          description: >
+            Window y position in screen coordinates.
+        width:
+          type: integer
+          description: >
+            Window width in DIP.
+        height:
+          type: integer
+          description: >
+            Window height in DIP.
+        window_state:
+          type: string
+          description: >
+            Window state requested (`normal`, `minimized`, `maximized`,
+            `fullscreen`).
+    BrowserCdpBrowserSetContentsSizeCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.setContentsSize` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Browser.setContentsSize`.
+      additionalProperties: false
+      required: [method, window_id]
+      properties:
+        method:
+          type: string
+          const: Browser.setContentsSize
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        window_id:
+          type: integer
+          description: >
+            Browser window identifier.
+        width:
+          type: integer
+          description: >
+            Contents width in DIP.
+        height:
+          type: integer
+          description: >
+            Contents height in DIP.
+    BrowserCdpAutofillTriggerCommandData:
+      type: object
+      description: >
+        Sanitized `Autofill.trigger` arguments. Canonical input:
+        devtools-protocol@2d019e73 `Autofill.trigger`.
+      additionalProperties: false
+      required: [method, field_id]
+      properties:
+        method:
+          type: string
+          const: Autofill.trigger
+        session_id:
+          type: string
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands.
+        field_id:
+          type: integer
+          description: >
+            Opaque backend node identifier of the field that was autofilled.
+        frame_id:
+          type: string
+          description: >
+            Opaque frame identifier.
+        mode:
+          type: string
+          description: >
+            What was filled: `card` or `address`. The values themselves are
+            never captured.
+    BrowserCdpCommandEventData:
+      description: >
+        Per-command payload for `cdp_command` events, discriminated by
+        `method`. Each variant carries only the arguments approved for that
+        command: values that could hold a secret — typed and composition
+        text, URLs, referrers, scripts, templates, file paths, drag contents
+        and autofill values — are replaced by a length, a count, a presence
+        flag, an enum or a URL scheme and host.
+      oneOf:
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchMouseEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchKeyEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputInsertTextCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputImeSetCompositionCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchTouchEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchDragEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputCancelDraggingCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputEmulateTouchFromMouseEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputSynthesizePinchGestureCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputSynthesizeScrollGestureCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputSynthesizeTapGestureCommandData"
+        - $ref: "#/components/schemas/BrowserCdpDomSetFileInputFilesCommandData"
+        - $ref: "#/components/schemas/BrowserCdpDomFocusCommandData"
+        - $ref: "#/components/schemas/BrowserCdpDomScrollIntoViewIfNeededCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageBringToFrontCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageCaptureScreenshotCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageCaptureSnapshotCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageHandleJavaScriptDialogCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageNavigateCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageNavigateToHistoryEntryCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageReloadCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPagePrintToPdfCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageStartScreencastCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageStopScreencastCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageStopLoadingCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageCloseCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageSetWebLifecycleStateCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetActivateTargetCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetCloseTargetCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetCreateTargetCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetCreateBrowserContextCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetDisposeBrowserContextCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetOpenDevToolsCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserCancelDownloadCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserCloseCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserSetWindowBoundsCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserSetContentsSizeCommandData"
+        - $ref: "#/components/schemas/BrowserCdpAutofillTriggerCommandData"
+      discriminator:
+        propertyName: method
+        mapping:
+          Input.dispatchMouseEvent: "#/components/schemas/BrowserCdpInputDispatchMouseEventCommandData"
+          Input.dispatchKeyEvent: "#/components/schemas/BrowserCdpInputDispatchKeyEventCommandData"
+          Input.insertText: "#/components/schemas/BrowserCdpInputInsertTextCommandData"
+          Input.imeSetComposition: "#/components/schemas/BrowserCdpInputImeSetCompositionCommandData"
+          Input.dispatchTouchEvent: "#/components/schemas/BrowserCdpInputDispatchTouchEventCommandData"
+          Input.dispatchDragEvent: "#/components/schemas/BrowserCdpInputDispatchDragEventCommandData"
+          Input.cancelDragging: "#/components/schemas/BrowserCdpInputCancelDraggingCommandData"
+          Input.emulateTouchFromMouseEvent: "#/components/schemas/BrowserCdpInputEmulateTouchFromMouseEventCommandData"
+          Input.synthesizePinchGesture: "#/components/schemas/BrowserCdpInputSynthesizePinchGestureCommandData"
+          Input.synthesizeScrollGesture: "#/components/schemas/BrowserCdpInputSynthesizeScrollGestureCommandData"
+          Input.synthesizeTapGesture: "#/components/schemas/BrowserCdpInputSynthesizeTapGestureCommandData"
+          DOM.setFileInputFiles: "#/components/schemas/BrowserCdpDomSetFileInputFilesCommandData"
+          DOM.focus: "#/components/schemas/BrowserCdpDomFocusCommandData"
+          DOM.scrollIntoViewIfNeeded: "#/components/schemas/BrowserCdpDomScrollIntoViewIfNeededCommandData"
+          Page.bringToFront: "#/components/schemas/BrowserCdpPageBringToFrontCommandData"
+          Page.captureScreenshot: "#/components/schemas/BrowserCdpPageCaptureScreenshotCommandData"
+          Page.captureSnapshot: "#/components/schemas/BrowserCdpPageCaptureSnapshotCommandData"
+          Page.handleJavaScriptDialog: "#/components/schemas/BrowserCdpPageHandleJavaScriptDialogCommandData"
+          Page.navigate: "#/components/schemas/BrowserCdpPageNavigateCommandData"
+          Page.navigateToHistoryEntry: "#/components/schemas/BrowserCdpPageNavigateToHistoryEntryCommandData"
+          Page.reload: "#/components/schemas/BrowserCdpPageReloadCommandData"
+          Page.printToPDF: "#/components/schemas/BrowserCdpPagePrintToPdfCommandData"
+          Page.startScreencast: "#/components/schemas/BrowserCdpPageStartScreencastCommandData"
+          Page.stopScreencast: "#/components/schemas/BrowserCdpPageStopScreencastCommandData"
+          Page.stopLoading: "#/components/schemas/BrowserCdpPageStopLoadingCommandData"
+          Page.close: "#/components/schemas/BrowserCdpPageCloseCommandData"
+          Page.setWebLifecycleState: "#/components/schemas/BrowserCdpPageSetWebLifecycleStateCommandData"
+          Target.activateTarget: "#/components/schemas/BrowserCdpTargetActivateTargetCommandData"
+          Target.closeTarget: "#/components/schemas/BrowserCdpTargetCloseTargetCommandData"
+          Target.createTarget: "#/components/schemas/BrowserCdpTargetCreateTargetCommandData"
+          Target.createBrowserContext: "#/components/schemas/BrowserCdpTargetCreateBrowserContextCommandData"
+          Target.disposeBrowserContext: "#/components/schemas/BrowserCdpTargetDisposeBrowserContextCommandData"
+          Target.openDevTools: "#/components/schemas/BrowserCdpTargetOpenDevToolsCommandData"
+          Browser.cancelDownload: "#/components/schemas/BrowserCdpBrowserCancelDownloadCommandData"
+          Browser.close: "#/components/schemas/BrowserCdpBrowserCloseCommandData"
+          Browser.setWindowBounds: "#/components/schemas/BrowserCdpBrowserSetWindowBoundsCommandData"
+          Browser.setContentsSize: "#/components/schemas/BrowserCdpBrowserSetContentsSizeCommandData"
+          Autofill.trigger: "#/components/schemas/BrowserCdpAutofillTriggerCommandData"
     BrowserCdpCommandEvent:
       type: object
       description: >
@@ -2855,7 +4281,7 @@ components:
         only when the method is excluded by telemetry configuration, when
         classification cannot keep up, or when the frame exceeds the telemetry
         size limit; those losses are counted in `cdp_disconnect.telemetry_dropped`.
-      required: [ts, type, category, source]
+      required: [ts, type, category, source, data]
       properties:
         ts:
           type: integer
