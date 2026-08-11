@@ -9,7 +9,7 @@ package devtoolsproxy
 // The rule for every field: an argument that can carry a secret — typed and
 // composition text, URLs, referrers, scripts, templates, file paths, drag
 // contents, autofill values — is replaced by a length, a count, a presence
-// flag, an enum or a URL scheme and host. Everything else is reported as it
+// flag, an enum or a URL scheme. Everything else is reported as it
 // arrived, because an event that omits the click count or the scroll distance
 // cannot answer what the agent did.
 //
@@ -142,25 +142,20 @@ func namedKey(key *string) *string {
 	return key
 }
 
-// urlParts reduces a URL to the scheme and host. Path, query and fragment are
-// where a reset token or a document name lives, so they never leave the VM;
-// scheme and host are what make the event readable without them.
-func urlParts(raw string) (scheme, host *string) {
+// urlScheme reduces a URL to its scheme. The host names the site the agent
+// went to and the path and query can carry a reset token, so neither leaves
+// the VM through the control category; the page category is where a reader
+// opts in to navigation URLs.
+func urlScheme(raw string) *string {
 	if raw == "" {
-		return nil, nil
+		return nil
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil {
-		return nil, nil
+	if err != nil || parsed.Scheme == "" {
+		return nil
 	}
-	if parsed.Scheme != "" {
-		s := parsed.Scheme
-		scheme = &s
-	}
-	if h := parsed.Hostname(); h != "" {
-		host = &h
-	}
-	return scheme, host
+	scheme := parsed.Scheme
+	return &scheme
 }
 
 // ---- Input ----
@@ -659,11 +654,9 @@ func sanitizePageNavigate(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, erro
 	if err := decodeParams(cmd.Params, &p); err != nil {
 		return out, err
 	}
-	scheme, host := urlParts(p.Url)
 	return out, out.FromBrowserCdpPageNavigateCommandData(oapi.BrowserCdpPageNavigateCommandData{
 		SessionId:       cmd.sessionID(),
-		UrlScheme:       scheme,
-		UrlHost:         host,
+		UrlScheme:       urlScheme(p.Url),
 		TransitionType:  p.TransitionType,
 		ReferrerPresent: present(p.Referrer),
 		ReferrerPolicy:  p.ReferrerPolicy,
@@ -873,11 +866,9 @@ func sanitizeTargetCreateTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventData
 	if err := decodeParams(cmd.Params, &p); err != nil {
 		return out, err
 	}
-	scheme, host := urlParts(p.Url)
 	return out, out.FromBrowserCdpTargetCreateTargetCommandData(oapi.BrowserCdpTargetCreateTargetCommandData{
 		SessionId:               cmd.sessionID(),
-		UrlScheme:               scheme,
-		UrlHost:                 host,
+		UrlScheme:               urlScheme(p.Url),
 		Left:                    p.Left,
 		Top:                     p.Top,
 		Width:                   p.Width,

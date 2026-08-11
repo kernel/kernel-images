@@ -113,10 +113,10 @@ func TestCdpCommandEventClassification(t *testing.T) {
 			},
 		},
 		{
-			name:  "navigation reports scheme and host, never the path",
+			name:  "navigation reports the scheme, never the host or the path",
 			frame: `{"id":10,"method":"Page.navigate","params":{"url":"https://example.com/reset?token=abc","referrer":"https://mail.example.com/x","transitionType":"typed"}}`,
 			want: map[string]any{
-				"method": "Page.navigate", "url_scheme": "https", "url_host": "example.com",
+				"method": "Page.navigate", "url_scheme": "https",
 				"transition_type": "typed", "referrer_present": true,
 			},
 		},
@@ -207,8 +207,8 @@ const sensitiveParams = `{
 	"key":"SENTINELkey",
 	"code":"SENTINELcode",
 	"keyIdentifier":"SENTINELkeyident",
-	"url":"https://host.example/SENTINELpath?token=SENTINELquery#SENTINELfragment",
-	"referrer":"https://host.example/SENTINELreferrer",
+	"url":"https://SENTINELhost.example/SENTINELpath?token=SENTINELquery#SENTINELfragment",
+	"referrer":"https://SENTINELhost.example/SENTINELreferrer",
 	"scriptToEvaluateOnLoad":"SENTINELscript",
 	"headerTemplate":"SENTINELheader",
 	"footerTemplate":"SENTINELfooter",
@@ -221,7 +221,7 @@ const sensitiveParams = `{
 	"originsWithUniversalNetworkAccess":["https://SENTINELorigin"],
 	"card":{"number":"SENTINELcard","cvc":"SENTINELcvc"},
 	"address":{"fields":[{"name":"SENTINELname","value":"SENTINELaddress"}]},
-	"data":{"items":[{"mimeType":"text/SENTINELsubtype","data":"SENTINELdrag","baseURL":"https://host.example/SENTINELbase","title":"SENTINELtitle"}],"files":["/tmp/SENTINELdragfile"]},
+	"data":{"items":[{"mimeType":"text/SENTINELsubtype","data":"SENTINELdrag","baseURL":"https://SENTINELhost.example/SENTINELbase","title":"SENTINELtitle"}],"files":["/tmp/SENTINELdragfile"]},
 	"bounds":{},
 	"clip":{},
 	"touchPoints":[{"x":1,"y":2}]
@@ -370,5 +370,41 @@ func TestExcludedMethodsSuppressOnlyTheirOwnEvents(t *testing.T) {
 	}
 	if _, ok := cdpCommandEvent([]byte(click), testForwardTs, nil); !ok {
 		t.Fatal("no exclusions configured, but the command produced no event")
+	}
+}
+
+// The scheme is the only part of a URL the control category carries. A reader
+// who needs the destination opts into the page category, where navigation
+// events report the URL itself.
+func TestNavigationReportsSchemeOnly(t *testing.T) {
+	for _, tc := range []struct {
+		frame string
+		want  string
+	}{
+		{`{"id":1,"method":"Page.navigate","params":{"url":"https://internal.acme.example/admin?token=abc"}}`, "https"},
+		{`{"id":2,"method":"Page.navigate","params":{"url":"data:text/html,<h1>hi</h1>"}}`, "data"},
+		{`{"id":3,"method":"Target.createTarget","params":{"url":"about:blank"}}`, "about"},
+	} {
+		got := payloadOf(t, tc.frame)
+		if got["url_scheme"] != tc.want {
+			t.Fatalf("url_scheme = %v, want %v", got["url_scheme"], tc.want)
+		}
+		if _, ok := got["url_host"]; ok {
+			t.Fatalf("payload carried a url_host: %v", got)
+		}
+		for key, value := range got {
+			if str, isStr := value.(string); isStr && strings.Contains(str, "acme") {
+				t.Fatalf("payload leaked the host in %s: %v", key, value)
+			}
+		}
+	}
+}
+
+// A relative or unparseable URL has no scheme, and the event says so rather
+// than inventing one.
+func TestNavigationOmitsSchemeWhenThereIsNone(t *testing.T) {
+	got := payloadOf(t, `{"id":1,"method":"Page.navigate","params":{"url":"/relative/path"}}`)
+	if _, ok := got["url_scheme"]; ok {
+		t.Fatalf("relative URL reported a scheme: %v", got)
 	}
 }
