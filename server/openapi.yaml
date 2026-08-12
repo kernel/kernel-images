@@ -5620,6 +5620,72 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserCaptchaType:
+      type: string
+      description: >
+        Captcha vendor family. Producers normalize provider-specific task
+        names into this set: enterprise variants of recaptcha collapse into
+        their version bucket (v2 / v3), and anything not covered (e.g.
+        DataDome, MtCaptcha, plain OCR) is reported as `other`.
+        `press_and_hold` is the vision-based PerimeterX/HUMAN press-and-hold
+        challenge solved in-VM.
+      enum:
+        - hcaptcha
+        - recaptcha_v2
+        - recaptcha_v3
+        - turnstile
+        - geetest
+        - press_and_hold
+        - other
+    BrowserCaptchaSolveStartedEventData:
+      type: object
+      description: >
+        Per-task payload for `captcha_solve_started` events. Emitted when a
+        solver accepts a task, once per solver task — a single visible
+        challenge can produce many tasks (e.g. image-grid captchas retry with
+        a fresh task per attempt), so consumers must not assume one started
+        event per challenge or pair events by arrival order. Correlate to the
+        terminal `captcha_solve_result` via `task_id`; a started event may
+        also arrive without a matching result (or vice versa) if delivery
+        fails, so absence of either is not a solve-state signal.
+      additionalProperties: false
+      required: [captcha_type]
+      properties:
+        captcha_type:
+          $ref: "#/components/schemas/BrowserCaptchaType"
+        task_id:
+          type: string
+          description: >
+            Solver-assigned identifier, shared with the matching
+            `captcha_solve_result`. Opaque.
+        website_host:
+          type: string
+          description: Host of the page where the captcha is being solved. May be empty for solver tasks that carry no page URL (e.g. image-grid sub-tasks).
+        website_path:
+          type: string
+          description: Path of the page where the captcha is being solved. Query string excluded.
+    BrowserCaptchaSolveStartedEvent:
+      type: object
+      description: A captcha solver accepted a task and a solve is in flight.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: captcha_solve_started
+        category:
+          type: string
+          const: captcha
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCaptchaSolveStartedEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     BrowserCaptchaSolveResultEventData:
       type: object
       description: Per-attempt payload for `captcha_solve_result` events.
@@ -5627,19 +5693,7 @@ components:
       required: [captcha_type, status, duration_ms]
       properties:
         captcha_type:
-          type: string
-          description: >
-            Captcha vendor family. Producers normalize provider-specific task
-            names into this set: enterprise variants of recaptcha collapse into
-            their version bucket (v2 / v3), and anything not covered (e.g.
-            DataDome, MtCaptcha, plain OCR) is reported as `other`.
-          enum:
-            - hcaptcha
-            - recaptcha_v2
-            - recaptcha_v3
-            - turnstile
-            - geetest
-            - other
+          $ref: "#/components/schemas/BrowserCaptchaType"
         status:
           type: string
           description: >
@@ -5654,7 +5708,11 @@ components:
             - abandoned
         duration_ms:
           type: number
-          description: Wall-clock duration from solve start to terminal outcome.
+          description: >
+            Wall-clock duration from solve start to terminal outcome. This is
+            the authoritative solve timing; do not derive duration from the
+            gap to a `captcha_solve_started` event, whose delivery and
+            sequencing are not guaranteed.
         task_id:
           type: string
           description: Solver-assigned identifier. Opaque, useful for support cross-references.
@@ -5892,6 +5950,7 @@ components:
         - $ref: "#/components/schemas/BrowserCdpDisconnectEvent"
         - $ref: "#/components/schemas/BrowserLiveViewConnectEvent"
         - $ref: "#/components/schemas/BrowserLiveViewDisconnectEvent"
+        - $ref: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
         - $ref: "#/components/schemas/BrowserCaptchaSolveResultEvent"
         - $ref: "#/components/schemas/BrowserSystemOomKillEvent"
         - $ref: "#/components/schemas/BrowserServiceCrashedEvent"
@@ -5929,6 +5988,7 @@ components:
           cdp_disconnect: "#/components/schemas/BrowserCdpDisconnectEvent"
           live_view_connect: "#/components/schemas/BrowserLiveViewConnectEvent"
           live_view_disconnect: "#/components/schemas/BrowserLiveViewDisconnectEvent"
+          captcha_solve_started: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
           captcha_solve_result: "#/components/schemas/BrowserCaptchaSolveResultEvent"
           system_oom_kill: "#/components/schemas/BrowserSystemOomKillEvent"
           service_crashed: "#/components/schemas/BrowserServiceCrashedEvent"
