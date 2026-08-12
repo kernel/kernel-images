@@ -172,7 +172,12 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
     const contexts = browserInstance.contexts();
     const context = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
     const pages = context.pages();
-    const page = pages.length > 0 ? pages[0] : await context.newPage();
+    // Bind `page` to the most recently opened tab. context.pages() is ordered by
+    // creation, so the last entry is the newest tab — the one an automation has
+    // just navigated to (e.g. a tab opened via a link click or window.open). Using
+    // pages[0] bound `page` to the oldest tab, so calls like page.pdf() operated on
+    // the wrong tab whenever more than one was open.
+    const page = pages.length > 0 ? pages[pages.length - 1] : await context.newPage();
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);

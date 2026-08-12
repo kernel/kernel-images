@@ -81,6 +81,65 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Log("playwright execute API test passed")
 }
 
+// TestPlaywrightExecuteBindsMostRecentTab verifies that when multiple tabs are
+// open, the injected `page` is bound to the most recently opened tab rather than
+// the oldest one. The daemon keeps a warm CDP connection, so sequential execute
+// calls share the same context and tabs.
+func TestPlaywrightExecuteBindsMostRecentTab(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	defer c.Stop(ctx)
+
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+
+	client, err := c.APIClient()
+	require.NoError(t, err)
+
+	// Navigate the initial tab, then open a second tab on a different URL.
+	setupReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			await page.goto('https://example.com');
+			const second = await context.newPage();
+			await second.goto('https://example.net');
+			return context.pages().length;
+		`,
+	}
+	setupRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, setupReq)
+	require.NoError(t, err, "setup request error: %v", err)
+	require.Equal(t, http.StatusOK, setupRsp.StatusCode(), "unexpected status: %s body=%s", setupRsp.Status(), string(setupRsp.Body))
+	require.NotNil(t, setupRsp.JSON200)
+	require.True(t, setupRsp.JSON200.Success, "expected setup success=true")
+
+	// A fresh execute call must bind `page` to the newest tab (example.net),
+	// not the first-opened tab (example.com).
+	urlReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return page.url();`,
+	}
+	urlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, urlReq)
+	require.NoError(t, err, "url request error: %v", err)
+	require.Equal(t, http.StatusOK, urlRsp.StatusCode(), "unexpected status: %s body=%s", urlRsp.Status(), string(urlRsp.Body))
+	require.NotNil(t, urlRsp.JSON200)
+	require.True(t, urlRsp.JSON200.Success, "expected url request success=true")
+	require.NotNil(t, urlRsp.JSON200.Result)
+
+	resultBytes, err := json.Marshal(urlRsp.JSON200.Result)
+	require.NoError(t, err, "failed to marshal result: %v", err)
+	resultStr := string(resultBytes)
+	t.Logf("injected page url=%s", resultStr)
+	require.Contains(t, resultStr, "example.net", "expected injected page to be the most recently opened tab")
+
+	t.Log("playwright most-recent-tab binding test passed")
+}
+
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	t.Parallel()
 
