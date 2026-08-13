@@ -25,8 +25,8 @@ const testForwardTs int64 = 1_700_000_000_000_000
 // point: the payload is what a reader sees.
 func payloadOf(t *testing.T, frame string) map[string]any {
 	t.Helper()
-	ev, ok := cdpCommandEvent([]byte(frame), testForwardTs, nil)
-	if !ok {
+	ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "", nil)
+	if result != classifyEvent {
 		t.Fatalf("frame produced no event: %s", frame)
 	}
 	if ev.Type != "cdp_command" {
@@ -55,7 +55,7 @@ func TestCdpCommandEventClassification(t *testing.T) {
 			name:  "click keeps the arguments that describe it",
 			frame: `{"id":1,"sessionId":"S1","method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":10.5,"y":20,"button":"left","clickCount":2,"modifiers":8,"buttons":1,"pointerType":"mouse"}}`,
 			want: map[string]any{
-				"method": "Input.dispatchMouseEvent", "session_id": "S1", "event_type": "mousePressed",
+				"command_id": 1.0, "method": "Input.dispatchMouseEvent", "session_id": "S1", "event_type": "mousePressed",
 				"x": 10.5, "y": 20.0, "button": "left", "click_count": 2.0,
 				"modifiers": 8.0, "buttons": 1.0, "pointer_type": "mouse",
 			},
@@ -64,7 +64,7 @@ func TestCdpCommandEventClassification(t *testing.T) {
 			name:  "mouseMoved with buttons held is a drag path, not a duplicate phase",
 			frame: `{"id":2,"method":"Input.dispatchMouseEvent","params":{"type":"mouseMoved","x":9,"y":9,"buttons":1}}`,
 			want: map[string]any{
-				"method": "Input.dispatchMouseEvent", "event_type": "mouseMoved",
+				"command_id": 2.0, "method": "Input.dispatchMouseEvent", "event_type": "mouseMoved",
 				"x": 9.0, "y": 9.0, "buttons": 1.0,
 			},
 		},
@@ -72,30 +72,30 @@ func TestCdpCommandEventClassification(t *testing.T) {
 			name:  "wheel keeps its deltas",
 			frame: `{"id":3,"method":"Input.dispatchMouseEvent","params":{"type":"mouseWheel","x":1,"y":2,"deltaX":0,"deltaY":-400}}`,
 			want: map[string]any{
-				"method": "Input.dispatchMouseEvent", "event_type": "mouseWheel",
+				"command_id": 3.0, "method": "Input.dispatchMouseEvent", "event_type": "mouseWheel",
 				"x": 1.0, "y": 2.0, "delta_x": 0.0, "delta_y": -400.0,
 			},
 		},
 		{
 			name:  "keyUp releases a held modifier",
 			frame: `{"id":4,"method":"Input.dispatchKeyEvent","params":{"type":"keyUp","key":"Shift"}}`,
-			want:  map[string]any{"method": "Input.dispatchKeyEvent", "event_type": "keyUp", "named_key": "Shift"},
+			want:  map[string]any{"command_id": 4.0, "method": "Input.dispatchKeyEvent", "event_type": "keyUp", "named_key": "Shift"},
 		},
 		{
 			name:  "char is the command that inserts the character",
 			frame: `{"id":5,"method":"Input.dispatchKeyEvent","params":{"type":"char","text":"a"}}`,
-			want:  map[string]any{"method": "Input.dispatchKeyEvent", "event_type": "char", "text_length": 1.0},
+			want:  map[string]any{"command_id": 5.0, "method": "Input.dispatchKeyEvent", "event_type": "char", "text_length": 1.0},
 		},
 		{
 			name:  "a typed key is counted, never named",
 			frame: `{"id":6,"method":"Input.dispatchKeyEvent","params":{"type":"keyDown","key":"é","text":"é","code":"KeyE"}}`,
-			want:  map[string]any{"method": "Input.dispatchKeyEvent", "event_type": "keyDown", "text_length": 1.0},
+			want:  map[string]any{"command_id": 6.0, "method": "Input.dispatchKeyEvent", "event_type": "keyDown", "text_length": 1.0},
 		},
 		{
 			name:  "scroll gesture keeps its distance",
 			frame: `{"id":7,"method":"Input.synthesizeScrollGesture","params":{"x":1,"y":2,"xDistance":0,"yDistance":-500,"speed":800}}`,
 			want: map[string]any{
-				"method": "Input.synthesizeScrollGesture", "x": 1.0, "y": 2.0,
+				"command_id": 7.0, "method": "Input.synthesizeScrollGesture", "x": 1.0, "y": 2.0,
 				"x_distance": 0.0, "y_distance": -500.0, "speed": 800.0,
 			},
 		},
@@ -103,7 +103,7 @@ func TestCdpCommandEventClassification(t *testing.T) {
 			name:  "touch reports its point count and the primary point",
 			frame: `{"id":8,"method":"Input.dispatchTouchEvent","params":{"type":"touchStart","touchPoints":[{"x":100,"y":200},{"x":300,"y":400}]}}`,
 			want: map[string]any{
-				"method": "Input.dispatchTouchEvent", "event_type": "touchStart",
+				"command_id": 8.0, "method": "Input.dispatchTouchEvent", "event_type": "touchStart",
 				"touch_point_count": 2.0, "x": 100.0, "y": 200.0,
 			},
 		},
@@ -111,7 +111,7 @@ func TestCdpCommandEventClassification(t *testing.T) {
 			name:  "drag reports counts and mime categories, not contents",
 			frame: `{"id":9,"method":"Input.dispatchDragEvent","params":{"type":"drop","x":5,"y":6,"data":{"items":[{"mimeType":"text/plain","data":"secret"},{"mimeType":"image/png","data":"secret"}],"files":["/tmp/a.pdf"],"dragOperationsMask":1}}}`,
 			want: map[string]any{
-				"method": "Input.dispatchDragEvent", "event_type": "drop", "x": 5.0, "y": 6.0,
+				"command_id": 9.0, "method": "Input.dispatchDragEvent", "event_type": "drop", "x": 5.0, "y": 6.0,
 				"drag_item_count": 2.0, "drag_file_count": 1.0,
 				"drag_mime_categories": []any{"image", "text"}, "drag_operations_mask": 1.0,
 			},
@@ -120,43 +120,43 @@ func TestCdpCommandEventClassification(t *testing.T) {
 			name:  "navigation reports the scheme, never the host or the path",
 			frame: `{"id":10,"method":"Page.navigate","params":{"url":"https://example.com/reset?token=abc","referrer":"https://mail.example.com/x","transitionType":"typed"}}`,
 			want: map[string]any{
-				"method": "Page.navigate", "url_scheme": "https",
+				"command_id": 10.0, "method": "Page.navigate", "url_scheme": "https",
 				"transition_type": "typed", "referrer_present": true,
 			},
 		},
 		{
 			name:  "dialog reports the decision",
 			frame: `{"id":11,"method":"Page.handleJavaScriptDialog","params":{"accept":true,"promptText":"hunter2"}}`,
-			want:  map[string]any{"method": "Page.handleJavaScriptDialog", "accept": true, "prompt_text_length": 7.0},
+			want:  map[string]any{"command_id": 11.0, "method": "Page.handleJavaScriptDialog", "accept": true, "prompt_text_length": 7.0},
 		},
 		{
 			name:  "file selection reports the count, never the paths",
 			frame: `{"id":12,"method":"DOM.setFileInputFiles","params":{"files":["/tmp/a.pdf","/tmp/b.pdf"],"backendNodeId":7}}`,
-			want:  map[string]any{"method": "DOM.setFileInputFiles", "file_count": 2.0, "backend_node_id": 7.0},
+			want:  map[string]any{"command_id": 12.0, "method": "DOM.setFileInputFiles", "file_count": 2.0, "backend_node_id": 7.0},
 		},
 		{
 			name:  "screenshot reports its options and clip",
 			frame: `{"id":13,"method":"Page.captureScreenshot","params":{"format":"png","quality":80,"clip":{"x":0,"y":0,"width":800,"height":600,"scale":1}}}`,
 			want: map[string]any{
-				"method": "Page.captureScreenshot", "format": "png", "quality": 80.0,
+				"command_id": 13.0, "method": "Page.captureScreenshot", "format": "png", "quality": 80.0,
 				"clip_x": 0.0, "clip_y": 0.0, "clip_width": 800.0, "clip_height": 600.0, "clip_scale": 1.0,
 			},
 		},
 		{
 			name:  "autofill reports which kind of value was filled",
 			frame: `{"id":14,"method":"Autofill.trigger","params":{"fieldId":3,"card":{"number":"4111111111111111","cvc":"123"}}}`,
-			want:  map[string]any{"method": "Autofill.trigger", "field_id": 3.0, "mode": "card"},
+			want:  map[string]any{"command_id": 14.0, "method": "Autofill.trigger", "field_id": 3.0, "mode": "card"},
 		},
 		{
 			name:  "a command with no arguments reports its name",
 			frame: `{"id":15,"method":"Page.bringToFront"}`,
-			want:  map[string]any{"method": "Page.bringToFront"},
+			want:  map[string]any{"command_id": 15.0, "method": "Page.bringToFront"},
 		},
 		{
 			name:  "window bounds are flattened out of the bounds object",
 			frame: `{"id":16,"method":"Browser.setWindowBounds","params":{"windowId":1,"bounds":{"left":0,"top":0,"width":1280,"height":720,"windowState":"normal"}}}`,
 			want: map[string]any{
-				"method": "Browser.setWindowBounds", "window_id": 1.0, "left": 0.0, "top": 0.0,
+				"command_id": 16.0, "method": "Browser.setWindowBounds", "window_id": 1.0, "left": 0.0, "top": 0.0,
 				"width": 1280.0, "height": 720.0, "window_state": "normal",
 			},
 		},
@@ -175,7 +175,7 @@ func TestCdpCommandEventClassification(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.want == nil {
-				if ev, ok := cdpCommandEvent([]byte(tc.frame), testForwardTs, nil); ok {
+				if ev, result := cdpCommandEvent([]byte(tc.frame), testForwardTs, "", nil); result == classifyEvent {
 					t.Fatalf("frame produced an event, want none: %s", ev.Data)
 				}
 				return
@@ -234,7 +234,17 @@ const sensitiveParams = `{
 	"card":{"number":"SENTINELcard","cvc":"SENTINELcvc"},
 	"address":{"fields":[{"name":"SENTINELname","value":"SENTINELaddress"}]},
 	"data":{"items":[{"mimeType":"text/SENTINELsubtype","data":"SENTINELdrag","baseURL":"https://SENTINELhost.example/SENTINELbase","title":"SENTINELtitle"}],"files":["/tmp/SENTINELdragfile"]},
-	"bounds":{},
+	"type":"SENTINELtype",
+	"button":"SENTINELbutton",
+	"pointerType":"SENTINELpointer",
+	"format":"SENTINELformat",
+	"state":"SENTINELstate",
+	"transferMode":"SENTINELtransfer",
+	"gestureSourceType":"SENTINELgesture",
+	"transitionType":"SENTINELtransition",
+	"referrerPolicy":"SENTINELpolicy",
+	"windowState":"SENTINELwindowstate",
+	"bounds":{"windowState":"SENTINELboundsstate"},
 	"clip":{},
 	"touchPoints":[{"x":1,"y":2}]
 }`
@@ -243,8 +253,8 @@ func TestSanitizersNeverEmitSensitiveValues(t *testing.T) {
 	for method := range sanitizers {
 		t.Run(method, func(t *testing.T) {
 			frame := fmt.Sprintf(`{"id":1,"sessionId":"S","method":%q,"params":%s}`, method, sensitiveParams)
-			ev, ok := cdpCommandEvent([]byte(frame), testForwardTs, nil)
-			if !ok {
+			ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "", nil)
+			if result != classifyEvent {
 				t.Fatalf("supported method produced no event")
 			}
 			payload := string(ev.Data)
@@ -304,8 +314,8 @@ func FuzzCdpCommandEvent(f *testing.F) {
 	f.Add("\x00\xff\xfe")
 
 	f.Fuzz(func(t *testing.T, frame string) {
-		ev, ok := cdpCommandEvent([]byte(frame), testForwardTs, nil)
-		if !ok {
+		ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "", nil)
+		if result != classifyEvent {
 			return
 		}
 		// Whatever the input, the output must be a payload naming a supported
@@ -326,7 +336,7 @@ func BenchmarkCdpCommandEventClick(b *testing.B) {
 	frame := []byte(`{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2,"button":"left","clickCount":1}}`)
 	b.ReportAllocs()
 	for b.Loop() {
-		cdpCommandEvent(frame, testForwardTs, nil)
+		cdpCommandEvent(frame, testForwardTs, "", nil)
 	}
 }
 
@@ -334,7 +344,7 @@ func BenchmarkCdpCommandEventUnsupported(b *testing.B) {
 	frame := []byte(`{"id":1,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"() => 1","objectId":"x"}}`)
 	b.ReportAllocs()
 	for b.Loop() {
-		cdpCommandEvent(frame, testForwardTs, nil)
+		cdpCommandEvent(frame, testForwardTs, "", nil)
 	}
 }
 
@@ -374,13 +384,13 @@ func TestExcludedMethodsSuppressOnlyTheirOwnEvents(t *testing.T) {
 	nav := `{"id":2,"method":"Page.navigate","params":{"url":"https://example.com/"}}`
 	excluded := map[string]struct{}{"Input.dispatchMouseEvent": {}}
 
-	if _, ok := cdpCommandEvent([]byte(click), testForwardTs, excluded); ok {
-		t.Fatal("excluded method produced an event")
+	if _, result := cdpCommandEvent([]byte(click), testForwardTs, "", excluded); result != classifyExcluded {
+		t.Fatalf("excluded method classified as %v, want classifyExcluded", result)
 	}
-	if _, ok := cdpCommandEvent([]byte(nav), testForwardTs, excluded); !ok {
+	if _, result := cdpCommandEvent([]byte(nav), testForwardTs, "", excluded); result != classifyEvent {
 		t.Fatal("a method that was not excluded produced no event")
 	}
-	if _, ok := cdpCommandEvent([]byte(click), testForwardTs, nil); !ok {
+	if _, result := cdpCommandEvent([]byte(click), testForwardTs, "", nil); result != classifyEvent {
 		t.Fatal("no exclusions configured, but the command produced no event")
 	}
 }
@@ -418,5 +428,91 @@ func TestNavigationOmitsSchemeWhenThereIsNone(t *testing.T) {
 	got := payloadOf(t, `{"id":1,"method":"Page.navigate","params":{"url":"/relative/path"}}`)
 	if _, ok := got["url_scheme"]; ok {
 		t.Fatalf("relative URL reported a scheme: %v", got)
+	}
+}
+
+// The failure this guards: a client-controlled string was copied into the
+// payload verbatim, so a 1.1 MB button produced a 1.1 MB event, and
+// truncateIfNeeded nulls the whole event rather than clipping the field. Every
+// such value is now either a protocol enum or a clipped identifier, so the
+// payload is bounded whatever the client sends.
+func TestPayloadStaysBoundedWhateverTheClientSends(t *testing.T) {
+	huge := strings.Repeat("z", 1_100_000)
+	for _, frame := range []string{
+		`{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","button":"` + huge + `"}}`,
+		`{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"` + huge + `"}}`,
+		`{"id":1,"sessionId":"` + huge + `","method":"Page.bringToFront"}`,
+		`{"id":1,"method":"Target.activateTarget","params":{"targetId":"` + huge + `"}}`,
+		`{"id":1,"method":"Page.navigate","params":{"url":"https://h.example/","transitionType":"` + huge + `"}}`,
+		`{"id":1,"method":"Page.captureScreenshot","params":{"format":"` + huge + `"}}`,
+		`{"id":1,"method":"Browser.setWindowBounds","params":{"windowId":1,"bounds":{"windowState":"` + huge + `"}}}`,
+	} {
+		ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "conn", nil)
+		if result != classifyEvent {
+			t.Fatalf("no event for %.60s", frame)
+		}
+		// Comfortably inside the 1 MB envelope limit, so the event survives whole.
+		if len(ev.Data) > 4096 {
+			t.Fatalf("payload is %d bytes for a frame with one huge value: %.200s", len(ev.Data), ev.Data)
+		}
+		// An enum is replaced outright; an identifier is clipped. Either way no
+		// single value carries more than the identifier bound.
+		var fields map[string]any
+		if err := json.Unmarshal(ev.Data, &fields); err != nil {
+			t.Fatal(err)
+		}
+		for name, value := range fields {
+			str, isStr := value.(string)
+			if isStr && len(str) > maxOpaqueIDBytes {
+				t.Fatalf("%s carries %d bytes of client value", name, len(str))
+			}
+		}
+	}
+}
+
+// A value the protocol does not define is reported, but as `other` rather than
+// whatever the client chose to send.
+func TestUnknownEnumValuesReportAsOther(t *testing.T) {
+	got := payloadOf(t, `{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"teleported","button":"elbow","pointerType":"nose"}}`)
+	for field, want := range map[string]string{"event_type": "other", "button": "other", "pointer_type": "other"} {
+		if got[field] != want {
+			t.Fatalf("%s = %v, want %v", field, got[field], want)
+		}
+	}
+}
+
+// An identifier past the bound is clipped, not dropped: the field is still
+// there and still partially readable.
+func TestOpaqueIdentifiersAreClipped(t *testing.T) {
+	got := payloadOf(t, `{"id":7,"sessionId":"`+strings.Repeat("S", 500)+`","method":"Page.reload"}`)
+	sid, _ := got["session_id"].(string)
+	if len(sid) != maxOpaqueIDBytes {
+		t.Fatalf("session_id length = %d, want %d", len(sid), maxOpaqueIDBytes)
+	}
+}
+
+// The JSON-RPC id and the connection id are what let a reader join a command to
+// the result the browser returned, and attribute it to one of several clients.
+func TestCommandAndConnectionIdsAreReported(t *testing.T) {
+	ev, result := cdpCommandEvent([]byte(`{"id":42,"method":"Page.reload"}`), testForwardTs, "conn-abc", nil)
+	if result != classifyEvent {
+		t.Fatal("no event")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ev.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["command_id"] != 42.0 {
+		t.Fatalf("command_id = %v, want 42", got["command_id"])
+	}
+	if got["connection_id"] != "conn-abc" {
+		t.Fatalf("connection_id = %v, want conn-abc", got["connection_id"])
+	}
+	// A notification carries no id, and the event says so rather than inventing one.
+	ev2, _ := cdpCommandEvent([]byte(`{"method":"Page.reload"}`), testForwardTs, "conn-abc", nil)
+	var got2 map[string]any
+	json.Unmarshal(ev2.Data, &got2)
+	if _, ok := got2["command_id"]; ok {
+		t.Fatalf("command_id present for a frame with no id: %v", got2)
 	}
 }

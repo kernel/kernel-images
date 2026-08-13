@@ -24,6 +24,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/wsdrain"
 	"github.com/kernel/kernel-images/server/lib/wsproxy"
+	"github.com/nrednav/cuid2"
 )
 
 var devtoolsListeningRegexp = regexp.MustCompile(`DevTools listening on (ws://\S+)`)
@@ -314,6 +315,9 @@ type EventPublisher func(ev events.Event) (events.Envelope, bool)
 // names the control methods configured out of the stream; nil reports them all.
 func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, reg *wsdrain.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Names this connection on every event it produces, so a reader can tell
+		// two clients driving the same browser apart.
+		connectionID := cuid2.Generate()
 		// Counts every relayed message so cdp_disconnect can report message_count.
 		var msgCount atomic.Int64
 		var transform wsproxy.MessageTransform = func(direction string, mt websocket.MessageType, msg []byte) []byte {
@@ -355,7 +359,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		untrack := reg.Track(clientConn)
 		defer untrack()
 
-		publishCdpConnect(publish)
+		publishCdpConnect(publish, connectionID)
 		connectedAt := time.Now()
 
 		// Dial upstream. If the URL is stale (Chromium just restarted), first
@@ -366,11 +370,11 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			switch {
 			case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded), errors.Is(r.Context().Err(), context.Canceled), errors.Is(r.Context().Err(), context.DeadlineExceeded):
 				clientConn.Close(websocket.StatusGoingAway, "request cancelled")
-				publishCdpDisconnect(publish, oapi.ContextCancelled, connectedAt, time.Now(), msgCount.Load(), 0)
+				publishCdpDisconnect(publish, connectionID, oapi.ContextCancelled, connectedAt, time.Now(), msgCount.Load(), 0, 0)
 			default:
 				logger.Error("failed to connect to upstream", slog.String("err", err.Error()))
 				clientConn.Close(websocket.StatusInternalError, "upstream unavailable")
-				publishCdpDisconnect(publish, oapi.UpstreamError, connectedAt, time.Now(), msgCount.Load(), 0)
+				publishCdpDisconnect(publish, connectionID, oapi.UpstreamError, connectedAt, time.Now(), msgCount.Load(), 0, 0)
 			}
 			return
 		}
@@ -382,7 +386,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 
 		// Classification of client commands runs behind the pump, not inside it:
 		// a frame is observed only once Chromium has accepted it.
-		observer := newCdpObserver(pumpCtx, publish, controlEnabled, excludedMethods, logger)
+		observer := newCdpObserver(pumpCtx, connectionID, publish, controlEnabled, excludedMethods, logger)
 		var observe wsproxy.Observer
 		if observer != nil {
 			observe = func(direction string, mt websocket.MessageType, msg []byte, ts int64) {
@@ -437,7 +441,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 				// client's last commands land ahead of it and telemetry_dropped
 				// is final.
 				observer.WaitDrained(cdpObserverDrainWait)
-				publishCdpDisconnect(publish, reason, connectedAt, disconnectedAt, msgCount.Load(), observer.Dropped())
+				publishCdpDisconnect(publish, connectionID, reason, connectedAt, disconnectedAt, msgCount.Load(), observer.Dropped(), observer.Excluded())
 			})
 		}
 
@@ -498,31 +502,35 @@ func resolveDisconnectReason(cause wsproxy.PumpExitCause, reqCtx context.Context
 	}
 }
 
-func publishCdpConnect(publish EventPublisher) {
+func publishCdpConnect(publish EventPublisher, connectionID string) {
 	if publish == nil {
 		return
 	}
+	data, _ := json.Marshal(oapi.BrowserCdpConnectEventData{ConnectionId: &connectionID})
 	publish(events.Event{
 		Ts:       time.Now().UnixMicro(),
 		Type:     "cdp_connect",
 		Category: events.Connection,
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
+		Data:     data,
 	})
 }
 
-func publishCdpDisconnect(publish EventPublisher, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt, disconnectedAt time.Time, msgCount, telemetryDropped int64) {
+func publishCdpDisconnect(publish EventPublisher, connectionID string, reason oapi.BrowserCdpDisconnectEventDataReason, connectedAt, disconnectedAt time.Time, msgCount, telemetryDropped, telemetryExcluded int64) {
 	if publish == nil {
 		return
 	}
 	// Optional in the schema so an event from an image that predates the field
 	// still validates, but always set here: absent means "not reported", which
 	// is not the same as zero.
-	dropped := int(telemetryDropped)
+	dropped, excluded := int(telemetryDropped), int(telemetryExcluded)
 	data, _ := json.Marshal(oapi.BrowserCdpDisconnectEventData{
-		DurationMs:       float32(disconnectedAt.Sub(connectedAt).Microseconds()) / 1000.0,
-		MessageCount:     int(msgCount),
-		TelemetryDropped: &dropped,
-		Reason:           reason,
+		ConnectionId:      &connectionID,
+		DurationMs:        float32(disconnectedAt.Sub(connectedAt).Microseconds()) / 1000.0,
+		MessageCount:      int(msgCount),
+		TelemetryDropped:  &dropped,
+		TelemetryExcluded: &excluded,
+		Reason:            reason,
 	})
 	publish(events.Event{
 		Ts:       disconnectedAt.UnixMicro(),

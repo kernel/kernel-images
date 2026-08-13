@@ -2863,6 +2863,221 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserCdpMouseEventType:
+      type: string
+      description: >
+        Mouse event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value the pinned protocol does not define, so a
+        client cannot put an arbitrary string into the stream.
+      enum:
+        - mousePressed
+        - mouseReleased
+        - mouseMoved
+        - mouseWheel
+        - other
+    BrowserCdpKeyEventType:
+      type: string
+      description: >
+        Key event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value the pinned protocol does not define, so a
+        client cannot put an arbitrary string into the stream.
+      enum:
+        - keyDown
+        - keyUp
+        - rawKeyDown
+        - char
+        - other
+    BrowserCdpTouchEventType:
+      type: string
+      description: >
+        Touch event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value the pinned protocol does not define, so a
+        client cannot put an arbitrary string into the stream.
+      enum:
+        - touchStart
+        - touchEnd
+        - touchMove
+        - touchCancel
+        - other
+    BrowserCdpDragEventType:
+      type: string
+      description: >
+        Drag event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value the pinned protocol does not define, so a
+        client cannot put an arbitrary string into the stream.
+      enum:
+        - dragEnter
+        - dragOver
+        - drop
+        - dragCancel
+        - other
+    BrowserCdpMouseButton:
+      type: string
+      description: >
+        Mouse button named by a command. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - none
+        - left
+        - middle
+        - right
+        - back
+        - forward
+        - other
+    BrowserCdpPointerType:
+      type: string
+      description: >
+        Pointer that generated an input event. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - mouse
+        - pen
+        - other
+    BrowserCdpGestureSourceType:
+      type: string
+      description: >
+        Input source a synthesized gesture emulates. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - default
+        - touch
+        - mouse
+        - other
+    BrowserCdpScreenshotFormat:
+      type: string
+      description: >
+        Image format requested for a screenshot. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - jpeg
+        - png
+        - webp
+        - other
+    BrowserCdpSnapshotFormat:
+      type: string
+      description: >
+        Format requested for a page snapshot. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - mhtml
+        - other
+    BrowserCdpScreencastFormat:
+      type: string
+      description: >
+        Frame format requested for a screencast. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - jpeg
+        - png
+        - other
+    BrowserCdpWebLifecycleState:
+      type: string
+      description: >
+        Page lifecycle state applied. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - frozen
+        - active
+        - other
+    BrowserCdpPdfTransferMode:
+      type: string
+      description: >
+        How a generated PDF is returned. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - ReturnAsBase64
+        - ReturnAsStream
+        - other
+    BrowserCdpWindowState:
+      type: string
+      description: >
+        Browser window state requested. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - normal
+        - minimized
+        - maximized
+        - fullscreen
+        - other
+    BrowserCdpTransitionType:
+      type: string
+      description: >
+        Navigation reason reported by the caller. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - link
+        - typed
+        - address_bar
+        - auto_bookmark
+        - auto_subframe
+        - manual_subframe
+        - generated
+        - auto_toplevel
+        - form_submit
+        - reload
+        - keyword
+        - keyword_generated
+        - other
+    BrowserCdpReferrerPolicy:
+      type: string
+      description: >
+        Referrer policy named by a navigation. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value the pinned
+        protocol does not define, so a client cannot put an arbitrary string
+        into the stream.
+      enum:
+        - noReferrer
+        - noReferrerWhenDowngrade
+        - origin
+        - originWhenCrossOrigin
+        - sameOrigin
+        - strictOrigin
+        - strictOriginWhenCrossOrigin
+        - unsafeUrl
+        - other
+    BrowserCdpAutofillMode:
+      type: string
+      description: >
+        Which kind of value autofill filled. Canonical values from
+        devtools-protocol@2d019e73.
+      enum:
+        - card
+        - address
+    BrowserCdpDragMimeCategory:
+      type: string
+      description: >
+        Top-level MIME category of a drag item. Canonical values from
+        devtools-protocol@2d019e73.
+      enum:
+        - text
+        - image
+        - audio
+        - video
+        - application
+        - font
+        - model
+        - multipart
+        - message
     BrowserCdpCommandMethod:
       type: string
       description: >
@@ -2922,14 +3137,30 @@ components:
           const: Input.dispatchMouseEvent
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        event_type:
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
           type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpMouseEventType"
           description: >
             Mouse event phase: `mousePressed`, `mouseReleased`, `mouseMoved`
-            or `mouseWheel`.
+            or `mouseWheel`. A value the protocol does not define is
+            reported as `other`.
         x:
           type: number
           format: double
@@ -2946,10 +3177,11 @@ components:
             Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
             8=Shift).
         button:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpMouseButton"
           description: >
             Button named by the command (`none`, `left`, `middle`, `right`,
-            `back`, `forward`).
+            `back`, `forward`). A value the protocol does not define is
+            reported as `other`.
         buttons:
           type: integer
           description: >
@@ -2970,9 +3202,10 @@ components:
           description: >
             Vertical scroll delta, for `mouseWheel`.
         pointer_type:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpPointerType"
           description: >
-            Pointer that generated the event (`mouse` or `pen`).
+            Pointer that generated the event (`mouse` or `pen`). A value the
+            protocol does not define is reported as `other`.
         force:
           type: number
           format: double
@@ -3010,13 +3243,29 @@ components:
           const: Input.dispatchKeyEvent
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        event_type:
-          type: string
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
           description: >
-            Key event phase: `keyDown`, `keyUp`, `rawKeyDown` or `char`.
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpKeyEventType"
+          description: >
+            Key event phase: `keyDown`, `keyUp`, `rawKeyDown` or `char`. A
+            value the protocol does not define is reported as `other`.
         modifiers:
           type: integer
           description: >
@@ -3068,9 +3317,24 @@ components:
           const: Input.insertText
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         text_length:
           type: integer
           description: >
@@ -3089,9 +3353,24 @@ components:
           const: Input.imeSetComposition
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         text_length:
           type: integer
           description: >
@@ -3126,14 +3405,30 @@ components:
           const: Input.dispatchTouchEvent
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        event_type:
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
           type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpTouchEventType"
           description: >
             Touch event phase: `touchStart`, `touchEnd`, `touchMove` or
-            `touchCancel`.
+            `touchCancel`. A value the protocol does not define is reported
+            as `other`.
         touch_point_count:
           type: integer
           description: >
@@ -3168,14 +3463,30 @@ components:
           const: Input.dispatchDragEvent
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        event_type:
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
           type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpDragEventType"
           description: >
             Drag event phase: `dragEnter`, `dragOver`, `drop` or
-            `dragCancel`.
+            `dragCancel`. A value the protocol does not define is reported
+            as `other`.
         x:
           type: number
           format: double
@@ -3204,7 +3515,7 @@ components:
         drag_mime_categories:
           type: array
           items:
-            type: string
+            $ref: "#/components/schemas/BrowserCdpDragMimeCategory"
           description: >
             Distinct top-level MIME categories of the drag items (e.g.
             `text`, `image`, `application`). Subtypes and contents are never
@@ -3226,9 +3537,24 @@ components:
           const: Input.cancelDragging
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpInputEmulateTouchFromMouseEventCommandData:
       type: object
       description: >
@@ -3243,13 +3569,29 @@ components:
           const: Input.emulateTouchFromMouseEvent
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        event_type:
-          type: string
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
           description: >
-            Mouse event phase being emulated as touch.
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpMouseEventType"
+          description: >
+            Mouse event phase being emulated as touch. A value the protocol
+            does not define is reported as `other`.
         x:
           type: number
           format: double
@@ -3261,9 +3603,10 @@ components:
           description: >
             Viewport y coordinate in CSS pixels.
         button:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpMouseButton"
           description: >
-            Button named by the command.
+            Button named by the command. A value the protocol does not
+            define is reported as `other`.
         modifiers:
           type: integer
           description: >
@@ -3296,9 +3639,24 @@ components:
           const: Input.synthesizePinchGesture
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         x:
           type: number
           format: double
@@ -3319,9 +3677,10 @@ components:
           description: >
             Relative pointer speed, in pixels per second.
         gesture_source_type:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpGestureSourceType"
           description: >
-            Input source the synthesized gesture emulates.
+            Input source the synthesized gesture emulates. A value the
+            protocol does not define is reported as `other`.
     BrowserCdpInputSynthesizeScrollGestureCommandData:
       type: object
       description: >
@@ -3335,9 +3694,24 @@ components:
           const: Input.synthesizeScrollGesture
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         x:
           type: number
           format: double
@@ -3377,9 +3751,10 @@ components:
           description: >
             Swipe speed in pixels per second.
         gesture_source_type:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpGestureSourceType"
           description: >
-            Input source the synthesized gesture emulates.
+            Input source the synthesized gesture emulates. A value the
+            protocol does not define is reported as `other`.
         repeat_count:
           type: integer
           description: >
@@ -3401,9 +3776,24 @@ components:
           const: Input.synthesizeTapGesture
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         x:
           type: number
           format: double
@@ -3423,9 +3813,10 @@ components:
           description: >
             Number of times to tap (2 is a double tap).
         gesture_source_type:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpGestureSourceType"
           description: >
-            Input source the synthesized gesture emulates.
+            Input source the synthesized gesture emulates. A value the
+            protocol does not define is reported as `other`.
     BrowserCdpDomSetFileInputFilesCommandData:
       type: object
       description: >
@@ -3439,9 +3830,24 @@ components:
           const: DOM.setFileInputFiles
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         file_count:
           type: integer
           description: >
@@ -3457,8 +3863,11 @@ components:
             Opaque backend DOM node identifier the command targeted.
         object_id:
           type: string
+          maxLength: 128
           description: >
             Opaque Runtime remote object identifier the command targeted.
+            Clipped to 128 characters; a longer value is not a real
+            identifier.
     BrowserCdpDomFocusCommandData:
       type: object
       description: >
@@ -3472,9 +3881,24 @@ components:
           const: DOM.focus
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         node_id:
           type: integer
           description: >
@@ -3485,8 +3909,11 @@ components:
             Opaque backend DOM node identifier the command targeted.
         object_id:
           type: string
+          maxLength: 128
           description: >
             Opaque Runtime remote object identifier the command targeted.
+            Clipped to 128 characters; a longer value is not a real
+            identifier.
     BrowserCdpDomScrollIntoViewIfNeededCommandData:
       type: object
       description: >
@@ -3500,9 +3927,24 @@ components:
           const: DOM.scrollIntoViewIfNeeded
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         node_id:
           type: integer
           description: >
@@ -3513,8 +3955,11 @@ components:
             Opaque backend DOM node identifier the command targeted.
         object_id:
           type: string
+          maxLength: 128
           description: >
             Opaque Runtime remote object identifier the command targeted.
+            Clipped to 128 characters; a longer value is not a real
+            identifier.
         has_rect:
           type: boolean
           description: >
@@ -3533,9 +3978,24 @@ components:
           const: Page.bringToFront
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpPageCaptureScreenshotCommandData:
       type: object
       description: >
@@ -3549,13 +4009,29 @@ components:
           const: Page.captureScreenshot
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        format:
-          type: string
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
           description: >
-            Image format requested (`jpeg`, `png` or `webp`).
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        format:
+          $ref: "#/components/schemas/BrowserCdpScreenshotFormat"
+          description: >
+            Image format requested (`jpeg`, `png` or `webp`). A value the
+            protocol does not define is reported as `other`.
         quality:
           type: integer
           description: >
@@ -3611,13 +4087,29 @@ components:
           const: Page.captureSnapshot
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        format:
-          type: string
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
           description: >
-            Snapshot format requested (`mhtml`).
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        format:
+          $ref: "#/components/schemas/BrowserCdpSnapshotFormat"
+          description: >
+            Snapshot format requested (`mhtml`). A value the protocol does
+            not define is reported as `other`.
     BrowserCdpPageHandleJavaScriptDialogCommandData:
       type: object
       description: >
@@ -3631,9 +4123,24 @@ components:
           const: Page.handleJavaScriptDialog
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         accept:
           type: boolean
           description: >
@@ -3656,34 +4163,56 @@ components:
           const: Page.navigate
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         url_scheme:
           type: string
           description: >
             Scheme of the destination URL (e.g. `https`, `about`, `data`).
-            The rest of the URL — host, path, query and fragment — is never
-            captured. Enable the `page` category for navigation events that
-            carry the URL itself.
-        transition_type:
+            The rest of the URL is never captured.
+        url_host:
           type: string
           description: >
+            Host of the destination URL. Path, query and fragment are never
+            captured; a reset token lives in those.
+        transition_type:
+          $ref: "#/components/schemas/BrowserCdpTransitionType"
+          description: >
             Navigation reason reported by the caller (e.g. `link`, `typed`,
-            `reload`).
+            `reload`). A value the protocol does not define is reported as
+            `other`.
         referrer_present:
           type: boolean
           description: >
             Whether the command carried a referrer. The referrer itself is
             never captured.
         referrer_policy:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpReferrerPolicy"
           description: >
-            Referrer policy named by the command.
+            Referrer policy named by the command. A value the protocol does
+            not define is reported as `other`.
         frame_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque frame identifier.
+            Opaque frame identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
     BrowserCdpPageNavigateToHistoryEntryCommandData:
       type: object
       description: >
@@ -3697,9 +4226,24 @@ components:
           const: Page.navigateToHistoryEntry
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         entry_id:
           type: integer
           description: >
@@ -3717,23 +4261,43 @@ components:
           const: Page.reload
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         ignore_cache:
           type: boolean
           description: >
             Whether the reload bypassed the cache.
+        script_present:
+          type: boolean
+          description: >
+            Whether an injected script was supplied. The script itself is
+            never captured.
         script_length:
           type: integer
           description: >
-            Number of characters in the injected script, absent when none was
-            supplied and 0 when an empty one was. The script itself is never
-            captured.
+            Number of characters in the injected script.
         loader_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque document loader identifier.
+            Opaque document loader identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
     BrowserCdpPagePrintToPdfCommandData:
       type: object
       description: >
@@ -3747,9 +4311,24 @@ components:
           const: Page.printToPDF
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         landscape:
           type: boolean
           description: >
@@ -3782,9 +4361,10 @@ components:
           description: >
             Whether the CSS page size was preferred over the paper size.
         transfer_mode:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpPdfTransferMode"
           description: >
             How the PDF was returned (`ReturnAsBase64` or `ReturnAsStream`).
+            A value the protocol does not define is reported as `other`.
         page_ranges_present:
           type: boolean
           description: >
@@ -3812,13 +4392,29 @@ components:
           const: Page.startScreencast
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        format:
-          type: string
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
           description: >
-            Frame format requested (`jpeg` or `png`).
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        format:
+          $ref: "#/components/schemas/BrowserCdpScreencastFormat"
+          description: >
+            Frame format requested (`jpeg` or `png`). A value the protocol
+            does not define is reported as `other`.
         quality:
           type: integer
           description: >
@@ -3848,9 +4444,24 @@ components:
           const: Page.stopScreencast
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpPageStopLoadingCommandData:
       type: object
       description: >
@@ -3864,9 +4475,24 @@ components:
           const: Page.stopLoading
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpPageCloseCommandData:
       type: object
       description: >
@@ -3880,9 +4506,24 @@ components:
           const: Page.close
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpPageSetWebLifecycleStateCommandData:
       type: object
       description: >
@@ -3896,13 +4537,29 @@ components:
           const: Page.setWebLifecycleState
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
-        state:
-          type: string
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
           description: >
-            Lifecycle state applied (`frozen` or `active`).
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        state:
+          $ref: "#/components/schemas/BrowserCdpWebLifecycleState"
+          description: >
+            Lifecycle state applied (`frozen` or `active`). A value the
+            protocol does not define is reported as `other`.
     BrowserCdpTargetActivateTargetCommandData:
       type: object
       description: >
@@ -3916,13 +4573,30 @@ components:
           const: Target.activateTarget
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         target_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque target identifier.
+            Opaque target identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
     BrowserCdpTargetCloseTargetCommandData:
       type: object
       description: >
@@ -3936,13 +4610,30 @@ components:
           const: Target.closeTarget
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         target_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque target identifier.
+            Opaque target identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
     BrowserCdpTargetCreateTargetCommandData:
       type: object
       description: >
@@ -3956,16 +4647,34 @@ components:
           const: Target.createTarget
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         url_scheme:
           type: string
           description: >
             Scheme of the destination URL (e.g. `https`, `about`, `data`).
-            The rest of the URL — host, path, query and fragment — is never
-            captured. Enable the `page` category for navigation events that
-            carry the URL itself.
+            The rest of the URL is never captured.
+        url_host:
+          type: string
+          description: >
+            Host of the destination URL. Path, query and fragment are never
+            captured; a reset token lives in those.
         left:
           type: integer
           description: >
@@ -3983,14 +4692,17 @@ components:
           description: >
             Window height in DIP.
         window_state:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpWindowState"
           description: >
             Window state requested (`normal`, `minimized`, `maximized`,
-            `fullscreen`).
+            `fullscreen`). A value the protocol does not define is reported
+            as `other`.
         browser_context_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque browser context identifier.
+            Opaque browser context identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
         new_window:
           type: boolean
           description: >
@@ -4024,9 +4736,24 @@ components:
           const: Target.createBrowserContext
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         dispose_on_detach:
           type: boolean
           description: >
@@ -4059,13 +4786,30 @@ components:
           const: Target.disposeBrowserContext
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         browser_context_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque browser context identifier.
+            Opaque browser context identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
     BrowserCdpTargetOpenDevToolsCommandData:
       type: object
       description: >
@@ -4079,17 +4823,36 @@ components:
           const: Target.openDevTools
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         target_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque target identifier.
+            Opaque target identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
         panel_id:
           type: string
+          maxLength: 128
           description: >
-            DevTools panel opened.
+            DevTools panel opened. Clipped to 128 characters; a longer value
+            is not a real identifier.
     BrowserCdpBrowserCancelDownloadCommandData:
       type: object
       description: >
@@ -4103,17 +4866,36 @@ components:
           const: Browser.cancelDownload
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         download_guid:
           type: string
+          maxLength: 128
           description: >
-            Opaque identifier of the download that was cancelled.
+            Opaque identifier of the download that was cancelled. Clipped to
+            128 characters; a longer value is not a real identifier.
         browser_context_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque browser context identifier.
+            Opaque browser context identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
     BrowserCdpBrowserCloseCommandData:
       type: object
       description: >
@@ -4127,9 +4909,24 @@ components:
           const: Browser.close
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpBrowserSetWindowBoundsCommandData:
       type: object
       description: >
@@ -4143,9 +4940,24 @@ components:
           const: Browser.setWindowBounds
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         window_id:
           type: integer
           description: >
@@ -4167,10 +4979,11 @@ components:
           description: >
             Window height in DIP.
         window_state:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpWindowState"
           description: >
             Window state requested (`normal`, `minimized`, `maximized`,
-            `fullscreen`).
+            `fullscreen`). A value the protocol does not define is reported
+            as `other`.
     BrowserCdpBrowserSetContentsSizeCommandData:
       type: object
       description: >
@@ -4184,9 +4997,24 @@ components:
           const: Browser.setContentsSize
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         window_id:
           type: integer
           description: >
@@ -4212,19 +5040,36 @@ components:
           const: Autofill.trigger
         session_id:
           type: string
+          maxLength: 128
           description: >
             CDP session identifier the command was addressed to. Absent for
-            browser-level commands.
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
         field_id:
           type: integer
           description: >
             Opaque backend node identifier of the field that was autofilled.
         frame_id:
           type: string
+          maxLength: 128
           description: >
-            Opaque frame identifier.
+            Opaque frame identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
         mode:
-          type: string
+          $ref: "#/components/schemas/BrowserCdpAutofillMode"
           description: >
             What was filled: `card` or `address`. The values themselves are
             never captured.
@@ -4326,9 +5171,10 @@ components:
 
         One event per browser-control command that reached the browser. The
         command stream is not sampled, coalesced or reordered. An event is lost
-        only when the method is excluded by telemetry configuration, when
-        or when classification cannot keep up; those losses are counted in
-        `cdp_disconnect.telemetry_dropped`.
+        only when the method is excluded by telemetry configuration, when the
+        command's arguments do not decode, or when classification cannot keep
+        up. Exclusions are counted in `cdp_disconnect.telemetry_excluded`; the
+        rest in `cdp_disconnect.telemetry_dropped`.
       required: [ts, type, category, source, data]
       properties:
         ts:
@@ -4348,6 +5194,18 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserCdpConnectEventData:
+      type: object
+      description: Per-connection payload for `cdp_connect` events.
+      additionalProperties: false
+      properties:
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies this CDP proxy connection, matching the `connection_id`
+            on the `cdp_command` events that arrived on it. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpConnectEvent:
       type: object
       description: An external client (e.g. customer SDK, Playwright, Puppeteer) connected to the CDP WebSocket proxy on this VM.
@@ -4365,6 +5223,8 @@ components:
           const: connection
         source:
           $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCdpConnectEventData"
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
@@ -4374,12 +5234,26 @@ components:
       additionalProperties: false
       required: [duration_ms, message_count, reason]
       properties:
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies this CDP proxy connection, matching the `connection_id`
+            on the `cdp_command` events that arrived on it. Two clients driving
+            the same browser are told apart by this.
         duration_ms:
           type: number
           description: Wall-clock duration of the connection in milliseconds.
         message_count:
           type: integer
           description: Number of CDP messages relayed across the connection in either direction.
+        telemetry_excluded:
+          type: integer
+          description: >
+            Number of forwarded client commands that produced no `cdp_command`
+            event because their method is listed in
+            `control.cdp.excluded_methods`. Configuration rather than loss, so
+            it is counted apart from `telemetry_dropped`.
         telemetry_dropped:
           type: integer
           description: >

@@ -46,11 +46,17 @@ type cdpObserver struct {
 	excludedMethods ExcludedMethodsFunc
 	logger          *slog.Logger
 
+	// connectionID names this proxy connection on every event it produces, so
+	// concurrent clients driving one browser can be told apart.
+	connectionID string
+
 	// queuedBytes tracks what the queue is holding, so admission can be decided
 	// on bytes rather than frame count alone.
-	queuedBytes     atomic.Int64
-	droppedQueued   atomic.Int64
-	droppedPanicked atomic.Int64
+	queuedBytes      atomic.Int64
+	droppedQueued    atomic.Int64
+	droppedPanicked  atomic.Int64
+	droppedMalformed atomic.Int64
+	excluded         atomic.Int64
 }
 
 // observedFrame is a client frame that reached Chromium, with the time the
@@ -63,7 +69,7 @@ type observedFrame struct {
 
 // newCdpObserver starts the classification worker. It stops when ctx is done.
 // A nil publish or controlEnabled disables observation entirely.
-func newCdpObserver(ctx context.Context, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, logger *slog.Logger) *cdpObserver {
+func newCdpObserver(ctx context.Context, connectionID string, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, logger *slog.Logger) *cdpObserver {
 	if publish == nil || controlEnabled == nil {
 		return nil
 	}
@@ -73,6 +79,7 @@ func newCdpObserver(ctx context.Context, publish EventPublisher, controlEnabled 
 	o := &cdpObserver{
 		frames:          make(chan observedFrame, cdpObserverQueueDepth),
 		drained:         make(chan struct{}),
+		connectionID:    connectionID,
 		publish:         publish,
 		controlEnabled:  controlEnabled,
 		excludedMethods: excludedMethods,
@@ -103,17 +110,28 @@ func (o *cdpObserver) Observe(msg []byte, ts int64) {
 	}
 }
 
-// Dropped reports how many forwarded frames the classifier never saw: queue
-// saturation, classification panics, and anything still queued once the worker
-// has stopped. Reported on cdp_disconnect so a reader sees the loss rather than
-// only the VM's log. A saturated queue rejects whatever arrives next, which may
-// be library traffic that would have produced nothing, so this is an upper
-// bound on commands lost rather than a count.
+// Excluded reports how many supported commands produced no event because
+// excluded_methods named their method. Counted, as the review asked, but apart
+// from Dropped: a reader who configured an exclusion has not lost anything.
+func (o *cdpObserver) Excluded() int64 {
+	if o == nil {
+		return 0
+	}
+	return o.excluded.Load()
+}
+
+// Dropped reports how many forwarded frames the classifier never saw or could
+// not read: queue saturation, classification panics, commands whose arguments
+// did not decode, and anything still queued once the worker has stopped.
+// Reported on cdp_disconnect so a reader sees the loss rather than only the
+// VM's log. A saturated queue rejects whatever arrives next, which may be
+// library traffic that would have produced nothing, so this is an upper bound
+// on commands lost rather than a count.
 func (o *cdpObserver) Dropped() int64 {
 	if o == nil {
 		return 0
 	}
-	dropped := o.droppedQueued.Load() + o.droppedPanicked.Load()
+	dropped := o.droppedQueued.Load() + o.droppedPanicked.Load() + o.droppedMalformed.Load()
 	// Pump calls onClose as soon as one direction fails, while the other may
 	// still be forwarding, so a frame can be queued after the final drain. Once
 	// the worker has stopped nothing will read it, which makes it as lost as one
@@ -179,19 +197,26 @@ func (o *cdpObserver) handle(f observedFrame) {
 			o.logger.Error("cdp command telemetry panicked", slog.Any("err", r))
 		}
 	}()
-	ev, ok := cdpCommandEvent(f.msg, f.ts, o.excludedMethods())
-	if !ok {
-		return
+	ev, result := cdpCommandEvent(f.msg, f.ts, o.connectionID, o.excludedMethods())
+	switch result {
+	case classifyEvent:
+		o.publish(ev)
+	case classifyExcluded:
+		o.excluded.Add(1)
+	case classifyMalformed:
+		// The command reached the browser but nothing readable reached the
+		// stream, which is a loss however malformed the arguments were.
+		o.droppedMalformed.Add(1)
 	}
-	o.publish(ev)
 }
 
 func (o *cdpObserver) logDrops() {
-	queued, panicked := o.droppedQueued.Load(), o.droppedPanicked.Load()
-	if queued+panicked == 0 {
+	queued, panicked, malformed := o.droppedQueued.Load(), o.droppedPanicked.Load(), o.droppedMalformed.Load()
+	if queued+panicked+malformed == 0 {
 		return
 	}
 	o.logger.Warn("cdp command telemetry dropped frames",
 		slog.Int64("queue_full", queued),
-		slog.Int64("panicked", panicked))
+		slog.Int64("panicked", panicked),
+		slog.Int64("malformed", malformed))
 }

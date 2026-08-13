@@ -91,6 +91,120 @@ var namedKeys = lookup(`
 // category survives, and one outside this set reports as "other".
 var mimeCategories = lookup(`text image audio video application font model multipart message`)
 
+// A client controls the enum strings below, and an event is only as bounded as
+// the values it copies: a 1 MB button would push the payload past the envelope
+// limit, and truncateIfNeeded drops the whole event rather than the field. So a
+// value is passed through only when the generated Valid() — the spec's own enum
+// membership — accepts it, and is reported as "other" otherwise.
+const unknownEnumValue = "other"
+
+// maxOpaqueIDBytes bounds identifiers the protocol leaves as free-form strings.
+// Real ones are well under this; anything longer is a broken or hostile client,
+// and clipping keeps one from taking the event down with it.
+const maxOpaqueIDBytes = 128
+
+// enumValue is a generated enum type that can vet its own value.
+type enumValue interface {
+	~string
+	Valid() bool
+}
+
+// enumOf narrows a client string to a generated enum, for a field the schema
+// always carries.
+func enumOf[T enumValue](v string) T {
+	out := T(v)
+	if v == "" || out.Valid() {
+		return out
+	}
+	return T(unknownEnumValue)
+}
+
+// optionalEnumOf is enumOf for a field the schema omits when absent.
+func optionalEnumOf[T enumValue](v *string) *T {
+	if v == nil || *v == "" {
+		return nil
+	}
+	out := enumOf[T](*v)
+	return &out
+}
+
+// clipID bounds an opaque identifier. Clipping rather than dropping keeps a
+// required field present and a long-but-real id partially readable.
+func clipID(v string) string {
+	if len(v) <= maxOpaqueIDBytes {
+		return v
+	}
+	return v[:maxOpaqueIDBytes]
+}
+
+func clipIDPtr(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	clipped := clipID(*v)
+	return &clipped
+}
+
+func mouseEventType(v string) oapi.BrowserCdpMouseEventType {
+	return enumOf[oapi.BrowserCdpMouseEventType](v)
+}
+
+func keyEventType(v string) oapi.BrowserCdpKeyEventType {
+	return enumOf[oapi.BrowserCdpKeyEventType](v)
+}
+
+func touchEventType(v string) oapi.BrowserCdpTouchEventType {
+	return enumOf[oapi.BrowserCdpTouchEventType](v)
+}
+
+func dragEventType(v string) oapi.BrowserCdpDragEventType {
+	return enumOf[oapi.BrowserCdpDragEventType](v)
+}
+
+func webLifecycleState(v string) oapi.BrowserCdpWebLifecycleState {
+	return enumOf[oapi.BrowserCdpWebLifecycleState](v)
+}
+
+func mouseButton(v *string) *oapi.BrowserCdpMouseButton {
+	return optionalEnumOf[oapi.BrowserCdpMouseButton](v)
+}
+
+func pointerType(v *string) *oapi.BrowserCdpPointerType {
+	return optionalEnumOf[oapi.BrowserCdpPointerType](v)
+}
+
+func gestureSourceType(v *string) *oapi.BrowserCdpGestureSourceType {
+	return optionalEnumOf[oapi.BrowserCdpGestureSourceType](v)
+}
+
+func screenshotFormat(v *string) *oapi.BrowserCdpScreenshotFormat {
+	return optionalEnumOf[oapi.BrowserCdpScreenshotFormat](v)
+}
+
+func snapshotFormat(v *string) *oapi.BrowserCdpSnapshotFormat {
+	return optionalEnumOf[oapi.BrowserCdpSnapshotFormat](v)
+}
+
+func screencastFormat(v *string) *oapi.BrowserCdpScreencastFormat {
+	return optionalEnumOf[oapi.BrowserCdpScreencastFormat](v)
+}
+
+func pdfTransferMode(v *string) *oapi.BrowserCdpPdfTransferMode {
+	return optionalEnumOf[oapi.BrowserCdpPdfTransferMode](v)
+}
+
+func windowState(v *string) *oapi.BrowserCdpWindowState {
+	return optionalEnumOf[oapi.BrowserCdpWindowState](v)
+}
+
+func transitionType(v *string) *oapi.BrowserCdpTransitionType {
+	return optionalEnumOf[oapi.BrowserCdpTransitionType](v)
+}
+
+func referrerPolicy(v *string) *oapi.BrowserCdpReferrerPolicy {
+	return optionalEnumOf[oapi.BrowserCdpReferrerPolicy](v)
+}
+
 // lookup builds a membership set from a whitespace-separated list, so the lists
 // above read as lists.
 func lookup(words string) map[string]struct{} {
@@ -186,16 +300,18 @@ func sanitizeInputDispatchMouseEvent(cmd cdpCommand) (oapi.BrowserCdpCommandEven
 	}
 	return out, out.FromBrowserCdpInputDispatchMouseEventCommandData(oapi.BrowserCdpInputDispatchMouseEventCommandData{
 		SessionId:          cmd.sessionID(),
-		EventType:          p.Type,
+		CommandId:          cmd.ID,
+		ConnectionId:       cmd.connID(),
+		EventType:          mouseEventType(p.Type),
 		X:                  p.X,
 		Y:                  p.Y,
 		Modifiers:          p.Modifiers,
-		Button:             p.Button,
+		Button:             mouseButton(p.Button),
 		Buttons:            p.Buttons,
 		ClickCount:         p.ClickCount,
 		DeltaX:             p.DeltaX,
 		DeltaY:             p.DeltaY,
-		PointerType:        p.PointerType,
+		PointerType:        pointerType(p.PointerType),
 		Force:              p.Force,
 		TangentialPressure: p.TangentialPressure,
 		TiltX:              p.TiltX,
@@ -223,15 +339,17 @@ func sanitizeInputDispatchKeyEvent(cmd cdpCommand) (oapi.BrowserCdpCommandEventD
 		return out, err
 	}
 	data := oapi.BrowserCdpInputDispatchKeyEventCommandData{
-		SessionId:   cmd.sessionID(),
-		EventType:   p.Type,
-		Modifiers:   p.Modifiers,
-		TextLength:  runeLen(p.Text),
-		NamedKey:    namedKey(p.Key),
-		Location:    p.Location,
-		AutoRepeat:  p.AutoRepeat,
-		IsKeypad:    p.IsKeypad,
-		IsSystemKey: p.IsSystemKey,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		EventType:    keyEventType(p.Type),
+		Modifiers:    p.Modifiers,
+		TextLength:   runeLen(p.Text),
+		NamedKey:     namedKey(p.Key),
+		Location:     p.Location,
+		AutoRepeat:   p.AutoRepeat,
+		IsKeypad:     p.IsKeypad,
+		IsSystemKey:  p.IsSystemKey,
 	}
 	// code, keyIdentifier and the virtual key codes all name the character as
 	// surely as text does, so they are never decoded.
@@ -252,8 +370,10 @@ func sanitizeInputInsertText(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, e
 		return out, err
 	}
 	return out, out.FromBrowserCdpInputInsertTextCommandData(oapi.BrowserCdpInputInsertTextCommandData{
-		SessionId:  cmd.sessionID(),
-		TextLength: utf8.RuneCountInString(p.Text),
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		TextLength:   utf8.RuneCountInString(p.Text),
 	})
 }
 
@@ -273,6 +393,8 @@ func sanitizeInputImeSetComposition(cmd cdpCommand) (oapi.BrowserCdpCommandEvent
 	}
 	return out, out.FromBrowserCdpInputImeSetCompositionCommandData(oapi.BrowserCdpInputImeSetCompositionCommandData{
 		SessionId:        cmd.sessionID(),
+		CommandId:        cmd.ID,
+		ConnectionId:     cmd.connID(),
 		TextLength:       utf8.RuneCountInString(p.Text),
 		SelectionStart:   p.SelectionStart,
 		SelectionEnd:     p.SelectionEnd,
@@ -300,7 +422,9 @@ func sanitizeInputDispatchTouchEvent(cmd cdpCommand) (oapi.BrowserCdpCommandEven
 	}
 	data := oapi.BrowserCdpInputDispatchTouchEventCommandData{
 		SessionId:       cmd.sessionID(),
-		EventType:       p.Type,
+		CommandId:       cmd.ID,
+		ConnectionId:    cmd.connID(),
+		EventType:       touchEventType(p.Type),
 		TouchPointCount: len(p.TouchPoints),
 		Modifiers:       p.Modifiers,
 	}
@@ -339,7 +463,9 @@ func sanitizeInputDispatchDragEvent(cmd cdpCommand) (oapi.BrowserCdpCommandEvent
 	}
 	data := oapi.BrowserCdpInputDispatchDragEventCommandData{
 		SessionId:          cmd.sessionID(),
-		EventType:          p.Type,
+		CommandId:          cmd.ID,
+		ConnectionId:       cmd.connID(),
+		EventType:          dragEventType(p.Type),
 		X:                  p.X,
 		Y:                  p.Y,
 		Modifiers:          p.Modifiers,
@@ -355,7 +481,7 @@ func sanitizeInputDispatchDragEvent(cmd cdpCommand) (oapi.BrowserCdpCommandEvent
 
 // mimeCategoriesOf reduces drag item MIME types to their distinct top-level
 // categories. The subtype names the file, so it does not survive.
-func mimeCategoriesOf(items []dragDataItem) []string {
+func mimeCategoriesOf(items []dragDataItem) []oapi.BrowserCdpDragMimeCategory {
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
 		category, _, _ := strings.Cut(item.MimeType, "/")
@@ -365,18 +491,20 @@ func mimeCategoriesOf(items []dragDataItem) []string {
 		}
 		seen[category] = struct{}{}
 	}
-	out := make([]string, 0, len(seen))
+	out := make([]oapi.BrowserCdpDragMimeCategory, 0, len(seen))
 	for category := range seen {
-		out = append(out, category)
+		out = append(out, oapi.BrowserCdpDragMimeCategory(category))
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
 func sanitizeInputCancelDragging(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	var out oapi.BrowserCdpCommandEventData
 	return out, out.FromBrowserCdpInputCancelDraggingCommandData(oapi.BrowserCdpInputCancelDraggingCommandData{
-		SessionId: cmd.sessionID(),
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
 	})
 }
 
@@ -398,15 +526,17 @@ func sanitizeInputEmulateTouchFromMouseEvent(cmd cdpCommand) (oapi.BrowserCdpCom
 		return out, err
 	}
 	return out, out.FromBrowserCdpInputEmulateTouchFromMouseEventCommandData(oapi.BrowserCdpInputEmulateTouchFromMouseEventCommandData{
-		SessionId:  cmd.sessionID(),
-		EventType:  p.Type,
-		X:          p.X,
-		Y:          p.Y,
-		Button:     p.Button,
-		Modifiers:  p.Modifiers,
-		ClickCount: p.ClickCount,
-		DeltaX:     p.DeltaX,
-		DeltaY:     p.DeltaY,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		EventType:    mouseEventType(p.Type),
+		X:            p.X,
+		Y:            p.Y,
+		Button:       mouseButton(p.Button),
+		Modifiers:    p.Modifiers,
+		ClickCount:   p.ClickCount,
+		DeltaX:       p.DeltaX,
+		DeltaY:       p.DeltaY,
 	})
 }
 
@@ -426,11 +556,13 @@ func sanitizeInputSynthesizePinchGesture(cmd cdpCommand) (oapi.BrowserCdpCommand
 	}
 	return out, out.FromBrowserCdpInputSynthesizePinchGestureCommandData(oapi.BrowserCdpInputSynthesizePinchGestureCommandData{
 		SessionId:         cmd.sessionID(),
+		CommandId:         cmd.ID,
+		ConnectionId:      cmd.connID(),
 		X:                 p.X,
 		Y:                 p.Y,
 		ScaleFactor:       p.ScaleFactor,
 		RelativeSpeed:     p.RelativeSpeed,
-		GestureSourceType: p.GestureSourceType,
+		GestureSourceType: gestureSourceType(p.GestureSourceType),
 	})
 }
 
@@ -457,6 +589,8 @@ func sanitizeInputSynthesizeScrollGesture(cmd cdpCommand) (oapi.BrowserCdpComman
 	// interactionMarkerName is a caller-supplied label, so it is not decoded.
 	return out, out.FromBrowserCdpInputSynthesizeScrollGestureCommandData(oapi.BrowserCdpInputSynthesizeScrollGestureCommandData{
 		SessionId:         cmd.sessionID(),
+		CommandId:         cmd.ID,
+		ConnectionId:      cmd.connID(),
 		X:                 p.X,
 		Y:                 p.Y,
 		XDistance:         p.XDistance,
@@ -465,7 +599,7 @@ func sanitizeInputSynthesizeScrollGesture(cmd cdpCommand) (oapi.BrowserCdpComman
 		YOverscroll:       p.YOverscroll,
 		PreventFling:      p.PreventFling,
 		Speed:             p.Speed,
-		GestureSourceType: p.GestureSourceType,
+		GestureSourceType: gestureSourceType(p.GestureSourceType),
 		RepeatCount:       p.RepeatCount,
 		RepeatDelayMs:     p.RepeatDelayMs,
 	})
@@ -487,11 +621,13 @@ func sanitizeInputSynthesizeTapGesture(cmd cdpCommand) (oapi.BrowserCdpCommandEv
 	}
 	return out, out.FromBrowserCdpInputSynthesizeTapGestureCommandData(oapi.BrowserCdpInputSynthesizeTapGestureCommandData{
 		SessionId:         cmd.sessionID(),
+		CommandId:         cmd.ID,
+		ConnectionId:      cmd.connID(),
 		X:                 p.X,
 		Y:                 p.Y,
 		Duration:          p.Duration,
 		TapCount:          p.TapCount,
-		GestureSourceType: p.GestureSourceType,
+		GestureSourceType: gestureSourceType(p.GestureSourceType),
 	})
 }
 
@@ -518,10 +654,12 @@ func sanitizeDomSetFileInputFiles(cmd cdpCommand) (oapi.BrowserCdpCommandEventDa
 	}
 	return out, out.FromBrowserCdpDomSetFileInputFilesCommandData(oapi.BrowserCdpDomSetFileInputFilesCommandData{
 		SessionId:     cmd.sessionID(),
+		CommandId:     cmd.ID,
+		ConnectionId:  cmd.connID(),
 		FileCount:     len(p.Files),
 		NodeId:        p.NodeId,
 		BackendNodeId: p.BackendNodeId,
-		ObjectId:      p.ObjectId,
+		ObjectId:      clipIDPtr(p.ObjectId),
 	})
 }
 
@@ -533,6 +671,8 @@ func sanitizeDomFocus(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	}
 	return out, out.FromBrowserCdpDomFocusCommandData(oapi.BrowserCdpDomFocusCommandData{
 		SessionId:     cmd.sessionID(),
+		CommandId:     cmd.ID,
+		ConnectionId:  cmd.connID(),
 		NodeId:        p.NodeId,
 		BackendNodeId: p.BackendNodeId,
 		ObjectId:      p.ObjectId,
@@ -552,6 +692,8 @@ func sanitizeDomScrollIntoViewIfNeeded(cmd cdpCommand) (oapi.BrowserCdpCommandEv
 	}
 	return out, out.FromBrowserCdpDomScrollIntoViewIfNeededCommandData(oapi.BrowserCdpDomScrollIntoViewIfNeededCommandData{
 		SessionId:     cmd.sessionID(),
+		CommandId:     cmd.ID,
+		ConnectionId:  cmd.connID(),
 		NodeId:        p.NodeId,
 		BackendNodeId: p.BackendNodeId,
 		ObjectId:      p.ObjectId,
@@ -564,7 +706,9 @@ func sanitizeDomScrollIntoViewIfNeeded(cmd cdpCommand) (oapi.BrowserCdpCommandEv
 func sanitizePageBringToFront(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	var out oapi.BrowserCdpCommandEventData
 	return out, out.FromBrowserCdpPageBringToFrontCommandData(oapi.BrowserCdpPageBringToFrontCommandData{
-		SessionId: cmd.sessionID(),
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
 	})
 }
 
@@ -593,7 +737,9 @@ func sanitizePageCaptureScreenshot(cmd cdpCommand) (oapi.BrowserCdpCommandEventD
 	}
 	data := oapi.BrowserCdpPageCaptureScreenshotCommandData{
 		SessionId:             cmd.sessionID(),
-		Format:                p.Format,
+		CommandId:             cmd.ID,
+		ConnectionId:          cmd.connID(),
+		Format:                screenshotFormat(p.Format),
 		Quality:               p.Quality,
 		FromSurface:           p.FromSurface,
 		CaptureBeyondViewport: p.CaptureBeyondViewport,
@@ -617,8 +763,10 @@ func sanitizePageCaptureSnapshot(cmd cdpCommand) (oapi.BrowserCdpCommandEventDat
 		return out, err
 	}
 	return out, out.FromBrowserCdpPageCaptureSnapshotCommandData(oapi.BrowserCdpPageCaptureSnapshotCommandData{
-		SessionId: cmd.sessionID(),
-		Format:    p.Format,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		Format:       snapshotFormat(p.Format),
 	})
 }
 
@@ -635,6 +783,8 @@ func sanitizePageHandleJavaScriptDialog(cmd cdpCommand) (oapi.BrowserCdpCommandE
 	}
 	return out, out.FromBrowserCdpPageHandleJavaScriptDialogCommandData(oapi.BrowserCdpPageHandleJavaScriptDialogCommandData{
 		SessionId:        cmd.sessionID(),
+		CommandId:        cmd.ID,
+		ConnectionId:     cmd.connID(),
 		Accept:           p.Accept,
 		PromptTextLength: runeLen(p.PromptText),
 	})
@@ -656,11 +806,13 @@ func sanitizePageNavigate(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, erro
 	}
 	return out, out.FromBrowserCdpPageNavigateCommandData(oapi.BrowserCdpPageNavigateCommandData{
 		SessionId:       cmd.sessionID(),
+		CommandId:       cmd.ID,
+		ConnectionId:    cmd.connID(),
 		UrlScheme:       urlScheme(p.Url),
-		TransitionType:  p.TransitionType,
+		TransitionType:  transitionType(p.TransitionType),
 		ReferrerPresent: present(p.Referrer),
-		ReferrerPolicy:  p.ReferrerPolicy,
-		FrameId:         p.FrameId,
+		ReferrerPolicy:  referrerPolicy(p.ReferrerPolicy),
+		FrameId:         clipIDPtr(p.FrameId),
 	})
 }
 
@@ -675,8 +827,10 @@ func sanitizePageNavigateToHistoryEntry(cmd cdpCommand) (oapi.BrowserCdpCommandE
 		return out, err
 	}
 	return out, out.FromBrowserCdpPageNavigateToHistoryEntryCommandData(oapi.BrowserCdpPageNavigateToHistoryEntryCommandData{
-		SessionId: cmd.sessionID(),
-		EntryId:   p.EntryId,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		EntryId:      p.EntryId,
 	})
 }
 
@@ -694,6 +848,8 @@ func sanitizePageReload(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error)
 	}
 	return out, out.FromBrowserCdpPageReloadCommandData(oapi.BrowserCdpPageReloadCommandData{
 		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
 		IgnoreCache:  p.IgnoreCache,
 		ScriptLength: runeLen(p.ScriptToEvaluateOnLoad),
 		LoaderId:     p.LoaderId,
@@ -722,6 +878,8 @@ func sanitizePagePrintToPDF(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, er
 	}
 	return out, out.FromBrowserCdpPagePrintToPdfCommandData(oapi.BrowserCdpPagePrintToPdfCommandData{
 		SessionId:             cmd.sessionID(),
+		CommandId:             cmd.ID,
+		ConnectionId:          cmd.connID(),
 		Landscape:             p.Landscape,
 		Scale:                 p.Scale,
 		PaperWidth:            p.PaperWidth,
@@ -729,7 +887,7 @@ func sanitizePagePrintToPDF(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, er
 		DisplayHeaderFooter:   p.DisplayHeaderFooter,
 		PrintBackground:       p.PrintBackground,
 		PreferCssPageSize:     p.PreferCSSPageSize,
-		TransferMode:          p.TransferMode,
+		TransferMode:          pdfTransferMode(p.TransferMode),
 		PageRangesPresent:     present(p.PageRanges),
 		HeaderTemplatePresent: present(p.HeaderTemplate),
 		FooterTemplatePresent: present(p.FooterTemplate),
@@ -752,7 +910,9 @@ func sanitizePageStartScreencast(cmd cdpCommand) (oapi.BrowserCdpCommandEventDat
 	}
 	return out, out.FromBrowserCdpPageStartScreencastCommandData(oapi.BrowserCdpPageStartScreencastCommandData{
 		SessionId:     cmd.sessionID(),
-		Format:        p.Format,
+		CommandId:     cmd.ID,
+		ConnectionId:  cmd.connID(),
+		Format:        screencastFormat(p.Format),
 		Quality:       p.Quality,
 		MaxWidth:      p.MaxWidth,
 		MaxHeight:     p.MaxHeight,
@@ -763,21 +923,27 @@ func sanitizePageStartScreencast(cmd cdpCommand) (oapi.BrowserCdpCommandEventDat
 func sanitizePageStopScreencast(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	var out oapi.BrowserCdpCommandEventData
 	return out, out.FromBrowserCdpPageStopScreencastCommandData(oapi.BrowserCdpPageStopScreencastCommandData{
-		SessionId: cmd.sessionID(),
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
 	})
 }
 
 func sanitizePageStopLoading(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	var out oapi.BrowserCdpCommandEventData
 	return out, out.FromBrowserCdpPageStopLoadingCommandData(oapi.BrowserCdpPageStopLoadingCommandData{
-		SessionId: cmd.sessionID(),
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
 	})
 }
 
 func sanitizePageClose(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	var out oapi.BrowserCdpCommandEventData
 	return out, out.FromBrowserCdpPageCloseCommandData(oapi.BrowserCdpPageCloseCommandData{
-		SessionId: cmd.sessionID(),
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
 	})
 }
 
@@ -792,8 +958,10 @@ func sanitizePageSetWebLifecycleState(cmd cdpCommand) (oapi.BrowserCdpCommandEve
 		return out, err
 	}
 	return out, out.FromBrowserCdpPageSetWebLifecycleStateCommandData(oapi.BrowserCdpPageSetWebLifecycleStateCommandData{
-		SessionId: cmd.sessionID(),
-		State:     p.State,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		State:        webLifecycleState(p.State),
 	})
 }
 
@@ -811,8 +979,10 @@ func sanitizeTargetActivateTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventDa
 		return out, err
 	}
 	return out, out.FromBrowserCdpTargetActivateTargetCommandData(oapi.BrowserCdpTargetActivateTargetCommandData{
-		SessionId: cmd.sessionID(),
-		TargetId:  p.TargetId,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		TargetId:     clipID(p.TargetId),
 	})
 }
 
@@ -823,8 +993,10 @@ func sanitizeTargetCloseTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventData,
 		return out, err
 	}
 	return out, out.FromBrowserCdpTargetCloseTargetCommandData(oapi.BrowserCdpTargetCloseTargetCommandData{
-		SessionId: cmd.sessionID(),
-		TargetId:  p.TargetId,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		TargetId:     p.TargetId,
 	})
 }
 
@@ -835,11 +1007,14 @@ func sanitizeTargetOpenDevTools(cmd cdpCommand) (oapi.BrowserCdpCommandEventData
 		return out, err
 	}
 	data := oapi.BrowserCdpTargetOpenDevToolsCommandData{
-		SessionId: cmd.sessionID(),
-		TargetId:  p.TargetId,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		TargetId:     p.TargetId,
 	}
 	if p.PanelId != "" {
-		data.PanelId = &p.PanelId
+		clipped := clipID(p.PanelId)
+		data.PanelId = &clipped
 	}
 	return out, out.FromBrowserCdpTargetOpenDevToolsCommandData(data)
 }
@@ -867,13 +1042,15 @@ func sanitizeTargetCreateTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventData
 	}
 	return out, out.FromBrowserCdpTargetCreateTargetCommandData(oapi.BrowserCdpTargetCreateTargetCommandData{
 		SessionId:               cmd.sessionID(),
+		CommandId:               cmd.ID,
+		ConnectionId:            cmd.connID(),
 		UrlScheme:               urlScheme(p.Url),
 		Left:                    p.Left,
 		Top:                     p.Top,
 		Width:                   p.Width,
 		Height:                  p.Height,
-		WindowState:             p.WindowState,
-		BrowserContextId:        p.BrowserContextId,
+		WindowState:             windowState(p.WindowState),
+		BrowserContextId:        clipIDPtr(p.BrowserContextId),
 		NewWindow:               p.NewWindow,
 		Background:              p.Background,
 		ForTab:                  p.ForTab,
@@ -897,6 +1074,8 @@ func sanitizeTargetCreateBrowserContext(cmd cdpCommand) (oapi.BrowserCdpCommandE
 	}
 	return out, out.FromBrowserCdpTargetCreateBrowserContextCommandData(oapi.BrowserCdpTargetCreateBrowserContextCommandData{
 		SessionId:                         cmd.sessionID(),
+		CommandId:                         cmd.ID,
+		ConnectionId:                      cmd.connID(),
 		DisposeOnDetach:                   p.DisposeOnDetach,
 		ProxyServerPresent:                present(p.ProxyServer),
 		ProxyBypassListPresent:            present(p.ProxyBypassList),
@@ -916,7 +1095,9 @@ func sanitizeTargetDisposeBrowserContext(cmd cdpCommand) (oapi.BrowserCdpCommand
 	}
 	return out, out.FromBrowserCdpTargetDisposeBrowserContextCommandData(oapi.BrowserCdpTargetDisposeBrowserContextCommandData{
 		SessionId:        cmd.sessionID(),
-		BrowserContextId: p.BrowserContextId,
+		CommandId:        cmd.ID,
+		ConnectionId:     cmd.connID(),
+		BrowserContextId: clipID(p.BrowserContextId),
 	})
 }
 
@@ -935,15 +1116,19 @@ func sanitizeBrowserCancelDownload(cmd cdpCommand) (oapi.BrowserCdpCommandEventD
 	}
 	return out, out.FromBrowserCdpBrowserCancelDownloadCommandData(oapi.BrowserCdpBrowserCancelDownloadCommandData{
 		SessionId:        cmd.sessionID(),
-		DownloadGuid:     p.Guid,
-		BrowserContextId: p.BrowserContextId,
+		CommandId:        cmd.ID,
+		ConnectionId:     cmd.connID(),
+		DownloadGuid:     clipID(p.Guid),
+		BrowserContextId: clipIDPtr(p.BrowserContextId),
 	})
 }
 
 func sanitizeBrowserClose(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	var out oapi.BrowserCdpCommandEventData
 	return out, out.FromBrowserCdpBrowserCloseCommandData(oapi.BrowserCdpBrowserCloseCommandData{
-		SessionId: cmd.sessionID(),
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
 	})
 }
 
@@ -967,13 +1152,15 @@ func sanitizeBrowserSetWindowBounds(cmd cdpCommand) (oapi.BrowserCdpCommandEvent
 		return out, err
 	}
 	return out, out.FromBrowserCdpBrowserSetWindowBoundsCommandData(oapi.BrowserCdpBrowserSetWindowBoundsCommandData{
-		SessionId:   cmd.sessionID(),
-		WindowId:    p.WindowId,
-		Left:        p.Bounds.Left,
-		Top:         p.Bounds.Top,
-		Width:       p.Bounds.Width,
-		Height:      p.Bounds.Height,
-		WindowState: p.Bounds.WindowState,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		WindowId:     p.WindowId,
+		Left:         p.Bounds.Left,
+		Top:          p.Bounds.Top,
+		Width:        p.Bounds.Width,
+		Height:       p.Bounds.Height,
+		WindowState:  windowState(p.Bounds.WindowState),
 	})
 }
 
@@ -990,10 +1177,12 @@ func sanitizeBrowserSetContentsSize(cmd cdpCommand) (oapi.BrowserCdpCommandEvent
 		return out, err
 	}
 	return out, out.FromBrowserCdpBrowserSetContentsSizeCommandData(oapi.BrowserCdpBrowserSetContentsSizeCommandData{
-		SessionId: cmd.sessionID(),
-		WindowId:  p.WindowId,
-		Width:     p.Width,
-		Height:    p.Height,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		WindowId:     p.WindowId,
+		Width:        p.Width,
+		Height:       p.Height,
 	})
 }
 
@@ -1013,18 +1202,20 @@ func sanitizeAutofillTrigger(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, e
 		return out, err
 	}
 	data := oapi.BrowserCdpAutofillTriggerCommandData{
-		SessionId: cmd.sessionID(),
-		FieldId:   p.FieldId,
-		FrameId:   p.FrameId,
+		SessionId:    cmd.sessionID(),
+		CommandId:    cmd.ID,
+		ConnectionId: cmd.connID(),
+		FieldId:      p.FieldId,
+		FrameId:      clipIDPtr(p.FrameId),
 	}
 	// The card number and the address lines are the whole payload, so only
 	// which of the two was filled survives.
 	switch {
 	case len(p.Card) > 0 && string(p.Card) != "null":
-		mode := "card"
+		mode := oapi.Card
 		data.Mode = &mode
 	case len(p.Address) > 0 && string(p.Address) != "null":
-		mode := "address"
+		mode := oapi.Address
 		data.Mode = &mode
 	}
 	return out, out.FromBrowserCdpAutofillTriggerCommandData(data)

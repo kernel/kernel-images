@@ -27,7 +27,7 @@ func newTestObserver(t *testing.T, publish EventPublisher, enabled ControlEnable
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	o := newCdpObserver(ctx, publish, enabled, nil, silentLogger())
+	o := newCdpObserver(ctx, testConnID, publish, enabled, nil, silentLogger())
 	if o == nil {
 		t.Fatal("observer was not created")
 	}
@@ -171,7 +171,7 @@ func TestQueueByteBudgetTurnsAwayWhatItCannotHold(t *testing.T) {
 func TestObserverDrainsQueuedFramesOnShutdown(t *testing.T) {
 	pub := &countingPublisher{}
 	ctx, cancel := context.WithCancel(context.Background())
-	o := newCdpObserver(ctx, pub.publish, controlOn, nil, silentLogger())
+	o := newCdpObserver(ctx, testConnID, pub.publish, controlOn, nil, silentLogger())
 
 	const sent = 20
 	for range sent {
@@ -192,7 +192,7 @@ func TestObserverAppliesMethodExclusions(t *testing.T) {
 	excluded := func() map[string]struct{} {
 		return map[string]struct{}{"Input.dispatchMouseEvent": {}}
 	}
-	o := newCdpObserver(ctx, pub.publish, controlOn, excluded, silentLogger())
+	o := newCdpObserver(ctx, testConnID, pub.publish, controlOn, excluded, silentLogger())
 
 	o.Observe([]byte(clickFrame), testForwardTs)
 	o.Observe([]byte(`{"id":2,"method":"Page.reload"}`), testForwardTs)
@@ -224,7 +224,7 @@ func waitFor(t *testing.T, cond func() bool) {
 func TestFramesQueuedAfterTeardownAreCountedAsLoss(t *testing.T) {
 	pub := &countingPublisher{}
 	ctx, cancel := context.WithCancel(context.Background())
-	o := newCdpObserver(ctx, pub.publish, controlOn, nil, silentLogger())
+	o := newCdpObserver(ctx, testConnID, pub.publish, controlOn, nil, silentLogger())
 
 	o.Observe([]byte(clickFrame), testForwardTs)
 	cancel()
@@ -244,5 +244,56 @@ func TestFramesQueuedAfterTeardownAreCountedAsLoss(t *testing.T) {
 	}
 	if got := o.Dropped(); got != 1 {
 		t.Fatalf("dropped = %d, want 1: a frame nothing will read is a loss", got)
+	}
+}
+
+// testConnID names the connection in observer tests.
+const testConnID = "conn-test"
+
+// An excluded method is configuration, not loss, so it is counted apart from
+// the drops. The review asked for it to be counted either way.
+func TestExcludedMethodsAreCountedApartFromDrops(t *testing.T) {
+	pub := &countingPublisher{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	excluded := func() map[string]struct{} {
+		return map[string]struct{}{"Input.dispatchMouseEvent": {}}
+	}
+	o := newCdpObserver(ctx, testConnID, pub.publish, controlOn, excluded, silentLogger())
+
+	for range 3 {
+		o.Observe([]byte(clickFrame), testForwardTs)
+	}
+	waitFor(t, func() bool { return o.Excluded() == 3 })
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("dropped = %d, want 0: an exclusion is not a loss", got)
+	}
+}
+
+// A supported command whose arguments do not decode reached the browser but
+// produced no event, so it is a loss and has to be counted as one.
+func TestMalformedParamsAreCountedAsLoss(t *testing.T) {
+	pub := &countingPublisher{}
+	o := newTestObserver(t, pub.publish, controlOn)
+
+	// x is a string where the protocol defines a number.
+	o.Observe([]byte(`{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":"nope"}}`), testForwardTs)
+	waitFor(t, func() bool { return o.Dropped() == 1 })
+	if got := pub.n.Load(); got != 0 {
+		t.Fatalf("published %d events, want 0", got)
+	}
+}
+
+// Library traffic is still not a loss, so the malformed counter must not catch
+// frames that were never browser control to begin with.
+func TestUnsupportedMethodsAreNotCountedAsLoss(t *testing.T) {
+	pub := &countingPublisher{}
+	o := newTestObserver(t, pub.publish, controlOn)
+
+	o.Observe([]byte(`{"id":1,"method":"Runtime.callFunctionOn","params":{"objectId":5}}`), testForwardTs)
+	o.Observe([]byte(`not json at all`), testForwardTs)
+	waitFor(t, func() bool { return o.queuedBytes.Load() == 0 })
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("dropped = %d, want 0", got)
 	}
 }
