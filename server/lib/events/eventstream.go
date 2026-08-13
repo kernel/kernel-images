@@ -21,10 +21,23 @@ type EventStream struct {
 type EventStreamConfig struct {
 	// RingCapacity is the number of envelopes the ring buffer holds.
 	RingCapacity int
+	// RingMaxBytes bounds the memory those envelopes may occupy. Zero uses
+	// DefaultRingMaxBytes. Capacity alone does not bound memory: a slot holds
+	// anything from a small control event to a base64 screenshot.
+	RingMaxBytes uint64
 }
 
+// DefaultRingMaxBytes bounds the ring when a caller does not choose. Sized to
+// hold a full ring of control events comfortably while keeping a run of
+// screenshot-sized ones from costing capacity times the largest envelope.
+const DefaultRingMaxBytes = 64 << 20
+
 func NewEventStream(cfg EventStreamConfig) (*EventStream, error) {
-	rb, err := newRingBuffer(cfg.RingCapacity)
+	maxBytes := cfg.RingMaxBytes
+	if maxBytes == 0 {
+		maxBytes = DefaultRingMaxBytes
+	}
+	rb, err := newRingBuffer(cfg.RingCapacity, maxBytes)
 	if err != nil {
 		return nil, fmt.Errorf("event stream: %w", err)
 	}
