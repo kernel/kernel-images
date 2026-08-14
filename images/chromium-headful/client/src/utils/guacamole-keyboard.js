@@ -1318,8 +1318,31 @@ Guacamole.Keyboard = function Keyboard(element) {
 
             // Ignore (but do not prevent) the "composition" keycode sent by some
             // browsers when an IME is in use (see: http://lists.w3.org/Archives/Public/www-dom/2010JulSep/att-0182/keyCode-spec.html)
-            if (keydownEvent.keyCode === 229)
-                return;
+            //
+            // KERNEL: Some Windows + Chromium configurations report keyCode 229 for
+            // *every* keydown on a text field, even when no IME is in use (see:
+            // https://bugs.chromium.org/p/chromium/issues/detail?id=864911).
+            // Returning unconditionally here silently drops all keyboard input on
+            // those machines, while mouse input keeps working, because
+            // interpret_event() only interprets a log that begins with a keydown or
+            // a keyup -- the keypress that follows a dropped keydown is orphaned and
+            // never interpreted.
+            //
+            // Falling through recovers both known shapes of this quirk:
+            //
+            //   - keyCode 229 with a usable "key" ("a", "Enter"): KeydownEvent
+            //     already prefers "key" over "keyCode" when resolving a keysym.
+            //   - keyCode 229 with key "Unidentified": the keydown resolves to a
+            //     null keysym, and interpret_event() then takes the keysym from the
+            //     following keypress, which carries the correct character.
+            //
+            // Only genuine composition is skipped. isComposing is false on the very
+            // first keydown that *starts* composition, so the "Process" sentinel is
+            // still needed to catch that event and avoid a duplicate keystroke.
+            if (keydownEvent.keyCode === 229) {
+                if (e.isComposing || keydownEvent.key === 'Process')
+                    return;
+            }
 
             // Log event
             eventLog.push(keydownEvent);
