@@ -17,8 +17,17 @@ type Conn interface {
 	Close(statusCode websocket.StatusCode, reason string) error
 }
 
+const (
+	// DirectionClientToUpstream marks a message travelling from the CDP
+	// client to Chromium.
+	DirectionClientToUpstream = "->"
+	// DirectionUpstreamToClient marks a message travelling from Chromium to
+	// the CDP client. CDP events only ever travel this way.
+	DirectionUpstreamToClient = "<-"
+)
+
 // MessageTransform is called for every message flowing through the proxy.
-// direction is "->" for client-to-upstream and "<-" for upstream-to-client.
+// direction is one of DirectionClientToUpstream or DirectionUpstreamToClient.
 // It returns the (possibly modified) message bytes to forward.
 type MessageTransform func(direction string, mt websocket.MessageType, msg []byte) []byte
 
@@ -67,7 +76,7 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExi
 				return
 			}
 			if transform != nil {
-				msg = transform("->", mt, msg)
+				msg = transform(DirectionClientToUpstream, mt, msg)
 			}
 			if err := upstream.Write(ctx, mt, msg); err != nil {
 				logger.Error("upstream write error", slog.String("err", err.Error()))
@@ -86,7 +95,7 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExi
 				return
 			}
 			if transform != nil {
-				msg = transform("<-", mt, msg)
+				msg = transform(DirectionUpstreamToClient, mt, msg)
 			}
 			if err := client.Write(ctx, mt, msg); err != nil {
 				logger.Error("client write error", slog.String("err", err.Error()))

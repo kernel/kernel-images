@@ -20,12 +20,95 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/wsdrain"
 	"github.com/kernel/kernel-images/server/lib/wsproxy"
 )
+
+// recordingObserver captures every frame handed to the net error tap.
+type recordingObserver struct {
+	mu     sync.Mutex
+	frames []string
+}
+
+func (o *recordingObserver) Observe(msg []byte) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.frames = append(o.frames, string(msg))
+}
+
+func (o *recordingObserver) snapshot() []string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return append([]string(nil), o.frames...)
+}
+
+// The tap must see Chromium's frames and only Chromium's frames: a reversed
+// direction check would silently scan client commands, which can never carry
+// a CDP event, and count nothing.
+func TestWebSocketProxyHandler_ObservesOnlyUpstreamFrames(t *testing.T) {
+	const clientFrame = "client-to-upstream"
+	const upstreamFrame = "upstream-to-client"
+
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+		if err != nil {
+			return
+		}
+		defer c.Close(websocket.StatusNormalClosure, "")
+		// Reply with a distinct payload so the two directions are never
+		// confusable in the recorded frames.
+		if _, _, err := c.Read(r.Context()); err != nil {
+			return
+		}
+		_ = c.Write(r.Context(), websocket.MessageText, []byte(upstreamFrame))
+		<-r.Context().Done()
+	}))
+	defer upstreamSrv.Close()
+
+	u, _ := url.Parse(upstreamSrv.URL)
+	logger := silentLogger()
+	mgr := NewUpstreamManager("/dev/null", logger)
+	mgr.setCurrent((&url.URL{Scheme: "ws", Host: u.Host, Path: "/"}).String())
+
+	obs := &recordingObserver{}
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, obs))
+	defer proxySrv.Close()
+
+	pu, _ := url.Parse(proxySrv.URL)
+	pu.Scheme = "ws"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, pu.String(), nil)
+	require.NoError(t, err)
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	require.NoError(t, conn.Write(ctx, websocket.MessageText, []byte(clientFrame)))
+
+	// The tap runs before the frame is written to the client, so a successful
+	// read means the observer has already been offered it.
+	_, got, err := conn.Read(ctx)
+	require.NoError(t, err)
+	require.Equal(t, upstreamFrame, string(got))
+
+	assert.Equal(t, []string{upstreamFrame}, obs.snapshot())
+}
+
+func TestWebSocketProxyHandler_NilObserverIsAllowed(t *testing.T) {
+	logger := silentLogger()
+	mgr := NewUpstreamManager("/dev/null", logger)
+	mgr.setCurrent("ws://127.0.0.1:1/")
+
+	assert.NotPanics(t, func() {
+		WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil)
+	})
+}
 
 func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -133,7 +216,7 @@ func TestWebSocketProxyHandler_ProxiesEcho(t *testing.T) {
 	// seed current upstream to echo server including path/query (bypass tailing)
 	mgr.setCurrent((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawQuery: u.RawQuery}).String())
 
-	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil)
+	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil)
 	proxySrv := httptest.NewServer(proxy)
 	defer proxySrv.Close()
 
@@ -191,7 +274,7 @@ func TestWebSocketProxyHandler_RegistryClosesClientWithGoingAway(t *testing.T) {
 	mgr.setCurrent((&url.URL{Scheme: "ws", Host: u.Host, Path: "/echo"}).String())
 
 	reg := wsdrain.New()
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, reg))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, reg, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -520,7 +603,7 @@ func TestWebSocketProxyHandler_EmitsConnectAndDisconnect(t *testing.T) {
 	mgr.setCurrent(u.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -695,7 +778,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -779,7 +862,7 @@ func TestWebSocketProxyHandler_KicksClientOffStaleUpstreamOnURLChange(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -831,7 +914,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 	mgr.setCurrent(deadURL)
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)

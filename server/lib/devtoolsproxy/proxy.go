@@ -305,18 +305,31 @@ func maybePauseAfterCurrentRead(ctx context.Context, logger *slog.Logger, r *htt
 // so it can be wired directly; the proxy ignores the returns.
 type EventPublisher func(ev events.Event) (events.Envelope, bool)
 
+// NetErrorObserver is offered every CDP frame Chromium sends to the client so
+// it can tally net::ERR_* failures. Satisfied by neterror.Tracker; nil
+// disables the tap.
+type NetErrorObserver interface {
+	Observe(msg []byte)
+}
+
 // WebSocketProxyHandler returns an http.Handler that upgrades incoming connections and
 // proxies them to the current upstream websocket URL. It expects only websocket requests.
 // If logCDPMessages is true, all CDP messages will be logged with their direction.
 // publish is invoked on accept (cdp_connect) and on teardown (cdp_disconnect); pass
-// nil to disable emission.
-func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, reg *wsdrain.Registry) http.Handler {
+// nil to disable emission. netErrors, when non-nil, observes upstream frames; it
+// must not mutate them.
+func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, reg *wsdrain.Registry, netErrors NetErrorObserver) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Counts every relayed message so cdp_disconnect can report message_count.
 		var msgCount atomic.Int64
 		var transform wsproxy.MessageTransform = func(direction string, mt websocket.MessageType, msg []byte) []byte {
 			if logCDPMessages {
 				logCDPMessage(logger, direction, mt, msg)
+			}
+			// Events only travel upstream-to-client, so client frames are
+			// skipped rather than scanned for a needle they cannot contain.
+			if netErrors != nil && direction == wsproxy.DirectionUpstreamToClient {
+				netErrors.Observe(msg)
 			}
 			msgCount.Add(1)
 			return msg
