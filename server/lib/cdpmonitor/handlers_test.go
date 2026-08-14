@@ -224,6 +224,113 @@ func TestNetworkEvents(t *testing.T) {
 		assert.Nil(t, data["body"], "binary resource should not have body field")
 		assert.False(t, getBodyCalled.Load(), "should not call getResponseBody for images")
 	})
+
+	t.Run("proxy_error_branded_response", func(t *testing.T) {
+		cp := ec.checkpoint()
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.requestWillBeSent",
+			"params": map[string]any{
+				"requestId": "req-proxy",
+				"request":   map[string]any{"method": "GET", "url": "https://blocked.example.com/"},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-proxy",
+				"response": map[string]any{
+					"status": 502, "statusText": "Bad Gateway",
+					"headers":  map[string]any{"X-Kernel-Proxy-Error": "provider_blacklisted"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		ev := ec.waitForNew(t, "proxy_error", cp, 2*time.Second)
+		assert.Equal(t, events.Network, ev.Category)
+		assert.Equal(t, "Network.responseReceived", *ev.Source.Event)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "provider_blacklisted", data["code"])
+		assert.Equal(t, float64(502), data["status"])
+		assert.Equal(t, "GET", data["method"])
+		assert.Equal(t, "https://blocked.example.com/", data["url"])
+	})
+
+	t.Run("proxy_error_untracked_request", func(t *testing.T) {
+		cp := ec.checkpoint()
+		// No prior Network.requestWillBeSent, so the request is untracked. The
+		// context must still be populated from the responseReceived params.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-untracked",
+				"type":      "Document",
+				"frameId":   "frame-untracked",
+				"loaderId":  "loader-untracked",
+				"response": map[string]any{
+					"status": 502, "statusText": "Bad Gateway",
+					"headers":  map[string]any{"X-Kernel-Proxy-Error": "provider_unreachable"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		ev := ec.waitForNew(t, "proxy_error", cp, 2*time.Second)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "provider_unreachable", data["code"])
+		assert.Equal(t, "frame-untracked", data["frame_id"])
+		assert.Equal(t, "loader-untracked", data["loader_id"])
+		assert.Equal(t, "Document", data["resource_type"])
+	})
+}
+
+// TestProxyErrorRateLimit exercises the proxy_error limiter (enum validation +
+// per-session+code min interval) deterministically, without timing sleeps.
+func TestProxyErrorRateLimit(t *testing.T) {
+	m := &Monitor{proxyLastEmit: make(map[string]time.Time)}
+	const interval = proxyErrorMinInterval
+
+	// Valid code: first emit allowed, repeat within the interval dropped,
+	// different codes and sessions unaffected.
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted"))
+	require.True(t, m.proxyErrorRateLimited("sess", "provider_blacklisted"), "same session+code within interval must be dropped")
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_unreachable"), "different code must be allowed")
+	require.False(t, m.proxyErrorRateLimited("sess2", "provider_blacklisted"), "different session must be allowed")
+
+	// After the interval elapses the slot reopens.
+	m.proxyRateMu.Lock()
+	m.proxyLastEmit["sess:provider_blacklisted"] = time.Now().Add(-2 * interval)
+	m.proxyRateMu.Unlock()
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted"), "after interval must be allowed")
+
+	// Codes outside the published enum are always dropped and never consume a
+	// rate-limit slot, so the map cannot grow with arbitrary header text.
+	require.True(t, m.proxyErrorRateLimited("sess", "made_up_code"), "unknown code must be dropped")
+	require.True(t, m.proxyErrorRateLimited("sess", "made_up_code"), "unknown code must be dropped again (no slot stamped)")
+	m.proxyRateMu.Lock()
+	defer m.proxyRateMu.Unlock()
+	for k := range m.proxyLastEmit {
+		assert.NotContains(t, k, "made_up_code", "unknown code must not occupy a map key")
+	}
+}
+
+func TestProxyErrorClassifiers(t *testing.T) {
+	t.Run("header", func(t *testing.T) {
+		code, ok := proxyErrorCode(json.RawMessage(`{"x-kernel-proxy-error":"provider_blacklisted","Content-Type":"text/html"}`))
+		assert.True(t, ok)
+		assert.Equal(t, "provider_blacklisted", code)
+
+		// header lookup is case-insensitive
+		code, ok = proxyErrorCode(json.RawMessage(`{"X-Kernel-Proxy-Error":"source_auth_error"}`))
+		assert.True(t, ok)
+		assert.Equal(t, "source_auth_error", code)
+	})
+	t.Run("header_absent", func(t *testing.T) {
+		_, ok := proxyErrorCode(json.RawMessage(`{"Content-Type":"text/html"}`))
+		assert.False(t, ok)
+		_, ok = proxyErrorCode(nil)
+		assert.False(t, ok)
+	})
 }
 
 func TestPageEvents(t *testing.T) {
@@ -690,5 +797,27 @@ func TestPerTargetStateMachines(t *testing.T) {
 		})
 
 		ec.assertNone(t, "network_idle", 1200*time.Millisecond)
+	})
+}
+
+func BenchmarkProxyErrorCode(b *testing.B) {
+	normal := json.RawMessage(`{"Content-Type":"text/html","Cache-Control":"no-cache","Server":"nginx","X-Powered-By":"Express","Accept-Ranges":"bytes","Content-Length":"1253"}`)
+	originErr := json.RawMessage(`{"Content-Type":"text/html","Cache-Control":"no-cache","Server":"nginx","X-Powered-By":"Express"}`)
+	branded := json.RawMessage(`{"Content-Type":"text/html","Cache-Control":"no-store","X-Kernel-Proxy-Error":"provider_blacklisted","X-Kernel-Session-Id":"sess-123"}`)
+
+	b.Run("normal_no_header", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			proxyErrorCode(normal)
+		}
+	})
+	b.Run("origin_5xx_no_header", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			proxyErrorCode(originErr)
+		}
+	})
+	b.Run("branded", func(b *testing.B) {
+		for i := 0; i < b.N; i++ {
+			proxyErrorCode(branded)
+		}
 	})
 }

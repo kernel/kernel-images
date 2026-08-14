@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/stretchr/testify/require"
 )
 
@@ -306,4 +309,52 @@ func (c *cdpConn) evalRect(t *testing.T, ctx context.Context, sessionID, selecto
 	var rect domRect
 	require.NoError(t, json.Unmarshal([]byte(resp.Result.Result.Value), &rect))
 	return rect
+}
+
+// TestProxyErrorE2E drives a real browser to a stub origin that serves a branded
+// 502 with the X-Kernel-Proxy-Error header and asserts the CDP collector emits a
+// proxy_error telemetry event. It exercises the image-side detection
+// (Network.responseReceived header classification) end to end through a real
+// browser, without needing the metro host-proxy.
+func TestProxyErrorE2E(t *testing.T) {
+	if os.Getenv("KERNEL_CDPMONITOR_CHROME_E2E") == "" {
+		t.Skip("set KERNEL_CDPMONITOR_CHROME_E2E=1 to run the real-Chromium proxy error test")
+	}
+	chrome := findChromium(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Kernel-Proxy-Error", "provider_blacklisted")
+		w.WriteHeader(http.StatusBadGateway)
+		fmt.Fprintln(w, "<html><body>proxy error</body></html>")
+	}))
+	defer stub.Close()
+
+	browserWS := launchChromium(t, ctx, chrome)
+	cdp := dialCDP(t, ctx, browserWS)
+	defer cdp.close()
+
+	ec := newEventCollector()
+	m := New(&staticUpstream{url: browserWS}, ec.publishFn(), 99, discardLogger, nil)
+	require.NoError(t, m.Start(ctx))
+	defer m.Stop()
+
+	// A fresh page target the monitor auto-attaches to and enables Network on.
+	targetID := cdp.call(t, ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}).targetID(t)
+	ec.waitFor(t, EventTabOpened, 5*time.Second)
+
+	// Drive navigation from a separate flat session on the same target.
+	sessionID := cdp.call(t, ctx, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}).sessionID(t)
+	cdp.call(t, ctx, sessionID, "Page.enable", nil)
+	cdp.call(t, ctx, sessionID, "Page.navigate", map[string]any{"url": stub.URL})
+
+	ev := ec.waitFor(t, EventProxyError, 10*time.Second)
+	require.Equal(t, events.Network, ev.Category)
+	require.Equal(t, "Network.responseReceived", *ev.Source.Event)
+	var data map[string]any
+	require.NoError(t, json.Unmarshal(ev.Data, &data))
+	require.Equal(t, "provider_blacklisted", data["code"])
+	require.Equal(t, float64(502), data["status"])
 }

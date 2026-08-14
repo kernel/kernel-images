@@ -10,7 +10,7 @@ Chrome can restart independently of the monitor. When that happens, `UpstreamPro
 
 ## Event taxonomy
 
-**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`
+**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` (classified from a branded 5xx response carrying the `X-Kernel-Proxy-Error` header), `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`. `proxy_error` is an opt-in per-session/per-URL refinement of the raw `network` events: it is only observable while the network category (CDP collector) is running, so it is not a default-on alerting signal.
 
 **Computed** (inferred from sequences of CDP events): `network_idle` (fires when in-flight requests drop to zero), `page_layout_settled` (1 s after `page_load` with no intervening layout shifts), `page_navigation_settled` (fires once `page_dom_content_loaded` and `page_layout_settled` have both fired for the same navigation; intentionally independent of `network_idle` so that a single hung request cannot stall the event).
 
@@ -159,7 +159,7 @@ target_id          <- one per tab/window; stable across navigations
 | `frame_id` | `page_navigation`, `network_request`, `network_response`, `network_loading_failed` | The frame the request or navigation belongs to. Top-level frame has no `parent_frame_id`. |
 | `source_frame_id` | `page_layout_shift`, `page_lcp` | The frame where the layout shift or LCP element occurred. Distinct from the nav context `frame_id`, which is always the top-level navigated frame. |
 | `loader_id` | `page_navigation`, `network_request`, `network_response` | The document load that owns a request. Join `network_request.loader_id` to `page_navigation.loader_id` to correlate requests with the navigation that triggered them. |
-| `request_id` | `network_request`, `network_response`, `network_loading_failed` | A single request chain (including redirects). Links request to its eventual response or failure. |
+| `request_id` | `network_request`, `network_response`, `network_loading_failed`, `proxy_error` | A single request chain (including redirects). Links request to its eventual response or failure. |
 
 ### Navigation context fields
 

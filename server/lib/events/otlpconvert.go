@@ -127,9 +127,9 @@ func otlpSeverity(eventType string) (log.Severity, string) {
 	switch {
 	case eventType == "console_error":
 		return log.SeverityError, "ERROR"
-	// Process-death, renderer-crash, and OOM events are failures a consumer
-	// alerts on, so they map to ERROR rather than the default INFO.
-	case eventType == "service_crashed", eventType == "system_oom_kill", eventType == "page_crashed":
+	// Process-death, renderer-crash, OOM, and proxy-layer failures are problems
+	// a consumer may alert on, so they map to ERROR rather than the default INFO.
+	case eventType == "service_crashed", eventType == "system_oom_kill", eventType == "page_crashed", eventType == "proxy_error":
 		return log.SeverityError, "ERROR"
 	case strings.HasSuffix(eventType, "_failed"):
 		return log.SeverityWarn, "WARN"

@@ -115,6 +115,7 @@ func TestToLogRecord_Severity(t *testing.T) {
 		"console_error":          log.SeverityError,
 		"service_crashed":        log.SeverityError,
 		"system_oom_kill":        log.SeverityError,
+		"proxy_error":            log.SeverityError,
 		"network_loading_failed": log.SeverityWarn,
 		"monitor_init_failed":    log.SeverityWarn,
 		"network_response":       log.SeverityInfo,
