@@ -21,6 +21,24 @@ KERNEL_WAYLAND_PURE=true ./run-docker.sh
 `KERNEL_WAYLAND_NESTED=true` remains available for comparing native Wayland
 Chromium while retaining the existing X11 capture and input path.
 
+#### Browser-only benchmark
+
+Ten fresh-container trials per mode, using the same Chromium flags and a
+1920x1080 configuration. The screenshot metric is CDP
+`Page.captureScreenshot`; it does not measure product capture or live view.
+
+| metric | X11 | pure Wayland |
+| --- | ---: | ---: |
+| wrapper readiness (mean) | 2.84s | 2.19s |
+| Chromium startup (mean) | 602ms | 565ms |
+| CDP evaluation p50 (mean) | 1.06ms | 0.96ms |
+| CDP screenshot p50 (mean) | 257ms | 116ms |
+| container memory (mean) | 709MiB | 414MiB |
+
+The memory reduction primarily comes from not starting Xorg and Mutter. Pure
+mode remains experimental and does not provide the X11 screenshot, input,
+recording, or live-view paths.
+
 - Now new endpoint should be available for tests example curl command:
 ```sh
 curl -X POST localhost:444/computer/cursor \
