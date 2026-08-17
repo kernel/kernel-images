@@ -1,21 +1,27 @@
 package devtoolsproxy
 
 // Sanitizers for the browser-control CDP commands the proxy reports. Each
-// supported method has a canonical input type mirroring its parameters at
-// devtools-protocol@2d019e73, and produces a separate output type generated
-// from the OpenAPI schema. The split is what keeps the two jobs apart: the
-// input names what the client sent, the output names what is safe to publish.
+// supported method has a canonical input type mirroring its parameters, and
+// produces a separate output type generated from the OpenAPI schema. The split
+// is what keeps the two jobs apart: the input names what the client sent, the
+// output names what is safe to publish.
+//
+// The canonical definitions are devtools-protocol at 2d019e73, pinned here:
+// https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json
 //
 // The rule for every field: an argument that can carry a secret — typed and
 // composition text, URLs, referrers, scripts, templates, file paths, drag
 // contents, autofill values — is replaced by a length, a count, a presence
-// flag, an enum or a URL scheme. Everything else is reported as it
-// arrived, because an event that omits the click count or the scroll distance
-// cannot answer what the agent did.
+// flag, an enum or a URL scheme. Everything else is reported as it arrived,
+// because an event that omits the click count or the scroll distance cannot
+// answer what the agent did.
 //
-// Fields a canonical input type does not name are not decoded and cannot
-// reach an event, so a protocol addition is privacy-safe until someone
-// deliberately adds it here.
+// Fields a canonical input type does not name are not decoded and cannot reach
+// an event, so a protocol addition is privacy-safe until someone deliberately
+// adds it here. Which arguments those are is not left implicit: every argument
+// of every supported command carries a retained or redacted decision in
+// testdata/cdp_arguments.yaml, checked against a snapshot of the pinned
+// protocol by the tests in cdpmanifest_test.go.
 
 import (
 	"encoding/json"
@@ -71,6 +77,52 @@ var sanitizers = map[string]sanitizer{
 	"Browser.setWindowBounds":          sanitizeBrowserSetWindowBounds,
 	"Browser.setContentsSize":          sanitizeBrowserSetContentsSize,
 	"Autofill.trigger":                 sanitizeAutofillTrigger,
+}
+
+// commandParams is the canonical input type each supported method decodes its
+// arguments into. It exists so the drift check can compare what the code reads
+// against testdata/cdp_arguments.yaml: an argument decoded here but not
+// declared there, or declared retained but never decoded, is a disagreement
+// between the sanitizers and the record of what they are meant to do.
+var commandParams = map[string]any{
+	"Input.dispatchMouseEvent":         inputDispatchMouseEventParams{},
+	"Input.dispatchKeyEvent":           inputDispatchKeyEventParams{},
+	"Input.insertText":                 inputInsertTextParams{},
+	"Input.imeSetComposition":          inputImeSetCompositionParams{},
+	"Input.dispatchTouchEvent":         inputDispatchTouchEventParams{},
+	"Input.dispatchDragEvent":          inputDispatchDragEventParams{},
+	"Input.cancelDragging":             struct{}{},
+	"Input.emulateTouchFromMouseEvent": inputEmulateTouchFromMouseEventParams{},
+	"Input.synthesizePinchGesture":     inputSynthesizePinchGestureParams{},
+	"Input.synthesizeScrollGesture":    inputSynthesizeScrollGestureParams{},
+	"Input.synthesizeTapGesture":       inputSynthesizeTapGestureParams{},
+	"DOM.setFileInputFiles":            domSetFileInputFilesParams{},
+	"DOM.focus":                        domNodeRef{},
+	"DOM.scrollIntoViewIfNeeded":       domScrollIntoViewIfNeededParams{},
+	"Page.bringToFront":                struct{}{},
+	"Page.captureScreenshot":           pageCaptureScreenshotParams{},
+	"Page.captureSnapshot":             pageCaptureSnapshotParams{},
+	"Page.handleJavaScriptDialog":      pageHandleJavaScriptDialogParams{},
+	"Page.navigate":                    pageNavigateParams{},
+	"Page.navigateToHistoryEntry":      pageNavigateToHistoryEntryParams{},
+	"Page.reload":                      pageReloadParams{},
+	"Page.printToPDF":                  pagePrintToPDFParams{},
+	"Page.startScreencast":             pageStartScreencastParams{},
+	"Page.stopScreencast":              struct{}{},
+	"Page.stopLoading":                 struct{}{},
+	"Page.close":                       struct{}{},
+	"Page.setWebLifecycleState":        pageSetWebLifecycleStateParams{},
+	"Target.activateTarget":            targetIdParams{},
+	"Target.closeTarget":               targetIdParams{},
+	"Target.createTarget":              targetCreateTargetParams{},
+	"Target.createBrowserContext":      targetCreateBrowserContextParams{},
+	"Target.disposeBrowserContext":     browserContextIdParams{},
+	"Target.openDevTools":              targetOpenDevToolsParams{},
+	"Browser.cancelDownload":           browserCancelDownloadParams{},
+	"Browser.close":                    struct{}{},
+	"Browser.setWindowBounds":          browserSetWindowBoundsParams{},
+	"Browser.setContentsSize":          browserSetContentsSizeParams{},
+	"Autofill.trigger":                 autofillTriggerParams{},
 }
 
 // namedKeys are the KeyboardEvent.key values worth reading back: keys that
@@ -242,8 +294,6 @@ func count[T any](items []T) *int {
 	return &n
 }
 
-func boolPtr(b bool) *bool { return &b }
-
 // namedKey passes through only a key that commands the page. A key that
 // produces a character is the character someone typed.
 func namedKey(key *string) *string {
@@ -404,8 +454,16 @@ func sanitizeInputImeSetComposition(cmd cdpCommand) (oapi.BrowserCdpCommandEvent
 }
 
 type touchPoint struct {
-	X *float64 `json:"x"`
-	Y *float64 `json:"y"`
+	X                  *float64 `json:"x"`
+	Y                  *float64 `json:"y"`
+	RadiusX            *float64 `json:"radiusX"`
+	RadiusY            *float64 `json:"radiusY"`
+	RotationAngle      *float64 `json:"rotationAngle"`
+	Force              *float64 `json:"force"`
+	TangentialPressure *float64 `json:"tangentialPressure"`
+	TiltX              *float64 `json:"tiltX"`
+	TiltY              *float64 `json:"tiltY"`
+	Twist              *int     `json:"twist"`
 }
 
 type inputDispatchTouchEventParams struct {
@@ -428,11 +486,17 @@ func sanitizeInputDispatchTouchEvent(cmd cdpCommand) (oapi.BrowserCdpCommandEven
 		TouchPointCount: len(p.TouchPoints),
 		Modifiers:       p.Modifiers,
 	}
-	// A touch dispatch carries its coordinates inside touchPoints rather than
-	// at the top level, so the primary point stands in for where it landed.
+	// A touch dispatch carries its per-point detail inside touchPoints rather
+	// than at the top level, so the primary point stands in for the gesture.
 	if len(p.TouchPoints) > 0 {
-		data.X = p.TouchPoints[0].X
-		data.Y = p.TouchPoints[0].Y
+		primary := p.TouchPoints[0]
+		data.X, data.Y = primary.X, primary.Y
+		data.RadiusX, data.RadiusY = primary.RadiusX, primary.RadiusY
+		data.RotationAngle = primary.RotationAngle
+		data.Force = primary.Force
+		data.TangentialPressure = primary.TangentialPressure
+		data.TiltX, data.TiltY = primary.TiltX, primary.TiltY
+		data.Twist = primary.Twist
 	}
 	return out, out.FromBrowserCdpInputDispatchTouchEventCommandData(data)
 }
@@ -679,9 +743,17 @@ func sanitizeDomFocus(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 	})
 }
 
+// rect is DOM.Rect: an offset and a size, none of it sensitive.
+type rect struct {
+	X      *float64 `json:"x"`
+	Y      *float64 `json:"y"`
+	Width  *float64 `json:"width"`
+	Height *float64 `json:"height"`
+}
+
 type domScrollIntoViewIfNeededParams struct {
 	domNodeRef
-	Rect json.RawMessage `json:"rect"`
+	Rect *rect `json:"rect"`
 }
 
 func sanitizeDomScrollIntoViewIfNeeded(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
@@ -690,15 +762,19 @@ func sanitizeDomScrollIntoViewIfNeeded(cmd cdpCommand) (oapi.BrowserCdpCommandEv
 	if err := decodeParams(cmd.Params, &p); err != nil {
 		return out, err
 	}
-	return out, out.FromBrowserCdpDomScrollIntoViewIfNeededCommandData(oapi.BrowserCdpDomScrollIntoViewIfNeededCommandData{
+	data := oapi.BrowserCdpDomScrollIntoViewIfNeededCommandData{
 		SessionId:     cmd.sessionID(),
 		CommandId:     cmd.ID,
 		ConnectionId:  cmd.connID(),
 		NodeId:        p.NodeId,
 		BackendNodeId: p.BackendNodeId,
 		ObjectId:      clipIDPtr(p.ObjectId),
-		HasRect:       boolPtr(len(p.Rect) > 0 && string(p.Rect) != "null"),
-	})
+	}
+	if p.Rect != nil {
+		data.RectX, data.RectY = p.Rect.X, p.Rect.Y
+		data.RectWidth, data.RectHeight = p.Rect.Width, p.Rect.Height
+	}
+	return out, out.FromBrowserCdpDomScrollIntoViewIfNeededCommandData(data)
 }
 
 // ---- Page ----
@@ -857,17 +933,23 @@ func sanitizePageReload(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error)
 }
 
 type pagePrintToPDFParams struct {
-	Landscape           *bool    `json:"landscape"`
-	DisplayHeaderFooter *bool    `json:"displayHeaderFooter"`
-	PrintBackground     *bool    `json:"printBackground"`
-	Scale               *float64 `json:"scale"`
-	PaperWidth          *float64 `json:"paperWidth"`
-	PaperHeight         *float64 `json:"paperHeight"`
-	PageRanges          *string  `json:"pageRanges"`
-	HeaderTemplate      *string  `json:"headerTemplate"`
-	FooterTemplate      *string  `json:"footerTemplate"`
-	PreferCSSPageSize   *bool    `json:"preferCSSPageSize"`
-	TransferMode        *string  `json:"transferMode"`
+	Landscape               *bool    `json:"landscape"`
+	DisplayHeaderFooter     *bool    `json:"displayHeaderFooter"`
+	PrintBackground         *bool    `json:"printBackground"`
+	Scale                   *float64 `json:"scale"`
+	PaperWidth              *float64 `json:"paperWidth"`
+	PaperHeight             *float64 `json:"paperHeight"`
+	PageRanges              *string  `json:"pageRanges"`
+	HeaderTemplate          *string  `json:"headerTemplate"`
+	FooterTemplate          *string  `json:"footerTemplate"`
+	MarginTop               *float64 `json:"marginTop"`
+	MarginBottom            *float64 `json:"marginBottom"`
+	MarginLeft              *float64 `json:"marginLeft"`
+	MarginRight             *float64 `json:"marginRight"`
+	PreferCSSPageSize       *bool    `json:"preferCSSPageSize"`
+	TransferMode            *string  `json:"transferMode"`
+	GenerateTaggedPDF       *bool    `json:"generateTaggedPDF"`
+	GenerateDocumentOutline *bool    `json:"generateDocumentOutline"`
 }
 
 func sanitizePagePrintToPDF(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
@@ -877,20 +959,26 @@ func sanitizePagePrintToPDF(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, er
 		return out, err
 	}
 	return out, out.FromBrowserCdpPagePrintToPdfCommandData(oapi.BrowserCdpPagePrintToPdfCommandData{
-		SessionId:             cmd.sessionID(),
-		CommandId:             cmd.ID,
-		ConnectionId:          cmd.connID(),
-		Landscape:             p.Landscape,
-		Scale:                 p.Scale,
-		PaperWidth:            p.PaperWidth,
-		PaperHeight:           p.PaperHeight,
-		DisplayHeaderFooter:   p.DisplayHeaderFooter,
-		PrintBackground:       p.PrintBackground,
-		PreferCssPageSize:     p.PreferCSSPageSize,
-		TransferMode:          pdfTransferMode(p.TransferMode),
-		PageRangesPresent:     present(p.PageRanges),
-		HeaderTemplatePresent: present(p.HeaderTemplate),
-		FooterTemplatePresent: present(p.FooterTemplate),
+		SessionId:               cmd.sessionID(),
+		CommandId:               cmd.ID,
+		ConnectionId:            cmd.connID(),
+		Landscape:               p.Landscape,
+		Scale:                   p.Scale,
+		PaperWidth:              p.PaperWidth,
+		PaperHeight:             p.PaperHeight,
+		DisplayHeaderFooter:     p.DisplayHeaderFooter,
+		PrintBackground:         p.PrintBackground,
+		MarginTop:               p.MarginTop,
+		MarginBottom:            p.MarginBottom,
+		MarginLeft:              p.MarginLeft,
+		MarginRight:             p.MarginRight,
+		PreferCssPageSize:       p.PreferCSSPageSize,
+		TransferMode:            pdfTransferMode(p.TransferMode),
+		GenerateTaggedPdf:       p.GenerateTaggedPDF,
+		GenerateDocumentOutline: p.GenerateDocumentOutline,
+		PageRangesPresent:       present(p.PageRanges),
+		HeaderTemplatePresent:   present(p.HeaderTemplate),
+		FooterTemplatePresent:   present(p.FooterTemplate),
 	})
 }
 
@@ -969,6 +1057,11 @@ func sanitizePageSetWebLifecycleState(cmd cdpCommand) (oapi.BrowserCdpCommandEve
 
 type targetIdParams struct {
 	TargetId string `json:"targetId"`
+}
+
+// Target.openDevTools is the only one of the three that takes a panel.
+type targetOpenDevToolsParams struct {
+	TargetId string `json:"targetId"`
 	PanelId  string `json:"panelId"`
 }
 
@@ -1001,7 +1094,7 @@ func sanitizeTargetCloseTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventData,
 }
 
 func sanitizeTargetOpenDevTools(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
-	var p targetIdParams
+	var p targetOpenDevToolsParams
 	var out oapi.BrowserCdpCommandEventData
 	if err := decodeParams(cmd.Params, &p); err != nil {
 		return out, err
@@ -1032,6 +1125,7 @@ type targetCreateTargetParams struct {
 	Background              *bool   `json:"background"`
 	ForTab                  *bool   `json:"forTab"`
 	Hidden                  *bool   `json:"hidden"`
+	Focus                   *bool   `json:"focus"`
 }
 
 func sanitizeTargetCreateTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
@@ -1056,6 +1150,7 @@ func sanitizeTargetCreateTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventData
 		ForTab:                  p.ForTab,
 		Hidden:                  p.Hidden,
 		EnableBeginFrameControl: p.EnableBeginFrameControl,
+		Focus:                   p.Focus,
 	})
 }
 
@@ -1188,11 +1283,18 @@ func sanitizeBrowserSetContentsSize(cmd cdpCommand) (oapi.BrowserCdpCommandEvent
 
 // ---- Autofill ----
 
+// autofillAddress counts the fields an address carries. Their names are
+// caller-supplied strings and their values are the address itself, so neither
+// is decoded.
+type autofillAddress struct {
+	Fields []struct{} `json:"fields"`
+}
+
 type autofillTriggerParams struct {
-	FieldId int             `json:"fieldId"`
-	FrameId *string         `json:"frameId"`
-	Card    json.RawMessage `json:"card"`
-	Address json.RawMessage `json:"address"`
+	FieldId int              `json:"fieldId"`
+	FrameId *string          `json:"frameId"`
+	Card    json.RawMessage  `json:"card"`
+	Address *autofillAddress `json:"address"`
 }
 
 func sanitizeAutofillTrigger(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
@@ -1214,9 +1316,10 @@ func sanitizeAutofillTrigger(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, e
 	case len(p.Card) > 0 && string(p.Card) != "null":
 		mode := oapi.Card
 		data.Mode = &mode
-	case len(p.Address) > 0 && string(p.Address) != "null":
+	case p.Address != nil:
 		mode := oapi.Address
 		data.Mode = &mode
+		data.AddressFieldCount = count(p.Address.Fields)
 	}
 	return out, out.FromBrowserCdpAutofillTriggerCommandData(data)
 }

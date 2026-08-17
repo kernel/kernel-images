@@ -279,8 +279,11 @@ func TestSanitizersReportTheMethodTheyAreKeyedBy(t *testing.T) {
 	}
 }
 
-// The inventory is the spec's enum. A method added to one and not the other is
-// either an event no schema describes or a schema nothing emits.
+// The schema has to describe what the sanitizers emit, so a method reported
+// with no variant to decode it, or a variant nothing emits, fails here.
+// Detecting a canonical method or argument that nobody handled is a different
+// question, and neither side of this comparison can answer it — that is what
+// the pinned-protocol checks in cdpmanifest_test.go are for.
 func TestSanitizersMatchTheSchemaMethodEnum(t *testing.T) {
 	want := specCommandMethods(t)
 	got := make([]string, 0, len(sanitizers))

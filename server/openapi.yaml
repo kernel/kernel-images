@@ -3121,7 +3121,10 @@ components:
       type: object
       description: >
         Sanitized `Input.dispatchMouseEvent` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.dispatchMouseEvent`.
+        `Input.dispatchMouseEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, event_type]
       properties:
@@ -3227,7 +3230,10 @@ components:
       type: object
       description: >
         Sanitized `Input.dispatchKeyEvent` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.dispatchKeyEvent`.
+        `Input.dispatchKeyEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, event_type]
       properties:
@@ -3301,7 +3307,10 @@ components:
       type: object
       description: >
         Sanitized `Input.insertText` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.insertText`.
+        `Input.insertText` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, text_length]
       properties:
@@ -3337,7 +3346,10 @@ components:
       type: object
       description: >
         Sanitized `Input.imeSetComposition` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.imeSetComposition`.
+        `Input.imeSetComposition` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, text_length]
       properties:
@@ -3389,7 +3401,10 @@ components:
       type: object
       description: >
         Sanitized `Input.dispatchTouchEvent` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.dispatchTouchEvent`.
+        `Input.dispatchTouchEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, event_type, touch_point_count]
       properties:
@@ -3438,6 +3453,46 @@ components:
           format: double
           description: >
             Viewport y coordinate of the first touch point.
+        radius_x:
+          type: number
+          format: double
+          description: >
+            Horizontal radius of the first touch point.
+        radius_y:
+          type: number
+          format: double
+          description: >
+            Vertical radius of the first touch point.
+        rotation_angle:
+          type: number
+          format: double
+          description: >
+            Rotation of the first touch point, in degrees.
+        force:
+          type: number
+          format: double
+          description: >
+            Normalized pressure of the first touch point, 0 to 1.
+        tangential_pressure:
+          type: number
+          format: double
+          description: >
+            Normalized tangential pressure of the first touch point, -1 to
+            1.
+        tilt_x:
+          type: number
+          format: double
+          description: >
+            Tilt of the first touch point from the Y-Z plane, in degrees.
+        tilt_y:
+          type: number
+          format: double
+          description: >
+            Tilt of the first touch point from the X-Z plane, in degrees.
+        twist:
+          type: integer
+          description: >
+            Clockwise rotation of the first touch point, in degrees.
         modifiers:
           type: integer
           description: >
@@ -3447,7 +3502,10 @@ components:
       type: object
       description: >
         Sanitized `Input.dispatchDragEvent` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.dispatchDragEvent`.
+        `Input.dispatchDragEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, event_type]
       properties:
@@ -3522,7 +3580,10 @@ components:
       type: object
       description: >
         Sanitized `Input.cancelDragging` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.cancelDragging`.
+        `Input.cancelDragging` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -3553,8 +3614,11 @@ components:
       type: object
       description: >
         Sanitized `Input.emulateTouchFromMouseEvent` arguments. Canonical
-        input: devtools-protocol@2d019e73
-        `Input.emulateTouchFromMouseEvent`.
+        input: `Input.emulateTouchFromMouseEvent` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, event_type]
       properties:
@@ -3624,7 +3688,11 @@ components:
       type: object
       description: >
         Sanitized `Input.synthesizePinchGesture` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.synthesizePinchGesture`.
+        `Input.synthesizePinchGesture` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -3679,7 +3747,11 @@ components:
       type: object
       description: >
         Sanitized `Input.synthesizeScrollGesture` arguments. Canonical
-        input: devtools-protocol@2d019e73 `Input.synthesizeScrollGesture`.
+        input: `Input.synthesizeScrollGesture` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -3761,7 +3833,11 @@ components:
       type: object
       description: >
         Sanitized `Input.synthesizeTapGesture` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Input.synthesizeTapGesture`.
+        `Input.synthesizeTapGesture` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -3815,7 +3891,10 @@ components:
       type: object
       description: >
         Sanitized `DOM.setFileInputFiles` arguments. Canonical input:
-        devtools-protocol@2d019e73 `DOM.setFileInputFiles`.
+        `DOM.setFileInputFiles` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, file_count]
       properties:
@@ -3865,8 +3944,11 @@ components:
     BrowserCdpDomFocusCommandData:
       type: object
       description: >
-        Sanitized `DOM.focus` arguments. Canonical input:
-        devtools-protocol@2d019e73 `DOM.focus`.
+        Sanitized `DOM.focus` arguments. Canonical input: `DOM.focus` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -3912,7 +3994,11 @@ components:
       type: object
       description: >
         Sanitized `DOM.scrollIntoViewIfNeeded` arguments. Canonical input:
-        devtools-protocol@2d019e73 `DOM.scrollIntoViewIfNeeded`.
+        `DOM.scrollIntoViewIfNeeded` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -3954,16 +4040,36 @@ components:
             Opaque Runtime remote object identifier the command targeted.
             Clipped to 128 characters; a longer value is not a real
             identifier.
-        has_rect:
-          type: boolean
+        rect_x:
+          type: number
+          format: double
           description: >
-            Whether the command constrained scrolling to a rect within the
+            X offset of the rect the command scrolled to, relative to the
             node.
+        rect_y:
+          type: number
+          format: double
+          description: >
+            Y offset of the rect the command scrolled to, relative to the
+            node.
+        rect_width:
+          type: number
+          format: double
+          description: >
+            Width of the rect the command scrolled to.
+        rect_height:
+          type: number
+          format: double
+          description: >
+            Height of the rect the command scrolled to.
     BrowserCdpPageBringToFrontCommandData:
       type: object
       description: >
         Sanitized `Page.bringToFront` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.bringToFront`.
+        `Page.bringToFront` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -3994,7 +4100,10 @@ components:
       type: object
       description: >
         Sanitized `Page.captureScreenshot` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.captureScreenshot`.
+        `Page.captureScreenshot` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4072,7 +4181,10 @@ components:
       type: object
       description: >
         Sanitized `Page.captureSnapshot` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.captureSnapshot`.
+        `Page.captureSnapshot` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4108,7 +4220,11 @@ components:
       type: object
       description: >
         Sanitized `Page.handleJavaScriptDialog` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.handleJavaScriptDialog`.
+        `Page.handleJavaScriptDialog` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, accept]
       properties:
@@ -4148,7 +4264,10 @@ components:
       type: object
       description: >
         Sanitized `Page.navigate` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.navigate`.
+        `Page.navigate` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4211,7 +4330,11 @@ components:
       type: object
       description: >
         Sanitized `Page.navigateToHistoryEntry` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.navigateToHistoryEntry`.
+        `Page.navigateToHistoryEntry` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, entry_id]
       properties:
@@ -4245,8 +4368,11 @@ components:
     BrowserCdpPageReloadCommandData:
       type: object
       description: >
-        Sanitized `Page.reload` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.reload`.
+        Sanitized `Page.reload` arguments. Canonical input: `Page.reload` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4296,7 +4422,10 @@ components:
       type: object
       description: >
         Sanitized `Page.printToPDF` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.printToPDF`.
+        `Page.printToPDF` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4350,10 +4479,38 @@ components:
           type: boolean
           description: >
             Whether background graphics were printed.
+        margin_top:
+          type: number
+          format: double
+          description: >
+            Top margin in inches.
+        margin_bottom:
+          type: number
+          format: double
+          description: >
+            Bottom margin in inches.
+        margin_left:
+          type: number
+          format: double
+          description: >
+            Left margin in inches.
+        margin_right:
+          type: number
+          format: double
+          description: >
+            Right margin in inches.
         prefer_css_page_size:
           type: boolean
           description: >
             Whether the CSS page size was preferred over the paper size.
+        generate_tagged_pdf:
+          type: boolean
+          description: >
+            Whether a tagged (accessible) PDF was requested.
+        generate_document_outline:
+          type: boolean
+          description: >
+            Whether a document outline was embedded.
         transfer_mode:
           $ref: "#/components/schemas/BrowserCdpPdfTransferMode"
           description: >
@@ -4377,7 +4534,10 @@ components:
       type: object
       description: >
         Sanitized `Page.startScreencast` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.startScreencast`.
+        `Page.startScreencast` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4429,7 +4589,10 @@ components:
       type: object
       description: >
         Sanitized `Page.stopScreencast` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.stopScreencast`.
+        `Page.stopScreencast` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4460,7 +4623,10 @@ components:
       type: object
       description: >
         Sanitized `Page.stopLoading` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.stopLoading`.
+        `Page.stopLoading` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4490,8 +4656,11 @@ components:
     BrowserCdpPageCloseCommandData:
       type: object
       description: >
-        Sanitized `Page.close` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.close`.
+        Sanitized `Page.close` arguments. Canonical input: `Page.close` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4522,7 +4691,10 @@ components:
       type: object
       description: >
         Sanitized `Page.setWebLifecycleState` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Page.setWebLifecycleState`.
+        `Page.setWebLifecycleState` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, state]
       properties:
@@ -4558,7 +4730,10 @@ components:
       type: object
       description: >
         Sanitized `Target.activateTarget` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Target.activateTarget`.
+        `Target.activateTarget` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, target_id]
       properties:
@@ -4595,7 +4770,10 @@ components:
       type: object
       description: >
         Sanitized `Target.closeTarget` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Target.closeTarget`.
+        `Target.closeTarget` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, target_id]
       properties:
@@ -4632,7 +4810,10 @@ components:
       type: object
       description: >
         Sanitized `Target.createTarget` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Target.createTarget`.
+        `Target.createTarget` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4717,11 +4898,19 @@ components:
           type: boolean
           description: >
             Whether BeginFrame control was enabled (headless only).
+        focus:
+          type: boolean
+          description: >
+            Whether the new target was focused.
     BrowserCdpTargetCreateBrowserContextCommandData:
       type: object
       description: >
         Sanitized `Target.createBrowserContext` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Target.createBrowserContext`.
+        `Target.createBrowserContext` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4771,7 +4960,11 @@ components:
       type: object
       description: >
         Sanitized `Target.disposeBrowserContext` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Target.disposeBrowserContext`.
+        `Target.disposeBrowserContext` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, browser_context_id]
       properties:
@@ -4808,7 +5001,10 @@ components:
       type: object
       description: >
         Sanitized `Target.openDevTools` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Target.openDevTools`.
+        `Target.openDevTools` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, target_id]
       properties:
@@ -4851,7 +5047,10 @@ components:
       type: object
       description: >
         Sanitized `Browser.cancelDownload` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Browser.cancelDownload`.
+        `Browser.cancelDownload` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, download_guid]
       properties:
@@ -4894,7 +5093,10 @@ components:
       type: object
       description: >
         Sanitized `Browser.close` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Browser.close`.
+        `Browser.close` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method]
       properties:
@@ -4925,7 +5127,10 @@ components:
       type: object
       description: >
         Sanitized `Browser.setWindowBounds` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Browser.setWindowBounds`.
+        `Browser.setWindowBounds` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, window_id]
       properties:
@@ -4982,7 +5187,10 @@ components:
       type: object
       description: >
         Sanitized `Browser.setContentsSize` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Browser.setContentsSize`.
+        `Browser.setContentsSize` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, window_id]
       properties:
@@ -5025,7 +5233,10 @@ components:
       type: object
       description: >
         Sanitized `Autofill.trigger` arguments. Canonical input:
-        devtools-protocol@2d019e73 `Autofill.trigger`.
+        `Autofill.trigger` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
       additionalProperties: false
       required: [method, field_id]
       properties:
@@ -5067,6 +5278,11 @@ components:
           description: >
             What was filled: `card` or `address`. The values themselves are
             never captured.
+        address_field_count:
+          type: integer
+          description: >
+            Number of address fields the command filled. Their names and
+            values are never captured.
     BrowserCdpCommandEventData:
       description: >
         Per-command payload for `cdp_command` events, discriminated by
