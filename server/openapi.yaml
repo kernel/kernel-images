@@ -1253,9 +1253,12 @@ paths:
       description: |
         Optional multipart parts apply configuration while Chromium stays stopped once (policy,
         flags, extensions, profile archive, optional display sizing), then Chromium is started exactly
-        once and DevTools readiness is awaited. Optional `start_url` dispatches a best-effort
-        navigation after readiness without waiting for page load. Bare hosts are normalized to
-        `https://`. Omit any part you do not need. At least one actionable part must be present.
+        once and DevTools readiness is awaited. Optional `start_url` is navigated after readiness and
+        awaited until the navigation commits, so the requested document has replaced whatever the
+        browser was showing; subresources may still be loading. A navigation that fails or exceeds
+        the internal budget is logged and still returns 200, leaving the browser on its
+        pre-navigation page. Bare hosts are normalized to `https://`. Omit any part you do not need.
+        At least one actionable part must be present.
         Required configuration steps run in this order: policies, extensions, display, flags,
         then profile archive. Chromium is started only once at the end. The endpoint is not
         transactional: if a later required step fails, earlier successful side effects may remain
@@ -1315,7 +1318,7 @@ paths:
                     required: [zip_file, name]
       responses:
         "200":
-          description: Configuration applied; optional navigate completed successfully.
+          description: Configuration applied; optional navigate committed, failed, or timed out.
           content:
             application/json:
               schema:

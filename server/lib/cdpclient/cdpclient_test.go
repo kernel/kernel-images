@@ -34,6 +34,8 @@ type fakeCDP struct {
 	navigateCalled      bool
 	navigateCalls       int
 	navigateURL         string
+	navigateErrorText   string
+	navigateBlock       time.Duration
 	pageStates          []string
 	pageStateIndex      int
 }
@@ -115,7 +117,20 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 			var params map[string]any
 			_ = json.Unmarshal(req.Params, &params)
 			f.navigateURL, _ = params["url"].(string)
-			result = map[string]any{"frameId": "frame-1"}
+			// Page.navigate resolves on commit, so a slow origin holds the
+			// response open rather than replying and navigating later.
+			if f.navigateBlock > 0 {
+				select {
+				case <-time.After(f.navigateBlock):
+				case <-ctx.Done():
+					return
+				}
+			}
+			nav := map[string]any{"frameId": "frame-1"}
+			if f.navigateErrorText != "" {
+				nav["errorText"] = f.navigateErrorText
+			}
+			result = nav
 		case "Runtime.evaluate":
 			state := `{"url":"about:blank","readyState":"loading"}`
 			if len(f.pageStates) > 0 {
@@ -232,6 +247,54 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 
 		_, err := Dial(ctx, url)
 		require.Error(t, err)
+	})
+}
+
+func TestDispatchStartURL(t *testing.T) {
+	t.Run("reports no error text on a committed navigation", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", sessionID: "session-abc"}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		errorText, err := DispatchStartURL(ctx, url, "https://example.com/")
+		require.NoError(t, err)
+		assert.Empty(t, errorText)
+		assert.Equal(t, "https://example.com/", f.navigateURL)
+	})
+
+	// Chrome answers Page.navigate with an errorText and commits an error page
+	// when the requested URL cannot load, which must not read as success.
+	t.Run("surfaces the navigation error text", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID:      "target-123",
+			sessionID:         "session-abc",
+			navigateErrorText: "net::ERR_CONNECTION_REFUSED",
+		}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		errorText, err := DispatchStartURL(ctx, url, "https://unreachable.example/")
+		require.NoError(t, err)
+		assert.Equal(t, "net::ERR_CONNECTION_REFUSED", errorText)
+	})
+
+	// When the origin is slower to commit than the caller's budget, the caller
+	// has to see the failure rather than assume the page was replaced.
+	t.Run("errors when the navigation does not commit within the budget", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID:  "target-123",
+			sessionID:     "session-abc",
+			navigateBlock: 2 * time.Second,
+		}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		_, err := DispatchStartURL(ctx, url, "https://slow.example/")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Page.navigate")
 	})
 }
 

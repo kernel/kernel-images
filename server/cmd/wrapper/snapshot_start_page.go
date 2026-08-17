@@ -62,7 +62,7 @@ func prepareSnapshotStartPage(ctx context.Context, internalPort string) (retErr 
 	logf("WARNING: snapshot start page unavailable, using about:blank: %v", navErr)
 	blankCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := cdpclient.DispatchStartURL(blankCtx, devtoolsURL, "about:blank"); err != nil {
+	if _, err := cdpclient.DispatchStartURL(blankCtx, devtoolsURL, "about:blank"); err != nil {
 		return fmt.Errorf("reset snapshot start page: %w", err)
 	}
 	return nil

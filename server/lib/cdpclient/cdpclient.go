@@ -220,19 +220,26 @@ func (c *Client) CountPageTargets(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// DispatchStartURL closes extra page targets and dispatches a navigation on the
-// first page target. It does not wait for lifecycle events; Chrome owns the
-// eventual navigation result.
-func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
+// DispatchStartURL closes extra page targets and navigates the first page
+// target. Page.navigate resolves once the navigation commits, so this returns
+// after the new document has replaced the old one but before subresources
+// finish loading.
+//
+// The first return value is Chrome's navigation errorText, non-empty when the
+// navigation committed an error page instead of the requested URL (an
+// unreachable host, for example). Callers that need the requested page to have
+// actually loaded must check it; a nil error alone only means the command was
+// accepted.
+func DispatchStartURL(ctx context.Context, devtoolsURL, url string) (string, error) {
 	c, err := Dial(ctx, devtoolsURL)
 	if err != nil {
-		return fmt.Errorf("dial devtools: %w", err)
+		return "", fmt.Errorf("dial devtools: %w", err)
 	}
 	defer c.Close()
 
 	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
-		return fmt.Errorf("Target.getTargets: %w", err)
+		return "", fmt.Errorf("Target.getTargets: %w", err)
 	}
 
 	var targets struct {
@@ -242,7 +249,7 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 		} `json:"targetInfos"`
 	}
 	if err := json.Unmarshal(targetsResult, &targets); err != nil {
-		return fmt.Errorf("unmarshal targets: %w", err)
+		return "", fmt.Errorf("unmarshal targets: %w", err)
 	}
 
 	var pageTargetID string
@@ -263,13 +270,13 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 			"url": "about:blank",
 		}, "")
 		if err != nil {
-			return fmt.Errorf("Target.createTarget: %w", err)
+			return "", fmt.Errorf("Target.createTarget: %w", err)
 		}
 		var created struct {
 			TargetID string `json:"targetId"`
 		}
 		if err := json.Unmarshal(createResult, &created); err != nil {
-			return fmt.Errorf("unmarshal create target: %w", err)
+			return "", fmt.Errorf("unmarshal create target: %w", err)
 		}
 		pageTargetID = created.TargetID
 	}
@@ -279,14 +286,14 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 		"flatten":  true,
 	}, "")
 	if err != nil {
-		return fmt.Errorf("Target.attachToTarget: %w", err)
+		return "", fmt.Errorf("Target.attachToTarget: %w", err)
 	}
 
 	var attach struct {
 		SessionID string `json:"sessionId"`
 	}
 	if err := json.Unmarshal(attachResult, &attach); err != nil {
-		return fmt.Errorf("unmarshal attach: %w", err)
+		return "", fmt.Errorf("unmarshal attach: %w", err)
 	}
 	defer func() {
 		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -296,16 +303,25 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 		}, "")
 	}()
 
-	if _, err := c.send(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID); err != nil {
-		return fmt.Errorf("Page.navigate: %w", err)
+	navResult, err := c.send(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID)
+	if err != nil {
+		return "", fmt.Errorf("Page.navigate: %w", err)
 	}
-	return nil
+	var nav struct {
+		ErrorText string `json:"errorText"`
+	}
+	if err := json.Unmarshal(navResult, &nav); err != nil {
+		return "", fmt.Errorf("unmarshal navigate result: %w", err)
+	}
+	return nav.ErrorText, nil
 }
 
 // DispatchStartURLAndWait navigates through navigationURL and waits for
 // destination to load without resolving to Chrome's network error page.
 func DispatchStartURLAndWait(ctx context.Context, devtoolsURL, navigationURL, destination string) error {
-	if err := DispatchStartURL(ctx, devtoolsURL, navigationURL); err != nil {
+	// The polling loop below re-navigates through chrome-error:// pages, so a
+	// reported navigation error is not terminal here.
+	if _, err := DispatchStartURL(ctx, devtoolsURL, navigationURL); err != nil {
 		return err
 	}
 

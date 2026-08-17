@@ -24,7 +24,13 @@ import (
 
 const userDataProfileDir = "/home/kernel/user-data"
 const maxStartURLLen = 2048
-const startURLDispatchTimeout = 3 * time.Second
+
+// startURLNavigateTimeout bounds the start_url navigation. Page.navigate only
+// resolves once the navigation commits, so this budget has to cover the origin's
+// DNS, connect and first byte; the previous 3s budget expired against slow
+// origins and handed the session over still showing the pre-navigation page. It
+// does not have to cover subresource loading, which continues after commit.
+const startURLNavigateTimeout = 15 * time.Second
 
 type chromiumConfigureState struct {
 	displayJSON        *string
@@ -181,8 +187,19 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 	}
 
 	if spec.needsNav {
-		if err := chromiumDoNavigate(ctx, s, spec); err != nil {
-			logger.FromContext(ctx).Warn("start_url dispatch failed", "error", err)
+		// A failed navigation leaves the session on whatever the browser was
+		// showing, so log it and keep going rather than discarding a browser over
+		// a start_url the caller may not control.
+		navStart := time.Now()
+		navErrorText, navErr := chromiumDoNavigate(ctx, s, spec)
+		if navErr == nil && navErrorText != "" {
+			navErr = errors.New(navErrorText)
+		}
+		if navErr != nil {
+			logger.FromContext(ctx).Warn("start_url dispatch failed",
+				"error", navErr,
+				"elapsed", time.Since(navStart).String(),
+				"timeout", startURLNavigateTimeout.String())
 		}
 	}
 
@@ -234,12 +251,14 @@ func normalizeStartURL(rawURL string) string {
 	return rawURL
 }
 
-func chromiumDoNavigate(ctx context.Context, s *ApiService, spec startURLParsed) error {
+// chromiumDoNavigate navigates to spec.url and returns Chrome's navigation
+// errorText, which is non-empty when an error page committed instead.
+func chromiumDoNavigate(ctx context.Context, s *ApiService, spec startURLParsed) (string, error) {
 	upstream := s.upstreamMgr.Current()
 	if upstream == "" {
-		return fmt.Errorf("devtools upstream not available")
+		return "", fmt.Errorf("devtools upstream not available")
 	}
-	navCtx, cancel := context.WithTimeout(ctx, startURLDispatchTimeout)
+	navCtx, cancel := context.WithTimeout(ctx, startURLNavigateTimeout)
 	defer cancel()
 	return cdpclient.DispatchStartURL(navCtx, upstream, spec.url)
 }
