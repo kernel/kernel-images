@@ -569,14 +569,9 @@ func chromiumPrepareProfileArchive(profilePath string, strip int) (preparedDir s
 	return preparedDir, cleanup, nil
 }
 
-// stripProfileSessionRestore deletes the prepared profile's Default/Sessions
-// directory so Chrome does not restore the profile's saved tabs on the restart
-// that follows. Only called when the same configure batch carries a start_url:
-// Chrome restores tabs asynchronously after DevTools comes up, so a restored
-// tab can appear after the start_url dispatch has enumerated (and closed) page
-// targets, leaving the browser on a profile tab instead of the requested page.
-// Without a start_url the directory is kept and tabs restore as usual. Only
-// the live copy is touched; the stored profile archive is unchanged.
+// stripProfileSessionRestore deletes the prepared profile's Default/Sessions so
+// Chrome cannot restore its saved tabs after the restart and race the start_url
+// navigation. Only the live copy is touched; the stored archive is unchanged.
 func stripProfileSessionRestore(preparedDir string) error {
 	if err := os.RemoveAll(filepath.Join(preparedDir, "Default", "Sessions")); err != nil {
 		return fmt.Errorf("strip profile session restore: %w", err)
