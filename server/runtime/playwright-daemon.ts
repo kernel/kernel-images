@@ -140,9 +140,11 @@ async function ensureBrowserConnection(): Promise<Browser> {
 // null when the signal isn't available (older Chrome) or no match is found, so
 // callers can fall back to a heuristic.
 async function resolveActivePage(browser: Browser, context: BrowserContext): Promise<Page | null> {
-  const root = await browser.newBrowserCDPSession();
+  let root: Awaited<ReturnType<Browser['newBrowserCDPSession']>> | undefined;
 
   try {
+    root = await browser.newBrowserCDPSession();
+
     const { targetInfos } = await root.send('Target.getTargets', {
       filter: [{ type: 'tab', exclude: false }, { exclude: true }],
     });
@@ -175,11 +177,12 @@ async function resolveActivePage(browser: Browser, context: BrowserContext): Pro
 
     return null;
   } catch {
-    // Target.getTargets/autoAttachRelated can fail or be unsupported on older
-    // Chrome; fall back to the heuristic rather than failing the request.
+    // Session creation, or Target.getTargets/autoAttachRelated, can fail or be
+    // unsupported on older Chrome; fall back to the heuristic rather than
+    // failing the request.
     return null;
   } finally {
-    await root.detach().catch(() => {});
+    await root?.detach().catch(() => {});
   }
 }
 
