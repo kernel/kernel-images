@@ -675,7 +675,7 @@ func sanitizeDomFocus(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error) {
 		ConnectionId:  cmd.connID(),
 		NodeId:        p.NodeId,
 		BackendNodeId: p.BackendNodeId,
-		ObjectId:      p.ObjectId,
+		ObjectId:      clipIDPtr(p.ObjectId),
 	})
 }
 
@@ -696,7 +696,7 @@ func sanitizeDomScrollIntoViewIfNeeded(cmd cdpCommand) (oapi.BrowserCdpCommandEv
 		ConnectionId:  cmd.connID(),
 		NodeId:        p.NodeId,
 		BackendNodeId: p.BackendNodeId,
-		ObjectId:      p.ObjectId,
+		ObjectId:      clipIDPtr(p.ObjectId),
 		HasRect:       boolPtr(len(p.Rect) > 0 && string(p.Rect) != "null"),
 	})
 }
@@ -852,7 +852,7 @@ func sanitizePageReload(cmd cdpCommand) (oapi.BrowserCdpCommandEventData, error)
 		ConnectionId: cmd.connID(),
 		IgnoreCache:  p.IgnoreCache,
 		ScriptLength: runeLen(p.ScriptToEvaluateOnLoad),
-		LoaderId:     p.LoaderId,
+		LoaderId:     clipIDPtr(p.LoaderId),
 	})
 }
 
@@ -996,7 +996,7 @@ func sanitizeTargetCloseTarget(cmd cdpCommand) (oapi.BrowserCdpCommandEventData,
 		SessionId:    cmd.sessionID(),
 		CommandId:    cmd.ID,
 		ConnectionId: cmd.connID(),
-		TargetId:     p.TargetId,
+		TargetId:     clipID(p.TargetId),
 	})
 }
 
@@ -1010,7 +1010,7 @@ func sanitizeTargetOpenDevTools(cmd cdpCommand) (oapi.BrowserCdpCommandEventData
 		SessionId:    cmd.sessionID(),
 		CommandId:    cmd.ID,
 		ConnectionId: cmd.connID(),
-		TargetId:     p.TargetId,
+		TargetId:     clipID(p.TargetId),
 	}
 	if p.PanelId != "" {
 		clipped := clipID(p.PanelId)

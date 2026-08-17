@@ -547,3 +547,115 @@ func classifyFrameWith(frame, connectionID string, excluded map[string]struct{})
 	}
 	return cdpCommandEvent([]byte(frame), testForwardTs, connectionID, method)
 }
+
+// specMaxLengthFields returns, per command method, the payload fields the
+// schema bounds. Reading it from the spec rather than listing them here is the
+// point: a field that gains a maxLength is covered without anyone remembering
+// to extend this test.
+func specMaxLengthFields(t *testing.T) map[string]map[string]int {
+	t.Helper()
+	raw, err := yaml.YAMLToJSON(serverpkg.OpenAPIYAML)
+	if err != nil {
+		t.Fatalf("convert spec: %v", err)
+	}
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Properties map[string]struct {
+					Const     string `json:"const"`
+					MaxLength *int   `json:"maxLength"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("parse spec: %v", err)
+	}
+	out := map[string]map[string]int{}
+	for name, schema := range spec.Components.Schemas {
+		if !strings.HasSuffix(name, "CommandData") {
+			continue
+		}
+		method := schema.Properties["method"].Const
+		if method == "" {
+			continue
+		}
+		for field, prop := range schema.Properties {
+			if prop.MaxLength == nil {
+				continue
+			}
+			if out[method] == nil {
+				out[method] = map[string]int{}
+			}
+			out[method][field] = *prop.MaxLength
+		}
+	}
+	if len(out) == 0 {
+		t.Fatal("spec declares no bounded fields, so this test proves nothing")
+	}
+	return out
+}
+
+// paramForField names a CDP argument that lands in a given payload field, so
+// the bound can be exercised through a real frame.
+var paramForField = map[string]string{
+	"session_id":         "", // envelope, not params
+	"connection_id":      "", // supplied by the proxy
+	"object_id":          "objectId",
+	"frame_id":           "frameId",
+	"target_id":          "targetId",
+	"browser_context_id": "browserContextId",
+	"loader_id":          "loaderId",
+	"download_guid":      "guid",
+	"panel_id":           "panelId",
+}
+
+// Every field the schema bounds has to be bounded in the payload too, on every
+// command that carries it. Five of these were emitted raw against a
+// maxLength: 128 schema, which put the whole-event nulling back in reach.
+func TestBoundedFieldsAreClippedOnEveryCommand(t *testing.T) {
+	huge := strings.Repeat("Q", 512)
+	for method, fields := range specMaxLengthFields(t) {
+		for field, max := range fields {
+			t.Run(method+"/"+field, func(t *testing.T) {
+				param, known := paramForField[field]
+				if !known {
+					t.Fatalf("no CDP argument mapped for bounded field %q; add it to paramForField", field)
+				}
+				var frame string
+				switch field {
+				case "session_id":
+					frame = fmt.Sprintf(`{"id":1,"sessionId":%q,"method":%q,"params":{}}`, huge, method)
+				case "connection_id":
+					t.Skip("supplied by the proxy, covered by TestConnectionIdIsClipped")
+				default:
+					frame = fmt.Sprintf(`{"id":1,"method":%q,"params":{%q:%q}}`, method, param, huge)
+				}
+				got := payloadOf(t, frame)
+				v, present := got[field].(string)
+				if !present {
+					t.Fatalf("%s did not report %s at all", method, field)
+				}
+				if len(v) > max {
+					t.Fatalf("%s.%s is %d bytes, over the schema's maxLength %d", method, field, len(v), max)
+				}
+			})
+		}
+	}
+}
+
+// The connection id is ours rather than the client's, but it is bounded by the
+// same schema and reaches every command.
+func TestConnectionIdIsClipped(t *testing.T) {
+	ev, ok := classifyFrameConn(t, `{"id":1,"method":"Page.reload"}`, strings.Repeat("C", 512))
+	if !ok {
+		t.Fatal("no event")
+	}
+	var got map[string]any
+	if err := json.Unmarshal(ev.Data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := got["connection_id"].(string); len(v) != maxOpaqueIDBytes {
+		t.Fatalf("connection_id is %d bytes, want %d", len(v), maxOpaqueIDBytes)
+	}
+}
