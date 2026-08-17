@@ -11,6 +11,7 @@ import (
 
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/lib/events"
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 // bs is a single backslash, kept out of the fixtures below so an editing
@@ -657,5 +658,173 @@ func TestConnectionIdIsClipped(t *testing.T) {
 	}
 	if v, _ := got["connection_id"].(string); len(v) != maxOpaqueIDBytes {
 		t.Fatalf("connection_id is %d bytes, want %d", len(v), maxOpaqueIDBytes)
+	}
+}
+
+// specPayloadEnums returns the value set of every enum a cdp_command payload
+// field can carry. Membership comes from what the CommandData schemas actually
+// reference, not from a naming convention, so the config-only method enum is
+// not swept in and a new payload enum is covered without extending this test.
+func specPayloadEnums(t *testing.T) map[string]map[string]bool {
+	t.Helper()
+	raw, err := yaml.YAMLToJSON(serverpkg.OpenAPIYAML)
+	if err != nil {
+		t.Fatalf("convert spec: %v", err)
+	}
+	var spec struct {
+		Components struct {
+			Schemas map[string]struct {
+				Enum       []string `json:"enum"`
+				Properties map[string]struct {
+					Ref   string `json:"$ref"`
+					Items *struct {
+						Ref string `json:"$ref"`
+					} `json:"items"`
+				} `json:"properties"`
+			} `json:"schemas"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("parse spec: %v", err)
+	}
+
+	referenced := map[string]bool{}
+	note := func(ref string) {
+		if name := strings.TrimPrefix(ref, "#/components/schemas/"); name != ref && name != "" {
+			referenced[name] = true
+		}
+	}
+	for name, schema := range spec.Components.Schemas {
+		if !strings.HasSuffix(name, "CommandData") {
+			continue
+		}
+		for _, prop := range schema.Properties {
+			note(prop.Ref)
+			if prop.Items != nil {
+				note(prop.Items.Ref)
+			}
+		}
+	}
+
+	out := map[string]map[string]bool{}
+	for name := range referenced {
+		schema := spec.Components.Schemas[name]
+		if len(schema.Enum) == 0 {
+			continue
+		}
+		members := map[string]bool{}
+		for _, v := range schema.Enum {
+			members[v] = true
+		}
+		out[name] = members
+	}
+	return out
+}
+
+// Every enum a payload can carry must have a fallback the schema accepts. The
+// drag MIME category emitted "other" while its enum did not list it, so a
+// client sending an unusual MIME type produced a payload the spec rejects.
+func TestEveryPayloadEnumHasItsFallbackInTheSchema(t *testing.T) {
+	members := specPayloadEnums(t)
+	if len(members) == 0 {
+		t.Fatal("spec declares no payload enums, so this test proves nothing")
+	}
+	// Autofill mode is the one enum the proxy derives rather than copying, so
+	// it has no unknown case to fall back on.
+	derived := map[string]bool{"BrowserCdpAutofillMode": true}
+	for name, values := range members {
+		if derived[name] {
+			continue
+		}
+		if !values[unknownEnumValue] {
+			t.Errorf("%s cannot represent an unrecognised value: %q is not in its enum", name, unknownEnumValue)
+		}
+	}
+}
+
+// An unusual value on any enum-bearing argument must still produce a payload
+// whose every enum passes the generated Valid().
+func TestUnrecognisedEnumValuesStaySchemaValid(t *testing.T) {
+	for _, frame := range []string{
+		`{"id":1,"method":"Input.dispatchDragEvent","params":{"type":"drop","data":{"items":[{"mimeType":"weirdtype/x-thing"},{"mimeType":"no-slash"}]}}}`,
+		`{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"teleported","button":"elbow","pointerType":"nose"}}`,
+		`{"id":1,"method":"Page.captureScreenshot","params":{"format":"holograph"}}`,
+		`{"id":1,"method":"Page.navigate","params":{"url":"https://h.example/","transitionType":"osmosis","referrerPolicy":"whatever"}}`,
+		`{"id":1,"method":"Browser.setWindowBounds","params":{"windowId":1,"bounds":{"windowState":"sideways"}}}`,
+		`{"id":1,"method":"Page.setWebLifecycleState","params":{"state":"marinating"}}`,
+	} {
+		ev, ok := classifyFrame(t, frame, nil)
+		if !ok {
+			t.Fatalf("no event for %.70s", frame)
+		}
+		assertPayloadEnumsValid(t, ev.Data)
+	}
+}
+
+// assertPayloadEnumsValid round-trips the payload through the generated union,
+// whose enum types vet their own values.
+func assertPayloadEnumsValid(t *testing.T, payload []byte) {
+	t.Helper()
+	var data oapi.BrowserCdpCommandEventData
+	if err := json.Unmarshal(payload, &data); err != nil {
+		t.Fatalf("payload does not decode into the union: %v", err)
+	}
+	var probe struct {
+		Method string `json:"method"`
+	}
+	json.Unmarshal(payload, &probe)
+
+	switch probe.Method {
+	case "Input.dispatchDragEvent":
+		v, err := data.AsBrowserCdpInputDispatchDragEventCommandData()
+		if err != nil {
+			t.Fatalf("decode drag payload: %v", err)
+		}
+		if !v.EventType.Valid() {
+			t.Errorf("event_type %q fails Valid()", v.EventType)
+		}
+		if v.DragMimeCategories != nil {
+			for _, c := range *v.DragMimeCategories {
+				if !c.Valid() {
+					t.Errorf("drag_mime_categories %q fails Valid(): payload violates its own schema", c)
+				}
+			}
+		}
+	case "Input.dispatchMouseEvent":
+		v, _ := data.AsBrowserCdpInputDispatchMouseEventCommandData()
+		if !v.EventType.Valid() {
+			t.Errorf("event_type %q fails Valid()", v.EventType)
+		}
+		if v.Button != nil && !v.Button.Valid() {
+			t.Errorf("button %q fails Valid()", *v.Button)
+		}
+		if v.PointerType != nil && !v.PointerType.Valid() {
+			t.Errorf("pointer_type %q fails Valid()", *v.PointerType)
+		}
+	case "Page.captureScreenshot":
+		v, _ := data.AsBrowserCdpPageCaptureScreenshotCommandData()
+		if v.Format != nil && !v.Format.Valid() {
+			t.Errorf("format %q fails Valid()", *v.Format)
+		}
+	case "Page.navigate":
+		v, _ := data.AsBrowserCdpPageNavigateCommandData()
+		if v.TransitionType != nil && !v.TransitionType.Valid() {
+			t.Errorf("transition_type %q fails Valid()", *v.TransitionType)
+		}
+		if v.ReferrerPolicy != nil && !v.ReferrerPolicy.Valid() {
+			t.Errorf("referrer_policy %q fails Valid()", *v.ReferrerPolicy)
+		}
+	case "Browser.setWindowBounds":
+		v, _ := data.AsBrowserCdpBrowserSetWindowBoundsCommandData()
+		if v.WindowState != nil && !v.WindowState.Valid() {
+			t.Errorf("window_state %q fails Valid()", *v.WindowState)
+		}
+	case "Page.setWebLifecycleState":
+		v, _ := data.AsBrowserCdpPageSetWebLifecycleStateCommandData()
+		if !v.State.Valid() {
+			t.Errorf("state %q fails Valid()", v.State)
+		}
+	default:
+		t.Fatalf("no enum assertions for %s", probe.Method)
 	}
 }

@@ -2867,8 +2867,8 @@ components:
       type: string
       description: >
         Mouse event phase. Canonical values from devtools-protocol@2d019e73.
-        `other` stands for a value the pinned protocol does not define, so a
-        client cannot put an arbitrary string into the stream.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
       enum:
         - mousePressed
         - mouseReleased
@@ -2879,8 +2879,8 @@ components:
       type: string
       description: >
         Key event phase. Canonical values from devtools-protocol@2d019e73.
-        `other` stands for a value the pinned protocol does not define, so a
-        client cannot put an arbitrary string into the stream.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
       enum:
         - keyDown
         - keyUp
@@ -2891,8 +2891,8 @@ components:
       type: string
       description: >
         Touch event phase. Canonical values from devtools-protocol@2d019e73.
-        `other` stands for a value the pinned protocol does not define, so a
-        client cannot put an arbitrary string into the stream.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
       enum:
         - touchStart
         - touchEnd
@@ -2903,8 +2903,8 @@ components:
       type: string
       description: >
         Drag event phase. Canonical values from devtools-protocol@2d019e73.
-        `other` stands for a value the pinned protocol does not define, so a
-        client cannot put an arbitrary string into the stream.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
       enum:
         - dragEnter
         - dragOver
@@ -2915,9 +2915,8 @@ components:
       type: string
       description: >
         Mouse button named by a command. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - none
         - left
@@ -2930,9 +2929,8 @@ components:
       type: string
       description: >
         Pointer that generated an input event. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - mouse
         - pen
@@ -2941,9 +2939,8 @@ components:
       type: string
       description: >
         Input source a synthesized gesture emulates. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - default
         - touch
@@ -2953,9 +2950,8 @@ components:
       type: string
       description: >
         Image format requested for a screenshot. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - jpeg
         - png
@@ -2965,9 +2961,8 @@ components:
       type: string
       description: >
         Format requested for a page snapshot. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - mhtml
         - other
@@ -2975,9 +2970,8 @@ components:
       type: string
       description: >
         Frame format requested for a screencast. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - jpeg
         - png
@@ -2986,9 +2980,8 @@ components:
       type: string
       description: >
         Page lifecycle state applied. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - frozen
         - active
@@ -2997,9 +2990,8 @@ components:
       type: string
       description: >
         How a generated PDF is returned. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - ReturnAsBase64
         - ReturnAsStream
@@ -3008,9 +3000,8 @@ components:
       type: string
       description: >
         Browser window state requested. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - normal
         - minimized
@@ -3021,9 +3012,8 @@ components:
       type: string
       description: >
         Navigation reason reported by the caller. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - link
         - typed
@@ -3042,9 +3032,8 @@ components:
       type: string
       description: >
         Referrer policy named by a navigation. Canonical values from
-        devtools-protocol@2d019e73. `other` stands for a value the pinned
-        protocol does not define, so a client cannot put an arbitrary string
-        into the stream.
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
       enum:
         - noReferrer
         - noReferrerWhenDowngrade
@@ -3066,8 +3055,11 @@ components:
     BrowserCdpDragMimeCategory:
       type: string
       description: >
-        Top-level MIME category of a drag item. Canonical values from
-        devtools-protocol@2d019e73.
+        Top-level MIME category of a drag item, from the IANA registry
+        rather than the protocol; a drag item's subtype names the file, so
+        only the category is reported. `other` stands for a value outside
+        that set, so a client cannot put an arbitrary string into the
+        stream.
       enum:
         - text
         - image
@@ -3078,6 +3070,7 @@ components:
         - model
         - multipart
         - message
+        - other
     BrowserCdpCommandMethod:
       type: string
       description: >
@@ -3519,7 +3512,8 @@ components:
           description: >
             Distinct top-level MIME categories of the drag items (e.g.
             `text`, `image`, `application`). Subtypes and contents are never
-            captured.
+            captured. A value the protocol does not define is reported as
+            `other`.
         drag_operations_mask:
           type: integer
           description: >
