@@ -34,12 +34,15 @@ func stzMode(managed bool) string {
 
 func prepareUserDirs(asRoot bool) {
 	if asRoot {
-		for _, d := range []string{"/tmp", "/var/log", supervisordLogD, "/home/kernel", "/home/kernel/user-data"} {
+		for _, d := range []string{"/tmp", "/var/log", supervisordLogD, waylandRuntimeDir, "/home/kernel", "/home/kernel/user-data"} {
 			_ = os.MkdirAll(d, 0o755)
 		}
+		_ = exec.Command("chown", "kernel:kernel", waylandRuntimeDir).Run()
+		_ = os.Chmod(waylandRuntimeDir, 0o700)
 		return
 	}
 	dirs := []string{
+		waylandRuntimeDir,
 		"/home/kernel/user-data",
 		"/home/kernel/.config/chromium",
 		"/home/kernel/.pki/nssdb",
@@ -51,6 +54,8 @@ func prepareUserDirs(asRoot bool) {
 	for _, d := range dirs {
 		_ = os.MkdirAll(d, 0o755)
 	}
+	_ = exec.Command("chown", "kernel:kernel", waylandRuntimeDir).Run()
+	_ = os.Chmod(waylandRuntimeDir, 0o700)
 	_ = exec.Command("chown", "-R", "kernel:kernel",
 		"/home/kernel", "/home/kernel/user-data", "/home/kernel/.config",
 		"/home/kernel/.pki", "/home/kernel/.cache").Run()

@@ -67,6 +67,39 @@ func TestDefaultPrivateNetworkBypassPreservesRuntimePrecedence(t *testing.T) {
 	}
 }
 
+func TestWithWaylandPlatform(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+		want  []string
+	}{
+		{
+			name:  "appends platform",
+			flags: []string{"--kiosk"},
+			want:  []string{"--kiosk", "--ozone-platform=wayland"},
+		},
+		{
+			name:  "replaces equals form",
+			flags: []string{"--ozone-platform=x11"},
+			want:  []string{"--ozone-platform=wayland"},
+		},
+		{
+			name:  "replaces separate form",
+			flags: []string{"--ozone-platform", "x11"},
+			want:  []string{"--ozone-platform", "wayland"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := withWaylandPlatform(tt.flags)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("withWaylandPlatform() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExecLookPath(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "mybin")

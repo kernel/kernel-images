@@ -60,6 +60,9 @@ func profileName(p profile) string {
 func main() {
 	t0 := time.Now()
 	prof := detectProfile()
+	waylandNested := prof == profileHeadful && nestedWaylandEnabled()
+	waylandPure := prof == profileHeadful && pureWaylandEnabled()
+	waylandEnabled := waylandNested || waylandPure
 	stzManaged := scaleToZeroManaged()
 	logf("starting wrapper (profile=%s stz=%s)", profileName(prof), stzMode(stzManaged))
 	forkIdentityWait, err := forkIdentityWaitEnabled()
@@ -119,7 +122,12 @@ func main() {
 	startLogAggregator()
 
 	// Default env that downstream services expect.
-	_ = os.Setenv("DISPLAY", defaultDisplay)
+	if !waylandPure {
+		_ = os.Setenv("DISPLAY", defaultDisplay)
+	}
+	if waylandEnabled {
+		configureWaylandEnv()
+	}
 	if os.Getenv("INTERNAL_PORT") == "" {
 		_ = os.Setenv("INTERNAL_PORT", defaultIntPort)
 	}
@@ -131,9 +139,12 @@ func main() {
 	// which would otherwise spam autolaunch errors).
 	_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+dbusSocket)
 
-	// Stale X locks from prior runs.
+	// Stale display state from prior runs.
 	_ = os.Remove("/tmp/.X1-lock")
 	_ = os.Remove("/tmp/.X11-unix/X1")
+	if waylandEnabled {
+		_ = os.Remove(waylandRuntimeDir + "/" + waylandDisplay)
+	}
 
 	// supervisord — start in nodaemon mode so we own its lifecycle.
 	// Without -n it forks and the parent exits with code 0, which would
@@ -161,22 +172,17 @@ func main() {
 	// any per-instance identity envs — it just needs the envoy CA cert
 	// (baked into the image at build time, see shared/envoy/bake-certs.sh)
 	// so it trusts the forward proxy on first start with no runtime cert
-	// work to wait on. chromium-launcher internally waits for the X server
-	// and (headful) for mutter before exec'ing chromium, so we start it in
-	// parallel with the X server to overlap chromium-launcher's preamble
-	// with display startup. chromedriver listens on 9225 immediately and
-	// only attaches to chromium on session creation, so it can come up
-	// alongside everything. mutter has no internal X-wait, so it's started
-	// as soon as the X server is confirmed up — chromium-launcher gates on
-	// it so chrome can negotiate CSD with the WM before mapping its window
-	// (without it, mutter reparents the existing window with default SSD
-	// and a titlebar appears). neko reads the active display mode at start,
-	// so it's deferred until after the dbus wait on the WebRTC path.
+	// work to wait on. chromium-launcher waits for the configured display
+	// before exec'ing chromium. In pure Wayland mode, Weston owns a headless
+	// output and no X server is started. In nested mode, Xorg remains the outer
+	// display so the existing capture and input stack can still be used.
+	// chromedriver listens on 9225 immediately and only attaches to Chromium
+	// on session creation, so it can come up alongside the display services.
 	xServer := "xorg"
 	if prof == profileHeadless {
 		xServer = "xvfb"
 	}
-	webrtc := prof == profileHeadful && os.Getenv("ENABLE_WEBRTC") == "true"
+	webrtc := prof == profileHeadful && !waylandPure && os.Getenv("ENABLE_WEBRTC") == "true"
 
 	// Pre-touch chromium's supervisord log so kernel-images-api's `tail -f`
 	// doesn't bail out and enter its 250ms retry backoff when started in
@@ -184,10 +190,25 @@ func main() {
 	_ = os.WriteFile(filepath.Join(supervisordLogD, "chromium"), nil, 0o644)
 
 	browserStart := time.Now()
-	startAll(xServer, "dbus", "chromedriver", "pulseaudio")
-	waitForX(defaultDisplay, 20*time.Second)
+	services := []string{"dbus", "chromedriver", "pulseaudio"}
+	if !waylandPure {
+		services = append([]string{xServer}, services...)
+	}
+	startAll(services...)
+	if !waylandPure {
+		waitForX(defaultDisplay, 20*time.Second)
+	}
 	if prof == profileHeadful {
-		startAll("mutter")
+		switch {
+		case waylandPure:
+			startAll("weston-pure")
+			waitForWayland(20 * time.Second)
+		case waylandNested:
+			startAll("weston")
+			waitForWayland(20 * time.Second)
+		default:
+			startAll("mutter")
+		}
 	}
 	waitForSocket(pulseSocket, 10*time.Second)
 	startAll("chromium")

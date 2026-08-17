@@ -20,6 +20,9 @@ import (
 // connect to the same socket and play into the same sink the daemon sets up.
 // Keep them in sync with start-pulseaudio.sh.
 const (
+	waylandRuntimeDir = "/tmp/runtime-kernel"
+	waylandDisplay    = "wayland-1"
+
 	// pulseServer is the PulseAudio socket the recorder and chromium share.
 	pulseServer = "unix:/tmp/pulse/native"
 	// pulseSink is the null sink chromium plays into; the recorder captures
@@ -56,21 +59,28 @@ func main() {
 	// Wait for devtools port to be available (handles SIGKILL socket cleanup delay)
 	waitForPort(internalPort, 5*time.Second)
 
-	// Wait for the X server. The wrapper starts chromium in parallel with
-	// xorg/xvfb, so the display socket may not be ready yet — without this
-	// gate chromium would fail on connect and supervisord would restart us.
-	if d := x11.WaitForDisplay(":1", 20*time.Second); d >= 20*time.Second {
-		fmt.Fprintf(os.Stderr, "warning: X display :1 not responsive after %s\n", d)
-	}
+	nestedWayland := !*headless && strings.EqualFold(strings.TrimSpace(os.Getenv("KERNEL_WAYLAND_NESTED")), "true")
+	pureWayland := !*headless && strings.EqualFold(strings.TrimSpace(os.Getenv("KERNEL_WAYLAND_PURE")), "true")
+	waylandEnabled := nestedWayland || pureWayland
+	if waylandEnabled {
+		waitForWayland(20 * time.Second)
+	} else {
+		// Wait for the X server. The wrapper starts chromium in parallel with
+		// xorg/xvfb, so the display socket may not be ready yet — without this
+		// gate chromium would fail on connect and supervisord would restart us.
+		if d := x11.WaitForDisplay(":1", 20*time.Second); d >= 20*time.Second {
+			fmt.Fprintf(os.Stderr, "warning: X display :1 not responsive after %s\n", d)
+		}
 
-	// Headful: wait for mutter to register before exec'ing chromium. If
-	// chromium maps its window with no WM present, the CSD hint it sends has
-	// no listener; mutter starts later, reparents the existing window, and
-	// applies default SSD — i.e., the titlebar with the close X. Headless
-	// has no WM, so skip.
-	if !*headless {
-		if d := x11.WaitForMutter(20 * time.Second); d >= 20*time.Second {
-			fmt.Fprintf(os.Stderr, "warning: mutter not registered after %s\n", d)
+		// Headful: wait for mutter to register before exec'ing chromium. If
+		// chromium maps its window with no WM present, the CSD hint it sends has
+		// no listener; mutter starts later, reparents the existing window, and
+		// applies default SSD — i.e., the titlebar with the close X. Headless
+		// has no WM, so skip.
+		if !*headless {
+			if d := x11.WaitForMutter(20 * time.Second); d >= 20*time.Second {
+				fmt.Fprintf(os.Stderr, "warning: mutter not registered after %s\n", d)
+			}
 		}
 	}
 
@@ -82,6 +92,9 @@ func main() {
 	}
 	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
 	final = withDefaultPrivateNetworkBypass(final)
+	if waylandEnabled {
+		final = withWaylandPlatform(final)
+	}
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
@@ -107,12 +120,20 @@ func main() {
 	// recorder's sink; the root path below relies on this inherited env, while the
 	// non-root path re-asserts them in its runuser env allowlist.
 	env := os.Environ()
+	if !pureWayland {
+		env = append(env, "DISPLAY=:1")
+	}
 	env = append(env,
-		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
 		"PULSE_SERVER="+pulseServer,
 		"PULSE_SINK="+pulseSink,
 	)
+	if waylandEnabled {
+		env = append(env,
+			"XDG_RUNTIME_DIR="+waylandRuntimeDir,
+			"WAYLAND_DISPLAY="+waylandDisplay,
+		)
+	}
 
 	if runAsRoot {
 		// Replace current process with Chromium
@@ -144,15 +165,23 @@ func main() {
 	// GetDefaultOutputDeviceID), which is the sink the recorder captures.
 	inner := []string{
 		"env",
-		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
 		"PULSE_SERVER=" + pulseServer,
 		"PULSE_SINK=" + pulseSink,
 		"XDG_CONFIG_HOME=/home/kernel/.config",
 		"XDG_CACHE_HOME=/home/kernel/.cache",
 		"HOME=/home/kernel",
-		*chromiumPath,
 	}
+	if !pureWayland {
+		inner = append(inner, "DISPLAY=:1")
+	}
+	if waylandEnabled {
+		inner = append(inner,
+			"XDG_RUNTIME_DIR="+waylandRuntimeDir,
+			"WAYLAND_DISPLAY="+waylandDisplay,
+		)
+	}
+	inner = append(inner, *chromiumPath)
 	inner = append(inner, chromiumArgs...)
 	argv := append([]string{filepath.Base(runuserPath), "-u", "kernel", "--"}, inner...)
 	if err := syscall.Exec(runuserPath, argv, env); err != nil {
@@ -168,6 +197,37 @@ func withDefaultPrivateNetworkBypass(flags []string) []string {
 		}
 	}
 	return append(flags, defaultPrivateNetworkBypassFlag)
+}
+
+func withWaylandPlatform(flags []string) []string {
+	result := append([]string(nil), flags...)
+	for i, flag := range result {
+		if strings.HasPrefix(flag, "--ozone-platform=") {
+			result[i] = "--ozone-platform=wayland"
+			return result
+		}
+		if flag == "--ozone-platform" && i+1 < len(result) {
+			result[i+1] = "wayland"
+			return result
+		}
+	}
+	return append(result, "--ozone-platform=wayland")
+}
+
+func waitForWayland(timeout time.Duration) {
+	runtimeDir := os.Getenv("XDG_RUNTIME_DIR")
+	if runtimeDir == "" {
+		runtimeDir = waylandRuntimeDir
+	}
+	socket := filepath.Join(runtimeDir, waylandDisplay)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fi, err := os.Stat(socket); err == nil && fi.Mode()&os.ModeSocket != 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	fmt.Fprintf(os.Stderr, "warning: Wayland display %s not ready after %s\n", socket, timeout)
 }
 
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.

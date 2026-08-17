@@ -68,6 +68,13 @@ RUN_ARGS=(
   --mount type=bind,src="$FLAGS_FILE",dst=/chromium/flags
 )
 
+if [[ "${KERNEL_WAYLAND_NESTED:-}" == "true" ]]; then
+  RUN_ARGS+=( -e KERNEL_WAYLAND_NESTED=true )
+fi
+if [[ "${KERNEL_WAYLAND_PURE:-}" == "true" ]]; then
+  RUN_ARGS+=( -e KERNEL_WAYLAND_PURE=true )
+fi
+
 if [[ -n "${PLAYWRIGHT_ENGINE:-}" ]]; then
   RUN_ARGS+=( -e PLAYWRIGHT_ENGINE="$PLAYWRIGHT_ENGINE" )
 fi
