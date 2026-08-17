@@ -158,6 +158,27 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
+FROM docker.io/ubuntu:22.04 AS wayland-recorder-builder
+
+RUN apt-get update && apt-get install --no-install-recommends -y \
+    build-essential git meson ninja-build pkg-config ca-certificates \
+    libwayland-dev wayland-protocols libgbm-dev libdrm-dev \
+    libavutil-dev libavcodec-dev libavdevice-dev libavfilter-dev \
+    libavformat-dev libswresample-dev libswscale-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth 1 --branch v0.6.0 https://github.com/ammen99/wf-recorder.git /tmp/wf-recorder \
+    && meson setup /tmp/wf-recorder/build /tmp/wf-recorder \
+        -Dpulse=disabled -Dpipewire=disabled \
+        -Ddefault_codec=rawvideo \
+    && meson compile -C /tmp/wf-recorder/build \
+    && meson install -C /tmp/wf-recorder/build \
+    && rm -rf /tmp/wf-recorder
+RUN git clone --depth 1 --branch v0.5.0 https://gitlab.freedesktop.org/emersion/wlr-randr.git /tmp/wlr-randr \
+    && meson setup /tmp/wlr-randr/build /tmp/wlr-randr \
+    && meson compile -C /tmp/wlr-randr/build \
+    && meson install -C /tmp/wlr-randr/build \
+    && rm -rf /tmp/wlr-randr
+
 FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.0 AS neko
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/ubuntu:22.04
@@ -198,8 +219,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     xdg-utils \
     libvulkan1 \
     fontconfig \
-    unzip && \
+    unzip \
+    libavcodec58 \
+    libavdevice58 \
+    libavfilter7 \
+    libavformat58 \
+    libavutil56 \
+    libswresample3 \
+    libswscale5 \
+    libgbm1 \
+    libwayland-client0 \
+    libdrm2 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
+
+COPY --from=wayland-recorder-builder /usr/local/bin/wf-recorder /usr/local/bin/wf-recorder
+COPY --from=wayland-recorder-builder /usr/local/bin/wlr-randr /usr/local/bin/wlr-randr
 
 # Install fonts to match a realistic Ubuntu 22.04 desktop fingerprint.
 # A minimal container has only 3 fonts, which is a strong fingerprinting signal

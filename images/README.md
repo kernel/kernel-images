@@ -21,6 +21,11 @@ KERNEL_WAYLAND_PURE=true ./run-docker.sh
 `KERNEL_WAYLAND_NESTED=true` remains available for comparing native Wayland
 Chromium while retaining the existing X11 capture and input path.
 
+Set `ENABLE_WEBRTC=true ENABLE_WAYLAND_WEBRTC=true` in pure mode to run Neko
+against the Wayland capture and `/dev/uinput` input backends. This requires
+the Neko build with Wayland support and a wlroots compositor exposing
+screencopy and output-management.
+
 #### Browser-only benchmark
 
 Ten fresh-container trials per mode, using the same Chromium flags and a

@@ -95,6 +95,9 @@ if [[ "${ENABLE_WEBRTC:-}" == "true" ]]; then
   echo "Running container with WebRTC"
   RUN_ARGS+=( -p 8080:8080 )
   RUN_ARGS+=( -e ENABLE_WEBRTC=true )
+  if [[ "${ENABLE_WAYLAND_WEBRTC:-}" == "true" ]]; then
+    RUN_ARGS+=( -e ENABLE_WAYLAND_WEBRTC=true )
+  fi
   if [[ -n "${NEKO_ICESERVERS:-}" ]]; then
     RUN_ARGS+=( -e NEKO_ICESERVERS="$NEKO_ICESERVERS" )
   else

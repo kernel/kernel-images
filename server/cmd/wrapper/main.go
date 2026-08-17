@@ -182,7 +182,10 @@ func main() {
 	if prof == profileHeadless {
 		xServer = "xvfb"
 	}
-	webrtc := prof == profileHeadful && !waylandPure && os.Getenv("ENABLE_WEBRTC") == "true"
+	webrtc := prof == profileHeadful && os.Getenv("ENABLE_WEBRTC") == "true"
+	if waylandPure {
+		webrtc = webrtc && os.Getenv("ENABLE_WAYLAND_WEBRTC") == "true"
+	}
 
 	// Pre-touch chromium's supervisord log so kernel-images-api's `tail -f`
 	// doesn't bail out and enter its 250ms retry backoff when started in
@@ -229,7 +232,11 @@ func main() {
 	}
 	waitForSocket(dbusSocket, 10*time.Second)
 	if prof == profileHeadful && webrtc {
-		startAll("neko")
+		if waylandPure {
+			startAll("neko-wayland")
+		} else {
+			startAll("neko")
+		}
 	}
 	if forkIdentityWait {
 		waitForHTTPProbe("public cdp", "http://127.0.0.1:"+os.Getenv("CHROME_PORT")+"/json/version", 30*time.Second)
