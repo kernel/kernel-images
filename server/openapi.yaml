@@ -1338,6 +1338,11 @@ paths:
         Execute arbitrary Playwright code in a fresh execution context against the browser running
         on localhost:9222. The code has access to 'page', 'context', and 'browser' variables.
         The result of the code execution is returned in the response.
+
+        'page' is bound to the browser's actual foreground tab where the underlying Chrome build
+        exposes that signal over CDP. On builds that don't expose it, 'page' falls back to the
+        most recently opened tab in the context — not necessarily the tab last brought to the
+        front. Use 'context.pages()' to select a specific tab explicitly.
       operationId: executePlaywrightCode
       x-telemetry-category: control
       requestBody:

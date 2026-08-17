@@ -79,63 +79,38 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Contains(t, resultStr, "Example Domain", "expected result to contain 'Example Domain'")
 
 	t.Log("playwright execute API test passed")
-}
 
-// TestPlaywrightExecuteBindsMostRecentTab verifies that when multiple tabs are
-// open, the injected `page` is bound to the most recently opened tab rather than
-// the oldest one. The daemon keeps a warm CDP connection, so sequential execute
-// calls share the same context and tabs.
-func TestPlaywrightExecuteBindsMostRecentTab(t *testing.T) {
-	t.Parallel()
-
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	c := NewTestContainer(t, headlessImage)
-	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
-	defer c.Stop(ctx)
-
-	require.NoError(t, c.WaitReady(ctx), "api not ready")
-
-	client, err := c.APIClient()
-	require.NoError(t, err)
-
-	// Navigate the initial tab, then open a second tab on a different URL.
-	setupReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	// Reuse the same container/warm daemon connection to verify tab-binding
+	// behavior: when multiple tabs are open, `page` must bind to the most
+	// recently opened tab rather than the oldest one (the test image's Chrome
+	// build doesn't expose the CDP active-tab signal used by resolveActivePage
+	// in playwright-daemon.ts, so this exercises the fallback heuristic). Uses
+	// a `data:` URL for the second tab so the assertion doesn't depend on a
+	// second outbound network request.
+	t.Log("verifying page binds to the most recently opened tab")
+	openSecondTabRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
-			await page.goto('https://example.com');
 			const second = await context.newPage();
-			await second.goto('https://example.net');
+			await second.goto('data:text/html,second-tab');
 			return context.pages().length;
 		`,
-	}
-	setupRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, setupReq)
-	require.NoError(t, err, "setup request error: %v", err)
-	require.Equal(t, http.StatusOK, setupRsp.StatusCode(), "unexpected status: %s body=%s", setupRsp.Status(), string(setupRsp.Body))
-	require.NotNil(t, setupRsp.JSON200)
-	require.True(t, setupRsp.JSON200.Success, "expected setup success=true")
+	})
+	require.NoError(t, err, "open second tab request error: %v", err)
+	require.Equal(t, http.StatusOK, openSecondTabRsp.StatusCode(), "unexpected status: %s body=%s", openSecondTabRsp.Status(), string(openSecondTabRsp.Body))
+	require.NotNil(t, openSecondTabRsp.JSON200)
+	require.True(t, openSecondTabRsp.JSON200.Success, "expected open-second-tab success=true")
+	require.EqualValues(t, 2, openSecondTabRsp.JSON200.Result, "expected two open tabs")
 
-	// A fresh execute call must bind `page` to the newest tab (example.net),
-	// not the first-opened tab (example.com).
-	urlReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	// A fresh execute call must bind `page` to the newest tab, not the
+	// first-opened tab still sitting at example.com.
+	urlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return page.url();`,
-	}
-	urlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, urlReq)
+	})
 	require.NoError(t, err, "url request error: %v", err)
 	require.Equal(t, http.StatusOK, urlRsp.StatusCode(), "unexpected status: %s body=%s", urlRsp.Status(), string(urlRsp.Body))
 	require.NotNil(t, urlRsp.JSON200)
 	require.True(t, urlRsp.JSON200.Success, "expected url request success=true")
-	require.NotNil(t, urlRsp.JSON200.Result)
-
-	resultBytes, err := json.Marshal(urlRsp.JSON200.Result)
-	require.NoError(t, err, "failed to marshal result: %v", err)
-	resultStr := string(resultBytes)
-	t.Logf("injected page url=%s", resultStr)
-	require.Contains(t, resultStr, "example.net", "expected injected page to be the most recently opened tab")
+	require.Equal(t, "data:text/html,second-tab", urlRsp.JSON200.Result, "expected injected page to be the most recently opened tab")
 
 	t.Log("playwright most-recent-tab binding test passed")
 }
