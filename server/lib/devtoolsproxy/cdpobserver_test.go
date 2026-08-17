@@ -123,22 +123,85 @@ func TestLargeFramesAreClassifiedRatherThanRejected(t *testing.T) {
 	}
 }
 
-// Library traffic the classifier discards is not a loss, however large it is.
-// Counting it would make telemetry_dropped read as lost commands.
-func TestLargeLibraryTrafficIsNotCountedAsLoss(t *testing.T) {
+// Library traffic never reaches the queue, so it neither occupies capacity nor
+// counts as a loss, however large it is.
+func TestLibraryTrafficIsNeverAdmitted(t *testing.T) {
 	pub := &countingPublisher{}
 	o := newTestObserver(t, pub.publish, controlOn)
 
 	big := `{"id":1,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"` +
 		strings.Repeat("x", 256<<10) + `","objectId":"x"}}`
 	o.Observe([]byte(big), testForwardTs)
-	waitFor(t, func() bool { return o.queuedBytes.Load() == 0 })
 
+	if queued := len(o.frames); queued != 0 {
+		t.Fatalf("queued %d library frames, want 0", queued)
+	}
+	if got := o.queuedBytes.Load(); got != 0 {
+		t.Fatalf("library traffic held %d queued bytes, want 0", got)
+	}
 	if got := pub.n.Load(); got != 0 {
 		t.Fatalf("published %d events for library traffic, want 0", got)
 	}
 	if got := o.Dropped(); got != 0 {
 		t.Fatalf("dropped = %d, want 0: a frame that would never be an event is not a loss", got)
+	}
+}
+
+// The failure raf reported: queue capacity exists for control commands, so
+// library traffic must not be able to fill it and push a real one out.
+func TestLibraryTrafficCannotCrowdOutCommands(t *testing.T) {
+	blocked := make(chan struct{})
+	var released sync.Once
+	t.Cleanup(func() { released.Do(func() { close(blocked) }) })
+
+	pub := &countingPublisher{}
+	blocking := func(ev events.Event) (events.Envelope, bool) {
+		pub.n.Add(1)
+		<-blocked
+		return events.Envelope{Event: ev}, true
+	}
+	o := newTestObserver(t, blocking, controlOn)
+
+	// One real command wedges the worker, then far more library frames than the
+	// queue could hold arrive.
+	o.Observe([]byte(clickFrame), testForwardTs)
+	waitFor(t, func() bool { return pub.n.Load() == 1 })
+	junk := []byte(`{"id":9,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"` +
+		strings.Repeat("x", 1024) + `","objectId":"x"}}`)
+	for range cdpObserverQueueDepth * 2 {
+		o.Observe(junk, testForwardTs)
+	}
+
+	// A real navigation arriving now still gets a slot.
+	before := o.Dropped()
+	o.Observe([]byte(`{"id":100,"method":"Page.navigate","params":{"url":"https://x.example/"}}`), testForwardTs)
+	if o.Dropped() != before {
+		t.Fatalf("a real command was dropped after %d library frames", cdpObserverQueueDepth*2)
+	}
+}
+
+// An excluded method is turned away at admission, so it does not occupy the
+// queue either, and is still counted apart from the drops.
+func TestExcludedMethodsAreNotAdmitted(t *testing.T) {
+	pub := &countingPublisher{}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	excluded := func() map[string]struct{} {
+		return map[string]struct{}{"Input.dispatchMouseEvent": {}}
+	}
+	o := newCdpObserver(ctx, testConnID, pub.publish, controlOn, excluded, silentLogger())
+
+	for range 3 {
+		o.Observe([]byte(clickFrame), testForwardTs)
+	}
+	if queued := len(o.frames); queued != 0 {
+		t.Fatalf("queued %d excluded frames, want 0", queued)
+	}
+	if got := o.Excluded(); got != 3 {
+		t.Fatalf("excluded = %d, want 3", got)
+	}
+	if got := o.Dropped(); got != 0 {
+		t.Fatalf("dropped = %d, want 0: an exclusion is not a loss", got)
 	}
 }
 
@@ -296,4 +359,48 @@ func TestUnsupportedMethodsAreNotCountedAsLoss(t *testing.T) {
 	if got := o.Dropped(); got != 0 {
 		t.Fatalf("dropped = %d, want 0", got)
 	}
+}
+
+// Admission runs on the pump goroutine, so its cost is the cost of every
+// forwarded client frame. It must not grow with the frame: the method decode
+// copies no arguments.
+func BenchmarkObserveControlCommand(b *testing.B) {
+	o := benchObserver(b)
+	frame := []byte(clickFrame)
+	b.ReportAllocs()
+	for b.Loop() {
+		o.Observe(frame, testForwardTs)
+	}
+}
+
+func BenchmarkObserveLibraryTraffic(b *testing.B) {
+	o := benchObserver(b)
+	frame := []byte(`{"id":1,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"() => 1","objectId":"x"}}`)
+	b.ReportAllocs()
+	for b.Loop() {
+		o.Observe(frame, testForwardTs)
+	}
+}
+
+func BenchmarkObserveLargeLibraryTraffic(b *testing.B) {
+	o := benchObserver(b)
+	frame := []byte(`{"id":1,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"` +
+		strings.Repeat("x", 64<<10) + `","objectId":"x"}}`)
+	b.SetBytes(int64(len(frame)))
+	b.ReportAllocs()
+	for b.Loop() {
+		o.Observe(frame, testForwardTs)
+	}
+}
+
+// benchObserver drains continuously so the benchmark measures admission rather
+// than a queue filling up.
+func benchObserver(b *testing.B) *cdpObserver {
+	b.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	b.Cleanup(cancel)
+	o := newCdpObserver(ctx, testConnID, func(events.Event) (events.Envelope, bool) {
+		return events.Envelope{}, true
+	}, controlOn, nil, silentLogger())
+	return o
 }

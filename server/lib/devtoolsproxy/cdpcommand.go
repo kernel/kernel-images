@@ -47,61 +47,48 @@ func (c cdpCommand) connID() *string {
 	return clipIDPtr(&c.connectionID)
 }
 
-// classification is what became of one forwarded frame. Anything other than
-// classifyEvent is a frame that produced no event, and the caller counts each
-// reason apart: configuration is not the same as a command nobody could read.
-type classification int
+// supportedMethod reports the browser-control method a frame names, if any. It
+// is the admission test, so it copies nothing out of the frame: with no Params
+// field, encoding/json walks the arguments without materializing them, and a
+// large Runtime.callFunctionOn costs a scan rather than a megabyte.
+func supportedMethod(msg []byte) (string, bool) {
+	var probe cdpCommandMethod
+	if err := json.Unmarshal(msg, &probe); err != nil {
+		return "", false
+	}
+	if _, ok := sanitizers[probe.Method]; !ok {
+		return "", false
+	}
+	return probe.Method, true
+}
 
-const (
-	// classifyIgnored: not a browser-control command. Not a loss — most client
-	// traffic is DOM and Runtime bookkeeping that was never in scope.
-	classifyIgnored classification = iota
-	// classifyExcluded: supported, but configured out via excluded_methods.
-	classifyExcluded
-	// classifyMalformed: supported, but the frame or its arguments did not
-	// decode. The command was still forwarded, so this is a real loss.
-	classifyMalformed
-	classifyEvent
-)
-
-// cdpCommandEvent builds the cdp_command event for a client-to-upstream frame
-// and reports what became of the frame. ts is when the command reached
-// Chromium, passed in so time spent queued for classification does not show up
-// as event time.
+// cdpCommandEvent builds the cdp_command event for a frame whose method
+// supportedMethod already resolved, or reports false when the arguments do not
+// decode. ts is when the command reached Chromium, passed in so time spent
+// queued for classification does not show up as event time.
 //
 // Every supported command gets one event. Subtypes like mouseMoved and keyUp
 // are commands in their own right — a mouseMoved with buttons held is a drag
 // path, a keyUp releases a modifier — so the stream is never coalesced down to
 // what looks like the interesting phases.
-func cdpCommandEvent(msg []byte, ts int64, connectionID string, excluded map[string]struct{}) (events.Event, classification) {
-	var probe cdpCommandMethod
-	if err := json.Unmarshal(msg, &probe); err != nil {
-		// Not decodable as a CDP frame at all, so nothing says it was a command.
-		return events.Event{}, classifyIgnored
-	}
-	sanitize, ok := sanitizers[probe.Method]
+func cdpCommandEvent(msg []byte, ts int64, connectionID, method string) (events.Event, bool) {
+	sanitize, ok := sanitizers[method]
 	if !ok {
-		return events.Event{}, classifyIgnored
+		return events.Event{}, false
 	}
-	// Excluding a method suppresses only its event; the raw command was
-	// forwarded to Chromium before this ran.
-	if _, skip := excluded[probe.Method]; skip {
-		return events.Event{}, classifyExcluded
-	}
-
 	// Only now is the frame worth copying arguments out of. A browser-control
-	// command is small, so the second pass is cheap.
+	// command is small, so this second pass is cheap.
 	cmd := cdpCommand{connectionID: connectionID}
 	if err := json.Unmarshal(msg, &cmd); err != nil {
-		return events.Event{}, classifyMalformed
+		return events.Event{}, false
 	}
 	data, err := sanitize(cmd)
 	if err != nil {
-		return events.Event{}, classifyMalformed
+		return events.Event{}, false
 	}
 	payload, err := json.Marshal(data)
 	if err != nil {
-		return events.Event{}, classifyMalformed
+		return events.Event{}, false
 	}
 	return events.Event{
 		Ts:       ts,
@@ -109,5 +96,5 @@ func cdpCommandEvent(msg []byte, ts int64, connectionID string, excluded map[str
 		Category: events.Control,
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
 		Data:     payload,
-	}, classifyEvent
+	}, true
 }

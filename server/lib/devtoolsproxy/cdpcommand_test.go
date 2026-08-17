@@ -25,8 +25,8 @@ const testForwardTs int64 = 1_700_000_000_000_000
 // point: the payload is what a reader sees.
 func payloadOf(t *testing.T, frame string) map[string]any {
 	t.Helper()
-	ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "", nil)
-	if result != classifyEvent {
+	ev, ok := classifyFrame(t, frame, nil)
+	if !ok {
 		t.Fatalf("frame produced no event: %s", frame)
 	}
 	if ev.Type != "cdp_command" {
@@ -175,7 +175,7 @@ func TestCdpCommandEventClassification(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.want == nil {
-				if ev, result := cdpCommandEvent([]byte(tc.frame), testForwardTs, "", nil); result == classifyEvent {
+				if ev, ok := classifyFrame(t, tc.frame, nil); ok {
 					t.Fatalf("frame produced an event, want none: %s", ev.Data)
 				}
 				return
@@ -253,8 +253,8 @@ func TestSanitizersNeverEmitSensitiveValues(t *testing.T) {
 	for method := range sanitizers {
 		t.Run(method, func(t *testing.T) {
 			frame := fmt.Sprintf(`{"id":1,"sessionId":"S","method":%q,"params":%s}`, method, sensitiveParams)
-			ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "", nil)
-			if result != classifyEvent {
+			ev, ok := classifyFrame(t, frame, nil)
+			if !ok {
 				t.Fatalf("supported method produced no event")
 			}
 			payload := string(ev.Data)
@@ -314,8 +314,8 @@ func FuzzCdpCommandEvent(f *testing.F) {
 	f.Add("\x00\xff\xfe")
 
 	f.Fuzz(func(t *testing.T, frame string) {
-		ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "", nil)
-		if result != classifyEvent {
+		ev, ok := classifyFrameOrSkip(frame)
+		if !ok {
 			return
 		}
 		// Whatever the input, the output must be a payload naming a supported
@@ -336,7 +336,7 @@ func BenchmarkCdpCommandEventClick(b *testing.B) {
 	frame := []byte(`{"id":1,"method":"Input.dispatchMouseEvent","params":{"type":"mousePressed","x":1,"y":2,"button":"left","clickCount":1}}`)
 	b.ReportAllocs()
 	for b.Loop() {
-		cdpCommandEvent(frame, testForwardTs, "", nil)
+		classifyFrameOrSkip(string(frame))
 	}
 }
 
@@ -344,7 +344,7 @@ func BenchmarkCdpCommandEventUnsupported(b *testing.B) {
 	frame := []byte(`{"id":1,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"() => 1","objectId":"x"}}`)
 	b.ReportAllocs()
 	for b.Loop() {
-		cdpCommandEvent(frame, testForwardTs, "", nil)
+		classifyFrameOrSkip(string(frame))
 	}
 }
 
@@ -384,13 +384,13 @@ func TestExcludedMethodsSuppressOnlyTheirOwnEvents(t *testing.T) {
 	nav := `{"id":2,"method":"Page.navigate","params":{"url":"https://example.com/"}}`
 	excluded := map[string]struct{}{"Input.dispatchMouseEvent": {}}
 
-	if _, result := cdpCommandEvent([]byte(click), testForwardTs, "", excluded); result != classifyExcluded {
-		t.Fatalf("excluded method classified as %v, want classifyExcluded", result)
+	if _, ok := classifyFrame(t, click, excluded); ok {
+		t.Fatal("excluded method produced an event")
 	}
-	if _, result := cdpCommandEvent([]byte(nav), testForwardTs, "", excluded); result != classifyEvent {
+	if _, ok := classifyFrame(t, nav, excluded); !ok {
 		t.Fatal("a method that was not excluded produced no event")
 	}
-	if _, result := cdpCommandEvent([]byte(click), testForwardTs, "", nil); result != classifyEvent {
+	if _, ok := classifyFrame(t, click, nil); !ok {
 		t.Fatal("no exclusions configured, but the command produced no event")
 	}
 }
@@ -447,8 +447,8 @@ func TestPayloadStaysBoundedWhateverTheClientSends(t *testing.T) {
 		`{"id":1,"method":"Page.captureScreenshot","params":{"format":"` + huge + `"}}`,
 		`{"id":1,"method":"Browser.setWindowBounds","params":{"windowId":1,"bounds":{"windowState":"` + huge + `"}}}`,
 	} {
-		ev, result := cdpCommandEvent([]byte(frame), testForwardTs, "conn", nil)
-		if result != classifyEvent {
+		ev, ok := classifyFrame(t, frame, nil)
+		if !ok {
 			t.Fatalf("no event for %.60s", frame)
 		}
 		// Comfortably inside the 1 MB envelope limit, so the event survives whole.
@@ -494,8 +494,8 @@ func TestOpaqueIdentifiersAreClipped(t *testing.T) {
 // The JSON-RPC id and the connection id are what let a reader join a command to
 // the result the browser returned, and attribute it to one of several clients.
 func TestCommandAndConnectionIdsAreReported(t *testing.T) {
-	ev, result := cdpCommandEvent([]byte(`{"id":42,"method":"Page.reload"}`), testForwardTs, "conn-abc", nil)
-	if result != classifyEvent {
+	ev, ok := classifyFrameConn(t, `{"id":42,"method":"Page.reload"}`, "conn-abc")
+	if !ok {
 		t.Fatal("no event")
 	}
 	var got map[string]any
@@ -509,10 +509,41 @@ func TestCommandAndConnectionIdsAreReported(t *testing.T) {
 		t.Fatalf("connection_id = %v, want conn-abc", got["connection_id"])
 	}
 	// A notification carries no id, and the event says so rather than inventing one.
-	ev2, _ := cdpCommandEvent([]byte(`{"method":"Page.reload"}`), testForwardTs, "conn-abc", nil)
+	ev2, _ := classifyFrameConn(t, `{"method":"Page.reload"}`, "conn-abc")
 	var got2 map[string]any
 	json.Unmarshal(ev2.Data, &got2)
 	if _, ok := got2["command_id"]; ok {
 		t.Fatalf("command_id present for a frame with no id: %v", got2)
 	}
+}
+
+// classifyFrame runs a frame through the two steps production uses: resolve the
+// method at admission, then build the event. A frame whose method is not
+// supported or is excluded never reaches the second step, exactly as it does
+// not reach the queue.
+func classifyFrame(t *testing.T, frame string, excluded map[string]struct{}) (events.Event, bool) {
+	t.Helper()
+	return classifyFrameWith(frame, "", excluded)
+}
+
+func classifyFrameConn(t *testing.T, frame, connectionID string) (events.Event, bool) {
+	t.Helper()
+	return classifyFrameWith(frame, connectionID, nil)
+}
+
+// classifyFrameOrSkip is classifyFrame for callers with no *testing.T to hand,
+// such as the fuzz target.
+func classifyFrameOrSkip(frame string) (events.Event, bool) {
+	return classifyFrameWith(frame, "", nil)
+}
+
+func classifyFrameWith(frame, connectionID string, excluded map[string]struct{}) (events.Event, bool) {
+	method, supported := supportedMethod([]byte(frame))
+	if !supported {
+		return events.Event{}, false
+	}
+	if _, skip := excluded[method]; skip {
+		return events.Event{}, false
+	}
+	return cdpCommandEvent([]byte(frame), testForwardTs, connectionID, method)
 }

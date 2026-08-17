@@ -13,8 +13,8 @@ import (
 type ControlEnabledFunc func() bool
 
 // ExcludedMethodsFunc returns the browser-control methods configured out of the
-// cdp_command stream, or nil when none are. Consulted on the worker once the
-// method is known, so an exclusion never costs the pump anything.
+// cdp_command stream, or nil when none are. Consulted at admission, once the
+// method is known, so an excluded command never occupies the queue.
 type ExcludedMethodsFunc func() map[string]struct{}
 
 const (
@@ -23,11 +23,10 @@ const (
 	// enough that a stalled publisher cannot accumulate unbounded garbage.
 	cdpObserverQueueDepth = 256
 	// cdpObserverMaxQueuedBytes bounds the memory frames awaiting classification
-	// can hold. A per-frame cap would be the obvious bound, but the pump cannot
-	// know a frame's method without parsing it, so a cap there rejects a large
-	// Runtime.callFunctionOn — which would never have produced an event — as
-	// though a command had been lost. Budgeting the queue as a whole bounds the
-	// same memory while leaving that judgement to the worker.
+	// can hold. Only supported methods reach the queue, so this bounds real
+	// commands rather than arbitrary traffic; a per-frame cap would instead
+	// reject a large paste, which is a command, while admitting many small
+	// frames that together cost more.
 	cdpObserverMaxQueuedBytes = 8 << 20
 	// cdpObserverDrainWait bounds how long connection teardown waits for the
 	// worker to finish the queue.
@@ -61,10 +60,12 @@ type cdpObserver struct {
 
 // observedFrame is a client frame that reached Chromium, with the time the
 // forward completed. The timestamp travels with the frame so queue latency
-// does not show up as event time.
+// does not show up as event time. The method is resolved at admission, so the
+// worker does not decode the envelope a second time to learn it.
 type observedFrame struct {
-	msg []byte
-	ts  int64
+	msg    []byte
+	ts     int64
+	method string
 }
 
 // newCdpObserver starts the classification worker. It stops when ctx is done.
@@ -89,11 +90,32 @@ func newCdpObserver(ctx context.Context, connectionID string, publish EventPubli
 	return o
 }
 
-// Observe queues a forwarded client frame. It never blocks and never parses:
-// a frame arrives here only after Chromium has already accepted it, and the
-// pump is waiting on the return.
+// Observe admits a forwarded client frame for classification. It never blocks,
+// and it runs only after Chromium has already accepted the frame, so nothing it
+// does can delay the command it is looking at.
+//
+// It resolves the method first. Queue capacity exists for browser-control
+// commands, and a client library issues far more DOM and Runtime bookkeeping
+// than gestures; admitting that traffic lets it fill the queue and push out a
+// real command, and makes the drop count a tally of arbitrary CDP traffic
+// rather than of lost control events.
+//
+// Deciding here costs a scan of the frame that copies none of its arguments:
+// 273 B and 7 allocations whatever the frame's size, per
+// BenchmarkObserveLibraryTraffic and BenchmarkObserveLargeLibraryTraffic. The
+// scan itself is proportional to the bytes, which is inherent to reading JSON,
+// and it runs after the forward, so it delays the next frame rather than this
+// one. A frame this package does not report is dropped here, never retained.
 func (o *cdpObserver) Observe(msg []byte, ts int64) {
 	if o == nil || !o.controlEnabled() {
+		return
+	}
+	method, supported := supportedMethod(msg)
+	if !supported {
+		return
+	}
+	if _, skip := o.excludedMethods()[method]; skip {
+		o.excluded.Add(1)
 		return
 	}
 	size := int64(len(msg))
@@ -103,7 +125,7 @@ func (o *cdpObserver) Observe(msg []byte, ts int64) {
 		return
 	}
 	select {
-	case o.frames <- observedFrame{msg: msg, ts: ts}:
+	case o.frames <- observedFrame{msg: msg, ts: ts, method: method}:
 	default:
 		o.queuedBytes.Add(-size)
 		o.droppedQueued.Add(1)
@@ -197,17 +219,14 @@ func (o *cdpObserver) handle(f observedFrame) {
 			o.logger.Error("cdp command telemetry panicked", slog.Any("err", r))
 		}
 	}()
-	ev, result := cdpCommandEvent(f.msg, f.ts, o.connectionID, o.excludedMethods())
-	switch result {
-	case classifyEvent:
-		o.publish(ev)
-	case classifyExcluded:
-		o.excluded.Add(1)
-	case classifyMalformed:
+	ev, ok := cdpCommandEvent(f.msg, f.ts, o.connectionID, f.method)
+	if !ok {
 		// The command reached the browser but nothing readable reached the
 		// stream, which is a loss however malformed the arguments were.
 		o.droppedMalformed.Add(1)
+		return
 	}
+	o.publish(ev)
 }
 
 func (o *cdpObserver) logDrops() {
