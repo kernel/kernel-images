@@ -166,7 +166,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get --no-install-recommends -y install sqlite3 unzip;
 
 # Install Chrome + ChromeDriver as a matched pair from chrome-for-testing so they cannot drift apart.
-ARG CHROME_VERSION=148.0.7778.97
+ARG CHROME_VERSION=152.0.7977.42
 RUN set -eux; \
     curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -o /tmp/chrome.zip; \
     curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
