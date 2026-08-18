@@ -5640,9 +5640,10 @@ components:
       description: >
         Opaque identifier shared by events from one visible challenge. An
         image-grid captcha can retry with a fresh task per attempt, so one
-        `challenge_id` may be associated with multiple `task_id` values. It is
-        not stable across page reloads or re-renders of the same widget and
-        does not indicate task ordering or challenge completion.
+        `challenge_id` may be associated with multiple `task_id` values. A
+        producer may preserve it across a page reload when that reload is part
+        of the same challenge episode. It does not indicate task ordering or
+        challenge completion.
     BrowserCaptchaSolveStartedEventData:
       type: object
       description: >
@@ -5663,8 +5664,8 @@ components:
         task_id:
           type: string
           description: >
-            Opaque solver-assigned identifier. When present, it is shared with
-            the matching `captcha_solve_result`.
+            Opaque producer-assigned identifier shared with the matching
+            `captcha_solve_result`.
         challenge_id:
           $ref: "#/components/schemas/BrowserCaptchaChallengeID"
         website_host:
@@ -5724,7 +5725,7 @@ components:
             sequencing are not guaranteed.
         task_id:
           type: string
-          description: Solver-assigned identifier. Opaque, useful for support cross-references.
+          description: Opaque producer-assigned identifier shared with the matching `captcha_solve_started`.
         challenge_id:
           $ref: "#/components/schemas/BrowserCaptchaChallengeID"
         website_host:
@@ -5769,10 +5770,12 @@ components:
         status:
           type: string
           description: >
-            Terminal outcome of the visible challenge. `solved`: the challenge
-            issued a response token. `abandoned`: the challenge ended without
-            one, for example because the page navigated, the widget was
-            dismissed, or the solver gave up.
+            Terminal outcome of the visible challenge. `solved`: the page
+            observed the challenge clear after a solver attempt. For token
+            captchas this means a response token was present; for
+            press-and-hold it means the challenge page navigated away.
+            `abandoned`: the challenge ended without a solved signal, for
+            example because the widget was dismissed or the solver gave up.
 
             `solved` describes the challenge, not the flow around it. A site
             can still reject a valid token, and tokens expire, so this is not
