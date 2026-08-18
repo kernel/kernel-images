@@ -1,0 +1,311 @@
+# Every argument of every browser-control command the proxy reports, with an
+# explicit decision: retained in the cdp_command payload, or redacted and why.
+#
+# The argument list comes from testdata/cdp_protocol_pinned.json, generated from
+# the pinned protocol by scripts/cdpmanifest. TestEveryCanonicalArgumentHasADecision
+# fails when an argument here has no decision, when a retained argument is not
+# actually decoded, or when the code decodes something this file does not declare.
+# An argument added upstream therefore surfaces as a decision someone must make,
+# rather than as a field that is quietly absent.
+#
+# retained means the argument reaches the payload, directly or as a derived value
+# (a length, a count, a presence flag, an enum, a URL scheme). The schema names the
+# field it becomes.
+#
+# Pinned protocol: https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json
+
+Autofill.trigger:
+  "address.fields[].name":
+    redacted: caller-supplied field names with no protocol-defined set to allowlist against
+  "address.fields[].value":
+    redacted: the address the agent filled
+  "card.cvc":
+    redacted: the card security code
+  "card.expiryMonth":
+    redacted: part of the card the agent filled
+  "card.expiryYear":
+    redacted: part of the card the agent filled
+  "card.name":
+    redacted: the cardholder name
+  "card.number":
+    redacted: the card number
+  "fieldId": retained
+  "frameId": retained
+
+Browser.cancelDownload:
+  "browserContextId": retained
+  "guid": retained
+
+Browser.close:
+  {}
+
+Browser.setContentsSize:
+  "height": retained
+  "width": retained
+  "windowId": retained
+
+Browser.setWindowBounds:
+  "bounds.height": retained
+  "bounds.left": retained
+  "bounds.top": retained
+  "bounds.width": retained
+  "bounds.windowState": retained
+  "windowId": retained
+
+DOM.focus:
+  "backendNodeId": retained
+  "nodeId": retained
+  "objectId": retained
+
+DOM.scrollIntoViewIfNeeded:
+  "backendNodeId": retained
+  "nodeId": retained
+  "objectId": retained
+  "rect.height": retained
+  "rect.width": retained
+  "rect.x": retained
+  "rect.y": retained
+
+DOM.setFileInputFiles:
+  "backendNodeId": retained
+  "files": retained
+  "nodeId": retained
+  "objectId": retained
+
+Input.cancelDragging:
+  {}
+
+Input.dispatchDragEvent:
+  "data.dragOperationsMask": retained
+  "data.files": retained
+  "data.items[].baseURL":
+    redacted: the document the drag came from
+  "data.items[].data":
+    redacted: the drag payload itself
+  "data.items[].mimeType": retained
+  "data.items[].title":
+    redacted: caller-supplied text describing the drag payload
+  "modifiers": retained
+  "type": retained
+  "x": retained
+  "y": retained
+
+Input.dispatchKeyEvent:
+  "autoRepeat": retained
+  "code":
+    redacted: names the character typed as surely as text does
+  "commands": retained
+  "isKeypad": retained
+  "isSystemKey": retained
+  "key": retained
+  "keyIdentifier":
+    redacted: names the character typed as surely as text does
+  "location": retained
+  "modifiers": retained
+  "nativeVirtualKeyCode":
+    redacted: names the character typed as surely as text does
+  "text": retained
+  "timestamp":
+    redacted: a clock reading supplied by the client, not part of what the agent did
+  "type": retained
+  "unmodifiedText":
+    redacted: the character typed, before modifiers applied
+  "windowsVirtualKeyCode":
+    redacted: names the character typed as surely as text does
+
+Input.dispatchMouseEvent:
+  "button": retained
+  "buttons": retained
+  "clickCount": retained
+  "deltaX": retained
+  "deltaY": retained
+  "force": retained
+  "modifiers": retained
+  "pointerType": retained
+  "tangentialPressure": retained
+  "tiltX": retained
+  "tiltY": retained
+  "timestamp":
+    redacted: a clock reading supplied by the client, not part of what the agent did
+  "twist": retained
+  "type": retained
+  "x": retained
+  "y": retained
+
+Input.dispatchTouchEvent:
+  "modifiers": retained
+  "timestamp":
+    redacted: a clock reading supplied by the client, not part of what the agent did
+  "touchPoints[].force": retained
+  "touchPoints[].id":
+    redacted: identifies one finger across frames, which only the full point list could use; the event reports the primary point
+  "touchPoints[].radiusX": retained
+  "touchPoints[].radiusY": retained
+  "touchPoints[].rotationAngle": retained
+  "touchPoints[].tangentialPressure": retained
+  "touchPoints[].tiltX": retained
+  "touchPoints[].tiltY": retained
+  "touchPoints[].twist": retained
+  "touchPoints[].x": retained
+  "touchPoints[].y": retained
+  "type": retained
+
+Input.emulateTouchFromMouseEvent:
+  "button": retained
+  "clickCount": retained
+  "deltaX": retained
+  "deltaY": retained
+  "modifiers": retained
+  "timestamp":
+    redacted: a clock reading supplied by the client, not part of what the agent did
+  "type": retained
+  "x": retained
+  "y": retained
+
+Input.imeSetComposition:
+  "replacementEnd": retained
+  "replacementStart": retained
+  "selectionEnd": retained
+  "selectionStart": retained
+  "text": retained
+
+Input.insertText:
+  "text": retained
+
+Input.synthesizePinchGesture:
+  "gestureSourceType": retained
+  "relativeSpeed": retained
+  "scaleFactor": retained
+  "x": retained
+  "y": retained
+
+Input.synthesizeScrollGesture:
+  "gestureSourceType": retained
+  "interactionMarkerName":
+    redacted: a caller-supplied label with no protocol-defined values
+  "preventFling": retained
+  "repeatCount": retained
+  "repeatDelayMs": retained
+  "speed": retained
+  "x": retained
+  "xDistance": retained
+  "xOverscroll": retained
+  "y": retained
+  "yDistance": retained
+  "yOverscroll": retained
+
+Input.synthesizeTapGesture:
+  "duration": retained
+  "gestureSourceType": retained
+  "tapCount": retained
+  "x": retained
+  "y": retained
+
+Page.bringToFront:
+  {}
+
+Page.captureScreenshot:
+  "captureBeyondViewport": retained
+  "clip.height": retained
+  "clip.scale": retained
+  "clip.width": retained
+  "clip.x": retained
+  "clip.y": retained
+  "format": retained
+  "fromSurface": retained
+  "optimizeForSpeed": retained
+  "quality": retained
+
+Page.captureSnapshot:
+  "format": retained
+
+Page.close:
+  {}
+
+Page.handleJavaScriptDialog:
+  "accept": retained
+  "promptText": retained
+
+Page.navigate:
+  "frameId": retained
+  "referrer": retained
+  "referrerPolicy": retained
+  "transitionType": retained
+  "url": retained
+
+Page.navigateToHistoryEntry:
+  "entryId": retained
+
+Page.printToPDF:
+  "displayHeaderFooter": retained
+  "footerTemplate": retained
+  "generateDocumentOutline": retained
+  "generateTaggedPDF": retained
+  "headerTemplate": retained
+  "landscape": retained
+  "marginBottom": retained
+  "marginLeft": retained
+  "marginRight": retained
+  "marginTop": retained
+  "pageRanges": retained
+  "paperHeight": retained
+  "paperWidth": retained
+  "preferCSSPageSize": retained
+  "printBackground": retained
+  "scale": retained
+  "transferMode": retained
+
+Page.reload:
+  "ignoreCache": retained
+  "loaderId": retained
+  "scriptToEvaluateOnLoad": retained
+
+Page.setWebLifecycleState:
+  "state": retained
+
+Page.startScreencast:
+  "everyNthFrame": retained
+  "format": retained
+  "maxHeight": retained
+  "maxWidth": retained
+  "quality": retained
+
+Page.stopLoading:
+  {}
+
+Page.stopScreencast:
+  {}
+
+Target.activateTarget:
+  "targetId": retained
+
+Target.closeTarget:
+  "targetId": retained
+
+Target.createBrowserContext:
+  "disposeOnDetach": retained
+  "originsWithUniversalNetworkAccess": retained
+  "proxyBypassList": retained
+  "proxyServer": retained
+
+Target.createTarget:
+  "background": retained
+  "browserContextId": retained
+  "enableBeginFrameControl": retained
+  "focus": retained
+  "forTab": retained
+  "height": retained
+  "hidden": retained
+  "left": retained
+  "newWindow": retained
+  "top": retained
+  "url": retained
+  "width": retained
+  "windowState": retained
+
+Target.disposeBrowserContext:
+  "browserContextId": retained
+
+Target.openDevTools:
+  "panelId": retained
+  "targetId": retained

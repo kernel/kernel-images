@@ -52,7 +52,7 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 			s.telemetrySession.Stop()
 			s.stopTelemetryState()
 		}
-		return oapi.PutTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
+		return oapi.PutTelemetry200JSONResponse(s.stoppedTelemetryResponse()), nil
 	}
 
 	// Commit the config first so the filter is live before the collector emits,
@@ -102,7 +102,7 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	if allDisabled {
 		s.telemetrySession.Stop()
 		s.stopTelemetryState()
-		return oapi.PatchTelemetry200JSONResponse(oapi.TelemetryState{Config: disabledConfig(), Seq: int64(s.telemetrySession.Seq())}), nil
+		return oapi.PatchTelemetry200JSONResponse(s.stoppedTelemetryResponse()), nil
 	}
 
 	// Commit first so the filter is live before the collector emits, then
@@ -199,8 +199,9 @@ func (s *ApiService) stopTelemetryState() {
 // buildTelemetryResponse constructs a TelemetryState response from the current configuration.
 func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
 	resp := oapi.TelemetryState{
-		Config: telemetryConfigToOAPI(s.telemetrySession.Config()),
-		Seq:    int64(s.telemetrySession.Seq()),
+		Config:        telemetryConfigToOAPI(s.telemetrySession.Config()),
+		Seq:           int64(s.telemetrySession.Seq()),
+		DroppedEvents: lo.ToPtr(int64(s.telemetrySession.DroppedEvents())),
 	}
 	if appliedAt := s.telemetrySession.AppliedAt(); !appliedAt.IsZero() {
 		resp.AppliedAt = &appliedAt
@@ -208,26 +209,57 @@ func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
 	return resp
 }
 
-// categoryField pairs a category with its config field so the helpers can walk
-// the configurable categories without enumerating them inline.
+// stoppedTelemetryResponse reports the cleared configuration. Seq and the
+// dropped count are process-scoped, so they survive a session ending.
+func (s *ApiService) stoppedTelemetryResponse() oapi.TelemetryState {
+	return oapi.TelemetryState{
+		Config:        disabledConfig(),
+		Seq:           int64(s.telemetrySession.Seq()),
+		DroppedEvents: lo.ToPtr(int64(s.telemetrySession.DroppedEvents())),
+	}
+}
+
+// categoryField pairs a category with its enabled flag so the helpers can walk
+// the configurable categories without enumerating them inline. The flag rather
+// than the config, because control carries settings the others do not.
 type categoryField struct {
 	category oapi.TelemetryEventCategory
-	config   *oapi.BrowserTelemetryCategoryConfig
+	enabled  *bool
 }
 
 func categoryFields(b *oapi.BrowserTelemetryCategoriesConfig) []categoryField {
-	return []categoryField{
-		{events.Console, b.Console},
-		{events.Network, b.Network},
-		{events.Page, b.Page},
-		{events.Interaction, b.Interaction},
-		{events.Control, b.Control},
-		{events.Platform, b.Platform},
-		{events.Connection, b.Connection},
-		{events.System, b.System},
-		{events.Screenshot, b.Screenshot},
-		{events.Captcha, b.Captcha},
+	flag := func(c *oapi.BrowserTelemetryCategoryConfig) *bool {
+		if c == nil {
+			return nil
+		}
+		return c.Enabled
 	}
+	var control *bool
+	if b.Control != nil {
+		control = b.Control.Enabled
+	}
+	return []categoryField{
+		{events.Console, flag(b.Console)},
+		{events.Network, flag(b.Network)},
+		{events.Page, flag(b.Page)},
+		{events.Interaction, flag(b.Interaction)},
+		{events.Control, control},
+		{events.Platform, flag(b.Platform)},
+		{events.Connection, flag(b.Connection)},
+		{events.System, flag(b.System)},
+		{events.Screenshot, flag(b.Screenshot)},
+		{events.Captcha, flag(b.Captcha)},
+	}
+}
+
+// excludedCdpMethodsFromOAPI reads the cdp_command exclusion list, which only
+// the control category carries.
+func excludedCdpMethodsFromOAPI(cfg *oapi.BrowserTelemetryConfig) []oapi.BrowserCdpCommandMethod {
+	if cfg == nil || cfg.Browser == nil || cfg.Browser.Control == nil ||
+		cfg.Browser.Control.Cdp == nil || cfg.Browser.Control.Cdp.ExcludedMethods == nil {
+		return nil
+	}
+	return *cfg.Browser.Control.Cdp.ExcludedMethods
 }
 
 func categorySetOf(cats []oapi.TelemetryEventCategory) map[oapi.TelemetryEventCategory]bool {
@@ -262,14 +294,18 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 
 	cats := make([]oapi.TelemetryEventCategory, 0, len(events.UserCategories))
 	for _, f := range categoryFields(cfg.Browser) {
-		if f.config != nil && f.config.Enabled != nil && *f.config.Enabled {
+		if f.enabled != nil && *f.enabled {
 			cats = append(cats, f.category)
 		}
 	}
 	if len(cats) == 0 {
 		return telemetry.TelemetryConfig{}, true, nil
 	}
-	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP}, false, nil
+	return telemetry.TelemetryConfig{
+		Categories:         cats,
+		ExportOTLP:         exportOTLP,
+		ExcludedCdpMethods: excludedCdpMethodsFromOAPI(cfg),
+	}, false, nil
 }
 
 // exportOTLPFromOAPI reads the OTLP export toggle from a config, defaulting to
@@ -295,10 +331,10 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 
 	if patch.Browser != nil {
 		for _, f := range categoryFields(patch.Browser) {
-			if f.config == nil || f.config.Enabled == nil {
+			if f.enabled == nil {
 				continue // not mentioned in patch; keep current state
 			}
-			if *f.config.Enabled {
+			if *f.enabled {
 				active[f.category] = struct{}{}
 			} else {
 				delete(active, f.category)
@@ -312,6 +348,13 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		exportOTLP = *patch.Export.Otlp.Enabled
 	}
 
+	// So do the cdp_command exclusions: an omitted list is unchanged, an empty
+	// one clears them.
+	excluded := current.ExcludedCdpMethods
+	if patched := excludedCdpMethodsFromOAPI(patch); patched != nil {
+		excluded = patched
+	}
+
 	if len(active) == 0 {
 		return telemetry.TelemetryConfig{}, true
 	}
@@ -319,7 +362,7 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	for c := range active {
 		cats = append(cats, c)
 	}
-	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP}, false
+	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP, ExcludedCdpMethods: excluded}, false
 }
 
 // disabledConfig returns a BrowserTelemetryConfig with every configurable category explicitly disabled.
@@ -333,7 +376,7 @@ func disabledConfig() oapi.BrowserTelemetryConfig {
 			Network:     off(),
 			Page:        off(),
 			Interaction: off(),
-			Control:     off(),
+			Control:     &oapi.BrowserTelemetryControlConfig{Enabled: lo.ToPtr(false)},
 			Platform:    off(),
 			Connection:  off(),
 			System:      off(),
@@ -359,13 +402,17 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 		on := active[cat]
 		return &oapi.BrowserTelemetryCategoryConfig{Enabled: &on}
 	}
+	control := &oapi.BrowserTelemetryControlConfig{Enabled: lo.ToPtr(active[events.Control])}
+	if len(cfg.ExcludedCdpMethods) > 0 {
+		control.Cdp = &oapi.BrowserTelemetryCdpControlConfig{ExcludedMethods: &cfg.ExcludedCdpMethods}
+	}
 	return oapi.BrowserTelemetryConfig{
 		Browser: &oapi.BrowserTelemetryCategoriesConfig{
 			Console:     enabled(events.Console),
 			Network:     enabled(events.Network),
 			Page:        enabled(events.Page),
 			Interaction: enabled(events.Interaction),
-			Control:     enabled(events.Control),
+			Control:     control,
 			Platform:    enabled(events.Platform),
 			Connection:  enabled(events.Connection),
 			System:      enabled(events.System),

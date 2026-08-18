@@ -122,6 +122,9 @@ func (s *ApiService) StreamTelemetryEvents(ctx context.Context, req oapi.StreamT
 			}
 
 			if result.Dropped > 0 {
+				// The client's next Last-Event-ID will skip this gap, so record it:
+				// a silent skip reads as a quiet stream rather than a lost one.
+				s.telemetrySession.RecordDropped(result.Dropped)
 				continue
 			}
 
