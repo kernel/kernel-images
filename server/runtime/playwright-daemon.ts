@@ -162,12 +162,18 @@ async function resolveActivePage(browser: Browser, context: BrowserContext): Pro
     });
 
     for (const page of context.pages()) {
-      const session = await context.newCDPSession(page);
       try {
-        const { targetInfo } = await session.send('Target.getTargetInfo');
-        if (relatedPageIds.has(targetInfo.targetId)) return page;
-      } finally {
-        await session.detach().catch(() => {});
+        const session = await context.newCDPSession(page);
+        try {
+          const { targetInfo } = await session.send('Target.getTargetInfo');
+          if (relatedPageIds.has(targetInfo.targetId)) return page;
+        } finally {
+          await session.detach().catch(() => {});
+        }
+      } catch {
+        // A crashed or closing page can fail CDP session setup/queries; skip it
+        // rather than aborting the search for the real foreground tab.
+        continue;
       }
     }
 
