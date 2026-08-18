@@ -714,7 +714,7 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *
 }
 
 func chromiumRunPatchDisplay(ctx context.Context, s *ApiService, body *oapi.PatchDisplayJSONRequestBody) oapi.ChromiumConfigureResponseObject {
-	resp, err := s.PatchDisplay(ctx, oapi.PatchDisplayRequestObject{Body: body})
+	resp, err := s.patchDisplayLocked(ctx, oapi.PatchDisplayRequestObject{Body: body})
 	if err != nil {
 		return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 	}

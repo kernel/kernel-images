@@ -248,7 +248,7 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 
 		requiresEntPolicy, err := s.policy.RequiresEnterprisePolicy(manifestPath)
 		if err != nil {
-			log.Warn("failed to read manifest for policy check", "error", err, "extension", extensionName)
+			return false, fmt.Sprintf("invalid extension %s: %v", extensionName, err), nil
 		}
 
 		chromeExtensionID := extensionName
@@ -323,7 +323,8 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 
 func (s *ApiService) loadUnpackedExtensions(ctx context.Context, items []extensionZipItem) error {
 	log := logger.FromContext(ctx)
-	return s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+	timeout := time.Duration(len(items)) * 10 * time.Second
+	return s.withCDPClientTimeout(ctx, timeout, func(cdpCtx context.Context, client *cdpclient.Client) error {
 		for _, item := range items {
 			path := filepath.Join(extensionsBaseDir, item.name)
 			id, err := client.LoadUnpackedExtension(cdpCtx, path)
