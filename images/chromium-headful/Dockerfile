@@ -107,24 +107,27 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get -yqq update; \
     apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils;
 
-# Download FFmpeg (latest static build) for the recording server
+# Download a pinned FFmpeg static build for the recording server
 RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX-ffmpeg \
     <<-'EOT'
     set -eux
     FFMPEG_CACHE_PATH="/tmp/cache/ffmpeg"
+    FFMPEG_RELEASE="autobuild-2026-08-18-15-03"
+    FFMPEG_VERSION="n8.1.2-44-g7c533d0f86"
     case ${TARGETARCH:-amd64} in
         "amd64") FFMPEG_TARGET_ARCH="64" ;;
         "arm64") FFMPEG_TARGET_ARCH="arm64" ;;
     esac
     FFMPEG_TARGET=linux${FFMPEG_TARGET_ARCH:?}
-    ARCHIVE_NAME="ffmpeg-n7.1-latest-${FFMPEG_TARGET}-gpl-7.1.tar.xz"
+    ARCHIVE_NAME="ffmpeg-${FFMPEG_VERSION}-${FFMPEG_TARGET}-gpl-8.1.tar.xz"
     FFMPEG_CACHED_ARCHIVE_PATH="$FFMPEG_CACHE_PATH/$ARCHIVE_NAME"
     FFMPEG_CACHED_ARCHIVE_CHECKSUM_PATH="$FFMPEG_CACHED_ARCHIVE_PATH.sha256"
-    URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ARCHIVE_NAME"
+    RELEASE_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_RELEASE"
+    URL="$RELEASE_URL/$ARCHIVE_NAME"
     TEMPORARY_SHA256_CHECKSUM_PATH=$(mktemp /tmp/tmp_sha256.XXXXXXXXXX)
     CONTINUE="true"
     echo "Downloading FFmpeg checksum"
-    if curl --connect-timeout 10 -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256" -o $TEMPORARY_SHA256_CHECKSUM_PATH; then
+    if curl --connect-timeout 10 -fsSL "$RELEASE_URL/checksums.sha256" -o $TEMPORARY_SHA256_CHECKSUM_PATH; then
         grep -F "$ARCHIVE_NAME" $TEMPORARY_SHA256_CHECKSUM_PATH > $FFMPEG_CACHED_ARCHIVE_CHECKSUM_PATH
     else
         echo "Failed to connect to ffmpeg static build provider for checksum."
