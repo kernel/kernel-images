@@ -123,7 +123,7 @@ func TestToLogRecord_Severity(t *testing.T) {
 		"console_error":          log.SeverityError,
 		"service_crashed":        log.SeverityError,
 		"system_oom_kill":        log.SeverityError,
-		"proxy_error":            log.SeverityError,
+		"proxy_error":            log.SeverityWarn, // no resource_type → not top-level document
 		"network_loading_failed": log.SeverityWarn,
 		"monitor_init_failed":    log.SeverityWarn,
 		"network_response":       log.SeverityInfo,
@@ -133,6 +133,13 @@ func TestToLogRecord_Severity(t *testing.T) {
 		rec := toLogRecord(Envelope{Event: Event{Type: typ}})
 		assert.Equalf(t, want, rec.Severity(), "severity for %q", typ)
 	}
+
+	// proxy_error severity is resource-type dependent: ERROR only for the
+	// top-level Document, WARN for subresources.
+	doc := toLogRecord(Envelope{Event: Event{Type: "proxy_error", Data: json.RawMessage(`{"resource_type":"Document","code":"destination_blocked","status":502}`)}})
+	assert.Equal(t, log.SeverityError, doc.Severity(), "Document proxy_error should be ERROR")
+	sub := toLogRecord(Envelope{Event: Event{Type: "proxy_error", Data: json.RawMessage(`{"resource_type":"Script","code":"provider_unreachable","status":502}`)}})
+	assert.Equal(t, log.SeverityWarn, sub.Severity(), "subresource proxy_error should be WARN")
 }
 
 func TestToLogRecord_Truncated(t *testing.T) {
