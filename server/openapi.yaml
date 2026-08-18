@@ -2108,6 +2108,64 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserProxyErrorEventData:
+      allOf:
+        - $ref: "#/components/schemas/BrowserEventContext"
+        - type: object
+          required: [request_id, code, status]
+          properties:
+            request_id:
+              type: string
+              description: CDP request identifier matching the originating request.
+            code:
+              type: string
+              enum: [destination_blocked, provider_blacklisted, provider_unreachable, proxy_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed]
+              description: >
+                Proxy-layer error code: the `X-Kernel-Proxy-Error` response
+                header value from a branded 5xx error page served by the metro
+                egress host-proxy. Values mirror what the proxy emits:
+                destination_blocked, provider_blacklisted, provider_unreachable,
+                proxy_unavailable, upstream_timeout, upstream_dns_failure,
+                upstream_connect_failed. Unknown header values are dropped.
+            status:
+              type: integer
+              description: HTTP response status of the branded error page (502).
+            method:
+              type: string
+              description: HTTP method of the failed request, when known.
+            resource_type:
+              type: string
+              description: CDP Network.ResourceType for the request, when known.
+    BrowserProxyErrorEvent:
+      type: object
+      description: >
+        A branded proxy-layer failure observed by the browser. Emitted when the
+        metro egress host-proxy serves a branded 5xx error page whose response
+        carries the `X-Kernel-Proxy-Error` header. Low-volume and carries a
+        typed code. Its value is per-session and per-URL attribution for
+        sessions that already capture the network stream: proxy failures are
+        only observable while the CDP network collector is running, so this is
+        an opt-in refinement of the raw network events rather than a default-on
+        alerting signal.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: proxy_error
+        category:
+          type: string
+          const: network
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserProxyErrorEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     BrowserPageNavigationEventData:
       type: object
       additionalProperties: false
@@ -3206,6 +3264,7 @@ components:
         - $ref: "#/components/schemas/BrowserNetworkResponseEvent"
         - $ref: "#/components/schemas/BrowserNetworkLoadingFailedEvent"
         - $ref: "#/components/schemas/BrowserNetworkIdleEvent"
+        - $ref: "#/components/schemas/BrowserProxyErrorEvent"
         - $ref: "#/components/schemas/BrowserPageNavigationEvent"
         - $ref: "#/components/schemas/BrowserPageDomContentLoadedEvent"
         - $ref: "#/components/schemas/BrowserPageLoadEvent"
@@ -3241,6 +3300,7 @@ components:
           network_response: "#/components/schemas/BrowserNetworkResponseEvent"
           network_loading_failed: "#/components/schemas/BrowserNetworkLoadingFailedEvent"
           network_idle: "#/components/schemas/BrowserNetworkIdleEvent"
+          proxy_error: "#/components/schemas/BrowserProxyErrorEvent"
           page_navigation: "#/components/schemas/BrowserPageNavigationEvent"
           page_dom_content_loaded: "#/components/schemas/BrowserPageDomContentLoadedEvent"
           page_load: "#/components/schemas/BrowserPageLoadEvent"

@@ -10,6 +10,14 @@ import (
 
 func ptrOf[T any](v T) *T { return &v }
 
+// optPtr returns a pointer to s, or nil when s is empty.
+func optPtr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 // marshalNavEventContext marshals a navContext and sequence number into the
 // BrowserEventContext JSON payload used by network_idle, page_layout_settled,
 // and page_navigation_settled events.

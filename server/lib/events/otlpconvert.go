@@ -36,12 +36,9 @@ func toLogRecord(env Envelope) log.Record {
 	var rec log.Record
 	rec.SetTimestamp(time.UnixMicro(ev.Ts))
 	rec.SetEventName(ev.Type)
-	sev, sevText := otlpSeverity(ev.Type)
-	rec.SetSeverity(sev)
-	rec.SetSeverityText(sevText)
 
 	// Decode the payload once: it becomes the structured body and the source of
-	// promoted attributes.
+	// promoted attributes, and drives per-resource severity for proxy_error.
 	var data any
 	if len(ev.Data) > 0 {
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
@@ -51,6 +48,10 @@ func toLogRecord(env Envelope) log.Record {
 			rec.SetBody(anyToLogValue(data))
 		}
 	}
+
+	sev, sevText := otlpSeverity(ev.Type, data)
+	rec.SetSeverity(sev)
+	rec.SetSeverityText(sevText)
 
 	attrs := make([]log.KeyValue, 0)
 	attrs = append(attrs,
@@ -89,6 +90,7 @@ const (
 	dataKeyMethod = "method"
 	dataKeyURL    = "url"
 	dataKeyStatus = "status"
+	dataKeyCode   = "code"
 	dataKeyLevel  = "level"
 )
 
@@ -109,6 +111,11 @@ func promotedAttributes(cat oapi.TelemetryEventCategory, data map[string]any) []
 		if v, ok := data[dataKeyStatus].(float64); ok {
 			out = append(out, log.Int64("http.response.status_code", int64(v)))
 		}
+		// Only proxy_error events carry code; other network events have no such
+		// field, so the promotion is effectively gated to that event type.
+		if v, ok := data[dataKeyCode].(string); ok {
+			out = append(out, log.String("kernel.proxy_error_code", v))
+		}
 	case Console:
 		if v, ok := data[dataKeyLevel].(string); ok {
 			out = append(out, log.String("kernel.console.level", v))
@@ -123,14 +130,24 @@ func promotedAttributes(cat oapi.TelemetryEventCategory, data map[string]any) []
 // generated event-type constants: those live in the producer package
 // (cdpmonitor), which this package cannot import without a cycle. If those type
 // names change, update this mapping in lockstep.
-func otlpSeverity(eventType string) (log.Severity, string) {
+func otlpSeverity(eventType string, data any) (log.Severity, string) {
 	switch {
 	case eventType == "console_error":
 		return log.SeverityError, "ERROR"
-	// Process-death, renderer-crash, and OOM events are failures a consumer
-	// alerts on, so they map to ERROR rather than the default INFO.
+	// Process-death, renderer-crash, OOM, and proxy loss of the top-level
+	// document are failures a consumer alerts on, so they map to ERROR.
 	case eventType == "service_crashed", eventType == "system_oom_kill", eventType == "page_crashed":
 		return log.SeverityError, "ERROR"
+	case eventType == "proxy_error":
+		// ERROR only for the top-level document; the ~vast majority of branded
+		// proxy errors are subresources (blocked scripts/images/fetches), which
+		// map to WARN so consumers do not alert on every blocked subresource.
+		if m, ok := data.(map[string]any); ok {
+			if rt, ok := m["resource_type"].(string); ok && rt == "Document" {
+				return log.SeverityError, "ERROR"
+			}
+		}
+		return log.SeverityWarn, "WARN"
 	case strings.HasSuffix(eventType, "_failed"):
 		return log.SeverityWarn, "WARN"
 	default:

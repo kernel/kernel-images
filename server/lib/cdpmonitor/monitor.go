@@ -64,6 +64,12 @@ type Monitor struct {
 	bindingRateMu   sync.Mutex
 	bindingLastSeen map[string]time.Time // sessionID → last accepted binding event time
 
+	// proxyRateMu guards proxyLastEmit. Entries are never pruned per-session
+	// (mirrors bindingLastSeen); the map stays bounded because proxy errors are
+	// rare and keys are limited to valid enum codes plus resource type.
+	proxyRateMu   sync.Mutex
+	proxyLastEmit map[string]time.Time // sessionID:code:resourceType → last accepted proxy_error emit time
+
 	// asyncWg tracks all goroutines except readLoop (which is tracked via done).
 	// subscribeToUpstream and sweepPendingRequests are included so Stop() can
 	// wait for them to exit before returning.
@@ -92,6 +98,7 @@ func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log 
 		pending:           make(map[int64]chan cdpMessage),
 		pendingRequests:   make(map[string]networkReqState),
 		bindingLastSeen:   make(map[string]time.Time),
+		proxyLastEmit:     make(map[string]time.Time),
 	}
 	m.lifecycleCtx = context.Background()
 	m.mainSessionID.Store(mainSessionUnset)
@@ -201,6 +208,10 @@ func (m *Monitor) clearState() {
 	m.bindingRateMu.Lock()
 	m.bindingLastSeen = make(map[string]time.Time)
 	m.bindingRateMu.Unlock()
+
+	m.proxyRateMu.Lock()
+	m.proxyLastEmit = make(map[string]time.Time)
+	m.proxyRateMu.Unlock()
 
 	m.failPendingCommands()
 }
