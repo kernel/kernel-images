@@ -35,6 +35,9 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 		return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no display parameters to update"}}, nil
 	}
 
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
+
 	// Get current resolution with refresh rate
 	currentWidth, currentHeight, currentRefreshRate, err := s.getCurrentResolution(ctx)
 	if err != nil {

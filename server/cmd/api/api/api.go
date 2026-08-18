@@ -61,6 +61,10 @@ type ApiService struct {
 	upstreamMgr *devtoolsproxy.UpstreamManager
 	stz         scaletozero.PinnedController
 
+	// chromiumConfigMu serializes configuration changes that may restart Chromium
+	// or mutate its runtime flags and policies.
+	chromiumConfigMu sync.Mutex
+
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
 

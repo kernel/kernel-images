@@ -1147,6 +1147,7 @@ paths:
         Upload one or more extension zip archives and extract them under
         /home/kernel/extensions/<name>. Ordinary unpacked extensions are activated immediately over
         CDP without restarting Chromium, while their runtime flags are persisted for future starts.
+        Content scripts are applied to existing pages after their next navigation or reload.
         Extensions that require enterprise policy still restart Chromium and wait for DevTools
         readiness before returning success.
       operationId: uploadExtensionsAndRestart

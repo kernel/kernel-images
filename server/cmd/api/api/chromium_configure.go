@@ -77,6 +77,9 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 		return cfg400("no configuration fields provided"), nil
 	}
 
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
+
 	needsStop := chromiumNeedsStopCycle(st)
 	chromiumStopped := false
 	restartAfterStop := func() error {

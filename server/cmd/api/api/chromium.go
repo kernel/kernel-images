@@ -28,8 +28,11 @@ type extensionZipItem struct {
 	name    string
 }
 
-// chromiumFlagsPath is the runtime flags file read by the chromium-launcher at startup.
-const chromiumFlagsPath = "/chromium/flags"
+const (
+	// chromiumFlagsPath is the runtime flags file read by the chromium-launcher at startup.
+	chromiumFlagsPath = "/chromium/flags"
+	extensionsBaseDir = "/home/kernel/extensions"
+)
 
 // UploadExtensionsAndRestart handles multipart upload of one or more extension zips and extracts
 // them under /home/kernel/extensions/<name>. Unpacked extensions are loaded immediately over CDP;
@@ -145,6 +148,9 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		extItems = append(extItems, extensionZipItem{zipTemp: p.zipTemp, name: p.name})
 	}
 
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
+
 	requiresRestart, reqMsg, err := s.applyExtensionZipItems(ctx, extItems)
 	if reqMsg != "" {
 		return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: reqMsg}}, nil
@@ -159,10 +165,16 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 				InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
 			}, nil
 		}
-	} else if err := s.loadUnpackedExtensions(ctx, extItems); err != nil {
-		return oapi.UploadExtensionsAndRestart500JSONResponse{
-			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
-		}, nil
+	} else if loadErr := s.loadUnpackedExtensions(ctx, extItems); loadErr != nil {
+		log.Warn("CDP extension load failed, restarting Chromium", "error", loadErr)
+		if restartErr := s.restartChromiumAndWait(ctx, "extension upload fallback"); restartErr != nil {
+			return oapi.UploadExtensionsAndRestart500JSONResponse{
+				InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+					Message: fmt.Sprintf("CDP extension load failed (%v), and fallback restart failed: %v", loadErr, restartErr),
+				},
+			}, nil
+		}
+		requiresRestart = true
 	}
 
 	log.Info("extensions ready", "restarted", requiresRestart, "elapsed", time.Since(start).String())
@@ -173,13 +185,12 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 // configuration. The boolean result reports whether enterprise policy requires a restart.
 func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensionZipItem) (bool, string, error) {
 	log := logger.FromContext(ctx)
-	extBase := "/home/kernel/extensions"
-	if err := os.MkdirAll(extBase, 0o755); err != nil {
+	if err := os.MkdirAll(extensionsBaseDir, 0o755); err != nil {
 		return false, "", fmt.Errorf("failed to create extension base dir: %w", err)
 	}
 
 	for _, p := range items {
-		dest := filepath.Join(extBase, p.name)
+		dest := filepath.Join(extensionsBaseDir, p.name)
 		if _, err := os.Stat(dest); err == nil {
 			return false, fmt.Sprintf("extension name already exists: %s", p.name), nil
 		} else if !os.IsNotExist(err) {
@@ -202,7 +213,7 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 	}()
 
 	for _, p := range items {
-		dest := filepath.Join(extBase, p.name)
+		dest := filepath.Join(extensionsBaseDir, p.name)
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			log.Error("failed to create extension dir", "error", err)
 			return false, "", fmt.Errorf("failed to create extension dir: %w", err)
@@ -230,7 +241,7 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 	requiresRestart := false
 
 	for _, p := range items {
-		extensionPath := filepath.Join(extBase, p.name)
+		extensionPath := filepath.Join(extensionsBaseDir, p.name)
 		extensionName := p.name
 		manifestPath := filepath.Join(extensionPath, "manifest.json")
 		updateXMLPath := filepath.Join(extensionPath, "update.xml")
@@ -312,19 +323,17 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 
 func (s *ApiService) loadUnpackedExtensions(ctx context.Context, items []extensionZipItem) error {
 	log := logger.FromContext(ctx)
-	for _, item := range items {
-		path := filepath.Join("/home/kernel/extensions", item.name)
-		var id string
-		if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
-			loadedID, err := client.LoadUnpackedExtension(cdpCtx, path)
-			id = loadedID
-			return err
-		}); err != nil {
-			return fmt.Errorf("failed to load extension %s: %w", item.name, err)
+	return s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		for _, item := range items {
+			path := filepath.Join(extensionsBaseDir, item.name)
+			id, err := client.LoadUnpackedExtension(cdpCtx, path)
+			if err != nil {
+				return fmt.Errorf("failed to load extension %s: %w", item.name, err)
+			}
+			log.Info("loaded unpacked extension over CDP", "name", item.name, "id", id)
 		}
-		log.Info("loaded unpacked extension over CDP", "name", item.name, "id", id)
-	}
-	return nil
+		return nil
+	})
 }
 
 // mergeAndWriteChromiumFlags reads existing flags, merges them with new flags,
@@ -599,6 +608,9 @@ func (s *ApiService) PatchChromiumPolicies(ctx context.Context, request oapi.Pat
 		return oapi.PatchChromiumPolicies400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 	}
 
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
+
 	if err := s.policy.ApplyOverrides(overrides); err != nil {
 		if strings.Contains(err.Error(), "invalid chromium policy overrides") || strings.Contains(err.Error(), "cannot be overridden") {
 			return oapi.PatchChromiumPolicies400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
@@ -643,6 +655,9 @@ func (s *ApiService) PatchChromiumFlags(ctx context.Context, request oapi.PatchC
 			return oapi.PatchChromiumFlags400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: fmt.Sprintf("invalid flag format: %s (must start with --)", flag)}}, nil
 		}
 	}
+
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
 
 	// Merge and write flags
 	if _, err := s.mergeAndWriteChromiumFlags(ctx, request.Body.Flags); err != nil {
