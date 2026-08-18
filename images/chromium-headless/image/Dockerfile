@@ -60,8 +60,8 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     <<-'EOT'
     set -eux
     FFMPEG_CACHE_PATH="/tmp/cache/ffmpeg"
-    FFMPEG_RELEASE="autobuild-2026-08-16-13-00"
-    FFMPEG_VERSION="n7.1.5-16-g9a4bb2c579"
+    FFMPEG_RELEASE="autobuild-2026-07-31-14-10"
+    FFMPEG_VERSION="n7.1.5-12-g1fdbca85aa"
     case ${TARGETARCH:-amd64} in
         "amd64") FFMPEG_TARGET_ARCH="64" ;;
         "arm64") FFMPEG_TARGET_ARCH="arm64" ;;
