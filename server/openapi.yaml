@@ -1142,6 +1142,46 @@ paths:
 
   /chromium/upload-extensions-and-restart:
     post:
+      summary: Upload one or more unpacked extensions (as zips) and restart Chromium
+      description: |
+        Upload one or more extension zip archives, extract them under /home/kernel/extensions/<name>,
+        set runtime extension flags in /chromium/flags, restart Chromium via supervisord, and wait
+        until the Chromium DevTools "listening" log line is observed before returning success.
+      operationId: uploadExtensionsAndRestart
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                extensions:
+                  type: array
+                  description: List of extensions to upload and activate
+                  items:
+                    type: object
+                    properties:
+                      zip_file:
+                        type: string
+                        format: binary
+                        description: Zip archive containing an unpacked Chromium extension (must include manifest.json)
+                      name:
+                        type: string
+                        description: Folder name to place the extension under /home/kernel/extensions/<name>
+                        pattern: "^[A-Za-z0-9._-]{1,255}$"
+                    required: [zip_file, name]
+              required: [extensions]
+      responses:
+        "201":
+          description: Extensions uploaded, Chromium restarted, and DevTools is ready
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /chromium/upload-extensions:
+    post:
       summary: Upload and activate one or more unpacked extensions
       description: |
         Upload one or more extension zip archives and extract them under
@@ -1150,7 +1190,7 @@ paths:
         Content scripts are applied to existing pages after their next navigation or reload.
         Extensions that require enterprise policy still restart Chromium and wait for DevTools
         readiness before returning success.
-      operationId: uploadExtensionsAndRestart
+      operationId: uploadExtensions
       x-telemetry-category: platform
       requestBody:
         required: true

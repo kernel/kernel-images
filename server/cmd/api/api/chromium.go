@@ -34,10 +34,31 @@ const (
 	extensionsBaseDir = "/home/kernel/extensions"
 )
 
-// UploadExtensionsAndRestart handles multipart upload of one or more extension zips and extracts
-// them under /home/kernel/extensions/<name>. Unpacked extensions are loaded immediately over CDP;
-// extensions that require enterprise policy restart Chromium after their policy is installed.
+// UploadExtensionsAndRestart uploads extensions and always restarts Chromium.
 func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oapi.UploadExtensionsAndRestartRequestObject) (oapi.UploadExtensionsAndRestartResponseObject, error) {
+	return s.uploadExtensions(ctx, request, true)
+}
+
+// UploadExtensions uploads extensions and activates ordinary unpacked extensions over CDP.
+func (s *ApiService) UploadExtensions(ctx context.Context, request oapi.UploadExtensionsRequestObject) (oapi.UploadExtensionsResponseObject, error) {
+	response, err := s.uploadExtensions(ctx, oapi.UploadExtensionsAndRestartRequestObject{Body: request.Body}, false)
+	if err != nil {
+		return nil, err
+	}
+
+	switch response := response.(type) {
+	case oapi.UploadExtensionsAndRestart201Response:
+		return oapi.UploadExtensions201Response{}, nil
+	case oapi.UploadExtensionsAndRestart400JSONResponse:
+		return oapi.UploadExtensions400JSONResponse{BadRequestErrorJSONResponse: response.BadRequestErrorJSONResponse}, nil
+	case oapi.UploadExtensionsAndRestart500JSONResponse:
+		return oapi.UploadExtensions500JSONResponse{InternalErrorJSONResponse: response.InternalErrorJSONResponse}, nil
+	default:
+		return oapi.UploadExtensions500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "internal error"}}, nil
+	}
+}
+
+func (s *ApiService) uploadExtensions(ctx context.Context, request oapi.UploadExtensionsAndRestartRequestObject, forceRestart bool) (oapi.UploadExtensionsAndRestartResponseObject, error) {
 	log := logger.FromContext(ctx)
 	start := time.Now()
 	log.Info("upload extensions: begin")
@@ -159,7 +180,8 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
 	}
 
-	if requiresRestart {
+	restarted := forceRestart || requiresRestart
+	if restarted {
 		if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
 			return oapi.UploadExtensionsAndRestart500JSONResponse{
 				InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
@@ -174,10 +196,10 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 				},
 			}, nil
 		}
-		requiresRestart = true
+		restarted = true
 	}
 
-	log.Info("extensions ready", "restarted", requiresRestart, "elapsed", time.Since(start).String())
+	log.Info("extensions ready", "restarted", restarted, "elapsed", time.Since(start).String())
 	return oapi.UploadExtensionsAndRestart201Response{}, nil
 }
 

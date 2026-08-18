@@ -99,6 +99,7 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"StreamTelemetryEvents":      oapi.TelemetryEventCategory("platform"),
 	"TakeScreenshot":             oapi.TelemetryEventCategory("control"),
 	"TypeText":                   oapi.TelemetryEventCategory("control"),
+	"UploadExtensions":           oapi.TelemetryEventCategory("platform"),
 	"UploadExtensionsAndRestart": oapi.TelemetryEventCategory("platform"),
 	"UploadFiles":                oapi.TelemetryEventCategory("platform"),
 	"UploadZip":                  oapi.TelemetryEventCategory("platform"),

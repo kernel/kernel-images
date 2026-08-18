@@ -278,11 +278,11 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		err = w.Close()
 		require.NoError(t, err)
 		start := time.Now()
-		rsp, err := client.UploadExtensionsAndRestartWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
 		elapsed := time.Since(start)
-		require.NoError(t, err, "uploadExtensionsAndRestart request error")
+		require.NoError(t, err, "uploadExtensions request error")
 		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
-		t.Logf("/chromium/upload-extensions-and-restart completed in %s (%d ms)", elapsed.String(), elapsed.Milliseconds())
+		t.Logf("/chromium/upload-extensions completed in %s (%d ms)", elapsed.String(), elapsed.Milliseconds())
 	}
 
 	browserWebSocketAfter, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
@@ -302,6 +302,28 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "title verify failed: %v output=%s", err, string(out))
 	}
+
+	// The legacy endpoint retains its unconditional restart behavior.
+	{
+		client, err := c.APIClient()
+		require.NoError(t, err)
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		fw, err := w.CreateFormFile("extensions.zip_file", "ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(extZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "restart-testext"))
+		require.NoError(t, w.Close())
+
+		rsp, err := client.UploadExtensionsAndRestartWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		require.NoError(t, err, "uploadExtensionsAndRestart request error")
+		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+	}
+
+	browserWebSocketAfterRestart, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after legacy extension upload")
+	require.NotEqual(t, browserWebSocketAfter, browserWebSocketAfterRestart, "legacy endpoint did not restart Chromium")
 }
 
 func TestScreenshotHeadless(t *testing.T) {
