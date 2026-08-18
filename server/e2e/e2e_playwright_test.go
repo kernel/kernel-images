@@ -81,13 +81,12 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Log("playwright execute API test passed")
 
 	// Reuse the same container/warm daemon connection to verify tab-binding
-	// behavior: when multiple tabs are open, `page` must bind to the most
-	// recently opened tab rather than the oldest one (the test image's Chrome
-	// build doesn't expose the CDP active-tab signal used by resolveActivePage
-	// in playwright-daemon.ts, so this exercises the fallback heuristic). Uses
-	// a `data:` URL for the second tab so the assertion doesn't depend on a
-	// second outbound network request.
-	t.Log("verifying page binds to the most recently opened tab")
+	// behavior: `page` must bind to the browser's actual foreground tab, not
+	// just the most recently opened one (resolveActivePage in
+	// playwright-daemon.ts, backed by the image's Chrome 150+ CDP `tabActive`
+	// signal). Uses a `data:` URL for the second tab so the assertion doesn't
+	// depend on a second outbound network request.
+	t.Log("verifying page binds to the foreground tab")
 	openSecondTabRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const second = await context.newPage();
@@ -101,8 +100,8 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.True(t, openSecondTabRsp.JSON200.Success, "expected open-second-tab success=true")
 	require.EqualValues(t, 2, openSecondTabRsp.JSON200.Result, "expected two open tabs")
 
-	// A fresh execute call must bind `page` to the newest tab, not the
-	// first-opened tab still sitting at example.com.
+	// A fresh execute call must bind `page` to the newest tab, which is also
+	// the foreground one right after opening it.
 	urlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return page.url();`,
 	})
@@ -110,9 +109,33 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Equal(t, http.StatusOK, urlRsp.StatusCode(), "unexpected status: %s body=%s", urlRsp.Status(), string(urlRsp.Body))
 	require.NotNil(t, urlRsp.JSON200)
 	require.True(t, urlRsp.JSON200.Success, "expected url request success=true")
-	require.Equal(t, "data:text/html,second-tab", urlRsp.JSON200.Result, "expected injected page to be the most recently opened tab")
+	require.Equal(t, "data:text/html,second-tab", urlRsp.JSON200.Result, "expected injected page to be the foreground tab")
 
-	t.Log("playwright most-recent-tab binding test passed")
+	// Bringing the first (oldest) tab back to the foreground must flip which
+	// page gets injected. Tab-creation order alone can't distinguish this case
+	// from the one above -- only the CDP `tabActive` signal can.
+	bringToFrontRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const first = context.pages()[0];
+			await first.bringToFront();
+			return first.url();
+		`,
+	})
+	require.NoError(t, err, "bring-to-front request error: %v", err)
+	require.Equal(t, http.StatusOK, bringToFrontRsp.StatusCode(), "unexpected status: %s body=%s", bringToFrontRsp.Status(), string(bringToFrontRsp.Body))
+	require.NotNil(t, bringToFrontRsp.JSON200)
+	require.True(t, bringToFrontRsp.JSON200.Success, "expected bring-to-front success=true")
+
+	refocusedUrlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return page.url();`,
+	})
+	require.NoError(t, err, "refocused url request error: %v", err)
+	require.Equal(t, http.StatusOK, refocusedUrlRsp.StatusCode(), "unexpected status: %s body=%s", refocusedUrlRsp.Status(), string(refocusedUrlRsp.Body))
+	require.NotNil(t, refocusedUrlRsp.JSON200)
+	require.True(t, refocusedUrlRsp.JSON200.Success, "expected refocused url request success=true")
+	require.Contains(t, refocusedUrlRsp.JSON200.Result, "example.com", "expected injected page to follow foreground focus, not tab-creation order")
+
+	t.Log("playwright foreground-tab binding test passed")
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {

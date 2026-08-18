@@ -136,21 +136,17 @@ async function ensureBrowserConnection(): Promise<Browser> {
 // on `tab` targets from the real tab strip state; the Playwright `Page` for that
 // tab is found by relating the tab target to its page target with
 // `Target.autoAttachRelated`. Every session used here is temporary and detached
-// before returning, so this adds no cross-request state to the daemon. Returns
-// null when the signal isn't available (older Chrome) or no match is found, so
-// callers can fall back to a heuristic.
-async function resolveActivePage(browser: Browser, context: BrowserContext): Promise<Page | null> {
-  let root: Awaited<ReturnType<Browser['newBrowserCDPSession']>> | undefined;
+// before returning, so this adds no cross-request state to the daemon.
+async function resolveActivePage(browser: Browser, context: BrowserContext): Promise<Page> {
+  const root = await browser.newBrowserCDPSession();
 
   try {
-    root = await browser.newBrowserCDPSession();
-
     const { targetInfos } = await root.send('Target.getTargets', {
       filter: [{ type: 'tab', exclude: false }, { exclude: true }],
     });
 
     const activeTab = targetInfos.find(target => (target.embedderData as any)?.tabActive === true);
-    if (!activeTab) return null;
+    if (!activeTab) throw new Error('no foreground tab reported by CDP');
 
     const relatedPageIds = new Set<string>();
     root.on('Target.attachedToTarget', event => {
@@ -175,14 +171,9 @@ async function resolveActivePage(browser: Browser, context: BrowserContext): Pro
       }
     }
 
-    return null;
-  } catch {
-    // Session creation, or Target.getTargets/autoAttachRelated, can fail or be
-    // unsupported on older Chrome; fall back to the heuristic rather than
-    // failing the request.
-    return null;
+    throw new Error('foreground tab has no matching Playwright page');
   } finally {
-    await root?.detach().catch(() => {});
+    await root.detach().catch(() => {});
   }
 }
 
@@ -227,16 +218,11 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
     const contexts = browserInstance.contexts();
     const context = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
     const pages = context.pages();
-    // Bind `page` to the actual foreground tab (see resolveActivePage). On Chrome
-    // builds that don't expose that signal, fall back to the most recently opened
-    // tab: context.pages() is ordered by creation, so the last entry is the
-    // newest tab — the one an automation has just navigated to (e.g. via a link
-    // click or window.open). Using pages[0] bound `page` to the oldest tab, so
+    // Bind `page` to the actual foreground tab (see resolveActivePage). Using
+    // pages[0] bound `page` to the oldest tab regardless of which was active, so
     // calls like page.pdf() operated on the wrong tab whenever more than one was
     // open.
-    const page = pages.length > 0
-      ? (await resolveActivePage(browserInstance, context)) ?? pages[pages.length - 1]
-      : await context.newPage();
+    const page = pages.length > 0 ? await resolveActivePage(browserInstance, context) : await context.newPage();
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);
