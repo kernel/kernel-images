@@ -491,16 +491,57 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	}
 }
 
-func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, _ string) {
+func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, sessionID string) {
 	m.pendReqMu.Lock()
-	if state, ok := m.pendingRequests[p.RequestID]; ok {
-		state.status = p.Response.Status
-		state.statusText = p.Response.StatusText
-		state.resHeaders = p.Response.Headers
-		state.mimeType = p.Response.MimeType
-		m.pendingRequests[p.RequestID] = state
+	var (
+		state networkReqState
+		ok    bool
+	)
+	if st, present := m.pendingRequests[p.RequestID]; present {
+		st.status = p.Response.Status
+		st.statusText = p.Response.StatusText
+		st.resHeaders = p.Response.Headers
+		st.mimeType = p.Response.MimeType
+		m.pendingRequests[p.RequestID] = st
+		state, ok = st, true
 	}
 	m.pendReqMu.Unlock()
+
+	// Branded proxy error pages are always served as 502 (the producer
+	// hardcodes that status), so gate detection on it exactly and leave every
+	// other response paying nothing extra beyond the status compare.
+	code, isProxyErr := "", false
+	if p.Response.Status == 502 {
+		code, isProxyErr = proxyErrorCode(p.Response.Headers)
+	}
+	if !isProxyErr {
+		return
+	}
+
+	var (
+		navSeq  int64
+		method  string
+		url     *string
+		frame   *string
+		loader  *string
+		resType string
+	)
+	if ok {
+		navSeq, method = state.navSeq, state.method
+		url, frame, loader = optPtr(state.url), optPtr(state.frameID), optPtr(state.loaderID)
+		resType = state.resourceType
+	} else {
+		// A branded response with no tracked pending request (e.g. in flight
+		// when CDP attached) still carries its context on the params; fall back
+		// to the current nav sequence like Network.loadingFailed so the event
+		// stays correlateable by nav_seq.
+		url, frame, loader = optPtr(p.Response.URL), optPtr(p.FrameID), optPtr(p.LoaderID)
+		resType = p.Type
+		if cs := m.computedFor(sessionID); cs != nil {
+			navSeq = int64(cs.currentNavSeq())
+		}
+	}
+	m.publishProxyError(sessionID, p.RequestID, code, p.Response.Status, navSeq, method, resType, url, frame, loader)
 }
 
 func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoadingFinishedParams, sessionID string) {
@@ -622,11 +663,94 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 	}
 	data, _ := json.Marshal(failPayload)
 	m.publishEvent(EventNetworkLoadingFailed, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.loadingFailed", data, sessionID)
+
 	if ok {
 		if cs := m.computedFor(state.sessionID); cs != nil {
 			cs.onLoadingFinished()
 		}
 	}
+}
+
+// proxyErrorHeader is the response header the metro egress host-proxy sets on
+// branded 502 error pages to signal a proxy-layer failure to automation clients.
+const proxyErrorHeader = "x-kernel-proxy-error"
+
+// proxyErrorCode returns the X-Kernel-Proxy-Error header value from a CDP
+// response header map, if present. Callers gate on 5xx status before reaching
+// here, so the full header map decode is already off the common path.
+func proxyErrorCode(resHeaders json.RawMessage) (string, bool) {
+	if len(resHeaders) == 0 {
+		return "", false
+	}
+	var hdrs map[string]any
+	if err := json.Unmarshal(resHeaders, &hdrs); err != nil {
+		return "", false
+	}
+	for k, v := range hdrs {
+		if strings.EqualFold(k, proxyErrorHeader) {
+			if s, ok := v.(string); ok && s != "" {
+				return s, true
+			}
+		}
+	}
+	return "", false
+}
+
+// proxyErrorMinInterval bounds proxy_error volume: proxy failures repeat per
+// request during an outage, and a single typed signal per code is enough to
+// alert on while keeping the fixed-capacity ring usable at peak.
+const proxyErrorMinInterval = time.Second
+
+// proxyErrorRateLimited reports whether a proxy_error for the given session,
+// code, and resource type should be dropped. Codes are validated against the
+// published enum (kept in lockstep with the metro egressproxy header codes in
+// kernel/kernel packages/metro-api/lib/egressproxy/proxy_error.go), so unknown
+// wire values are dropped and never occupy a rate-limit slot. At most one event
+// per session+code+resource_type per interval is emitted; the interval is a
+// sampling bound, not a per-URL dedup.
+func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bool {
+	if !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
+		m.log.Warn("cdpmonitor: dropping proxy_error with unknown code", "code", code)
+		return true
+	}
+	now := time.Now()
+	key := sessionID + ":" + code + ":" + resourceType
+	m.proxyRateMu.Lock()
+	defer m.proxyRateMu.Unlock()
+	last, ok := m.proxyLastEmit[key]
+	if ok && now.Sub(last) < proxyErrorMinInterval {
+		return true
+	}
+	m.proxyLastEmit[key] = now
+	return false
+}
+
+// publishProxyError emits a typed proxy_error event for a branded proxy-layer
+// failure observed on the browser's network path (a 5xx response carrying the
+// X-Kernel-Proxy-Error header). The code is the header value, validated against
+// the published enum.
+func (m *Monitor) publishProxyError(sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
+	if m.proxyErrorRateLimited(sessionID, code, resourceType) {
+		return
+	}
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
+	data, _ := json.Marshal(oapi.BrowserProxyErrorEventData{
+		SessionId:    sessionID,
+		TargetId:     info.targetID,
+		TargetType:   oapi.BrowserTargetType(info.targetType),
+		NavSeq:       navSeq,
+		RequestId:    requestID,
+		Url:          url,
+		FrameId:      frameID,
+		LoaderId:     loaderID,
+		Method:       optPtr(method),
+		Status:       status,
+		Code:         oapi.BrowserProxyErrorEventDataCode(code),
+		ResourceType: optPtr(resourceType),
+	})
+	m.publishEvent(EventProxyError, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.responseReceived", data, sessionID)
 }
 
 func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID string) {
