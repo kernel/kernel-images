@@ -21,6 +21,12 @@ func TestCategoryMapsAgreeOnAPICallSplit(t *testing.T) {
 	assert.Equal(t, Platform, cat)
 }
 
+func TestCaptchaSolveStartedCategory(t *testing.T) {
+	cat, ok := CategoryForType("captcha_solve_started")
+	require.True(t, ok)
+	assert.Equal(t, Captcha, cat)
+}
+
 func TestCategoryForOperation(t *testing.T) {
 	require.NotEmpty(t, categoryByOperationID, "generator produced no operations")
 

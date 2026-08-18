@@ -5623,12 +5623,10 @@ components:
     BrowserCaptchaType:
       type: string
       description: >
-        Captcha vendor family. Producers normalize provider-specific task
-        names into this set: enterprise variants of recaptcha collapse into
-        their version bucket (v2 / v3), and anything not covered (e.g.
-        DataDome, MtCaptcha, plain OCR) is reported as `other`.
-        `press_and_hold` is the vision-based PerimeterX/HUMAN press-and-hold
-        challenge solved in-VM.
+        Captcha kind reported by the solver. Provider-specific task names are
+        normalized into this set: enterprise variants of reCAPTCHA collapse
+        into their version bucket (v2 / v3), `press_and_hold` covers
+        press-and-hold challenges, and unlisted kinds are reported as `other`.
       enum:
         - hcaptcha
         - recaptcha_v2
@@ -5642,30 +5640,24 @@ components:
       description: >
         Groups every solver task belonging to one visible challenge. An
         image-grid captcha retries with a fresh task per attempt, so the
-        tasks of a single challenge share a `challenge_id` while each
-        carries its own `task_id`. Minted by the producer that owns the
-        challenge lifecycle, opaque, and not stable across page reloads or
-        re-renders of the same widget.
-
-
-        Grouping only. It does not mark which task in a challenge was the
-        last: task ordering is not guaranteed, and a challenge whose final
-        task succeeded may still have been rejected by the site. Absent when
-        the producer has no challenge context for the task (a solver task
-        forwarded on its own), and absence carries no information about
+        tasks of a single challenge share a `challenge_id` and may each carry
+        their own `task_id`. This opaque identifier is not stable across page
+        reloads or re-renders of the same widget. It does not indicate task
+        ordering or challenge completion. It is absent when the producer cannot
+        identify the containing challenge; absence carries no information about
         solve state.
     BrowserCaptchaSolveStartedEventData:
       type: object
       description: >
         Per-task payload for `captcha_solve_started` events. Emitted when a
-        solver accepts a task, once per solver task — a single visible
-        challenge can produce many tasks (e.g. image-grid captchas retry with
-        a fresh task per attempt), so consumers must not assume one started
-        event per challenge or pair events by arrival order. Correlate to the
-        terminal `captcha_solve_result` via `task_id`, and group the tasks of
-        one challenge via `challenge_id`; a started event may
-        also arrive without a matching result (or vice versa) if delivery
-        fails, so absence of either is not a solve-state signal.
+        solver accepts a task, once per solver task. A single visible challenge
+        can produce many tasks, so consumers must not assume one started event
+        per challenge or pair events by arrival order. When present, `task_id`
+        correlates this event with a terminal `captcha_solve_result`, and
+        `challenge_id` groups tasks from one visible challenge. Delivery is not
+        ordered: a started event may arrive after its result, and either event
+        may be missing. Arrival or absence therefore does not indicate current
+        solve state.
       additionalProperties: false
       required: [captcha_type]
       properties:
@@ -5674,8 +5666,8 @@ components:
         task_id:
           type: string
           description: >
-            Solver-assigned identifier, shared with the matching
-            `captcha_solve_result`. Opaque.
+            Opaque solver-assigned identifier. When present, it is shared with
+            the matching `captcha_solve_result`.
         challenge_id:
           $ref: "#/components/schemas/BrowserCaptchaChallengeID"
         website_host:
@@ -5686,7 +5678,7 @@ components:
           description: Path of the page where the captcha is being solved. Query string excluded.
     BrowserCaptchaSolveStartedEvent:
       type: object
-      description: A captcha solver accepted a task and a solve is in flight.
+      description: A captcha solver accepted a task.
       required: [ts, type, category, source]
       properties:
         ts:
