@@ -162,11 +162,13 @@ type enumValue interface {
 }
 
 // enumOf narrows a client string to a generated enum, for a field the schema
-// always carries.
+// always carries. An empty or unrecognised value maps to the "other" fallback
+// so the emitted payload is always schema-valid.
 func enumOf[T enumValue](v string) T {
-	out := T(v)
-	if v == "" || out.Valid() {
-		return out
+	if v != "" {
+		if out := T(v); out.Valid() {
+			return out
+		}
 	}
 	return T(unknownEnumValue)
 }
@@ -310,6 +312,8 @@ func namedKey(key *string) *string {
 // went to and the path and query can carry a reset token, so neither leaves
 // the VM through the control category; the page category is where a reader
 // opts in to navigation URLs.
+const maxURLSchemeBytes = 32
+
 func urlScheme(raw string) *string {
 	if raw == "" {
 		return nil
@@ -319,6 +323,9 @@ func urlScheme(raw string) *string {
 		return nil
 	}
 	scheme := parsed.Scheme
+	if len(scheme) > maxURLSchemeBytes {
+		scheme = scheme[:maxURLSchemeBytes]
+	}
 	return &scheme
 }
 

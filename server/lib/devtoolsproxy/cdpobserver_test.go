@@ -106,9 +106,9 @@ func TestQueueSaturationIsCounted(t *testing.T) {
 	}
 }
 
-// A big frame is admitted on its merits, not rejected for its size: the pump
-// cannot tell a large paste from library traffic, and rejecting either as a
-// lost command is wrong. Only the queue's byte budget turns one away.
+// A big frame is admitted on its merits, not rejected for its size: a large
+// paste is a real command, and rejecting it as a lost command is wrong. Only
+// the queue's byte budget turns one away.
 func TestLargeFramesAreClassifiedRatherThanRejected(t *testing.T) {
 	pub := &countingPublisher{}
 	o := newTestObserver(t, pub.publish, controlOn)

@@ -142,13 +142,12 @@ func (o *cdpObserver) Excluded() int64 {
 	return o.excluded.Load()
 }
 
-// Dropped reports how many forwarded frames the classifier never saw or could
-// not read: queue saturation, classification panics, commands whose arguments
-// did not decode, and anything still queued once the worker has stopped.
-// Reported on cdp_disconnect so a reader sees the loss rather than only the
-// VM's log. A saturated queue rejects whatever arrives next, which may be
-// library traffic that would have produced nothing, so this is an upper bound
-// on commands lost rather than a count.
+// Dropped reports how many supported commands the classifier never saw or
+// could not read: queue saturation, classification panics, commands whose
+// arguments did not decode, and anything still queued once the worker has
+// stopped. Reported on cdp_disconnect so a reader sees the loss rather than
+// only the VM's log. Every increment is a real lost command — unsupported
+// and excluded methods are filtered before admission.
 func (o *cdpObserver) Dropped() int64 {
 	if o == nil {
 		return 0

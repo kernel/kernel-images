@@ -612,6 +612,7 @@ var paramForField = map[string]string{
 	"loader_id":          "loaderId",
 	"download_guid":      "guid",
 	"panel_id":           "panelId",
+	"url_scheme":         "url", // derived via urlScheme(); test value is scheme://x
 }
 
 // Every field the schema bounds has to be bounded in the payload too, on every
@@ -632,6 +633,8 @@ func TestBoundedFieldsAreClippedOnEveryCommand(t *testing.T) {
 					frame = fmt.Sprintf(`{"id":1,"sessionId":%q,"method":%q,"params":{}}`, huge, method)
 				case "connection_id":
 					t.Skip("supplied by the proxy, covered by TestConnectionIdIsClipped")
+				case "url_scheme":
+					frame = fmt.Sprintf(`{"id":1,"method":%q,"params":{%q:%q}}`, method, param, huge+"://x")
 				default:
 					frame = fmt.Sprintf(`{"id":1,"method":%q,"params":{%q:%q}}`, method, param, huge)
 				}
@@ -755,6 +758,11 @@ func TestUnrecognisedEnumValuesStaySchemaValid(t *testing.T) {
 		`{"id":1,"method":"Page.navigate","params":{"url":"https://h.example/","transitionType":"osmosis","referrerPolicy":"whatever"}}`,
 		`{"id":1,"method":"Browser.setWindowBounds","params":{"windowId":1,"bounds":{"windowState":"sideways"}}}`,
 		`{"id":1,"method":"Page.setWebLifecycleState","params":{"state":"marinating"}}`,
+		// Missing type field: enumOf must produce the fallback, not "".
+		`{"id":1,"method":"Input.dispatchMouseEvent","params":{}}`,
+		`{"id":1,"method":"Input.dispatchKeyEvent","params":{}}`,
+		`{"id":1,"method":"Input.dispatchTouchEvent","params":{"touchPoints":[]}}`,
+		`{"id":1,"method":"Input.dispatchDragEvent","params":{}}`,
 	} {
 		ev, ok := classifyFrame(t, frame, nil)
 		if !ok {
@@ -821,6 +829,16 @@ func assertPayloadEnumsValid(t *testing.T, payload []byte) {
 		v, _ := data.AsBrowserCdpBrowserSetWindowBoundsCommandData()
 		if v.WindowState != nil && !v.WindowState.Valid() {
 			t.Errorf("window_state %q fails Valid()", *v.WindowState)
+		}
+	case "Input.dispatchKeyEvent":
+		v, _ := data.AsBrowserCdpInputDispatchKeyEventCommandData()
+		if !v.EventType.Valid() {
+			t.Errorf("event_type %q fails Valid()", v.EventType)
+		}
+	case "Input.dispatchTouchEvent":
+		v, _ := data.AsBrowserCdpInputDispatchTouchEventCommandData()
+		if !v.EventType.Valid() {
+			t.Errorf("event_type %q fails Valid()", v.EventType)
 		}
 	case "Page.setWebLifecycleState":
 		v, _ := data.AsBrowserCdpPageSetWebLifecycleStateCommandData()

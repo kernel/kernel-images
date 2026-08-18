@@ -4296,14 +4296,10 @@ components:
             the same browser are told apart by this.
         url_scheme:
           type: string
+          maxLength: 32
           description: >
             Scheme of the destination URL (e.g. `https`, `about`, `data`).
             The rest of the URL is never captured.
-        url_host:
-          type: string
-          description: >
-            Host of the destination URL. Path, query and fragment are never
-            captured; a reset token lives in those.
         transition_type:
           $ref: "#/components/schemas/BrowserCdpTransitionType"
           description: >
@@ -4403,11 +4399,6 @@ components:
           type: boolean
           description: >
             Whether the reload bypassed the cache.
-        script_present:
-          type: boolean
-          description: >
-            Whether an injected script was supplied. The script itself is
-            never captured.
         script_length:
           type: integer
           description: >
@@ -4842,14 +4833,10 @@ components:
             the same browser are told apart by this.
         url_scheme:
           type: string
+          maxLength: 32
           description: >
             Scheme of the destination URL (e.g. `https`, `about`, `data`).
             The rest of the URL is never captured.
-        url_host:
-          type: string
-          description: >
-            Host of the destination URL. Path, query and fragment are never
-            captured; a reset token lives in those.
         left:
           type: integer
           description: >
@@ -5467,14 +5454,14 @@ components:
         telemetry_dropped:
           type: integer
           description: >
-            Number of forwarded client frames the classifier never saw,
-            because it could not keep up or because classification failed.
-            An upper bound on lost commands rather than a count: a saturated
-            queue turns away whatever arrives next, which may be library
-            traffic that would have produced no event. Telemetry loss only;
-            every command was still relayed to the browser. Always present on
-            events from images that report it; absent on events from an image
-            predating the field, which is not the same as zero.
+            Number of supported browser-control commands that were forwarded
+            to the browser but never classified, because the queue was full
+            or classification panicked. Every increment is a real lost
+            command — unsupported and excluded methods are filtered before
+            admission and never count toward this total. Telemetry loss
+            only; every command was still relayed to the browser. Always
+            present on images that report it; absent on images predating the
+            field, which is not the same as zero.
         reason:
           type: string
           description: >
