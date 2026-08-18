@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/kernel/kernel-images/server/lib/wsdrain"
@@ -22,6 +23,13 @@ type Conn interface {
 // It returns the (possibly modified) message bytes to forward.
 type MessageTransform func(direction string, mt websocket.MessageType, msg []byte) []byte
 
+// Observer is called after a message has been successfully written to the
+// other side, with ts set to the time that write completed (Unix
+// microseconds). It runs on the pump goroutine, so anything it does delays the
+// next message: hand work to a worker rather than doing it here. msg is not
+// retained by the pump after the call, so an observer may take ownership.
+type Observer func(direction string, mt websocket.MessageType, msg []byte, ts int64)
+
 // ProxyOptions configures the proxy accept/dial behavior and optional message
 // transformation. Zero values are valid and use sensible defaults.
 type ProxyOptions struct {
@@ -29,6 +37,7 @@ type ProxyOptions struct {
 	DialOptions   *websocket.DialOptions
 	Logger        *slog.Logger
 	Transform     MessageTransform
+	Observe       Observer
 	// Registry, when set, tracks the accepted client connection so it is
 	// closed with a Going Away frame on server shutdown.
 	Registry *wsdrain.Registry
@@ -54,8 +63,10 @@ const (
 // Pump bidirectionally copies messages between client and upstream until
 // either side errors or ctx is cancelled, then calls onClose with the cause.
 // If transform is non-nil it is called for every message; the returned bytes
-// are forwarded to the other side.
-func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExitCause), logger *slog.Logger, transform MessageTransform) {
+// are forwarded to the other side. If observe is non-nil it is called for
+// every message that was forwarded successfully, so a message whose write
+// failed is never observed.
+func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExitCause), logger *slog.Logger, transform MessageTransform, observe Observer) {
 	causeChan := make(chan PumpExitCause, 2)
 
 	go func() {
@@ -73,6 +84,9 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExi
 				logger.Error("upstream write error", slog.String("err", err.Error()))
 				causeChan <- PumpExitUpstream
 				return
+			}
+			if observe != nil {
+				observe("->", mt, msg, time.Now().UnixMicro())
 			}
 		}
 	}()
@@ -92,6 +106,9 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExi
 				logger.Error("client write error", slog.String("err", err.Error()))
 				causeChan <- PumpExitClient
 				return
+			}
+			if observe != nil {
+				observe("<-", mt, msg, time.Now().UnixMicro())
 			}
 		}
 	}()
@@ -146,5 +163,5 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts Prox
 		})
 	}
 
-	Pump(r.Context(), clientConn, upstreamConn, cleanup, logger, opts.Transform)
+	Pump(r.Context(), clientConn, upstreamConn, cleanup, logger, opts.Transform, opts.Observe)
 }

@@ -1,7 +1,9 @@
 package telemetry
 
 import (
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -18,6 +20,10 @@ type TelemetryConfig struct {
 	// ExportOTLP forwards captured events to the configured OTLP endpoint.
 	// Off by default and independent of what is captured.
 	ExportOTLP bool
+	// ExcludedCdpMethods leaves the named browser-control methods out of the
+	// cdp_command stream. Empty reports every supported method. Telemetry only:
+	// an excluded command still reaches the browser.
+	ExcludedCdpMethods []oapi.BrowserCdpCommandMethod
 }
 
 // TelemetrySession manages a telemetry session against a shared EventStream.
@@ -36,6 +42,15 @@ type TelemetrySession struct {
 	categories      map[oapi.TelemetryEventCategory]struct{}
 	exportOTLP      bool
 	appliedAt       time.Time
+	excludedCdp     map[string]struct{}
+	// active mirrors "a session is running with these categories" for callers
+	// on a hot path, who must decide whether to do any work at all before they
+	// reach Publish and its mutex. nil means no session. Written under mu;
+	// the pointed-to set is never mutated after it is stored.
+	active atomic.Pointer[map[oapi.TelemetryEventCategory]struct{}]
+	// excludedCdpActive mirrors excludedCdp for the same reason. Never nil once
+	// stored, and the pointed-to set is never mutated after it is stored.
+	excludedCdpActive atomic.Pointer[map[string]struct{}]
 }
 
 func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
@@ -43,6 +58,19 @@ func NewTelemetrySession(es *events.EventStream) *TelemetrySession {
 		panic("telemetry: NewTelemetrySession requires a non-nil EventStream")
 	}
 	return &TelemetrySession{es: es, categories: categorySet(nil)}
+}
+
+// setActiveLocked republishes the lock-free view of the session state.
+// Requires s.mu to be held.
+func (s *TelemetrySession) setActiveLocked() {
+	if s.id == "" {
+		s.active.Store(nil)
+		return
+	}
+	cats := s.categories
+	s.active.Store(&cats)
+	excluded := s.excludedCdp
+	s.excludedCdpActive.Store(&excluded)
 }
 
 // categorySet builds the active filter set from the configured categories. An
@@ -62,6 +90,19 @@ func categorySet(cats []oapi.TelemetryEventCategory) map[oapi.TelemetryEventCate
 	return set
 }
 
+// excludedSet builds the cdp_command exclusion set. nil when nothing is
+// excluded, which is the common case and the cheapest lookup.
+func excludedSet(methods []oapi.BrowserCdpCommandMethod) map[string]struct{} {
+	if len(methods) == 0 {
+		return nil
+	}
+	set := make(map[string]struct{}, len(methods))
+	for _, m := range methods {
+		set[string(m)] = struct{}{}
+	}
+	return set
+}
+
 // Start begins a new telemetry session with the given ID and config. Sequence
 // numbers are process-monotonic and do not reset between sessions; a
 // Last-Event-ID from any previous session is valid for resuming the SSE stream.
@@ -73,6 +114,8 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.appliedAt = time.Now()
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
+	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
+	s.setActiveLocked()
 }
 
 // publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
@@ -117,6 +160,16 @@ func (s *TelemetrySession) ID() string {
 	return s.id
 }
 
+// RecordDropped notes that a consumer found a gap of n envelopes in the stream.
+func (s *TelemetrySession) RecordDropped(n uint64) {
+	s.es.RecordDropped(n)
+}
+
+// DroppedEvents returns the cumulative gap count across consumers.
+func (s *TelemetrySession) DroppedEvents() uint64 {
+	return s.es.DroppedEvents()
+}
+
 // Seq returns the sequence number of the last published event.
 func (s *TelemetrySession) Seq() uint64 {
 	return s.es.Seq()
@@ -138,7 +191,12 @@ func (s *TelemetrySession) Config() TelemetryConfig {
 	for c := range s.categories {
 		cats = append(cats, c)
 	}
-	return TelemetryConfig{Categories: cats, ExportOTLP: s.exportOTLP}
+	excluded := make([]oapi.BrowserCdpCommandMethod, 0, len(s.excludedCdp))
+	for m := range s.excludedCdp {
+		excluded = append(excluded, oapi.BrowserCdpCommandMethod(m))
+	}
+	sort.Slice(excluded, func(i, j int) bool { return excluded[i] < excluded[j] })
+	return TelemetryConfig{Categories: cats, ExportOTLP: s.exportOTLP, ExcludedCdpMethods: excluded}
 }
 
 // AppliedAt returns when the current configuration was applied, or the zero
@@ -155,25 +213,36 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	defer s.mu.Unlock()
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
+	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
+	s.setActiveLocked()
 }
 
 // CategoryEnabled reports whether events in category c are currently captured.
-// It returns false when no session is active.
+// It returns false when no session is active. Lock-free, so a caller on the
+// CDP forwarding path can check it per frame; Publish re-checks under mu.
 func (s *TelemetrySession) CategoryEnabled(c oapi.TelemetryEventCategory) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.id == "" {
+	cats := s.active.Load()
+	if cats == nil {
 		return false
 	}
-	_, ok := s.categories[c]
+	_, ok := (*cats)[c]
 	return ok
+}
+
+// ExcludedCdpMethods returns the methods left out of the cdp_command stream.
+// Lock-free for the same reason CategoryEnabled is; the returned set is
+// read-only and may be nil.
+func (s *TelemetrySession) ExcludedCdpMethods() map[string]struct{} {
+	excluded := s.excludedCdpActive.Load()
+	if excluded == nil {
+		return nil
+	}
+	return *excluded
 }
 
 // Active reports whether a telemetry session is currently running.
 func (s *TelemetrySession) Active() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.id != ""
+	return s.active.Load() != nil
 }
 
 // Stop ends the current telemetry session. The ring buffer is left intact so
@@ -186,4 +255,5 @@ func (s *TelemetrySession) Stop() {
 	// The session is over, so export is off; keep Config() authoritative for the
 	// desired export state after a clear.
 	s.exportOTLP = false
+	s.setActiveLocked()
 }

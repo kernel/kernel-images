@@ -128,7 +128,7 @@ func cdpEvent(typ string, cat oapi.TelemetryEventCategory) Event {
 
 func newTestRingBuffer(t *testing.T, capacity int) *ringBuffer {
 	t.Helper()
-	rb, err := newRingBuffer(capacity)
+	rb, err := newRingBuffer(capacity, DefaultRingMaxBytes)
 	require.NoError(t, err)
 	return rb
 }
@@ -361,9 +361,64 @@ func TestRingBufferResetWithActiveReader(t *testing.T) {
 
 func TestNewRingBufferRejectsNonPositiveCapacity(t *testing.T) {
 	for _, cap := range []int{0, -1} {
-		rb, err := newRingBuffer(cap)
+		rb, err := newRingBuffer(cap, DefaultRingMaxBytes)
 		assert.Nil(t, rb)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "capacity must be > 0")
 	}
+}
+
+// Capacity in envelopes bounds the count, not the memory: one slot holds
+// anything from a small control event to a base64 screenshot. The byte budget
+// is what keeps a run of large events from costing capacity times the largest
+// one, and a reader it evicts past sees a gap exactly as it would for eviction
+// by count.
+func TestRingBufferEvictsOnByteBudget(t *testing.T) {
+	const payload = 4096
+	// Room for four payloads, against a ring that would otherwise hold 64.
+	rb, err := newRingBuffer(64, 4*(payload+envelopeOverheadBytes))
+	require.NoError(t, err)
+
+	reader := rb.newReader(0)
+	big := make([]byte, payload)
+	for i := range big {
+		big[i] = 'x'
+	}
+	for seq := uint64(1); seq <= 20; seq++ {
+		rb.publish(Envelope{Seq: seq, Event: Event{Data: append([]byte(nil), big...)}})
+	}
+
+	assert.LessOrEqual(t, rb.bytes, rb.maxBytes, "ring held more than its byte budget")
+	assert.Greater(t, rb.oldestSeq(), uint64(1), "byte eviction should have moved the floor")
+
+	// The reader started at the beginning, so it is told what it missed.
+	res, ok := reader.TryRead()
+	require.True(t, ok)
+	assert.NotZero(t, res.Dropped, "a reader evicted past must see a gap")
+
+	// And the newest event is always still there.
+	res, ok = reader.TryRead()
+	require.True(t, ok)
+	require.NotNil(t, res.Envelope)
+	assert.LessOrEqual(t, res.Envelope.Seq, uint64(20))
+}
+
+// Small events are what the capacity is for: the byte budget must not evict
+// them early.
+func TestRingBufferKeepsSmallEventsUpToCapacity(t *testing.T) {
+	rb, err := newRingBuffer(64, DefaultRingMaxBytes)
+	require.NoError(t, err)
+	for seq := uint64(1); seq <= 64; seq++ {
+		rb.publish(Envelope{Seq: seq, Event: Event{Data: []byte(`{"method":"Page.reload"}`)}})
+	}
+	assert.Equal(t, uint64(1), rb.oldestSeq(), "nothing should have been evicted")
+}
+
+func TestRingBufferResetClearsByteAccounting(t *testing.T) {
+	rb, err := newRingBuffer(8, 1024)
+	require.NoError(t, err)
+	rb.publish(Envelope{Seq: 1, Event: Event{Data: make([]byte, 512)}})
+	rb.reset()
+	assert.Zero(t, rb.bytes)
+	assert.Equal(t, uint64(1), rb.oldestSeq())
 }

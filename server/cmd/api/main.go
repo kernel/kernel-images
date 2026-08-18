@@ -108,8 +108,12 @@ func main() {
 	}
 
 	// Construct events pipeline
+	// Sized for the control stream's event rate rather than the operational
+	// signals it started with: browser-control CDP commands are one event per
+	// keystroke and two per click, so a form-filling session produces thousands
+	// where a session used to produce tens.
 	eventStream, err := events.NewEventStream(events.EventStreamConfig{
-		RingCapacity: 1024,
+		RingCapacity: 8192,
 	})
 	if err != nil {
 		slogger.Error("failed to create event stream", "err", err)
@@ -321,8 +325,11 @@ func main() {
 	rDevtools.Get("/json/", jsonTargetHandler)
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
+	// Checked once per forwarded client frame, so it reads the session's
+	// lock-free view rather than taking the telemetry lock.
+	controlEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Control) }
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, telemetrySession.ExcludedCdpMethods, wsRegistry).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
