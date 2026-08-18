@@ -5637,6 +5637,23 @@ components:
         - geetest
         - press_and_hold
         - other
+    BrowserCaptchaChallengeID:
+      type: string
+      description: >
+        Groups every solver task belonging to one visible challenge. An
+        image-grid captcha retries with a fresh task per attempt, so the
+        tasks of a single challenge share a `challenge_id` while each
+        carries its own `task_id`. Minted by the producer that owns the
+        challenge lifecycle, opaque, and not stable across page reloads or
+        re-renders of the same widget.
+
+
+        Grouping only. It does not mark which task in a challenge was the
+        last: task ordering is not guaranteed, and a challenge whose final
+        task succeeded may still have been rejected by the site. Absent when
+        the producer has no challenge context for the task (a solver task
+        forwarded on its own), and absence carries no information about
+        solve state.
     BrowserCaptchaSolveStartedEventData:
       type: object
       description: >
@@ -5645,7 +5662,8 @@ components:
         challenge can produce many tasks (e.g. image-grid captchas retry with
         a fresh task per attempt), so consumers must not assume one started
         event per challenge or pair events by arrival order. Correlate to the
-        terminal `captcha_solve_result` via `task_id`; a started event may
+        terminal `captcha_solve_result` via `task_id`, and group the tasks of
+        one challenge via `challenge_id`; a started event may
         also arrive without a matching result (or vice versa) if delivery
         fails, so absence of either is not a solve-state signal.
       additionalProperties: false
@@ -5658,6 +5676,8 @@ components:
           description: >
             Solver-assigned identifier, shared with the matching
             `captcha_solve_result`. Opaque.
+        challenge_id:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeID"
         website_host:
           type: string
           description: Host of the page where the captcha is being solved. May be empty for solver tasks that carry no page URL (e.g. image-grid sub-tasks).
@@ -5716,6 +5736,8 @@ components:
         task_id:
           type: string
           description: Solver-assigned identifier. Opaque, useful for support cross-references.
+        challenge_id:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeID"
         website_host:
           type: string
           description: Host of the page where the captcha was solved.
