@@ -111,12 +111,18 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.True(t, urlRsp.JSON200.Success, "expected url request success=true")
 	require.Equal(t, "data:text/html,second-tab", urlRsp.JSON200.Result, "expected injected page to be the foreground tab")
 
-	// Bringing the first (oldest) tab back to the foreground must flip which
-	// page gets injected. Tab-creation order alone can't distinguish this case
-	// from the one above -- only the CDP `tabActive` signal can.
+	// Bringing the original tab back to the foreground must flip which page
+	// gets injected. Select it by URL rather than context.pages()[0] -- relying
+	// on index/creation order would reintroduce the same undocumented ordering
+	// assumption this change removes. Tab-creation order alone can't
+	// distinguish this case from the one above -- only the CDP `tabActive`
+	// signal can.
 	bringToFrontRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
-			const first = context.pages()[0];
+			const first = context.pages().find(candidate =>
+				candidate.url().includes('example.com')
+			);
+			if (!first) throw new Error('original page not found');
 			await first.bringToFront();
 			return first.url();
 		`,
