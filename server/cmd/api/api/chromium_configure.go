@@ -767,7 +767,8 @@ func chromiumApplyExtensions(ctx context.Context, s *ApiService, items []extensi
 	if len(items) == 0 {
 		return "", nil
 	}
-	return s.applyExtensionZipItems(ctx, items)
+	_, reqMsg, err := s.applyExtensionZipItems(ctx, items)
+	return reqMsg, err
 }
 
 func chromiumValidateFlags(raw *string) (*chromiumFlagsPlan, error) {

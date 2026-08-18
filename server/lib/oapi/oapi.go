@@ -140,255 +140,6 @@ func (e BrowserCaptchaSolveResultEventDataStatus) Valid() bool {
 	}
 }
 
-// Defines values for BrowserCdpAutofillMode.
-const (
-	Address BrowserCdpAutofillMode = "address"
-	Card    BrowserCdpAutofillMode = "card"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpAutofillMode enum.
-func (e BrowserCdpAutofillMode) Valid() bool {
-	switch e {
-	case Address:
-		return true
-	case Card:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpAutofillTriggerCommandDataMethod.
-const (
-	BrowserCdpAutofillTriggerCommandDataMethodAutofillTrigger BrowserCdpAutofillTriggerCommandDataMethod = "Autofill.trigger"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpAutofillTriggerCommandDataMethod enum.
-func (e BrowserCdpAutofillTriggerCommandDataMethod) Valid() bool {
-	switch e {
-	case BrowserCdpAutofillTriggerCommandDataMethodAutofillTrigger:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpBrowserCancelDownloadCommandDataMethod.
-const (
-	BrowserCancelDownload BrowserCdpBrowserCancelDownloadCommandDataMethod = "Browser.cancelDownload"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpBrowserCancelDownloadCommandDataMethod enum.
-func (e BrowserCdpBrowserCancelDownloadCommandDataMethod) Valid() bool {
-	switch e {
-	case BrowserCancelDownload:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpBrowserCloseCommandDataMethod.
-const (
-	BrowserClose BrowserCdpBrowserCloseCommandDataMethod = "Browser.close"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpBrowserCloseCommandDataMethod enum.
-func (e BrowserCdpBrowserCloseCommandDataMethod) Valid() bool {
-	switch e {
-	case BrowserClose:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpBrowserSetContentsSizeCommandDataMethod.
-const (
-	BrowserSetContentsSize BrowserCdpBrowserSetContentsSizeCommandDataMethod = "Browser.setContentsSize"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpBrowserSetContentsSizeCommandDataMethod enum.
-func (e BrowserCdpBrowserSetContentsSizeCommandDataMethod) Valid() bool {
-	switch e {
-	case BrowserSetContentsSize:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpBrowserSetWindowBoundsCommandDataMethod.
-const (
-	BrowserSetWindowBounds BrowserCdpBrowserSetWindowBoundsCommandDataMethod = "Browser.setWindowBounds"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpBrowserSetWindowBoundsCommandDataMethod enum.
-func (e BrowserCdpBrowserSetWindowBoundsCommandDataMethod) Valid() bool {
-	switch e {
-	case BrowserSetWindowBounds:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpCommandEventCategory.
-const (
-	BrowserCdpCommandEventCategoryControl BrowserCdpCommandEventCategory = "control"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpCommandEventCategory enum.
-func (e BrowserCdpCommandEventCategory) Valid() bool {
-	switch e {
-	case BrowserCdpCommandEventCategoryControl:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpCommandEventType.
-const (
-	CdpCommand BrowserCdpCommandEventType = "cdp_command"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpCommandEventType enum.
-func (e BrowserCdpCommandEventType) Valid() bool {
-	switch e {
-	case CdpCommand:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpCommandMethod.
-const (
-	BrowserCdpCommandMethodAutofillTrigger                 BrowserCdpCommandMethod = "Autofill.trigger"
-	BrowserCdpCommandMethodBrowserCancelDownload           BrowserCdpCommandMethod = "Browser.cancelDownload"
-	BrowserCdpCommandMethodBrowserClose                    BrowserCdpCommandMethod = "Browser.close"
-	BrowserCdpCommandMethodBrowserSetContentsSize          BrowserCdpCommandMethod = "Browser.setContentsSize"
-	BrowserCdpCommandMethodBrowserSetWindowBounds          BrowserCdpCommandMethod = "Browser.setWindowBounds"
-	BrowserCdpCommandMethodDOMFocus                        BrowserCdpCommandMethod = "DOM.focus"
-	BrowserCdpCommandMethodDOMScrollIntoViewIfNeeded       BrowserCdpCommandMethod = "DOM.scrollIntoViewIfNeeded"
-	BrowserCdpCommandMethodDOMSetFileInputFiles            BrowserCdpCommandMethod = "DOM.setFileInputFiles"
-	BrowserCdpCommandMethodInputCancelDragging             BrowserCdpCommandMethod = "Input.cancelDragging"
-	BrowserCdpCommandMethodInputDispatchDragEvent          BrowserCdpCommandMethod = "Input.dispatchDragEvent"
-	BrowserCdpCommandMethodInputDispatchKeyEvent           BrowserCdpCommandMethod = "Input.dispatchKeyEvent"
-	BrowserCdpCommandMethodInputDispatchMouseEvent         BrowserCdpCommandMethod = "Input.dispatchMouseEvent"
-	BrowserCdpCommandMethodInputDispatchTouchEvent         BrowserCdpCommandMethod = "Input.dispatchTouchEvent"
-	BrowserCdpCommandMethodInputEmulateTouchFromMouseEvent BrowserCdpCommandMethod = "Input.emulateTouchFromMouseEvent"
-	BrowserCdpCommandMethodInputImeSetComposition          BrowserCdpCommandMethod = "Input.imeSetComposition"
-	BrowserCdpCommandMethodInputInsertText                 BrowserCdpCommandMethod = "Input.insertText"
-	BrowserCdpCommandMethodInputSynthesizePinchGesture     BrowserCdpCommandMethod = "Input.synthesizePinchGesture"
-	BrowserCdpCommandMethodInputSynthesizeScrollGesture    BrowserCdpCommandMethod = "Input.synthesizeScrollGesture"
-	BrowserCdpCommandMethodInputSynthesizeTapGesture       BrowserCdpCommandMethod = "Input.synthesizeTapGesture"
-	BrowserCdpCommandMethodPageBringToFront                BrowserCdpCommandMethod = "Page.bringToFront"
-	BrowserCdpCommandMethodPageCaptureScreenshot           BrowserCdpCommandMethod = "Page.captureScreenshot"
-	BrowserCdpCommandMethodPageCaptureSnapshot             BrowserCdpCommandMethod = "Page.captureSnapshot"
-	BrowserCdpCommandMethodPageClose                       BrowserCdpCommandMethod = "Page.close"
-	BrowserCdpCommandMethodPageHandleJavaScriptDialog      BrowserCdpCommandMethod = "Page.handleJavaScriptDialog"
-	BrowserCdpCommandMethodPageNavigate                    BrowserCdpCommandMethod = "Page.navigate"
-	BrowserCdpCommandMethodPageNavigateToHistoryEntry      BrowserCdpCommandMethod = "Page.navigateToHistoryEntry"
-	BrowserCdpCommandMethodPagePrintToPDF                  BrowserCdpCommandMethod = "Page.printToPDF"
-	BrowserCdpCommandMethodPageReload                      BrowserCdpCommandMethod = "Page.reload"
-	BrowserCdpCommandMethodPageSetWebLifecycleState        BrowserCdpCommandMethod = "Page.setWebLifecycleState"
-	BrowserCdpCommandMethodPageStartScreencast             BrowserCdpCommandMethod = "Page.startScreencast"
-	BrowserCdpCommandMethodPageStopLoading                 BrowserCdpCommandMethod = "Page.stopLoading"
-	BrowserCdpCommandMethodPageStopScreencast              BrowserCdpCommandMethod = "Page.stopScreencast"
-	BrowserCdpCommandMethodTargetActivateTarget            BrowserCdpCommandMethod = "Target.activateTarget"
-	BrowserCdpCommandMethodTargetCloseTarget               BrowserCdpCommandMethod = "Target.closeTarget"
-	BrowserCdpCommandMethodTargetCreateBrowserContext      BrowserCdpCommandMethod = "Target.createBrowserContext"
-	BrowserCdpCommandMethodTargetCreateTarget              BrowserCdpCommandMethod = "Target.createTarget"
-	BrowserCdpCommandMethodTargetDisposeBrowserContext     BrowserCdpCommandMethod = "Target.disposeBrowserContext"
-	BrowserCdpCommandMethodTargetOpenDevTools              BrowserCdpCommandMethod = "Target.openDevTools"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpCommandMethod enum.
-func (e BrowserCdpCommandMethod) Valid() bool {
-	switch e {
-	case BrowserCdpCommandMethodAutofillTrigger:
-		return true
-	case BrowserCdpCommandMethodBrowserCancelDownload:
-		return true
-	case BrowserCdpCommandMethodBrowserClose:
-		return true
-	case BrowserCdpCommandMethodBrowserSetContentsSize:
-		return true
-	case BrowserCdpCommandMethodBrowserSetWindowBounds:
-		return true
-	case BrowserCdpCommandMethodDOMFocus:
-		return true
-	case BrowserCdpCommandMethodDOMScrollIntoViewIfNeeded:
-		return true
-	case BrowserCdpCommandMethodDOMSetFileInputFiles:
-		return true
-	case BrowserCdpCommandMethodInputCancelDragging:
-		return true
-	case BrowserCdpCommandMethodInputDispatchDragEvent:
-		return true
-	case BrowserCdpCommandMethodInputDispatchKeyEvent:
-		return true
-	case BrowserCdpCommandMethodInputDispatchMouseEvent:
-		return true
-	case BrowserCdpCommandMethodInputDispatchTouchEvent:
-		return true
-	case BrowserCdpCommandMethodInputEmulateTouchFromMouseEvent:
-		return true
-	case BrowserCdpCommandMethodInputImeSetComposition:
-		return true
-	case BrowserCdpCommandMethodInputInsertText:
-		return true
-	case BrowserCdpCommandMethodInputSynthesizePinchGesture:
-		return true
-	case BrowserCdpCommandMethodInputSynthesizeScrollGesture:
-		return true
-	case BrowserCdpCommandMethodInputSynthesizeTapGesture:
-		return true
-	case BrowserCdpCommandMethodPageBringToFront:
-		return true
-	case BrowserCdpCommandMethodPageCaptureScreenshot:
-		return true
-	case BrowserCdpCommandMethodPageCaptureSnapshot:
-		return true
-	case BrowserCdpCommandMethodPageClose:
-		return true
-	case BrowserCdpCommandMethodPageHandleJavaScriptDialog:
-		return true
-	case BrowserCdpCommandMethodPageNavigate:
-		return true
-	case BrowserCdpCommandMethodPageNavigateToHistoryEntry:
-		return true
-	case BrowserCdpCommandMethodPagePrintToPDF:
-		return true
-	case BrowserCdpCommandMethodPageReload:
-		return true
-	case BrowserCdpCommandMethodPageSetWebLifecycleState:
-		return true
-	case BrowserCdpCommandMethodPageStartScreencast:
-		return true
-	case BrowserCdpCommandMethodPageStopLoading:
-		return true
-	case BrowserCdpCommandMethodPageStopScreencast:
-		return true
-	case BrowserCdpCommandMethodTargetActivateTarget:
-		return true
-	case BrowserCdpCommandMethodTargetCloseTarget:
-		return true
-	case BrowserCdpCommandMethodTargetCreateBrowserContext:
-		return true
-	case BrowserCdpCommandMethodTargetCreateTarget:
-		return true
-	case BrowserCdpCommandMethodTargetDisposeBrowserContext:
-		return true
-	case BrowserCdpCommandMethodTargetOpenDevTools:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for BrowserCdpConnectEventCategory.
 const (
 	BrowserCdpConnectEventCategoryConnection BrowserCdpConnectEventCategory = "connection"
@@ -467,951 +218,6 @@ func (e BrowserCdpDisconnectEventDataReason) Valid() bool {
 	case UpstreamChanged:
 		return true
 	case UpstreamError:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpDomFocusCommandDataMethod.
-const (
-	DOMFocus BrowserCdpDomFocusCommandDataMethod = "DOM.focus"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpDomFocusCommandDataMethod enum.
-func (e BrowserCdpDomFocusCommandDataMethod) Valid() bool {
-	switch e {
-	case DOMFocus:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpDomScrollIntoViewIfNeededCommandDataMethod.
-const (
-	DOMScrollIntoViewIfNeeded BrowserCdpDomScrollIntoViewIfNeededCommandDataMethod = "DOM.scrollIntoViewIfNeeded"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpDomScrollIntoViewIfNeededCommandDataMethod enum.
-func (e BrowserCdpDomScrollIntoViewIfNeededCommandDataMethod) Valid() bool {
-	switch e {
-	case DOMScrollIntoViewIfNeeded:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpDomSetFileInputFilesCommandDataMethod.
-const (
-	DOMSetFileInputFiles BrowserCdpDomSetFileInputFilesCommandDataMethod = "DOM.setFileInputFiles"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpDomSetFileInputFilesCommandDataMethod enum.
-func (e BrowserCdpDomSetFileInputFilesCommandDataMethod) Valid() bool {
-	switch e {
-	case DOMSetFileInputFiles:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpDragEventType.
-const (
-	BrowserCdpDragEventTypeDragCancel BrowserCdpDragEventType = "dragCancel"
-	BrowserCdpDragEventTypeDragEnter  BrowserCdpDragEventType = "dragEnter"
-	BrowserCdpDragEventTypeDragOver   BrowserCdpDragEventType = "dragOver"
-	BrowserCdpDragEventTypeDrop       BrowserCdpDragEventType = "drop"
-	BrowserCdpDragEventTypeOther      BrowserCdpDragEventType = "other"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpDragEventType enum.
-func (e BrowserCdpDragEventType) Valid() bool {
-	switch e {
-	case BrowserCdpDragEventTypeDragCancel:
-		return true
-	case BrowserCdpDragEventTypeDragEnter:
-		return true
-	case BrowserCdpDragEventTypeDragOver:
-		return true
-	case BrowserCdpDragEventTypeDrop:
-		return true
-	case BrowserCdpDragEventTypeOther:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpDragMimeCategory.
-const (
-	BrowserCdpDragMimeCategoryApplication BrowserCdpDragMimeCategory = "application"
-	BrowserCdpDragMimeCategoryAudio       BrowserCdpDragMimeCategory = "audio"
-	BrowserCdpDragMimeCategoryFont        BrowserCdpDragMimeCategory = "font"
-	BrowserCdpDragMimeCategoryImage       BrowserCdpDragMimeCategory = "image"
-	BrowserCdpDragMimeCategoryMessage     BrowserCdpDragMimeCategory = "message"
-	BrowserCdpDragMimeCategoryModel       BrowserCdpDragMimeCategory = "model"
-	BrowserCdpDragMimeCategoryMultipart   BrowserCdpDragMimeCategory = "multipart"
-	BrowserCdpDragMimeCategoryOther       BrowserCdpDragMimeCategory = "other"
-	BrowserCdpDragMimeCategoryText        BrowserCdpDragMimeCategory = "text"
-	BrowserCdpDragMimeCategoryVideo       BrowserCdpDragMimeCategory = "video"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpDragMimeCategory enum.
-func (e BrowserCdpDragMimeCategory) Valid() bool {
-	switch e {
-	case BrowserCdpDragMimeCategoryApplication:
-		return true
-	case BrowserCdpDragMimeCategoryAudio:
-		return true
-	case BrowserCdpDragMimeCategoryFont:
-		return true
-	case BrowserCdpDragMimeCategoryImage:
-		return true
-	case BrowserCdpDragMimeCategoryMessage:
-		return true
-	case BrowserCdpDragMimeCategoryModel:
-		return true
-	case BrowserCdpDragMimeCategoryMultipart:
-		return true
-	case BrowserCdpDragMimeCategoryOther:
-		return true
-	case BrowserCdpDragMimeCategoryText:
-		return true
-	case BrowserCdpDragMimeCategoryVideo:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpGestureSourceType.
-const (
-	BrowserCdpGestureSourceTypeDefault BrowserCdpGestureSourceType = "default"
-	BrowserCdpGestureSourceTypeMouse   BrowserCdpGestureSourceType = "mouse"
-	BrowserCdpGestureSourceTypeOther   BrowserCdpGestureSourceType = "other"
-	BrowserCdpGestureSourceTypeTouch   BrowserCdpGestureSourceType = "touch"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpGestureSourceType enum.
-func (e BrowserCdpGestureSourceType) Valid() bool {
-	switch e {
-	case BrowserCdpGestureSourceTypeDefault:
-		return true
-	case BrowserCdpGestureSourceTypeMouse:
-		return true
-	case BrowserCdpGestureSourceTypeOther:
-		return true
-	case BrowserCdpGestureSourceTypeTouch:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputCancelDraggingCommandDataMethod.
-const (
-	InputCancelDragging BrowserCdpInputCancelDraggingCommandDataMethod = "Input.cancelDragging"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputCancelDraggingCommandDataMethod enum.
-func (e BrowserCdpInputCancelDraggingCommandDataMethod) Valid() bool {
-	switch e {
-	case InputCancelDragging:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputDispatchDragEventCommandDataMethod.
-const (
-	InputDispatchDragEvent BrowserCdpInputDispatchDragEventCommandDataMethod = "Input.dispatchDragEvent"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputDispatchDragEventCommandDataMethod enum.
-func (e BrowserCdpInputDispatchDragEventCommandDataMethod) Valid() bool {
-	switch e {
-	case InputDispatchDragEvent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputDispatchKeyEventCommandDataMethod.
-const (
-	InputDispatchKeyEvent BrowserCdpInputDispatchKeyEventCommandDataMethod = "Input.dispatchKeyEvent"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputDispatchKeyEventCommandDataMethod enum.
-func (e BrowserCdpInputDispatchKeyEventCommandDataMethod) Valid() bool {
-	switch e {
-	case InputDispatchKeyEvent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputDispatchMouseEventCommandDataMethod.
-const (
-	InputDispatchMouseEvent BrowserCdpInputDispatchMouseEventCommandDataMethod = "Input.dispatchMouseEvent"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputDispatchMouseEventCommandDataMethod enum.
-func (e BrowserCdpInputDispatchMouseEventCommandDataMethod) Valid() bool {
-	switch e {
-	case InputDispatchMouseEvent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputDispatchTouchEventCommandDataMethod.
-const (
-	InputDispatchTouchEvent BrowserCdpInputDispatchTouchEventCommandDataMethod = "Input.dispatchTouchEvent"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputDispatchTouchEventCommandDataMethod enum.
-func (e BrowserCdpInputDispatchTouchEventCommandDataMethod) Valid() bool {
-	switch e {
-	case InputDispatchTouchEvent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputEmulateTouchFromMouseEventCommandDataMethod.
-const (
-	InputEmulateTouchFromMouseEvent BrowserCdpInputEmulateTouchFromMouseEventCommandDataMethod = "Input.emulateTouchFromMouseEvent"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputEmulateTouchFromMouseEventCommandDataMethod enum.
-func (e BrowserCdpInputEmulateTouchFromMouseEventCommandDataMethod) Valid() bool {
-	switch e {
-	case InputEmulateTouchFromMouseEvent:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputImeSetCompositionCommandDataMethod.
-const (
-	InputImeSetComposition BrowserCdpInputImeSetCompositionCommandDataMethod = "Input.imeSetComposition"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputImeSetCompositionCommandDataMethod enum.
-func (e BrowserCdpInputImeSetCompositionCommandDataMethod) Valid() bool {
-	switch e {
-	case InputImeSetComposition:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputInsertTextCommandDataMethod.
-const (
-	InputInsertText BrowserCdpInputInsertTextCommandDataMethod = "Input.insertText"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputInsertTextCommandDataMethod enum.
-func (e BrowserCdpInputInsertTextCommandDataMethod) Valid() bool {
-	switch e {
-	case InputInsertText:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputSynthesizePinchGestureCommandDataMethod.
-const (
-	InputSynthesizePinchGesture BrowserCdpInputSynthesizePinchGestureCommandDataMethod = "Input.synthesizePinchGesture"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputSynthesizePinchGestureCommandDataMethod enum.
-func (e BrowserCdpInputSynthesizePinchGestureCommandDataMethod) Valid() bool {
-	switch e {
-	case InputSynthesizePinchGesture:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputSynthesizeScrollGestureCommandDataMethod.
-const (
-	InputSynthesizeScrollGesture BrowserCdpInputSynthesizeScrollGestureCommandDataMethod = "Input.synthesizeScrollGesture"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputSynthesizeScrollGestureCommandDataMethod enum.
-func (e BrowserCdpInputSynthesizeScrollGestureCommandDataMethod) Valid() bool {
-	switch e {
-	case InputSynthesizeScrollGesture:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpInputSynthesizeTapGestureCommandDataMethod.
-const (
-	InputSynthesizeTapGesture BrowserCdpInputSynthesizeTapGestureCommandDataMethod = "Input.synthesizeTapGesture"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpInputSynthesizeTapGestureCommandDataMethod enum.
-func (e BrowserCdpInputSynthesizeTapGestureCommandDataMethod) Valid() bool {
-	switch e {
-	case InputSynthesizeTapGesture:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpKeyEventType.
-const (
-	BrowserCdpKeyEventTypeChar       BrowserCdpKeyEventType = "char"
-	BrowserCdpKeyEventTypeKeyDown    BrowserCdpKeyEventType = "keyDown"
-	BrowserCdpKeyEventTypeKeyUp      BrowserCdpKeyEventType = "keyUp"
-	BrowserCdpKeyEventTypeOther      BrowserCdpKeyEventType = "other"
-	BrowserCdpKeyEventTypeRawKeyDown BrowserCdpKeyEventType = "rawKeyDown"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpKeyEventType enum.
-func (e BrowserCdpKeyEventType) Valid() bool {
-	switch e {
-	case BrowserCdpKeyEventTypeChar:
-		return true
-	case BrowserCdpKeyEventTypeKeyDown:
-		return true
-	case BrowserCdpKeyEventTypeKeyUp:
-		return true
-	case BrowserCdpKeyEventTypeOther:
-		return true
-	case BrowserCdpKeyEventTypeRawKeyDown:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpMouseButton.
-const (
-	BrowserCdpMouseButtonBack    BrowserCdpMouseButton = "back"
-	BrowserCdpMouseButtonForward BrowserCdpMouseButton = "forward"
-	BrowserCdpMouseButtonLeft    BrowserCdpMouseButton = "left"
-	BrowserCdpMouseButtonMiddle  BrowserCdpMouseButton = "middle"
-	BrowserCdpMouseButtonNone    BrowserCdpMouseButton = "none"
-	BrowserCdpMouseButtonOther   BrowserCdpMouseButton = "other"
-	BrowserCdpMouseButtonRight   BrowserCdpMouseButton = "right"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpMouseButton enum.
-func (e BrowserCdpMouseButton) Valid() bool {
-	switch e {
-	case BrowserCdpMouseButtonBack:
-		return true
-	case BrowserCdpMouseButtonForward:
-		return true
-	case BrowserCdpMouseButtonLeft:
-		return true
-	case BrowserCdpMouseButtonMiddle:
-		return true
-	case BrowserCdpMouseButtonNone:
-		return true
-	case BrowserCdpMouseButtonOther:
-		return true
-	case BrowserCdpMouseButtonRight:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpMouseEventType.
-const (
-	BrowserCdpMouseEventTypeMouseMoved    BrowserCdpMouseEventType = "mouseMoved"
-	BrowserCdpMouseEventTypeMousePressed  BrowserCdpMouseEventType = "mousePressed"
-	BrowserCdpMouseEventTypeMouseReleased BrowserCdpMouseEventType = "mouseReleased"
-	BrowserCdpMouseEventTypeMouseWheel    BrowserCdpMouseEventType = "mouseWheel"
-	BrowserCdpMouseEventTypeOther         BrowserCdpMouseEventType = "other"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpMouseEventType enum.
-func (e BrowserCdpMouseEventType) Valid() bool {
-	switch e {
-	case BrowserCdpMouseEventTypeMouseMoved:
-		return true
-	case BrowserCdpMouseEventTypeMousePressed:
-		return true
-	case BrowserCdpMouseEventTypeMouseReleased:
-		return true
-	case BrowserCdpMouseEventTypeMouseWheel:
-		return true
-	case BrowserCdpMouseEventTypeOther:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageBringToFrontCommandDataMethod.
-const (
-	PageBringToFront BrowserCdpPageBringToFrontCommandDataMethod = "Page.bringToFront"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageBringToFrontCommandDataMethod enum.
-func (e BrowserCdpPageBringToFrontCommandDataMethod) Valid() bool {
-	switch e {
-	case PageBringToFront:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageCaptureScreenshotCommandDataMethod.
-const (
-	PageCaptureScreenshot BrowserCdpPageCaptureScreenshotCommandDataMethod = "Page.captureScreenshot"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageCaptureScreenshotCommandDataMethod enum.
-func (e BrowserCdpPageCaptureScreenshotCommandDataMethod) Valid() bool {
-	switch e {
-	case PageCaptureScreenshot:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageCaptureSnapshotCommandDataMethod.
-const (
-	PageCaptureSnapshot BrowserCdpPageCaptureSnapshotCommandDataMethod = "Page.captureSnapshot"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageCaptureSnapshotCommandDataMethod enum.
-func (e BrowserCdpPageCaptureSnapshotCommandDataMethod) Valid() bool {
-	switch e {
-	case PageCaptureSnapshot:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageCloseCommandDataMethod.
-const (
-	PageClose BrowserCdpPageCloseCommandDataMethod = "Page.close"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageCloseCommandDataMethod enum.
-func (e BrowserCdpPageCloseCommandDataMethod) Valid() bool {
-	switch e {
-	case PageClose:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageHandleJavaScriptDialogCommandDataMethod.
-const (
-	PageHandleJavaScriptDialog BrowserCdpPageHandleJavaScriptDialogCommandDataMethod = "Page.handleJavaScriptDialog"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageHandleJavaScriptDialogCommandDataMethod enum.
-func (e BrowserCdpPageHandleJavaScriptDialogCommandDataMethod) Valid() bool {
-	switch e {
-	case PageHandleJavaScriptDialog:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageNavigateCommandDataMethod.
-const (
-	PageNavigate BrowserCdpPageNavigateCommandDataMethod = "Page.navigate"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageNavigateCommandDataMethod enum.
-func (e BrowserCdpPageNavigateCommandDataMethod) Valid() bool {
-	switch e {
-	case PageNavigate:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageNavigateToHistoryEntryCommandDataMethod.
-const (
-	PageNavigateToHistoryEntry BrowserCdpPageNavigateToHistoryEntryCommandDataMethod = "Page.navigateToHistoryEntry"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageNavigateToHistoryEntryCommandDataMethod enum.
-func (e BrowserCdpPageNavigateToHistoryEntryCommandDataMethod) Valid() bool {
-	switch e {
-	case PageNavigateToHistoryEntry:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPagePrintToPdfCommandDataMethod.
-const (
-	PagePrintToPDF BrowserCdpPagePrintToPdfCommandDataMethod = "Page.printToPDF"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPagePrintToPdfCommandDataMethod enum.
-func (e BrowserCdpPagePrintToPdfCommandDataMethod) Valid() bool {
-	switch e {
-	case PagePrintToPDF:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageReloadCommandDataMethod.
-const (
-	PageReload BrowserCdpPageReloadCommandDataMethod = "Page.reload"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageReloadCommandDataMethod enum.
-func (e BrowserCdpPageReloadCommandDataMethod) Valid() bool {
-	switch e {
-	case PageReload:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageSetWebLifecycleStateCommandDataMethod.
-const (
-	PageSetWebLifecycleState BrowserCdpPageSetWebLifecycleStateCommandDataMethod = "Page.setWebLifecycleState"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageSetWebLifecycleStateCommandDataMethod enum.
-func (e BrowserCdpPageSetWebLifecycleStateCommandDataMethod) Valid() bool {
-	switch e {
-	case PageSetWebLifecycleState:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageStartScreencastCommandDataMethod.
-const (
-	PageStartScreencast BrowserCdpPageStartScreencastCommandDataMethod = "Page.startScreencast"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageStartScreencastCommandDataMethod enum.
-func (e BrowserCdpPageStartScreencastCommandDataMethod) Valid() bool {
-	switch e {
-	case PageStartScreencast:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageStopLoadingCommandDataMethod.
-const (
-	PageStopLoading BrowserCdpPageStopLoadingCommandDataMethod = "Page.stopLoading"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageStopLoadingCommandDataMethod enum.
-func (e BrowserCdpPageStopLoadingCommandDataMethod) Valid() bool {
-	switch e {
-	case PageStopLoading:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPageStopScreencastCommandDataMethod.
-const (
-	PageStopScreencast BrowserCdpPageStopScreencastCommandDataMethod = "Page.stopScreencast"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPageStopScreencastCommandDataMethod enum.
-func (e BrowserCdpPageStopScreencastCommandDataMethod) Valid() bool {
-	switch e {
-	case PageStopScreencast:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPdfTransferMode.
-const (
-	BrowserCdpPdfTransferModeOther          BrowserCdpPdfTransferMode = "other"
-	BrowserCdpPdfTransferModeReturnAsBase64 BrowserCdpPdfTransferMode = "ReturnAsBase64"
-	BrowserCdpPdfTransferModeReturnAsStream BrowserCdpPdfTransferMode = "ReturnAsStream"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPdfTransferMode enum.
-func (e BrowserCdpPdfTransferMode) Valid() bool {
-	switch e {
-	case BrowserCdpPdfTransferModeOther:
-		return true
-	case BrowserCdpPdfTransferModeReturnAsBase64:
-		return true
-	case BrowserCdpPdfTransferModeReturnAsStream:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpPointerType.
-const (
-	BrowserCdpPointerTypeMouse BrowserCdpPointerType = "mouse"
-	BrowserCdpPointerTypeOther BrowserCdpPointerType = "other"
-	BrowserCdpPointerTypePen   BrowserCdpPointerType = "pen"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpPointerType enum.
-func (e BrowserCdpPointerType) Valid() bool {
-	switch e {
-	case BrowserCdpPointerTypeMouse:
-		return true
-	case BrowserCdpPointerTypeOther:
-		return true
-	case BrowserCdpPointerTypePen:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpReferrerPolicy.
-const (
-	BrowserCdpReferrerPolicyNoReferrer                  BrowserCdpReferrerPolicy = "noReferrer"
-	BrowserCdpReferrerPolicyNoReferrerWhenDowngrade     BrowserCdpReferrerPolicy = "noReferrerWhenDowngrade"
-	BrowserCdpReferrerPolicyOrigin                      BrowserCdpReferrerPolicy = "origin"
-	BrowserCdpReferrerPolicyOriginWhenCrossOrigin       BrowserCdpReferrerPolicy = "originWhenCrossOrigin"
-	BrowserCdpReferrerPolicyOther                       BrowserCdpReferrerPolicy = "other"
-	BrowserCdpReferrerPolicySameOrigin                  BrowserCdpReferrerPolicy = "sameOrigin"
-	BrowserCdpReferrerPolicyStrictOrigin                BrowserCdpReferrerPolicy = "strictOrigin"
-	BrowserCdpReferrerPolicyStrictOriginWhenCrossOrigin BrowserCdpReferrerPolicy = "strictOriginWhenCrossOrigin"
-	BrowserCdpReferrerPolicyUnsafeUrl                   BrowserCdpReferrerPolicy = "unsafeUrl"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpReferrerPolicy enum.
-func (e BrowserCdpReferrerPolicy) Valid() bool {
-	switch e {
-	case BrowserCdpReferrerPolicyNoReferrer:
-		return true
-	case BrowserCdpReferrerPolicyNoReferrerWhenDowngrade:
-		return true
-	case BrowserCdpReferrerPolicyOrigin:
-		return true
-	case BrowserCdpReferrerPolicyOriginWhenCrossOrigin:
-		return true
-	case BrowserCdpReferrerPolicyOther:
-		return true
-	case BrowserCdpReferrerPolicySameOrigin:
-		return true
-	case BrowserCdpReferrerPolicyStrictOrigin:
-		return true
-	case BrowserCdpReferrerPolicyStrictOriginWhenCrossOrigin:
-		return true
-	case BrowserCdpReferrerPolicyUnsafeUrl:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpScreencastFormat.
-const (
-	BrowserCdpScreencastFormatJpeg  BrowserCdpScreencastFormat = "jpeg"
-	BrowserCdpScreencastFormatOther BrowserCdpScreencastFormat = "other"
-	BrowserCdpScreencastFormatPng   BrowserCdpScreencastFormat = "png"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpScreencastFormat enum.
-func (e BrowserCdpScreencastFormat) Valid() bool {
-	switch e {
-	case BrowserCdpScreencastFormatJpeg:
-		return true
-	case BrowserCdpScreencastFormatOther:
-		return true
-	case BrowserCdpScreencastFormatPng:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpScreenshotFormat.
-const (
-	BrowserCdpScreenshotFormatJpeg  BrowserCdpScreenshotFormat = "jpeg"
-	BrowserCdpScreenshotFormatOther BrowserCdpScreenshotFormat = "other"
-	BrowserCdpScreenshotFormatPng   BrowserCdpScreenshotFormat = "png"
-	BrowserCdpScreenshotFormatWebp  BrowserCdpScreenshotFormat = "webp"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpScreenshotFormat enum.
-func (e BrowserCdpScreenshotFormat) Valid() bool {
-	switch e {
-	case BrowserCdpScreenshotFormatJpeg:
-		return true
-	case BrowserCdpScreenshotFormatOther:
-		return true
-	case BrowserCdpScreenshotFormatPng:
-		return true
-	case BrowserCdpScreenshotFormatWebp:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpSnapshotFormat.
-const (
-	BrowserCdpSnapshotFormatMhtml BrowserCdpSnapshotFormat = "mhtml"
-	BrowserCdpSnapshotFormatOther BrowserCdpSnapshotFormat = "other"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpSnapshotFormat enum.
-func (e BrowserCdpSnapshotFormat) Valid() bool {
-	switch e {
-	case BrowserCdpSnapshotFormatMhtml:
-		return true
-	case BrowserCdpSnapshotFormatOther:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTargetActivateTargetCommandDataMethod.
-const (
-	TargetActivateTarget BrowserCdpTargetActivateTargetCommandDataMethod = "Target.activateTarget"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTargetActivateTargetCommandDataMethod enum.
-func (e BrowserCdpTargetActivateTargetCommandDataMethod) Valid() bool {
-	switch e {
-	case TargetActivateTarget:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTargetCloseTargetCommandDataMethod.
-const (
-	TargetCloseTarget BrowserCdpTargetCloseTargetCommandDataMethod = "Target.closeTarget"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTargetCloseTargetCommandDataMethod enum.
-func (e BrowserCdpTargetCloseTargetCommandDataMethod) Valid() bool {
-	switch e {
-	case TargetCloseTarget:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTargetCreateBrowserContextCommandDataMethod.
-const (
-	TargetCreateBrowserContext BrowserCdpTargetCreateBrowserContextCommandDataMethod = "Target.createBrowserContext"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTargetCreateBrowserContextCommandDataMethod enum.
-func (e BrowserCdpTargetCreateBrowserContextCommandDataMethod) Valid() bool {
-	switch e {
-	case TargetCreateBrowserContext:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTargetCreateTargetCommandDataMethod.
-const (
-	TargetCreateTarget BrowserCdpTargetCreateTargetCommandDataMethod = "Target.createTarget"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTargetCreateTargetCommandDataMethod enum.
-func (e BrowserCdpTargetCreateTargetCommandDataMethod) Valid() bool {
-	switch e {
-	case TargetCreateTarget:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTargetDisposeBrowserContextCommandDataMethod.
-const (
-	TargetDisposeBrowserContext BrowserCdpTargetDisposeBrowserContextCommandDataMethod = "Target.disposeBrowserContext"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTargetDisposeBrowserContextCommandDataMethod enum.
-func (e BrowserCdpTargetDisposeBrowserContextCommandDataMethod) Valid() bool {
-	switch e {
-	case TargetDisposeBrowserContext:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTargetOpenDevToolsCommandDataMethod.
-const (
-	TargetOpenDevTools BrowserCdpTargetOpenDevToolsCommandDataMethod = "Target.openDevTools"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTargetOpenDevToolsCommandDataMethod enum.
-func (e BrowserCdpTargetOpenDevToolsCommandDataMethod) Valid() bool {
-	switch e {
-	case TargetOpenDevTools:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTouchEventType.
-const (
-	BrowserCdpTouchEventTypeOther       BrowserCdpTouchEventType = "other"
-	BrowserCdpTouchEventTypeTouchCancel BrowserCdpTouchEventType = "touchCancel"
-	BrowserCdpTouchEventTypeTouchEnd    BrowserCdpTouchEventType = "touchEnd"
-	BrowserCdpTouchEventTypeTouchMove   BrowserCdpTouchEventType = "touchMove"
-	BrowserCdpTouchEventTypeTouchStart  BrowserCdpTouchEventType = "touchStart"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTouchEventType enum.
-func (e BrowserCdpTouchEventType) Valid() bool {
-	switch e {
-	case BrowserCdpTouchEventTypeOther:
-		return true
-	case BrowserCdpTouchEventTypeTouchCancel:
-		return true
-	case BrowserCdpTouchEventTypeTouchEnd:
-		return true
-	case BrowserCdpTouchEventTypeTouchMove:
-		return true
-	case BrowserCdpTouchEventTypeTouchStart:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpTransitionType.
-const (
-	BrowserCdpTransitionTypeAddressBar       BrowserCdpTransitionType = "address_bar"
-	BrowserCdpTransitionTypeAutoBookmark     BrowserCdpTransitionType = "auto_bookmark"
-	BrowserCdpTransitionTypeAutoSubframe     BrowserCdpTransitionType = "auto_subframe"
-	BrowserCdpTransitionTypeAutoToplevel     BrowserCdpTransitionType = "auto_toplevel"
-	BrowserCdpTransitionTypeFormSubmit       BrowserCdpTransitionType = "form_submit"
-	BrowserCdpTransitionTypeGenerated        BrowserCdpTransitionType = "generated"
-	BrowserCdpTransitionTypeKeyword          BrowserCdpTransitionType = "keyword"
-	BrowserCdpTransitionTypeKeywordGenerated BrowserCdpTransitionType = "keyword_generated"
-	BrowserCdpTransitionTypeLink             BrowserCdpTransitionType = "link"
-	BrowserCdpTransitionTypeManualSubframe   BrowserCdpTransitionType = "manual_subframe"
-	BrowserCdpTransitionTypeOther            BrowserCdpTransitionType = "other"
-	BrowserCdpTransitionTypeReload           BrowserCdpTransitionType = "reload"
-	BrowserCdpTransitionTypeTyped            BrowserCdpTransitionType = "typed"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpTransitionType enum.
-func (e BrowserCdpTransitionType) Valid() bool {
-	switch e {
-	case BrowserCdpTransitionTypeAddressBar:
-		return true
-	case BrowserCdpTransitionTypeAutoBookmark:
-		return true
-	case BrowserCdpTransitionTypeAutoSubframe:
-		return true
-	case BrowserCdpTransitionTypeAutoToplevel:
-		return true
-	case BrowserCdpTransitionTypeFormSubmit:
-		return true
-	case BrowserCdpTransitionTypeGenerated:
-		return true
-	case BrowserCdpTransitionTypeKeyword:
-		return true
-	case BrowserCdpTransitionTypeKeywordGenerated:
-		return true
-	case BrowserCdpTransitionTypeLink:
-		return true
-	case BrowserCdpTransitionTypeManualSubframe:
-		return true
-	case BrowserCdpTransitionTypeOther:
-		return true
-	case BrowserCdpTransitionTypeReload:
-		return true
-	case BrowserCdpTransitionTypeTyped:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpWebLifecycleState.
-const (
-	BrowserCdpWebLifecycleStateActive BrowserCdpWebLifecycleState = "active"
-	BrowserCdpWebLifecycleStateFrozen BrowserCdpWebLifecycleState = "frozen"
-	BrowserCdpWebLifecycleStateOther  BrowserCdpWebLifecycleState = "other"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpWebLifecycleState enum.
-func (e BrowserCdpWebLifecycleState) Valid() bool {
-	switch e {
-	case BrowserCdpWebLifecycleStateActive:
-		return true
-	case BrowserCdpWebLifecycleStateFrozen:
-		return true
-	case BrowserCdpWebLifecycleStateOther:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserCdpWindowState.
-const (
-	BrowserCdpWindowStateFullscreen BrowserCdpWindowState = "fullscreen"
-	BrowserCdpWindowStateMaximized  BrowserCdpWindowState = "maximized"
-	BrowserCdpWindowStateMinimized  BrowserCdpWindowState = "minimized"
-	BrowserCdpWindowStateNormal     BrowserCdpWindowState = "normal"
-	BrowserCdpWindowStateOther      BrowserCdpWindowState = "other"
-)
-
-// Valid indicates whether the value is a known member of the BrowserCdpWindowState enum.
-func (e BrowserCdpWindowState) Valid() bool {
-	switch e {
-	case BrowserCdpWindowStateFullscreen:
-		return true
-	case BrowserCdpWindowStateMaximized:
-		return true
-	case BrowserCdpWindowStateMinimized:
-		return true
-	case BrowserCdpWindowStateNormal:
-		return true
-	case BrowserCdpWindowStateOther:
 		return true
 	default:
 		return false
@@ -1564,13 +370,13 @@ func (e BrowserInteractionKeyEventType) Valid() bool {
 
 // Defines values for BrowserInteractionScrollSettledEventCategory.
 const (
-	BrowserInteractionScrollSettledEventCategoryInteraction BrowserInteractionScrollSettledEventCategory = "interaction"
+	Interaction BrowserInteractionScrollSettledEventCategory = "interaction"
 )
 
 // Valid indicates whether the value is a known member of the BrowserInteractionScrollSettledEventCategory enum.
 func (e BrowserInteractionScrollSettledEventCategory) Valid() bool {
 	switch e {
-	case BrowserInteractionScrollSettledEventCategoryInteraction:
+	case Interaction:
 		return true
 	default:
 		return false
@@ -2246,69 +1052,6 @@ const (
 func (e BrowserPlatformApiCallEventType) Valid() bool {
 	switch e {
 	case PlatformApiCall:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserProxyErrorEventCategory.
-const (
-	Network BrowserProxyErrorEventCategory = "network"
-)
-
-// Valid indicates whether the value is a known member of the BrowserProxyErrorEventCategory enum.
-func (e BrowserProxyErrorEventCategory) Valid() bool {
-	switch e {
-	case Network:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserProxyErrorEventType.
-const (
-	ProxyError BrowserProxyErrorEventType = "proxy_error"
-)
-
-// Valid indicates whether the value is a known member of the BrowserProxyErrorEventType enum.
-func (e BrowserProxyErrorEventType) Valid() bool {
-	switch e {
-	case ProxyError:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for BrowserProxyErrorEventDataCode.
-const (
-	DestinationBlocked    BrowserProxyErrorEventDataCode = "destination_blocked"
-	ProviderBlacklisted   BrowserProxyErrorEventDataCode = "provider_blacklisted"
-	ProviderUnreachable   BrowserProxyErrorEventDataCode = "provider_unreachable"
-	ProxyUnavailable      BrowserProxyErrorEventDataCode = "proxy_unavailable"
-	UpstreamConnectFailed BrowserProxyErrorEventDataCode = "upstream_connect_failed"
-	UpstreamDnsFailure    BrowserProxyErrorEventDataCode = "upstream_dns_failure"
-	UpstreamTimeout       BrowserProxyErrorEventDataCode = "upstream_timeout"
-)
-
-// Valid indicates whether the value is a known member of the BrowserProxyErrorEventDataCode enum.
-func (e BrowserProxyErrorEventDataCode) Valid() bool {
-	switch e {
-	case DestinationBlocked:
-		return true
-	case ProviderBlacklisted:
-		return true
-	case ProviderUnreachable:
-		return true
-	case ProxyUnavailable:
-		return true
-	case UpstreamConnectFailed:
-		return true
-	case UpstreamDnsFailure:
-		return true
-	case UpstreamTimeout:
 		return true
 	default:
 		return false
@@ -3002,173 +1745,9 @@ type BrowserCaptchaSolveResultEventDataCaptchaType string
 // BrowserCaptchaSolveResultEventDataStatus Terminal outcome. `success`: solver returned a usable solution. `failure`: solver returned an error (see `error_code`). `timeout`: solver did not return within the caller's wait budget. `abandoned`: caller cancelled or the page navigated away mid-solve.
 type BrowserCaptchaSolveResultEventDataStatus string
 
-// BrowserCdpAutofillMode Which kind of value autofill filled. Canonical values from devtools-protocol@2d019e73.
-type BrowserCdpAutofillMode string
-
-// BrowserCdpAutofillTriggerCommandData Sanitized `Autofill.trigger` arguments. Canonical input: `Autofill.trigger` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpAutofillTriggerCommandData struct {
-	// AddressFieldCount Number of address fields the command filled. Their names and values are never captured.
-	AddressFieldCount *int `json:"address_field_count,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// FieldId Opaque backend node identifier of the field that was autofilled.
-	FieldId int `json:"field_id"`
-
-	// FrameId Opaque frame identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	FrameId *string                                    `json:"frame_id,omitempty"`
-	Method  BrowserCdpAutofillTriggerCommandDataMethod `json:"method"`
-
-	// Mode What was filled: `card` or `address`. The values themselves are never captured.
-	Mode *BrowserCdpAutofillMode `json:"mode,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpAutofillTriggerCommandDataMethod defines model for BrowserCdpAutofillTriggerCommandData.Method.
-type BrowserCdpAutofillTriggerCommandDataMethod string
-
-// BrowserCdpBrowserCancelDownloadCommandData Sanitized `Browser.cancelDownload` arguments. Canonical input: `Browser.cancelDownload` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpBrowserCancelDownloadCommandData struct {
-	// BrowserContextId Opaque browser context identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	BrowserContextId *string `json:"browser_context_id,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// DownloadGuid Opaque identifier of the download that was cancelled. Clipped to 128 characters; a longer value is not a real identifier.
-	DownloadGuid string                                           `json:"download_guid"`
-	Method       BrowserCdpBrowserCancelDownloadCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpBrowserCancelDownloadCommandDataMethod defines model for BrowserCdpBrowserCancelDownloadCommandData.Method.
-type BrowserCdpBrowserCancelDownloadCommandDataMethod string
-
-// BrowserCdpBrowserCloseCommandData Sanitized `Browser.close` arguments. Canonical input: `Browser.close` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpBrowserCloseCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                 `json:"connection_id,omitempty"`
-	Method       BrowserCdpBrowserCloseCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpBrowserCloseCommandDataMethod defines model for BrowserCdpBrowserCloseCommandData.Method.
-type BrowserCdpBrowserCloseCommandDataMethod string
-
-// BrowserCdpBrowserSetContentsSizeCommandData Sanitized `Browser.setContentsSize` arguments. Canonical input: `Browser.setContentsSize` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpBrowserSetContentsSizeCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// Height Contents height in DIP.
-	Height *int                                              `json:"height,omitempty"`
-	Method BrowserCdpBrowserSetContentsSizeCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// Width Contents width in DIP.
-	Width *int `json:"width,omitempty"`
-
-	// WindowId Browser window identifier.
-	WindowId int `json:"window_id"`
-}
-
-// BrowserCdpBrowserSetContentsSizeCommandDataMethod defines model for BrowserCdpBrowserSetContentsSizeCommandData.Method.
-type BrowserCdpBrowserSetContentsSizeCommandDataMethod string
-
-// BrowserCdpBrowserSetWindowBoundsCommandData Sanitized `Browser.setWindowBounds` arguments. Canonical input: `Browser.setWindowBounds` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpBrowserSetWindowBoundsCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// Height Window height in DIP.
-	Height *int `json:"height,omitempty"`
-
-	// Left Window x position in screen coordinates.
-	Left   *int                                              `json:"left,omitempty"`
-	Method BrowserCdpBrowserSetWindowBoundsCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// Top Window y position in screen coordinates.
-	Top *int `json:"top,omitempty"`
-
-	// Width Window width in DIP.
-	Width *int `json:"width,omitempty"`
-
-	// WindowId Browser window identifier.
-	WindowId int `json:"window_id"`
-
-	// WindowState Window state requested (`normal`, `minimized`, `maximized`, `fullscreen`). A value the protocol does not define is reported as `other`.
-	WindowState *BrowserCdpWindowState `json:"window_state,omitempty"`
-}
-
-// BrowserCdpBrowserSetWindowBoundsCommandDataMethod defines model for BrowserCdpBrowserSetWindowBoundsCommandData.Method.
-type BrowserCdpBrowserSetWindowBoundsCommandDataMethod string
-
-// BrowserCdpCommandEvent A browser-control command a client sent over the CDP WebSocket proxy: input gestures, navigation, dialog handling, file selection and screenshots. Configuration commands and the DOM/Runtime traffic a client library issues on the caller's behalf are not reported.
-// One event per browser-control command that reached the browser. The command stream is not sampled, coalesced or reordered. An event is lost only when the method is excluded by telemetry configuration, when the command's arguments do not decode, or when classification cannot keep up. Exclusions are counted in `cdp_disconnect.telemetry_excluded`; the rest in `cdp_disconnect.telemetry_dropped`.
-type BrowserCdpCommandEvent struct {
-	Category BrowserCdpCommandEventCategory `json:"category"`
-
-	// Data Per-command payload for `cdp_command` events, discriminated by `method`. Each variant carries only the arguments approved for that command: values that could hold a secret — typed and composition text, URLs, referrers, scripts, templates, file paths, drag contents and autofill values — are replaced by a length, a count, a presence flag, an enum or a URL scheme and host.
-	Data BrowserCdpCommandEventData `json:"data"`
-
-	// Source Provenance metadata identifying which producer emitted the event.
-	Source BrowserEventSource `json:"source"`
-
-	// Truncated True if the data field was truncated due to size limits.
-	Truncated *bool `json:"truncated,omitempty"`
-
-	// Ts Event timestamp in Unix microseconds.
-	Ts   int64                      `json:"ts"`
-	Type BrowserCdpCommandEventType `json:"type"`
-}
-
-// BrowserCdpCommandEventCategory defines model for BrowserCdpCommandEvent.Category.
-type BrowserCdpCommandEventCategory string
-
-// BrowserCdpCommandEventType defines model for BrowserCdpCommandEvent.Type.
-type BrowserCdpCommandEventType string
-
-// BrowserCdpCommandEventData Per-command payload for `cdp_command` events, discriminated by `method`. Each variant carries only the arguments approved for that command: values that could hold a secret — typed and composition text, URLs, referrers, scripts, templates, file paths, drag contents and autofill values — are replaced by a length, a count, a presence flag, an enum or a URL scheme and host.
-type BrowserCdpCommandEventData struct {
-	union json.RawMessage
-}
-
-// BrowserCdpCommandMethod A browser-control CDP method the proxy reports. The set covers the commands an agent drives the browser with; configuration, DOM and Runtime bookkeeping, and Chrome-specific UI commands are outside it. Canonical definitions: devtools-protocol@2d019e73.
-type BrowserCdpCommandMethod string
-
 // BrowserCdpConnectEvent An external client (e.g. customer SDK, Playwright, Puppeteer) connected to the CDP WebSocket proxy on this VM.
 type BrowserCdpConnectEvent struct {
 	Category BrowserCdpConnectEventCategory `json:"category"`
-
-	// Data Per-connection payload for `cdp_connect` events.
-	Data *BrowserCdpConnectEventData `json:"data,omitempty"`
 
 	// Source Provenance metadata identifying which producer emitted the event.
 	Source BrowserEventSource `json:"source"`
@@ -3186,12 +1765,6 @@ type BrowserCdpConnectEventCategory string
 
 // BrowserCdpConnectEventType defines model for BrowserCdpConnectEvent.Type.
 type BrowserCdpConnectEventType string
-
-// BrowserCdpConnectEventData Per-connection payload for `cdp_connect` events.
-type BrowserCdpConnectEventData struct {
-	// ConnectionId Identifies this CDP proxy connection, matching the `connection_id` on the `cdp_command` events that arrived on it. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-}
 
 // BrowserCdpDisconnectEvent An external client disconnected from the CDP WebSocket proxy on this VM. Pair with the immediately preceding `cdp_connect` on the same stream.
 type BrowserCdpDisconnectEvent struct {
@@ -3219,9 +1792,6 @@ type BrowserCdpDisconnectEventType string
 
 // BrowserCdpDisconnectEventData Per-disconnect payload for `cdp_disconnect` events.
 type BrowserCdpDisconnectEventData struct {
-	// ConnectionId Identifies this CDP proxy connection, matching the `connection_id` on the `cdp_command` events that arrived on it. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
 	// DurationMs Wall-clock duration of the connection in milliseconds.
 	DurationMs float32 `json:"duration_ms"`
 
@@ -3230,1075 +1800,10 @@ type BrowserCdpDisconnectEventData struct {
 
 	// Reason Why the connection ended. `client_close`: the client initiated the close. `upstream_changed`: Chromium restarted mid-session and the proxy tore down so the client could reconnect against the new upstream. `upstream_error`: upstream dial or message pump errored. `context_cancelled`: the request context was cancelled (typically server shutdown).
 	Reason BrowserCdpDisconnectEventDataReason `json:"reason"`
-
-	// TelemetryDropped Number of supported browser-control commands that were forwarded to the browser but never classified, because the queue was full or classification panicked. Every increment is a real lost command — unsupported and excluded methods are filtered before admission and never count toward this total. Telemetry loss only; every command was still relayed to the browser. Always present on images that report it; absent on images predating the field, which is not the same as zero.
-	TelemetryDropped *int `json:"telemetry_dropped,omitempty"`
-
-	// TelemetryExcluded Number of forwarded client commands that produced no `cdp_command` event because their method is listed in `control.cdp.excluded_methods`. Configuration rather than loss, so it is counted apart from `telemetry_dropped`.
-	TelemetryExcluded *int `json:"telemetry_excluded,omitempty"`
 }
 
 // BrowserCdpDisconnectEventDataReason Why the connection ended. `client_close`: the client initiated the close. `upstream_changed`: Chromium restarted mid-session and the proxy tore down so the client could reconnect against the new upstream. `upstream_error`: upstream dial or message pump errored. `context_cancelled`: the request context was cancelled (typically server shutdown).
 type BrowserCdpDisconnectEventDataReason string
-
-// BrowserCdpDomFocusCommandData Sanitized `DOM.focus` arguments. Canonical input: `DOM.focus` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpDomFocusCommandData struct {
-	// BackendNodeId Opaque backend DOM node identifier the command targeted.
-	BackendNodeId *int `json:"backend_node_id,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                             `json:"connection_id,omitempty"`
-	Method       BrowserCdpDomFocusCommandDataMethod `json:"method"`
-
-	// NodeId Opaque DOM node identifier the command targeted.
-	NodeId *int `json:"node_id,omitempty"`
-
-	// ObjectId Opaque Runtime remote object identifier the command targeted. Clipped to 128 characters; a longer value is not a real identifier.
-	ObjectId *string `json:"object_id,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpDomFocusCommandDataMethod defines model for BrowserCdpDomFocusCommandData.Method.
-type BrowserCdpDomFocusCommandDataMethod string
-
-// BrowserCdpDomScrollIntoViewIfNeededCommandData Sanitized `DOM.scrollIntoViewIfNeeded` arguments. Canonical input: `DOM.scrollIntoViewIfNeeded` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpDomScrollIntoViewIfNeededCommandData struct {
-	// BackendNodeId Opaque backend DOM node identifier the command targeted.
-	BackendNodeId *int `json:"backend_node_id,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                              `json:"connection_id,omitempty"`
-	Method       BrowserCdpDomScrollIntoViewIfNeededCommandDataMethod `json:"method"`
-
-	// NodeId Opaque DOM node identifier the command targeted.
-	NodeId *int `json:"node_id,omitempty"`
-
-	// ObjectId Opaque Runtime remote object identifier the command targeted. Clipped to 128 characters; a longer value is not a real identifier.
-	ObjectId *string `json:"object_id,omitempty"`
-
-	// RectHeight Height of the rect the command scrolled to.
-	RectHeight *float64 `json:"rect_height,omitempty"`
-
-	// RectWidth Width of the rect the command scrolled to.
-	RectWidth *float64 `json:"rect_width,omitempty"`
-
-	// RectX X offset of the rect the command scrolled to, relative to the node.
-	RectX *float64 `json:"rect_x,omitempty"`
-
-	// RectY Y offset of the rect the command scrolled to, relative to the node.
-	RectY *float64 `json:"rect_y,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpDomScrollIntoViewIfNeededCommandDataMethod defines model for BrowserCdpDomScrollIntoViewIfNeededCommandData.Method.
-type BrowserCdpDomScrollIntoViewIfNeededCommandDataMethod string
-
-// BrowserCdpDomSetFileInputFilesCommandData Sanitized `DOM.setFileInputFiles` arguments. Canonical input: `DOM.setFileInputFiles` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpDomSetFileInputFilesCommandData struct {
-	// BackendNodeId Opaque backend DOM node identifier the command targeted.
-	BackendNodeId *int `json:"backend_node_id,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// FileCount Number of files handed to the input. File paths are never captured.
-	FileCount int                                             `json:"file_count"`
-	Method    BrowserCdpDomSetFileInputFilesCommandDataMethod `json:"method"`
-
-	// NodeId Opaque DOM node identifier the command targeted.
-	NodeId *int `json:"node_id,omitempty"`
-
-	// ObjectId Opaque Runtime remote object identifier the command targeted. Clipped to 128 characters; a longer value is not a real identifier.
-	ObjectId *string `json:"object_id,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpDomSetFileInputFilesCommandDataMethod defines model for BrowserCdpDomSetFileInputFilesCommandData.Method.
-type BrowserCdpDomSetFileInputFilesCommandDataMethod string
-
-// BrowserCdpDragEventType Drag event phase. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpDragEventType string
-
-// BrowserCdpDragMimeCategory Top-level MIME category of a drag item, from the IANA registry rather than the protocol; a drag item's subtype names the file, so only the category is reported. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpDragMimeCategory string
-
-// BrowserCdpGestureSourceType Input source a synthesized gesture emulates. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpGestureSourceType string
-
-// BrowserCdpInputCancelDraggingCommandData Sanitized `Input.cancelDragging` arguments. Canonical input: `Input.cancelDragging` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputCancelDraggingCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                        `json:"connection_id,omitempty"`
-	Method       BrowserCdpInputCancelDraggingCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpInputCancelDraggingCommandDataMethod defines model for BrowserCdpInputCancelDraggingCommandData.Method.
-type BrowserCdpInputCancelDraggingCommandDataMethod string
-
-// BrowserCdpInputDispatchDragEventCommandData Sanitized `Input.dispatchDragEvent` arguments. Canonical input: `Input.dispatchDragEvent` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputDispatchDragEventCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// DragFileCount Number of files in the drag payload. File paths are never captured.
-	DragFileCount *int `json:"drag_file_count,omitempty"`
-
-	// DragItemCount Number of items in the drag payload. Item contents are never captured.
-	DragItemCount *int `json:"drag_item_count,omitempty"`
-
-	// DragMimeCategories Distinct top-level MIME categories of the drag items (e.g. `text`, `image`, `application`). Subtypes and contents are never captured. A value the protocol does not define is reported as `other`.
-	DragMimeCategories *[]BrowserCdpDragMimeCategory `json:"drag_mime_categories,omitempty"`
-
-	// DragOperationsMask Bit field of allowed drag operations (1=copy, 2=link, 16=move).
-	DragOperationsMask *int `json:"drag_operations_mask,omitempty"`
-
-	// EventType Drag event phase: `dragEnter`, `dragOver`, `drop` or `dragCancel`. A value the protocol does not define is reported as `other`.
-	EventType BrowserCdpDragEventType                           `json:"event_type"`
-	Method    BrowserCdpInputDispatchDragEventCommandDataMethod `json:"method"`
-
-	// Modifiers Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta, 8=Shift).
-	Modifiers *int `json:"modifiers,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// X Viewport x coordinate in CSS pixels.
-	X *float64 `json:"x,omitempty"`
-
-	// Y Viewport y coordinate in CSS pixels.
-	Y *float64 `json:"y,omitempty"`
-}
-
-// BrowserCdpInputDispatchDragEventCommandDataMethod defines model for BrowserCdpInputDispatchDragEventCommandData.Method.
-type BrowserCdpInputDispatchDragEventCommandDataMethod string
-
-// BrowserCdpInputDispatchKeyEventCommandData Sanitized `Input.dispatchKeyEvent` arguments. Canonical input: `Input.dispatchKeyEvent` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputDispatchKeyEventCommandData struct {
-	// AutoRepeat Whether the event was generated by key repeat.
-	AutoRepeat *bool `json:"auto_repeat,omitempty"`
-
-	// CommandCount Number of editing commands (e.g. `selectAll`) carried by the event.
-	CommandCount *int `json:"command_count,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// EventType Key event phase: `keyDown`, `keyUp`, `rawKeyDown` or `char`. A value the protocol does not define is reported as `other`.
-	EventType BrowserCdpKeyEventType `json:"event_type"`
-
-	// IsKeypad Whether the key is on the numeric keypad.
-	IsKeypad *bool `json:"is_keypad,omitempty"`
-
-	// IsSystemKey Whether the event is a system key event.
-	IsSystemKey *bool `json:"is_system_key,omitempty"`
-
-	// Location Keyboard location (1=left, 2=right, 3=numpad).
-	Location *int                                             `json:"location,omitempty"`
-	Method   BrowserCdpInputDispatchKeyEventCommandDataMethod `json:"method"`
-
-	// Modifiers Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta, 8=Shift).
-	Modifiers *int `json:"modifiers,omitempty"`
-
-	// NamedKey Key that commands the page rather than typing into it (e.g. `Enter`, `Tab`, `ArrowDown`, `F5`). Keys that produce a character are never captured; those are counted by `text_length`.
-	NamedKey *string `json:"named_key,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TextLength Number of characters the command submitted. The text itself is never captured.
-	TextLength *int `json:"text_length,omitempty"`
-}
-
-// BrowserCdpInputDispatchKeyEventCommandDataMethod defines model for BrowserCdpInputDispatchKeyEventCommandData.Method.
-type BrowserCdpInputDispatchKeyEventCommandDataMethod string
-
-// BrowserCdpInputDispatchMouseEventCommandData Sanitized `Input.dispatchMouseEvent` arguments. Canonical input: `Input.dispatchMouseEvent` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputDispatchMouseEventCommandData struct {
-	// Button Button named by the command (`none`, `left`, `middle`, `right`, `back`, `forward`). A value the protocol does not define is reported as `other`.
-	Button *BrowserCdpMouseButton `json:"button,omitempty"`
-
-	// Buttons Bit field of buttons held down. Non-zero on a `mouseMoved` means the move is a drag path.
-	Buttons *int `json:"buttons,omitempty"`
-
-	// ClickCount Number of times the button was clicked (2 is a double click).
-	ClickCount *int `json:"click_count,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// DeltaX Horizontal scroll delta, for `mouseWheel`.
-	DeltaX *float64 `json:"delta_x,omitempty"`
-
-	// DeltaY Vertical scroll delta, for `mouseWheel`.
-	DeltaY *float64 `json:"delta_y,omitempty"`
-
-	// EventType Mouse event phase: `mousePressed`, `mouseReleased`, `mouseMoved` or `mouseWheel`. A value the protocol does not define is reported as `other`.
-	EventType BrowserCdpMouseEventType `json:"event_type"`
-
-	// Force Normalized pressure, 0 to 1.
-	Force  *float64                                           `json:"force,omitempty"`
-	Method BrowserCdpInputDispatchMouseEventCommandDataMethod `json:"method"`
-
-	// Modifiers Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta, 8=Shift).
-	Modifiers *int `json:"modifiers,omitempty"`
-
-	// PointerType Pointer that generated the event (`mouse` or `pen`). A value the protocol does not define is reported as `other`.
-	PointerType *BrowserCdpPointerType `json:"pointer_type,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TangentialPressure Normalized tangential pressure, -1 to 1.
-	TangentialPressure *float64 `json:"tangential_pressure,omitempty"`
-
-	// TiltX Pen tilt from the Y-Z plane, in degrees.
-	TiltX *float64 `json:"tilt_x,omitempty"`
-
-	// TiltY Pen tilt from the X-Z plane, in degrees.
-	TiltY *float64 `json:"tilt_y,omitempty"`
-
-	// Twist Pen clockwise rotation, in degrees.
-	Twist *int `json:"twist,omitempty"`
-
-	// X Viewport x coordinate in CSS pixels.
-	X *float64 `json:"x,omitempty"`
-
-	// Y Viewport y coordinate in CSS pixels.
-	Y *float64 `json:"y,omitempty"`
-}
-
-// BrowserCdpInputDispatchMouseEventCommandDataMethod defines model for BrowserCdpInputDispatchMouseEventCommandData.Method.
-type BrowserCdpInputDispatchMouseEventCommandDataMethod string
-
-// BrowserCdpInputDispatchTouchEventCommandData Sanitized `Input.dispatchTouchEvent` arguments. Canonical input: `Input.dispatchTouchEvent` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputDispatchTouchEventCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// EventType Touch event phase: `touchStart`, `touchEnd`, `touchMove` or `touchCancel`. A value the protocol does not define is reported as `other`.
-	EventType BrowserCdpTouchEventType `json:"event_type"`
-
-	// Force Normalized pressure of the first touch point, 0 to 1.
-	Force  *float64                                           `json:"force,omitempty"`
-	Method BrowserCdpInputDispatchTouchEventCommandDataMethod `json:"method"`
-
-	// Modifiers Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta, 8=Shift).
-	Modifiers *int `json:"modifiers,omitempty"`
-
-	// RadiusX Horizontal radius of the first touch point.
-	RadiusX *float64 `json:"radius_x,omitempty"`
-
-	// RadiusY Vertical radius of the first touch point.
-	RadiusY *float64 `json:"radius_y,omitempty"`
-
-	// RotationAngle Rotation of the first touch point, in degrees.
-	RotationAngle *float64 `json:"rotation_angle,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TangentialPressure Normalized tangential pressure of the first touch point, -1 to 1.
-	TangentialPressure *float64 `json:"tangential_pressure,omitempty"`
-
-	// TiltX Tilt of the first touch point from the Y-Z plane, in degrees.
-	TiltX *float64 `json:"tilt_x,omitempty"`
-
-	// TiltY Tilt of the first touch point from the X-Z plane, in degrees.
-	TiltY *float64 `json:"tilt_y,omitempty"`
-
-	// TouchPointCount Number of active touch points the command carried.
-	TouchPointCount int `json:"touch_point_count"`
-
-	// Twist Clockwise rotation of the first touch point, in degrees.
-	Twist *int `json:"twist,omitempty"`
-
-	// X Viewport x coordinate of the first touch point. Touch coordinates live inside `touchPoints`, so this is the primary point rather than a command-level argument.
-	X *float64 `json:"x,omitempty"`
-
-	// Y Viewport y coordinate of the first touch point.
-	Y *float64 `json:"y,omitempty"`
-}
-
-// BrowserCdpInputDispatchTouchEventCommandDataMethod defines model for BrowserCdpInputDispatchTouchEventCommandData.Method.
-type BrowserCdpInputDispatchTouchEventCommandDataMethod string
-
-// BrowserCdpInputEmulateTouchFromMouseEventCommandData Sanitized `Input.emulateTouchFromMouseEvent` arguments. Canonical input: `Input.emulateTouchFromMouseEvent` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputEmulateTouchFromMouseEventCommandData struct {
-	// Button Button named by the command. A value the protocol does not define is reported as `other`.
-	Button *BrowserCdpMouseButton `json:"button,omitempty"`
-
-	// ClickCount Number of times the button was clicked.
-	ClickCount *int `json:"click_count,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// DeltaX Horizontal scroll delta.
-	DeltaX *float64 `json:"delta_x,omitempty"`
-
-	// DeltaY Vertical scroll delta.
-	DeltaY *float64 `json:"delta_y,omitempty"`
-
-	// EventType Mouse event phase being emulated as touch. A value the protocol does not define is reported as `other`.
-	EventType BrowserCdpMouseEventType                                   `json:"event_type"`
-	Method    BrowserCdpInputEmulateTouchFromMouseEventCommandDataMethod `json:"method"`
-
-	// Modifiers Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta, 8=Shift).
-	Modifiers *int `json:"modifiers,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// X Viewport x coordinate in CSS pixels.
-	X *float64 `json:"x,omitempty"`
-
-	// Y Viewport y coordinate in CSS pixels.
-	Y *float64 `json:"y,omitempty"`
-}
-
-// BrowserCdpInputEmulateTouchFromMouseEventCommandDataMethod defines model for BrowserCdpInputEmulateTouchFromMouseEventCommandData.Method.
-type BrowserCdpInputEmulateTouchFromMouseEventCommandDataMethod string
-
-// BrowserCdpInputImeSetCompositionCommandData Sanitized `Input.imeSetComposition` arguments. Canonical input: `Input.imeSetComposition` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputImeSetCompositionCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                           `json:"connection_id,omitempty"`
-	Method       BrowserCdpInputImeSetCompositionCommandDataMethod `json:"method"`
-
-	// ReplacementEnd Replacement range end offset.
-	ReplacementEnd *int `json:"replacement_end,omitempty"`
-
-	// ReplacementStart Replacement range start offset.
-	ReplacementStart *int `json:"replacement_start,omitempty"`
-
-	// SelectionEnd Selection end offset within the composition.
-	SelectionEnd *int `json:"selection_end,omitempty"`
-
-	// SelectionStart Selection start offset within the composition.
-	SelectionStart *int `json:"selection_start,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TextLength Number of characters in the composition. The text itself is never captured.
-	TextLength int `json:"text_length"`
-}
-
-// BrowserCdpInputImeSetCompositionCommandDataMethod defines model for BrowserCdpInputImeSetCompositionCommandData.Method.
-type BrowserCdpInputImeSetCompositionCommandDataMethod string
-
-// BrowserCdpInputInsertTextCommandData Sanitized `Input.insertText` arguments. Canonical input: `Input.insertText` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputInsertTextCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                    `json:"connection_id,omitempty"`
-	Method       BrowserCdpInputInsertTextCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TextLength Number of characters inserted. The text itself is never captured.
-	TextLength int `json:"text_length"`
-}
-
-// BrowserCdpInputInsertTextCommandDataMethod defines model for BrowserCdpInputInsertTextCommandData.Method.
-type BrowserCdpInputInsertTextCommandDataMethod string
-
-// BrowserCdpInputSynthesizePinchGestureCommandData Sanitized `Input.synthesizePinchGesture` arguments. Canonical input: `Input.synthesizePinchGesture` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputSynthesizePinchGestureCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// GestureSourceType Input source the synthesized gesture emulates. A value the protocol does not define is reported as `other`.
-	GestureSourceType *BrowserCdpGestureSourceType                           `json:"gesture_source_type,omitempty"`
-	Method            BrowserCdpInputSynthesizePinchGestureCommandDataMethod `json:"method"`
-
-	// RelativeSpeed Relative pointer speed, in pixels per second.
-	RelativeSpeed *int `json:"relative_speed,omitempty"`
-
-	// ScaleFactor Relative scale of the pinch (>1 zooms in).
-	ScaleFactor *float64 `json:"scale_factor,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// X Viewport x coordinate in CSS pixels.
-	X *float64 `json:"x,omitempty"`
-
-	// Y Viewport y coordinate in CSS pixels.
-	Y *float64 `json:"y,omitempty"`
-}
-
-// BrowserCdpInputSynthesizePinchGestureCommandDataMethod defines model for BrowserCdpInputSynthesizePinchGestureCommandData.Method.
-type BrowserCdpInputSynthesizePinchGestureCommandDataMethod string
-
-// BrowserCdpInputSynthesizeScrollGestureCommandData Sanitized `Input.synthesizeScrollGesture` arguments. Canonical input: `Input.synthesizeScrollGesture` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputSynthesizeScrollGestureCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// GestureSourceType Input source the synthesized gesture emulates. A value the protocol does not define is reported as `other`.
-	GestureSourceType *BrowserCdpGestureSourceType                            `json:"gesture_source_type,omitempty"`
-	Method            BrowserCdpInputSynthesizeScrollGestureCommandDataMethod `json:"method"`
-
-	// PreventFling Whether fling was suppressed.
-	PreventFling *bool `json:"prevent_fling,omitempty"`
-
-	// RepeatCount Number of additional repeats of the scroll.
-	RepeatCount *int `json:"repeat_count,omitempty"`
-
-	// RepeatDelayMs Delay between repeats, in milliseconds.
-	RepeatDelayMs *int `json:"repeat_delay_ms,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// Speed Swipe speed in pixels per second.
-	Speed *int `json:"speed,omitempty"`
-
-	// X Viewport x coordinate in CSS pixels.
-	X *float64 `json:"x,omitempty"`
-
-	// XDistance Horizontal scroll distance in CSS pixels; positive scrolls left.
-	XDistance *float64 `json:"x_distance,omitempty"`
-
-	// XOverscroll Additional horizontal distance scrolled past the end.
-	XOverscroll *float64 `json:"x_overscroll,omitempty"`
-
-	// Y Viewport y coordinate in CSS pixels.
-	Y *float64 `json:"y,omitempty"`
-
-	// YDistance Vertical scroll distance in CSS pixels; positive scrolls up.
-	YDistance *float64 `json:"y_distance,omitempty"`
-
-	// YOverscroll Additional vertical distance scrolled past the end.
-	YOverscroll *float64 `json:"y_overscroll,omitempty"`
-}
-
-// BrowserCdpInputSynthesizeScrollGestureCommandDataMethod defines model for BrowserCdpInputSynthesizeScrollGestureCommandData.Method.
-type BrowserCdpInputSynthesizeScrollGestureCommandDataMethod string
-
-// BrowserCdpInputSynthesizeTapGestureCommandData Sanitized `Input.synthesizeTapGesture` arguments. Canonical input: `Input.synthesizeTapGesture` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpInputSynthesizeTapGestureCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// Duration Duration between touchdown and touchup, in milliseconds.
-	Duration *int `json:"duration,omitempty"`
-
-	// GestureSourceType Input source the synthesized gesture emulates. A value the protocol does not define is reported as `other`.
-	GestureSourceType *BrowserCdpGestureSourceType                         `json:"gesture_source_type,omitempty"`
-	Method            BrowserCdpInputSynthesizeTapGestureCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TapCount Number of times to tap (2 is a double tap).
-	TapCount *int `json:"tap_count,omitempty"`
-
-	// X Viewport x coordinate in CSS pixels.
-	X *float64 `json:"x,omitempty"`
-
-	// Y Viewport y coordinate in CSS pixels.
-	Y *float64 `json:"y,omitempty"`
-}
-
-// BrowserCdpInputSynthesizeTapGestureCommandDataMethod defines model for BrowserCdpInputSynthesizeTapGestureCommandData.Method.
-type BrowserCdpInputSynthesizeTapGestureCommandDataMethod string
-
-// BrowserCdpKeyEventType Key event phase. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpKeyEventType string
-
-// BrowserCdpMouseButton Mouse button named by a command. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpMouseButton string
-
-// BrowserCdpMouseEventType Mouse event phase. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpMouseEventType string
-
-// BrowserCdpPageBringToFrontCommandData Sanitized `Page.bringToFront` arguments. Canonical input: `Page.bringToFront` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageBringToFrontCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                     `json:"connection_id,omitempty"`
-	Method       BrowserCdpPageBringToFrontCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageBringToFrontCommandDataMethod defines model for BrowserCdpPageBringToFrontCommandData.Method.
-type BrowserCdpPageBringToFrontCommandDataMethod string
-
-// BrowserCdpPageCaptureScreenshotCommandData Sanitized `Page.captureScreenshot` arguments. Canonical input: `Page.captureScreenshot` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageCaptureScreenshotCommandData struct {
-	// CaptureBeyondViewport Whether the capture extended past the viewport.
-	CaptureBeyondViewport *bool `json:"capture_beyond_viewport,omitempty"`
-
-	// ClipHeight Clip region height in CSS pixels.
-	ClipHeight *float64 `json:"clip_height,omitempty"`
-
-	// ClipScale Clip region page scale factor.
-	ClipScale *float64 `json:"clip_scale,omitempty"`
-
-	// ClipWidth Clip region width in CSS pixels.
-	ClipWidth *float64 `json:"clip_width,omitempty"`
-
-	// ClipX Clip region x offset in CSS pixels.
-	ClipX *float64 `json:"clip_x,omitempty"`
-
-	// ClipY Clip region y offset in CSS pixels.
-	ClipY *float64 `json:"clip_y,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// Format Image format requested (`jpeg`, `png` or `webp`). A value the protocol does not define is reported as `other`.
-	Format *BrowserCdpScreenshotFormat `json:"format,omitempty"`
-
-	// FromSurface Whether the capture was taken from the surface rather than the view.
-	FromSurface *bool                                            `json:"from_surface,omitempty"`
-	Method      BrowserCdpPageCaptureScreenshotCommandDataMethod `json:"method"`
-
-	// OptimizeForSpeed Whether encoding favored speed over size.
-	OptimizeForSpeed *bool `json:"optimize_for_speed,omitempty"`
-
-	// Quality Compression quality, 0 to 100, for lossy formats.
-	Quality *int `json:"quality,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageCaptureScreenshotCommandDataMethod defines model for BrowserCdpPageCaptureScreenshotCommandData.Method.
-type BrowserCdpPageCaptureScreenshotCommandDataMethod string
-
-// BrowserCdpPageCaptureSnapshotCommandData Sanitized `Page.captureSnapshot` arguments. Canonical input: `Page.captureSnapshot` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageCaptureSnapshotCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// Format Snapshot format requested (`mhtml`). A value the protocol does not define is reported as `other`.
-	Format *BrowserCdpSnapshotFormat                      `json:"format,omitempty"`
-	Method BrowserCdpPageCaptureSnapshotCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageCaptureSnapshotCommandDataMethod defines model for BrowserCdpPageCaptureSnapshotCommandData.Method.
-type BrowserCdpPageCaptureSnapshotCommandDataMethod string
-
-// BrowserCdpPageCloseCommandData Sanitized `Page.close` arguments. Canonical input: `Page.close` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageCloseCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                              `json:"connection_id,omitempty"`
-	Method       BrowserCdpPageCloseCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageCloseCommandDataMethod defines model for BrowserCdpPageCloseCommandData.Method.
-type BrowserCdpPageCloseCommandDataMethod string
-
-// BrowserCdpPageHandleJavaScriptDialogCommandData Sanitized `Page.handleJavaScriptDialog` arguments. Canonical input: `Page.handleJavaScriptDialog` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageHandleJavaScriptDialogCommandData struct {
-	// Accept Whether the dialog was accepted or dismissed.
-	Accept bool `json:"accept"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                               `json:"connection_id,omitempty"`
-	Method       BrowserCdpPageHandleJavaScriptDialogCommandDataMethod `json:"method"`
-
-	// PromptTextLength Number of characters entered into a prompt dialog. The text itself is never captured.
-	PromptTextLength *int `json:"prompt_text_length,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageHandleJavaScriptDialogCommandDataMethod defines model for BrowserCdpPageHandleJavaScriptDialogCommandData.Method.
-type BrowserCdpPageHandleJavaScriptDialogCommandDataMethod string
-
-// BrowserCdpPageNavigateCommandData Sanitized `Page.navigate` arguments. Canonical input: `Page.navigate` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageNavigateCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// FrameId Opaque frame identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	FrameId *string                                 `json:"frame_id,omitempty"`
-	Method  BrowserCdpPageNavigateCommandDataMethod `json:"method"`
-
-	// ReferrerPolicy Referrer policy named by the command. A value the protocol does not define is reported as `other`.
-	ReferrerPolicy *BrowserCdpReferrerPolicy `json:"referrer_policy,omitempty"`
-
-	// ReferrerPresent Whether the command carried a referrer. The referrer itself is never captured.
-	ReferrerPresent *bool `json:"referrer_present,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TransitionType Navigation reason reported by the caller (e.g. `link`, `typed`, `reload`). A value the protocol does not define is reported as `other`.
-	TransitionType *BrowserCdpTransitionType `json:"transition_type,omitempty"`
-
-	// UrlScheme Scheme of the destination URL (e.g. `https`, `about`, `data`). The rest of the URL is never captured.
-	UrlScheme *string `json:"url_scheme,omitempty"`
-}
-
-// BrowserCdpPageNavigateCommandDataMethod defines model for BrowserCdpPageNavigateCommandData.Method.
-type BrowserCdpPageNavigateCommandDataMethod string
-
-// BrowserCdpPageNavigateToHistoryEntryCommandData Sanitized `Page.navigateToHistoryEntry` arguments. Canonical input: `Page.navigateToHistoryEntry` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageNavigateToHistoryEntryCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// EntryId History entry the command navigated to.
-	EntryId int                                                   `json:"entry_id"`
-	Method  BrowserCdpPageNavigateToHistoryEntryCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageNavigateToHistoryEntryCommandDataMethod defines model for BrowserCdpPageNavigateToHistoryEntryCommandData.Method.
-type BrowserCdpPageNavigateToHistoryEntryCommandDataMethod string
-
-// BrowserCdpPagePrintToPdfCommandData Sanitized `Page.printToPDF` arguments. Canonical input: `Page.printToPDF` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPagePrintToPdfCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// DisplayHeaderFooter Whether a header and footer were rendered.
-	DisplayHeaderFooter *bool `json:"display_header_footer,omitempty"`
-
-	// FooterTemplatePresent Whether a footer template was supplied. The template itself is never captured.
-	FooterTemplatePresent *bool `json:"footer_template_present,omitempty"`
-
-	// GenerateDocumentOutline Whether a document outline was embedded.
-	GenerateDocumentOutline *bool `json:"generate_document_outline,omitempty"`
-
-	// GenerateTaggedPdf Whether a tagged (accessible) PDF was requested.
-	GenerateTaggedPdf *bool `json:"generate_tagged_pdf,omitempty"`
-
-	// HeaderTemplatePresent Whether a header template was supplied. The template itself is never captured.
-	HeaderTemplatePresent *bool `json:"header_template_present,omitempty"`
-
-	// Landscape Whether the page was laid out in landscape.
-	Landscape *bool `json:"landscape,omitempty"`
-
-	// MarginBottom Bottom margin in inches.
-	MarginBottom *float64 `json:"margin_bottom,omitempty"`
-
-	// MarginLeft Left margin in inches.
-	MarginLeft *float64 `json:"margin_left,omitempty"`
-
-	// MarginRight Right margin in inches.
-	MarginRight *float64 `json:"margin_right,omitempty"`
-
-	// MarginTop Top margin in inches.
-	MarginTop *float64                                  `json:"margin_top,omitempty"`
-	Method    BrowserCdpPagePrintToPdfCommandDataMethod `json:"method"`
-
-	// PageRangesPresent Whether a page range was supplied.
-	PageRangesPresent *bool `json:"page_ranges_present,omitempty"`
-
-	// PaperHeight Paper height in inches.
-	PaperHeight *float64 `json:"paper_height,omitempty"`
-
-	// PaperWidth Paper width in inches.
-	PaperWidth *float64 `json:"paper_width,omitempty"`
-
-	// PreferCssPageSize Whether the CSS page size was preferred over the paper size.
-	PreferCssPageSize *bool `json:"prefer_css_page_size,omitempty"`
-
-	// PrintBackground Whether background graphics were printed.
-	PrintBackground *bool `json:"print_background,omitempty"`
-
-	// Scale Page render scale.
-	Scale *float64 `json:"scale,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TransferMode How the PDF was returned (`ReturnAsBase64` or `ReturnAsStream`). A value the protocol does not define is reported as `other`.
-	TransferMode *BrowserCdpPdfTransferMode `json:"transfer_mode,omitempty"`
-}
-
-// BrowserCdpPagePrintToPdfCommandDataMethod defines model for BrowserCdpPagePrintToPdfCommandData.Method.
-type BrowserCdpPagePrintToPdfCommandDataMethod string
-
-// BrowserCdpPageReloadCommandData Sanitized `Page.reload` arguments. Canonical input: `Page.reload` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageReloadCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// IgnoreCache Whether the reload bypassed the cache.
-	IgnoreCache *bool `json:"ignore_cache,omitempty"`
-
-	// LoaderId Opaque document loader identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	LoaderId *string                               `json:"loader_id,omitempty"`
-	Method   BrowserCdpPageReloadCommandDataMethod `json:"method"`
-
-	// ScriptLength Number of characters in the injected script.
-	ScriptLength *int `json:"script_length,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageReloadCommandDataMethod defines model for BrowserCdpPageReloadCommandData.Method.
-type BrowserCdpPageReloadCommandDataMethod string
-
-// BrowserCdpPageSetWebLifecycleStateCommandData Sanitized `Page.setWebLifecycleState` arguments. Canonical input: `Page.setWebLifecycleState` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageSetWebLifecycleStateCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                             `json:"connection_id,omitempty"`
-	Method       BrowserCdpPageSetWebLifecycleStateCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// State Lifecycle state applied (`frozen` or `active`). A value the protocol does not define is reported as `other`.
-	State BrowserCdpWebLifecycleState `json:"state"`
-}
-
-// BrowserCdpPageSetWebLifecycleStateCommandDataMethod defines model for BrowserCdpPageSetWebLifecycleStateCommandData.Method.
-type BrowserCdpPageSetWebLifecycleStateCommandDataMethod string
-
-// BrowserCdpPageStartScreencastCommandData Sanitized `Page.startScreencast` arguments. Canonical input: `Page.startScreencast` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageStartScreencastCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// EveryNthFrame Frame sampling interval.
-	EveryNthFrame *int `json:"every_nth_frame,omitempty"`
-
-	// Format Frame format requested (`jpeg` or `png`). A value the protocol does not define is reported as `other`.
-	Format *BrowserCdpScreencastFormat `json:"format,omitempty"`
-
-	// MaxHeight Maximum frame height in pixels.
-	MaxHeight *int `json:"max_height,omitempty"`
-
-	// MaxWidth Maximum frame width in pixels.
-	MaxWidth *int                                           `json:"max_width,omitempty"`
-	Method   BrowserCdpPageStartScreencastCommandDataMethod `json:"method"`
-
-	// Quality Compression quality, 0 to 100.
-	Quality *int `json:"quality,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageStartScreencastCommandDataMethod defines model for BrowserCdpPageStartScreencastCommandData.Method.
-type BrowserCdpPageStartScreencastCommandDataMethod string
-
-// BrowserCdpPageStopLoadingCommandData Sanitized `Page.stopLoading` arguments. Canonical input: `Page.stopLoading` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageStopLoadingCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                    `json:"connection_id,omitempty"`
-	Method       BrowserCdpPageStopLoadingCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageStopLoadingCommandDataMethod defines model for BrowserCdpPageStopLoadingCommandData.Method.
-type BrowserCdpPageStopLoadingCommandDataMethod string
-
-// BrowserCdpPageStopScreencastCommandData Sanitized `Page.stopScreencast` arguments. Canonical input: `Page.stopScreencast` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpPageStopScreencastCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                       `json:"connection_id,omitempty"`
-	Method       BrowserCdpPageStopScreencastCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpPageStopScreencastCommandDataMethod defines model for BrowserCdpPageStopScreencastCommandData.Method.
-type BrowserCdpPageStopScreencastCommandDataMethod string
-
-// BrowserCdpPdfTransferMode How a generated PDF is returned. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpPdfTransferMode string
-
-// BrowserCdpPointerType Pointer that generated an input event. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpPointerType string
-
-// BrowserCdpReferrerPolicy Referrer policy named by a navigation. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpReferrerPolicy string
-
-// BrowserCdpScreencastFormat Frame format requested for a screencast. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpScreencastFormat string
-
-// BrowserCdpScreenshotFormat Image format requested for a screenshot. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpScreenshotFormat string
-
-// BrowserCdpSnapshotFormat Format requested for a page snapshot. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpSnapshotFormat string
-
-// BrowserCdpTargetActivateTargetCommandData Sanitized `Target.activateTarget` arguments. Canonical input: `Target.activateTarget` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpTargetActivateTargetCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                         `json:"connection_id,omitempty"`
-	Method       BrowserCdpTargetActivateTargetCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TargetId Opaque target identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	TargetId string `json:"target_id"`
-}
-
-// BrowserCdpTargetActivateTargetCommandDataMethod defines model for BrowserCdpTargetActivateTargetCommandData.Method.
-type BrowserCdpTargetActivateTargetCommandDataMethod string
-
-// BrowserCdpTargetCloseTargetCommandData Sanitized `Target.closeTarget` arguments. Canonical input: `Target.closeTarget` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpTargetCloseTargetCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                      `json:"connection_id,omitempty"`
-	Method       BrowserCdpTargetCloseTargetCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TargetId Opaque target identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	TargetId string `json:"target_id"`
-}
-
-// BrowserCdpTargetCloseTargetCommandDataMethod defines model for BrowserCdpTargetCloseTargetCommandData.Method.
-type BrowserCdpTargetCloseTargetCommandDataMethod string
-
-// BrowserCdpTargetCreateBrowserContextCommandData Sanitized `Target.createBrowserContext` arguments. Canonical input: `Target.createBrowserContext` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpTargetCreateBrowserContextCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// DisposeOnDetach Whether the context is disposed when the debugging session detaches.
-	DisposeOnDetach *bool                                                 `json:"dispose_on_detach,omitempty"`
-	Method          BrowserCdpTargetCreateBrowserContextCommandDataMethod `json:"method"`
-
-	// ProxyBypassListPresent Whether a proxy bypass list was configured.
-	ProxyBypassListPresent *bool `json:"proxy_bypass_list_present,omitempty"`
-
-	// ProxyServerPresent Whether a proxy was configured. The proxy address is never captured.
-	ProxyServerPresent *bool `json:"proxy_server_present,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// UniversalNetworkAccessOriginCount Number of origins granted universal network access. The origins themselves are never captured.
-	UniversalNetworkAccessOriginCount *int `json:"universal_network_access_origin_count,omitempty"`
-}
-
-// BrowserCdpTargetCreateBrowserContextCommandDataMethod defines model for BrowserCdpTargetCreateBrowserContextCommandData.Method.
-type BrowserCdpTargetCreateBrowserContextCommandDataMethod string
-
-// BrowserCdpTargetCreateTargetCommandData Sanitized `Target.createTarget` arguments. Canonical input: `Target.createTarget` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpTargetCreateTargetCommandData struct {
-	// Background Whether the target was created in the background.
-	Background *bool `json:"background,omitempty"`
-
-	// BrowserContextId Opaque browser context identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	BrowserContextId *string `json:"browser_context_id,omitempty"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string `json:"connection_id,omitempty"`
-
-	// EnableBeginFrameControl Whether BeginFrame control was enabled (headless only).
-	EnableBeginFrameControl *bool `json:"enable_begin_frame_control,omitempty"`
-
-	// Focus Whether the new target was focused.
-	Focus *bool `json:"focus,omitempty"`
-
-	// ForTab Whether a tab target rather than a page target was created.
-	ForTab *bool `json:"for_tab,omitempty"`
-
-	// Height Window height in DIP.
-	Height *int `json:"height,omitempty"`
-
-	// Hidden Whether the target was created hidden.
-	Hidden *bool `json:"hidden,omitempty"`
-
-	// Left Window x position in screen coordinates.
-	Left   *int                                          `json:"left,omitempty"`
-	Method BrowserCdpTargetCreateTargetCommandDataMethod `json:"method"`
-
-	// NewWindow Whether a new window was requested.
-	NewWindow *bool `json:"new_window,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// Top Window y position in screen coordinates.
-	Top *int `json:"top,omitempty"`
-
-	// UrlScheme Scheme of the destination URL (e.g. `https`, `about`, `data`). The rest of the URL is never captured.
-	UrlScheme *string `json:"url_scheme,omitempty"`
-
-	// Width Window width in DIP.
-	Width *int `json:"width,omitempty"`
-
-	// WindowState Window state requested (`normal`, `minimized`, `maximized`, `fullscreen`). A value the protocol does not define is reported as `other`.
-	WindowState *BrowserCdpWindowState `json:"window_state,omitempty"`
-}
-
-// BrowserCdpTargetCreateTargetCommandDataMethod defines model for BrowserCdpTargetCreateTargetCommandData.Method.
-type BrowserCdpTargetCreateTargetCommandDataMethod string
-
-// BrowserCdpTargetDisposeBrowserContextCommandData Sanitized `Target.disposeBrowserContext` arguments. Canonical input: `Target.disposeBrowserContext` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpTargetDisposeBrowserContextCommandData struct {
-	// BrowserContextId Opaque browser context identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	BrowserContextId string `json:"browser_context_id"`
-
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                                `json:"connection_id,omitempty"`
-	Method       BrowserCdpTargetDisposeBrowserContextCommandDataMethod `json:"method"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
-// BrowserCdpTargetDisposeBrowserContextCommandDataMethod defines model for BrowserCdpTargetDisposeBrowserContextCommandData.Method.
-type BrowserCdpTargetDisposeBrowserContextCommandDataMethod string
-
-// BrowserCdpTargetOpenDevToolsCommandData Sanitized `Target.openDevTools` arguments. Canonical input: `Target.openDevTools` in devtools-protocol@2d019e73, pinned at https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json. Every argument of this command has a retained or redacted decision in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
-type BrowserCdpTargetOpenDevToolsCommandData struct {
-	// CommandId The command's JSON-RPC id, so the command can be joined to the result the browser returned for it. Absent when the client sent none.
-	CommandId *int64 `json:"command_id,omitempty"`
-
-	// ConnectionId Identifies the CDP proxy connection the command arrived on, matching `cdp_connect` and `cdp_disconnect`. Two clients driving the same browser are told apart by this.
-	ConnectionId *string                                       `json:"connection_id,omitempty"`
-	Method       BrowserCdpTargetOpenDevToolsCommandDataMethod `json:"method"`
-
-	// PanelId DevTools panel opened. Clipped to 128 characters; a longer value is not a real identifier.
-	PanelId *string `json:"panel_id,omitempty"`
-
-	// SessionId CDP session identifier the command was addressed to. Absent for browser-level commands. Clipped to 128 characters.
-	SessionId *string `json:"session_id,omitempty"`
-
-	// TargetId Opaque target identifier. Clipped to 128 characters; a longer value is not a real identifier.
-	TargetId string `json:"target_id"`
-}
-
-// BrowserCdpTargetOpenDevToolsCommandDataMethod defines model for BrowserCdpTargetOpenDevToolsCommandData.Method.
-type BrowserCdpTargetOpenDevToolsCommandDataMethod string
-
-// BrowserCdpTouchEventType Touch event phase. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpTouchEventType string
-
-// BrowserCdpTransitionType Navigation reason reported by the caller. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpTransitionType string
-
-// BrowserCdpWebLifecycleState Page lifecycle state applied. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpWebLifecycleState string
-
-// BrowserCdpWindowState Browser window state requested. Canonical values from devtools-protocol@2d019e73. `other` stands for a value outside that set, so a client cannot put an arbitrary string into the stream.
-type BrowserCdpWindowState string
 
 // BrowserConsoleErrorEvent A browser console error or uncaught JavaScript exception event. Emitted from two distinct CDP sources with different data shapes. Runtime.consoleAPICalled (console.error calls) produces level, text, args, and stack_trace. Runtime.exceptionThrown (uncaught exceptions) produces text, line, column, source_url, and stack_trace. Fields not applicable to the source are absent.
 type BrowserConsoleErrorEvent struct {
@@ -5520,70 +3025,6 @@ type BrowserPlatformApiCallEventData struct {
 	Status int `json:"status"`
 }
 
-// BrowserProxyErrorEvent A branded proxy-layer failure observed by the browser. Emitted when the metro egress host-proxy serves a branded 5xx error page whose response carries the `X-Kernel-Proxy-Error` header. Low-volume and carries a typed code. Its value is per-session and per-URL attribution for sessions that already capture the network stream: proxy failures are only observable while the CDP network collector is running, so this is an opt-in refinement of the raw network events rather than a default-on alerting signal.
-type BrowserProxyErrorEvent struct {
-	Category BrowserProxyErrorEventCategory `json:"category"`
-	Data     *BrowserProxyErrorEventData    `json:"data,omitempty"`
-
-	// Source Provenance metadata identifying which producer emitted the event.
-	Source BrowserEventSource `json:"source"`
-
-	// Truncated True if the data field was truncated due to size limits.
-	Truncated *bool `json:"truncated,omitempty"`
-
-	// Ts Event timestamp in Unix microseconds.
-	Ts   int64                      `json:"ts"`
-	Type BrowserProxyErrorEventType `json:"type"`
-}
-
-// BrowserProxyErrorEventCategory defines model for BrowserProxyErrorEvent.Category.
-type BrowserProxyErrorEventCategory string
-
-// BrowserProxyErrorEventType defines model for BrowserProxyErrorEvent.Type.
-type BrowserProxyErrorEventType string
-
-// BrowserProxyErrorEventData defines model for BrowserProxyErrorEventData.
-type BrowserProxyErrorEventData struct {
-	// Code Proxy-layer error code: the `X-Kernel-Proxy-Error` response header value from a branded 5xx error page served by the metro egress host-proxy. Values mirror what the proxy emits: destination_blocked, provider_blacklisted, provider_unreachable, proxy_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed. Unknown header values are dropped.
-	Code BrowserProxyErrorEventDataCode `json:"code"`
-
-	// FrameId CDP frame identifier within the target.
-	FrameId *string `json:"frame_id,omitempty"`
-
-	// LoaderId CDP document loader identifier, reset on each navigation.
-	LoaderId *string `json:"loader_id,omitempty"`
-
-	// Method HTTP method of the failed request, when known.
-	Method *string `json:"method,omitempty"`
-
-	// NavSeq Monotonically increasing navigation sequence number, incremented on each top-level navigation within the target.
-	NavSeq int64 `json:"nav_seq"`
-
-	// RequestId CDP request identifier matching the originating request.
-	RequestId string `json:"request_id"`
-
-	// ResourceType CDP Network.ResourceType for the request, when known.
-	ResourceType *string `json:"resource_type,omitempty"`
-
-	// SessionId CDP session identifier for the target connection.
-	SessionId string `json:"session_id"`
-
-	// Status HTTP response status of the branded error page (502).
-	Status int `json:"status"`
-
-	// TargetId Browser target identifier (stable across navigations within a tab).
-	TargetId string `json:"target_id"`
-
-	// TargetType CDP target type of the page that produced the event.
-	TargetType BrowserTargetType `json:"target_type"`
-
-	// Url URL relevant to this event; page URL for navigation and page events, request URL for network events.
-	Url *string `json:"url,omitempty"`
-}
-
-// BrowserProxyErrorEventDataCode Proxy-layer error code: the `X-Kernel-Proxy-Error` response header value from a branded 5xx error page served by the metro egress host-proxy. Values mirror what the proxy emits: destination_blocked, provider_blacklisted, provider_unreachable, proxy_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed. Unknown header values are dropped.
-type BrowserProxyErrorEventDataCode string
-
 // BrowserServiceCrashedEvent A managed service exited unexpectedly. Intentional stops (e.g. operator-initiated shutdown) do not produce this event — only unexpected exits and terminal restart-give-up transitions do.
 type BrowserServiceCrashedEvent struct {
 	Category BrowserServiceCrashedEventCategory `json:"category"`
@@ -5706,8 +3147,8 @@ type BrowserTelemetryCategoriesConfig struct {
 	// Console Console output (log, warn, error) and uncaught exceptions.
 	Console *BrowserTelemetryCategoryConfig `json:"console,omitempty"`
 
-	// Control Agent-driven actions against the browser — computer-control calls, Playwright code execution, screenshots, clipboard access, and browser-control commands sent over the CDP proxy.
-	Control *BrowserTelemetryControlConfig `json:"control,omitempty"`
+	// Control Agent-driven actions against the browser — computer-control calls, Playwright code execution, screenshots and clipboard access.
+	Control *BrowserTelemetryCategoryConfig `json:"control,omitempty"`
 
 	// Interaction User interaction events (clicks, keydowns, scroll).
 	Interaction *BrowserTelemetryCategoryConfig `json:"interaction,omitempty"`
@@ -5734,12 +3175,6 @@ type BrowserTelemetryCategoryConfig struct {
 	Enabled *bool `json:"enabled,omitempty"`
 }
 
-// BrowserTelemetryCdpControlConfig Settings for the `cdp_command` events the DevTools proxy reports.
-type BrowserTelemetryCdpControlConfig struct {
-	// ExcludedMethods Methods to leave out of the `cdp_command` stream. Omit the list (or send an empty one) to report every supported method. Exclusion is a telemetry setting only: an excluded command is still relayed to the browser unchanged, it simply produces no event. Use it to drop the highest-volume methods — `Input.dispatchMouseEvent` during a humanized cursor path, or `Page.captureScreenshot` under a screencast — without turning the whole category off.
-	ExcludedMethods *[]BrowserCdpCommandMethod `json:"excluded_methods,omitempty"`
-}
-
 // BrowserTelemetryConfig Telemetry configuration for a browser. Selection is opt-in. Omit the browser key (or send an empty object) to capture the default set: lightweight operational signals (control, connection, system, captcha). Within `browser`, only the categories you set enabled: true are captured; anything omitted is off. The CDP categories (console, network, page, interaction), `screenshot` and `platform` are off by default and must be opted into. A `browser` config with nothing enabled clears the telemetry configuration. The `monitor` category (CDP collector health) is not configurable here; it flows automatically whenever a CDP category is captured.
 type BrowserTelemetryConfig struct {
 	// Browser Per-category telemetry capture settings for browser events.
@@ -5747,15 +3182,6 @@ type BrowserTelemetryConfig struct {
 
 	// Export Forwarding of captured telemetry to an external destination. Independent of what is captured: export is off unless explicitly enabled here, even when an export destination is configured. In a PUT (full replace) an omitted export block resets export to off, the same as omitted categories turn off; in a PATCH an omitted field leaves the current setting unchanged.
 	Export *BrowserTelemetryExportConfig `json:"export,omitempty"`
-}
-
-// BrowserTelemetryControlConfig Configuration for the control category. Same `enabled` semantics as any other category, plus settings for the browser-control commands the CDP proxy reports.
-type BrowserTelemetryControlConfig struct {
-	// Cdp Settings for the `cdp_command` events the DevTools proxy reports.
-	Cdp *BrowserTelemetryCdpControlConfig `json:"cdp,omitempty"`
-
-	// Enabled Whether this category is captured. In PUT requests selection is opt-in: omitting this field (or the whole category) leaves the category off, so a PUT captures exactly the categories set to true. In PATCH requests, omitting this field (or sending an empty object `{}`) is a no-op; the category retains its current state. To enable or disable a category via PATCH, you must send an explicit `true` or `false`.
-	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // BrowserTelemetryExportConfig Forwarding of captured telemetry to an external destination. Independent of what is captured: export is off unless explicitly enabled here, even when an export destination is configured. In a PUT (full replace) an omitted export block resets export to off, the same as omitted categories turn off; in a PATCH an omitted field leaves the current setting unchanged.
@@ -6413,9 +3839,6 @@ type TelemetryState struct {
 	// Config Telemetry configuration for a browser. Selection is opt-in. Omit the browser key (or send an empty object) to capture the default set: lightweight operational signals (control, connection, system, captcha). Within `browser`, only the categories you set enabled: true are captured; anything omitted is off. The CDP categories (console, network, page, interaction), `screenshot` and `platform` are off by default and must be opted into. A `browser` config with nothing enabled clears the telemetry configuration. The `monitor` category (CDP collector health) is not configurable here; it flows automatically whenever a CDP category is captured.
 	Config BrowserTelemetryConfig `json:"config"`
 
-	// DroppedEvents Cumulative number of buffered events a consumer missed because it fell behind the ring, summed across consumers and configuration changes. A rising count means the stream is being produced faster than it is being read; a steady one means nothing has been lost. Always present on images that report it; absent on an image predating the field, which is not the same as zero.
-	DroppedEvents *int64 `json:"dropped_events,omitempty"`
-
 	// Seq Process-monotonic sequence number of the last published event. Does not reset across configuration changes.
 	Seq int64 `json:"seq"`
 }
@@ -6728,1175 +4151,6 @@ type PutTelemetryJSONRequestBody = BrowserTelemetryConfig
 // PublishTelemetryEventJSONRequestBody defines body for PublishTelemetryEvent for application/json ContentType.
 type PublishTelemetryEventJSONRequestBody = PublishEventRequest
 
-// AsBrowserCdpInputDispatchMouseEventCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputDispatchMouseEventCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputDispatchMouseEventCommandData() (BrowserCdpInputDispatchMouseEventCommandData, error) {
-	var body BrowserCdpInputDispatchMouseEventCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputDispatchMouseEventCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputDispatchMouseEventCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputDispatchMouseEventCommandData(v BrowserCdpInputDispatchMouseEventCommandData) error {
-	v.Method = "Input.dispatchMouseEvent"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputDispatchMouseEventCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputDispatchMouseEventCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputDispatchMouseEventCommandData(v BrowserCdpInputDispatchMouseEventCommandData) error {
-	v.Method = "Input.dispatchMouseEvent"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputDispatchKeyEventCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputDispatchKeyEventCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputDispatchKeyEventCommandData() (BrowserCdpInputDispatchKeyEventCommandData, error) {
-	var body BrowserCdpInputDispatchKeyEventCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputDispatchKeyEventCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputDispatchKeyEventCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputDispatchKeyEventCommandData(v BrowserCdpInputDispatchKeyEventCommandData) error {
-	v.Method = "Input.dispatchKeyEvent"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputDispatchKeyEventCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputDispatchKeyEventCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputDispatchKeyEventCommandData(v BrowserCdpInputDispatchKeyEventCommandData) error {
-	v.Method = "Input.dispatchKeyEvent"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputInsertTextCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputInsertTextCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputInsertTextCommandData() (BrowserCdpInputInsertTextCommandData, error) {
-	var body BrowserCdpInputInsertTextCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputInsertTextCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputInsertTextCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputInsertTextCommandData(v BrowserCdpInputInsertTextCommandData) error {
-	v.Method = "Input.insertText"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputInsertTextCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputInsertTextCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputInsertTextCommandData(v BrowserCdpInputInsertTextCommandData) error {
-	v.Method = "Input.insertText"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputImeSetCompositionCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputImeSetCompositionCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputImeSetCompositionCommandData() (BrowserCdpInputImeSetCompositionCommandData, error) {
-	var body BrowserCdpInputImeSetCompositionCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputImeSetCompositionCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputImeSetCompositionCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputImeSetCompositionCommandData(v BrowserCdpInputImeSetCompositionCommandData) error {
-	v.Method = "Input.imeSetComposition"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputImeSetCompositionCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputImeSetCompositionCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputImeSetCompositionCommandData(v BrowserCdpInputImeSetCompositionCommandData) error {
-	v.Method = "Input.imeSetComposition"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputDispatchTouchEventCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputDispatchTouchEventCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputDispatchTouchEventCommandData() (BrowserCdpInputDispatchTouchEventCommandData, error) {
-	var body BrowserCdpInputDispatchTouchEventCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputDispatchTouchEventCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputDispatchTouchEventCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputDispatchTouchEventCommandData(v BrowserCdpInputDispatchTouchEventCommandData) error {
-	v.Method = "Input.dispatchTouchEvent"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputDispatchTouchEventCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputDispatchTouchEventCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputDispatchTouchEventCommandData(v BrowserCdpInputDispatchTouchEventCommandData) error {
-	v.Method = "Input.dispatchTouchEvent"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputDispatchDragEventCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputDispatchDragEventCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputDispatchDragEventCommandData() (BrowserCdpInputDispatchDragEventCommandData, error) {
-	var body BrowserCdpInputDispatchDragEventCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputDispatchDragEventCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputDispatchDragEventCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputDispatchDragEventCommandData(v BrowserCdpInputDispatchDragEventCommandData) error {
-	v.Method = "Input.dispatchDragEvent"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputDispatchDragEventCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputDispatchDragEventCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputDispatchDragEventCommandData(v BrowserCdpInputDispatchDragEventCommandData) error {
-	v.Method = "Input.dispatchDragEvent"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputCancelDraggingCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputCancelDraggingCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputCancelDraggingCommandData() (BrowserCdpInputCancelDraggingCommandData, error) {
-	var body BrowserCdpInputCancelDraggingCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputCancelDraggingCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputCancelDraggingCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputCancelDraggingCommandData(v BrowserCdpInputCancelDraggingCommandData) error {
-	v.Method = "Input.cancelDragging"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputCancelDraggingCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputCancelDraggingCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputCancelDraggingCommandData(v BrowserCdpInputCancelDraggingCommandData) error {
-	v.Method = "Input.cancelDragging"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputEmulateTouchFromMouseEventCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputEmulateTouchFromMouseEventCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputEmulateTouchFromMouseEventCommandData() (BrowserCdpInputEmulateTouchFromMouseEventCommandData, error) {
-	var body BrowserCdpInputEmulateTouchFromMouseEventCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputEmulateTouchFromMouseEventCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputEmulateTouchFromMouseEventCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputEmulateTouchFromMouseEventCommandData(v BrowserCdpInputEmulateTouchFromMouseEventCommandData) error {
-	v.Method = "Input.emulateTouchFromMouseEvent"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputEmulateTouchFromMouseEventCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputEmulateTouchFromMouseEventCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputEmulateTouchFromMouseEventCommandData(v BrowserCdpInputEmulateTouchFromMouseEventCommandData) error {
-	v.Method = "Input.emulateTouchFromMouseEvent"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputSynthesizePinchGestureCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputSynthesizePinchGestureCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputSynthesizePinchGestureCommandData() (BrowserCdpInputSynthesizePinchGestureCommandData, error) {
-	var body BrowserCdpInputSynthesizePinchGestureCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputSynthesizePinchGestureCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputSynthesizePinchGestureCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputSynthesizePinchGestureCommandData(v BrowserCdpInputSynthesizePinchGestureCommandData) error {
-	v.Method = "Input.synthesizePinchGesture"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputSynthesizePinchGestureCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputSynthesizePinchGestureCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputSynthesizePinchGestureCommandData(v BrowserCdpInputSynthesizePinchGestureCommandData) error {
-	v.Method = "Input.synthesizePinchGesture"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputSynthesizeScrollGestureCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputSynthesizeScrollGestureCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputSynthesizeScrollGestureCommandData() (BrowserCdpInputSynthesizeScrollGestureCommandData, error) {
-	var body BrowserCdpInputSynthesizeScrollGestureCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputSynthesizeScrollGestureCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputSynthesizeScrollGestureCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputSynthesizeScrollGestureCommandData(v BrowserCdpInputSynthesizeScrollGestureCommandData) error {
-	v.Method = "Input.synthesizeScrollGesture"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputSynthesizeScrollGestureCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputSynthesizeScrollGestureCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputSynthesizeScrollGestureCommandData(v BrowserCdpInputSynthesizeScrollGestureCommandData) error {
-	v.Method = "Input.synthesizeScrollGesture"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpInputSynthesizeTapGestureCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputSynthesizeTapGestureCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpInputSynthesizeTapGestureCommandData() (BrowserCdpInputSynthesizeTapGestureCommandData, error) {
-	var body BrowserCdpInputSynthesizeTapGestureCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpInputSynthesizeTapGestureCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpInputSynthesizeTapGestureCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpInputSynthesizeTapGestureCommandData(v BrowserCdpInputSynthesizeTapGestureCommandData) error {
-	v.Method = "Input.synthesizeTapGesture"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpInputSynthesizeTapGestureCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpInputSynthesizeTapGestureCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpInputSynthesizeTapGestureCommandData(v BrowserCdpInputSynthesizeTapGestureCommandData) error {
-	v.Method = "Input.synthesizeTapGesture"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpDomSetFileInputFilesCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpDomSetFileInputFilesCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpDomSetFileInputFilesCommandData() (BrowserCdpDomSetFileInputFilesCommandData, error) {
-	var body BrowserCdpDomSetFileInputFilesCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpDomSetFileInputFilesCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpDomSetFileInputFilesCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpDomSetFileInputFilesCommandData(v BrowserCdpDomSetFileInputFilesCommandData) error {
-	v.Method = "DOM.setFileInputFiles"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpDomSetFileInputFilesCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpDomSetFileInputFilesCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpDomSetFileInputFilesCommandData(v BrowserCdpDomSetFileInputFilesCommandData) error {
-	v.Method = "DOM.setFileInputFiles"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpDomFocusCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpDomFocusCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpDomFocusCommandData() (BrowserCdpDomFocusCommandData, error) {
-	var body BrowserCdpDomFocusCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpDomFocusCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpDomFocusCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpDomFocusCommandData(v BrowserCdpDomFocusCommandData) error {
-	v.Method = "DOM.focus"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpDomFocusCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpDomFocusCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpDomFocusCommandData(v BrowserCdpDomFocusCommandData) error {
-	v.Method = "DOM.focus"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpDomScrollIntoViewIfNeededCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpDomScrollIntoViewIfNeededCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpDomScrollIntoViewIfNeededCommandData() (BrowserCdpDomScrollIntoViewIfNeededCommandData, error) {
-	var body BrowserCdpDomScrollIntoViewIfNeededCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpDomScrollIntoViewIfNeededCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpDomScrollIntoViewIfNeededCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpDomScrollIntoViewIfNeededCommandData(v BrowserCdpDomScrollIntoViewIfNeededCommandData) error {
-	v.Method = "DOM.scrollIntoViewIfNeeded"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpDomScrollIntoViewIfNeededCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpDomScrollIntoViewIfNeededCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpDomScrollIntoViewIfNeededCommandData(v BrowserCdpDomScrollIntoViewIfNeededCommandData) error {
-	v.Method = "DOM.scrollIntoViewIfNeeded"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageBringToFrontCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageBringToFrontCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageBringToFrontCommandData() (BrowserCdpPageBringToFrontCommandData, error) {
-	var body BrowserCdpPageBringToFrontCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageBringToFrontCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageBringToFrontCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageBringToFrontCommandData(v BrowserCdpPageBringToFrontCommandData) error {
-	v.Method = "Page.bringToFront"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageBringToFrontCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageBringToFrontCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageBringToFrontCommandData(v BrowserCdpPageBringToFrontCommandData) error {
-	v.Method = "Page.bringToFront"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageCaptureScreenshotCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageCaptureScreenshotCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageCaptureScreenshotCommandData() (BrowserCdpPageCaptureScreenshotCommandData, error) {
-	var body BrowserCdpPageCaptureScreenshotCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageCaptureScreenshotCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageCaptureScreenshotCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageCaptureScreenshotCommandData(v BrowserCdpPageCaptureScreenshotCommandData) error {
-	v.Method = "Page.captureScreenshot"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageCaptureScreenshotCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageCaptureScreenshotCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageCaptureScreenshotCommandData(v BrowserCdpPageCaptureScreenshotCommandData) error {
-	v.Method = "Page.captureScreenshot"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageCaptureSnapshotCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageCaptureSnapshotCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageCaptureSnapshotCommandData() (BrowserCdpPageCaptureSnapshotCommandData, error) {
-	var body BrowserCdpPageCaptureSnapshotCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageCaptureSnapshotCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageCaptureSnapshotCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageCaptureSnapshotCommandData(v BrowserCdpPageCaptureSnapshotCommandData) error {
-	v.Method = "Page.captureSnapshot"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageCaptureSnapshotCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageCaptureSnapshotCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageCaptureSnapshotCommandData(v BrowserCdpPageCaptureSnapshotCommandData) error {
-	v.Method = "Page.captureSnapshot"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageHandleJavaScriptDialogCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageHandleJavaScriptDialogCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageHandleJavaScriptDialogCommandData() (BrowserCdpPageHandleJavaScriptDialogCommandData, error) {
-	var body BrowserCdpPageHandleJavaScriptDialogCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageHandleJavaScriptDialogCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageHandleJavaScriptDialogCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageHandleJavaScriptDialogCommandData(v BrowserCdpPageHandleJavaScriptDialogCommandData) error {
-	v.Method = "Page.handleJavaScriptDialog"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageHandleJavaScriptDialogCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageHandleJavaScriptDialogCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageHandleJavaScriptDialogCommandData(v BrowserCdpPageHandleJavaScriptDialogCommandData) error {
-	v.Method = "Page.handleJavaScriptDialog"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageNavigateCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageNavigateCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageNavigateCommandData() (BrowserCdpPageNavigateCommandData, error) {
-	var body BrowserCdpPageNavigateCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageNavigateCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageNavigateCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageNavigateCommandData(v BrowserCdpPageNavigateCommandData) error {
-	v.Method = "Page.navigate"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageNavigateCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageNavigateCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageNavigateCommandData(v BrowserCdpPageNavigateCommandData) error {
-	v.Method = "Page.navigate"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageNavigateToHistoryEntryCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageNavigateToHistoryEntryCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageNavigateToHistoryEntryCommandData() (BrowserCdpPageNavigateToHistoryEntryCommandData, error) {
-	var body BrowserCdpPageNavigateToHistoryEntryCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageNavigateToHistoryEntryCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageNavigateToHistoryEntryCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageNavigateToHistoryEntryCommandData(v BrowserCdpPageNavigateToHistoryEntryCommandData) error {
-	v.Method = "Page.navigateToHistoryEntry"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageNavigateToHistoryEntryCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageNavigateToHistoryEntryCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageNavigateToHistoryEntryCommandData(v BrowserCdpPageNavigateToHistoryEntryCommandData) error {
-	v.Method = "Page.navigateToHistoryEntry"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageReloadCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageReloadCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageReloadCommandData() (BrowserCdpPageReloadCommandData, error) {
-	var body BrowserCdpPageReloadCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageReloadCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageReloadCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageReloadCommandData(v BrowserCdpPageReloadCommandData) error {
-	v.Method = "Page.reload"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageReloadCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageReloadCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageReloadCommandData(v BrowserCdpPageReloadCommandData) error {
-	v.Method = "Page.reload"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPagePrintToPdfCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPagePrintToPdfCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPagePrintToPdfCommandData() (BrowserCdpPagePrintToPdfCommandData, error) {
-	var body BrowserCdpPagePrintToPdfCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPagePrintToPdfCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPagePrintToPdfCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPagePrintToPdfCommandData(v BrowserCdpPagePrintToPdfCommandData) error {
-	v.Method = "Page.printToPDF"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPagePrintToPdfCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPagePrintToPdfCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPagePrintToPdfCommandData(v BrowserCdpPagePrintToPdfCommandData) error {
-	v.Method = "Page.printToPDF"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageStartScreencastCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageStartScreencastCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageStartScreencastCommandData() (BrowserCdpPageStartScreencastCommandData, error) {
-	var body BrowserCdpPageStartScreencastCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageStartScreencastCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageStartScreencastCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageStartScreencastCommandData(v BrowserCdpPageStartScreencastCommandData) error {
-	v.Method = "Page.startScreencast"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageStartScreencastCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageStartScreencastCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageStartScreencastCommandData(v BrowserCdpPageStartScreencastCommandData) error {
-	v.Method = "Page.startScreencast"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageStopScreencastCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageStopScreencastCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageStopScreencastCommandData() (BrowserCdpPageStopScreencastCommandData, error) {
-	var body BrowserCdpPageStopScreencastCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageStopScreencastCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageStopScreencastCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageStopScreencastCommandData(v BrowserCdpPageStopScreencastCommandData) error {
-	v.Method = "Page.stopScreencast"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageStopScreencastCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageStopScreencastCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageStopScreencastCommandData(v BrowserCdpPageStopScreencastCommandData) error {
-	v.Method = "Page.stopScreencast"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageStopLoadingCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageStopLoadingCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageStopLoadingCommandData() (BrowserCdpPageStopLoadingCommandData, error) {
-	var body BrowserCdpPageStopLoadingCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageStopLoadingCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageStopLoadingCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageStopLoadingCommandData(v BrowserCdpPageStopLoadingCommandData) error {
-	v.Method = "Page.stopLoading"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageStopLoadingCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageStopLoadingCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageStopLoadingCommandData(v BrowserCdpPageStopLoadingCommandData) error {
-	v.Method = "Page.stopLoading"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageCloseCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageCloseCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageCloseCommandData() (BrowserCdpPageCloseCommandData, error) {
-	var body BrowserCdpPageCloseCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageCloseCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageCloseCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageCloseCommandData(v BrowserCdpPageCloseCommandData) error {
-	v.Method = "Page.close"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageCloseCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageCloseCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageCloseCommandData(v BrowserCdpPageCloseCommandData) error {
-	v.Method = "Page.close"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpPageSetWebLifecycleStateCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpPageSetWebLifecycleStateCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpPageSetWebLifecycleStateCommandData() (BrowserCdpPageSetWebLifecycleStateCommandData, error) {
-	var body BrowserCdpPageSetWebLifecycleStateCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpPageSetWebLifecycleStateCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpPageSetWebLifecycleStateCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpPageSetWebLifecycleStateCommandData(v BrowserCdpPageSetWebLifecycleStateCommandData) error {
-	v.Method = "Page.setWebLifecycleState"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpPageSetWebLifecycleStateCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpPageSetWebLifecycleStateCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpPageSetWebLifecycleStateCommandData(v BrowserCdpPageSetWebLifecycleStateCommandData) error {
-	v.Method = "Page.setWebLifecycleState"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpTargetActivateTargetCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpTargetActivateTargetCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpTargetActivateTargetCommandData() (BrowserCdpTargetActivateTargetCommandData, error) {
-	var body BrowserCdpTargetActivateTargetCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpTargetActivateTargetCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpTargetActivateTargetCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpTargetActivateTargetCommandData(v BrowserCdpTargetActivateTargetCommandData) error {
-	v.Method = "Target.activateTarget"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpTargetActivateTargetCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpTargetActivateTargetCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpTargetActivateTargetCommandData(v BrowserCdpTargetActivateTargetCommandData) error {
-	v.Method = "Target.activateTarget"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpTargetCloseTargetCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpTargetCloseTargetCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpTargetCloseTargetCommandData() (BrowserCdpTargetCloseTargetCommandData, error) {
-	var body BrowserCdpTargetCloseTargetCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpTargetCloseTargetCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpTargetCloseTargetCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpTargetCloseTargetCommandData(v BrowserCdpTargetCloseTargetCommandData) error {
-	v.Method = "Target.closeTarget"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpTargetCloseTargetCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpTargetCloseTargetCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpTargetCloseTargetCommandData(v BrowserCdpTargetCloseTargetCommandData) error {
-	v.Method = "Target.closeTarget"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpTargetCreateTargetCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpTargetCreateTargetCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpTargetCreateTargetCommandData() (BrowserCdpTargetCreateTargetCommandData, error) {
-	var body BrowserCdpTargetCreateTargetCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpTargetCreateTargetCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpTargetCreateTargetCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpTargetCreateTargetCommandData(v BrowserCdpTargetCreateTargetCommandData) error {
-	v.Method = "Target.createTarget"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpTargetCreateTargetCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpTargetCreateTargetCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpTargetCreateTargetCommandData(v BrowserCdpTargetCreateTargetCommandData) error {
-	v.Method = "Target.createTarget"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpTargetCreateBrowserContextCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpTargetCreateBrowserContextCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpTargetCreateBrowserContextCommandData() (BrowserCdpTargetCreateBrowserContextCommandData, error) {
-	var body BrowserCdpTargetCreateBrowserContextCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpTargetCreateBrowserContextCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpTargetCreateBrowserContextCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpTargetCreateBrowserContextCommandData(v BrowserCdpTargetCreateBrowserContextCommandData) error {
-	v.Method = "Target.createBrowserContext"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpTargetCreateBrowserContextCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpTargetCreateBrowserContextCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpTargetCreateBrowserContextCommandData(v BrowserCdpTargetCreateBrowserContextCommandData) error {
-	v.Method = "Target.createBrowserContext"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpTargetDisposeBrowserContextCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpTargetDisposeBrowserContextCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpTargetDisposeBrowserContextCommandData() (BrowserCdpTargetDisposeBrowserContextCommandData, error) {
-	var body BrowserCdpTargetDisposeBrowserContextCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpTargetDisposeBrowserContextCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpTargetDisposeBrowserContextCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpTargetDisposeBrowserContextCommandData(v BrowserCdpTargetDisposeBrowserContextCommandData) error {
-	v.Method = "Target.disposeBrowserContext"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpTargetDisposeBrowserContextCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpTargetDisposeBrowserContextCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpTargetDisposeBrowserContextCommandData(v BrowserCdpTargetDisposeBrowserContextCommandData) error {
-	v.Method = "Target.disposeBrowserContext"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpTargetOpenDevToolsCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpTargetOpenDevToolsCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpTargetOpenDevToolsCommandData() (BrowserCdpTargetOpenDevToolsCommandData, error) {
-	var body BrowserCdpTargetOpenDevToolsCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpTargetOpenDevToolsCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpTargetOpenDevToolsCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpTargetOpenDevToolsCommandData(v BrowserCdpTargetOpenDevToolsCommandData) error {
-	v.Method = "Target.openDevTools"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpTargetOpenDevToolsCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpTargetOpenDevToolsCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpTargetOpenDevToolsCommandData(v BrowserCdpTargetOpenDevToolsCommandData) error {
-	v.Method = "Target.openDevTools"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpBrowserCancelDownloadCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpBrowserCancelDownloadCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpBrowserCancelDownloadCommandData() (BrowserCdpBrowserCancelDownloadCommandData, error) {
-	var body BrowserCdpBrowserCancelDownloadCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpBrowserCancelDownloadCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpBrowserCancelDownloadCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpBrowserCancelDownloadCommandData(v BrowserCdpBrowserCancelDownloadCommandData) error {
-	v.Method = "Browser.cancelDownload"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpBrowserCancelDownloadCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpBrowserCancelDownloadCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpBrowserCancelDownloadCommandData(v BrowserCdpBrowserCancelDownloadCommandData) error {
-	v.Method = "Browser.cancelDownload"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpBrowserCloseCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpBrowserCloseCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpBrowserCloseCommandData() (BrowserCdpBrowserCloseCommandData, error) {
-	var body BrowserCdpBrowserCloseCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpBrowserCloseCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpBrowserCloseCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpBrowserCloseCommandData(v BrowserCdpBrowserCloseCommandData) error {
-	v.Method = "Browser.close"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpBrowserCloseCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpBrowserCloseCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpBrowserCloseCommandData(v BrowserCdpBrowserCloseCommandData) error {
-	v.Method = "Browser.close"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpBrowserSetWindowBoundsCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpBrowserSetWindowBoundsCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpBrowserSetWindowBoundsCommandData() (BrowserCdpBrowserSetWindowBoundsCommandData, error) {
-	var body BrowserCdpBrowserSetWindowBoundsCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpBrowserSetWindowBoundsCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpBrowserSetWindowBoundsCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpBrowserSetWindowBoundsCommandData(v BrowserCdpBrowserSetWindowBoundsCommandData) error {
-	v.Method = "Browser.setWindowBounds"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpBrowserSetWindowBoundsCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpBrowserSetWindowBoundsCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpBrowserSetWindowBoundsCommandData(v BrowserCdpBrowserSetWindowBoundsCommandData) error {
-	v.Method = "Browser.setWindowBounds"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpBrowserSetContentsSizeCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpBrowserSetContentsSizeCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpBrowserSetContentsSizeCommandData() (BrowserCdpBrowserSetContentsSizeCommandData, error) {
-	var body BrowserCdpBrowserSetContentsSizeCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpBrowserSetContentsSizeCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpBrowserSetContentsSizeCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpBrowserSetContentsSizeCommandData(v BrowserCdpBrowserSetContentsSizeCommandData) error {
-	v.Method = "Browser.setContentsSize"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpBrowserSetContentsSizeCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpBrowserSetContentsSizeCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpBrowserSetContentsSizeCommandData(v BrowserCdpBrowserSetContentsSizeCommandData) error {
-	v.Method = "Browser.setContentsSize"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserCdpAutofillTriggerCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpAutofillTriggerCommandData
-func (t BrowserCdpCommandEventData) AsBrowserCdpAutofillTriggerCommandData() (BrowserCdpAutofillTriggerCommandData, error) {
-	var body BrowserCdpAutofillTriggerCommandData
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpAutofillTriggerCommandData overwrites any union data inside the BrowserCdpCommandEventData as the provided BrowserCdpAutofillTriggerCommandData
-func (t *BrowserCdpCommandEventData) FromBrowserCdpAutofillTriggerCommandData(v BrowserCdpAutofillTriggerCommandData) error {
-	v.Method = "Autofill.trigger"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpAutofillTriggerCommandData performs a merge with any union data inside the BrowserCdpCommandEventData, using the provided BrowserCdpAutofillTriggerCommandData
-func (t *BrowserCdpCommandEventData) MergeBrowserCdpAutofillTriggerCommandData(v BrowserCdpAutofillTriggerCommandData) error {
-	v.Method = "Autofill.trigger"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-func (t BrowserCdpCommandEventData) Discriminator() (string, error) {
-	var discriminator struct {
-		Discriminator string `json:"method"`
-	}
-	err := json.Unmarshal(t.union, &discriminator)
-	return discriminator.Discriminator, err
-}
-
-func (t BrowserCdpCommandEventData) ValueByDiscriminator() (interface{}, error) {
-	discriminator, err := t.Discriminator()
-	if err != nil {
-		return nil, err
-	}
-	switch discriminator {
-	case "Autofill.trigger":
-		return t.AsBrowserCdpAutofillTriggerCommandData()
-	case "Browser.cancelDownload":
-		return t.AsBrowserCdpBrowserCancelDownloadCommandData()
-	case "Browser.close":
-		return t.AsBrowserCdpBrowserCloseCommandData()
-	case "Browser.setContentsSize":
-		return t.AsBrowserCdpBrowserSetContentsSizeCommandData()
-	case "Browser.setWindowBounds":
-		return t.AsBrowserCdpBrowserSetWindowBoundsCommandData()
-	case "DOM.focus":
-		return t.AsBrowserCdpDomFocusCommandData()
-	case "DOM.scrollIntoViewIfNeeded":
-		return t.AsBrowserCdpDomScrollIntoViewIfNeededCommandData()
-	case "DOM.setFileInputFiles":
-		return t.AsBrowserCdpDomSetFileInputFilesCommandData()
-	case "Input.cancelDragging":
-		return t.AsBrowserCdpInputCancelDraggingCommandData()
-	case "Input.dispatchDragEvent":
-		return t.AsBrowserCdpInputDispatchDragEventCommandData()
-	case "Input.dispatchKeyEvent":
-		return t.AsBrowserCdpInputDispatchKeyEventCommandData()
-	case "Input.dispatchMouseEvent":
-		return t.AsBrowserCdpInputDispatchMouseEventCommandData()
-	case "Input.dispatchTouchEvent":
-		return t.AsBrowserCdpInputDispatchTouchEventCommandData()
-	case "Input.emulateTouchFromMouseEvent":
-		return t.AsBrowserCdpInputEmulateTouchFromMouseEventCommandData()
-	case "Input.imeSetComposition":
-		return t.AsBrowserCdpInputImeSetCompositionCommandData()
-	case "Input.insertText":
-		return t.AsBrowserCdpInputInsertTextCommandData()
-	case "Input.synthesizePinchGesture":
-		return t.AsBrowserCdpInputSynthesizePinchGestureCommandData()
-	case "Input.synthesizeScrollGesture":
-		return t.AsBrowserCdpInputSynthesizeScrollGestureCommandData()
-	case "Input.synthesizeTapGesture":
-		return t.AsBrowserCdpInputSynthesizeTapGestureCommandData()
-	case "Page.bringToFront":
-		return t.AsBrowserCdpPageBringToFrontCommandData()
-	case "Page.captureScreenshot":
-		return t.AsBrowserCdpPageCaptureScreenshotCommandData()
-	case "Page.captureSnapshot":
-		return t.AsBrowserCdpPageCaptureSnapshotCommandData()
-	case "Page.close":
-		return t.AsBrowserCdpPageCloseCommandData()
-	case "Page.handleJavaScriptDialog":
-		return t.AsBrowserCdpPageHandleJavaScriptDialogCommandData()
-	case "Page.navigate":
-		return t.AsBrowserCdpPageNavigateCommandData()
-	case "Page.navigateToHistoryEntry":
-		return t.AsBrowserCdpPageNavigateToHistoryEntryCommandData()
-	case "Page.printToPDF":
-		return t.AsBrowserCdpPagePrintToPdfCommandData()
-	case "Page.reload":
-		return t.AsBrowserCdpPageReloadCommandData()
-	case "Page.setWebLifecycleState":
-		return t.AsBrowserCdpPageSetWebLifecycleStateCommandData()
-	case "Page.startScreencast":
-		return t.AsBrowserCdpPageStartScreencastCommandData()
-	case "Page.stopLoading":
-		return t.AsBrowserCdpPageStopLoadingCommandData()
-	case "Page.stopScreencast":
-		return t.AsBrowserCdpPageStopScreencastCommandData()
-	case "Target.activateTarget":
-		return t.AsBrowserCdpTargetActivateTargetCommandData()
-	case "Target.closeTarget":
-		return t.AsBrowserCdpTargetCloseTargetCommandData()
-	case "Target.createBrowserContext":
-		return t.AsBrowserCdpTargetCreateBrowserContextCommandData()
-	case "Target.createTarget":
-		return t.AsBrowserCdpTargetCreateTargetCommandData()
-	case "Target.disposeBrowserContext":
-		return t.AsBrowserCdpTargetDisposeBrowserContextCommandData()
-	case "Target.openDevTools":
-		return t.AsBrowserCdpTargetOpenDevToolsCommandData()
-	default:
-		return nil, errors.New("unknown discriminator value: " + discriminator)
-	}
-}
-
-func (t BrowserCdpCommandEventData) MarshalJSON() ([]byte, error) {
-	b, err := t.union.MarshalJSON()
-	return b, err
-}
-
-func (t *BrowserCdpCommandEventData) UnmarshalJSON(b []byte) error {
-	err := t.union.UnmarshalJSON(b)
-	return err
-}
-
 // AsBrowserConsoleLogEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserConsoleLogEvent
 func (t KnownBrowserTelemetryEvent) AsBrowserConsoleLogEvent() (BrowserConsoleLogEvent, error) {
 	var body BrowserConsoleLogEvent
@@ -8055,34 +4309,6 @@ func (t *KnownBrowserTelemetryEvent) FromBrowserNetworkIdleEvent(v BrowserNetwor
 // MergeBrowserNetworkIdleEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserNetworkIdleEvent
 func (t *KnownBrowserTelemetryEvent) MergeBrowserNetworkIdleEvent(v BrowserNetworkIdleEvent) error {
 	v.Type = "network_idle"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
-// AsBrowserProxyErrorEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserProxyErrorEvent
-func (t KnownBrowserTelemetryEvent) AsBrowserProxyErrorEvent() (BrowserProxyErrorEvent, error) {
-	var body BrowserProxyErrorEvent
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserProxyErrorEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserProxyErrorEvent
-func (t *KnownBrowserTelemetryEvent) FromBrowserProxyErrorEvent(v BrowserProxyErrorEvent) error {
-	v.Type = "proxy_error"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserProxyErrorEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserProxyErrorEvent
-func (t *KnownBrowserTelemetryEvent) MergeBrowserProxyErrorEvent(v BrowserProxyErrorEvent) error {
-	v.Type = "proxy_error"
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -8625,34 +4851,6 @@ func (t *KnownBrowserTelemetryEvent) MergeBrowserPlatformApiCallEvent(v BrowserP
 	return err
 }
 
-// AsBrowserCdpCommandEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserCdpCommandEvent
-func (t KnownBrowserTelemetryEvent) AsBrowserCdpCommandEvent() (BrowserCdpCommandEvent, error) {
-	var body BrowserCdpCommandEvent
-	err := json.Unmarshal(t.union, &body)
-	return body, err
-}
-
-// FromBrowserCdpCommandEvent overwrites any union data inside the KnownBrowserTelemetryEvent as the provided BrowserCdpCommandEvent
-func (t *KnownBrowserTelemetryEvent) FromBrowserCdpCommandEvent(v BrowserCdpCommandEvent) error {
-	v.Type = "cdp_command"
-	b, err := json.Marshal(v)
-	t.union = b
-	return err
-}
-
-// MergeBrowserCdpCommandEvent performs a merge with any union data inside the KnownBrowserTelemetryEvent, using the provided BrowserCdpCommandEvent
-func (t *KnownBrowserTelemetryEvent) MergeBrowserCdpCommandEvent(v BrowserCdpCommandEvent) error {
-	v.Type = "cdp_command"
-	b, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-
-	merged, err := runtime.JSONMerge(t.union, b)
-	t.union = merged
-	return err
-}
-
 // AsBrowserCdpConnectEvent returns the union data inside the KnownBrowserTelemetryEvent as a BrowserCdpConnectEvent
 func (t KnownBrowserTelemetryEvent) AsBrowserCdpConnectEvent() (BrowserCdpConnectEvent, error) {
 	var body BrowserCdpConnectEvent
@@ -8867,8 +5065,6 @@ func (t KnownBrowserTelemetryEvent) ValueByDiscriminator() (interface{}, error) 
 		return t.AsBrowserApiCallEvent()
 	case "captcha_solve_result":
 		return t.AsBrowserCaptchaSolveResultEvent()
-	case "cdp_command":
-		return t.AsBrowserCdpCommandEvent()
 	case "cdp_connect":
 		return t.AsBrowserCdpConnectEvent()
 	case "cdp_disconnect":
@@ -8925,8 +5121,6 @@ func (t KnownBrowserTelemetryEvent) ValueByDiscriminator() (interface{}, error) 
 		return t.AsBrowserPageTabOpenedEvent()
 	case "platform_api_call":
 		return t.AsBrowserPlatformApiCallEvent()
-	case "proxy_error":
-		return t.AsBrowserProxyErrorEvent()
 	case "service_crashed":
 		return t.AsBrowserServiceCrashedEvent()
 	case "system_oom_kill":
@@ -17070,7 +13264,7 @@ type ServerInterface interface {
 	// Update Chromium enterprise policies and restart
 	// (PATCH /chromium/policies)
 	PatchChromiumPolicies(w http.ResponseWriter, r *http.Request)
-	// Upload one or more unpacked extensions (as zips) and restart Chromium
+	// Upload and activate one or more unpacked extensions
 	// (POST /chromium/upload-extensions-and-restart)
 	UploadExtensionsAndRestart(w http.ResponseWriter, r *http.Request)
 	// Execute a batch of computer actions sequentially
@@ -17250,7 +13444,7 @@ func (_ Unimplemented) PatchChromiumPolicies(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
-// Upload one or more unpacked extensions (as zips) and restart Chromium
+// Upload and activate one or more unpacked extensions
 // (POST /chromium/upload-extensions-and-restart)
 func (_ Unimplemented) UploadExtensionsAndRestart(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotImplemented)
@@ -21327,7 +17521,7 @@ type StrictServerInterface interface {
 	// Update Chromium enterprise policies and restart
 	// (PATCH /chromium/policies)
 	PatchChromiumPolicies(ctx context.Context, request PatchChromiumPoliciesRequestObject) (PatchChromiumPoliciesResponseObject, error)
-	// Upload one or more unpacked extensions (as zips) and restart Chromium
+	// Upload and activate one or more unpacked extensions
 	// (POST /chromium/upload-extensions-and-restart)
 	UploadExtensionsAndRestart(ctx context.Context, request UploadExtensionsAndRestartRequestObject) (UploadExtensionsAndRestartResponseObject, error)
 	// Execute a batch of computer actions sequentially
@@ -23175,544 +19369,393 @@ func (sh *strictHandler) StreamTelemetryEvents(w http.ResponseWriter, r *http.Re
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
-	"Tq09Bg+wfIH/+vV/AgAA///8WZ2COTsDAA==",
+	"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",
+	"/9rSY8kBNgv4jx///wAAAP//RAOsjcrjAQA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

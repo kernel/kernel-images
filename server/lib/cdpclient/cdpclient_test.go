@@ -31,6 +31,10 @@ type fakeCDP struct {
 	getVersionCalled    bool
 	failGetVersion      bool
 	productResponse     string
+	loadUnpackedCalled  bool
+	loadUnpackedPath    string
+	loadUnpackedID      string
+	failLoadUnpacked    bool
 	navigateCalled      bool
 	navigateCalls       int
 	navigateURL         string
@@ -108,6 +112,16 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 					"userAgent":       "Mozilla/5.0 fake",
 					"jsVersion":       "1.2.3",
 				}
+			}
+		case "Extensions.loadUnpacked":
+			f.loadUnpackedCalled = true
+			var params map[string]string
+			_ = json.Unmarshal(req.Params, &params)
+			f.loadUnpackedPath = params["path"]
+			if f.failLoadUnpacked {
+				cdpErr = &cdpError{Code: -4, Message: "invalid extension"}
+			} else {
+				result = map[string]string{"id": f.loadUnpackedID}
 			}
 		case "Page.navigate":
 			f.navigateCalled = true
@@ -345,5 +359,47 @@ func TestGetBrowserVersion(t *testing.T) {
 		_, err = client.GetBrowserVersion(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Browser.getVersion")
+	})
+}
+
+func TestLoadUnpackedExtension(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		f := &fakeCDP{loadUnpackedID: "abcdefghijklmnopabcdefghijklmnop"}
+		url := startFakeCDP(t, f)
+
+		client, err := Dial(context.Background(), url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		id, err := client.LoadUnpackedExtension(context.Background(), "/home/kernel/extensions/test")
+		require.NoError(t, err)
+		assert.Equal(t, f.loadUnpackedID, id)
+		assert.True(t, f.loadUnpackedCalled)
+		assert.Equal(t, "/home/kernel/extensions/test", f.loadUnpackedPath)
+	})
+
+	t.Run("CDP error from chromium", func(t *testing.T) {
+		f := &fakeCDP{failLoadUnpacked: true}
+		url := startFakeCDP(t, f)
+
+		client, err := Dial(context.Background(), url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		_, err = client.LoadUnpackedExtension(context.Background(), "/bad-extension")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Extensions.loadUnpacked")
+	})
+
+	t.Run("missing extension ID", func(t *testing.T) {
+		f := &fakeCDP{}
+		url := startFakeCDP(t, f)
+
+		client, err := Dial(context.Background(), url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		_, err = client.LoadUnpackedExtension(context.Background(), "/home/kernel/extensions/test")
+		require.EqualError(t, err, "Extensions.loadUnpacked returned no extension ID")
 	})
 }

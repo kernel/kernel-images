@@ -1142,11 +1142,13 @@ paths:
 
   /chromium/upload-extensions-and-restart:
     post:
-      summary: Upload one or more unpacked extensions (as zips) and restart Chromium
+      summary: Upload and activate one or more unpacked extensions
       description: |
-        Upload one or more extension zip archives, extract them under /home/kernel/extensions/<name>,
-        set runtime extension flags in /chromium/flags, restart Chromium via supervisord, and wait
-        until the Chromium DevTools "listening" log line is observed before returning success.
+        Upload one or more extension zip archives and extract them under
+        /home/kernel/extensions/<name>. Ordinary unpacked extensions are activated immediately over
+        CDP without restarting Chromium, while their runtime flags are persisted for future starts.
+        Extensions that require enterprise policy still restart Chromium and wait for DevTools
+        readiness before returning success.
       operationId: uploadExtensionsAndRestart
       x-telemetry-category: platform
       requestBody:
@@ -1174,7 +1176,7 @@ paths:
               required: [extensions]
       responses:
         "201":
-          description: Extensions uploaded, Chromium restarted, and DevTools is ready
+          description: Extensions uploaded and activated
         "400":
           $ref: "#/components/responses/BadRequestError"
         "500":

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	_ "github.com/glebarez/sqlite"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
@@ -258,7 +259,11 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 	extZip, err := zipDirToBytes(extDir)
 	require.NoError(t, err, "zip ext")
 
-	// Use new API to upload extension and restart Chromium
+	versionURL := "http" + strings.TrimPrefix(c.CDPURL(), "ws") + "json/version"
+	browserWebSocketBefore, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL before extension upload")
+
+	// Upload and activate the unpacked extension without restarting Chromium.
 	{
 		client, err := c.APIClient()
 		require.NoError(t, err)
@@ -279,6 +284,10 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 		t.Logf("/chromium/upload-extensions-and-restart completed in %s (%d ms)", elapsed.String(), elapsed.Milliseconds())
 	}
+
+	browserWebSocketAfter, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after extension upload")
+	require.Equal(t, browserWebSocketBefore, browserWebSocketAfter, "Chromium restarted during unpacked extension upload")
 
 	// Verify the content script updated the title on an allowed URL
 	{

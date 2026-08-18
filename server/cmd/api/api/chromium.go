@@ -31,9 +31,9 @@ type extensionZipItem struct {
 // chromiumFlagsPath is the runtime flags file read by the chromium-launcher at startup.
 const chromiumFlagsPath = "/chromium/flags"
 
-// UploadExtensionsAndRestart handles multipart upload of one or more extension zips, extracts
-// them under /home/kernel/extensions/<name>, writes /chromium/flags to enable them, restarts
-// Chromium via supervisord, and waits (via UpstreamManager) until DevTools is ready.
+// UploadExtensionsAndRestart handles multipart upload of one or more extension zips and extracts
+// them under /home/kernel/extensions/<name>. Unpacked extensions are loaded immediately over CDP;
+// extensions that require enterprise policy restart Chromium after their policy is installed.
 func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oapi.UploadExtensionsAndRestartRequestObject) (oapi.UploadExtensionsAndRestartResponseObject, error) {
 	log := logger.FromContext(ctx)
 	start := time.Now()
@@ -145,7 +145,7 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		extItems = append(extItems, extensionZipItem{zipTemp: p.zipTemp, name: p.name})
 	}
 
-	reqMsg, err := s.applyExtensionZipItems(ctx, extItems)
+	requiresRestart, reqMsg, err := s.applyExtensionZipItems(ctx, extItems)
 	if reqMsg != "" {
 		return oapi.UploadExtensionsAndRestart400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: reqMsg}}, nil
 	}
@@ -153,33 +153,38 @@ func (s *ApiService) UploadExtensionsAndRestart(ctx context.Context, request oap
 		return oapi.UploadExtensionsAndRestart500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
 	}
 
-	// Restart Chromium and wait for DevTools to be ready
-	if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
+	if requiresRestart {
+		if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
+			return oapi.UploadExtensionsAndRestart500JSONResponse{
+				InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
+			}, nil
+		}
+	} else if err := s.loadUnpackedExtensions(ctx, extItems); err != nil {
 		return oapi.UploadExtensionsAndRestart500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()},
 		}, nil
 	}
 
-	log.Info("devtools ready", "elapsed", time.Since(start).String())
+	log.Info("extensions ready", "restarted", requiresRestart, "elapsed", time.Since(start).String())
 	return oapi.UploadExtensionsAndRestart201Response{}, nil
 }
 
-// applyExtensionZipItems applies name+zipTemp extension pairs (merge flags for --load-extension).
-// On validation errors returns (reqMsg, nil); on internal errors returns ("", err).
-func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensionZipItem) (reqMsg string, err error) {
+// applyExtensionZipItems installs name+zipTemp extension pairs and persists their startup
+// configuration. The boolean result reports whether enterprise policy requires a restart.
+func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensionZipItem) (bool, string, error) {
 	log := logger.FromContext(ctx)
 	extBase := "/home/kernel/extensions"
 	if err := os.MkdirAll(extBase, 0o755); err != nil {
-		return "", fmt.Errorf("failed to create extension base dir: %w", err)
+		return false, "", fmt.Errorf("failed to create extension base dir: %w", err)
 	}
 
 	for _, p := range items {
 		dest := filepath.Join(extBase, p.name)
 		if _, err := os.Stat(dest); err == nil {
-			return fmt.Sprintf("extension name already exists: %s", p.name), nil
+			return false, fmt.Sprintf("extension name already exists: %s", p.name), nil
 		} else if !os.IsNotExist(err) {
 			log.Error("failed to check extension dir", "error", err)
-			return "", fmt.Errorf("failed to check extension dir: %w", err)
+			return false, "", fmt.Errorf("failed to check extension dir: %w", err)
 		}
 	}
 
@@ -200,12 +205,12 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 		dest := filepath.Join(extBase, p.name)
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			log.Error("failed to create extension dir", "error", err)
-			return "", fmt.Errorf("failed to create extension dir: %w", err)
+			return false, "", fmt.Errorf("failed to create extension dir: %w", err)
 		}
 		createdDests = append(createdDests, dest)
 		if err := ziputil.Unzip(p.zipTemp, dest); err != nil {
 			log.Error("failed to unzip zip file", "error", err)
-			return "invalid zip file", nil
+			return false, "invalid zip file", nil
 		}
 
 		updateXMLPath := filepath.Join(dest, "update.xml")
@@ -215,13 +220,14 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 
 		if err := exec.Command("chown", "-R", "kernel:kernel", dest).Run(); err != nil {
 			log.Error("failed to chown extension dir", "error", err)
-			return "", fmt.Errorf("failed to chown extension dir: %w", err)
+			return false, "", fmt.Errorf("failed to chown extension dir: %w", err)
 		}
 
 		log.Info("installed extension", "name", p.name)
 	}
 
 	var pathsNeedingFlags []string
+	requiresRestart := false
 
 	for _, p := range items {
 		extensionPath := filepath.Join(extBase, p.name)
@@ -252,7 +258,7 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 
 			if _, err := os.Stat(updateXMLPath); err == nil {
 				if extractionErr != nil {
-					return fmt.Sprintf("extension %s requires enterprise policy but update.xml is invalid: %v", extensionName, extractionErr), nil
+					return false, fmt.Sprintf("extension %s requires enterprise policy but update.xml is invalid: %v", extensionName, extractionErr), nil
 				}
 				hasUpdateXML = true
 				log.Info("found update.xml in extension zip", "name", extensionName)
@@ -274,6 +280,8 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 					"name", extensionName, "hasUpdateXML", hasUpdateXML, "hasCRX", hasCRX)
 				requiresEntPolicy = false
 				pathsNeedingFlags = append(pathsNeedingFlags, extensionPath)
+			} else {
+				requiresRestart = true
 			}
 		} else {
 			pathsNeedingFlags = append(pathsNeedingFlags, extensionPath)
@@ -281,7 +289,7 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 
 		if err := s.policy.AddExtension(extensionName, chromeExtensionID, extensionPath, requiresEntPolicy); err != nil {
 			log.Error("failed to update enterprise policy", "error", err, "extension", extensionName)
-			return "", fmt.Errorf("failed to update enterprise policy for %s: %w", extensionName, err)
+			return false, "", fmt.Errorf("failed to update enterprise policy for %s: %w", extensionName, err)
 		}
 
 		log.Info("updated enterprise policy", "extension", extensionName, "chromeExtensionID", chromeExtensionID, "requiresEnterprisePolicy", requiresEntPolicy)
@@ -295,11 +303,28 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 	}
 
 	if _, err := s.mergeAndWriteChromiumFlags(ctx, newTokens); err != nil {
-		return "", err
+		return false, "", err
 	}
 
 	success = true
-	return "", nil
+	return requiresRestart, "", nil
+}
+
+func (s *ApiService) loadUnpackedExtensions(ctx context.Context, items []extensionZipItem) error {
+	log := logger.FromContext(ctx)
+	for _, item := range items {
+		path := filepath.Join("/home/kernel/extensions", item.name)
+		var id string
+		if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+			loadedID, err := client.LoadUnpackedExtension(cdpCtx, path)
+			id = loadedID
+			return err
+		}); err != nil {
+			return fmt.Errorf("failed to load extension %s: %w", item.name, err)
+		}
+		log.Info("loaded unpacked extension over CDP", "name", item.name, "id", id)
+	}
+	return nil
 }
 
 // mergeAndWriteChromiumFlags reads existing flags, merges them with new flags,

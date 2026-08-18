@@ -162,6 +162,25 @@ func (c *Client) GetBrowserVersion(ctx context.Context) (*BrowserVersion, error)
 	return &v, nil
 }
 
+// LoadUnpackedExtension installs an unpacked extension from an absolute path
+// visible to Chromium and returns its extension ID.
+func (c *Client) LoadUnpackedExtension(ctx context.Context, path string) (string, error) {
+	raw, err := c.send(ctx, "Extensions.loadUnpacked", map[string]string{"path": path}, "")
+	if err != nil {
+		return "", fmt.Errorf("Extensions.loadUnpacked: %w", err)
+	}
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", fmt.Errorf("unmarshal Extensions.loadUnpacked: %w", err)
+	}
+	if result.ID == "" {
+		return "", fmt.Errorf("Extensions.loadUnpacked returned no extension ID")
+	}
+	return result.ID, nil
+}
+
 // Histogram is a snapshot of a Chrome UMA histogram as returned by
 // Browser.getHistograms. Values are cumulative since browser start and the
 // units follow the UMA definition of the histogram (PageLoad timings are
