@@ -54,6 +54,7 @@ func (s *ApiService) UploadExtensions(ctx context.Context, request oapi.UploadEx
 	case oapi.UploadExtensionsAndRestart500JSONResponse:
 		return oapi.UploadExtensions500JSONResponse{InternalErrorJSONResponse: response.InternalErrorJSONResponse}, nil
 	default:
+		logger.FromContext(ctx).Error("unexpected extension upload response", "type", fmt.Sprintf("%T", response))
 		return oapi.UploadExtensions500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "internal error"}}, nil
 	}
 }
