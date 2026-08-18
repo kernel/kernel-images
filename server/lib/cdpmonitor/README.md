@@ -10,7 +10,7 @@ Chrome can restart independently of the monitor. When that happens, `UpstreamPro
 
 ## Event taxonomy
 
-**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`
+**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` (classified from a branded 5xx response carrying the `X-Kernel-Proxy-Error` header), `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`. `proxy_error` is an opt-in per-session/per-URL refinement of the raw `network` events: it is only observable while the network category (CDP collector) is running, so it is not a default-on alerting signal.
 
 **Computed** (inferred from sequences of CDP events): `network_idle` (fires when in-flight requests drop to zero), `page_layout_settled` (1 s after `page_load` with no intervening layout shifts), `page_navigation_settled` (fires once `page_dom_content_loaded` and `page_layout_settled` have both fired for the same navigation; intentionally independent of `network_idle` so that a single hung request cannot stall the event).
 
@@ -156,10 +156,10 @@ target_id          <- one per tab/window; stable across navigations
 | --- | --- | --- |
 | `target_id` | `source.metadata`, most `data` objects | The browser tab. Use this to group all events from one tab session. |
 | `cdp_session_id` | `source.metadata` | The WebSocket sub-channel. Not stable across reconnects. |
-| `frame_id` | `page_navigation`, `network_request`, `network_response`, `network_loading_failed` | The frame the request or navigation belongs to. Top-level frame has no `parent_frame_id`. |
+| `frame_id` | `page_navigation`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` | The frame the request or navigation belongs to. Top-level frame has no `parent_frame_id`. |
 | `source_frame_id` | `page_layout_shift`, `page_lcp` | The frame where the layout shift or LCP element occurred. Distinct from the nav context `frame_id`, which is always the top-level navigated frame. |
-| `loader_id` | `page_navigation`, `network_request`, `network_response` | The document load that owns a request. Join `network_request.loader_id` to `page_navigation.loader_id` to correlate requests with the navigation that triggered them. |
-| `request_id` | `network_request`, `network_response`, `network_loading_failed` | A single request chain (including redirects). Links request to its eventual response or failure. |
+| `loader_id` | `page_navigation`, `network_request`, `network_response`, `proxy_error` | The document load that owns a request. Join `network_request.loader_id` to `page_navigation.loader_id` to correlate requests with the navigation that triggered them. |
+| `request_id` | `network_request`, `network_response`, `network_loading_failed`, `proxy_error` | A single request chain (including redirects). Links request to its eventual response or failure. |
 
 ### Navigation context fields
 
@@ -171,7 +171,7 @@ Most event `data` objects include a nav context block stamped at the last `page_
 | `frame_id` | Frame ID of the navigated top-level frame. |
 | `loader_id` | Loader ID of the current document. |
 | `url` | URL of the current page at the time of the last navigation. |
-| `nav_seq` | Monotonically increasing counter, incremented on each `page_navigation`. Use it to detect that the page has navigated between two events in the same session. For `network_request`/`network_response`/`network_loading_failed`, the `nav_seq` is captured at request-send time and carried forward to the response so a request/response pair always shares an epoch. |
+| `nav_seq` | Monotonically increasing counter, incremented on each `page_navigation`. Use it to detect that the page has navigated between two events in the same session. For `network_request`/`network_response`/`network_loading_failed`/`proxy_error`, the `nav_seq` is captured at request-send time and carried forward to the response so a request/response pair always shares an epoch. |
 
 ### Events that do not compose `BrowserEventContext`
 
@@ -202,6 +202,7 @@ Unless otherwise noted, events also include the nav context fields described abo
 | `network_request` | `request_id`, `loader_id`, `frame_id`, `document_url`, `method`, `url`, `headers`, `initiator_type`. Optional: `post_data`, `resource_type`, `is_redirect` + `redirect_url`. |
 | `network_response` | `request_id`, `loader_id`, `frame_id`, `method`, `url`, `status`, `headers`. Optional: `status_text`, `mime_type`, `resource_type`, `body` (truncated text body for textual MIME types). |
 | `network_loading_failed` | `request_id`, `error_text`, `canceled`. Optional (absent when the request record was not found): `url`, `loader_id`, `frame_id`, `resource_type`. |
+| `proxy_error` | `request_id`, `code` (typed enum matching the metro header values), `status` (502). Optional: `url`, `loader_id`, `frame_id`, `method`, `resource_type`. Emitted when a 502 response carries the `X-Kernel-Proxy-Error` header; unknown codes are dropped and emission is sampled to at most one per session+code+resource_type per second. WebSocket handshakes are not classified (documented non-goal). |
 
 #### Page events
 
