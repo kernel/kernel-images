@@ -21,10 +21,14 @@ func TestCategoryMapsAgreeOnAPICallSplit(t *testing.T) {
 	assert.Equal(t, Platform, cat)
 }
 
-func TestCaptchaSolveStartedCategory(t *testing.T) {
-	cat, ok := CategoryForType("captcha_solve_started")
-	require.True(t, ok)
-	assert.Equal(t, Captcha, cat)
+func TestCaptchaCategories(t *testing.T) {
+	for _, eventType := range []string{"captcha_solve_started", "captcha_challenge_result"} {
+		t.Run(eventType, func(t *testing.T) {
+			cat, ok := CategoryForType(eventType)
+			require.True(t, ok)
+			assert.Equal(t, Captcha, cat)
+		})
+	}
 }
 
 func TestCategoryForOperation(t *testing.T) {

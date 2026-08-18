@@ -5638,14 +5638,11 @@ components:
     BrowserCaptchaChallengeID:
       type: string
       description: >
-        Groups every solver task belonging to one visible challenge. An
-        image-grid captcha retries with a fresh task per attempt, so the
-        tasks of a single challenge share a `challenge_id` and may each carry
-        their own `task_id`. This opaque identifier is not stable across page
-        reloads or re-renders of the same widget. It does not indicate task
-        ordering or challenge completion. It is absent when the producer cannot
-        identify the containing challenge; absence carries no information about
-        solve state.
+        Opaque identifier shared by events from one visible challenge. An
+        image-grid captcha can retry with a fresh task per attempt, so one
+        `challenge_id` may be associated with multiple `task_id` values. It is
+        not stable across page reloads or re-renders of the same widget and
+        does not indicate task ordering or challenge completion.
     BrowserCaptchaSolveStartedEventData:
       type: object
       description: >
@@ -5765,18 +5762,17 @@ components:
       type: object
       description: Per-challenge payload for `captcha_challenge_result` events.
       additionalProperties: false
-      required: [captcha_type, status]
+      required: [captcha_type, status, challenge_id]
       properties:
         captcha_type:
           $ref: "#/components/schemas/BrowserCaptchaType"
         status:
           type: string
           description: >
-            What the page observed when the challenge left the screen.
-            `solved`: the challenge issued a response token. `abandoned`: it
-            went away without one, because the page navigated, the widget was
+            Terminal outcome of the visible challenge. `solved`: the challenge
+            issued a response token. `abandoned`: the challenge ended without
+            one, for example because the page navigated, the widget was
             dismissed, or the solver gave up.
-
 
             `solved` describes the challenge, not the flow around it. A site
             can still reject a valid token, and tokens expire, so this is not
@@ -5789,8 +5785,8 @@ components:
         duration_ms:
           type: number
           description: >
-            Wall-clock duration from the challenge appearing to it leaving the
-            screen, covering every solver attempt in between.
+            Wall-clock duration from the challenge appearing to its terminal
+            outcome, covering every solver attempt in between.
         website_host:
           type: string
           description: Host of the page the challenge appeared on.
@@ -5800,12 +5796,11 @@ components:
     BrowserCaptchaChallengeResultEvent:
       type: object
       description: >
-        A visible captcha challenge finished. Emitted once per challenge by a
-        producer watching the page, which is the only vantage point that can
-        see the response token, so this is the event to wait on to know a
-        challenge is over. `captcha_solve_started` and `captcha_solve_result`
-        describe the individual solver attempts within it and are emitted once
-        per attempt.
+        A visible captcha challenge reached a terminal outcome. Emitted once
+        per challenge. Wait for this event, rather than a task result, to
+        determine the overall challenge outcome. `captcha_solve_started` and
+        `captcha_solve_result` describe individual solver tasks and may occur
+        multiple times within one challenge.
       required: [ts, type, category, source]
       properties:
         ts:
