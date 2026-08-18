@@ -5761,6 +5761,70 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserCaptchaChallengeResultEventData:
+      type: object
+      description: Per-challenge payload for `captcha_challenge_result` events.
+      additionalProperties: false
+      required: [captcha_type, status]
+      properties:
+        captcha_type:
+          $ref: "#/components/schemas/BrowserCaptchaType"
+        status:
+          type: string
+          description: >
+            What the page observed when the challenge left the screen.
+            `solved`: the challenge issued a response token. `abandoned`: it
+            went away without one, because the page navigated, the widget was
+            dismissed, or the solver gave up.
+
+
+            `solved` describes the challenge, not the flow around it. A site
+            can still reject a valid token, and tokens expire, so this is not
+            proof that whatever the challenge was guarding succeeded.
+          enum:
+            - solved
+            - abandoned
+        challenge_id:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeID"
+        duration_ms:
+          type: number
+          description: >
+            Wall-clock duration from the challenge appearing to it leaving the
+            screen, covering every solver attempt in between.
+        website_host:
+          type: string
+          description: Host of the page the challenge appeared on.
+        website_path:
+          type: string
+          description: Path of the page the challenge appeared on. Query string excluded.
+    BrowserCaptchaChallengeResultEvent:
+      type: object
+      description: >
+        A visible captcha challenge finished. Emitted once per challenge by a
+        producer watching the page, which is the only vantage point that can
+        see the response token, so this is the event to wait on to know a
+        challenge is over. `captcha_solve_started` and `captcha_solve_result`
+        describe the individual solver attempts within it and are emitted once
+        per attempt.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: captcha_challenge_result
+        category:
+          type: string
+          const: captcha
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeResultEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     BrowserSystemOomKillEventData:
       type: object
       description: Per-kill payload for `system_oom_kill` events.
@@ -5966,6 +6030,7 @@ components:
         - $ref: "#/components/schemas/BrowserLiveViewDisconnectEvent"
         - $ref: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
         - $ref: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+        - $ref: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
         - $ref: "#/components/schemas/BrowserSystemOomKillEvent"
         - $ref: "#/components/schemas/BrowserServiceCrashedEvent"
       discriminator:
@@ -6004,6 +6069,7 @@ components:
           live_view_disconnect: "#/components/schemas/BrowserLiveViewDisconnectEvent"
           captcha_solve_started: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
           captcha_solve_result: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+          captcha_challenge_result: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
           system_oom_kill: "#/components/schemas/BrowserSystemOomKillEvent"
           service_crashed: "#/components/schemas/BrowserServiceCrashedEvent"
     TelemetryState:
