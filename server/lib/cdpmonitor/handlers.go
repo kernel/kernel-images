@@ -507,11 +507,11 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 	}
 	m.pendReqMu.Unlock()
 
-	// Proxy errors are always served as 5xx responses (never 200), so gate
-	// detection on that slice and leave the common success/redirect path
-	// paying nothing extra beyond the status compare.
+	// Branded proxy error pages are always served as 502 (the producer
+	// hardcodes that status), so gate detection on it exactly and leave every
+	// other response paying nothing extra beyond the status compare.
 	code, isProxyErr := "", false
-	if p.Response.Status >= 500 {
+	if p.Response.Status == 502 {
 		code, isProxyErr = proxyErrorCode(p.Response.Headers)
 	}
 	if !isProxyErr {
@@ -701,17 +701,20 @@ func proxyErrorCode(resHeaders json.RawMessage) (string, bool) {
 // alert on while keeping the fixed-capacity ring usable at peak.
 const proxyErrorMinInterval = time.Second
 
-// proxyErrorRateLimited reports whether a proxy_error for the given session and
-// code should be dropped. Codes are validated against the published enum so
-// the never-swept key map stays bounded (at most one entry per session+code)
-// and unknown wire values are not surfaced. At most one event per session+code
-// per interval is emitted.
-func (m *Monitor) proxyErrorRateLimited(sessionID, code string) bool {
+// proxyErrorRateLimited reports whether a proxy_error for the given session,
+// code, and resource type should be dropped. Codes are validated against the
+// published enum (kept in lockstep with the metro egressproxy header codes in
+// kernel/kernel packages/metro-api/lib/egressproxy/proxy_error.go), so unknown
+// wire values are dropped and never occupy a rate-limit slot. At most one event
+// per session+code+resource_type per interval is emitted; the interval is a
+// sampling bound, not a per-URL dedup.
+func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bool {
 	if !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
+		m.log.Warn("cdpmonitor: dropping proxy_error with unknown code", "code", code)
 		return true
 	}
 	now := time.Now()
-	key := sessionID + ":" + code
+	key := sessionID + ":" + code + ":" + resourceType
 	m.proxyRateMu.Lock()
 	defer m.proxyRateMu.Unlock()
 	last, ok := m.proxyLastEmit[key]
@@ -727,7 +730,7 @@ func (m *Monitor) proxyErrorRateLimited(sessionID, code string) bool {
 // X-Kernel-Proxy-Error header). The code is the header value, validated against
 // the published enum.
 func (m *Monitor) publishProxyError(sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
-	if m.proxyErrorRateLimited(sessionID, code) {
+	if m.proxyErrorRateLimited(sessionID, code, resourceType) {
 		return
 	}
 	m.sessionsMu.RLock()

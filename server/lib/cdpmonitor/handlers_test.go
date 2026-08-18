@@ -282,31 +282,108 @@ func TestNetworkEvents(t *testing.T) {
 		assert.Equal(t, "loader-untracked", data["loader_id"])
 		assert.Equal(t, "Document", data["resource_type"])
 	})
+
+	t.Run("proxy_error_gate_lt_502", func(t *testing.T) {
+		cp := ec.checkpoint()
+		// A non-502 carrying the header must not be classified, even with a
+		// valid code; the following genuine 502 is the positive anchor.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-404",
+				"response": map[string]any{
+					"status": 404, "statusText": "Not Found",
+					"headers":  map[string]any{"X-Kernel-Proxy-Error": "provider_blacklisted"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-502",
+				"response": map[string]any{
+					"status": 502, "statusText": "Bad Gateway",
+					"headers":  map[string]any{"X-Kernel-Proxy-Error": "proxy_unavailable"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		ec.waitForNew(t, "proxy_error", cp, 2*time.Second)
+		ec.mu.Lock()
+		defer ec.mu.Unlock()
+		count := 0
+		for _, ev := range ec.events[cp:] {
+			if ev.Type == EventProxyError {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "non-502 response must not emit proxy_error")
+	})
+
+	t.Run("proxy_error_unknown_code_dropped", func(t *testing.T) {
+		cp := ec.checkpoint()
+		// A 502 with a code outside the published enum must be dropped; the
+		// following valid-code 502 is the positive anchor.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-unknown",
+				"response": map[string]any{
+					"status": 502, "statusText": "Bad Gateway",
+					"headers":  map[string]any{"X-Kernel-Proxy-Error": "made_up_code"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-valid",
+				"response": map[string]any{
+					"status": 502, "statusText": "Bad Gateway",
+					"headers":  map[string]any{"X-Kernel-Proxy-Error": "destination_blocked"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		ec.waitForNew(t, "proxy_error", cp, 2*time.Second)
+		ec.mu.Lock()
+		defer ec.mu.Unlock()
+		count := 0
+		for _, ev := range ec.events[cp:] {
+			if ev.Type == EventProxyError {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "unknown-code response must not emit proxy_error")
+	})
 }
 
 // TestProxyErrorRateLimit exercises the proxy_error limiter (enum validation +
 // per-session+code min interval) deterministically, without timing sleeps.
 func TestProxyErrorRateLimit(t *testing.T) {
-	m := &Monitor{proxyLastEmit: make(map[string]time.Time)}
+	m := &Monitor{proxyLastEmit: make(map[string]time.Time), log: discardLogger}
 	const interval = proxyErrorMinInterval
 
 	// Valid code: first emit allowed, repeat within the interval dropped,
-	// different codes and sessions unaffected.
-	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted"))
-	require.True(t, m.proxyErrorRateLimited("sess", "provider_blacklisted"), "same session+code within interval must be dropped")
-	require.False(t, m.proxyErrorRateLimited("sess", "provider_unreachable"), "different code must be allowed")
-	require.False(t, m.proxyErrorRateLimited("sess2", "provider_blacklisted"), "different session must be allowed")
+	// different codes, sessions, and resource types unaffected.
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted", "Document"))
+	require.True(t, m.proxyErrorRateLimited("sess", "provider_blacklisted", "Document"), "same session+code+resource within interval must be dropped")
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_unreachable", "Document"), "different code must be allowed")
+	require.False(t, m.proxyErrorRateLimited("sess2", "provider_blacklisted", "Document"), "different session must be allowed")
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted", "Script"), "different resource type must be allowed")
 
 	// After the interval elapses the slot reopens.
 	m.proxyRateMu.Lock()
-	m.proxyLastEmit["sess:provider_blacklisted"] = time.Now().Add(-2 * interval)
+	m.proxyLastEmit["sess:provider_blacklisted:Document"] = time.Now().Add(-2 * interval)
 	m.proxyRateMu.Unlock()
-	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted"), "after interval must be allowed")
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted", "Document"), "after interval must be allowed")
 
 	// Codes outside the published enum are always dropped and never consume a
 	// rate-limit slot, so the map cannot grow with arbitrary header text.
-	require.True(t, m.proxyErrorRateLimited("sess", "made_up_code"), "unknown code must be dropped")
-	require.True(t, m.proxyErrorRateLimited("sess", "made_up_code"), "unknown code must be dropped again (no slot stamped)")
+	require.True(t, m.proxyErrorRateLimited("sess", "made_up_code", "Document"), "unknown code must be dropped")
+	require.True(t, m.proxyErrorRateLimited("sess", "made_up_code", "Document"), "unknown code must be dropped again (no slot stamped)")
 	m.proxyRateMu.Lock()
 	defer m.proxyRateMu.Unlock()
 	for k := range m.proxyLastEmit {
@@ -321,9 +398,9 @@ func TestProxyErrorClassifiers(t *testing.T) {
 		assert.Equal(t, "provider_blacklisted", code)
 
 		// header lookup is case-insensitive
-		code, ok = proxyErrorCode(json.RawMessage(`{"X-Kernel-Proxy-Error":"source_auth_error"}`))
+		code, ok = proxyErrorCode(json.RawMessage(`{"X-Kernel-Proxy-Error":"provider_unreachable"}`))
 		assert.True(t, ok)
-		assert.Equal(t, "source_auth_error", code)
+		assert.Equal(t, "provider_unreachable", code)
 	})
 	t.Run("header_absent", func(t *testing.T) {
 		_, ok := proxyErrorCode(json.RawMessage(`{"Content-Type":"text/html"}`))

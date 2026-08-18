@@ -66,9 +66,9 @@ type Monitor struct {
 
 	// proxyRateMu guards proxyLastEmit. Entries are never pruned per-session
 	// (mirrors bindingLastSeen); the map stays bounded because proxy errors are
-	// rare and keys are limited to valid enum codes.
+	// rare and keys are limited to valid enum codes plus resource type.
 	proxyRateMu   sync.Mutex
-	proxyLastEmit map[string]time.Time // sessionID:code → last accepted proxy_error emit time
+	proxyLastEmit map[string]time.Time // sessionID:code:resourceType → last accepted proxy_error emit time
 
 	// asyncWg tracks all goroutines except readLoop (which is tracked via done).
 	// subscribeToUpstream and sweepPendingRequests are included so Stop() can

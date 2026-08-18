@@ -89,6 +89,7 @@ const (
 	dataKeyMethod = "method"
 	dataKeyURL    = "url"
 	dataKeyStatus = "status"
+	dataKeyCode   = "code"
 	dataKeyLevel  = "level"
 )
 
@@ -108,6 +109,11 @@ func promotedAttributes(cat oapi.TelemetryEventCategory, data map[string]any) []
 		}
 		if v, ok := data[dataKeyStatus].(float64); ok {
 			out = append(out, log.Int64("http.response.status_code", int64(v)))
+		}
+		// Only proxy_error events carry code; other network events have no such
+		// field, so the promotion is effectively gated to that event type.
+		if v, ok := data[dataKeyCode].(string); ok {
+			out = append(out, log.String("kernel.proxy_error_code", v))
 		}
 	case Console:
 		if v, ok := data[dataKeyLevel].(string); ok {

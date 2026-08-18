@@ -74,6 +74,14 @@ func TestToLogRecord_PromotedAttributes(t *testing.T) {
 		assert.Equal(t, "https://x/y", attrs["url.full"].AsString())
 		assert.Equal(t, int64(404), attrs["http.response.status_code"].AsInt64())
 	})
+	t.Run("proxy_error_code", func(t *testing.T) {
+		// proxy_error carries code, promoted as its own attribute.
+		env := Envelope{Seq: 3, Event: Event{Type: "proxy_error", Category: Network,
+			Data: json.RawMessage(`{"code":"provider_unreachable","status":502}`)}}
+		rec := toLogRecord(env)
+		attrs := attrsOf(rec)
+		assert.Equal(t, "provider_unreachable", attrs["kernel.proxy_error_code"].AsString())
+	})
 	t.Run("console", func(t *testing.T) {
 		env := Envelope{Seq: 2, Event: Event{Type: "console_error", Category: Console,
 			Data: json.RawMessage(`{"level":"error","text":"boom"}`)}}
