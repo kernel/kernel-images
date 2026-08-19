@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,29 +34,67 @@ func TestChromiumConfigureModeFor(t *testing.T) {
 	stringPtr := func(value string) *string { return &value }
 
 	tests := []struct {
-		name  string
-		state chromiumConfigureState
-		want  chromiumConfigureMode
+		name     string
+		state    chromiumConfigureState
+		strategy oapi.ChromiumConfigureParamsExtensionLoadStrategy
+		want     chromiumConfigureMode
 	}{
-		{name: "no restart fields", want: chromiumConfigureModeLive},
-		{name: "display only", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`)}, want: chromiumConfigureModeLive},
-		{name: "start URL only", state: chromiumConfigureState{startURLRaw: stringPtr("https://example.com")}, want: chromiumConfigureModeLive},
-		{name: "empty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{}`)}, want: chromiumConfigureModeLive},
-		{name: "nonempty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{"QuicAllowed":false}`)}, want: chromiumConfigureModeRestart},
-		{name: "invalid policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{bad-json`)}, want: chromiumConfigureModeRestart},
-		{name: "empty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":[]}`)}, want: chromiumConfigureModeLive},
-		{name: "nonempty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":["--kiosk"]}`)}, want: chromiumConfigureModeRestart},
-		{name: "invalid flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{bad-json`)}, want: chromiumConfigureModeRestart},
-		{name: "profile", state: chromiumConfigureState{hasProfile: true}, want: chromiumConfigureModeRestart},
-		{name: "extensions", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, want: chromiumConfigureModeRestart},
-		{name: "display and extension", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`), extItems: []extensionZipItem{{name: "test"}}}, want: chromiumConfigureModeRestart},
+		{name: "no restart fields", strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "display only", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`)}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "start URL only", state: chromiumConfigureState{startURLRaw: stringPtr("https://example.com")}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "empty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{}`)}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "nonempty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{"QuicAllowed":false}`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "invalid policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{bad-json`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "empty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":[]}`)}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "nonempty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":["--kiosk"]}`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "invalid flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{bad-json`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "profile", state: chromiumConfigureState{hasProfile: true}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "extensions default restart", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.Restart, want: chromiumConfigureModeRestart},
+		{name: "extensions prefer CDP", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModeCandidateCDPExtensions},
+		{name: "display and extensions prefer CDP", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`), extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModeCandidateCDPExtensions},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			require.Equal(t, tt.want, chromiumConfigureModeFor(&tt.state))
+			require.Equal(t, tt.want, chromiumConfigureModeFor(&tt.state, tt.strategy))
 		})
 	}
+}
+
+func TestChromiumConfigureExtensionLoadStrategy(t *testing.T) {
+	strategy, msg := chromiumConfigureExtensionLoadStrategy(oapi.ChromiumConfigureParams{})
+	require.Empty(t, msg)
+	require.Equal(t, oapi.Restart, strategy)
+
+	preferCDP := oapi.PreferCdp
+	strategy, msg = chromiumConfigureExtensionLoadStrategy(oapi.ChromiumConfigureParams{ExtensionLoadStrategy: &preferCDP})
+	require.Empty(t, msg)
+	require.Equal(t, oapi.PreferCdp, strategy)
+
+	invalid := oapi.ChromiumConfigureParamsExtensionLoadStrategy("invalid")
+	_, msg = chromiumConfigureExtensionLoadStrategy(oapi.ChromiumConfigureParams{ExtensionLoadStrategy: &invalid})
+	require.Equal(t, "extension_load_strategy must be restart or prefer_cdp", msg)
+}
+
+func TestChromiumConfigureGeneratedClientQuery(t *testing.T) {
+	preferCDP := oapi.PreferCdp
+	req, err := oapi.NewChromiumConfigureRequestWithBody(
+		"http://example.test",
+		&oapi.ChromiumConfigureParams{ExtensionLoadStrategy: &preferCDP},
+		"multipart/form-data; boundary=test",
+		strings.NewReader("--test--"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "prefer_cdp", req.URL.Query().Get("extension_load_strategy"))
+
+	req, err = oapi.NewChromiumConfigureRequestWithBody(
+		"http://example.test",
+		nil,
+		"multipart/form-data; boundary=test",
+		strings.NewReader("--test--"),
+	)
+	require.NoError(t, err)
+	require.Empty(t, req.URL.RawQuery)
 }
 
 func TestChromiumConfigureActionables(t *testing.T) {

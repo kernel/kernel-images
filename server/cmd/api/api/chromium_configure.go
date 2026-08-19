@@ -53,6 +53,11 @@ func (st *chromiumConfigureState) cleanup() {
 func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.ChromiumConfigureRequestObject) (oapi.ChromiumConfigureResponseObject, error) {
 	start := time.Now()
 
+	extensionLoadStrategy, strategyErr := chromiumConfigureExtensionLoadStrategy(request.Params)
+	if strategyErr != "" {
+		return cfg400(strategyErr), nil
+	}
+
 	if request.Body == nil {
 		return cfg400("request body required"), nil
 	}
@@ -81,11 +86,13 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 	defer s.chromiumConfigMu.Unlock()
 
 	var configureResp oapi.ChromiumConfigureResponseObject
-	switch chromiumConfigureModeFor(st) {
+	switch chromiumConfigureModeFor(st, extensionLoadStrategy) {
 	case chromiumConfigureModeLive:
 		configureResp = s.chromiumConfigureLive(ctx, st, spec)
 	case chromiumConfigureModeRestart:
 		configureResp = s.chromiumConfigureRestart(ctx, st, spec)
+	case chromiumConfigureModeCandidateCDPExtensions:
+		configureResp = s.chromiumConfigureCandidateCDPExtensions(ctx, st, spec)
 	default:
 		return cfg500Configure("unhandled configure mode"), nil
 	}
@@ -102,13 +109,29 @@ type chromiumConfigureMode uint8
 const (
 	chromiumConfigureModeLive chromiumConfigureMode = iota
 	chromiumConfigureModeRestart
+	chromiumConfigureModeCandidateCDPExtensions
 )
 
-func chromiumConfigureModeFor(st *chromiumConfigureState) chromiumConfigureMode {
+func chromiumConfigureExtensionLoadStrategy(params oapi.ChromiumConfigureParams) (oapi.ChromiumConfigureParamsExtensionLoadStrategy, string) {
+	if params.ExtensionLoadStrategy == nil {
+		return oapi.Restart, ""
+	}
+	if !params.ExtensionLoadStrategy.Valid() {
+		return "", "extension_load_strategy must be restart or prefer_cdp"
+	}
+	return *params.ExtensionLoadStrategy, ""
+}
+
+func chromiumConfigureModeFor(st *chromiumConfigureState, strategy oapi.ChromiumConfigureParamsExtensionLoadStrategy) chromiumConfigureMode {
 	if st.hasProfile ||
-		len(st.extItems) > 0 ||
 		policiesContentNonEmpty(st.chromePoliciesJSON) ||
 		flagsContentNonEmpty(st.chromiumFlagsJSON) {
+		return chromiumConfigureModeRestart
+	}
+	if len(st.extItems) > 0 {
+		if strategy == oapi.PreferCdp {
+			return chromiumConfigureModeCandidateCDPExtensions
+		}
 		return chromiumConfigureModeRestart
 	}
 	return chromiumConfigureModeLive
@@ -138,6 +161,47 @@ func chromiumConfigureNavigate(ctx context.Context, s *ApiService, spec startURL
 	if err := chromiumDoNavigate(ctx, s, spec); err != nil {
 		logger.FromContext(ctx).Warn("start_url dispatch failed", "error", err)
 	}
+}
+
+func (s *ApiService) chromiumConfigureCandidateCDPExtensions(ctx context.Context, st *chromiumConfigureState, spec startURLParsed) oapi.ChromiumConfigureResponseObject {
+	prepared, reqMsg, err := s.prepareExtensionZipItems(ctx, st.extItems)
+	if prepared != nil {
+		defer prepared.cleanup()
+	}
+	if reqMsg != "" {
+		return cfg400(fmt.Sprintf("%s: %s", chromiumConfigureStepExtensions, reqMsg))
+	}
+	if err != nil {
+		return cfg500ConfigureStep(chromiumConfigureStepExtensions, err.Error())
+	}
+
+	if prepared.requiresRestart {
+		return s.chromiumConfigureRestart(ctx, st, spec)
+	}
+
+	_, _, reqMsg, err = s.commitPreparedExtensions(ctx, prepared)
+	if reqMsg != "" {
+		return cfg400(fmt.Sprintf("%s: %s", chromiumConfigureStepExtensions, reqMsg))
+	}
+	if err != nil {
+		return cfg500ConfigureStep(chromiumConfigureStepExtensions, err.Error())
+	}
+
+	loadErr := s.loadUnpackedExtensions(ctx, prepared.extensions)
+	if loadErr == nil {
+		return s.chromiumConfigureLive(ctx, st, spec)
+	}
+	logger.FromContext(ctx).Warn("CDP extension load failed during configure, restarting Chromium", "error", loadErr)
+
+	restartState := *st
+	restartState.extItems = nil // already persisted; the fallback only restarts Chromium
+	if resp := s.chromiumConfigureRestart(ctx, &restartState, spec); resp != nil {
+		return resp
+	}
+	if err := s.verifyUnpackedExtensions(ctx, prepared.extensions); err != nil {
+		return cfg500ConfigureStep(chromiumConfigureStepExtensions, errors.Join(loadErr, err).Error())
+	}
+	return nil
 }
 
 func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumConfigureState, spec startURLParsed) (resp oapi.ChromiumConfigureResponseObject) {

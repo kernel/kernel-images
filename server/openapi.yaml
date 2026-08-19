@@ -1260,19 +1260,35 @@ paths:
     post:
       summary: Apply batched session and browser configuration plus optional navigation
       description: |
-        Optional multipart parts apply configuration while Chromium stays stopped once (policy,
-        flags, extensions, profile archive, optional display sizing), then Chromium is started exactly
-        once and DevTools readiness is awaited. Optional `start_url` dispatches a best-effort
-        navigation after readiness without waiting for page load. Bare hosts are normalized to
-        `https://`. Omit any part you do not need. At least one actionable part must be present.
-        Required configuration steps run in this order: policies, extensions, display, flags,
-        then profile archive. Chromium is started only once at the end. The endpoint is not
-        transactional: if a later required step fails, earlier successful side effects may remain
-        on the instance while the non-2xx error propagates.
+        Optional multipart parts apply browser and session configuration in one serialized request.
+        Profiles, nonempty policies, nonempty flags, and extensions use one Chromium stop/apply/start
+        cycle by default. Display-only and start_url-only requests stay live. Set
+        `extension_load_strategy=prefer_cdp` to attempt live CDP activation when extensions are present
+        without a profile, nonempty policies, or nonempty flags. Enterprise-policy extensions and CDP
+        activation failures fall back to one restart within the same request. The query parameter is
+        ignored by older images, which retain the default restart behavior.
+        Optional `start_url` dispatches a best-effort navigation after configuration and readiness
+        without waiting for page load. Bare hosts are normalized to `https://`. Omit any part you do
+        not need. At least one actionable part must be present. Required configuration steps run in
+        this order: policies, extensions, display, flags, then profile archive. The endpoint is not
+        transactional: if a later required step fails, earlier successful side effects may remain on
+        the instance while the non-2xx error propagates.
         Prefer this over separate `/chromium/*` and `/display` calls when multiple restart-triggering
         steps apply in one session configure.
       operationId: chromiumConfigure
       x-telemetry-category: platform
+      parameters:
+        - name: extension_load_strategy
+          in: query
+          required: false
+          description: >-
+            Extension activation strategy. Omit or use `restart` to preserve unconditional restart
+            behavior for requests containing extensions. `prefer_cdp` attempts live activation for
+            eligible unpacked extensions and falls back to one restart when required.
+          schema:
+            type: string
+            enum: [restart, prefer_cdp]
+            default: restart
       requestBody:
         required: true
         content:

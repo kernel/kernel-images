@@ -86,7 +86,7 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 			client, err := c.APIClient()
 			require.NoError(t, err)
 
-			rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, w.FormDataContentType(), io.NopCloser(bytes.NewReader(body.Bytes())))
+			rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, nil, w.FormDataContentType(), io.NopCloser(bytes.NewReader(body.Bytes())))
 			require.NoError(t, err)
 
 			require.Equal(t, http.StatusOK, rsp.StatusCode(),
@@ -217,7 +217,7 @@ func TestChromiumConfigureStartURLBareHost(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, mw.FormDataContentType(), io.NopCloser(bytes.NewReader(buf.Bytes())))
+	rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, nil, mw.FormDataContentType(), io.NopCloser(bytes.NewReader(buf.Bytes())))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "%s", string(rsp.Body))
 	require.True(t, rsp.JSON200.Ok)
