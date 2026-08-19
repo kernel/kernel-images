@@ -193,7 +193,7 @@ func (s *ApiService) chromiumConfigurePreferCDPExtensions(ctx context.Context, s
 
 	// Configure keeps the default restart path's non-transactional install semantics.
 	// Rolling back after fallback verification would require a second restart.
-	_, reqMsg, err := s.commitPreparedExtensions(ctx, prepared)
+	reqMsg, err := commitExtensions()
 	if reqMsg != "" {
 		return cfg400(fmt.Sprintf("%s: %s", chromiumConfigureStepExtensions, reqMsg))
 	}
