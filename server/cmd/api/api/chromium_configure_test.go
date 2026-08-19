@@ -29,30 +29,33 @@ func TestPoliciesContentNonEmpty(t *testing.T) {
 	require.True(t, policiesContentNonEmpty(&real))
 }
 
-func TestChromiumConfigureActionableFlags(t *testing.T) {
-	emptyFlags := `{"flags":[]}`
-	realFlags := `{"flags":["--kiosk"]}`
+func TestChromiumConfigureModeFor(t *testing.T) {
+	stringPtr := func(value string) *string { return &value }
 
-	st := &chromiumConfigureState{chromiumFlagsJSON: &emptyFlags}
-	require.Equal(t, 0, cfgActionables(st))
-	require.False(t, chromiumNeedsStopCycle(st))
+	tests := []struct {
+		name  string
+		state chromiumConfigureState
+		want  chromiumConfigureMode
+	}{
+		{name: "no restart fields", want: chromiumConfigureModeLive},
+		{name: "display only", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`)}, want: chromiumConfigureModeLive},
+		{name: "start URL only", state: chromiumConfigureState{startURLRaw: stringPtr("https://example.com")}, want: chromiumConfigureModeLive},
+		{name: "empty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{}`)}, want: chromiumConfigureModeLive},
+		{name: "nonempty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{"QuicAllowed":false}`)}, want: chromiumConfigureModeRestart},
+		{name: "invalid policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{bad-json`)}, want: chromiumConfigureModeRestart},
+		{name: "empty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":[]}`)}, want: chromiumConfigureModeLive},
+		{name: "nonempty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":["--kiosk"]}`)}, want: chromiumConfigureModeRestart},
+		{name: "invalid flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{bad-json`)}, want: chromiumConfigureModeRestart},
+		{name: "profile", state: chromiumConfigureState{hasProfile: true}, want: chromiumConfigureModeRestart},
+		{name: "extensions", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, want: chromiumConfigureModeRestart},
+		{name: "display and extension", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`), extItems: []extensionZipItem{{name: "test"}}}, want: chromiumConfigureModeRestart},
+	}
 
-	st = &chromiumConfigureState{chromiumFlagsJSON: &realFlags}
-	require.Equal(t, 1, cfgActionables(st))
-	require.True(t, chromiumNeedsStopCycle(st))
-}
-
-func TestChromiumConfigureActionablePolicies(t *testing.T) {
-	emptyPolicies := `{}`
-	realPolicies := `{"QuicAllowed":false}`
-
-	st := &chromiumConfigureState{chromePoliciesJSON: &emptyPolicies}
-	require.Equal(t, 0, cfgActionables(st))
-	require.False(t, chromiumNeedsStopCycle(st))
-
-	st = &chromiumConfigureState{chromePoliciesJSON: &realPolicies}
-	require.Equal(t, 1, cfgActionables(st))
-	require.True(t, chromiumNeedsStopCycle(st))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, chromiumConfigureModeFor(&tt.state))
+		})
+	}
 }
 
 func TestChromiumStartURLSpec(t *testing.T) {

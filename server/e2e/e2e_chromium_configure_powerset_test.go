@@ -44,6 +44,7 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 
 	matrix := []int{
 		matDisplay,
+		matStartURL,
 		matPolicy | matKioskFlags,
 		matExtension,
 		matDisplay | matPolicy | matKioskFlags | matExtension | matStartURL,
@@ -73,6 +74,9 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 			defer func() { _ = c.Stop(context.WithoutCancel(ctx)) }()
 
 			require.NoError(t, c.WaitReady(ctx))
+			require.NoError(t, c.WaitDevTools(ctx))
+			browserWebSocketBefore, err := fetchBrowserWebSocketURL(ctx, c)
+			require.NoError(t, err)
 
 			var body bytes.Buffer
 			w := multipart.NewWriter(&body)
@@ -89,8 +93,20 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 				"bits=%02x unexpected status=%s body=%s", bits, rsp.Status(), string(rsp.Body))
 			require.NotNil(t, rsp.JSON200, "want ok JSON")
 			require.True(t, rsp.JSON200.Ok)
+
+			browserWebSocketAfter, err := fetchBrowserWebSocketURL(ctx, c)
+			require.NoError(t, err)
+			if chromiumConfigurePowersetRestarts(bits) {
+				require.NotEqual(t, browserWebSocketBefore, browserWebSocketAfter, "restart path must replace the browser WebSocket identity")
+			} else {
+				require.Equal(t, browserWebSocketBefore, browserWebSocketAfter, "live path must preserve the browser WebSocket identity")
+			}
 		})
 	}
+}
+
+func chromiumConfigurePowersetRestarts(bits int) bool {
+	return bits&(matPolicy|matKioskFlags|matExtension) != 0
 }
 
 func chromiumConfigurePowersetLabel(bits int) string {
