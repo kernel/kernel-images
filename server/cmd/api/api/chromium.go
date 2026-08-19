@@ -108,7 +108,7 @@ func (s *ApiService) uploadExtensions(ctx context.Context, mr *multipart.Reader,
 	s.chromiumConfigMu.Lock()
 	defer s.chromiumConfigMu.Unlock()
 
-	requiresRestart, reqMsg, err := s.commitPreparedExtensions(ctx, prepared)
+	requiresRestart, transaction, reqMsg, err := s.commitPreparedExtensions(ctx, prepared)
 	if reqMsg != "" {
 		return badExtensionUpload(reqMsg)
 	}
@@ -119,14 +119,17 @@ func (s *ApiService) uploadExtensions(ctx context.Context, mr *multipart.Reader,
 	restarted := forceRestart || requiresRestart
 	if restarted {
 		if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
-			return internalExtensionUpload(err.Error())
+			return s.rollbackFailedExtensionActivation(ctx, transaction, err)
 		}
 	} else if loadErr := s.loadUnpackedExtensions(ctx, extItems); loadErr != nil {
 		log.Warn("CDP extension load failed, restarting Chromium", "error", loadErr)
 		if restartErr := s.restartChromiumAndWait(ctx, "extension upload fallback"); restartErr != nil {
-			return internalExtensionUpload(fmt.Sprintf("CDP extension load failed (%v), and fallback restart failed: %v", loadErr, restartErr))
+			return s.rollbackFailedExtensionActivation(ctx, transaction, errors.Join(loadErr, restartErr))
 		}
 		restarted = true
+		if verifyErr := s.verifyUnpackedExtensions(ctx, extItems); verifyErr != nil {
+			return s.rollbackFailedExtensionActivation(ctx, transaction, errors.Join(loadErr, verifyErr))
+		}
 	}
 
 	log.Info("extensions ready", "restarted", restarted, "elapsed", time.Since(start).String())
@@ -263,7 +266,8 @@ func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensi
 	if reqMsg != "" || err != nil {
 		return false, reqMsg, err
 	}
-	return s.commitPreparedExtensions(ctx, prepared)
+	requiresRestart, _, reqMsg, err := s.commitPreparedExtensions(ctx, prepared)
+	return requiresRestart, reqMsg, err
 }
 
 // prepareExtensionZipItems performs archive extraction and validation before the global Chromium
@@ -409,54 +413,69 @@ func restoreOptionalFileSnapshot(snapshot optionalFileSnapshot) error {
 	return os.WriteFile(snapshot.path, snapshot.data, snapshot.mode)
 }
 
-func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *preparedExtensionBatch) (requiresRestart bool, reqMsg string, err error) {
+type committedExtensionBatch struct {
+	paths          []string
+	flagsSnapshot  optionalFileSnapshot
+	policySnapshot optionalFileSnapshot
+}
+
+func (batch *committedExtensionBatch) rollback() error {
+	var rollbackErr error
+	for _, path := range batch.paths {
+		if err := os.RemoveAll(path); err != nil {
+			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove extension directory %s: %w", path, err))
+		}
+	}
+	if err := restoreOptionalFileSnapshot(batch.policySnapshot); err != nil {
+		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore chromium policy: %w", err))
+	}
+	if err := restoreOptionalFileSnapshot(batch.flagsSnapshot); err != nil {
+		rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore chromium flags: %w", err))
+	}
+	return rollbackErr
+}
+
+func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *preparedExtensionBatch) (requiresRestart bool, transaction *committedExtensionBatch, reqMsg string, err error) {
 	for _, extension := range batch.extensions {
 		if _, statErr := os.Stat(extension.finalPath); statErr == nil {
-			return false, fmt.Sprintf("extension name already exists: %s", extension.name), nil
+			return false, nil, fmt.Sprintf("extension name already exists: %s", extension.name), nil
 		} else if !os.IsNotExist(statErr) {
-			return false, "", fmt.Errorf("failed to check extension dir: %w", statErr)
+			return false, nil, "", fmt.Errorf("failed to check extension dir: %w", statErr)
 		}
 	}
 
 	flagsSnapshot, err := captureOptionalFileSnapshot(chromiumFlagsPath)
 	if err != nil {
-		return false, "", fmt.Errorf("failed to snapshot chromium flags: %w", err)
+		return false, nil, "", fmt.Errorf("failed to snapshot chromium flags: %w", err)
 	}
 	policySnapshot, err := captureOptionalFileSnapshot(policy.PolicyPath)
 	if err != nil {
-		return false, "", fmt.Errorf("failed to snapshot chromium policy: %w", err)
+		return false, nil, "", fmt.Errorf("failed to snapshot chromium policy: %w", err)
 	}
 
-	committedPaths := make([]string, 0, len(batch.extensions))
+	transaction = &committedExtensionBatch{
+		paths:          make([]string, 0, len(batch.extensions)),
+		flagsSnapshot:  flagsSnapshot,
+		policySnapshot: policySnapshot,
+	}
 	committed := false
 	defer func() {
 		if committed {
 			return
 		}
-		var rollbackErr error
-		for _, path := range committedPaths {
-			if removeErr := os.RemoveAll(path); removeErr != nil {
-				rollbackErr = errors.Join(rollbackErr, fmt.Errorf("remove extension directory %s: %w", path, removeErr))
-			}
-		}
-		if restoreErr := restoreOptionalFileSnapshot(policySnapshot); restoreErr != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore chromium policy: %w", restoreErr))
-		}
-		if restoreErr := restoreOptionalFileSnapshot(flagsSnapshot); restoreErr != nil {
-			rollbackErr = errors.Join(rollbackErr, fmt.Errorf("restore chromium flags: %w", restoreErr))
-		}
-		if rollbackErr != nil {
+		if rollbackErr := transaction.rollback(); rollbackErr != nil {
 			reqMsg = ""
 			err = errors.Join(err, fmt.Errorf("rollback extension installation: %w", rollbackErr))
 		}
+		transaction = nil
 	}()
 
 	registrations := make([]policy.ExtensionRegistration, 0, len(batch.extensions))
 	for _, extension := range batch.extensions {
 		if err := os.Rename(extension.stagingPath, extension.finalPath); err != nil {
-			return false, "", fmt.Errorf("commit extension directory %s: %w", extension.name, err)
+			return false, nil, "", fmt.Errorf("commit extension directory %s: %w", extension.name, err)
 		}
-		committedPaths = append(committedPaths, extension.finalPath)
+		transaction.paths = append(transaction.paths, extension.finalPath)
 		registrations = append(registrations, policy.ExtensionRegistration{
 			Name:                     extension.name,
 			ChromeExtensionID:        extension.chromeExtensionID,
@@ -465,7 +484,7 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 	}
 
 	if err := s.policy.AddExtensions(registrations); err != nil {
-		return false, "", fmt.Errorf("failed to update enterprise policy: %w", err)
+		return false, nil, "", fmt.Errorf("failed to update enterprise policy: %w", err)
 	}
 
 	var newTokens []string
@@ -473,7 +492,7 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 		newTokens = []string{fmt.Sprintf("--load-extension=%s", strings.Join(batch.flagPaths, ","))}
 	}
 	if _, err := s.mergeAndWriteChromiumFlags(ctx, newTokens); err != nil {
-		return false, "", err
+		return false, nil, "", err
 	}
 
 	committed = true
@@ -483,7 +502,7 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 			"chromeExtensionID", extension.chromeExtensionID,
 			"requiresEnterprisePolicy", extension.requiresEnterprisePolicy)
 	}
-	return batch.requiresRestart, "", nil
+	return batch.requiresRestart, transaction, "", nil
 }
 
 func (s *ApiService) loadUnpackedExtensions(ctx context.Context, items []extensionZipItem) error {
@@ -499,6 +518,51 @@ func (s *ApiService) loadUnpackedExtensions(ctx context.Context, items []extensi
 		}
 		return nil
 	})
+}
+
+func (s *ApiService) verifyUnpackedExtensions(ctx context.Context, items []extensionZipItem) error {
+	return s.withCDPClientTimeout(ctx, extensionActivationTimeout, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		wanted := make(map[string]struct{}, len(items))
+		for _, item := range items {
+			wanted[filepath.Join(extensionsBaseDir, item.name)] = struct{}{}
+		}
+
+		ticker := time.NewTicker(200 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			extensions, err := client.GetExtensions(cdpCtx)
+			if err == nil {
+				missing := make(map[string]struct{}, len(wanted))
+				for path := range wanted {
+					missing[path] = struct{}{}
+				}
+				for _, extension := range extensions {
+					if extension.Enabled {
+						delete(missing, filepath.Clean(extension.Path))
+					}
+				}
+				if len(missing) == 0 {
+					return nil
+				}
+			}
+
+			select {
+			case <-cdpCtx.Done():
+				return fmt.Errorf("extensions were not active after restart: %w", cdpCtx.Err())
+			case <-ticker.C:
+			}
+		}
+	})
+}
+
+func (s *ApiService) rollbackFailedExtensionActivation(ctx context.Context, transaction *committedExtensionBatch, activationErr error) *extensionUploadError {
+	rollbackErr := transaction.rollback()
+	restartErr := s.restartChromiumAndWait(ctx, "extension upload rollback")
+	return internalExtensionUpload(errors.Join(
+		fmt.Errorf("extension activation failed: %w", activationErr),
+		rollbackErr,
+		restartErr,
+	).Error())
 }
 
 // mergeAndWriteChromiumFlags reads existing flags, merges them with new flags,

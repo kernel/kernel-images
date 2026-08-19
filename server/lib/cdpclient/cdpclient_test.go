@@ -35,6 +35,9 @@ type fakeCDP struct {
 	loadUnpackedPath    string
 	loadUnpackedID      string
 	failLoadUnpacked    bool
+	getExtensionsCalled bool
+	extensions          []ExtensionInfo
+	failGetExtensions   bool
 	navigateCalled      bool
 	navigateCalls       int
 	navigateURL         string
@@ -122,6 +125,13 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 				cdpErr = &cdpError{Code: -4, Message: "invalid extension"}
 			} else {
 				result = map[string]string{"id": f.loadUnpackedID}
+			}
+		case "Extensions.getExtensions":
+			f.getExtensionsCalled = true
+			if f.failGetExtensions {
+				cdpErr = &cdpError{Code: -5, Message: "extensions unavailable"}
+			} else {
+				result = map[string]any{"extensions": f.extensions}
 			}
 		case "Page.navigate":
 			f.navigateCalled = true
@@ -359,6 +369,42 @@ func TestGetBrowserVersion(t *testing.T) {
 		_, err = client.GetBrowserVersion(ctx)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "Browser.getVersion")
+	})
+}
+
+func TestGetExtensions(t *testing.T) {
+	t.Run("happy path", func(t *testing.T) {
+		want := []ExtensionInfo{{
+			ID:      "abcdefghijklmnopabcdefghijklmnop",
+			Name:    "Test Extension",
+			Version: "1.0",
+			Path:    "/home/kernel/extensions/test",
+			Enabled: true,
+		}}
+		f := &fakeCDP{extensions: want}
+		url := startFakeCDP(t, f)
+
+		client, err := Dial(context.Background(), url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		got, err := client.GetExtensions(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+		assert.True(t, f.getExtensionsCalled)
+	})
+
+	t.Run("CDP error", func(t *testing.T) {
+		f := &fakeCDP{failGetExtensions: true}
+		url := startFakeCDP(t, f)
+
+		client, err := Dial(context.Background(), url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		_, err = client.GetExtensions(context.Background())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "Extensions.getExtensions")
 	})
 }
 

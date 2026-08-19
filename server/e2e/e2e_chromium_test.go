@@ -303,8 +303,58 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		require.NoError(t, err, "title verify failed: %v output=%s", err, string(out))
 	}
 
-	// A manifest that passes server-side JSON validation but is rejected by Chromium forces
-	// the CDP activation failure path. The endpoint falls back to a restart and still succeeds.
+	// Stop Chromium to inject a transient CDP connection failure, then upload a valid
+	// extension. The fallback restart must activate it before returning success.
+	fallbackExtDir := t.TempDir()
+	fallbackManifest := `{
+    "manifest_version": 3,
+    "version": "1.0",
+    "name": "Fallback Test Extension",
+    "content_scripts": [{
+        "matches": ["https://www.sfmoma.org/*"],
+        "js": ["content-script.js"]
+    }]
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(fallbackExtDir, "manifest.json"), []byte(fallbackManifest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fallbackExtDir, "content-script.js"), []byte(`document.title += " -- Fallback extension active";`), 0o600))
+	fallbackExtZip, err := zipDirToBytes(fallbackExtDir)
+	require.NoError(t, err, "zip fallback extension")
+	_, err = execCombinedOutputWithClient(ctx, c, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "stop", "chromium"})
+	require.NoError(t, err, "stop Chromium to inject transient CDP failure")
+	{
+		client, err := c.APIClient()
+		require.NoError(t, err)
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		fw, err := w.CreateFormFile("extensions.zip_file", "fallback-ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(fallbackExtZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "cdp-fallback-testext"))
+		require.NoError(t, w.Close())
+
+		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		require.NoError(t, err, "uploadExtensions fallback request error")
+		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+	}
+	browserWebSocketAfterFallback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after CDP fallback")
+	require.NotEqual(t, browserWebSocketAfter, browserWebSocketAfterFallback, "transient CDP failure did not fall back to restart")
+	{
+		cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "index.ts",
+			"verify-title-contains",
+			"--url", "https://www.sfmoma.org/",
+			"--substr", "Fallback extension active",
+			"--ws-url", c.CDPURL(),
+			"--timeout", "45000",
+		)
+		cmd.Dir = getPlaywrightPath()
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "fallback extension was not active after restart: %v output=%s", err, string(out))
+	}
+
+	// A permanently invalid extension is rejected after fallback verification. Its committed
+	// directory, flag, and policy state must be removed before the endpoint returns 500.
 	invalidExtDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(invalidExtDir, "manifest.json"), []byte(`{
     "manifest_version": 3,
@@ -321,16 +371,18 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		require.NoError(t, err)
 		_, err = io.Copy(fw, bytes.NewReader(invalidExtZip))
 		require.NoError(t, err)
-		require.NoError(t, w.WriteField("extensions.name", "cdp-fallback-testext"))
+		require.NoError(t, w.WriteField("extensions.name", "cdp-invalid-testext"))
 		require.NoError(t, w.Close())
 
 		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
-		require.NoError(t, err, "uploadExtensions fallback request error")
-		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+		require.NoError(t, err, "uploadExtensions invalid-extension request error")
+		require.Equal(t, http.StatusInternalServerError, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 	}
-	browserWebSocketAfterFallback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
-	require.NoError(t, err, "get browser WebSocket URL after CDP fallback")
-	require.NotEqual(t, browserWebSocketAfter, browserWebSocketAfterFallback, "CDP activation failure did not fall back to restart")
+	rollbackCheck := `test ! -e /home/kernel/extensions/cdp-invalid-testext && ! grep -q cdp-invalid-testext /chromium/flags && ! grep -q cdp-invalid-testext /etc/chromium/policies/managed/policy.json`
+	_, err = execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", rollbackCheck})
+	require.NoError(t, err, "invalid extension state was not rolled back")
+	browserWebSocketAfterRollback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after activation rollback")
 
 	// The legacy endpoint retains its unconditional restart behavior.
 	{
@@ -352,7 +404,7 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 
 	browserWebSocketAfterRestart, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
 	require.NoError(t, err, "get browser WebSocket URL after legacy extension upload")
-	require.NotEqual(t, browserWebSocketAfterFallback, browserWebSocketAfterRestart, "legacy endpoint did not restart Chromium")
+	require.NotEqual(t, browserWebSocketAfterRollback, browserWebSocketAfterRestart, "legacy endpoint did not restart Chromium")
 }
 
 func TestScreenshotHeadless(t *testing.T) {
