@@ -58,6 +58,30 @@ func TestChromiumConfigureModeFor(t *testing.T) {
 	}
 }
 
+func TestChromiumConfigureActionables(t *testing.T) {
+	emptyFlags := `{"flags":[]}`
+	realFlags := `{"flags":["--kiosk"]}`
+	emptyPolicies := `{}`
+	realPolicies := `{"QuicAllowed":false}`
+
+	tests := []struct {
+		name  string
+		state chromiumConfigureState
+		want  int
+	}{
+		{name: "empty flags", state: chromiumConfigureState{chromiumFlagsJSON: &emptyFlags}},
+		{name: "nonempty flags", state: chromiumConfigureState{chromiumFlagsJSON: &realFlags}, want: 1},
+		{name: "empty policies", state: chromiumConfigureState{chromePoliciesJSON: &emptyPolicies}},
+		{name: "nonempty policies", state: chromiumConfigureState{chromePoliciesJSON: &realPolicies}, want: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, cfgActionables(&tt.state))
+		})
+	}
+}
+
 func TestChromiumStartURLSpec(t *testing.T) {
 	bareHost := "roblox.com"
 	out, errs := chromiumStartURLSpec(&bareHost)

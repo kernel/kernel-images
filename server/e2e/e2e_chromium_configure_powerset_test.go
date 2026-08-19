@@ -106,6 +106,7 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 }
 
 func chromiumConfigurePowersetRestarts(bits int) bool {
+	// This matrix runs against headless Xvfb, where display-only configure stays live.
 	return bits&(matPolicy|matKioskFlags|matExtension) != 0
 }
 

@@ -81,11 +81,19 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 	defer s.chromiumConfigMu.Unlock()
 
 	var configureResp oapi.ChromiumConfigureResponseObject
+	var stoppedRecordings []stoppedRecordingInfo
 	switch chromiumConfigureModeFor(st) {
 	case chromiumConfigureModeLive:
 		configureResp = s.chromiumConfigureLive(ctx, st)
 	case chromiumConfigureModeRestart:
-		configureResp = s.chromiumConfigureRestart(ctx, st, spec)
+		configureResp, stoppedRecordings = s.chromiumConfigureRestart(ctx, st, spec)
+	default:
+		return cfg500Configure("unhandled configure mode"), nil
+	}
+	if len(stoppedRecordings) > 0 {
+		defer func() {
+			go s.startNewRecordingSegments(context.WithoutCancel(ctx), stoppedRecordings)
+		}()
 	}
 	if configureResp != nil {
 		return configureResp, nil
@@ -133,7 +141,7 @@ func (s *ApiService) chromiumConfigureLive(ctx context.Context, st *chromiumConf
 	return chromiumRunPatchDisplay(ctx, s, displayPlan.body)
 }
 
-func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumConfigureState, spec startURLParsed) (resp oapi.ChromiumConfigureResponseObject) {
+func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumConfigureState, spec startURLParsed) (resp oapi.ChromiumConfigureResponseObject, stoppedRecordings []stoppedRecordingInfo) {
 	chromiumStopped := false
 	restartAfterStop := func() error {
 		if !chromiumStopped {
@@ -146,6 +154,12 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 		return nil
 	}
 	defer func() {
+		// Error paths restart recordings before Chromium recovery. Successful paths
+		// return them so the caller waits until after navigation.
+		if (resp != nil || chromiumStopped) && len(stoppedRecordings) > 0 {
+			go s.startNewRecordingSegments(context.WithoutCancel(ctx), stoppedRecordings)
+			stoppedRecordings = nil
+		}
 		if restartErr := restartAfterStop(); restartErr != nil {
 			if resp != nil {
 				logger.FromContext(ctx).Error("failed to restart chromium after configure error", "error", restartErr)
@@ -157,51 +171,47 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 
 	logger.FromContext(ctx).Info("chromium configure (stop/start path)")
 	if err := s.stopChromium(ctx); err != nil {
-		return cfg500ConfigureStep(chromiumConfigureStepStop, err.Error())
+		return cfg500ConfigureStep(chromiumConfigureStepStop, err.Error()), stoppedRecordings
 	}
 	chromiumStopped = true
 
 	policyOverrides, err := chromiumValidatePolicies(st.chromePoliciesJSON)
 	if err != nil {
-		return cfgResponseFromStepError(chromiumConfigureStepPolicies, err)
+		return cfgResponseFromStepError(chromiumConfigureStepPolicies, err), stoppedRecordings
 	}
 	if err := chromiumApplyPolicies(ctx, s, policyOverrides); err != nil {
-		return cfgResponseFromStepError(chromiumConfigureStepPolicies, err)
+		return cfgResponseFromStepError(chromiumConfigureStepPolicies, err), stoppedRecordings
 	}
 
 	if reqMsgs, ierr := chromiumApplyExtensions(ctx, s, st.extItems); reqMsgs != "" {
-		return cfg400(fmt.Sprintf("%s: %s", chromiumConfigureStepExtensions, reqMsgs))
+		return cfg400(fmt.Sprintf("%s: %s", chromiumConfigureStepExtensions, reqMsgs)), stoppedRecordings
 	} else if ierr != nil {
-		return cfg500ConfigureStep(chromiumConfigureStepExtensions, ierr.Error())
+		return cfg500ConfigureStep(chromiumConfigureStepExtensions, ierr.Error()), stoppedRecordings
 	}
 
 	if st.displayJSON != nil && strings.TrimSpace(*st.displayJSON) != "" {
 		displayPlan, displayResp := chromiumPrepareDisplay(ctx, s, st.displayJSON)
 		if displayResp != nil {
-			return displayResp
+			return displayResp, stoppedRecordings
 		}
 		if displayPlan != nil {
 			stopped, stopErr := s.stopActiveRecordings(ctx)
 			if stopErr != nil {
-				return cfg500ConfigureStep(chromiumConfigureStepDisplay, fmt.Sprintf("failed to stop recordings: %v", stopErr))
+				return cfg500ConfigureStep(chromiumConfigureStepDisplay, fmt.Sprintf("failed to stop recordings: %v", stopErr)), stoppedRecordings
 			}
-			if len(stopped) > 0 {
-				defer func() {
-					go s.startNewRecordingSegments(context.WithoutCancel(ctx), stopped)
-				}()
-			}
+			stoppedRecordings = stopped
 			if rr := chromiumDisplayApplyWhileStopped(ctx, s, displayPlan); rr != nil {
-				return rr
+				return rr, stoppedRecordings
 			}
 		}
 	}
 
 	flagsPlan, err := chromiumValidateFlags(st.chromiumFlagsJSON)
 	if err != nil {
-		return cfgResponseFromStepError(chromiumConfigureStepFlags, err)
+		return cfgResponseFromStepError(chromiumConfigureStepFlags, err), stoppedRecordings
 	}
 	if err := chromiumMergeFlags(ctx, s, flagsPlan); err != nil {
-		return cfgResponseFromStepError(chromiumConfigureStepFlags, err)
+		return cfgResponseFromStepError(chromiumConfigureStepFlags, err), stoppedRecordings
 	}
 
 	if st.hasProfile {
@@ -210,22 +220,22 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 			defer cleanupProfile()
 		}
 		if err != nil {
-			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
+			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), stoppedRecordings
 		}
 		if spec.needsNav {
 			if err := stripProfileSessionRestore(preparedProfile); err != nil {
-				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
+				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), stoppedRecordings
 			}
 		}
 		if err := chromiumInstallPreparedProfile(preparedProfile); err != nil {
-			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
+			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), stoppedRecordings
 		}
 	}
 
 	if err := restartAfterStop(); err != nil {
-		return cfg500ConfigureStep(chromiumConfigureStepStart, err.Error())
+		return cfg500ConfigureStep(chromiumConfigureStepStart, err.Error()), stoppedRecordings
 	}
-	return nil
+	return nil, stoppedRecordings
 }
 
 type startURLParsed struct {
