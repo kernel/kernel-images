@@ -27,6 +27,7 @@ type configureExtensionPart struct {
 type configureE2ERequest struct {
 	params        *instanceoapi.ChromiumConfigureParams
 	extensions    []configureExtensionPart
+	display       string
 	chromiumFlags string
 	startURL      string
 }
@@ -42,6 +43,9 @@ func chromiumConfigureE2E(t *testing.T, ctx context.Context, client *instanceoap
 		_, err = part.Write(extension.zip)
 		require.NoError(t, err)
 		require.NoError(t, writer.WriteField("extensions.name", extension.name))
+	}
+	if request.display != "" {
+		require.NoError(t, writer.WriteField("display", request.display))
 	}
 	if request.chromiumFlags != "" {
 		require.NoError(t, writer.WriteField("chromium_flags", request.chromiumFlags))
@@ -127,7 +131,9 @@ func testChromiumConfigureExtensionLoadStrategies(t *testing.T, image string, te
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	c := NewTestContainer(t, image)
-	require.NoError(t, c.Start(ctx, ContainerConfig{}))
+	require.NoError(t, c.Start(ctx, ContainerConfig{
+		Env: map[string]string{"WIDTH": "1024", "HEIGHT": "768"},
+	}))
 	defer c.Stop(context.WithoutCancel(ctx))
 	require.NoError(t, c.WaitReady(ctx))
 	require.NoError(t, c.WaitDevTools(ctx))
@@ -164,6 +170,24 @@ func testChromiumConfigureExtensionLoadStrategies(t *testing.T, image string, te
 		require.NoError(t, err)
 		require.Equal(t, before, after)
 		requireConfiguredExtensionActive(t, ctx, c, "configure-cdp")
+	})
+
+	t.Run("prefer CDP with display", func(t *testing.T) {
+		before, err := fetchBrowserWebSocketURL(ctx, c)
+		require.NoError(t, err)
+		starts := chromiumConfigureStartCount(t, ctx, c)
+		response := chromiumConfigureE2E(t, ctx, client, configureE2ERequest{
+			params:     preferCDPParams,
+			extensions: []configureExtensionPart{{name: "configure-cdp-display", zip: ordinaryZip}},
+			display:    `{"width":1280,"height":720,"refresh_rate":60,"restart_chromium":false,"require_idle":true}`,
+		})
+		require.Equal(t, http.StatusOK, response.StatusCode(), "%s", response.Body)
+		after, err := fetchBrowserWebSocketURL(ctx, c)
+		require.NoError(t, err)
+		require.Equal(t, before, after)
+		require.Equal(t, starts, chromiumConfigureStartCount(t, ctx, c))
+		requireConfiguredExtensionActive(t, ctx, c, "configure-cdp-display")
+		waitForXRootResolution(t, ctx, c, 1280, 720, 10*time.Second)
 	})
 
 	t.Run("startup field restart", func(t *testing.T) {
