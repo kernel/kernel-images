@@ -212,8 +212,11 @@ func testChromiumConfigureExtensionLoadStrategies(t *testing.T, image string, te
 		require.NoError(t, err)
 		starts := chromiumConfigureStartCount(t, ctx, c)
 		response := chromiumConfigureE2E(t, ctx, client, configureE2ERequest{
-			params:     preferCDPParams,
-			extensions: []configureExtensionPart{{name: "configure-enterprise", zip: enterpriseZip}},
+			params: preferCDPParams,
+			extensions: []configureExtensionPart{
+				{name: "configure-enterprise", zip: enterpriseZip},
+				{name: "configure-enterprise-unpacked", zip: ordinaryZip},
+			},
 		})
 		require.Equal(t, http.StatusOK, response.StatusCode(), "%s", response.Body)
 		after, err := fetchBrowserWebSocketURL(ctx, c)
@@ -222,6 +225,7 @@ func testChromiumConfigureExtensionLoadStrategies(t *testing.T, image string, te
 		require.Equal(t, starts+1, chromiumConfigureStartCount(t, ctx, c))
 		_, err = execCombinedOutputWithClient(ctx, c, "grep", []string{"-q", "configure-enterprise", "/etc/chromium/policies/managed/policy.json"})
 		require.NoError(t, err)
+		requireConfiguredExtensionActive(t, ctx, c, "configure-enterprise-unpacked")
 	})
 
 	t.Run("CDP failure restart", func(t *testing.T) {

@@ -109,7 +109,7 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 	case chromiumConfigureModeRestart:
 		configureResp = s.chromiumConfigureRestart(ctx, st, spec, func() (string, error) {
 			return s.installExtensionZipItems(ctx, st.extItems)
-		})
+		}, nil)
 	case chromiumConfigureModePreferCDPExtensions:
 		configureResp = s.chromiumConfigurePreferCDPExtensions(ctx, st, spec, preparedExtensions)
 	default:
@@ -188,7 +188,12 @@ func (s *ApiService) chromiumConfigurePreferCDPExtensions(ctx context.Context, s
 		return reqMsg, err
 	}
 	if prepared.requiresRestart {
-		return s.chromiumConfigureRestart(ctx, st, spec, commitExtensions)
+		return s.chromiumConfigureRestart(ctx, st, spec, commitExtensions, func() oapi.ChromiumConfigureResponseObject {
+			if err := s.verifyUnpackedExtensions(ctx, prepared.extensions); err != nil {
+				return cfg500ConfigureStep(chromiumConfigureStepExtensions, err.Error())
+			}
+			return nil
+		})
 	}
 
 	// Configure keeps the default restart path's non-transactional install semantics.
@@ -209,18 +214,18 @@ func (s *ApiService) chromiumConfigurePreferCDPExtensions(ctx context.Context, s
 
 	// Extensions are already persisted. The fallback re-launches Chromium with
 	// the merged flags and still applies any pending display change.
-	if resp := s.chromiumConfigureRestart(ctx, st, spec, nil); resp != nil {
-		return resp
-	}
-	if err := s.verifyUnpackedExtensions(ctx, prepared.extensions); err != nil {
-		return cfg500ConfigureStep(chromiumConfigureStepExtensions, errors.Join(loadErr, err).Error())
-	}
-	return nil
+	return s.chromiumConfigureRestart(ctx, st, spec, nil, func() oapi.ChromiumConfigureResponseObject {
+		if err := s.verifyUnpackedExtensions(ctx, prepared.extensions); err != nil {
+			return cfg500ConfigureStep(chromiumConfigureStepExtensions, errors.Join(loadErr, err).Error())
+		}
+		return nil
+	})
 }
 
 type chromiumConfigureExtensionInstaller func() (string, error)
+type chromiumConfigurePostRestartCheck func() oapi.ChromiumConfigureResponseObject
 
-func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumConfigureState, spec startURLParsed, installExtensions chromiumConfigureExtensionInstaller) (resp oapi.ChromiumConfigureResponseObject) {
+func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumConfigureState, spec startURLParsed, installExtensions chromiumConfigureExtensionInstaller, postRestartCheck chromiumConfigurePostRestartCheck) (resp oapi.ChromiumConfigureResponseObject) {
 	var stoppedRecordings []stoppedRecordingInfo
 	chromiumStopped := false
 	restartAfterStop := func() error {
@@ -318,6 +323,11 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 
 	if err := restartAfterStop(); err != nil {
 		return cfg500ConfigureStep(chromiumConfigureStepStart, err.Error())
+	}
+	if postRestartCheck != nil {
+		if resp := postRestartCheck(); resp != nil {
+			return resp
+		}
 	}
 	chromiumConfigureNavigate(ctx, s, spec)
 	if len(stoppedRecordings) > 0 {
