@@ -108,7 +108,7 @@ func (s *ApiService) uploadExtensions(ctx context.Context, mr *multipart.Reader,
 	s.chromiumConfigMu.Lock()
 	defer s.chromiumConfigMu.Unlock()
 
-	requiresRestart, transaction, reqMsg, err := s.commitPreparedExtensions(ctx, prepared)
+	transaction, reqMsg, err := s.commitPreparedExtensions(ctx, prepared)
 	if reqMsg != "" {
 		return badExtensionUpload(reqMsg)
 	}
@@ -116,7 +116,7 @@ func (s *ApiService) uploadExtensions(ctx context.Context, mr *multipart.Reader,
 		return internalExtensionUpload(err.Error())
 	}
 
-	restarted := forceRestart || requiresRestart
+	restarted := forceRestart || prepared.requiresRestart
 	var loadErr error
 	if restarted {
 		if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
@@ -259,22 +259,25 @@ func (batch *preparedExtensionBatch) cleanup() {
 	}
 }
 
-// applyExtensionZipItems installs name+zipTemp extension pairs and persists their startup
-// configuration. The boolean result reports whether enterprise policy requires a restart.
-func (s *ApiService) applyExtensionZipItems(ctx context.Context, items []extensionZipItem) (bool, string, error) {
+// installExtensionZipItems extracts, validates, and persists extension archives.
+// The caller must hold chromiumConfigMu while it commits the prepared batch.
+func (s *ApiService) installExtensionZipItems(ctx context.Context, items []extensionZipItem) (string, error) {
+	if len(items) == 0 {
+		return "", nil
+	}
 	prepared, reqMsg, err := s.prepareExtensionZipItems(ctx, items)
 	if prepared != nil {
 		defer prepared.cleanup()
 	}
 	if reqMsg != "" || err != nil {
-		return false, reqMsg, err
+		return reqMsg, err
 	}
-	requiresRestart, _, reqMsg, err := s.commitPreparedExtensions(ctx, prepared)
-	return requiresRestart, reqMsg, err
+	_, reqMsg, err = s.commitPreparedExtensions(ctx, prepared)
+	return reqMsg, err
 }
 
-// prepareExtensionZipItems performs archive extraction and validation before the global Chromium
-// configuration lock is acquired. commitPreparedExtensions rechecks destination names under lock.
+// prepareExtensionZipItems extracts and validates archives into staging paths.
+// commitPreparedExtensions rechecks destination names while the caller holds the config lock.
 func (s *ApiService) prepareExtensionZipItems(ctx context.Context, items []extensionZipItem) (*preparedExtensionBatch, string, error) {
 	log := logger.FromContext(ctx)
 	if err := os.MkdirAll(extensionsBaseDir, 0o755); err != nil {
@@ -438,22 +441,25 @@ func (batch *committedExtensionBatch) rollback() error {
 	return rollbackErr
 }
 
-func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *preparedExtensionBatch) (requiresRestart bool, transaction *committedExtensionBatch, reqMsg string, err error) {
+// commitPreparedExtensions moves a prepared batch into place and updates policy and
+// flags, rolling back partial commit failures. Callers may retain the returned
+// transaction to roll back a later activation failure.
+func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *preparedExtensionBatch) (transaction *committedExtensionBatch, reqMsg string, err error) {
 	for _, extension := range batch.extensions {
 		if _, statErr := os.Stat(extension.finalPath); statErr == nil {
-			return false, nil, fmt.Sprintf("extension name already exists: %s", extension.name), nil
+			return nil, fmt.Sprintf("extension name already exists: %s", extension.name), nil
 		} else if !os.IsNotExist(statErr) {
-			return false, nil, "", fmt.Errorf("failed to check extension dir: %w", statErr)
+			return nil, "", fmt.Errorf("failed to check extension dir: %w", statErr)
 		}
 	}
 
 	flagsSnapshot, err := captureOptionalFileSnapshot(chromiumFlagsPath)
 	if err != nil {
-		return false, nil, "", fmt.Errorf("failed to snapshot chromium flags: %w", err)
+		return nil, "", fmt.Errorf("failed to snapshot chromium flags: %w", err)
 	}
 	policySnapshot, err := captureOptionalFileSnapshot(policy.PolicyPath)
 	if err != nil {
-		return false, nil, "", fmt.Errorf("failed to snapshot chromium policy: %w", err)
+		return nil, "", fmt.Errorf("failed to snapshot chromium policy: %w", err)
 	}
 
 	transaction = &committedExtensionBatch{
@@ -477,7 +483,7 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 	registrations := make([]policy.ExtensionRegistration, 0, len(batch.extensions))
 	for _, extension := range batch.extensions {
 		if err := os.Rename(extension.stagingPath, extension.finalPath); err != nil {
-			return false, nil, "", fmt.Errorf("commit extension directory %s: %w", extension.name, err)
+			return nil, "", fmt.Errorf("commit extension directory %s: %w", extension.name, err)
 		}
 		transaction.paths = append(transaction.paths, extension.finalPath)
 		registrations = append(registrations, policy.ExtensionRegistration{
@@ -488,7 +494,7 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 	}
 
 	if err := s.policy.AddExtensions(registrations); err != nil {
-		return false, nil, "", fmt.Errorf("failed to update enterprise policy: %w", err)
+		return nil, "", fmt.Errorf("failed to update enterprise policy: %w", err)
 	}
 
 	var newTokens []string
@@ -496,7 +502,7 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 		newTokens = []string{fmt.Sprintf("--load-extension=%s", strings.Join(batch.flagPaths, ","))}
 	}
 	if _, err := s.mergeAndWriteChromiumFlags(ctx, newTokens); err != nil {
-		return false, nil, "", err
+		return nil, "", err
 	}
 
 	committed = true
@@ -506,7 +512,7 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 			"chromeExtensionID", extension.chromeExtensionID,
 			"requiresEnterprisePolicy", extension.requiresEnterprisePolicy)
 	}
-	return batch.requiresRestart, transaction, "", nil
+	return transaction, "", nil
 }
 
 func (s *ApiService) loadUnpackedExtensions(ctx context.Context, extensions []preparedExtension) error {

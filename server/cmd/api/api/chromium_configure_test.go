@@ -50,8 +50,8 @@ func TestChromiumConfigureModeFor(t *testing.T) {
 		{name: "invalid flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{bad-json`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
 		{name: "profile", state: chromiumConfigureState{hasProfile: true}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
 		{name: "extensions default restart", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.Restart, want: chromiumConfigureModeRestart},
-		{name: "extensions prefer CDP", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModeCandidateCDPExtensions},
-		{name: "display and extensions prefer CDP", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`), extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModeCandidateCDPExtensions},
+		{name: "extensions prefer CDP", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModePreferCDPExtensions},
+		{name: "display and extensions prefer CDP", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`), extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModePreferCDPExtensions},
 	}
 
 	for _, tt := range tests {
