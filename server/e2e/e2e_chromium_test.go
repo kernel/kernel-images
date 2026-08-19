@@ -387,7 +387,7 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		require.NoError(t, err, "uploadExtensions mixed-batch request error")
 		require.Equal(t, http.StatusInternalServerError, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 	}
-	rollbackCheck := `test ! -e /home/kernel/extensions/mixed-enterprise-testext && ! -e /home/kernel/extensions/mixed-invalid-testext && ! grep -q mixed-invalid-testext /chromium/flags && ! grep -q mixed-enterprise-testext /etc/chromium/policies/managed/policy.json`
+	rollbackCheck := `test ! -e /home/kernel/extensions/mixed-enterprise-testext && test ! -e /home/kernel/extensions/mixed-invalid-testext && ! grep -q mixed-invalid-testext /chromium/flags && ! grep -q mixed-enterprise-testext /etc/chromium/policies/managed/policy.json`
 	_, err = execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", rollbackCheck})
 	require.NoError(t, err, "mixed extension state was not rolled back")
 	browserWebSocketAfterRollback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
