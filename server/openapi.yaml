@@ -5620,7 +5620,7 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
-    BrowserCaptchaType:
+    BrowserCaptchaSolveResultEventDataCaptchaType:
       type: string
       description: >
         Captcha kind reported by the solver. Provider-specific task names are
@@ -5635,6 +5635,8 @@ components:
         - geetest
         - press_and_hold
         - other
+    BrowserCaptchaType:
+      $ref: "#/components/schemas/BrowserCaptchaSolveResultEventDataCaptchaType"
     BrowserCaptchaChallengeID:
       type: string
       description: >
@@ -5677,7 +5679,7 @@ components:
     BrowserCaptchaSolveStartedEvent:
       type: object
       description: A captcha solver accepted a task.
-      required: [ts, type, category, source]
+      required: [ts, type, category, source, data]
       properties:
         ts:
           type: integer
@@ -5763,7 +5765,7 @@ components:
       type: object
       description: Per-challenge payload for `captcha_challenge_result` events.
       additionalProperties: false
-      required: [captcha_type, status, challenge_id]
+      required: [captcha_type, status, challenge_id, duration_ms]
       properties:
         captcha_type:
           $ref: "#/components/schemas/BrowserCaptchaType"
@@ -5773,16 +5775,27 @@ components:
             Terminal outcome of the visible challenge. `solved`: the page
             observed the challenge clear after a solver attempt. For token
             captchas this means a response token was present; for
-            press-and-hold it means the challenge page navigated away.
-            `abandoned`: the challenge ended without a solved signal, for
-            example because the widget was dismissed or the solver gave up.
+            press-and-hold it means the challenge page navigated away. `failure`:
+            the producer stopped after an explicit terminal solver failure or
+            exhausted its attempts while the challenge remained. `timeout`:
+            the producer's challenge-level wait budget expired while the
+            challenge remained. `abandoned`: observation ended without a
+            solved signal or an explicit terminal solver outcome, for example
+            because the widget was dismissed or the page unloaded.
 
             `solved` describes the challenge, not the flow around it. A site
             can still reject a valid token, and tokens expire, so this is not
             proof that whatever the challenge was guarding succeeded.
           enum:
             - solved
+            - failure
+            - timeout
             - abandoned
+          x-enum-varnames:
+            - ChallengeSolved
+            - ChallengeFailure
+            - ChallengeTimeout
+            - ChallengeAbandoned
         challenge_id:
           $ref: "#/components/schemas/BrowserCaptchaChallengeID"
         duration_ms:
@@ -5804,7 +5817,7 @@ components:
         determine the overall challenge outcome. `captcha_solve_started` and
         `captcha_solve_result` describe individual solver tasks and may occur
         multiple times within one challenge.
-      required: [ts, type, category, source]
+      required: [ts, type, category, source, data]
       properties:
         ts:
           type: integer
