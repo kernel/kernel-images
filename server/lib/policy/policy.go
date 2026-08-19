@@ -191,47 +191,55 @@ func (p *Policy) ReadPolicy() (*Policy, error) {
 	return readFromDisk()
 }
 
-// AddExtension adds or updates an extension in the policy.
-// extensionName is the user-provided name used for the directory and URL paths.
-// chromeExtensionID is the actual Chrome extension ID (from update.xml appid) used in policy entries.
-// extensionPath is the full path to the unpacked extension directory.
-func (p *Policy) AddExtension(extensionName, chromeExtensionID, extensionPath string, requiresEnterprisePolicy bool) error {
+// ExtensionRegistration describes one extension policy entry.
+type ExtensionRegistration struct {
+	Name                     string
+	ChromeExtensionID        string
+	RequiresEnterprisePolicy bool
+}
+
+// AddExtension adds or updates one extension in the policy.
+func (p *Policy) AddExtension(extensionName, chromeExtensionID, _ string, requiresEnterprisePolicy bool) error {
+	return p.AddExtensions([]ExtensionRegistration{{
+		Name:                     extensionName,
+		ChromeExtensionID:        chromeExtensionID,
+		RequiresEnterprisePolicy: requiresEnterprisePolicy,
+	}})
+}
+
+// AddExtensions applies a batch in one read-modify-write cycle.
+func (p *Policy) AddExtensions(extensions []ExtensionRegistration) error {
 	return p.Modify(func(current *Policy) error {
-		if _, exists := current.ExtensionSettings["*"]; !exists {
-			current.ExtensionSettings["*"] = ExtensionSetting{
-				AllowedTypes:   []string{"extension"},
-				InstallSources: []string{"*"},
-			}
-		}
+		addExtensionRegistrations(current, extensions)
+		return nil
+	})
+}
 
+func addExtensionRegistrations(current *Policy, extensions []ExtensionRegistration) {
+	if _, exists := current.ExtensionSettings["*"]; !exists {
+		current.ExtensionSettings["*"] = ExtensionSetting{
+			AllowedTypes:   []string{"extension"},
+			InstallSources: []string{"*"},
+		}
+	}
+
+	for _, extension := range extensions {
 		setting := ExtensionSetting{
-			UpdateUrl: fmt.Sprintf("http://127.0.0.1:10001/extensions/%s/update.xml", extensionName),
+			UpdateUrl: fmt.Sprintf("http://127.0.0.1:10001/extensions/%s/update.xml", extension.Name),
 		}
-
-		if requiresEnterprisePolicy {
-			// Chrome requires the extension to be in ExtensionInstallForcelist.
-			// Format: "extension_id;update_url" per https://chromeenterprise.google/intl/en_ca/policies/#ExtensionInstallForcelist
+		if extension.RequiresEnterprisePolicy {
 			setting.InstallationMode = "force_installed"
-
-			forcelistEntry := fmt.Sprintf("%s;%s", chromeExtensionID, setting.UpdateUrl)
-
-			if current.ExtensionInstallForcelist == nil {
-				current.ExtensionInstallForcelist = []string{}
-			}
-
-			extensionIDPrefix := chromeExtensionID + ";"
+			forcelistEntry := fmt.Sprintf("%s;%s", extension.ChromeExtensionID, setting.UpdateUrl)
+			extensionIDPrefix := extension.ChromeExtensionID + ";"
 			current.ExtensionInstallForcelist = slices.DeleteFunc(current.ExtensionInstallForcelist, func(entry string) bool {
 				return strings.HasPrefix(entry, extensionIDPrefix)
 			})
 			current.ExtensionInstallForcelist = append(current.ExtensionInstallForcelist, forcelistEntry)
-
-			current.ExtensionSettings[chromeExtensionID] = setting
+			current.ExtensionSettings[extension.ChromeExtensionID] = setting
 		} else {
-			current.ExtensionSettings[extensionName] = setting
+			current.ExtensionSettings[extension.Name] = setting
 		}
-
-		return nil
-	})
+	}
 }
 
 // GenerateExtensionID returns a stable identifier for the extension policy.

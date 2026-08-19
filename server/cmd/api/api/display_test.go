@@ -571,26 +571,20 @@ func TestAdjustParamsForRemainingBudget(t *testing.T) {
 	})
 }
 
-func TestPatchDisplayLockedDoesNotRelockChromiumConfig(t *testing.T) {
+func TestChromiumRunPatchDisplayDoesNotRelockChromiumConfig(t *testing.T) {
 	s := &ApiService{}
 	s.chromiumConfigMu.Lock()
 	defer s.chromiumConfigMu.Unlock()
 
-	type result struct {
-		resp oapi.PatchDisplayResponseObject
-		err  error
-	}
-	done := make(chan result, 1)
+	done := make(chan oapi.ChromiumConfigureResponseObject, 1)
 	go func() {
-		resp, err := s.patchDisplayLocked(context.Background(), oapi.PatchDisplayRequestObject{})
-		done <- result{resp: resp, err: err}
+		done <- chromiumRunPatchDisplay(context.Background(), s, nil)
 	}()
 
 	select {
-	case got := <-done:
-		require.NoError(t, got.err)
-		require.IsType(t, oapi.PatchDisplay400JSONResponse{}, got.resp)
+	case response := <-done:
+		require.IsType(t, oapi.ChromiumConfigure400JSONResponse{}, response)
 	case <-time.After(time.Second):
-		t.Fatal("patchDisplayLocked tried to reacquire chromiumConfigMu")
+		t.Fatal("chromiumRunPatchDisplay tried to reacquire chromiumConfigMu")
 	}
 }

@@ -303,6 +303,35 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		require.NoError(t, err, "title verify failed: %v output=%s", err, string(out))
 	}
 
+	// A manifest that passes server-side JSON validation but is rejected by Chromium forces
+	// the CDP activation failure path. The endpoint falls back to a restart and still succeeds.
+	invalidExtDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(invalidExtDir, "manifest.json"), []byte(`{
+    "manifest_version": 3,
+    "name": "Missing Version Extension"
+}`), 0o600))
+	invalidExtZip, err := zipDirToBytes(invalidExtDir)
+	require.NoError(t, err, "zip invalid extension")
+	{
+		client, err := c.APIClient()
+		require.NoError(t, err)
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		fw, err := w.CreateFormFile("extensions.zip_file", "invalid-ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(invalidExtZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "cdp-fallback-testext"))
+		require.NoError(t, w.Close())
+
+		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		require.NoError(t, err, "uploadExtensions fallback request error")
+		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+	}
+	browserWebSocketAfterFallback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after CDP fallback")
+	require.NotEqual(t, browserWebSocketAfter, browserWebSocketAfterFallback, "CDP activation failure did not fall back to restart")
+
 	// The legacy endpoint retains its unconditional restart behavior.
 	{
 		client, err := c.APIClient()
@@ -323,7 +352,7 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 
 	browserWebSocketAfterRestart, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
 	require.NoError(t, err, "get browser WebSocket URL after legacy extension upload")
-	require.NotEqual(t, browserWebSocketAfter, browserWebSocketAfterRestart, "legacy endpoint did not restart Chromium")
+	require.NotEqual(t, browserWebSocketAfterFallback, browserWebSocketAfterRestart, "legacy endpoint did not restart Chromium")
 }
 
 func TestScreenshotHeadless(t *testing.T) {

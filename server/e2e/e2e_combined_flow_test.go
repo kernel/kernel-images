@@ -178,9 +178,9 @@ func uploadExtension(t *testing.T, ctx context.Context, client *instanceoapi.Cli
 	require.NoError(t, err)
 
 	start := time.Now()
-	rsp, err := client.UploadExtensionsAndRestartWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+	rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
 	elapsed := time.Since(start)
-	require.NoError(t, err, "uploadExtensionsAndRestart request error")
+	require.NoError(t, err, "uploadExtensions request error")
 	require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 	t.Logf("[extension] uploaded in %s", elapsed)
 }

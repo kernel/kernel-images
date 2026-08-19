@@ -1154,24 +1154,7 @@ paths:
         content:
           multipart/form-data:
             schema:
-              type: object
-              properties:
-                extensions:
-                  type: array
-                  description: List of extensions to upload and activate
-                  items:
-                    type: object
-                    properties:
-                      zip_file:
-                        type: string
-                        format: binary
-                        description: Zip archive containing an unpacked Chromium extension (must include manifest.json)
-                      name:
-                        type: string
-                        description: Folder name to place the extension under /home/kernel/extensions/<name>
-                        pattern: "^[A-Za-z0-9._-]{1,255}$"
-                    required: [zip_file, name]
-              required: [extensions]
+              $ref: "#/components/schemas/ExtensionUploadMultipart"
       responses:
         "201":
           description: Extensions uploaded, Chromium restarted, and DevTools is ready
@@ -1197,24 +1180,7 @@ paths:
         content:
           multipart/form-data:
             schema:
-              type: object
-              properties:
-                extensions:
-                  type: array
-                  description: List of extensions to upload and activate
-                  items:
-                    type: object
-                    properties:
-                      zip_file:
-                        type: string
-                        format: binary
-                        description: Zip archive containing an unpacked Chromium extension (must include manifest.json)
-                      name:
-                        type: string
-                        description: Folder name to place the extension under /home/kernel/extensions/<name>
-                        pattern: "^[A-Za-z0-9._-]{1,255}$"
-                    required: [zip_file, name]
-              required: [extensions]
+              $ref: "#/components/schemas/ExtensionUploadMultipart"
       responses:
         "201":
           description: Extensions uploaded and activated
@@ -1593,6 +1559,28 @@ paths:
           $ref: "#/components/responses/InternalError"
 components:
   schemas:
+    ExtensionUploadMultipart:
+      type: object
+      required: [extensions]
+      properties:
+        extensions:
+          type: array
+          description: List of extensions to upload and activate
+          minItems: 1
+          maxItems: 20
+          items:
+            type: object
+            required: [zip_file, name]
+            properties:
+              zip_file:
+                type: string
+                format: binary
+                description: Zip archive containing an unpacked Chromium extension (maximum 50 MiB; must include manifest.json)
+              name:
+                type: string
+                description: Folder name to place the extension under /home/kernel/extensions/<name>
+                pattern: "^[A-Za-z0-9._-]{1,255}$"
+
     TelemetryEvent:
       type: object
       description: >
