@@ -250,7 +250,7 @@ func testChromiumConfigureExtensionLoadStrategies(t *testing.T, image string, te
 		invalid := instanceoapi.ChromiumConfigureParamsExtensionLoadStrategy("invalid")
 		response := chromiumConfigureE2E(t, ctx, client, configureE2ERequest{
 			params:   &instanceoapi.ChromiumConfigureParams{ExtensionLoadStrategy: &invalid},
-			startURL: "https://example.com",
+			startURL: "data:text/html,<title>invalid-strategy</title>",
 		})
 		require.Equal(t, http.StatusBadRequest, response.StatusCode(), "%s", response.Body)
 	})
