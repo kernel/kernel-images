@@ -353,8 +353,12 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		require.NoError(t, err, "fallback extension was not active after restart: %v output=%s", err, string(out))
 	}
 
-	// A permanently invalid extension is rejected after fallback verification. Its committed
-	// directory, flag, and policy state must be removed before the endpoint returns 500.
+	// A mixed batch with an enterprise extension and a permanently invalid unpacked extension
+	// must verify the unpacked item after the policy-required restart, then roll back both items.
+	enterpriseExtDir, err := filepath.Abs("test-extension-enterprise")
+	require.NoError(t, err, "resolve enterprise extension fixture")
+	enterpriseExtZip, err := zipDirToBytes(enterpriseExtDir)
+	require.NoError(t, err, "zip enterprise extension")
 	invalidExtDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(invalidExtDir, "manifest.json"), []byte(`{
     "manifest_version": 3,
@@ -367,20 +371,25 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		require.NoError(t, err)
 		var body bytes.Buffer
 		w := multipart.NewWriter(&body)
-		fw, err := w.CreateFormFile("extensions.zip_file", "invalid-ext.zip")
+		fw, err := w.CreateFormFile("extensions.zip_file", "enterprise-ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(enterpriseExtZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "mixed-enterprise-testext"))
+		fw, err = w.CreateFormFile("extensions.zip_file", "invalid-ext.zip")
 		require.NoError(t, err)
 		_, err = io.Copy(fw, bytes.NewReader(invalidExtZip))
 		require.NoError(t, err)
-		require.NoError(t, w.WriteField("extensions.name", "cdp-invalid-testext"))
+		require.NoError(t, w.WriteField("extensions.name", "mixed-invalid-testext"))
 		require.NoError(t, w.Close())
 
 		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
-		require.NoError(t, err, "uploadExtensions invalid-extension request error")
+		require.NoError(t, err, "uploadExtensions mixed-batch request error")
 		require.Equal(t, http.StatusInternalServerError, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 	}
-	rollbackCheck := `test ! -e /home/kernel/extensions/cdp-invalid-testext && ! grep -q cdp-invalid-testext /chromium/flags && ! grep -q cdp-invalid-testext /etc/chromium/policies/managed/policy.json`
+	rollbackCheck := `test ! -e /home/kernel/extensions/mixed-enterprise-testext && ! -e /home/kernel/extensions/mixed-invalid-testext && ! grep -q mixed-invalid-testext /chromium/flags && ! grep -q mixed-enterprise-testext /etc/chromium/policies/managed/policy.json`
 	_, err = execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", rollbackCheck})
-	require.NoError(t, err, "invalid extension state was not rolled back")
+	require.NoError(t, err, "mixed extension state was not rolled back")
 	browserWebSocketAfterRollback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
 	require.NoError(t, err, "get browser WebSocket URL after activation rollback")
 

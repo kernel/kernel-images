@@ -117,17 +117,20 @@ func (s *ApiService) uploadExtensions(ctx context.Context, mr *multipart.Reader,
 	}
 
 	restarted := forceRestart || requiresRestart
+	var loadErr error
 	if restarted {
 		if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
 			return s.rollbackFailedExtensionActivation(ctx, transaction, err)
 		}
-	} else if loadErr := s.loadUnpackedExtensions(ctx, extItems); loadErr != nil {
+	} else if loadErr = s.loadUnpackedExtensions(ctx, prepared.extensions); loadErr != nil {
 		log.Warn("CDP extension load failed, restarting Chromium", "error", loadErr)
 		if restartErr := s.restartChromiumAndWait(ctx, "extension upload fallback"); restartErr != nil {
 			return s.rollbackFailedExtensionActivation(ctx, transaction, errors.Join(loadErr, restartErr))
 		}
 		restarted = true
-		if verifyErr := s.verifyUnpackedExtensions(ctx, extItems); verifyErr != nil {
+	}
+	if restarted && !forceRestart {
+		if verifyErr := s.verifyUnpackedExtensions(ctx, prepared.extensions); verifyErr != nil {
 			return s.rollbackFailedExtensionActivation(ctx, transaction, errors.Join(loadErr, verifyErr))
 		}
 	}
@@ -506,28 +509,35 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 	return batch.requiresRestart, transaction, "", nil
 }
 
-func (s *ApiService) loadUnpackedExtensions(ctx context.Context, items []extensionZipItem) error {
+func (s *ApiService) loadUnpackedExtensions(ctx context.Context, extensions []preparedExtension) error {
 	log := logger.FromContext(ctx)
 	return s.withCDPClientTimeout(ctx, extensionActivationTimeout, func(cdpCtx context.Context, client *cdpclient.Client) error {
-		for _, item := range items {
-			path := filepath.Join(extensionsBaseDir, item.name)
-			id, err := client.LoadUnpackedExtension(cdpCtx, path)
-			if err != nil {
-				return fmt.Errorf("failed to load extension %s: %w", item.name, err)
+		for _, extension := range extensions {
+			if extension.requiresEnterprisePolicy {
+				continue
 			}
-			log.Info("loaded unpacked extension over CDP", "name", item.name, "id", id)
+			id, err := client.LoadUnpackedExtension(cdpCtx, extension.finalPath)
+			if err != nil {
+				return fmt.Errorf("failed to load extension %s: %w", extension.name, err)
+			}
+			log.Info("loaded unpacked extension over CDP", "name", extension.name, "id", id)
 		}
 		return nil
 	})
 }
 
-func (s *ApiService) verifyUnpackedExtensions(ctx context.Context, items []extensionZipItem) error {
-	return s.withCDPClientTimeout(ctx, extensionActivationTimeout, func(cdpCtx context.Context, client *cdpclient.Client) error {
-		wanted := make(map[string]struct{}, len(items))
-		for _, item := range items {
-			wanted[filepath.Join(extensionsBaseDir, item.name)] = struct{}{}
+func (s *ApiService) verifyUnpackedExtensions(ctx context.Context, extensions []preparedExtension) error {
+	wanted := make(map[string]struct{}, len(extensions))
+	for _, extension := range extensions {
+		if !extension.requiresEnterprisePolicy {
+			wanted[extension.finalPath] = struct{}{}
 		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
 
+	return s.withCDPClientTimeout(ctx, extensionActivationTimeout, func(cdpCtx context.Context, client *cdpclient.Client) error {
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
 		for {
