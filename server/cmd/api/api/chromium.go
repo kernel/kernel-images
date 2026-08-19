@@ -458,12 +458,13 @@ func (s *ApiService) commitPreparedExtensions(ctx context.Context, batch *prepar
 		flagsSnapshot:  flagsSnapshot,
 		policySnapshot: policySnapshot,
 	}
+	rollbackTransaction := transaction
 	committed := false
 	defer func() {
 		if committed {
 			return
 		}
-		if rollbackErr := transaction.rollback(); rollbackErr != nil {
+		if rollbackErr := rollbackTransaction.rollback(); rollbackErr != nil {
 			reqMsg = ""
 			err = errors.Join(err, fmt.Errorf("rollback extension installation: %w", rollbackErr))
 		}
