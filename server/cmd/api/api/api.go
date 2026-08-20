@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/display"
@@ -148,6 +149,20 @@ func New(
 	displayConfig, err := display.FromEnv()
 	if err != nil {
 		return nil, fmt.Errorf("display backend configuration: %w", err)
+	}
+	if displayConfig.Backend == display.BackendWayland {
+		mon.SetScreenshotFunc(func(ctx context.Context, _ int) ([]byte, error) {
+			upstream := upstreamMgr.Current()
+			if upstream == "" {
+				return nil, fmt.Errorf("devtools upstream not available")
+			}
+			client, err := cdpclient.Dial(ctx, upstream)
+			if err != nil {
+				return nil, err
+			}
+			defer client.Close()
+			return client.CaptureScreenshot(ctx, nil)
+		})
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 

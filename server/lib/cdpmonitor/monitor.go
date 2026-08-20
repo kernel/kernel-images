@@ -105,6 +105,12 @@ func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log 
 	return m
 }
 
+// SetScreenshotFunc replaces the platform screenshot implementation. This is
+// used by native Wayland, where an X11 grab cannot capture the compositor.
+func (m *Monitor) SetScreenshotFunc(fn func(context.Context, int) ([]byte, error)) {
+	m.screenshotFn = fn
+}
+
 // IsRunning reports whether the monitor is actively capturing.
 func (m *Monitor) IsRunning() bool {
 	return m.running.Load()
