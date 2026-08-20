@@ -70,9 +70,6 @@ func main() {
 		if prof == profileHeadless {
 			fatalf("Wayland display backend requires the headful image")
 		}
-		if os.Getenv("ENABLE_WEBRTC") == "true" {
-			fatalf("Wayland display backend does not support ENABLE_WEBRTC yet")
-		}
 		if displayConfig.RuntimeDir == "" {
 			displayConfig.RuntimeDir = "/tmp/runtime-kernel"
 			_ = os.Setenv("XDG_RUNTIME_DIR", displayConfig.RuntimeDir)
@@ -220,7 +217,7 @@ func main() {
 	} else if displayConfig.Backend == display.BackendWayland {
 		xServer = "weston"
 	}
-	webrtc := prof == profileHeadful && displayConfig.Backend == display.BackendX11 && os.Getenv("ENABLE_WEBRTC") == "true"
+	webrtc := prof == profileHeadful && os.Getenv("ENABLE_WEBRTC") == "true"
 
 	// Pre-touch chromium's supervisord log so kernel-images-api's `tail -f`
 	// doesn't bail out and enter its 250ms retry backoff when started in
