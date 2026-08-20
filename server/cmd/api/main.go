@@ -27,8 +27,10 @@ import (
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/display"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -82,6 +84,36 @@ func main() {
 		OutputDir:   &config.OutputDir,
 		AudioSource: &config.AudioSource,
 		PulseServer: &config.PulseServer,
+	}
+	displayConfig, err := display.FromEnv()
+	if err != nil {
+		slogger.Error("failed to load display backend configuration", "err", err)
+		os.Exit(1)
+	}
+	if displayConfig.Backend == display.BackendWayland {
+		versionURL := fmt.Sprintf("http://127.0.0.1:%d/json/version", config.DevToolsProxyPort)
+		var captureMu sync.Mutex
+		var captureClient *cdpclient.Client
+		defaultParams.CaptureFrame = func(ctx context.Context) ([]byte, error) {
+			captureMu.Lock()
+			defer captureMu.Unlock()
+			if captureClient == nil {
+				devtoolsURL, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+				if err != nil {
+					return nil, err
+				}
+				captureClient, err = cdpclient.Dial(ctx, devtoolsURL)
+				if err != nil {
+					return nil, err
+				}
+			}
+			frame, err := captureClient.CaptureScreenshot(ctx, nil)
+			if err != nil {
+				_ = captureClient.Close()
+				captureClient = nil
+			}
+			return frame, err
+		}
 	}
 	if err := defaultParams.Validate(); err != nil {
 		slogger.Error("invalid default recording parameters", "err", err)

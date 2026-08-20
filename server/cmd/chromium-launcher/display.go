@@ -20,6 +20,7 @@ func chromiumDisplaySetup(config display.Config) (flags, env []string, err error
 		return []string{
 				"--enable-features=UseOzonePlatform",
 				"--ozone-platform=wayland",
+				"--start-fullscreen",
 			}, []string{
 				"WAYLAND_DISPLAY=" + config.WaylandDisplay,
 				"XDG_RUNTIME_DIR=" + config.RuntimeDir,

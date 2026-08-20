@@ -30,6 +30,7 @@ func TestChromiumDisplaySetup(t *testing.T) {
 			wantFlags: []string{
 				"--enable-features=UseOzonePlatform",
 				"--ozone-platform=wayland",
+				"--start-fullscreen",
 			},
 			wantEnv: []string{"WAYLAND_DISPLAY=wayland-2", "XDG_RUNTIME_DIR=/run/user/1000"},
 		},
