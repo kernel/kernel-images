@@ -35,8 +35,18 @@ func validateWaylandPoint(x, y, width, height int) error {
 }
 
 func (s *ApiService) dispatchWaylandMouse(ctx context.Context, eventType string, x, y int, button string, clickCount int) error {
+	return s.dispatchWaylandMouseEvents(ctx, []cdpclient.MouseEvent{{
+		Type:       eventType,
+		X:          float64(x),
+		Y:          float64(y),
+		Button:     button,
+		ClickCount: clickCount,
+	}})
+}
+
+func (s *ApiService) dispatchWaylandMouseEvents(ctx context.Context, events []cdpclient.MouseEvent) error {
 	return s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
-		return client.DispatchMouseEvent(cdpCtx, eventType, float64(x), float64(y), button, clickCount)
+		return client.DispatchMouseEvents(cdpCtx, events)
 	})
 }
 
@@ -82,11 +92,11 @@ func (s *ApiService) doClickMouseWayland(ctx context.Context, body oapi.ClickMou
 	if body.ClickType != nil && *body.ClickType != oapi.Click {
 		return &validationError{msg: "Wayland input currently supports click only"}
 	}
-	if err := s.dispatchWaylandMouse(ctx, "mousePressed", body.X, body.Y, button, clickCount); err != nil {
-		return &executionError{msg: fmt.Sprintf("failed to press Wayland pointer: %v", err)}
-	}
-	if err := s.dispatchWaylandMouse(ctx, "mouseReleased", body.X, body.Y, button, clickCount); err != nil {
-		return &executionError{msg: fmt.Sprintf("failed to release Wayland pointer: %v", err)}
+	if err := s.dispatchWaylandMouseEvents(ctx, []cdpclient.MouseEvent{
+		{Type: "mousePressed", X: float64(body.X), Y: float64(body.Y), Button: button, ClickCount: clickCount},
+		{Type: "mouseReleased", X: float64(body.X), Y: float64(body.Y), Button: button, ClickCount: clickCount},
+	}); err != nil {
+		return &executionError{msg: fmt.Sprintf("failed to click through Wayland: %v", err)}
 	}
 	return nil
 }
@@ -171,18 +181,16 @@ func (s *ApiService) doDragMouseWayland(ctx context.Context, body oapi.DragMouse
 			return &validationError{msg: fmt.Sprintf("unsupported button: %s", *body.Button)}
 		}
 	}
+	events := make([]cdpclient.MouseEvent, 0, len(body.Path)+1)
 	start := body.Path[0]
-	if err := s.dispatchWaylandMouse(ctx, "mousePressed", start[0], start[1], button, 1); err != nil {
-		return &executionError{msg: fmt.Sprintf("failed to press Wayland pointer: %v", err)}
-	}
+	events = append(events, cdpclient.MouseEvent{Type: "mousePressed", X: float64(start[0]), Y: float64(start[1]), Button: button, ClickCount: 1})
 	for _, point := range body.Path[1:] {
-		if err := s.dispatchWaylandMouse(ctx, "mouseMoved", point[0], point[1], "", 0); err != nil {
-			_ = s.dispatchWaylandMouse(context.Background(), "mouseReleased", point[0], point[1], button, 1)
-			return &executionError{msg: fmt.Sprintf("failed during Wayland drag: %v", err)}
-		}
+		events = append(events, cdpclient.MouseEvent{Type: "mouseMoved", X: float64(point[0]), Y: float64(point[1])})
 	}
-	if err := s.dispatchWaylandMouse(ctx, "mouseReleased", body.Path[len(body.Path)-1][0], body.Path[len(body.Path)-1][1], button, 1); err != nil {
-		return &executionError{msg: fmt.Sprintf("failed to release Wayland pointer: %v", err)}
+	end := body.Path[len(body.Path)-1]
+	events = append(events, cdpclient.MouseEvent{Type: "mouseReleased", X: float64(end[0]), Y: float64(end[1]), Button: button, ClickCount: 1})
+	if err := s.dispatchWaylandMouseEvents(ctx, events); err != nil {
+		return &executionError{msg: fmt.Sprintf("failed during Wayland drag: %v", err)}
 	}
 	return nil
 }

@@ -300,25 +300,51 @@ func (c *Client) GetViewportSize(ctx context.Context) (ViewportSize, error) {
 	return size, nil
 }
 
-// DispatchMouseEvent sends a mouse event to the first page target.
-func (c *Client) DispatchMouseEvent(ctx context.Context, eventType string, x, y float64, button string, clickCount int) error {
+// MouseEvent describes one CDP mouse event.
+type MouseEvent struct {
+	Type       string
+	X          float64
+	Y          float64
+	Button     string
+	ClickCount int
+}
+
+// DispatchMouseEvents sends mouse events to the first page target while
+// reusing one attached CDP session for the whole sequence.
+func (c *Client) DispatchMouseEvents(ctx context.Context, events []MouseEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
 	sessionID, detach, err := c.attachFirstPage(ctx)
 	if err != nil {
 		return err
 	}
 	defer detach()
 
-	params := map[string]any{"type": eventType, "x": x, "y": y}
-	if button != "" {
-		params["button"] = button
-	}
-	if clickCount > 0 {
-		params["clickCount"] = clickCount
-	}
-	if _, err := c.send(ctx, "Input.dispatchMouseEvent", params, sessionID); err != nil {
-		return fmt.Errorf("Input.dispatchMouseEvent: %w", err)
+	for _, event := range events {
+		params := map[string]any{"type": event.Type, "x": event.X, "y": event.Y}
+		if event.Button != "" {
+			params["button"] = event.Button
+		}
+		if event.ClickCount > 0 {
+			params["clickCount"] = event.ClickCount
+		}
+		if _, err := c.send(ctx, "Input.dispatchMouseEvent", params, sessionID); err != nil {
+			return fmt.Errorf("Input.dispatchMouseEvent: %w", err)
+		}
 	}
 	return nil
+}
+
+// DispatchMouseEvent sends one mouse event to the first page target.
+func (c *Client) DispatchMouseEvent(ctx context.Context, eventType string, x, y float64, button string, clickCount int) error {
+	return c.DispatchMouseEvents(ctx, []MouseEvent{{
+		Type:       eventType,
+		X:          x,
+		Y:          y,
+		Button:     button,
+		ClickCount: clickCount,
+	}})
 }
 
 // DispatchMouseWheel sends a wheel event to the first page target.
