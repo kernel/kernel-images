@@ -143,3 +143,46 @@ func (s *ApiService) doScrollWayland(ctx context.Context, body oapi.ScrollReques
 		return client.DispatchMouseWheel(cdpCtx, float64(body.X), float64(body.Y), deltaX, deltaY)
 	})
 }
+
+func (s *ApiService) doDragMouseWayland(ctx context.Context, body oapi.DragMouseRequest) error {
+	if len(body.Path) < 2 {
+		return &validationError{msg: "path must contain at least two points"}
+	}
+	width, height, err := s.waylandViewport(ctx)
+	if err != nil {
+		return &executionError{msg: err.Error()}
+	}
+	for _, point := range body.Path {
+		if len(point) != 2 {
+			return &validationError{msg: "path points must be [x,y]"}
+		}
+		if err := validateWaylandPoint(point[0], point[1], width, height); err != nil {
+			return err
+		}
+	}
+	button := "left"
+	if body.Button != nil {
+		button = map[oapi.DragMouseRequestButton]string{
+			oapi.DragMouseRequestButtonLeft:   "left",
+			oapi.DragMouseRequestButtonMiddle: "middle",
+			oapi.DragMouseRequestButtonRight:  "right",
+		}[*body.Button]
+		if button == "" {
+			return &validationError{msg: fmt.Sprintf("unsupported button: %s", *body.Button)}
+		}
+	}
+	start := body.Path[0]
+	if err := s.dispatchWaylandMouse(ctx, "mousePressed", start[0], start[1], button, 1); err != nil {
+		return &executionError{msg: fmt.Sprintf("failed to press Wayland pointer: %v", err)}
+	}
+	for _, point := range body.Path[1:] {
+		if err := s.dispatchWaylandMouse(ctx, "mouseMoved", point[0], point[1], "", 0); err != nil {
+			_ = s.dispatchWaylandMouse(context.Background(), "mouseReleased", point[0], point[1], button, 1)
+			return &executionError{msg: fmt.Sprintf("failed during Wayland drag: %v", err)}
+		}
+	}
+	if err := s.dispatchWaylandMouse(ctx, "mouseReleased", body.Path[len(body.Path)-1][0], body.Path[len(body.Path)-1][1], button, 1); err != nil {
+		return &executionError{msg: fmt.Sprintf("failed to release Wayland pointer: %v", err)}
+	}
+	return nil
+}

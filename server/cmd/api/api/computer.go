@@ -1041,6 +1041,9 @@ func (s *ApiService) Scroll(ctx context.Context, request oapi.ScrollRequestObjec
 }
 
 func (s *ApiService) doDragMouse(ctx context.Context, body oapi.DragMouseRequest) error {
+	if s.usesWayland() {
+		return s.doDragMouseWayland(ctx, body)
+	}
 	log := logger.FromContext(ctx)
 
 	if len(body.Path) < 2 {
