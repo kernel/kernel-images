@@ -65,10 +65,31 @@ func main() {
 	if err != nil {
 		fatalf("display backend configuration: %v", err)
 	}
-	if displayConfig.Backend != display.BackendX11 {
-		fatalf("display backend %q is not implemented in this image", displayConfig.Backend)
-	}
 	prof := detectProfile()
+	if displayConfig.Backend == display.BackendWayland {
+		if prof == profileHeadless {
+			fatalf("Wayland display backend requires the headful image")
+		}
+		if os.Getenv("ENABLE_WEBRTC") == "true" {
+			fatalf("Wayland display backend does not support ENABLE_WEBRTC yet")
+		}
+		if displayConfig.RuntimeDir == "" {
+			displayConfig.RuntimeDir = "/tmp/runtime-kernel"
+			_ = os.Setenv("XDG_RUNTIME_DIR", displayConfig.RuntimeDir)
+		}
+		if err := os.MkdirAll(displayConfig.RuntimeDir, 0o700); err != nil {
+			fatalf("create Wayland runtime directory: %v", err)
+		}
+		if err := os.Chmod(displayConfig.RuntimeDir, 0o700); err != nil {
+			fatalf("secure Wayland runtime directory: %v", err)
+		}
+		// Weston runs as the non-root browser user. The image creates that user
+		// with uid 1000, so the runtime directory must be owned by it before
+		// supervisor starts the compositor.
+		if err := os.Chown(displayConfig.RuntimeDir, 1000, 1000); err != nil {
+			fatalf("assign Wayland runtime directory: %v", err)
+		}
+	}
 	stzManaged := scaleToZeroManaged()
 	logf("starting wrapper (profile=%s display_backend=%s stz=%s)", profileName(prof), displayConfig.Backend, stzMode(stzManaged))
 	forkIdentityWait, err := forkIdentityWaitEnabled()
@@ -128,7 +149,15 @@ func main() {
 	startLogAggregator()
 
 	// Default env that downstream services expect.
-	_ = os.Setenv("DISPLAY", defaultDisplay)
+	if displayConfig.Backend == display.BackendX11 {
+		_ = os.Setenv("DISPLAY", defaultDisplay)
+	} else {
+		_ = os.Unsetenv("DISPLAY")
+		_ = os.Setenv("WAYLAND_DISPLAY", displayConfig.WaylandDisplay)
+	}
+	if displayConfig.RuntimeDir != "" {
+		_ = os.Setenv("XDG_RUNTIME_DIR", displayConfig.RuntimeDir)
+	}
 	if os.Getenv("INTERNAL_PORT") == "" {
 		_ = os.Setenv("INTERNAL_PORT", defaultIntPort)
 	}
@@ -140,9 +169,13 @@ func main() {
 	// which would otherwise spam autolaunch errors).
 	_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+dbusSocket)
 
-	// Stale X locks from prior runs.
-	_ = os.Remove("/tmp/.X1-lock")
-	_ = os.Remove("/tmp/.X11-unix/X1")
+	// Stale X/Wayland sockets from prior runs.
+	if displayConfig.Backend == display.BackendX11 {
+		_ = os.Remove("/tmp/.X1-lock")
+		_ = os.Remove("/tmp/.X11-unix/X1")
+	} else {
+		_ = os.Remove(filepath.Join(displayConfig.RuntimeDir, displayConfig.WaylandDisplay))
+	}
 
 	// supervisord — start in nodaemon mode so we own its lifecycle.
 	// Without -n it forks and the parent exits with code 0, which would
@@ -184,8 +217,10 @@ func main() {
 	xServer := "xorg"
 	if prof == profileHeadless {
 		xServer = "xvfb"
+	} else if displayConfig.Backend == display.BackendWayland {
+		xServer = "weston"
 	}
-	webrtc := prof == profileHeadful && os.Getenv("ENABLE_WEBRTC") == "true"
+	webrtc := prof == profileHeadful && displayConfig.Backend == display.BackendX11 && os.Getenv("ENABLE_WEBRTC") == "true"
 
 	// Pre-touch chromium's supervisord log so kernel-images-api's `tail -f`
 	// doesn't bail out and enter its 250ms retry backoff when started in
@@ -194,8 +229,10 @@ func main() {
 
 	browserStart := time.Now()
 	startAll(xServer, "dbus", "chromedriver", "pulseaudio")
-	waitForX(defaultDisplay, 20*time.Second)
-	if prof == profileHeadful {
+	if displayConfig.Backend == display.BackendX11 {
+		waitForX(defaultDisplay, 20*time.Second)
+	}
+	if prof == profileHeadful && displayConfig.Backend == display.BackendX11 {
 		startAll("mutter")
 	}
 	waitForSocket(pulseSocket, 10*time.Second)

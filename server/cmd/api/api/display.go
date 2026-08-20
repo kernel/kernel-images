@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
+	"github.com/kernel/kernel-images/server/lib/display"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
@@ -30,6 +32,9 @@ func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequ
 }
 
 func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDisplayRequestObject) (oapi.PatchDisplayResponseObject, error) {
+	if s.usesWayland() {
+		return s.patchWaylandDisplay(ctx, req)
+	}
 	log := logger.FromContext(ctx)
 
 	if req.Body == nil {
@@ -196,6 +201,62 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 		Height:      &height,
 		RefreshRate: &refreshRate,
 	}, nil
+}
+
+func (s *ApiService) usesWayland() bool {
+	return s.displayBackend == display.BackendWayland
+}
+
+func (s *ApiService) patchWaylandDisplay(ctx context.Context, req oapi.PatchDisplayRequestObject) (oapi.PatchDisplayResponseObject, error) {
+	if req.Body == nil {
+		return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "missing request body"}}, nil
+	}
+	if req.Body.Width == nil && req.Body.Height == nil {
+		return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "no display parameters to update"}}, nil
+	}
+	if req.Body.Width == nil || req.Body.Height == nil || *req.Body.Width <= 0 || *req.Body.Height <= 0 {
+		return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "Wayland resize requires positive width and height"}}, nil
+	}
+	if err := s.setViewportViaCDP(ctx, *req.Body.Width, *req.Body.Height); err != nil {
+		return oapi.PatchDisplay500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: fmt.Sprintf("failed to resize Wayland viewport: %v", err)}}, nil
+	}
+	refreshRate := 60
+	if req.Body.RefreshRate != nil {
+		refreshRate = int(*req.Body.RefreshRate)
+	}
+	return oapi.PatchDisplay200JSONResponse{
+		Width:       req.Body.Width,
+		Height:      req.Body.Height,
+		RefreshRate: &refreshRate,
+	}, nil
+}
+
+func (s *ApiService) takeWaylandScreenshot(ctx context.Context, body oapi.ScreenshotRequest) (oapi.TakeScreenshotResponseObject, error) {
+	var clip *cdpclient.ScreenshotClip
+	if body.Region != nil {
+		region := body.Region
+		if region.X < 0 || region.Y < 0 || region.Width <= 0 || region.Height <= 0 {
+			return oapi.TakeScreenshot400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid region dimensions"}}, nil
+		}
+		clip = &cdpclient.ScreenshotClip{
+			X:      float64(region.X),
+			Y:      float64(region.Y),
+			Width:  float64(region.Width),
+			Height: float64(region.Height),
+			Scale:  1,
+		}
+	}
+
+	var pngBytes []byte
+	err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		var err error
+		pngBytes, err = client.CaptureScreenshot(cdpCtx, clip)
+		return err
+	})
+	if err != nil {
+		return oapi.TakeScreenshot500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: fmt.Sprintf("failed to capture Wayland screenshot: %v", err)}}, nil
+	}
+	return oapi.TakeScreenshot200ImagepngResponse{Body: bytes.NewReader(pngBytes), ContentLength: int64(len(pngBytes))}, nil
 }
 
 // resolveDisplayParams merges the request body with the current display

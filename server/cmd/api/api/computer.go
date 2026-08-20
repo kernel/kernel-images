@@ -38,6 +38,9 @@ func isValidationErr(err error) bool {
 }
 
 func (s *ApiService) doMoveMouse(ctx context.Context, body oapi.MoveMouseRequest) error {
+	if s.usesWayland() {
+		return s.doMoveMouseWayland(ctx, body)
+	}
 	log := logger.FromContext(ctx)
 
 	// Get current resolution for bounds validation
@@ -213,6 +216,9 @@ func (s *ApiService) getMouseLocation(ctx context.Context) (x, y int, err error)
 }
 
 func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseRequest) error {
+	if s.usesWayland() {
+		return s.doClickMouseWayland(ctx, body)
+	}
 	log := logger.FromContext(ctx)
 
 	// Get current resolution for bounds validation
@@ -341,6 +347,9 @@ func (s *ApiService) TakeScreenshot(ctx context.Context, request oapi.TakeScreen
 	if request.Body != nil {
 		body = *request.Body
 	}
+	if s.usesWayland() {
+		return s.takeWaylandScreenshot(ctx, body)
+	}
 
 	// Get current resolution for bounds validation
 	screenWidth, screenHeight, _, err := s.getCurrentResolution(ctx)
@@ -448,6 +457,9 @@ func (s *ApiService) TakeScreenshot(ctx context.Context, request oapi.TakeScreen
 }
 
 func (s *ApiService) doTypeText(ctx context.Context, body oapi.TypeTextRequest) error {
+	if s.usesWayland() {
+		return s.doTypeTextWayland(ctx, body)
+	}
 	useSmooth := body.Smooth == nil || *body.Smooth
 	if useSmooth {
 		return s.doTypeTextSmooth(ctx, body)
@@ -830,6 +842,9 @@ func (s *ApiService) GetMousePosition(ctx context.Context, request oapi.GetMouse
 }
 
 func (s *ApiService) doPressKey(ctx context.Context, body oapi.PressKeyRequest) error {
+	if s.usesWayland() {
+		return s.doPressKeyWayland(ctx, body)
+	}
 	log := logger.FromContext(ctx)
 
 	if len(body.Keys) == 0 {
@@ -940,6 +955,9 @@ func (s *ApiService) PressKey(ctx context.Context, request oapi.PressKeyRequestO
 }
 
 func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) error {
+	if s.usesWayland() {
+		return s.doScrollWayland(ctx, body)
+	}
 	log := logger.FromContext(ctx)
 
 	// Validate deltas

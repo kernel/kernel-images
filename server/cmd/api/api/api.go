@@ -12,6 +12,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/display"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
@@ -56,6 +57,7 @@ type ApiService struct {
 
 	// Neko authenticated client
 	nekoAuthClient *nekoclient.AuthClient
+	displayBackend display.Backend
 
 	// DevTools upstream manager (Chromium supervisord log tailer)
 	upstreamMgr *devtoolsproxy.UpstreamManager
@@ -143,6 +145,10 @@ func New(
 
 	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
 	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default(), screenshotEnabled)
+	displayConfig, err := display.FromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("display backend configuration: %w", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &ApiService{
@@ -154,6 +160,7 @@ func New(
 		upstreamMgr:       upstreamMgr,
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
+		displayBackend:    displayConfig.Backend,
 		policy:            &policy.Policy{},
 		eventStream:       eventStream,
 		telemetrySession:  telemetrySession,

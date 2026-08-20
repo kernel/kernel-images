@@ -19,6 +19,7 @@ volume_name="${NAME}-flags"
 # volume which we then mount into the image at /chromium.
 # RUN_AS_ROOT defaults to true in unikernel (for now, until we figure it out)
 RUN_AS_ROOT="${RUN_AS_ROOT:-true}"
+DISPLAY_BACKEND="${DISPLAY_BACKEND:-x11}"
 
 chromium_flags_default="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*"
 if [[ "$RUN_AS_ROOT" == "true" ]]; then
@@ -76,6 +77,7 @@ deploy_args=(
   -e WIDTH=1920
   -e TZ=${TZ:-'America/Los_Angeles'}
   -e RUN_AS_ROOT="$RUN_AS_ROOT"
+  -e DISPLAY_BACKEND="$DISPLAY_BACKEND"
   -e LOG_CDP_MESSAGES=true
   -v "$volume_name":/chromium
   -n "$NAME"

@@ -2,6 +2,7 @@ package cdpclient
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -261,6 +262,182 @@ func (c *Client) CountPageTargets(ctx context.Context) (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// ViewportSize is the CSS pixel size of the first page target.
+type ViewportSize struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// GetViewportSize returns the first page target's current viewport size.
+func (c *Client) GetViewportSize(ctx context.Context) (ViewportSize, error) {
+	sessionID, detach, err := c.attachFirstPage(ctx)
+	if err != nil {
+		return ViewportSize{}, err
+	}
+	defer detach()
+
+	raw, err := c.send(ctx, "Runtime.evaluate", map[string]any{
+		"expression":    "JSON.stringify({width: window.innerWidth, height: window.innerHeight})",
+		"returnByValue": true,
+	}, sessionID)
+	if err != nil {
+		return ViewportSize{}, fmt.Errorf("Runtime.evaluate viewport size: %w", err)
+	}
+	var evaluated struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &evaluated); err != nil {
+		return ViewportSize{}, fmt.Errorf("unmarshal viewport size: %w", err)
+	}
+	var size ViewportSize
+	if err := json.Unmarshal([]byte(evaluated.Result.Value), &size); err != nil {
+		return ViewportSize{}, fmt.Errorf("decode viewport size: %w", err)
+	}
+	return size, nil
+}
+
+// DispatchMouseEvent sends a mouse event to the first page target.
+func (c *Client) DispatchMouseEvent(ctx context.Context, eventType string, x, y float64, button string, clickCount int) error {
+	sessionID, detach, err := c.attachFirstPage(ctx)
+	if err != nil {
+		return err
+	}
+	defer detach()
+
+	params := map[string]any{"type": eventType, "x": x, "y": y}
+	if button != "" {
+		params["button"] = button
+	}
+	if clickCount > 0 {
+		params["clickCount"] = clickCount
+	}
+	if _, err := c.send(ctx, "Input.dispatchMouseEvent", params, sessionID); err != nil {
+		return fmt.Errorf("Input.dispatchMouseEvent: %w", err)
+	}
+	return nil
+}
+
+// DispatchMouseWheel sends a wheel event to the first page target.
+func (c *Client) DispatchMouseWheel(ctx context.Context, x, y float64, deltaX, deltaY int) error {
+	sessionID, detach, err := c.attachFirstPage(ctx)
+	if err != nil {
+		return err
+	}
+	defer detach()
+	_, err = c.send(ctx, "Input.dispatchMouseEvent", map[string]any{
+		"type":   "mouseWheel",
+		"x":      x,
+		"y":      y,
+		"deltaX": deltaX,
+		"deltaY": deltaY,
+	}, sessionID)
+	if err != nil {
+		return fmt.Errorf("Input.dispatchMouseEvent wheel: %w", err)
+	}
+	return nil
+}
+
+// InsertText inserts text into the focused element of the first page target.
+func (c *Client) InsertText(ctx context.Context, text string) error {
+	sessionID, detach, err := c.attachFirstPage(ctx)
+	if err != nil {
+		return err
+	}
+	defer detach()
+	if _, err := c.send(ctx, "Input.insertText", map[string]string{"text": text}, sessionID); err != nil {
+		return fmt.Errorf("Input.insertText: %w", err)
+	}
+	return nil
+}
+
+// DispatchKeyEvent sends a key event to the first page target.
+func (c *Client) DispatchKeyEvent(ctx context.Context, eventType, key, code, text string) error {
+	sessionID, detach, err := c.attachFirstPage(ctx)
+	if err != nil {
+		return err
+	}
+	defer detach()
+	params := map[string]any{"type": eventType, "key": key, "code": code}
+	if text != "" {
+		params["text"] = text
+	}
+	if _, err := c.send(ctx, "Input.dispatchKeyEvent", params, sessionID); err != nil {
+		return fmt.Errorf("Input.dispatchKeyEvent: %w", err)
+	}
+	return nil
+}
+
+// ScreenshotClip describes an optional page screenshot crop in CSS pixels.
+type ScreenshotClip struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+	Scale  float64 `json:"scale,omitempty"`
+}
+
+// CaptureScreenshot captures the first page target as a PNG. It uses CDP
+// rather than an X11 grab so native Wayland pages can be captured too.
+func (c *Client) CaptureScreenshot(ctx context.Context, clip *ScreenshotClip) ([]byte, error) {
+	sessionID, detach, err := c.attachFirstPage(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer detach()
+
+	params := map[string]any{"format": "png"}
+	if clip != nil {
+		params["clip"] = clip
+	}
+	raw, err := c.send(ctx, "Page.captureScreenshot", params, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("Page.captureScreenshot: %w", err)
+	}
+	var result struct {
+		Data string `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal Page.captureScreenshot: %w", err)
+	}
+	data, err := base64.StdEncoding.DecodeString(result.Data)
+	if err != nil {
+		return nil, fmt.Errorf("decode Page.captureScreenshot: %w", err)
+	}
+	return data, nil
+}
+
+func (c *Client) attachFirstPage(ctx context.Context) (string, func(), error) {
+	targetID, err := c.firstPageTargetID(ctx)
+	if err != nil {
+		return "", nil, err
+	}
+	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": targetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return "", nil, fmt.Errorf("Target.attachToTarget: %w", err)
+	}
+	var attach struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(attachResult, &attach); err != nil {
+		return "", nil, fmt.Errorf("unmarshal attach: %w", err)
+	}
+	if attach.SessionID == "" {
+		return "", nil, fmt.Errorf("Target.attachToTarget returned no session ID")
+	}
+	return attach.SessionID, func() {
+		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = c.send(detachCtx, "Target.detachFromTarget", map[string]any{
+			"sessionId": attach.SessionID,
+		}, "")
+	}, nil
 }
 
 // DispatchStartURL closes extra page targets and dispatches a navigation on the
