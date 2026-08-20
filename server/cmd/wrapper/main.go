@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kernel/kernel-images/server/lib/display"
 )
 
 const (
@@ -59,9 +61,16 @@ func profileName(p profile) string {
 
 func main() {
 	t0 := time.Now()
+	displayConfig, err := display.FromEnv()
+	if err != nil {
+		fatalf("display backend configuration: %v", err)
+	}
+	if displayConfig.Backend != display.BackendX11 {
+		fatalf("display backend %q is not implemented in this image", displayConfig.Backend)
+	}
 	prof := detectProfile()
 	stzManaged := scaleToZeroManaged()
-	logf("starting wrapper (profile=%s stz=%s)", profileName(prof), stzMode(stzManaged))
+	logf("starting wrapper (profile=%s display_backend=%s stz=%s)", profileName(prof), displayConfig.Backend, stzMode(stzManaged))
 	forkIdentityWait, err := forkIdentityWaitEnabled()
 	if err != nil {
 		fatalf("fork identity config: %v", err)
