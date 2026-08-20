@@ -380,21 +380,40 @@ func (c *Client) InsertText(ctx context.Context, text string) error {
 	return nil
 }
 
-// DispatchKeyEvent sends a key event to the first page target.
-func (c *Client) DispatchKeyEvent(ctx context.Context, eventType, key, code, text string) error {
+// KeyEvent describes one CDP key event.
+type KeyEvent struct {
+	Type string
+	Key  string
+	Code string
+	Text string
+}
+
+// DispatchKeyEvents sends key events to the first page target with one
+// attached CDP session for the whole sequence.
+func (c *Client) DispatchKeyEvents(ctx context.Context, events []KeyEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
 	sessionID, detach, err := c.attachFirstPage(ctx)
 	if err != nil {
 		return err
 	}
 	defer detach()
-	params := map[string]any{"type": eventType, "key": key, "code": code}
-	if text != "" {
-		params["text"] = text
-	}
-	if _, err := c.send(ctx, "Input.dispatchKeyEvent", params, sessionID); err != nil {
-		return fmt.Errorf("Input.dispatchKeyEvent: %w", err)
+	for _, event := range events {
+		params := map[string]any{"type": event.Type, "key": event.Key, "code": event.Code}
+		if event.Text != "" {
+			params["text"] = event.Text
+		}
+		if _, err := c.send(ctx, "Input.dispatchKeyEvent", params, sessionID); err != nil {
+			return fmt.Errorf("Input.dispatchKeyEvent: %w", err)
+		}
 	}
 	return nil
+}
+
+// DispatchKeyEvent sends one key event to the first page target.
+func (c *Client) DispatchKeyEvent(ctx context.Context, eventType, key, code, text string) error {
+	return c.DispatchKeyEvents(ctx, []KeyEvent{{Type: eventType, Key: key, Code: code, Text: text}})
 }
 
 // ScreenshotClip describes an optional page screenshot crop in CSS pixels.

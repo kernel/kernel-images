@@ -114,19 +114,21 @@ func (s *ApiService) doPressKeyWayland(ctx context.Context, body oapi.PressKeyRe
 	if len(body.Keys) == 0 {
 		return &validationError{msg: "keys must contain at least one key symbol"}
 	}
+	events := make([]cdpclient.KeyEvent, 0, len(body.Keys)*2)
 	for _, key := range body.Keys {
 		code := key
 		if len([]rune(key)) == 1 {
 			code = "Key" + key
 		}
-		if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
-			if err := client.DispatchKeyEvent(cdpCtx, "keyDown", key, code, ""); err != nil {
-				return err
-			}
-			return client.DispatchKeyEvent(cdpCtx, "keyUp", key, code, "")
-		}); err != nil {
-			return &executionError{msg: fmt.Sprintf("failed to press Wayland key %q: %v", key, err)}
-		}
+		events = append(events,
+			cdpclient.KeyEvent{Type: "keyDown", Key: key, Code: code},
+			cdpclient.KeyEvent{Type: "keyUp", Key: key, Code: code},
+		)
+	}
+	if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		return client.DispatchKeyEvents(cdpCtx, events)
+	}); err != nil {
+		return &executionError{msg: fmt.Sprintf("failed to press Wayland key: %v", err)}
 	}
 	return nil
 }
