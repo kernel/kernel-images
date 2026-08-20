@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -74,6 +76,24 @@ func TestChromiumStartURLSpec(t *testing.T) {
 	longURL := strings.Repeat("a", maxStartURLLen+1)
 	_, errs = chromiumStartURLSpec(&longURL)
 	require.NotEmpty(t, errs)
+}
+
+func TestStripProfileSessionRestore(t *testing.T) {
+	prepared := t.TempDir()
+	sessions := filepath.Join(prepared, "Default", "Sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sessions, "Session_123"), []byte("tabs"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(prepared, "Default", "Preferences"), []byte("{}"), 0o644))
+
+	require.NoError(t, stripProfileSessionRestore(prepared))
+
+	_, err := os.Stat(sessions)
+	require.True(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(prepared, "Default", "Preferences"))
+	require.NoError(t, err)
+
+	// Absent Sessions directory is a no-op, not an error.
+	require.NoError(t, stripProfileSessionRestore(prepared))
 }
 
 func TestChromiumValidateFlags(t *testing.T) {

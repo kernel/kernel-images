@@ -77,6 +77,9 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 		return cfg400("no configuration fields provided"), nil
 	}
 
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
+
 	needsStop := chromiumNeedsStopCycle(st)
 	chromiumStopped := false
 	restartAfterStop := func() error {
@@ -157,6 +160,11 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 			}
 			if err != nil {
 				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), nil
+			}
+			if spec.needsNav {
+				if err := stripProfileSessionRestore(preparedProfile); err != nil {
+					return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), nil
+				}
 			}
 			if err := chromiumInstallPreparedProfile(preparedProfile); err != nil {
 				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error()), nil
@@ -564,6 +572,16 @@ func chromiumPrepareProfileArchive(profilePath string, strip int) (preparedDir s
 	return preparedDir, cleanup, nil
 }
 
+// stripProfileSessionRestore deletes the prepared profile's Default/Sessions so
+// Chrome cannot restore its saved tabs after the restart and race the start_url
+// navigation. Only the live copy is touched; the stored archive is unchanged.
+func stripProfileSessionRestore(preparedDir string) error {
+	if err := os.RemoveAll(filepath.Join(preparedDir, "Default", "Sessions")); err != nil {
+		return fmt.Errorf("strip profile session restore: %w", err)
+	}
+	return nil
+}
+
 func chromiumInstallPreparedProfile(preparedDir string) error {
 	if preparedDir == "" {
 		return nil
@@ -696,7 +714,7 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *
 }
 
 func chromiumRunPatchDisplay(ctx context.Context, s *ApiService, body *oapi.PatchDisplayJSONRequestBody) oapi.ChromiumConfigureResponseObject {
-	resp, err := s.PatchDisplay(ctx, oapi.PatchDisplayRequestObject{Body: body})
+	resp, err := s.patchDisplayLocked(ctx, oapi.PatchDisplayRequestObject{Body: body})
 	if err != nil {
 		return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 	}
@@ -752,7 +770,8 @@ func chromiumApplyExtensions(ctx context.Context, s *ApiService, items []extensi
 	if len(items) == 0 {
 		return "", nil
 	}
-	return s.applyExtensionZipItems(ctx, items)
+	_, reqMsg, err := s.applyExtensionZipItems(ctx, items)
+	return reqMsg, err
 }
 
 func chromiumValidateFlags(raw *string) (*chromiumFlagsPlan, error) {

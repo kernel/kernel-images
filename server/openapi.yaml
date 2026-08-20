@@ -1154,27 +1154,36 @@ paths:
         content:
           multipart/form-data:
             schema:
-              type: object
-              properties:
-                extensions:
-                  type: array
-                  description: List of extensions to upload and activate
-                  items:
-                    type: object
-                    properties:
-                      zip_file:
-                        type: string
-                        format: binary
-                        description: Zip archive containing an unpacked Chromium extension (must include manifest.json)
-                      name:
-                        type: string
-                        description: Folder name to place the extension under /home/kernel/extensions/<name>
-                        pattern: "^[A-Za-z0-9._-]{1,255}$"
-                    required: [zip_file, name]
-              required: [extensions]
+              $ref: "#/components/schemas/ExtensionUploadMultipart"
       responses:
         "201":
           description: Extensions uploaded, Chromium restarted, and DevTools is ready
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /chromium/upload-extensions:
+    post:
+      summary: Upload and activate one or more unpacked extensions
+      description: |
+        Upload one or more extension zip archives and extract them under
+        /home/kernel/extensions/<name>. Ordinary unpacked extensions are activated immediately over
+        CDP without restarting Chromium, while their runtime flags are persisted for future starts.
+        Content scripts are applied to existing pages after their next navigation or reload.
+        Extensions that require enterprise policy still restart Chromium and wait for DevTools
+        readiness before returning success.
+      operationId: uploadExtensions
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/ExtensionUploadMultipart"
+      responses:
+        "201":
+          description: Extensions uploaded and activated
         "400":
           $ref: "#/components/responses/BadRequestError"
         "500":
@@ -1338,6 +1347,11 @@ paths:
         Execute arbitrary Playwright code in a fresh execution context against the browser running
         on localhost:9222. The code has access to 'page', 'context', and 'browser' variables.
         The result of the code execution is returned in the response.
+
+        'page' is bound to an active tab reported by Chrome. In single-window sessions, this is
+        the foreground tab. When multiple browser windows are open, Chrome reports one active tab
+        per window and the selected window is unspecified. Use 'context.pages()' to select a page
+        explicitly.
       operationId: executePlaywrightCode
       x-telemetry-category: control
       requestBody:
@@ -1545,6 +1559,28 @@ paths:
           $ref: "#/components/responses/InternalError"
 components:
   schemas:
+    ExtensionUploadMultipart:
+      type: object
+      required: [extensions]
+      properties:
+        extensions:
+          type: array
+          description: List of extensions to upload and activate
+          minItems: 1
+          maxItems: 20
+          items:
+            type: object
+            required: [zip_file, name]
+            properties:
+              zip_file:
+                type: string
+                format: binary
+                description: Zip archive containing an unpacked Chromium extension (maximum 50 MiB; must include manifest.json)
+              name:
+                type: string
+                description: Folder name to place the extension under /home/kernel/extensions/<name>
+                pattern: "^[A-Za-z0-9._-]{1,255}$"
+
     TelemetryEvent:
       type: object
       description: >

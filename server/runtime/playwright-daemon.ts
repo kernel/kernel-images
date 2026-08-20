@@ -12,7 +12,7 @@
 import { createServer, Socket } from 'net';
 import { unlinkSync, existsSync } from 'fs';
 import { transform } from 'esbuild';
-import { chromium as chromiumPW, Browser } from 'playwright-core';
+import { chromium as chromiumPW, Browser, BrowserContext, Page } from 'playwright-core';
 import { chromium as chromiumPR } from 'patchright';
 
 const SOCKET_PATH = process.env.PLAYWRIGHT_DAEMON_SOCKET || '/tmp/playwright-daemon.sock';
@@ -131,6 +131,58 @@ async function ensureBrowserConnection(): Promise<Browser> {
   }
 }
 
+// Resolves the browser's actual foreground tab via CDP rather than guessing from
+// tab-creation order. Chrome 150+ populates `TargetInfo.embedderData.tabActive`
+// on `tab` targets from the real tab strip state; the Playwright `Page` for that
+// tab is found by relating the tab target to its page target with
+// `Target.autoAttachRelated`. Every session used here is temporary and detached
+// before returning, so this adds no cross-request state to the daemon.
+async function resolveActivePage(browser: Browser, context: BrowserContext): Promise<Page> {
+  const root = await browser.newBrowserCDPSession();
+
+  try {
+    const { targetInfos } = await root.send('Target.getTargets', {
+      filter: [{ type: 'tab', exclude: false }, { exclude: true }],
+    });
+
+    const activeTab = targetInfos.find(target => (target.embedderData as any)?.tabActive === true);
+    if (!activeTab) throw new Error('no foreground tab reported by CDP');
+
+    const relatedPageIds = new Set<string>();
+    root.on('Target.attachedToTarget', event => {
+      if (event.targetInfo.type === 'page' && !event.targetInfo.subtype) {
+        relatedPageIds.add(event.targetInfo.targetId);
+      }
+    });
+
+    await root.send('Target.autoAttachRelated', {
+      targetId: activeTab.targetId,
+      waitForDebuggerOnStart: false,
+      filter: [{ type: 'page', exclude: false }, { exclude: true }],
+    });
+
+    for (const page of context.pages()) {
+      try {
+        const session = await context.newCDPSession(page);
+        try {
+          const { targetInfo } = await session.send('Target.getTargetInfo');
+          if (relatedPageIds.has(targetInfo.targetId)) return page;
+        } finally {
+          await session.detach().catch(() => {});
+        }
+      } catch {
+        // A crashed or closing page can fail CDP session setup/queries; skip it
+        // rather than aborting the search for the real foreground tab.
+        continue;
+      }
+    }
+
+    throw new Error('foreground tab has no matching Playwright page');
+  } finally {
+    await root.detach().catch(() => {});
+  }
+}
+
 async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promise<ExecuteResponse> {
   const { id, code } = request;
 
@@ -172,7 +224,11 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
     const contexts = browserInstance.contexts();
     const context = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
     const pages = context.pages();
-    const page = pages.length > 0 ? pages[0] : await context.newPage();
+    // Bind `page` to the actual foreground tab (see resolveActivePage). Using
+    // pages[0] bound `page` to the oldest tab regardless of which was active, so
+    // calls like page.pdf() operated on the wrong tab whenever more than one was
+    // open.
+    const page = pages.length > 0 ? await resolveActivePage(browserInstance, context) : await context.newPage();
 
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);
