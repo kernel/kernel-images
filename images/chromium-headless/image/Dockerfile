@@ -158,6 +158,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     fontconfig \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
+    fonts-noto-mono \
     fonts-nanum \
     supervisor; \
     fc-cache -f

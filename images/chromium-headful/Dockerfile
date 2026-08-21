@@ -213,6 +213,7 @@ RUN apt-get update && \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     fonts-noto-core \
+    fonts-noto-mono \
     fonts-nanum \
     fonts-dejavu-core \
     fonts-dejavu-extra \
