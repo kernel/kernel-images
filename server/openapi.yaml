@@ -1366,8 +1366,9 @@ paths:
 
         'page' is bound to an active tab reported by Chrome. In single-window sessions, this is
         the foreground tab. When multiple browser windows are open, Chrome reports one active tab
-        per window and the selected window is unspecified. Use 'context.pages()' to select a page
-        explicitly.
+        per window and the selected window is unspecified. 'context' is the BrowserContext that owns
+        the selected page. If active-tab resolution races with a target change, execution falls back
+        to an existing page. Use 'browser.contexts()' to select a context or page explicitly.
       operationId: executePlaywrightCode
       x-telemetry-category: control
       requestBody:

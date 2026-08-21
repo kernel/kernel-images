@@ -142,6 +142,33 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Contains(t, refocusedUrlRsp.JSON200.Result, "example.com", "expected injected page to follow foreground focus, not tab-creation order")
 
 	t.Log("playwright foreground-tab binding test passed")
+
+	t.Log("verifying page resolution across browser contexts")
+	openSecondContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const secondContext = await browser.newContext();
+			const secondPage = await secondContext.newPage();
+			await secondPage.goto('data:text/html,second-context');
+			await secondPage.bringToFront();
+			return browser.contexts().length;
+		`,
+	})
+	require.NoError(t, err, "open second context request error: %v", err)
+	require.Equal(t, http.StatusOK, openSecondContextRsp.StatusCode(), "unexpected status: %s body=%s", openSecondContextRsp.Status(), string(openSecondContextRsp.Body))
+	require.NotNil(t, openSecondContextRsp.JSON200)
+	require.True(t, openSecondContextRsp.JSON200.Success, "expected open-second-context success=true")
+	require.EqualValues(t, 2, openSecondContextRsp.JSON200.Result, "expected two browser contexts")
+
+	for i := 0; i < 30; i++ {
+		crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+			Code: `return page.context() === context && browser.contexts().length === 2;`,
+		})
+		require.NoError(t, err, "cross-context request %d error: %v", i+1, err)
+		require.Equal(t, http.StatusOK, crossContextRsp.StatusCode(), "cross-context request %d returned %s body=%s", i+1, crossContextRsp.Status(), string(crossContextRsp.Body))
+		require.NotNil(t, crossContextRsp.JSON200)
+		require.True(t, crossContextRsp.JSON200.Success, "cross-context request %d failed", i+1)
+		require.Equal(t, true, crossContextRsp.JSON200.Result, "cross-context request %d injected a mismatched page and context", i+1)
+	}
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
