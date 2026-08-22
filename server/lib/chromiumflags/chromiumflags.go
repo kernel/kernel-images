@@ -36,10 +36,11 @@ func appendCSVInto(dst *[]string, csv string) {
 	}
 }
 
-// parseTokenStream extracts extension-related flags and collects non-extension flags.
-// It returns the list of non-extension tokens and, via references, fills the buckets for
-// --load-extension, --disable-extensions-except and a possible --disable-extensions token for that stream.
-func parseTokenStream(tokens []string, load, except *[]string, disableAll *string) (nonExt []string) {
+// parseTokenStream extracts extension-related and feature-list flags and collects the rest.
+// It returns the leftover tokens and, via references, fills the buckets for
+// --load-extension, --disable-extensions-except, --enable-features, --disable-features
+// and a possible --disable-extensions token for that stream.
+func parseTokenStream(tokens []string, load, except, enableFeatures, disableFeatures *[]string, disableAll *string) (nonExt []string) {
 	for _, tok := range tokens {
 		switch {
 		case strings.HasPrefix(tok, "--load-extension="):
@@ -48,6 +49,12 @@ func parseTokenStream(tokens []string, load, except *[]string, disableAll *strin
 		case strings.HasPrefix(tok, "--disable-extensions-except="):
 			val := strings.TrimPrefix(tok, "--disable-extensions-except=")
 			appendCSVInto(except, val)
+		case strings.HasPrefix(tok, "--enable-features="):
+			val := strings.TrimPrefix(tok, "--enable-features=")
+			appendCSVInto(enableFeatures, val)
+		case strings.HasPrefix(tok, "--disable-features="):
+			val := strings.TrimPrefix(tok, "--disable-features=")
+			appendCSVInto(disableFeatures, val)
 		case tok == "--disable-extensions":
 			*disableAll = tok
 		default:
@@ -128,28 +135,51 @@ func ReadOptionalFlagFile(path string) ([]string, error) {
 // extensions_enabled() returns true, which is false when --disable-extensions-except is used.
 // Any paths from --disable-extensions-except are merged into --load-extension instead.
 //
-// Non-extension flags from both base and runtime are combined with deduplication (first occurrence preserved).
+// Feature-list flags (--enable-features / --disable-features) from both sources are also
+// merged into single comma-separated tokens. Chromium keeps only one value per switch, so
+// emitting duplicates would silently drop all but the last list. When a feature appears in
+// both lists Chromium disables it — disable wins over enable.
+//
+// Non-feature, non-extension flags from both base and runtime are combined with deduplication
+// (first occurrence preserved).
 func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	// Buckets
 	var (
-		baseNonExt     []string // Non-extension related flags contained in base
-		runtimeNonExt  []string // Non-extension related flags contained in runtime
-		baseLoad       []string // --load-extension flags contained in base
-		baseExcept     []string // --disable-extensions-except flags for base (parsed but not re-emitted)
-		rtLoad         []string // --load-extension flags contained in runtime
-		rtExcept       []string // --disable-extensions-except flags contained in runtime (parsed but not re-emitted)
-		baseDisableAll string   // --disable-extensions flag contained in base
-		rtDisableAll   string   // --disable-extensions flag contained in runtime
+		baseNonExt      []string // Non-extension related flags contained in base
+		runtimeNonExt   []string // Non-extension related flags contained in runtime
+		baseLoad        []string // --load-extension flags contained in base
+		baseExcept      []string // --disable-extensions-except flags for base (parsed but not re-emitted)
+		baseEnableFeat  []string // --enable-features values contained in base
+		baseDisableFeat []string // --disable-features values contained in base
+		rtLoad          []string // --load-extension flags contained in runtime
+		rtExcept        []string // --disable-extensions-except flags contained in runtime (parsed but not re-emitted)
+		rtEnableFeat    []string // --enable-features values contained in runtime
+		rtDisableFeat   []string // --disable-features values contained in runtime
+		baseDisableAll  string   // --disable-extensions flag contained in base
+		rtDisableAll    string   // --disable-extensions flag contained in runtime
 	)
 
-	baseNonExt = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisableAll)
-	runtimeNonExt = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtDisableAll)
+	baseNonExt = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseEnableFeat, &baseDisableFeat, &baseDisableAll)
+	runtimeNonExt = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtEnableFeat, &rtDisableFeat, &rtDisableAll)
 
 	// Merge extension lists - include paths from --disable-extensions-except in load paths
 	// since we no longer emit --disable-extensions-except
 	mergedLoad := union(baseLoad, rtLoad)
 	mergedLoad = union(mergedLoad, baseExcept)
 	mergedLoad = union(mergedLoad, rtExcept)
+
+	// Merge feature lists - a feature listed in both enable and disable stays in both;
+	// Chromium resolves that conflict as disabled.
+	mergedEnableFeat := union(baseEnableFeat, rtEnableFeat)
+	mergedDisableFeat := union(baseDisableFeat, rtDisableFeat)
+
+	var featureFlags []string
+	if len(mergedEnableFeat) > 0 {
+		featureFlags = append(featureFlags, "--enable-features="+strings.Join(mergedEnableFeat, ","))
+	}
+	if len(mergedDisableFeat) > 0 {
+		featureFlags = append(featureFlags, "--disable-features="+strings.Join(mergedDisableFeat, ","))
+	}
 
 	// Construct final extension-related flags respecting override semantics:
 	// 1) If runtime specifies --disable-extensions, it overrides everything extension related
@@ -169,6 +199,7 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 
 	// Combine and dedupe (preserving first occurrence)
 	combined := append(append([]string{}, baseNonExt...), runtimeNonExt...)
+	combined = append(combined, featureFlags...)
 	combined = append(combined, extFlags...)
 	seen := make(map[string]struct{}, len(combined))
 	final := make([]string, 0, len(combined))

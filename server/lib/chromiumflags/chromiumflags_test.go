@@ -41,12 +41,16 @@ func TestAppendCSVInto(t *testing.T) {
 
 func TestParseTokenStream_BaseAndRuntime(t *testing.T) {
 	var (
-		baseLoad    []string
-		baseExcept  []string
-		rtLoad      []string
-		rtExcept    []string
-		baseDisable string
-		rtDisable   string
+		baseLoad       []string
+		baseExcept     []string
+		rtLoad         []string
+		rtExcept       []string
+		baseDisable    string
+		rtDisable      string
+		baseEnableFeat []string
+		baseDisFeat    []string
+		rtEnableFeat   []string
+		rtDisFeat      []string
 	)
 
 	baseTokens := []string{
@@ -62,8 +66,8 @@ func TestParseTokenStream_BaseAndRuntime(t *testing.T) {
 		"--foo",
 	}
 
-	baseNonExt := parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisable)
-	runtimeNonExt := parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtDisable)
+	baseNonExt := parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseEnableFeat, &baseDisFeat, &baseDisable)
+	runtimeNonExt := parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtEnableFeat, &rtDisFeat, &rtDisable)
 
 	if !reflect.DeepEqual(baseLoad, []string{"/e1", "/e2"}) {
 		t.Fatalf("base load-extension parsed incorrectly: %#v", baseLoad)
@@ -127,16 +131,20 @@ func TestOverrideSemantics_DisableRuntime_Wins(t *testing.T) {
 	runtimeTokens := parseFlags(runtimeFlags)
 
 	var (
-		baseLoad       []string
-		baseExcept     []string
-		rtLoad         []string
-		rtExcept       []string
-		baseDisable    string
-		runtimeDisable string
+		baseLoad        []string
+		baseExcept      []string
+		rtLoad          []string
+		rtExcept        []string
+		baseEnableFeat  []string
+		baseDisableFeat []string
+		rtEnableFeat    []string
+		rtDisableFeat   []string
+		baseDisable     string
+		runtimeDisable  string
 	)
 
-	_ = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisable)
-	_ = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &runtimeDisable)
+	_ = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseEnableFeat, &baseDisableFeat, &baseDisable)
+	_ = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtEnableFeat, &rtDisableFeat, &runtimeDisable)
 
 	var extFlags []string
 	if runtimeDisable != "" {
@@ -286,6 +294,30 @@ func TestMergeFlags(t *testing.T) {
 			baseFlags:    []string{"--foo", "--load-extension=/e1", "--disable-extensions-except=/x1"},
 			runtimeFlags: []string{"--bar", "--load-extension=/e2", "--disable-extensions-except=/x2"},
 			want:         []string{"--foo", "--bar", "--load-extension=/e1,/e2,/x1,/x2"},
+		},
+		{
+			name:         "merge enable-features from base and runtime",
+			baseFlags:    []string{"--enable-features=WebMCPTesting"},
+			runtimeFlags: []string{"--enable-features=Foo"},
+			want:         []string{"--enable-features=WebMCPTesting,Foo"},
+		},
+		{
+			name:         "merge disable-features across sources",
+			baseFlags:    []string{"--disable-features=A,B"},
+			runtimeFlags: []string{"--disable-features=B,C"},
+			want:         []string{"--disable-features=A,B,C"},
+		},
+		{
+			name:         "runtime can opt out of a base-enabled feature via disable list",
+			baseFlags:    []string{"--enable-features=WebMCPTesting,DevToolsWebMCPSupport"},
+			runtimeFlags: []string{"--disable-features=WebMCPTesting"},
+			want:         []string{"--enable-features=WebMCPTesting,DevToolsWebMCPSupport", "--disable-features=WebMCPTesting"},
+		},
+		{
+			name:         "enable and disable features coexist across sources",
+			baseFlags:    []string{"--enable-features=A", "--disable-features=B"},
+			runtimeFlags: []string{"--enable-features=C", "--disable-features=D"},
+			want:         []string{"--enable-features=A,C", "--disable-features=B,D"},
 		},
 	}
 

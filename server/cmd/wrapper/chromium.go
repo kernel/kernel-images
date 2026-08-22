@@ -41,6 +41,11 @@ func applyHeadlessDefaultFlags() {
 		"--disable-renderer-backgrounding",
 		"--disable-search-engine-choice-screen",
 		"--disable-software-rasterizer",
+		// WebMCP (navigator.modelContext + CDP WebMCP domain, Chromium 151+).
+		// DevToolsWebMCPSupport is default-on upstream; listing it keeps the
+		// CDP domain stable against finch flips. Sessions can opt out per
+		// instance via --disable-features=WebMCPTesting,DevToolsWebMCPSupport.
+		"--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
 		"--enable-use-zoom-for-dsf=false",
 		"--export-tagged-pdf",
 		"--force-color-profile=srgb",
