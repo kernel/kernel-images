@@ -81,6 +81,7 @@ func main() {
 		os.Exit(1)
 	}
 	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
+	final = chromiumflags.TranslateKernelDisableFeatures(final)
 	final = withDefaultPrivateNetworkBypass(final)
 
 	// Diagnostics for parity with previous scripts

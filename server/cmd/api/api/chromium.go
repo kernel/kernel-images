@@ -598,6 +598,9 @@ func (s *ApiService) mergeAndWriteChromiumFlags(ctx context.Context, newTokens [
 
 	// Merge existing flags with new flags using token-aware API
 	mergedTokens := chromiumflags.MergeFlags(existingTokens, newTokens)
+	// Fold kernel-namespaced disable tokens into the plain Chromium switch so
+	// /chromium/flags only ever holds switches Chromium understands.
+	mergedTokens = chromiumflags.TranslateKernelDisableFeatures(mergedTokens)
 
 	if err := writeChromiumFlags(mergedTokens); err != nil {
 		log.Error("failed to write flags", "error", err)

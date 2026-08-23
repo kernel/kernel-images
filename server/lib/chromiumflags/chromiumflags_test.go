@@ -330,3 +330,47 @@ func TestMergeFlags(t *testing.T) {
 		})
 	}
 }
+
+func TestTranslateKernelDisableFeatures(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens []string
+		want   []string
+	}{
+		{
+			name:   "no kernel tokens is a no-op",
+			tokens: []string{"--foo", "--disable-features=A,B"},
+			want:   nil,
+		},
+		{
+			name:   "kernel token folds into existing disable list",
+			tokens: []string{"--foo", "--disable-features=A,B", "--kernel-disable-features=WebMCPTesting"},
+			want:   []string{"--foo", "--disable-features=A,B,WebMCPTesting"},
+		},
+		{
+			name:   "kernel token creates a disable list when none exists",
+			tokens: []string{"--foo", "--kernel-disable-features=WebMCPTesting,DevToolsWebMCPSupport"},
+			want:   []string{"--foo", "--disable-features=WebMCPTesting,DevToolsWebMCPSupport"},
+		},
+		{
+			name:   "multiple kernel tokens and duplicates are unioned",
+			tokens: []string{"--kernel-disable-features=A", "--bar", "--kernel-disable-features=B,A"},
+			want:   []string{"--bar", "--disable-features=A,B"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TranslateKernelDisableFeatures(tt.tokens)
+			if tt.want == nil {
+				if !reflect.DeepEqual(got, tt.tokens) {
+					t.Fatalf("expected unchanged input:\n got: %#v\nwant: %#v", got, tt.tokens)
+				}
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("TranslateKernelDisableFeatures() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}

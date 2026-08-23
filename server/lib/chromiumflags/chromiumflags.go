@@ -274,3 +274,32 @@ func WriteFlagFile(path string, tokens []string) error {
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0o644)
 }
+
+// KernelDisableFeaturesPrefix is a kernel-namespaced switch for per-session feature
+// disabling. Chromium ignores unknown switches, so on images that predate translation
+// the token is inert instead of last-win clobbering boot-time --disable-features lists.
+const KernelDisableFeaturesPrefix = "--kernel-disable-features="
+
+// TranslateKernelDisableFeatures folds any --kernel-disable-features tokens into the
+// single --disable-features token and returns the result. Values are unioned with any
+// existing disable list; ordering of unrelated tokens is preserved. Idempotent.
+func TranslateKernelDisableFeatures(tokens []string) []string {
+	var kernelVals, disableVals []string
+	rest := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		switch {
+		case strings.HasPrefix(tok, KernelDisableFeaturesPrefix):
+			appendCSVInto(&kernelVals, strings.TrimPrefix(tok, KernelDisableFeaturesPrefix))
+		case strings.HasPrefix(tok, "--disable-features="):
+			appendCSVInto(&disableVals, strings.TrimPrefix(tok, "--disable-features="))
+		default:
+			rest = append(rest, tok)
+		}
+	}
+	if len(kernelVals) == 0 {
+		return tokens
+	}
+	merged := union(disableVals, kernelVals)
+	rest = append(rest, "--disable-features="+strings.Join(merged, ","))
+	return rest
+}
