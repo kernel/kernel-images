@@ -208,6 +208,7 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
     }
   }
 
+  console.error('[playwright-daemon] active-tab resolution failed; falling back');
   return null;
 }
 
