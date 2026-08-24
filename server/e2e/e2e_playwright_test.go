@@ -144,16 +144,21 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Log("playwright foreground-tab binding test passed")
 
 	t.Log("verifying page resolution across browser contexts")
+	// Keep a newer blank page behind the foreground page so the newest-page
+	// fallback cannot satisfy the active-page assertion.
 	openSecondContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const firstContext = browser.contexts()[0];
 			const secondContext = await browser.newContext();
 			const secondPage = await secondContext.newPage();
 			await secondPage.goto('data:text/html,second-context');
+			await secondContext.newPage();
 			await Promise.all(firstContext.pages().map(page => page.close()));
+			await secondPage.bringToFront();
 			return {
 				contextCount: browser.contexts().length,
 				firstContextPageCount: firstContext.pages().length,
+				secondContextPageCount: secondContext.pages().length,
 			};
 		`,
 	})
@@ -165,15 +170,17 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	setupResultBytes, err := json.Marshal(openSecondContextRsp.JSON200.Result)
 	require.NoError(t, err)
 	var setupResult struct {
-		ContextCount          int `json:"contextCount"`
-		FirstContextPageCount int `json:"firstContextPageCount"`
+		ContextCount           int `json:"contextCount"`
+		FirstContextPageCount  int `json:"firstContextPageCount"`
+		SecondContextPageCount int `json:"secondContextPageCount"`
 	}
 	require.NoError(t, json.Unmarshal(setupResultBytes, &setupResult))
 	require.Equal(t, 2, setupResult.ContextCount, "expected two browser contexts")
 	require.Zero(t, setupResult.FirstContextPageCount, "expected the first context to remain open without pages")
+	require.Equal(t, 2, setupResult.SecondContextPageCount, "expected a foreground page and a newer fallback page in the second context")
 
 	crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
-		Code: `return { url: page.url(), contextIndex: browser.contexts().indexOf(page.context()) };`,
+		Code: `return { url: page.url(), contextPageUrls: page.context().pages().map(candidate => candidate.url()) };`,
 	})
 	require.NoError(t, err, "cross-context request error: %v", err)
 	require.Equal(t, http.StatusOK, crossContextRsp.StatusCode(), "cross-context request returned %s body=%s", crossContextRsp.Status(), string(crossContextRsp.Body))
@@ -183,12 +190,12 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	resultBytes, err = json.Marshal(crossContextRsp.JSON200.Result)
 	require.NoError(t, err)
 	var crossContextResult struct {
-		URL          string `json:"url"`
-		ContextIndex int    `json:"contextIndex"`
+		URL             string   `json:"url"`
+		ContextPageURLs []string `json:"contextPageUrls"`
 	}
 	require.NoError(t, json.Unmarshal(resultBytes, &crossContextResult))
-	require.Equal(t, "data:text/html,second-context", crossContextResult.URL, "expected page from the second context")
-	require.Equal(t, 1, crossContextResult.ContextIndex, "expected page context at index 1")
+	require.Equal(t, "data:text/html,second-context", crossContextResult.URL, "expected active-page resolution to select the foreground page, not the newer fallback page")
+	require.ElementsMatch(t, []string{"data:text/html,second-context", "about:blank"}, crossContextResult.ContextPageURLs, "expected the selected page to belong to the second context")
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
