@@ -88,7 +88,7 @@ func tailFile(path string) {
 		return
 	}
 	cmd.Stderr = nil
-	if err := cmd.Start(); err != nil {
+	if err := startOwned(cmd); err != nil {
 		return
 	}
 	label := filepath.Base(path)
@@ -107,14 +107,14 @@ func tailFile(path string) {
 	if scanner.Err() != nil {
 		_ = cmd.Process.Kill()
 	}
-	_ = cmd.Wait()
+	_ = waitOwned(cmd)
 }
 
 func runStream(label, name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	cmd.Stdout = prefixWriter{label: label, w: os.Stdout}
 	cmd.Stderr = prefixWriter{label: label, w: os.Stderr}
-	return cmd.Run()
+	return runOwned(cmd)
 }
 
 // runStreamFatal is runStream + fatalf on non-zero exit. Use for scripts the

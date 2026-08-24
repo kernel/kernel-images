@@ -76,6 +76,9 @@ func main() {
 	startupCtx, cancelStartup := context.WithCancel(context.Background())
 	defer cancelStartup()
 
+	// Nothing else reaps the orphans we adopt as pid 1; start before we fork.
+	startReaper()
+
 	// /dev/shm: only mount when not running under Docker (Docker manages it).
 	if os.Getenv("WITHDOCKER") == "" {
 		_ = os.MkdirAll("/dev/shm", 0o1777)
@@ -137,12 +140,12 @@ func main() {
 
 	// supervisord — start in nodaemon mode so we own its lifecycle.
 	// Without -n it forks and the parent exits with code 0, which would
-	// drop us out of supCmd.Wait() and the container would stop.
+	// drop us out of waitOwned(supCmd) and the container would stop.
 	logf("starting supervisord")
 	supCmd := exec.Command("supervisord", "-n", "-c", supervisorConf)
 	supCmd.Stdout = os.Stdout
 	supCmd.Stderr = os.Stderr
-	if err := supCmd.Start(); err != nil {
+	if err := startOwned(supCmd); err != nil {
 		fatalf("supervisord start: %v", err)
 	}
 	// Install the shutdown goroutine now so it can clean up if a signal
@@ -196,7 +199,7 @@ func main() {
 		if err := prepareSnapshotStartPage(startupCtx, os.Getenv("INTERNAL_PORT")); err != nil {
 			if errors.Is(err, context.Canceled) {
 				logf("snapshot start page preparation canceled")
-				if err := supCmd.Wait(); err != nil {
+				if err := waitOwned(supCmd); err != nil {
 					logf("supervisord exited: %v", err)
 				}
 				return
@@ -217,7 +220,7 @@ func main() {
 
 	forkIdentity, identityDeadline, ok := waitForForkIdentityIfEnabled(startupCtx, forkIdentityWait)
 	if !ok {
-		if err := supCmd.Wait(); err != nil {
+		if err := waitOwned(supCmd); err != nil {
 			logf("supervisord exited: %v", err)
 		}
 		return
@@ -264,7 +267,7 @@ func main() {
 	}
 
 	// Block on supervisord; container exits when it does.
-	if err := supCmd.Wait(); err != nil {
+	if err := waitOwned(supCmd); err != nil {
 		logf("supervisord exited: %v", err)
 	}
 }
