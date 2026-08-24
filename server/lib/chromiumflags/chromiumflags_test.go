@@ -412,6 +412,18 @@ func TestMergeFeatureEntries(t *testing.T) {
 			rt:   nil,
 			want: []string{"Foo<B"},
 		},
+		{
+			name: "parameter-decorated variants collapse to one canonical name",
+			base: []string{"Foo:p/v1"},
+			rt:   []string{"Foo:p/v2"},
+			want: []string{"Foo:p/v2"},
+		},
+		{
+			name: "group-and-study decoration is stripped too",
+			base: []string{"Foo"},
+			rt:   []string{"Foo.G1<S"},
+			want: []string{"Foo.G1<S"},
+		},
 	}
 
 	for _, tt := range tests {

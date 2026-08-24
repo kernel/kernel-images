@@ -82,10 +82,11 @@ func union(base, rt []string) []string {
 }
 
 // canonicalFeatureName strips trial/parameter decoration from a feature-list
-// entry. Entries may be of the form Feature or Feature<Trial (Chromium splits
-// on '<' and registers only the part before it as the feature name).
+// entry. ParseEnableFeatureString (base/feature_list.cc) terminates the name
+// at the first of ':', '.', or '<' — parameter, group, and study separators
+// respectively.
 func canonicalFeatureName(entry string) string {
-	if i := strings.IndexByte(entry, '<'); i >= 0 {
+	if i := strings.IndexAny(entry, ":.<"); i >= 0 {
 		return entry[:i]
 	}
 	return entry
