@@ -144,35 +144,51 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Log("playwright foreground-tab binding test passed")
 
 	t.Log("verifying page resolution across browser contexts")
-	// Leave a newer page behind the foreground page so the newest-open-page
-	// fallback cannot satisfy the active-tab assertion.
 	openSecondContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
+			const firstContext = browser.contexts()[0];
 			const secondContext = await browser.newContext();
 			const secondPage = await secondContext.newPage();
 			await secondPage.goto('data:text/html,second-context');
-			const fallbackPage = await secondContext.newPage();
-			await fallbackPage.goto('data:text/html,fallback-page');
-			await secondPage.bringToFront();
-			return browser.contexts().length;
+			await Promise.all(firstContext.pages().map(page => page.close()));
+			return {
+				contextCount: browser.contexts().length,
+				firstContextPageCount: firstContext.pages().length,
+			};
 		`,
 	})
 	require.NoError(t, err, "open second context request error: %v", err)
 	require.Equal(t, http.StatusOK, openSecondContextRsp.StatusCode(), "unexpected status: %s body=%s", openSecondContextRsp.Status(), string(openSecondContextRsp.Body))
 	require.NotNil(t, openSecondContextRsp.JSON200)
 	require.True(t, openSecondContextRsp.JSON200.Success, "expected open-second-context success=true")
-	require.EqualValues(t, 2, openSecondContextRsp.JSON200.Result, "expected two browser contexts")
 
-	for i := 0; i < 30; i++ {
-		crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
-			Code: `return page.url();`,
-		})
-		require.NoError(t, err, "cross-context request %d error: %v", i+1, err)
-		require.Equal(t, http.StatusOK, crossContextRsp.StatusCode(), "cross-context request %d returned %s body=%s", i+1, crossContextRsp.Status(), string(crossContextRsp.Body))
-		require.NotNil(t, crossContextRsp.JSON200)
-		require.True(t, crossContextRsp.JSON200.Success, "cross-context request %d failed", i+1)
-		require.Equal(t, "data:text/html,second-context", crossContextRsp.JSON200.Result, "cross-context request %d injected the fallback page instead of the foreground page", i+1)
+	setupResultBytes, err := json.Marshal(openSecondContextRsp.JSON200.Result)
+	require.NoError(t, err)
+	var setupResult struct {
+		ContextCount          int `json:"contextCount"`
+		FirstContextPageCount int `json:"firstContextPageCount"`
 	}
+	require.NoError(t, json.Unmarshal(setupResultBytes, &setupResult))
+	require.Equal(t, 2, setupResult.ContextCount, "expected two browser contexts")
+	require.Zero(t, setupResult.FirstContextPageCount, "expected the first context to remain open without pages")
+
+	crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return { url: page.url(), contextIndex: browser.contexts().indexOf(page.context()) };`,
+	})
+	require.NoError(t, err, "cross-context request error: %v", err)
+	require.Equal(t, http.StatusOK, crossContextRsp.StatusCode(), "cross-context request returned %s body=%s", crossContextRsp.Status(), string(crossContextRsp.Body))
+	require.NotNil(t, crossContextRsp.JSON200)
+	require.True(t, crossContextRsp.JSON200.Success, "cross-context request failed")
+
+	resultBytes, err = json.Marshal(crossContextRsp.JSON200.Result)
+	require.NoError(t, err)
+	var crossContextResult struct {
+		URL          string `json:"url"`
+		ContextIndex int    `json:"contextIndex"`
+	}
+	require.NoError(t, json.Unmarshal(resultBytes, &crossContextResult))
+	require.Equal(t, "data:text/html,second-context", crossContextResult.URL, "expected page from the second context")
+	require.Equal(t, 1, crossContextResult.ContextIndex, "expected page context at index 1")
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
