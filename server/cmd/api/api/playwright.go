@@ -23,9 +23,10 @@ const (
 )
 
 type playwrightDaemonRequest struct {
-	ID        string `json:"id"`
-	Code      string `json:"code"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	ID                string `json:"id"`
+	Code              string `json:"code"`
+	TimeoutMs         int    `json:"timeout_ms,omitempty"`
+	ResolveActivePage bool   `json:"resolve_active_page"`
 }
 
 type playwrightDaemonResponse struct {
@@ -84,7 +85,7 @@ func (s *ApiService) ensurePlaywrightDaemon(ctx context.Context) error {
 	return fmt.Errorf("playwright daemon failed to start within %v", playwrightDaemonStartup)
 }
 
-func (s *ApiService) executeViaUnixSocket(ctx context.Context, code string, timeout time.Duration) (*playwrightDaemonResponse, error) {
+func (s *ApiService) executeViaUnixSocket(ctx context.Context, code string, timeout time.Duration, resolveActivePage bool) (*playwrightDaemonResponse, error) {
 	conn, err := net.DialTimeout("unix", playwrightDaemonSocket, 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to daemon: %w", err)
@@ -97,9 +98,10 @@ func (s *ApiService) executeViaUnixSocket(ctx context.Context, code string, time
 
 	reqID := uuid.New().String()
 	req := playwrightDaemonRequest{
-		ID:        reqID,
-		Code:      code,
-		TimeoutMs: int(timeout.Milliseconds()),
+		ID:                reqID,
+		Code:              code,
+		TimeoutMs:         int(timeout.Milliseconds()),
+		ResolveActivePage: resolveActivePage,
 	}
 
 	reqBytes, err := json.Marshal(req)
@@ -160,7 +162,8 @@ func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.Exe
 		}, nil
 	}
 
-	resp, err := s.executeViaUnixSocket(ctx, request.Body.Code, timeout)
+	resolveActivePage := request.Body.ResolveActivePage == nil || *request.Body.ResolveActivePage
+	resp, err := s.executeViaUnixSocket(ctx, request.Body.Code, timeout, resolveActivePage)
 	if err != nil {
 		log.Error("playwright execution failed", "error", err)
 		errorMsg := fmt.Sprintf("execution failed: %v", err)

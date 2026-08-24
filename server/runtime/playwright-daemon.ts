@@ -5,7 +5,7 @@
  * connection to the browser, and uses esbuild for TypeScript transformation.
  *
  * Protocol (newline-delimited JSON):
- * Request:  { "id": string, "code": string, "timeout_ms"?: number }
+ * Request:  { "id": string, "code": string, "timeout_ms"?: number, "resolve_active_page"?: boolean }
  * Response: { "id": string, "success": boolean, "result"?: any, "error"?: string, "stack"?: string }
  */
 
@@ -29,6 +29,7 @@ interface ExecuteRequest {
   id: string;
   code: string;
   timeout_ms?: number;
+  resolve_active_page?: boolean;
 }
 
 interface ExecuteResponse {
@@ -140,7 +141,7 @@ async function activeTabTargetIds(browser: Browser): Promise<string[]> {
     });
 
     return targetInfos
-      .filter(target => (target.embedderData as any)?.tabActive === true)
+      .filter(target => (target as any).embedderData?.tabActive === true)
       .map(target => target.targetId);
   } finally {
     await root.detach().catch(() => {});
@@ -261,12 +262,13 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
     const contexts = browserInstance.contexts();
     const defaultContext = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
     const pages = contexts.flatMap(context => context.pages());
+    const resolvePage = request.resolve_active_page !== false;
     // Bind `page` to the actual foreground tab (see resolveActivePage). Using
     // pages[0] bound `page` to the oldest tab regardless of which was active, so
     // calls like page.pdf() operated on the wrong tab whenever more than one was
     // open.
     const page =
-      (pages.length > 0 ? await resolveActivePage(browserInstance) : null) ??
+      (resolvePage && pages.length > 0 ? await resolveActivePage(browserInstance) : null) ??
       pages.findLast(candidate => !candidate.isClosed()) ??
       (await defaultContext.newPage());
     const context = page.context();

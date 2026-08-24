@@ -179,6 +179,17 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Zero(t, setupResult.FirstContextPageCount, "expected the first context to remain open without pages")
 	require.Equal(t, 2, setupResult.SecondContextPageCount, "expected a foreground page and a newer fallback page in the second context")
 
+	resolveActivePage := false
+	pageFreeRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code:              `return browser.contexts().flatMap(browserContext => browserContext.pages()).length;`,
+		ResolveActivePage: &resolveActivePage,
+	})
+	require.NoError(t, err, "page-free request error: %v", err)
+	require.Equal(t, http.StatusOK, pageFreeRsp.StatusCode(), "page-free request returned %s body=%s", pageFreeRsp.Status(), string(pageFreeRsp.Body))
+	require.NotNil(t, pageFreeRsp.JSON200)
+	require.True(t, pageFreeRsp.JSON200.Success, "expected page-free request success=true")
+	require.EqualValues(t, 2, pageFreeRsp.JSON200.Result, "expected page-free request to list both pages in the second context")
+
 	crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return { url: page.url(), contextPageUrls: page.context().pages().map(candidate => candidate.url()) };`,
 	})

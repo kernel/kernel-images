@@ -6902,6 +6902,13 @@ components:
           default: 60
           minimum: 1
           maximum: 300
+        resolve_active_page:
+          type: boolean
+          description: |
+            Whether to resolve Chrome's active tab before execution. Set to false only when the code
+            does not access the injected 'page' or 'context' variables, such as an operation that lists
+            pages through 'browser'. Skipping resolution avoids unnecessary CDP work.
+          default: true
       additionalProperties: false
     ExecutePlaywrightResult:
       type: object
