@@ -376,7 +376,7 @@ func TestTranslateKernelDisableFeatures(t *testing.T) {
 }
 
 func TestMergeFeatureEntries(t *testing.T) {
-	tests := []struct {
+	enableCases := []struct {
 		name string
 		base []string
 		rt   []string
@@ -401,18 +401,6 @@ func TestMergeFeatureEntries(t *testing.T) {
 			want: []string{"Foo<TrialB"},
 		},
 		{
-			name: "distinct canonical names both survive in order",
-			base: []string{"Foo<ParamA/1", "Bar"},
-			rt:   []string{"Bar<TrialB", "Baz"},
-			want: []string{"Foo<ParamA/1", "Bar<TrialB", "Baz"},
-		},
-		{
-			name: "later entry replaces earlier within a stream",
-			base: []string{"Foo<A", "Foo<B"},
-			rt:   nil,
-			want: []string{"Foo<B"},
-		},
-		{
 			name: "parameter-decorated variants collapse to one canonical name",
 			base: []string{"Foo:p/v1"},
 			rt:   []string{"Foo:p/v2"},
@@ -424,11 +412,58 @@ func TestMergeFeatureEntries(t *testing.T) {
 			rt:   []string{"Foo.G1<S"},
 			want: []string{"Foo.G1<S"},
 		},
+		{
+			name: "distinct canonical names both survive in order",
+			base: []string{"Foo<ParamA/1", "Bar"},
+			rt:   []string{"Bar<TrialB", "Baz"},
+			want: []string{"Foo<ParamA/1", "Bar<TrialB", "Baz"},
+		},
+		{
+			name: "later entry replaces earlier within a stream",
+			base: []string{"Foo<A", "Foo<B"},
+			rt:   nil,
+			want: []string{"Foo<B"},
+		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := mergeFeatureEntries(tt.base, tt.rt)
+	for _, tt := range enableCases {
+		t.Run("enable/"+tt.name, func(t *testing.T) {
+			got := mergeFeatureEntries(tt.base, tt.rt, canonicalEnableFeatureName)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeFeatureEntries() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+
+	disableCases := []struct {
+		name string
+		base []string
+		rt   []string
+		want []string
+	}{
+		{
+			name: "runtime trial variant replaces base trial variant",
+			base: []string{"Foo<A"},
+			rt:   []string{"Foo<B"},
+			want: []string{"Foo<B"},
+		},
+		{
+			name: "dotted names are distinct features on the disable switch",
+			base: []string{"Foo.G1"},
+			rt:   []string{"Foo.G2"},
+			want: []string{"Foo.G1", "Foo.G2"},
+		},
+		{
+			name: "colon stays in the name so param variants remain distinct",
+			base: []string{"Foo:p/v1"},
+			rt:   []string{"Foo:p/v2"},
+			want: []string{"Foo:p/v1", "Foo:p/v2"},
+		},
+	}
+
+	for _, tt := range disableCases {
+		t.Run("disable/"+tt.name, func(t *testing.T) {
+			got := mergeFeatureEntries(tt.base, tt.rt, canonicalDisableFeatureName)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("mergeFeatureEntries() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
 			}

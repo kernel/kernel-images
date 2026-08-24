@@ -81,12 +81,23 @@ func union(base, rt []string) []string {
 	return out
 }
 
-// canonicalFeatureName strips trial/parameter decoration from a feature-list
-// entry. ParseEnableFeatureString (base/feature_list.cc) terminates the name
-// at the first of ':', '.', or '<' — parameter, group, and study separators
-// respectively.
-func canonicalFeatureName(entry string) string {
+// canonicalEnableFeatureName strips trial/parameter decoration from an
+// --enable-features entry. Those go through ParseEnableFeatureString
+// (base/feature_list.cc), which terminates the name at the first of ':',
+// '.', or '<' — parameter, group, and study separators respectively.
+func canonicalEnableFeatureName(entry string) string {
 	if i := strings.IndexAny(entry, ":.<"); i >= 0 {
+		return entry[:i]
+	}
+	return entry
+}
+
+// canonicalDisableFeatureName strips decoration from a --disable-features
+// entry. That list bypasses ParseEnableFeatureString and is parsed by
+// RegisterOverridesFromCommandLine, which only splits on '<'; dots and colons
+// are part of the name.
+func canonicalDisableFeatureName(entry string) string {
+	if i := strings.IndexByte(entry, '<'); i >= 0 {
 		return entry[:i]
 	}
 	return entry
@@ -95,20 +106,22 @@ func canonicalFeatureName(entry string) string {
 // mergeFeatureEntries merges base and runtime feature-list entries into one
 // list holding a single entry per canonical feature name, preserving first-
 // seen order. A runtime entry replaces a base entry with the same canonical
-// name, and later entries replace earlier ones within a stream.
+// name, and later entries replace earlier ones within a stream. Entries are
+// canonicalized with canon, which differs between the enable and disable
+// switches.
 //
 // This matters because Chromium's FeatureList registers overrides keyed by
 // canonical name and keeps only the FIRST entry per name (try_emplace in
 // base/feature_list.cc RegisterOverride). Emitting two decorated variants of
-// one feature (e.g. base Foo<TrialA plus runtime Foo<TrialB) would therefore
+// one feature (e.g. base Foo<StudyA plus runtime Foo<StudyB) would therefore
 // let the base configuration silently win; collapsing here makes the emitted
 // switch carry exactly one deliberate configuration per feature.
-func mergeFeatureEntries(baseVals, rtVals []string) []string {
+func mergeFeatureEntries(baseVals, rtVals []string, canon func(string) string) []string {
 	index := make(map[string]int, len(baseVals)+len(rtVals))
 	out := make([]string, 0, len(baseVals)+len(rtVals))
 	add := func(vals []string) {
 		for _, v := range vals {
-			name := canonicalFeatureName(v)
+			name := canon(v)
 			if pos, ok := index[name]; ok {
 				out[pos] = v
 				continue
@@ -212,8 +225,8 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	// Merge feature lists - one entry per canonical feature name, runtime
 	// replacing base on collision. A feature listed in both enable and disable
 	// stays in both; Chromium resolves that conflict as disabled.
-	mergedEnableFeat := mergeFeatureEntries(baseEnableFeat, rtEnableFeat)
-	mergedDisableFeat := mergeFeatureEntries(baseDisableFeat, rtDisableFeat)
+	mergedEnableFeat := mergeFeatureEntries(baseEnableFeat, rtEnableFeat, canonicalEnableFeatureName)
+	mergedDisableFeat := mergeFeatureEntries(baseDisableFeat, rtDisableFeat, canonicalDisableFeatureName)
 
 	var featureFlags []string
 	if len(mergedEnableFeat) > 0 {
@@ -342,7 +355,7 @@ func TranslateKernelDisableFeatures(tokens []string) []string {
 	if len(kernelVals) == 0 {
 		return tokens
 	}
-	merged := mergeFeatureEntries(disableVals, kernelVals)
+	merged := mergeFeatureEntries(disableVals, kernelVals, canonicalDisableFeatureName)
 	rest = append(rest, "--disable-features="+strings.Join(merged, ","))
 	return rest
 }
