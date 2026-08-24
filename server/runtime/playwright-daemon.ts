@@ -189,8 +189,10 @@ async function pageForTabTarget(browser: Browser, targetId: string, pages: Page[
 
 // Chrome reports one active tab per window. Try every reported target against
 // every Playwright context, then retry once in case focus changed mid-lookup.
+const ACTIVE_PAGE_RESOLUTION_ATTEMPTS = 2;
+
 async function resolveActivePage(browser: Browser): Promise<Page | null> {
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < ACTIVE_PAGE_RESOLUTION_ATTEMPTS; attempt++) {
     try {
       const pages = browser
         .contexts()
@@ -201,10 +203,16 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
         try {
           const page = await pageForTabTarget(browser, targetId, pages);
           if (page) return page;
-        } catch {}
+        } catch {
+          // This tab may have changed while it was inspected. Keep trying the
+          // other active tabs reported by the same browser snapshot.
+        }
       }
+
+      // No active tab matched this page snapshot. Retry with fresh snapshots.
     } catch {
-      // Fall back after the retry if Chrome changes targets during resolution.
+      // The browser-wide lookup raced with a target change. Discard this pass;
+      // the next attempt, if any, snapshots both pages and active tabs again.
     }
   }
 
