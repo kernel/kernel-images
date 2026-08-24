@@ -424,6 +424,18 @@ func TestMergeFeatureEntries(t *testing.T) {
 			rt:   nil,
 			want: []string{"Foo<B"},
 		},
+		{
+			name: "starred base is replaced by unstarred runtime",
+			base: []string{"*Foo"},
+			rt:   []string{"Foo"},
+			want: []string{"Foo"},
+		},
+		{
+			name: "unstarred base is replaced by starred runtime",
+			base: []string{"Foo"},
+			rt:   []string{"*Foo"},
+			want: []string{"*Foo"},
+		},
 	}
 
 	for _, tt := range enableCases {
@@ -458,6 +470,18 @@ func TestMergeFeatureEntries(t *testing.T) {
 			base: []string{"Foo:p/v1"},
 			rt:   []string{"Foo:p/v2"},
 			want: []string{"Foo:p/v1", "Foo:p/v2"},
+		},
+		{
+			name: "starred base is replaced by unstarred runtime",
+			base: []string{"*Foo"},
+			rt:   []string{"Foo"},
+			want: []string{"Foo"},
+		},
+		{
+			name: "unstarred base is replaced by starred runtime",
+			base: []string{"Foo"},
+			rt:   []string{"*Foo"},
+			want: []string{"*Foo"},
 		},
 	}
 

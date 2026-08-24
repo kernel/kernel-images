@@ -86,10 +86,7 @@ func union(base, rt []string) []string {
 // (base/feature_list.cc), which terminates the name at the first of ':',
 // '.', or '<' — parameter, group, and study separators respectively.
 func canonicalEnableFeatureName(entry string) string {
-	if i := strings.IndexAny(entry, ":.<"); i >= 0 {
-		return entry[:i]
-	}
-	return entry
+	return stripLeadingStar(cutAtFirst(entry, ":.<"))
 }
 
 // canonicalDisableFeatureName strips decoration from a --disable-features
@@ -97,10 +94,22 @@ func canonicalEnableFeatureName(entry string) string {
 // RegisterOverridesFromCommandLine, which only splits on '<'; dots and colons
 // are part of the name.
 func canonicalDisableFeatureName(entry string) string {
-	if i := strings.IndexByte(entry, '<'); i >= 0 {
+	return stripLeadingStar(cutAtFirst(entry, "<"))
+}
+
+// cutAtFirst returns entry up to its first byte in separators, if any.
+func cutAtFirst(entry, separators string) string {
+	if i := strings.IndexAny(entry, separators); i >= 0 {
 		return entry[:i]
 	}
 	return entry
+}
+
+// stripLeadingStar removes the optional '*' default-reset prefix that
+// RegisterOverride consumes before inserting into its override map, so
+// *Foo and Foo collapse to one canonical key.
+func stripLeadingStar(name string) string {
+	return strings.TrimPrefix(name, "*")
 }
 
 // mergeFeatureEntries merges base and runtime feature-list entries into one
