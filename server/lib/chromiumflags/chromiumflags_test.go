@@ -374,3 +374,52 @@ func TestTranslateKernelDisableFeatures(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeFeatureEntries(t *testing.T) {
+	tests := []struct {
+		name string
+		base []string
+		rt   []string
+		want []string
+	}{
+		{
+			name: "runtime decorated variant replaces base decorated variant",
+			base: []string{"Foo<TrialA"},
+			rt:   []string{"Foo<TrialB"},
+			want: []string{"Foo<TrialB"},
+		},
+		{
+			name: "runtime plain name replaces base decorated variant",
+			base: []string{"Foo<TrialA"},
+			rt:   []string{"Foo"},
+			want: []string{"Foo"},
+		},
+		{
+			name: "runtime decorated variant replaces base plain name",
+			base: []string{"Foo"},
+			rt:   []string{"Foo<TrialB"},
+			want: []string{"Foo<TrialB"},
+		},
+		{
+			name: "distinct canonical names both survive in order",
+			base: []string{"Foo<ParamA/1", "Bar"},
+			rt:   []string{"Bar<TrialB", "Baz"},
+			want: []string{"Foo<ParamA/1", "Bar<TrialB", "Baz"},
+		},
+		{
+			name: "later entry replaces earlier within a stream",
+			base: []string{"Foo<A", "Foo<B"},
+			rt:   nil,
+			want: []string{"Foo<B"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergeFeatureEntries(tt.base, tt.rt)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeFeatureEntries() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}

@@ -81,6 +81,46 @@ func union(base, rt []string) []string {
 	return out
 }
 
+// canonicalFeatureName strips trial/parameter decoration from a feature-list
+// entry. Entries may be of the form Feature or Feature<Trial (Chromium splits
+// on '<' and registers only the part before it as the feature name).
+func canonicalFeatureName(entry string) string {
+	if i := strings.IndexByte(entry, '<'); i >= 0 {
+		return entry[:i]
+	}
+	return entry
+}
+
+// mergeFeatureEntries merges base and runtime feature-list entries into one
+// list holding a single entry per canonical feature name, preserving first-
+// seen order. A runtime entry replaces a base entry with the same canonical
+// name, and later entries replace earlier ones within a stream.
+//
+// This matters because Chromium's FeatureList registers overrides keyed by
+// canonical name and keeps only the FIRST entry per name (try_emplace in
+// base/feature_list.cc RegisterOverride). Emitting two decorated variants of
+// one feature (e.g. base Foo<TrialA plus runtime Foo<TrialB) would therefore
+// let the base configuration silently win; collapsing here makes the emitted
+// switch carry exactly one deliberate configuration per feature.
+func mergeFeatureEntries(baseVals, rtVals []string) []string {
+	index := make(map[string]int, len(baseVals)+len(rtVals))
+	out := make([]string, 0, len(baseVals)+len(rtVals))
+	add := func(vals []string) {
+		for _, v := range vals {
+			name := canonicalFeatureName(v)
+			if pos, ok := index[name]; ok {
+				out[pos] = v
+				continue
+			}
+			index[name] = len(out)
+			out = append(out, v)
+		}
+	}
+	add(baseVals)
+	add(rtVals)
+	return out
+}
+
 // ReadOptionalFlagFile returns the flags array from the JSON file at path.
 // If the file does not exist, it returns nil and a nil error.
 func ReadOptionalFlagFile(path string) ([]string, error) {
@@ -168,10 +208,11 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	mergedLoad = union(mergedLoad, baseExcept)
 	mergedLoad = union(mergedLoad, rtExcept)
 
-	// Merge feature lists - a feature listed in both enable and disable stays in both;
-	// Chromium resolves that conflict as disabled.
-	mergedEnableFeat := union(baseEnableFeat, rtEnableFeat)
-	mergedDisableFeat := union(baseDisableFeat, rtDisableFeat)
+	// Merge feature lists - one entry per canonical feature name, runtime
+	// replacing base on collision. A feature listed in both enable and disable
+	// stays in both; Chromium resolves that conflict as disabled.
+	mergedEnableFeat := mergeFeatureEntries(baseEnableFeat, rtEnableFeat)
+	mergedDisableFeat := mergeFeatureEntries(baseDisableFeat, rtDisableFeat)
 
 	var featureFlags []string
 	if len(mergedEnableFeat) > 0 {
@@ -281,8 +322,9 @@ func WriteFlagFile(path string, tokens []string) error {
 const KernelDisableFeaturesPrefix = "--kernel-disable-features="
 
 // TranslateKernelDisableFeatures folds any --kernel-disable-features tokens into the
-// single --disable-features token and returns the result. Values are unioned with any
-// existing disable list; ordering of unrelated tokens is preserved. Idempotent.
+// single --disable-features token and returns the result. Values are merged by
+// canonical feature name (runtime/kernel entries replacing base ones); ordering of
+// unrelated tokens is preserved. Idempotent.
 func TranslateKernelDisableFeatures(tokens []string) []string {
 	var kernelVals, disableVals []string
 	rest := make([]string, 0, len(tokens))
@@ -299,7 +341,7 @@ func TranslateKernelDisableFeatures(tokens []string) []string {
 	if len(kernelVals) == 0 {
 		return tokens
 	}
-	merged := union(disableVals, kernelVals)
+	merged := mergeFeatureEntries(disableVals, kernelVals)
 	rest = append(rest, "--disable-features="+strings.Join(merged, ","))
 	return rest
 }
