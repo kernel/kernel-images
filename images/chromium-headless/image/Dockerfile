@@ -268,7 +268,7 @@ COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launch
 COPY --from=server-builder /out/kernel-images-supervisord-shim /usr/local/bin/kernel-images-supervisord-shim
 
 # Copy and compile the Playwright daemon
-COPY server/runtime/playwright-daemon.ts /tmp/playwright-daemon.ts
+COPY server/runtime/playwright-daemon.ts server/runtime/page-target-id-cache.ts /tmp/
 RUN esbuild /tmp/playwright-daemon.ts \
     --bundle \
     --platform=node \
@@ -278,6 +278,6 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:playwright-core \
     --external:patchright \
     --external:esbuild \
-    && rm /tmp/playwright-daemon.ts
+    && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts
 
 ENTRYPOINT [ "/wrapper" ]

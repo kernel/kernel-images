@@ -15,6 +15,8 @@ import { transform } from 'esbuild';
 import { chromium as chromiumPW, Browser, Page } from 'playwright-core';
 import { chromium as chromiumPR } from 'patchright';
 
+import { PageTargetIdCache } from './page-target-id-cache';
+
 const SOCKET_PATH = process.env.PLAYWRIGHT_DAEMON_SOCKET || '/tmp/playwright-daemon.sock';
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
 const USE_PATCHRIGHT = process.env.PLAYWRIGHT_ENGINE !== 'playwright-core';
@@ -24,6 +26,16 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 let browser: Browser | null = null;
 let connecting = false;
 let reconnectAttempts = 0;
+
+const pageTargetIdCache = new PageTargetIdCache<Page>(async page => {
+  const session = await page.context().newCDPSession(page);
+  try {
+    const { targetInfo } = await session.send('Target.getTargetInfo');
+    return targetInfo.targetId;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+});
 
 interface ExecuteRequest {
   id: string;
@@ -76,6 +88,7 @@ async function transformCode(code: string): Promise<string> {
 async function disconnectBrowser(): Promise<void> {
   const connectedBrowser = browser;
   browser = null;
+  pageTargetIdCache.reset();
   if (!connectedBrowser) return;
 
   try {
@@ -110,6 +123,7 @@ async function ensureBrowserConnection(): Promise<Browser> {
         // Ignore
       }
       browser = null;
+      pageTargetIdCache.reset();
     }
 
     console.error(`[playwright-daemon] Connecting to CDP: ${CDP_ENDPOINT}`);
@@ -121,6 +135,7 @@ async function ensureBrowserConnection(): Promise<Browser> {
       console.error('[playwright-daemon] Browser disconnected');
       if (browser === connectedBrowser) {
         browser = null;
+        pageTargetIdCache.reset();
       }
     });
 
@@ -147,7 +162,11 @@ async function activeTabTargetIds(browser: Browser): Promise<string[]> {
   }
 }
 
-async function pageForTabTarget(browser: Browser, targetId: string, pages: Page[]): Promise<Page | null> {
+async function pageForTabTarget(
+  browser: Browser,
+  targetId: string,
+  pageByTargetId: Map<string, Page>,
+): Promise<Page | null> {
   const root = await browser.newBrowserCDPSession();
 
   try {
@@ -164,21 +183,9 @@ async function pageForTabTarget(browser: Browser, targetId: string, pages: Page[
       filter: [{ type: 'page', exclude: false }, { exclude: true }],
     });
 
-    for (const page of pages) {
-      try {
-        const context = page.context();
-        const session = await context.newCDPSession(page);
-        try {
-          const { targetInfo } = await session.send('Target.getTargetInfo');
-          if (relatedPageIds.has(targetInfo.targetId)) return page;
-        } finally {
-          await session.detach().catch(() => {});
-        }
-      } catch {
-        // A crashed or closing page can fail CDP session setup/queries; skip it
-        // rather than aborting the search for the real foreground tab.
-        continue;
-      }
+    for (const relatedPageId of relatedPageIds) {
+      const page = pageByTargetId.get(relatedPageId);
+      if (page && !page.isClosed()) return page;
     }
 
     return null;
@@ -215,11 +222,12 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
         .contexts()
         .flatMap(context => context.pages())
         .filter(page => !page.isClosed());
+      const pageByTargetId = await pageTargetIdCache.buildPageByTargetId(pages, { refresh: attempt > 0 });
 
       activeTabIds = await activeTabTargetIds(browser);
       for (const targetId of activeTabIds) {
         try {
-          const page = await pageForTabTarget(browser, targetId, pages);
+          const page = await pageForTabTarget(browser, targetId, pageByTargetId);
           if (page) return page;
         } catch {
           // This tab may have changed while it was inspected. Keep trying the

@@ -36,6 +36,11 @@ jobs:
           cache: true
           cache-dependency-path: server/go.sum
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       # categorygen's checks (unclassified route, category that isn't control or
       # platform, classified route with no handler) only run when the generator
       # does, and its only other caller is `make oapi-generate`, which needs the
@@ -48,6 +53,10 @@ jobs:
 
       - name: Run server unit tests
         run: make test-unit
+        working-directory: server
+
+      - name: Run Playwright daemon unit tests
+        run: make test-runtime
         working-directory: server
 
   test-server-e2e:
