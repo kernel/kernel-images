@@ -1,0 +1,21 @@
+name: Breakglass
+
+# Comment `/breakglass <reason>` on a PR to merge it without its required approval.
+# The mechanism lives in kernel/security-workflows; this file is the whole per-repo install
+# and should never grow logic. See kernel/infra docs/breakglass.md.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  merge:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/breakglass')
+    uses: kernel/security-workflows/.github/workflows/breakglass-merge.yml@main
+    # Named rather than `secrets: inherit`: this calls a workflow in another repository, and
+    # inherit would hand it every secret this repo holds.
+    secrets:
+      BREAKGLASS_APP_ID: ${{ secrets.BREAKGLASS_APP_ID }}
+      BREAKGLASS_APP_PRIVATE_KEY: ${{ secrets.BREAKGLASS_APP_PRIVATE_KEY }}
