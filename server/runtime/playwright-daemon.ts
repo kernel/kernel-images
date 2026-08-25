@@ -188,18 +188,36 @@ async function pageForTabTarget(browser: Browser, targetId: string, pages: Page[
 }
 
 // Chrome reports one active tab per window. Try every reported target against
-// every Playwright context, then retry once in case focus changed mid-lookup.
-const ACTIVE_PAGE_RESOLUTION_ATTEMPTS = 2;
+// every Playwright context's pages.
+//
+// A pass can legitimately find an active tab with no matching page. The known
+// cause is a cross-origin navigation in a freshly opened tab (e.g. a site
+// handing the user off to a sibling product on another origin): Chrome swaps
+// the tab's page target to a new renderer process and marks the tab active
+// before Playwright has attached to the replacement target. That gap is
+// transient but has been observed to outlast back-to-back daemon calls, so an
+// immediate retry lands inside the same gap; the retries are spaced to give
+// Playwright time to attach. The delay is only paid when a pass fails, and
+// callers fall back to an open page if every attempt misses.
+const ACTIVE_PAGE_RESOLUTION_ATTEMPTS = 3;
+const ACTIVE_PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
 
 async function resolveActivePage(browser: Browser): Promise<Page | null> {
+  let activeTabIds: string[] = [];
+
   for (let attempt = 0; attempt < ACTIVE_PAGE_RESOLUTION_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise(resolve => setTimeout(resolve, ACTIVE_PAGE_RESOLUTION_RETRY_DELAY_MS));
+    }
+
     try {
       const pages = browser
         .contexts()
         .flatMap(context => context.pages())
         .filter(page => !page.isClosed());
 
-      for (const targetId of await activeTabTargetIds(browser)) {
+      activeTabIds = await activeTabTargetIds(browser);
+      for (const targetId of activeTabIds) {
         try {
           const page = await pageForTabTarget(browser, targetId, pages);
           if (page) return page;
@@ -216,7 +234,10 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
     }
   }
 
-  console.error('[playwright-daemon] active-tab resolution failed; falling back');
+  console.error(
+    `[playwright-daemon] active-tab resolution failed after ${ACTIVE_PAGE_RESOLUTION_ATTEMPTS} attempts; ` +
+      `falling back (unmatched active tabs: ${activeTabIds.join(', ') || 'none reported'})`,
+  );
   return null;
 }
 
