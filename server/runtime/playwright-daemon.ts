@@ -12,7 +12,7 @@
 import { createServer, Socket } from 'net';
 import { unlinkSync, existsSync } from 'fs';
 import { transform } from 'esbuild';
-import { chromium as chromiumPW, Browser, Page } from 'playwright-core';
+import { chromium as chromiumPW, Browser, CDPSession, Page } from 'playwright-core';
 import { chromium as chromiumPR } from 'patchright';
 
 import { PageTargetIdCache } from './page-target-id-cache';
@@ -146,37 +146,32 @@ async function ensureBrowserConnection(): Promise<Browser> {
   }
 }
 
-async function activeTabTargetIds(browser: Browser): Promise<string[]> {
-  const root = await browser.newBrowserCDPSession();
+async function activeTabTargetIds(root: CDPSession): Promise<string[]> {
+  const { targetInfos } = await root.send('Target.getTargets', {
+    filter: [{ type: 'tab', exclude: false }, { exclude: true }],
+  });
 
-  try {
-    const { targetInfos } = await root.send('Target.getTargets', {
-      filter: [{ type: 'tab', exclude: false }, { exclude: true }],
-    });
-
-    return targetInfos
-      .filter(target => (target.embedderData as any)?.tabActive === true)
-      .map(target => target.targetId);
-  } finally {
-    await root.detach().catch(() => {});
-  }
+  return targetInfos
+    .filter(target => (target.embedderData as any)?.tabActive === true)
+    .map(target => target.targetId);
 }
 
 async function pageForTabTarget(
-  browser: Browser,
+  root: CDPSession,
   targetId: string,
   pageByTargetId: Map<string, Page>,
 ): Promise<Page | null> {
-  const root = await browser.newBrowserCDPSession();
+  // The listener is scoped to this call so page targets attached for one tab
+  // never leak into another tab's candidate set.
+  const relatedPageIds = new Set<string>();
+  const collectRelatedPage = (event: { targetInfo: { type: string; subtype?: string; targetId: string } }) => {
+    if (event.targetInfo.type === 'page' && !event.targetInfo.subtype) {
+      relatedPageIds.add(event.targetInfo.targetId);
+    }
+  };
+  root.on('Target.attachedToTarget', collectRelatedPage);
 
   try {
-    const relatedPageIds = new Set<string>();
-    root.on('Target.attachedToTarget', event => {
-      if (event.targetInfo.type === 'page' && !event.targetInfo.subtype) {
-        relatedPageIds.add(event.targetInfo.targetId);
-      }
-    });
-
     await root.send('Target.autoAttachRelated', {
       targetId,
       waitForDebuggerOnStart: false,
@@ -190,7 +185,7 @@ async function pageForTabTarget(
 
     return null;
   } finally {
-    await root.detach().catch(() => {});
+    root.off('Target.attachedToTarget', collectRelatedPage);
   }
 }
 
@@ -224,15 +219,23 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
         .filter(page => !page.isClosed());
       const pageByTargetId = await pageTargetIdCache.buildPageByTargetId(pages, { refresh: attempt > 0 });
 
-      activeTabIds = await activeTabTargetIds(browser);
-      for (const targetId of activeTabIds) {
-        try {
-          const page = await pageForTabTarget(browser, targetId, pageByTargetId);
-          if (page) return page;
-        } catch {
-          // This tab may have changed while it was inspected. Keep trying the
-          // other active tabs reported by the same browser snapshot.
+      // One browser-level session serves the whole attempt: the active-tab
+      // listing and every tab-to-page join. Detaching it also cleans up the
+      // page sessions auto-attached by pageForTabTarget.
+      const root = await browser.newBrowserCDPSession();
+      try {
+        activeTabIds = await activeTabTargetIds(root);
+        for (const targetId of activeTabIds) {
+          try {
+            const page = await pageForTabTarget(root, targetId, pageByTargetId);
+            if (page) return page;
+          } catch {
+            // This tab may have changed while it was inspected. Keep trying the
+            // other active tabs reported by the same browser snapshot.
+          }
         }
+      } finally {
+        await root.detach().catch(() => {});
       }
 
       // No active tab matched this page snapshot. Retry with fresh snapshots.
