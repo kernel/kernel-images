@@ -156,11 +156,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     xclip \
     xdotool \
     fontconfig \
+    locales \
+    tzdata \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
     fonts-noto-mono \
     fonts-nanum \
     supervisor; \
+    locale-gen en_US.UTF-8 en_GB.UTF-8 en_CA.UTF-8 en_IE.UTF-8 en_SG.UTF-8; \
     fc-cache -f
 
 # sqlite3 for debugging the cookies file; unzip for the chrome-for-testing archives below.
@@ -178,6 +181,7 @@ RUN set -eux; \
     unzip -q /tmp/cd.zip -d /tmp; \
     mv /opt/chrome-linux64 /opt/chrome-for-testing; \
     mv /opt/chrome-for-testing/chrome /opt/chrome-for-testing/chromium; \
+    for locale in en-CA en-IE en-SG; do cp /opt/chrome-for-testing/locales/en-GB.pak "/opt/chrome-for-testing/locales/${locale}.pak"; done; \
     ln -sf /opt/chrome-for-testing/chromium /usr/bin/chromium; \
     mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
     chmod +x /usr/local/bin/chromedriver /opt/chrome-for-testing/chromium; \
