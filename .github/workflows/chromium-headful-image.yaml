@@ -5,6 +5,10 @@ on:
 
 jobs:
   docker:
+    # Fork PRs get no secrets and now must not reach the self-hosted pool
+    # either: skipping here (rather than failing at registry login, as
+    # before) also skips the dependent e2e job via its needs chain.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux]
     permissions:
       contents: read
