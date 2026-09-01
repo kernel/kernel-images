@@ -74,8 +74,9 @@ func (t *Tracker) handleProtocolEvent(message cdpconnection.Message) {
 	case "Page.frameDetached":
 		var event struct {
 			FrameID string `json:"frameId"`
+			Reason  string `json:"reason"`
 		}
-		if json.Unmarshal(message.Params, &event) == nil {
+		if json.Unmarshal(message.Params, &event) == nil && event.Reason != "swap" {
 			t.removeFrame(event.FrameID)
 		}
 	}

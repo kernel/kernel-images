@@ -207,6 +207,47 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	require.Equal(t, 2, moved.WindowID)
 }
 
+func TestTrackerPreservesFramesDuringProcessSwap(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	events, cancel := tracker.Subscribe()
+	defer cancel()
+	require.NoError(t, tracker.Start(context.Background()))
+	require.Eventually(t, func() bool {
+		_, ok := tracker.Resolve("session-a", "inner")
+		return ok
+	}, time.Second, 10*time.Millisecond)
+
+	waitForDetach := func(reason string) {
+		require.Eventually(t, func() bool {
+			select {
+			case event := <-events:
+				if event.Kind != EventProtocol || event.Message.Method != "Page.frameDetached" {
+					return false
+				}
+				var params struct {
+					Reason string `json:"reason"`
+				}
+				return json.Unmarshal(event.Message.Params, &params) == nil && params.Reason == reason
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond)
+	}
+
+	protocol.emitTarget("Page.frameDetached", map[string]any{"frameId": "outer", "reason": "swap"})
+	waitForDetach("swap")
+	_, ok := tracker.Resolve("session-a", "inner")
+	require.True(t, ok)
+
+	protocol.emitTarget("Page.frameDetached", map[string]any{"frameId": "outer", "reason": "remove"})
+	waitForDetach("remove")
+	require.Eventually(t, func() bool {
+		_, ok := tracker.Resolve("session-a", "inner")
+		return !ok
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestTrackerRefreshDoesNotRemoveTabCreatedAfterSnapshot(t *testing.T) {
 	protocol := newFakeProtocol()
 	tracker := New(protocol)
