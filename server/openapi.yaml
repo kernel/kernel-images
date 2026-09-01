@@ -1356,6 +1356,73 @@ paths:
               schema:
                 $ref: "#/components/schemas/ChromiumConfigureError"
 
+  /webmcp/tools:
+    get:
+      summary: Discover WebMCP tools in the active page and its frames
+      description: |
+        Lazily attaches one internal CDP connection to a page target and returns a snapshot of
+        native WebMCP tools registered by its current documents. Cross-origin iframe targets are
+        followed through CDP auto-attach. The server consumes WebMCP events internally; callers do
+        not need to maintain a CDP connection or subscribe to an event stream.
+      operationId: getWebMCPTools
+      x-telemetry-category: control
+      parameters:
+        - name: target_id
+          in: query
+          required: false
+          description: Optional page target to inspect. When omitted, the first page target reported by Chromium is used.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+      responses:
+        "200":
+          description: Current WebMCP tool snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebMCPToolsResponse"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /webmcp/invoke:
+    post:
+      summary: Invoke a discovered WebMCP tool
+      description: |
+        Invokes the registration identified by tool_ref and waits for Chromium's matching
+        WebMCP.toolResponded event. Navigation during execution is allowed. If the owning CDP
+        session disappears or the request times out after invocation begins, the server reports
+        outcome_unknown and never retries the tool automatically.
+      operationId: invokeWebMCPTool
+      x-telemetry-category: control
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebMCPInvokeRequest"
+      responses:
+        "200":
+          description: Chromium reported the tool's terminal result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebMCPInvocationResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "504":
+          description: Invocation began, but its final outcome could not be observed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebMCPInvocationFailure"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
@@ -6170,6 +6237,121 @@ components:
             Wall-clock time at which the current configuration was applied.
             Omitted when telemetry is not configured.
       additionalProperties: false
+    WebMCPToolAnnotations:
+      type: object
+      description: Page-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
+      additionalProperties: false
+      required: [read_only, untrusted_content, consequential, autosubmit]
+      properties:
+        read_only:
+          type: boolean
+        untrusted_content:
+          type: boolean
+        consequential:
+          type: boolean
+        autosubmit:
+          type: boolean
+    WebMCPTool:
+      type: object
+      additionalProperties: false
+      required:
+        - tool_ref
+        - name
+        - description
+        - input_schema
+        - page_target_id
+        - target_id
+        - target_type
+        - frame_id
+      properties:
+        tool_ref:
+          type: string
+          description: Opaque reference for invoking this exact live registration. It becomes invalid when its document or CDP session is replaced.
+        name:
+          type: string
+        description:
+          type: string
+        input_schema:
+          type: object
+          additionalProperties: true
+        annotations:
+          $ref: "#/components/schemas/WebMCPToolAnnotations"
+        page_target_id:
+          type: string
+          description: CDP target ID of the selected top-level page.
+        target_id:
+          type: string
+          description: CDP target ID owning the registration. For an out-of-process iframe this differs from page_target_id.
+        target_type:
+          type: string
+          description: CDP target type, normally page or iframe.
+        target_url:
+          type: string
+          description: Owning target URL with the fragment omitted.
+        frame_id:
+          type: string
+          description: Page.FrameId supplied by Chromium's WebMCP domain.
+        frame_url:
+          type: string
+          description: Current frame URL with the fragment omitted.
+        parent_frame_id:
+          type: string
+        document_ref:
+          type: string
+          description: Reference derived from the owning target and current Page.LoaderId. It changes when the frame commits a new document.
+    WebMCPToolsResponse:
+      type: object
+      additionalProperties: false
+      required: [tools]
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebMCPTool"
+    WebMCPInvokeRequest:
+      type: object
+      additionalProperties: false
+      required: [tool_ref, input]
+      properties:
+        tool_ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+        input:
+          type: object
+          description: Tool input, limited to 1 MiB after JSON serialization.
+          additionalProperties: true
+        timeout_sec:
+          type: integer
+          minimum: 1
+          maximum: 120
+          default: 60
+    WebMCPInvocationResult:
+      type: object
+      additionalProperties: false
+      required: [invocation_id, status]
+      properties:
+        invocation_id:
+          type: string
+        status:
+          type: string
+          enum: [completed, canceled, error]
+        output:
+          description: Untrusted page-provided output. Callers must treat it as potentially malicious input.
+        error_text:
+          type: string
+    WebMCPInvocationFailure:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [outcome_unknown]
+        message:
+          type: string
+        invocation_id:
+          type: string
     StartRecordingRequest:
       type: object
       properties:

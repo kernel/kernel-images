@@ -2903,6 +2903,42 @@ func (e TelemetryEventCategory) Valid() bool {
 	}
 }
 
+// Defines values for WebMCPInvocationFailureCode.
+const (
+	OutcomeUnknown WebMCPInvocationFailureCode = "outcome_unknown"
+)
+
+// Valid indicates whether the value is a known member of the WebMCPInvocationFailureCode enum.
+func (e WebMCPInvocationFailureCode) Valid() bool {
+	switch e {
+	case OutcomeUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WebMCPInvocationResultStatus.
+const (
+	WebMCPInvocationResultStatusCanceled  WebMCPInvocationResultStatus = "canceled"
+	WebMCPInvocationResultStatusCompleted WebMCPInvocationResultStatus = "completed"
+	WebMCPInvocationResultStatusError     WebMCPInvocationResultStatus = "error"
+)
+
+// Valid indicates whether the value is a known member of the WebMCPInvocationResultStatus enum.
+func (e WebMCPInvocationResultStatus) Valid() bool {
+	switch e {
+	case WebMCPInvocationResultStatusCanceled:
+		return true
+	case WebMCPInvocationResultStatusCompleted:
+		return true
+	case WebMCPInvocationResultStatusError:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ChromiumConfigureParamsExtensionLoadStrategy.
 const (
 	PreferCdp ChromiumConfigureParamsExtensionLoadStrategy = "prefer_cdp"
@@ -6659,6 +6695,84 @@ type TypeTextRequest struct {
 	TypoChance *float32 `json:"typo_chance,omitempty"`
 }
 
+// WebMCPInvocationFailure defines model for WebMCPInvocationFailure.
+type WebMCPInvocationFailure struct {
+	Code         WebMCPInvocationFailureCode `json:"code"`
+	InvocationId *string                     `json:"invocation_id,omitempty"`
+	Message      string                      `json:"message"`
+}
+
+// WebMCPInvocationFailureCode defines model for WebMCPInvocationFailure.Code.
+type WebMCPInvocationFailureCode string
+
+// WebMCPInvocationResult defines model for WebMCPInvocationResult.
+type WebMCPInvocationResult struct {
+	ErrorText    *string `json:"error_text,omitempty"`
+	InvocationId string  `json:"invocation_id"`
+
+	// Output Untrusted page-provided output. Callers must treat it as potentially malicious input.
+	Output interface{}                  `json:"output,omitempty"`
+	Status WebMCPInvocationResultStatus `json:"status"`
+}
+
+// WebMCPInvocationResultStatus defines model for WebMCPInvocationResult.Status.
+type WebMCPInvocationResultStatus string
+
+// WebMCPInvokeRequest defines model for WebMCPInvokeRequest.
+type WebMCPInvokeRequest struct {
+	// Input Tool input, limited to 1 MiB after JSON serialization.
+	Input      map[string]interface{} `json:"input"`
+	TimeoutSec *int                   `json:"timeout_sec,omitempty"`
+	ToolRef    string                 `json:"tool_ref"`
+}
+
+// WebMCPTool defines model for WebMCPTool.
+type WebMCPTool struct {
+	// Annotations Page-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
+	Annotations *WebMCPToolAnnotations `json:"annotations,omitempty"`
+	Description string                 `json:"description"`
+
+	// DocumentRef Reference derived from the owning target and current Page.LoaderId. It changes when the frame commits a new document.
+	DocumentRef *string `json:"document_ref,omitempty"`
+
+	// FrameId Page.FrameId supplied by Chromium's WebMCP domain.
+	FrameId string `json:"frame_id"`
+
+	// FrameUrl Current frame URL with the fragment omitted.
+	FrameUrl    *string                `json:"frame_url,omitempty"`
+	InputSchema map[string]interface{} `json:"input_schema"`
+	Name        string                 `json:"name"`
+
+	// PageTargetId CDP target ID of the selected top-level page.
+	PageTargetId  string  `json:"page_target_id"`
+	ParentFrameId *string `json:"parent_frame_id,omitempty"`
+
+	// TargetId CDP target ID owning the registration. For an out-of-process iframe this differs from page_target_id.
+	TargetId string `json:"target_id"`
+
+	// TargetType CDP target type, normally page or iframe.
+	TargetType string `json:"target_type"`
+
+	// TargetUrl Owning target URL with the fragment omitted.
+	TargetUrl *string `json:"target_url,omitempty"`
+
+	// ToolRef Opaque reference for invoking this exact live registration. It becomes invalid when its document or CDP session is replaced.
+	ToolRef string `json:"tool_ref"`
+}
+
+// WebMCPToolAnnotations Page-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
+type WebMCPToolAnnotations struct {
+	Autosubmit       bool `json:"autosubmit"`
+	Consequential    bool `json:"consequential"`
+	ReadOnly         bool `json:"read_only"`
+	UntrustedContent bool `json:"untrusted_content"`
+}
+
+// WebMCPToolsResponse defines model for WebMCPToolsResponse.
+type WebMCPToolsResponse struct {
+	Tools []WebMCPTool `json:"tools"`
+}
+
 // WriteClipboardRequest defines model for WriteClipboardRequest.
 type WriteClipboardRequest struct {
 	// Text Text to write to the system clipboard
@@ -6832,6 +6946,12 @@ type StreamTelemetryEventsParams struct {
 // StreamTelemetryEventsParamsReplay defines parameters for StreamTelemetryEvents.
 type StreamTelemetryEventsParamsReplay string
 
+// GetWebMCPToolsParams defines parameters for GetWebMCPTools.
+type GetWebMCPToolsParams struct {
+	// TargetId Optional page target to inspect. When omitted, the first page target reported by Chromium is used.
+	TargetId *string `form:"target_id,omitempty" json:"target_id,omitempty"`
+}
+
 // PatchChromiumFlagsJSONRequestBody defines body for PatchChromiumFlags for application/json ContentType.
 type PatchChromiumFlagsJSONRequestBody PatchChromiumFlagsJSONBody
 
@@ -6945,6 +7065,9 @@ type PutTelemetryJSONRequestBody = BrowserTelemetryConfig
 
 // PublishTelemetryEventJSONRequestBody defines body for PublishTelemetryEvent for application/json ContentType.
 type PublishTelemetryEventJSONRequestBody = PublishEventRequest
+
+// InvokeWebMCPToolJSONRequestBody defines body for InvokeWebMCPTool for application/json ContentType.
+type InvokeWebMCPToolJSONRequestBody = WebMCPInvokeRequest
 
 // AsBrowserCdpInputDispatchMouseEventCommandData returns the union data inside the BrowserCdpCommandEventData as a BrowserCdpInputDispatchMouseEventCommandData
 func (t BrowserCdpCommandEventData) AsBrowserCdpInputDispatchMouseEventCommandData() (BrowserCdpInputDispatchMouseEventCommandData, error) {
@@ -9531,6 +9654,14 @@ type ClientInterface interface {
 
 	// StreamTelemetryEvents request
 	StreamTelemetryEvents(ctx context.Context, params *StreamTelemetryEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// InvokeWebMCPToolWithBody request with any body
+	InvokeWebMCPToolWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	InvokeWebMCPTool(ctx context.Context, body InvokeWebMCPToolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetWebMCPTools request
+	GetWebMCPTools(ctx context.Context, params *GetWebMCPToolsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
 func (c *Client) PatchChromiumFlagsWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -10591,6 +10722,42 @@ func (c *Client) PublishTelemetryEvent(ctx context.Context, body PublishTelemetr
 
 func (c *Client) StreamTelemetryEvents(ctx context.Context, params *StreamTelemetryEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStreamTelemetryEventsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) InvokeWebMCPToolWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewInvokeWebMCPToolRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) InvokeWebMCPTool(ctx context.Context, body InvokeWebMCPToolJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewInvokeWebMCPToolRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetWebMCPTools(ctx context.Context, params *GetWebMCPToolsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetWebMCPToolsRequest(c.Server, params)
 	if err != nil {
 		return nil, err
 	}
@@ -12906,6 +13073,95 @@ func NewStreamTelemetryEventsRequest(server string, params *StreamTelemetryEvent
 	return req, nil
 }
 
+// NewInvokeWebMCPToolRequest calls the generic InvokeWebMCPTool builder with application/json body
+func NewInvokeWebMCPToolRequest(server string, body InvokeWebMCPToolJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewInvokeWebMCPToolRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewInvokeWebMCPToolRequestWithBody generates requests for InvokeWebMCPTool with any type of body
+func NewInvokeWebMCPToolRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/webmcp/invoke")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewGetWebMCPToolsRequest generates requests for GetWebMCPTools
+func NewGetWebMCPToolsRequest(server string, params *GetWebMCPToolsParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/webmcp/tools")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if params.TargetId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "target_id", *params.TargetId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+				return nil, err
+			} else {
+				for k, v := range parsed {
+					for _, v2 := range v {
+						queryValues.Add(k, v2)
+					}
+				}
+			}
+
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 func (c *Client) applyEditors(ctx context.Context, req *http.Request, additionalEditors []RequestEditorFn) error {
 	for _, r := range c.RequestEditors {
 		if err := r(ctx, req); err != nil {
@@ -13183,6 +13439,14 @@ type ClientWithResponsesInterface interface {
 
 	// StreamTelemetryEventsWithResponse request
 	StreamTelemetryEventsWithResponse(ctx context.Context, params *StreamTelemetryEventsParams, reqEditors ...RequestEditorFn) (*StreamTelemetryEventsResponse, error)
+
+	// InvokeWebMCPToolWithBodyWithResponse request with any body
+	InvokeWebMCPToolWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*InvokeWebMCPToolResponse, error)
+
+	InvokeWebMCPToolWithResponse(ctx context.Context, body InvokeWebMCPToolJSONRequestBody, reqEditors ...RequestEditorFn) (*InvokeWebMCPToolResponse, error)
+
+	// GetWebMCPToolsWithResponse request
+	GetWebMCPToolsWithResponse(ctx context.Context, params *GetWebMCPToolsParams, reqEditors ...RequestEditorFn) (*GetWebMCPToolsResponse, error)
 }
 
 type PatchChromiumFlagsResponse struct {
@@ -14540,6 +14804,56 @@ func (r StreamTelemetryEventsResponse) StatusCode() int {
 	return 0
 }
 
+type InvokeWebMCPToolResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *WebMCPInvocationResult
+	JSON400      *BadRequestError
+	JSON404      *NotFoundError
+	JSON500      *InternalError
+	JSON504      *WebMCPInvocationFailure
+}
+
+// Status returns HTTPResponse.Status
+func (r InvokeWebMCPToolResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r InvokeWebMCPToolResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetWebMCPToolsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *WebMCPToolsResponse
+	JSON404      *NotFoundError
+	JSON500      *InternalError
+}
+
+// Status returns HTTPResponse.Status
+func (r GetWebMCPToolsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetWebMCPToolsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 // PatchChromiumFlagsWithBodyWithResponse request with arbitrary body returning *PatchChromiumFlagsResponse
 func (c *ClientWithResponses) PatchChromiumFlagsWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PatchChromiumFlagsResponse, error) {
 	rsp, err := c.PatchChromiumFlagsWithBody(ctx, contentType, body, reqEditors...)
@@ -15307,6 +15621,32 @@ func (c *ClientWithResponses) StreamTelemetryEventsWithResponse(ctx context.Cont
 		return nil, err
 	}
 	return ParseStreamTelemetryEventsResponse(rsp)
+}
+
+// InvokeWebMCPToolWithBodyWithResponse request with arbitrary body returning *InvokeWebMCPToolResponse
+func (c *ClientWithResponses) InvokeWebMCPToolWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*InvokeWebMCPToolResponse, error) {
+	rsp, err := c.InvokeWebMCPToolWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseInvokeWebMCPToolResponse(rsp)
+}
+
+func (c *ClientWithResponses) InvokeWebMCPToolWithResponse(ctx context.Context, body InvokeWebMCPToolJSONRequestBody, reqEditors ...RequestEditorFn) (*InvokeWebMCPToolResponse, error) {
+	rsp, err := c.InvokeWebMCPTool(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseInvokeWebMCPToolResponse(rsp)
+}
+
+// GetWebMCPToolsWithResponse request returning *GetWebMCPToolsResponse
+func (c *ClientWithResponses) GetWebMCPToolsWithResponse(ctx context.Context, params *GetWebMCPToolsParams, reqEditors ...RequestEditorFn) (*GetWebMCPToolsResponse, error) {
+	rsp, err := c.GetWebMCPTools(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetWebMCPToolsResponse(rsp)
 }
 
 // ParsePatchChromiumFlagsResponse parses an HTTP response from a PatchChromiumFlagsWithResponse call
@@ -17474,6 +17814,100 @@ func ParseStreamTelemetryEventsResponse(rsp *http.Response) (*StreamTelemetryEve
 	return response, nil
 }
 
+// ParseInvokeWebMCPToolResponse parses an HTTP response from a InvokeWebMCPToolWithResponse call
+func ParseInvokeWebMCPToolResponse(rsp *http.Response) (*InvokeWebMCPToolResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &InvokeWebMCPToolResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WebMCPInvocationResult
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequestError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 504:
+		var dest WebMCPInvocationFailure
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON504 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetWebMCPToolsResponse parses an HTTP response from a GetWebMCPToolsWithResponse call
+func ParseGetWebMCPToolsResponse(rsp *http.Response) (*GetWebMCPToolsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetWebMCPToolsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WebMCPToolsResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest NotFoundError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest InternalError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON500 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// Update Chromium launch flags and restart
@@ -17647,6 +18081,12 @@ type ServerInterface interface {
 	// Stream telemetry events as Server-Sent Events
 	// (GET /telemetry/stream)
 	StreamTelemetryEvents(w http.ResponseWriter, r *http.Request, params StreamTelemetryEventsParams)
+	// Invoke a discovered WebMCP tool
+	// (POST /webmcp/invoke)
+	InvokeWebMCPTool(w http.ResponseWriter, r *http.Request)
+	// Discover WebMCP tools in the active page and its frames
+	// (GET /webmcp/tools)
+	GetWebMCPTools(w http.ResponseWriter, r *http.Request, params GetWebMCPToolsParams)
 }
 
 // Unimplemented server implementation that returns http.StatusNotImplemented for each endpoint.
@@ -17992,6 +18432,18 @@ func (_ Unimplemented) PublishTelemetryEvent(w http.ResponseWriter, r *http.Requ
 // Stream telemetry events as Server-Sent Events
 // (GET /telemetry/stream)
 func (_ Unimplemented) StreamTelemetryEvents(w http.ResponseWriter, r *http.Request, params StreamTelemetryEventsParams) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Invoke a discovered WebMCP tool
+// (POST /webmcp/invoke)
+func (_ Unimplemented) InvokeWebMCPTool(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNotImplemented)
+}
+
+// Discover WebMCP tools in the active page and its frames
+// (GET /webmcp/tools)
+func (_ Unimplemented) GetWebMCPTools(w http.ResponseWriter, r *http.Request, params GetWebMCPToolsParams) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -19119,6 +19571,47 @@ func (siw *ServerInterfaceWrapper) StreamTelemetryEvents(w http.ResponseWriter, 
 	handler.ServeHTTP(w, r)
 }
 
+// InvokeWebMCPTool operation middleware
+func (siw *ServerInterfaceWrapper) InvokeWebMCPTool(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.InvokeWebMCPTool(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetWebMCPTools operation middleware
+func (siw *ServerInterfaceWrapper) GetWebMCPTools(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetWebMCPToolsParams
+
+	// ------------- Optional query parameter "target_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "target_id", r.URL.Query(), &params.TargetId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "target_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWebMCPTools(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -19402,6 +19895,12 @@ func HandlerWithOptions(si ServerInterface, options ChiServerOptions) http.Handl
 	})
 	r.Group(func(r chi.Router) {
 		r.Get(options.BaseURL+"/telemetry/stream", wrapper.StreamTelemetryEvents)
+	})
+	r.Group(func(r chi.Router) {
+		r.Post(options.BaseURL+"/webmcp/invoke", wrapper.InvokeWebMCPTool)
+	})
+	r.Group(func(r chi.Router) {
+		r.Get(options.BaseURL+"/webmcp/tools", wrapper.GetWebMCPTools)
 	})
 
 	return r
@@ -21805,6 +22304,94 @@ func (response StreamTelemetryEvents200TexteventStreamResponse) VisitStreamTelem
 	}
 }
 
+type InvokeWebMCPToolRequestObject struct {
+	Body *InvokeWebMCPToolJSONRequestBody
+}
+
+type InvokeWebMCPToolResponseObject interface {
+	VisitInvokeWebMCPToolResponse(w http.ResponseWriter) error
+}
+
+type InvokeWebMCPTool200JSONResponse WebMCPInvocationResult
+
+func (response InvokeWebMCPTool200JSONResponse) VisitInvokeWebMCPToolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InvokeWebMCPTool400JSONResponse struct{ BadRequestErrorJSONResponse }
+
+func (response InvokeWebMCPTool400JSONResponse) VisitInvokeWebMCPToolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InvokeWebMCPTool404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response InvokeWebMCPTool404JSONResponse) VisitInvokeWebMCPToolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InvokeWebMCPTool500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response InvokeWebMCPTool500JSONResponse) VisitInvokeWebMCPToolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type InvokeWebMCPTool504JSONResponse WebMCPInvocationFailure
+
+func (response InvokeWebMCPTool504JSONResponse) VisitInvokeWebMCPToolResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(504)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWebMCPToolsRequestObject struct {
+	Params GetWebMCPToolsParams
+}
+
+type GetWebMCPToolsResponseObject interface {
+	VisitGetWebMCPToolsResponse(w http.ResponseWriter) error
+}
+
+type GetWebMCPTools200JSONResponse WebMCPToolsResponse
+
+func (response GetWebMCPTools200JSONResponse) VisitGetWebMCPToolsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWebMCPTools404JSONResponse struct{ NotFoundErrorJSONResponse }
+
+func (response GetWebMCPTools404JSONResponse) VisitGetWebMCPToolsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetWebMCPTools500JSONResponse struct{ InternalErrorJSONResponse }
+
+func (response GetWebMCPTools500JSONResponse) VisitGetWebMCPToolsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// Update Chromium launch flags and restart
@@ -21978,6 +22565,12 @@ type StrictServerInterface interface {
 	// Stream telemetry events as Server-Sent Events
 	// (GET /telemetry/stream)
 	StreamTelemetryEvents(ctx context.Context, request StreamTelemetryEventsRequestObject) (StreamTelemetryEventsResponseObject, error)
+	// Invoke a discovered WebMCP tool
+	// (POST /webmcp/invoke)
+	InvokeWebMCPTool(ctx context.Context, request InvokeWebMCPToolRequestObject) (InvokeWebMCPToolResponseObject, error)
+	// Discover WebMCP tools in the active page and its frames
+	// (GET /webmcp/tools)
+	GetWebMCPTools(ctx context.Context, request GetWebMCPToolsRequestObject) (GetWebMCPToolsResponseObject, error)
 }
 
 type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
@@ -23694,6 +24287,63 @@ func (sh *strictHandler) StreamTelemetryEvents(w http.ResponseWriter, r *http.Re
 	}
 }
 
+// InvokeWebMCPTool operation middleware
+func (sh *strictHandler) InvokeWebMCPTool(w http.ResponseWriter, r *http.Request) {
+	var request InvokeWebMCPToolRequestObject
+
+	var body InvokeWebMCPToolJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.InvokeWebMCPTool(ctx, request.(InvokeWebMCPToolRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "InvokeWebMCPTool")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(InvokeWebMCPToolResponseObject); ok {
+		if err := validResponse.VisitInvokeWebMCPToolResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetWebMCPTools operation middleware
+func (sh *strictHandler) GetWebMCPTools(w http.ResponseWriter, r *http.Request, params GetWebMCPToolsParams) {
+	var request GetWebMCPToolsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWebMCPTools(ctx, request.(GetWebMCPToolsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWebMCPTools")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWebMCPToolsResponseObject); ok {
+		if err := validResponse.VisitGetWebMCPToolsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
@@ -24097,174 +24747,195 @@ var swaggerSpec = []string{
 	"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",
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

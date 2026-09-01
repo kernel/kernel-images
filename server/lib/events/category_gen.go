@@ -68,6 +68,8 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"FileInfo":                   oapi.TelemetryEventCategory("platform"),
 	"GetMousePosition":           oapi.TelemetryEventCategory("control"),
 	"GetTelemetry":               oapi.TelemetryEventCategory("platform"),
+	"GetWebMCPTools":             oapi.TelemetryEventCategory("control"),
+	"InvokeWebMCPTool":           oapi.TelemetryEventCategory("control"),
 	"ListFiles":                  oapi.TelemetryEventCategory("platform"),
 	"ListRecorders":              oapi.TelemetryEventCategory("platform"),
 	"LogsStream":                 oapi.TelemetryEventCategory("platform"),

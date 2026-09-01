@@ -20,6 +20,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/webmcpclient"
 )
 
 type cdpMonitorController interface {
@@ -39,6 +40,12 @@ type OTLPExporter interface {
 }
 
 var _ OTLPExporter = (*events.OTLPExportController)(nil)
+
+type webMCPClient interface {
+	Tools(ctx context.Context, targetID string) ([]webmcpclient.Tool, error)
+	Invoke(ctx context.Context, toolRef string, input map[string]any) (webmcpclient.InvocationResult, error)
+	Close() error
+}
 
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
@@ -76,6 +83,8 @@ type ApiService struct {
 
 	// playwrightDaemonCmd holds the daemon process for cleanup
 	playwrightDaemonCmd *exec.Cmd
+
+	webmcp webMCPClient
 
 	// policy management
 	policy *policy.Policy
@@ -159,6 +168,7 @@ func New(
 		telemetrySession:  telemetrySession,
 		cdpMonitor:        mon,
 		otlpExport:        otlpExport,
+		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}, nil
@@ -421,6 +431,7 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	_ = s.webmcp.Close()
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()
