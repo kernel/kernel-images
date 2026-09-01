@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/kernel/kernel-images/server/lib/cdpconnection"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 )
 
 type Protocol interface {
 	Send(ctx context.Context, method string, params any, sessionID string) (json.RawMessage, error)
-	Events() <-chan cdpconnection.Message
+	Events() <-chan cdpclient.Message
 	IsClosed() bool
 }
 
@@ -28,7 +28,7 @@ type Event struct {
 	Kind      EventKind
 	SessionID string
 	FrameID   string
-	Message   cdpconnection.Message
+	Message   cdpclient.Message
 }
 
 type WindowInfo struct {

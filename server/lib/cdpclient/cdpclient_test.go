@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -65,13 +66,13 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var result any
-		var cdpErr *cdpError
+		var cdpErr *Error
 
 		switch req.Method {
 		case "Target.getTargets":
 			f.getTargetsCalled = true
 			if f.failGetTargets {
-				cdpErr = &cdpError{Code: -1, Message: "mock error"}
+				cdpErr = &Error{Code: -1, Message: "mock error"}
 			} else {
 				targets := []map[string]string{}
 				if !f.returnNoPageTargets {
@@ -88,7 +89,7 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 		case "Emulation.setDeviceMetricsOverride":
 			f.setMetricsCalled = true
 			if f.failSetMetrics {
-				cdpErr = &cdpError{Code: -2, Message: "metrics error"}
+				cdpErr = &Error{Code: -2, Message: "metrics error"}
 			} else {
 				var params map[string]any
 				_ = json.Unmarshal(req.Params, &params)
@@ -102,7 +103,7 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 		case "Browser.getVersion":
 			f.getVersionCalled = true
 			if f.failGetVersion {
-				cdpErr = &cdpError{Code: -3, Message: "version error"}
+				cdpErr = &Error{Code: -3, Message: "version error"}
 			} else {
 				product := f.productResponse
 				if product == "" {
@@ -122,14 +123,14 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal(req.Params, &params)
 			f.loadUnpackedPath = params["path"]
 			if f.failLoadUnpacked {
-				cdpErr = &cdpError{Code: -4, Message: "invalid extension"}
+				cdpErr = &Error{Code: -4, Message: "invalid extension"}
 			} else {
 				result = map[string]string{"id": f.loadUnpackedID}
 			}
 		case "Extensions.getExtensions":
 			f.getExtensionsCalled = true
 			if f.failGetExtensions {
-				cdpErr = &cdpError{Code: -5, Message: "extensions unavailable"}
+				cdpErr = &Error{Code: -5, Message: "extensions unavailable"}
 			} else {
 				result = map[string]any{"extensions": f.extensions}
 			}
@@ -448,4 +449,152 @@ func TestLoadUnpackedExtension(t *testing.T) {
 		_, err = client.LoadUnpackedExtension(context.Background(), "/home/kernel/extensions/test")
 		require.EqualError(t, err, "Extensions.loadUnpacked returned no extension ID")
 	})
+}
+
+func TestClientCorrelatesConcurrentCommandsAndPreservesEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		requests := make([]cdpRequest, 0, 2)
+		for len(requests) < cap(requests) {
+			_, payload, err := conn.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var request cdpRequest
+			if json.Unmarshal(payload, &request) == nil {
+				requests = append(requests, request)
+			}
+		}
+		for _, request := range requests {
+			event, _ := json.Marshal(map[string]any{
+				"method": "Test.event", "sessionId": request.SessionID,
+				"params": map[string]any{"command": request.Method},
+			})
+			_ = conn.Write(r.Context(), websocket.MessageText, event)
+		}
+		for i := len(requests) - 1; i >= 0; i-- {
+			request := requests[i]
+			response, _ := json.Marshal(map[string]any{
+				"id": request.ID, "result": map[string]any{"command": request.Method},
+			})
+			_ = conn.Write(r.Context(), websocket.MessageText, response)
+		}
+	}))
+	defer server.Close()
+
+	client, err := DialWithEvents(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, err)
+	defer client.Close()
+
+	commands := []string{"Browser.getVersion", "Target.getTargets"}
+	type result struct {
+		command string
+		err     error
+	}
+	results := make(chan result, len(commands))
+	var wg sync.WaitGroup
+	for _, command := range commands {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			raw, sendErr := client.Send(context.Background(), command, nil, "session-1")
+			if sendErr != nil {
+				results <- result{err: sendErr}
+				return
+			}
+			var response struct {
+				Command string `json:"command"`
+			}
+			if unmarshalErr := json.Unmarshal(raw, &response); unmarshalErr != nil {
+				results <- result{err: unmarshalErr}
+				return
+			}
+			results <- result{command: response.Command}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	seenResults := make(map[string]bool)
+	for result := range results {
+		require.NoError(t, result.err)
+		seenResults[result.command] = true
+	}
+	for _, command := range commands {
+		require.True(t, seenResults[command])
+	}
+
+	seenEvents := make(map[string]bool)
+	for range commands {
+		event := <-client.Events()
+		require.Equal(t, "Test.event", event.Method)
+		var params struct {
+			Command string `json:"command"`
+		}
+		require.NoError(t, json.Unmarshal(event.Params, &params))
+		seenEvents[params.Command] = true
+	}
+	for _, command := range commands {
+		require.True(t, seenEvents[command])
+	}
+}
+
+func TestClientMarksInFlightCommandUnknownOnDisconnect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_, _, _ = conn.Read(r.Context())
+	}))
+	defer server.Close()
+
+	client, err := Dial(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, err)
+	defer client.Close()
+
+	_, err = client.Send(context.Background(), "Browser.getVersion", nil, "")
+	require.ErrorIs(t, err, ErrOutcomeUnknown)
+}
+
+func TestCommandOnlyClientDiscardsEvents(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_, payload, err := conn.Read(r.Context())
+		if err != nil {
+			return
+		}
+		var request cdpRequest
+		if json.Unmarshal(payload, &request) != nil {
+			return
+		}
+		event, _ := json.Marshal(map[string]any{"method": "Test.event"})
+		for range 300 {
+			if conn.Write(r.Context(), websocket.MessageText, event) != nil {
+				return
+			}
+		}
+		response, _ := json.Marshal(map[string]any{"id": request.ID, "result": map[string]any{}})
+		_ = conn.Write(r.Context(), websocket.MessageText, response)
+	}))
+	defer server.Close()
+
+	client, err := Dial(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, err)
+	defer client.Close()
+	require.Nil(t, client.Events())
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err = client.Send(ctx, "Browser.getVersion", nil, "")
+	require.NoError(t, err)
 }

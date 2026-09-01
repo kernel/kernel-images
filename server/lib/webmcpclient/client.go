@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/browsersurface"
-	"github.com/kernel/kernel-images/server/lib/cdpconnection"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/nrednav/cuid2"
 )
 
@@ -25,7 +25,7 @@ const (
 )
 
 type connection struct {
-	protocol *cdpconnection.Client
+	protocol *cdpclient.Client
 	surface  *browsersurface.Tracker
 
 	startMu sync.Mutex
@@ -50,7 +50,7 @@ type connection struct {
 	closeOnce    sync.Once
 }
 
-func newConnection(protocol *cdpconnection.Client) *connection {
+func newConnection(protocol *cdpclient.Client) *connection {
 	surface := browsersurface.New(protocol)
 	events, cancel := surface.Subscribe()
 	client := &connection{
@@ -164,7 +164,7 @@ func (c *connection) enableSession(sessionID string) {
 	c.signalStateChanged()
 }
 
-func (c *connection) handleProtocolEvent(message cdpconnection.Message) {
+func (c *connection) handleProtocolEvent(message cdpclient.Message) {
 	switch message.Method {
 	case "WebMCP.toolsAdded":
 		var event struct {
@@ -353,7 +353,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 	if err != nil {
 		unknownOutcome := errors.Is(err, context.Canceled) ||
 			errors.Is(err, context.DeadlineExceeded) ||
-			errors.Is(err, cdpconnection.ErrOutcomeUnknown) ||
+			errors.Is(err, cdpclient.ErrOutcomeUnknown) ||
 			!c.sessionExists(sessionID)
 		if unknownOutcome {
 			return InvocationResult{}, ErrOutcomeUnknown

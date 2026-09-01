@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/kernel-images/server/lib/cdpconnection"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +18,7 @@ type fakeProtocol struct {
 	attachFailures      int
 	attachCalls         map[string]int
 	beforeTargetsResult func()
-	events              chan cdpconnection.Message
+	events              chan cdpclient.Message
 	closed              chan struct{}
 }
 
@@ -26,7 +26,7 @@ func newFakeProtocol() *fakeProtocol {
 	return &fakeProtocol{
 		windowIDs:   map[string]int{"page-a": 10, "page-b": 20},
 		attachCalls: make(map[string]int),
-		events:      make(chan cdpconnection.Message, 64),
+		events:      make(chan cdpclient.Message, 64),
 		closed:      make(chan struct{}),
 	}
 }
@@ -103,9 +103,9 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 	}
 }
 
-func (f *fakeProtocol) Events() <-chan cdpconnection.Message { return f.events }
-func (f *fakeProtocol) Done() <-chan struct{}                { return f.closed }
-func (f *fakeProtocol) IsClosed() bool                       { return false }
+func (f *fakeProtocol) Events() <-chan cdpclient.Message { return f.events }
+func (f *fakeProtocol) Done() <-chan struct{}            { return f.closed }
+func (f *fakeProtocol) IsClosed() bool                   { return false }
 
 func (f *fakeProtocol) emitAttached(sessionID, targetID, title, url string) {
 	f.emitAttachedFrom("", sessionID, targetID, title, url)
@@ -118,14 +118,14 @@ func (f *fakeProtocol) emitAttachedFrom(parentSessionID, sessionID, targetID, ti
 			"targetId": targetID, "type": "page", "title": title, "url": url,
 		},
 	})
-	f.events <- cdpconnection.Message{
+	f.events <- cdpclient.Message{
 		Method: "Target.attachedToTarget", SessionID: parentSessionID, Params: params,
 	}
 }
 
 func (f *fakeProtocol) emitTarget(method string, params any) {
 	raw, _ := json.Marshal(params)
-	f.events <- cdpconnection.Message{Method: method, Params: raw}
+	f.events <- cdpclient.Message{Method: method, Params: raw}
 }
 
 func (f *fakeProtocol) setWindow(targetID string, windowID int) {

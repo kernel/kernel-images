@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/kernel/kernel-images/server/lib/cdpconnection"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -520,7 +520,7 @@ func TestToolResponsesAreScopedBySession(t *testing.T) {
 	for _, sessionID := range []string{"page-session", "iframe-session"} {
 		params, err := json.Marshal(invocationResponse{InvocationID: "invocation-1", Status: "Completed", Output: sessionID})
 		require.NoError(t, err)
-		client.handleProtocolEvent(cdpconnection.Message{Method: "WebMCP.toolResponded", SessionID: sessionID, Params: params})
+		client.handleProtocolEvent(cdpclient.Message{Method: "WebMCP.toolResponded", SessionID: sessionID, Params: params})
 	}
 
 	require.Len(t, client.invocations, 2)

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/kernel/kernel-images/server/lib/cdpconnection"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 )
 
 type UpstreamManager interface {
@@ -88,7 +88,7 @@ func (m *Manager) getConnection(ctx context.Context) (*connection, error) {
 	if m.connection != nil {
 		_ = m.connection.close()
 	}
-	protocol, err := cdpconnection.Dial(ctx, url)
+	protocol, err := cdpclient.DialWithEvents(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("WebMCP: %w", err)
 	}

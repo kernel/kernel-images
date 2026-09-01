@@ -3,10 +3,10 @@ package browsersurface
 import (
 	"encoding/json"
 
-	"github.com/kernel/kernel-images/server/lib/cdpconnection"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 )
 
-func (t *Tracker) handleProtocolEvent(message cdpconnection.Message) {
+func (t *Tracker) handleProtocolEvent(message cdpclient.Message) {
 	switch message.Method {
 	case "Target.targetCreated":
 		var event struct {
