@@ -17,12 +17,12 @@ func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInf
 		return
 	}
 	tabID := t.tabsByTarget[target.TargetID]
-	if tabID == 0 && parentSessionID != "" {
+	if tabID == 0 && target.Type == "iframe" && parentSessionID != "" {
 		if parent := t.sessions[parentSessionID]; parent != nil {
 			tabID = parent.tabID
 		}
 	}
-	if tabID == 0 && target.ParentFrameID != "" {
+	if tabID == 0 && target.Type == "iframe" && target.ParentFrameID != "" {
 		if parentFrame := t.frames[target.ParentFrameID]; parentFrame != nil {
 			tabID = parentFrame.tabID
 		}
@@ -162,15 +162,15 @@ func (t *Tracker) bindSessionsLocked() {
 			sess.tabID = tabID
 			continue
 		}
-		if parent := t.sessions[sess.parentID]; parent != nil && parent.tabID != 0 {
-			sess.tabID = parent.tabID
-			continue
-		}
-		if parentFrame := t.frames[sess.target.ParentFrameID]; parentFrame != nil {
-			sess.tabID = parentFrame.tabID
-			continue
-		}
 		if sess.target.Type == "iframe" {
+			if parent := t.sessions[sess.parentID]; parent != nil && parent.tabID != 0 {
+				sess.tabID = parent.tabID
+				continue
+			}
+			if parentFrame := t.frames[sess.target.ParentFrameID]; parentFrame != nil {
+				sess.tabID = parentFrame.tabID
+				continue
+			}
 			if ownFrame := t.frames[sess.target.TargetID]; ownFrame != nil {
 				sess.tabID = ownFrame.tabID
 			}

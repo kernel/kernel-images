@@ -113,13 +113,19 @@ func (f *fakeProtocol) Done() <-chan struct{}                { return f.closed }
 func (f *fakeProtocol) IsClosed() bool                       { return false }
 
 func (f *fakeProtocol) emitAttached(sessionID, targetID, title, url string) {
+	f.emitAttachedFrom("", sessionID, targetID, title, url)
+}
+
+func (f *fakeProtocol) emitAttachedFrom(parentSessionID, sessionID, targetID, title, url string) {
 	params, _ := json.Marshal(map[string]any{
 		"sessionId": sessionID,
 		"targetInfo": map[string]any{
 			"targetId": targetID, "type": "page", "title": title, "url": url,
 		},
 	})
-	f.events <- cdpconnection.Message{Method: "Target.attachedToTarget", Params: params}
+	f.events <- cdpconnection.Message{
+		Method: "Target.attachedToTarget", SessionID: parentSessionID, Params: params,
+	}
 }
 
 func (f *fakeProtocol) emitTarget(method string, params any) {
@@ -279,13 +285,13 @@ func TestTrackerBindsPageSessionThatArrivesBeforeTarget(t *testing.T) {
 	tracker := New(protocol)
 	require.NoError(t, tracker.Start(context.Background()))
 
-	protocol.emitAttached("late-session", "late-page", "Late", "https://late.example/")
+	protocol.emitAttachedFrom("session-a", "late-session", "late-page", "Late", "https://late.example/")
 	protocol.emitTarget("Target.targetCreated", map[string]any{"targetInfo": map[string]any{
 		"targetId": "late-page", "type": "page", "title": "Late", "url": "https://late.example/",
 	}})
 	require.Eventually(t, func() bool {
-		_, ok := tracker.Resolve("late-session", "root-late")
-		return ok
+		location, ok := tracker.Resolve("late-session", "root-late")
+		return ok && location.TabID == 3 && location.PageURL == "https://late.example/"
 	}, time.Second, 10*time.Millisecond)
 }
 
