@@ -32,7 +32,11 @@ func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInf
 			tabID = ownFrame.tabID
 		}
 	}
-	t.sessions[sessionID] = &session{id: sessionID, parentID: parentSessionID, target: target, tabID: tabID}
+	ownedParentID := ""
+	if target.Type == "iframe" {
+		ownedParentID = parentSessionID
+	}
+	t.sessions[sessionID] = &session{id: sessionID, parentID: ownedParentID, target: target, tabID: tabID}
 	t.bindSessionsLocked()
 	t.stateMu.Unlock()
 	t.signalChanged()

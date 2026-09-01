@@ -293,6 +293,12 @@ func TestTrackerBindsPageSessionThatArrivesBeforeTarget(t *testing.T) {
 		location, ok := tracker.Resolve("late-session", "root-late")
 		return ok && location.TabID == 3 && location.PageURL == "https://late.example/"
 	}, time.Second, 10*time.Millisecond)
+
+	protocol.emitTarget("Target.detachedFromTarget", map[string]any{"sessionId": "session-a"})
+	require.Eventually(t, func() bool { return !tracker.SessionExists("session-a") }, time.Second, 10*time.Millisecond)
+	location, ok := tracker.Resolve("late-session", "root-late")
+	require.True(t, ok)
+	require.Equal(t, 3, location.TabID)
 }
 
 func TestTrackerNeverReusesWindowTabOrFrameIDs(t *testing.T) {
