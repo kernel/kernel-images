@@ -59,6 +59,7 @@ type fakeCDP struct {
 	detachAfterResponse bool
 	invokeResponseDelay time.Duration
 	toolCount           int
+	popupOpen           bool
 	write               func(any)
 }
 
@@ -81,6 +82,9 @@ func (f *fakeCDP) emit(value any) {
 }
 
 func (f *fakeCDP) openPopup() {
+	f.mu.Lock()
+	f.popupOpen = true
+	f.mu.Unlock()
 	f.emit(map[string]any{
 		"method": "Target.targetCreated",
 		"params": map[string]any{"targetInfo": map[string]any{
@@ -128,10 +132,16 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 		case "Target.setDiscoverTargets":
 			respond(map[string]any{})
 		case "Target.getTargets":
-			respond(map[string]any{"targetInfos": []map[string]any{
+			targets := []map[string]any{
 				{"targetId": "page-target", "type": "page", "title": "Store", "url": "https://merchant.example/"},
 				{"targetId": "other-page", "type": "page", "title": "Travel", "url": "https://travel.example/"},
-			}})
+			}
+			f.mu.Lock()
+			if f.popupOpen {
+				targets = append(targets, map[string]any{"targetId": "popup-target", "type": "page", "title": "Popup", "url": "https://popup.example/"})
+			}
+			f.mu.Unlock()
+			respond(map[string]any{"targetInfos": targets})
 		case "Browser.getWindowForTarget":
 			var params struct {
 				TargetID string `json:"targetId"`
@@ -255,21 +265,10 @@ func frameTreeForSession(sessionID string) map[string]any {
 	case "page-session":
 		return map[string]any{
 			"frame": map[string]any{"id": "page-frame", "loaderId": "page-loader", "url": "https://merchant.example/"},
-			"childFrames": []any{
-				map[string]any{
-					"frame": map[string]any{"id": "iframe-frame", "parentId": "page-frame", "loaderId": "iframe-loader", "url": "https://payments.example/element#private-state"},
-					"childFrames": []any{
-						map[string]any{"frame": map[string]any{"id": "nested-frame", "parentId": "iframe-frame", "loaderId": "nested-loader", "url": "https://bank.example/challenge"}},
-					},
-				},
-			},
 		}
 	case "iframe-session":
 		return map[string]any{
 			"frame": map[string]any{"id": "iframe-frame", "parentId": "page-frame", "loaderId": "iframe-loader", "url": "https://payments.example/element#private-state"},
-			"childFrames": []any{
-				map[string]any{"frame": map[string]any{"id": "nested-frame", "parentId": "iframe-frame", "loaderId": "nested-loader", "url": "https://bank.example/challenge"}},
-			},
 		}
 	case "nested-session":
 		return map[string]any{"frame": map[string]any{"id": "nested-frame", "parentId": "iframe-frame", "loaderId": "nested-loader", "url": "https://bank.example/challenge"}}

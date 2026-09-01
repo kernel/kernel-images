@@ -3,6 +3,7 @@ package browsersurface
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -12,17 +13,20 @@ import (
 )
 
 type fakeProtocol struct {
-	mu        sync.Mutex
-	windowIDs map[string]int
-	events    chan cdpconnection.Message
-	closed    chan struct{}
+	mu             sync.Mutex
+	windowIDs      map[string]int
+	attachFailures int
+	attachCalls    map[string]int
+	events         chan cdpconnection.Message
+	closed         chan struct{}
 }
 
 func newFakeProtocol() *fakeProtocol {
 	return &fakeProtocol{
-		windowIDs: map[string]int{"page-a": 10, "page-b": 20},
-		events:    make(chan cdpconnection.Message, 64),
-		closed:    make(chan struct{}),
+		windowIDs:   map[string]int{"page-a": 10, "page-b": 20},
+		attachCalls: make(map[string]int),
+		events:      make(chan cdpconnection.Message, 64),
+		closed:      make(chan struct{}),
 	}
 }
 
@@ -47,10 +51,21 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 		return marshal(map[string]any{"windowId": windowID}), nil
 	case "Target.autoAttachRelated":
 		targetID := params.(map[string]any)["targetId"].(string)
-		if targetID == "page-a" {
+		f.mu.Lock()
+		f.attachCalls[targetID]++
+		if f.attachFailures > 0 {
+			f.attachFailures--
+			f.mu.Unlock()
+			return nil, errors.New("temporary attach failure")
+		}
+		f.mu.Unlock()
+		switch targetID {
+		case "page-a":
 			f.emitAttached("session-a", "page-a", "Store", "https://store.example/")
-		} else {
+		case "page-b":
 			f.emitAttached("session-b", "page-b", "Travel", "https://travel.example/")
+		case "late-page":
+			f.emitAttached("late-session", "late-page", "Late", "https://late.example/")
 		}
 		return marshal(map[string]any{}), nil
 	case "Page.enable":
@@ -58,7 +73,12 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 	case "Page.getFrameTree":
 		if sessionID == "oopif-session" {
 			return marshal(map[string]any{"frameTree": map[string]any{
-				"frame": map[string]any{"id": "inner", "url": "https://bank.example/"},
+				"frame": map[string]any{"id": "oopif", "url": "https://cross-origin.example/"},
+			}}), nil
+		}
+		if sessionID == "late-session" {
+			return marshal(map[string]any{"frameTree": map[string]any{
+				"frame": map[string]any{"id": "root-late", "url": "https://late.example/"},
 			}}), nil
 		}
 		if sessionID == "session-a" {
@@ -132,12 +152,13 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	protocol.emitTarget("Target.attachedToTarget", map[string]any{
 		"sessionId": "oopif-session",
 		"targetInfo": map[string]any{
-			"targetId": "inner", "type": "iframe", "url": "https://bank.example/",
+			"targetId": "oopif", "type": "iframe", "url": "https://cross-origin.example/",
+			"parentFrameId": "root-a",
 		},
 	})
 	require.Eventually(t, func() bool {
-		location, resolved := tracker.Resolve("oopif-session", "inner")
-		return resolved && location.Frame != nil && location.Frame.ID == 2
+		location, resolved := tracker.Resolve("oopif-session", "oopif")
+		return resolved && location.Frame != nil && location.Frame.ID == 3
 	}, time.Second, 10*time.Millisecond)
 
 	require.Equal(t, Snapshot{
@@ -149,6 +170,7 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 		Frames: []FrameInfo{
 			{ID: 1, TabID: 1, URL: "https://payments.example/"},
 			{ID: 2, TabID: 1, ParentFrameID: 1, URL: "https://bank.example/"},
+			{ID: 3, TabID: 1, URL: "https://cross-origin.example/"},
 		},
 	}, tracker.Snapshot())
 
@@ -170,6 +192,63 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 1, moved.TabID)
 	require.Equal(t, 2, moved.WindowID)
+}
+
+func TestTrackerRetriesTabsAfterAttachFailure(t *testing.T) {
+	protocol := newFakeProtocol()
+	protocol.attachFailures = 1
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+	require.False(t, tracker.SessionExists("session-a"))
+
+	require.NoError(t, tracker.RefreshTargets(context.Background()))
+	require.Eventually(t, func() bool {
+		location, ok := tracker.Resolve("session-a", "root-a")
+		return ok && location.TabID == 1
+	}, time.Second, 10*time.Millisecond)
+	protocol.mu.Lock()
+	require.Equal(t, 2, protocol.attachCalls["page-a"])
+	protocol.mu.Unlock()
+}
+
+func TestTrackerDoesNotRetainTabClosedImmediatelyAfterCreation(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	events, cancel := tracker.Subscribe()
+	defer cancel()
+	require.NoError(t, tracker.Start(context.Background()))
+
+	protocol.emitTarget("Target.targetCreated", map[string]any{"targetInfo": map[string]any{
+		"targetId": "short-lived", "type": "page", "title": "Short", "url": "https://short.example/",
+	}})
+	protocol.emitTarget("Target.targetDestroyed", map[string]any{"targetId": "short-lived"})
+	require.Eventually(t, func() bool {
+		select {
+		case event := <-events:
+			return event.Kind == EventProtocol && event.Message.Method == "Target.targetDestroyed"
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	for _, tab := range tracker.Snapshot().Tabs {
+		require.NotEqual(t, "https://short.example/", tab.PageURL)
+	}
+}
+
+func TestTrackerBindsPageSessionThatArrivesBeforeTarget(t *testing.T) {
+	protocol := newFakeProtocol()
+	protocol.windowIDs["late-page"] = 30
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+
+	protocol.emitAttached("late-session", "late-page", "Late", "https://late.example/")
+	protocol.emitTarget("Target.targetCreated", map[string]any{"targetInfo": map[string]any{
+		"targetId": "late-page", "type": "page", "title": "Late", "url": "https://late.example/",
+	}})
+	require.Eventually(t, func() bool {
+		_, ok := tracker.Resolve("late-session", "root-late")
+		return ok
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestTrackerNeverReusesWindowTabOrFrameIDs(t *testing.T) {

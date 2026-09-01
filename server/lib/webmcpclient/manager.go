@@ -42,6 +42,9 @@ func (m *Manager) Tools(ctx context.Context) ([]Tool, error) {
 			return nil, err
 		}
 	}
+	if err := conn.surface.RefreshTargets(ctx); err != nil {
+		return nil, fmt.Errorf("WebMCP: refresh browser tabs: %w", err)
+	}
 	conn.surface.RefreshWindows(ctx)
 	conn.surface.WaitForSettled(ctx)
 	conn.waitForSettled(ctx)

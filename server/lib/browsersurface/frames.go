@@ -44,6 +44,7 @@ func (t *Tracker) initializeSession(sessionID string) {
 	var sess session
 	for {
 		t.stateMu.Lock()
+		t.bindSessionsLocked()
 		tracked := t.sessions[sessionID]
 		if tracked == nil || tracked.initialized || tracked.initializing {
 			t.stateMu.Unlock()
@@ -60,7 +61,11 @@ func (t *Tracker) initializeSession(sessionID string) {
 			break
 		}
 		t.stateMu.Unlock()
-		if time.Now().After(deadline) || t.protocol.IsClosed() {
+		if time.Now().After(deadline) {
+			t.removeSession(sessionID)
+			return
+		}
+		if t.protocol.IsClosed() {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -151,6 +156,10 @@ func (t *Tracker) upsertFrameLocked(tabID int, info frameInfo) {
 func (t *Tracker) bindSessionsLocked() {
 	for _, sess := range t.sessions {
 		if sess.tabID != 0 {
+			continue
+		}
+		if tabID := t.tabsByTarget[sess.target.TargetID]; tabID != 0 {
+			sess.tabID = tabID
 			continue
 		}
 		if parent := t.sessions[sess.parentID]; parent != nil && parent.tabID != 0 {

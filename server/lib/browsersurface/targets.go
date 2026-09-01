@@ -6,22 +6,42 @@ import (
 	"time"
 )
 
-func (t *Tracker) trackPage(ctx context.Context, target targetInfo) {
-	t.stateMu.Lock()
-	if t.trackingTarget[target.TargetID] {
-		t.updateTabTargetLocked(target)
-		t.stateMu.Unlock()
+func (t *Tracker) trackPage(target targetInfo, async bool) {
+	tabID, attach := t.registerPage(target)
+	if !attach {
 		return
 	}
-	t.trackingTarget[target.TargetID] = true
+	if async {
+		go t.attachPage(tabID, target)
+		return
+	}
+	t.attachPage(tabID, target)
+}
+
+func (t *Tracker) registerPage(target targetInfo) (int, bool) {
+	t.stateMu.Lock()
+	if tabID := t.tabsByTarget[target.TargetID]; tabID != 0 {
+		t.updateTabTargetLocked(target)
+		attach := !t.trackingTarget[target.TargetID]
+		t.trackingTarget[target.TargetID] = true
+		t.bindSessionsLocked()
+		t.stateMu.Unlock()
+		t.signalChanged()
+		return tabID, attach
+	}
 	t.nextTabID++
-	tab := &tab{id: t.nextTabID, targetID: target.TargetID, title: target.Title, url: target.URL}
-	t.tabs[tab.id] = tab
-	t.tabsByTarget[target.TargetID] = tab.id
+	tabID := t.nextTabID
+	t.tabs[tabID] = &tab{id: tabID, targetID: target.TargetID, title: target.Title, url: target.URL}
+	t.tabsByTarget[target.TargetID] = tabID
+	t.trackingTarget[target.TargetID] = true
+	t.bindSessionsLocked()
 	t.stateMu.Unlock()
 	t.signalChanged()
+	return tabID, true
+}
 
-	windowCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+func (t *Tracker) attachPage(tabID int, target targetInfo) {
+	windowCtx, cancel := context.WithTimeout(t.ctx, 2*time.Second)
 	raw, err := t.protocol.Send(windowCtx, "Browser.getWindowForTarget", map[string]any{"targetId": target.TargetID}, "")
 	cancel()
 	windowAssigned := false
@@ -35,9 +55,9 @@ func (t *Tracker) trackPage(ctx context.Context, target targetInfo) {
 		}
 	}
 	if !windowAssigned {
-		t.assignWindow(target.TargetID, -int64(tab.id))
+		t.assignFallbackWindow(target.TargetID, tabID)
 	}
-	attachCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	attachCtx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
 	_, err = t.protocol.Send(attachCtx, "Target.autoAttachRelated", map[string]any{
 		"targetId":               target.TargetID,
 		"waitForDebuggerOnStart": false,
@@ -47,8 +67,60 @@ func (t *Tracker) trackPage(ctx context.Context, target targetInfo) {
 		},
 	}, "")
 	cancel()
-	if err != nil && !t.protocol.IsClosed() {
-		t.logger.Warn("failed to attach browser tab", "tab_id", tab.id, "err", err)
+	if err == nil {
+		return
+	}
+	t.stateMu.Lock()
+	if t.tabsByTarget[target.TargetID] == tabID {
+		t.trackingTarget[target.TargetID] = false
+	}
+	t.stateMu.Unlock()
+	t.signalChanged()
+	if !t.protocol.IsClosed() {
+		t.logger.Warn("failed to attach browser tab", "tab_id", tabID, "err", err)
+	}
+}
+
+func (t *Tracker) RefreshTargets(ctx context.Context) error {
+	raw, err := t.protocol.Send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return err
+	}
+	var result struct {
+		TargetInfos []targetInfo `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return err
+	}
+	active := make(map[string]bool)
+	for _, target := range result.TargetInfos {
+		if target.Type != "page" {
+			continue
+		}
+		active[target.TargetID] = true
+		t.trackPage(target, true)
+	}
+	t.stateMu.RLock()
+	var removed []string
+	for targetID := range t.tabsByTarget {
+		if !active[targetID] {
+			removed = append(removed, targetID)
+		}
+	}
+	t.stateMu.RUnlock()
+	for _, targetID := range removed {
+		t.removeTarget(targetID)
+	}
+	return nil
+}
+
+func (t *Tracker) assignFallbackWindow(targetID string, tabID int) {
+	t.stateMu.RLock()
+	tracked := t.tabs[t.tabsByTarget[targetID]]
+	assigned := tracked != nil && tracked.windowID != 0
+	t.stateMu.RUnlock()
+	if !assigned {
+		t.assignWindow(targetID, -int64(tabID))
 	}
 }
 
@@ -87,7 +159,7 @@ func (t *Tracker) updateTarget(target targetInfo) {
 	t.stateMu.Unlock()
 	t.signalChanged()
 	if target.Type == "page" && !knownTab {
-		go t.trackPage(t.ctx, target)
+		t.trackPage(target, true)
 		return
 	}
 	if target.Type == "page" {

@@ -99,7 +99,7 @@ func (t *Tracker) Start(ctx context.Context) error {
 	}
 	for _, target := range result.TargetInfos {
 		if target.Type == "page" {
-			t.trackPage(ctx, target)
+			t.trackPage(target, false)
 		}
 	}
 	return nil
