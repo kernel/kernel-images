@@ -372,7 +372,7 @@ COPY --from=server-builder /out/kernel-images-supervisord-shim /usr/local/bin/ke
 COPY --from=server-builder /out/wrapper /wrapper
 
 # Copy and compile the Playwright daemon
-COPY server/runtime/playwright-daemon.ts server/runtime/page-target-id-cache.ts /tmp/
+COPY server/runtime/playwright-daemon.ts server/runtime/page-target-id-cache.ts server/runtime/webmcp.ts /tmp/
 RUN esbuild /tmp/playwright-daemon.ts \
     --bundle \
     --platform=node \
@@ -382,7 +382,7 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:playwright-core \
     --external:patchright \
     --external:esbuild \
-    && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts
+    && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts /tmp/webmcp.ts
 
 RUN useradd -m -s /bin/bash kernel
 

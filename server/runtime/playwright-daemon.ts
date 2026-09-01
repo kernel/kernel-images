@@ -16,9 +16,12 @@ import { chromium as chromiumPW, Browser, CDPSession, Page } from 'playwright-co
 import { chromium as chromiumPR } from 'patchright';
 
 import { PageTargetIdCache } from './page-target-id-cache';
+import { createWebMCPClient } from './webmcp';
 
 const SOCKET_PATH = process.env.PLAYWRIGHT_DAEMON_SOCKET || '/tmp/playwright-daemon.sock';
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
+const KERNEL_API_ENDPOINT =
+  process.env.KERNEL_API_ENDPOINT || `http://127.0.0.1:${process.env.PORT || '10001'}`;
 const USE_PATCHRIGHT = process.env.PLAYWRIGHT_ENGINE !== 'playwright-core';
 const RECONNECT_DELAY_MS = 1000;
 const MAX_RECONNECT_ATTEMPTS = 10;
@@ -303,11 +306,12 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
       (await defaultContext.newPage());
     const context = page.context();
 
+    const webmcp = createWebMCPClient({apiBaseUrl: KERNEL_API_ENDPOINT, signal});
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const userFunction = new AsyncFunction('page', 'context', 'browser', jsCode);
+    const userFunction = new AsyncFunction('page', 'context', 'browser', 'webmcp', jsCode);
     signal.throwIfAborted();
 
-    const result = await userFunction(page, context, browserInstance);
+    const result = await userFunction(page, context, browserInstance, webmcp);
 
     return {
       id,

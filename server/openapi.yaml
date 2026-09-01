@@ -1426,8 +1426,12 @@ paths:
       summary: Execute Playwright/TypeScript code against the browser
       description: |
         Execute arbitrary Playwright code in a fresh execution context against the browser running
-        on localhost:9222. The code has access to 'page', 'context', and 'browser' variables.
-        The result of the code execution is returned in the response.
+        on localhost:9222. The code has access to 'page', 'context', 'browser', and 'webmcp'
+        variables. 'webmcp.listTools()' returns the browser-wide WebMCP tool snapshot, and
+        'webmcp.invokeTool(toolRef, input?, { timeoutSec? })' invokes an exact registration through
+        the image's synchronous WebMCP API. WebMCP request failures throw a WebMCPRequestError with
+        statusCode, code, invocationId, and body fields. The result of the code execution is returned
+        in the response.
 
         'page' is bound to an active tab reported by Chrome. In single-window sessions, this is
         the foreground tab. When multiple browser windows are open, Chrome reports one active tab
