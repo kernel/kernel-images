@@ -1396,6 +1396,7 @@ paths:
       operationId: invokeWebMCPTool
       x-telemetry-category: control
       requestBody:
+        description: The raw JSON request body is limited to 1 MiB plus 4 KiB of envelope overhead before decoding.
         required: true
         content:
           application/json:

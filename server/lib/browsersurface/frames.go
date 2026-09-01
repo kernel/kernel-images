@@ -82,6 +82,9 @@ func (t *Tracker) initializeSession(sessionID string) {
 	}
 	var initErr error
 	for {
+		if !t.SessionExists(sessionID) {
+			return
+		}
 		result.FrameTree = frameTree{}
 		if _, initErr = t.protocol.Send(ctx, "Page.enable", nil, sessionID); initErr == nil {
 			var raw json.RawMessage
@@ -92,6 +95,9 @@ func (t *Tracker) initializeSession(sessionID string) {
 		}
 		if initErr == nil {
 			break
+		}
+		if !t.SessionExists(sessionID) {
+			return
 		}
 
 		timer := time.NewTimer(sessionInitRetryDelay)

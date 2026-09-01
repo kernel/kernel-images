@@ -17,9 +17,9 @@ type fakeProtocol struct {
 	windowIDs           map[string]int
 	attachFailures      int
 	attachCalls         map[string]int
-	pageEnableFailures  int
-	pageEnableCalls     int
-	frameTreeFailures   int
+	pageEnableFailures  map[string]int
+	pageEnableCalls     map[string]int
+	frameTreeFailures   map[string]int
 	beforeTargetsResult func()
 	events              chan cdpclient.Message
 	closed              chan struct{}
@@ -27,10 +27,13 @@ type fakeProtocol struct {
 
 func newFakeProtocol() *fakeProtocol {
 	return &fakeProtocol{
-		windowIDs:   map[string]int{"page-a": 10, "page-b": 20},
-		attachCalls: make(map[string]int),
-		events:      make(chan cdpclient.Message, 64),
-		closed:      make(chan struct{}),
+		windowIDs:          map[string]int{"page-a": 10, "page-b": 20},
+		attachCalls:        make(map[string]int),
+		pageEnableFailures: make(map[string]int),
+		pageEnableCalls:    make(map[string]int),
+		frameTreeFailures:  make(map[string]int),
+		events:             make(chan cdpclient.Message, 64),
+		closed:             make(chan struct{}),
 	}
 }
 
@@ -76,9 +79,9 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 		return marshal(map[string]any{"sessionId": sessionID}), nil
 	case "Page.enable":
 		f.mu.Lock()
-		f.pageEnableCalls++
-		if f.pageEnableFailures > 0 {
-			f.pageEnableFailures--
+		f.pageEnableCalls[sessionID]++
+		if f.pageEnableFailures[sessionID] > 0 {
+			f.pageEnableFailures[sessionID]--
 			f.mu.Unlock()
 			return nil, errors.New("temporary Page.enable failure")
 		}
@@ -86,8 +89,8 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 		return marshal(map[string]any{}), nil
 	case "Page.getFrameTree":
 		f.mu.Lock()
-		if f.frameTreeFailures > 0 {
-			f.frameTreeFailures--
+		if f.frameTreeFailures[sessionID] > 0 {
+			f.frameTreeFailures[sessionID]--
 			f.mu.Unlock()
 			return nil, errors.New("temporary Page.getFrameTree failure")
 		}
@@ -166,8 +169,8 @@ func TestTrackerRetriesTransientSessionInitializationFailure(t *testing.T) {
 		name      string
 		configure func(*fakeProtocol)
 	}{
-		{name: "enable", configure: func(protocol *fakeProtocol) { protocol.pageEnableFailures = 1 }},
-		{name: "frame tree", configure: func(protocol *fakeProtocol) { protocol.frameTreeFailures = 1 }},
+		{name: "enable", configure: func(protocol *fakeProtocol) { protocol.pageEnableFailures["session-a"] = 1 }},
+		{name: "frame tree", configure: func(protocol *fakeProtocol) { protocol.frameTreeFailures["session-a"] = 1 }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			protocol := newFakeProtocol()
@@ -177,13 +180,37 @@ func TestTrackerRetriesTransientSessionInitializationFailure(t *testing.T) {
 
 			require.Eventually(t, func() bool {
 				protocol.mu.Lock()
-				calls := protocol.pageEnableCalls
+				calls := protocol.pageEnableCalls["session-a"]
 				protocol.mu.Unlock()
 				_, resolved := tracker.Resolve("session-a", "root-a")
 				return calls >= 2 && resolved
 			}, time.Second, 10*time.Millisecond)
 		})
 	}
+}
+
+func TestTrackerStopsInitializationRetriesAfterSessionRemoval(t *testing.T) {
+	protocol := newFakeProtocol()
+	protocol.pageEnableFailures["session-a"] = 1000
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+	require.Eventually(t, func() bool {
+		protocol.mu.Lock()
+		defer protocol.mu.Unlock()
+		return protocol.pageEnableCalls["session-a"] > 0
+	}, time.Second, 10*time.Millisecond)
+
+	protocol.emitTarget("Target.detachedFromTarget", map[string]any{"sessionId": "session-a"})
+	require.Eventually(t, func() bool {
+		return !tracker.SessionExists("session-a")
+	}, time.Second, 10*time.Millisecond)
+	protocol.mu.Lock()
+	callsAfterRemoval := protocol.pageEnableCalls["session-a"]
+	protocol.mu.Unlock()
+	time.Sleep(4 * sessionInitRetryDelay)
+	protocol.mu.Lock()
+	defer protocol.mu.Unlock()
+	require.Equal(t, callsAfterRemoval, protocol.pageEnableCalls["session-a"])
 }
 
 func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
