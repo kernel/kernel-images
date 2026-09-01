@@ -141,12 +141,11 @@ func (t *Tracker) initializeSession(sessionID string) {
 }
 
 func (t *Tracker) failSessionInitialization(sessionID string, err error) {
-	t.stateMu.Lock()
-	if tracked := t.sessions[sessionID]; tracked != nil {
-		tracked.initializing = false
-	}
-	t.stateMu.Unlock()
+	t.removeSession(sessionID)
 	if !t.protocol.IsClosed() {
+		ctx, cancel := context.WithTimeout(t.ctx, time.Second)
+		_, _ = t.protocol.Send(ctx, "Target.detachFromTarget", map[string]any{"sessionId": sessionID}, "")
+		cancel()
 		t.logger.Warn("failed to initialize browser surface session", "session_id", sessionID, "err", err)
 	}
 }

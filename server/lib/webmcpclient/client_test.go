@@ -63,6 +63,8 @@ type fakeCDP struct {
 	invokeResponseDelay     time.Duration
 	toolCount               int
 	popupOpen               bool
+	iframeOpen              bool
+	nestedFrameOpen         bool
 	write                   func(any)
 }
 
@@ -143,6 +145,18 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			if f.popupOpen {
 				targets = append(targets, map[string]any{"targetId": "popup-target", "type": "page", "title": "Popup", "url": "https://popup.example/"})
 			}
+			if f.iframeOpen {
+				targets = append(targets, map[string]any{
+					"targetId": "iframe-target", "type": "iframe", "url": "https://payments.example/element#private-state",
+					"parentFrameId": "page-frame",
+				})
+			}
+			if f.nestedFrameOpen {
+				targets = append(targets, map[string]any{
+					"targetId": "nested-target", "type": "iframe", "url": "https://bank.example/challenge",
+					"parentFrameId": "iframe-frame",
+				})
+			}
 			f.mu.Unlock()
 			respond(map[string]any{"targetInfos": targets})
 		case "Browser.getWindowForTarget":
@@ -170,6 +184,9 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			respond(map[string]any{"sessionId": sessionID})
 			switch params.TargetID {
 			case "page-target":
+				f.mu.Lock()
+				f.iframeOpen = true
+				f.mu.Unlock()
 				write(map[string]any{
 					"method": "Target.targetCreated",
 					"params": map[string]any{"targetInfo": map[string]any{
@@ -178,6 +195,9 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 					}},
 				})
 			case "iframe-target":
+				f.mu.Lock()
+				f.nestedFrameOpen = true
+				f.mu.Unlock()
 				write(map[string]any{
 					"method": "Target.targetCreated",
 					"params": map[string]any{"targetInfo": map[string]any{

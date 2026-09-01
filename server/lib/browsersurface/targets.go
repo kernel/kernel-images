@@ -156,13 +156,11 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		}
 		t.removeTarget(targetID)
 	}
-	t.stateMu.Lock()
 	for _, targetID := range knownFrames {
 		if !activeFrames[targetID] {
-			delete(t.trackingFrameTarget, targetID)
+			t.removeTarget(targetID)
 		}
 	}
-	t.stateMu.Unlock()
 	return nil
 }
 

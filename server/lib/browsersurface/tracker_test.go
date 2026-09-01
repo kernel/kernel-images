@@ -17,6 +17,7 @@ type fakeProtocol struct {
 	windowIDs           map[string]int
 	attachFailures      int
 	attachCalls         map[string]int
+	detachCalls         map[string]int
 	pageEnableFailures  map[string]int
 	pageEnableCalls     map[string]int
 	frameTreeFailures   map[string]int
@@ -29,6 +30,7 @@ func newFakeProtocol() *fakeProtocol {
 	return &fakeProtocol{
 		windowIDs:          map[string]int{"page-a": 10, "page-b": 20},
 		attachCalls:        make(map[string]int),
+		detachCalls:        make(map[string]int),
 		pageEnableFailures: make(map[string]int),
 		pageEnableCalls:    make(map[string]int),
 		frameTreeFailures:  make(map[string]int),
@@ -77,6 +79,12 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 			"page-a": "session-a", "page-b": "session-b", "late-page": "late-session", "oopif": "oopif-session",
 		}[targetID]
 		return marshal(map[string]any{"sessionId": sessionID}), nil
+	case "Target.detachFromTarget":
+		detachedSessionID := params.(map[string]any)["sessionId"].(string)
+		f.mu.Lock()
+		f.detachCalls[detachedSessionID]++
+		f.mu.Unlock()
+		return marshal(map[string]any{}), nil
 	case "Page.enable":
 		f.mu.Lock()
 		f.pageEnableCalls[sessionID]++
@@ -187,6 +195,33 @@ func TestTrackerRetriesTransientSessionInitializationFailure(t *testing.T) {
 			}, time.Second, 10*time.Millisecond)
 		})
 	}
+}
+
+func TestTrackerReattachesAfterTerminalSessionInitializationFailure(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+	require.Eventually(t, func() bool {
+		_, resolved := tracker.Resolve("session-a", "root-a")
+		return resolved
+	}, time.Second, 10*time.Millisecond)
+
+	tracker.stateMu.Lock()
+	tracker.sessions["session-a"].initialized = false
+	tracker.sessions["session-a"].initializing = true
+	tracker.stateMu.Unlock()
+	tracker.failSessionInitialization("session-a", errors.New("initialization deadline exceeded"))
+	require.False(t, tracker.SessionExists("session-a"))
+
+	require.NoError(t, tracker.RefreshTargets(context.Background()))
+	require.Eventually(t, func() bool {
+		_, resolved := tracker.Resolve("session-a", "root-a")
+		return resolved
+	}, time.Second, 10*time.Millisecond)
+	protocol.mu.Lock()
+	defer protocol.mu.Unlock()
+	require.Equal(t, 2, protocol.attachCalls["page-a"])
+	require.Equal(t, 1, protocol.detachCalls["session-a"])
 }
 
 func TestTrackerStopsInitializationRetriesAfterSessionRemoval(t *testing.T) {
@@ -355,6 +390,37 @@ func TestTrackerRefreshDoesNotRemoveTabCreatedAfterSnapshot(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+func TestTrackerRefreshRemovesMissingFrameTargetSession(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	events, cancel := tracker.Subscribe()
+	defer cancel()
+	require.NoError(t, tracker.Start(context.Background()))
+
+	protocol.emitTarget("Target.targetCreated", map[string]any{"targetInfo": map[string]any{
+		"targetId": "oopif", "type": "iframe", "url": "https://cross-origin.example/",
+		"parentFrameId": "root-a",
+	}})
+	require.Eventually(t, func() bool {
+		_, resolved := tracker.Resolve("oopif-session", "oopif")
+		return resolved
+	}, time.Second, 10*time.Millisecond)
+
+	// Target.getTargets omits oopif, simulating a missed targetDestroyed event.
+	require.NoError(t, tracker.RefreshTargets(context.Background()))
+	require.False(t, tracker.SessionExists("oopif-session"))
+	_, resolved := tracker.Resolve("oopif-session", "oopif")
+	require.False(t, resolved)
+	require.Eventually(t, func() bool {
+		select {
+		case event := <-events:
+			return event.Kind == EventSessionRemoved && event.SessionID == "oopif-session"
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestTrackerRetriesTabsAfterAttachFailure(t *testing.T) {
