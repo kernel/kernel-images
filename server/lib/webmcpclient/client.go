@@ -117,7 +117,6 @@ func (c *connection) eventLoop(events <-chan browsersurface.Event) {
 			c.stateMu.Lock()
 			c.markDocumentChangedLocked(documentKey{sessionID: event.SessionID, frameID: event.FrameID})
 			c.abandonFrameInvocationsLocked(event.SessionID, event.FrameID)
-			c.removeFrameToolsLocked(event.SessionID, event.FrameID)
 			c.stateMu.Unlock()
 			c.signalStateChanged()
 		case browsersurface.EventDocumentChanged:
@@ -397,7 +396,6 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 			}, nil
 		}
 		if _, abandoned := c.abandonedInvocations[key]; abandoned {
-			delete(c.abandonedInvocations, key)
 			c.stateMu.Unlock()
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}

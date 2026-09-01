@@ -50,18 +50,20 @@ type fakeCDP struct {
 	server *httptest.Server
 	url    string
 
-	mu                   sync.Mutex
-	connections          int
-	relatedAttaches      int
-	enabledSessions      map[string]int
-	omitResponse         bool
-	closeOnInvoke        bool
-	detachAfterResponse  bool
-	navigateBeforeResult bool
-	invokeResponseDelay  time.Duration
-	toolCount            int
-	popupOpen            bool
-	write                func(any)
+	mu                      sync.Mutex
+	connections             int
+	relatedAttaches         int
+	invocationCount         int
+	enabledSessions         map[string]int
+	omitResponse            bool
+	closeOnInvoke           bool
+	detachAfterResponse     bool
+	navigateBeforeResult    bool
+	navigationDoesNotCommit bool
+	invokeResponseDelay     time.Duration
+	toolCount               int
+	popupOpen               bool
+	write                   func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
@@ -210,44 +212,56 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 				"params": map[string]any{"tools": tools},
 			})
 		case "WebMCP.invokeTool":
-			if f.closeOnInvoke {
+			f.mu.Lock()
+			f.invocationCount++
+			invocationID := fmt.Sprintf("invocation-%d", f.invocationCount)
+			closeOnInvoke := f.closeOnInvoke
+			responseDelay := f.invokeResponseDelay
+			omitResponse := f.omitResponse
+			navigateBeforeResult := f.navigateBeforeResult
+			navigationDoesNotCommit := f.navigationDoesNotCommit
+			detachAfterResponse := f.detachAfterResponse
+			f.mu.Unlock()
+			if closeOnInvoke {
 				conn.CloseNow()
 				return
 			}
-			if f.invokeResponseDelay > 0 {
-				time.Sleep(f.invokeResponseDelay)
+			if responseDelay > 0 {
+				time.Sleep(responseDelay)
 			}
-			respond(map[string]any{"invocationId": "invocation-1"})
-			if !f.omitResponse {
-				if f.navigateBeforeResult {
+			respond(map[string]any{"invocationId": invocationID})
+			if !omitResponse {
+				if navigateBeforeResult {
 					write(map[string]any{
 						"method": "Page.frameStartedLoading", "sessionId": request.SessionID,
 						"params": map[string]any{"frameId": "iframe-frame"},
 					})
 				}
 				output := any(map[string]any{"content": []map[string]any{{"type": "text", "text": request.SessionID}}})
-				if f.navigateBeforeResult {
+				if navigateBeforeResult {
 					output = []any{}
 				}
 				write(map[string]any{
 					"method": "WebMCP.toolResponded", "sessionId": request.SessionID,
 					"params": map[string]any{
-						"invocationId": "invocation-1", "status": "Completed", "output": output,
+						"invocationId": invocationID, "status": "Completed", "output": output,
 					},
 				})
-				if !f.navigateBeforeResult {
+				if !navigateBeforeResult {
 					write(map[string]any{
 						"method": "Page.frameStartedLoading", "sessionId": request.SessionID,
 						"params": map[string]any{"frameId": "iframe-frame"},
 					})
 				}
-				write(map[string]any{
-					"method": "Page.frameNavigated", "sessionId": request.SessionID,
-					"params": map[string]any{"frame": map[string]any{
-						"id": "iframe-frame", "loaderId": "next-loader", "url": "https://payments.example/success",
-					}},
-				})
-				if f.detachAfterResponse {
+				if !navigationDoesNotCommit {
+					write(map[string]any{
+						"method": "Page.frameNavigated", "sessionId": request.SessionID,
+						"params": map[string]any{"frame": map[string]any{
+							"id": "iframe-frame", "loaderId": "next-loader", "url": "https://payments.example/success",
+						}},
+					})
+				}
+				if detachAfterResponse {
 					write(map[string]any{
 						"method": "Target.detachedFromTarget",
 						"params": map[string]any{"sessionId": request.SessionID},
@@ -420,12 +434,33 @@ func TestInvocationPreservesResponseObservedBeforeFrameNavigation(t *testing.T) 
 func TestInvocationNavigationBeforeResponseHasUnknownOutcome(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	fake.navigateBeforeResult = true
+	fake.navigationDoesNotCommit = true
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
+	toolRef := paymentToolRef(t, manager)
 
-	result, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
+	result, err := manager.Invoke(context.Background(), toolRef, map[string]any{})
 	require.ErrorIs(t, err, ErrOutcomeUnknown)
 	require.Equal(t, "invocation-1", result.InvocationID)
+
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	toolStillRegistered := false
+	for _, tool := range tools {
+		if tool.Ref == toolRef {
+			toolStillRegistered = true
+			break
+		}
+	}
+	require.True(t, toolStillRegistered)
+
+	fake.mu.Lock()
+	fake.navigateBeforeResult = false
+	fake.navigationDoesNotCommit = false
+	fake.mu.Unlock()
+	result, err = manager.Invoke(context.Background(), toolRef, map[string]any{})
+	require.NoError(t, err)
+	require.Equal(t, "Completed", result.Status)
 }
 
 func TestInvocationReturnsCompletedResponseBeforeTargetDetach(t *testing.T) {
