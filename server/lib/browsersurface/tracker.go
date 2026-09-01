@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-const sessionInitTimeout = 5 * time.Second
+const (
+	sessionInitTimeout    = 5 * time.Second
+	sessionInitRetryDelay = 50 * time.Millisecond
+)
 
 type subscriber struct {
 	events chan Event

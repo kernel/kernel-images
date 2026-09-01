@@ -125,6 +125,19 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Nil(t, helperResult.Failure.InvocationID)
 	require.NotEmpty(t, helperResult.Failure.Message)
 
+	t.Log("verifying existing code may declare its own webmcp binding")
+	shadowedWebMCPRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const webmcp = 'user-defined';
+			return webmcp;
+		`,
+	})
+	require.NoError(t, err, "shadowed WebMCP request error: %v", err)
+	require.Equal(t, http.StatusOK, shadowedWebMCPRsp.StatusCode(), "unexpected status: %s body=%s", shadowedWebMCPRsp.Status(), string(shadowedWebMCPRsp.Body))
+	require.NotNil(t, shadowedWebMCPRsp.JSON200)
+	require.True(t, shadowedWebMCPRsp.JSON200.Success, "existing webmcp binding should remain valid")
+	require.Equal(t, "user-defined", shadowedWebMCPRsp.JSON200.Result)
+
 	// Reuse the same container/warm daemon connection to verify tab-binding
 	// behavior: `page` must bind to the browser's actual foreground tab, not
 	// just the most recently opened one (resolveActivePage in

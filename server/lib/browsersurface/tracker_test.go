@@ -17,6 +17,9 @@ type fakeProtocol struct {
 	windowIDs           map[string]int
 	attachFailures      int
 	attachCalls         map[string]int
+	pageEnableFailures  int
+	pageEnableCalls     int
+	frameTreeFailures   int
 	beforeTargetsResult func()
 	events              chan cdpclient.Message
 	closed              chan struct{}
@@ -72,8 +75,23 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 		}[targetID]
 		return marshal(map[string]any{"sessionId": sessionID}), nil
 	case "Page.enable":
+		f.mu.Lock()
+		f.pageEnableCalls++
+		if f.pageEnableFailures > 0 {
+			f.pageEnableFailures--
+			f.mu.Unlock()
+			return nil, errors.New("temporary Page.enable failure")
+		}
+		f.mu.Unlock()
 		return marshal(map[string]any{}), nil
 	case "Page.getFrameTree":
+		f.mu.Lock()
+		if f.frameTreeFailures > 0 {
+			f.frameTreeFailures--
+			f.mu.Unlock()
+			return nil, errors.New("temporary Page.getFrameTree failure")
+		}
+		f.mu.Unlock()
 		if sessionID == "oopif-session" {
 			return marshal(map[string]any{"frameTree": map[string]any{
 				"frame": map[string]any{"id": "oopif", "url": "https://cross-origin.example/"},
@@ -141,6 +159,31 @@ func TestTrackerRejectsProtocolWithoutEvents(t *testing.T) {
 
 	err := tracker.Start(context.Background())
 	require.EqualError(t, err, "start browser surface discovery: protocol events are unavailable")
+}
+
+func TestTrackerRetriesTransientSessionInitializationFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		configure func(*fakeProtocol)
+	}{
+		{name: "enable", configure: func(protocol *fakeProtocol) { protocol.pageEnableFailures = 1 }},
+		{name: "frame tree", configure: func(protocol *fakeProtocol) { protocol.frameTreeFailures = 1 }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			protocol := newFakeProtocol()
+			test.configure(protocol)
+			tracker := New(protocol)
+			require.NoError(t, tracker.Start(context.Background()))
+
+			require.Eventually(t, func() bool {
+				protocol.mu.Lock()
+				calls := protocol.pageEnableCalls
+				protocol.mu.Unlock()
+				_, resolved := tracker.Resolve("session-a", "root-a")
+				return calls >= 2 && resolved
+			}, time.Second, 10*time.Millisecond)
+		})
+	}
 }
 
 func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {

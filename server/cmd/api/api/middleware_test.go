@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -72,6 +73,33 @@ func withTelemetryMiddlewareEnabled(t *testing.T) {
 	})
 }
 
+func TestWebMCPRequestSizeMiddlewareRejectsOversizedInvokeBody(t *testing.T) {
+	body := strings.NewReader(strings.Repeat("x", maxWebMCPRequestBytes+1))
+	request := httptest.NewRequest(http.MethodPost, "/webmcp/invoke", body)
+	recorder := httptest.NewRecorder()
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		var tooLarge *http.MaxBytesError
+		require.ErrorAs(t, err, &tooLarge)
+		w.WriteHeader(http.StatusBadRequest)
+	})
+
+	WebMCPRequestSizeMiddleware(next).ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+func TestWebMCPRequestSizeMiddlewareDoesNotLimitOtherRoutes(t *testing.T) {
+	body := strings.NewReader(strings.Repeat("x", maxWebMCPRequestBytes+1))
+	request := httptest.NewRequest(http.MethodPost, "/playwright/execute", body)
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		payload, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		require.Len(t, payload, maxWebMCPRequestBytes+1)
+	})
+
+	WebMCPRequestSizeMiddleware(next).ServeHTTP(httptest.NewRecorder(), request)
+}
+
 func TestStrictErrorHandlersReturnJSON(t *testing.T) {
 	for _, test := range []struct {
 		name    string
@@ -87,6 +115,25 @@ func TestStrictErrorHandlersReturnJSON(t *testing.T) {
 			require.Equal(t, test.status, recorder.Code)
 			require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
 			require.JSONEq(t, `{"message":"invalid request"}`, recorder.Body.String())
+		})
+	}
+}
+
+func TestStrictErrorHandlersPreservePlaintextOutsideWebMCP(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request, error)
+		status  int
+	}{
+		{name: "request", handler: StrictRequestErrorHandler, status: http.StatusBadRequest},
+		{name: "response", handler: StrictResponseErrorHandler, status: http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			test.handler(recorder, httptest.NewRequest(http.MethodPost, "/playwright/execute", nil), errors.New("invalid request"))
+			require.Equal(t, test.status, recorder.Code)
+			require.Equal(t, "text/plain; charset=utf-8", recorder.Header().Get("Content-Type"))
+			require.Equal(t, "invalid request\n", recorder.Body.String())
 		})
 	}
 }

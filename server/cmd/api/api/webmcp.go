@@ -17,6 +17,7 @@ const (
 	defaultWebMCPInvocationTimeout = 60 * time.Second
 	maxWebMCPInvocationTimeoutSec  = 120
 	maxWebMCPInputBytes            = 1 << 20
+	maxWebMCPRequestBytes          = maxWebMCPInputBytes + (4 << 10)
 )
 
 func (s *ApiService) GetWebMCPTools(ctx context.Context, _ oapi.GetWebMCPToolsRequestObject) (oapi.GetWebMCPToolsResponseObject, error) {

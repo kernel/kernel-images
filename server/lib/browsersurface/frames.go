@@ -77,21 +77,35 @@ func (t *Tracker) initializeSession(sessionID string) {
 
 	ctx, cancel := context.WithTimeout(t.ctx, sessionInitTimeout)
 	defer cancel()
-	if _, err := t.protocol.Send(ctx, "Page.enable", nil, sessionID); err != nil {
-		t.failSessionInitialization(sessionID, err)
-		return
-	}
-	raw, err := t.protocol.Send(ctx, "Page.getFrameTree", nil, sessionID)
-	if err != nil {
-		t.failSessionInitialization(sessionID, err)
-		return
-	}
 	var result struct {
 		FrameTree frameTree `json:"frameTree"`
 	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		t.failSessionInitialization(sessionID, err)
-		return
+	var initErr error
+	for {
+		result.FrameTree = frameTree{}
+		if _, initErr = t.protocol.Send(ctx, "Page.enable", nil, sessionID); initErr == nil {
+			var raw json.RawMessage
+			raw, initErr = t.protocol.Send(ctx, "Page.getFrameTree", nil, sessionID)
+			if initErr == nil {
+				initErr = json.Unmarshal(raw, &result)
+			}
+		}
+		if initErr == nil {
+			break
+		}
+
+		timer := time.NewTimer(sessionInitRetryDelay)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			timer.Stop()
+			t.failSessionInitialization(sessionID, initErr)
+			return
+		case <-t.closed:
+			timer.Stop()
+			t.failSessionInitialization(sessionID, initErr)
+			return
+		}
 	}
 
 	t.stateMu.Lock()

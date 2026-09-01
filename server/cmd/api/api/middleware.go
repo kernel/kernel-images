@@ -121,14 +121,38 @@ func apiCallEvent(operationID string) (string, oapi.TelemetryEventCategory) {
 	return "platform_api_call", events.Platform
 }
 
-// TelemetryStrictMiddleware records the matched OpenAPI operationId onto the
-// per-request scratch so TelemetryHTTPMiddleware can include it in the event.
-func StrictRequestErrorHandler(w http.ResponseWriter, _ *http.Request, err error) {
-	writeStrictError(w, http.StatusBadRequest, err.Error())
+// WebMCPRequestSizeMiddleware bounds invoke bodies before the generated JSON
+// decoder materializes them. The allowance above the input limit covers the
+// request envelope while keeping memory use bounded.
+func WebMCPRequestSizeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/webmcp/invoke" {
+			r.Body = http.MaxBytesReader(w, r.Body, maxWebMCPRequestBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
-func StrictResponseErrorHandler(w http.ResponseWriter, _ *http.Request, err error) {
-	writeStrictError(w, http.StatusInternalServerError, err.Error())
+// StrictRequestErrorHandler preserves the existing plaintext contract outside
+// WebMCP, whose documented errors are JSON.
+func StrictRequestErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	if isWebMCPRequest(r) {
+		writeStrictError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+func StrictResponseErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	if isWebMCPRequest(r) {
+		writeStrictError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func isWebMCPRequest(r *http.Request) bool {
+	return r.URL.Path == "/webmcp/tools" || r.URL.Path == "/webmcp/invoke"
 }
 
 func writeStrictError(w http.ResponseWriter, status int, message string) {
@@ -137,6 +161,8 @@ func writeStrictError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
+// TelemetryStrictMiddleware records the matched OpenAPI operationId onto the
+// per-request scratch so TelemetryHTTPMiddleware can include it in the event.
 func TelemetryStrictMiddleware() oapi.StrictMiddlewareFunc {
 	return func(next oapi.StrictHandlerFunc, operationID string) oapi.StrictHandlerFunc {
 		return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {

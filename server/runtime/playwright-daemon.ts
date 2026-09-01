@@ -308,10 +308,14 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
 
     const webmcp = createWebMCPClient({apiBaseUrl: KERNEL_API_ENDPOINT, signal});
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const userFunction = new AsyncFunction('page', 'context', 'browser', 'webmcp', jsCode);
+    const createUserFunction = new AsyncFunction(
+      'webmcp',
+      `return async function(page, context, browser) {\n${jsCode}\n};`,
+    );
+    const userFunction = await createUserFunction(webmcp);
     signal.throwIfAborted();
 
-    const result = await userFunction(page, context, browserInstance, webmcp);
+    const result = await userFunction(page, context, browserInstance);
 
     return {
       id,
