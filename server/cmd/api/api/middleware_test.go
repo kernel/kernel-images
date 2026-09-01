@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -69,6 +70,25 @@ func withTelemetryMiddlewareEnabled(t *testing.T) {
 			DisableTelemetryMiddleware()
 		}
 	})
+}
+
+func TestStrictErrorHandlersReturnJSON(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		handler func(http.ResponseWriter, *http.Request, error)
+		status  int
+	}{
+		{name: "request", handler: StrictRequestErrorHandler, status: http.StatusBadRequest},
+		{name: "response", handler: StrictResponseErrorHandler, status: http.StatusInternalServerError},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			test.handler(recorder, httptest.NewRequest(http.MethodPost, "/webmcp/invoke", nil), errors.New("invalid request"))
+			require.Equal(t, test.status, recorder.Code)
+			require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+			require.JSONEq(t, `{"message":"invalid request"}`, recorder.Body.String())
+		})
+	}
 }
 
 func TestTelemetryMiddleware_EmitsApiCallEventOnDocumentedRoute(t *testing.T) {

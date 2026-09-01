@@ -123,6 +123,20 @@ func apiCallEvent(operationID string) (string, oapi.TelemetryEventCategory) {
 
 // TelemetryStrictMiddleware records the matched OpenAPI operationId onto the
 // per-request scratch so TelemetryHTTPMiddleware can include it in the event.
+func StrictRequestErrorHandler(w http.ResponseWriter, _ *http.Request, err error) {
+	writeStrictError(w, http.StatusBadRequest, err.Error())
+}
+
+func StrictResponseErrorHandler(w http.ResponseWriter, _ *http.Request, err error) {
+	writeStrictError(w, http.StatusInternalServerError, err.Error())
+}
+
+func writeStrictError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
+}
+
 func TelemetryStrictMiddleware() oapi.StrictMiddlewareFunc {
 	return func(next oapi.StrictHandlerFunc, operationID string) oapi.StrictHandlerFunc {
 		return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
