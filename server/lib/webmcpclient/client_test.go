@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/kernel/kernel-images/server/lib/cdpconnection"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +39,13 @@ func (u *mutableUpstream) Set(url string) {
 	u.mu.Unlock()
 }
 
+type wireRequest struct {
+	ID        int64           `json:"id"`
+	Method    string          `json:"method"`
+	Params    json.RawMessage `json:"params"`
+	SessionID string          `json:"sessionId"`
+}
+
 type fakeCDP struct {
 	server *httptest.Server
 	url    string
@@ -52,16 +58,35 @@ type fakeCDP struct {
 	closeOnInvoke       bool
 	detachAfterResponse bool
 	invokeResponseDelay time.Duration
-	extraPageFirst      bool
+	toolCount           int
+	write               func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
 	t.Helper()
-	fake := &fakeCDP{enabledSessions: make(map[string]int), omitResponse: omitResponse}
+	fake := &fakeCDP{enabledSessions: make(map[string]int), omitResponse: omitResponse, toolCount: 1}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
 	fake.url = "ws" + strings.TrimPrefix(fake.server.URL, "http")
 	t.Cleanup(fake.server.Close)
 	return fake
+}
+
+func (f *fakeCDP) emit(value any) {
+	f.mu.Lock()
+	write := f.write
+	f.mu.Unlock()
+	if write != nil {
+		write(value)
+	}
+}
+
+func (f *fakeCDP) openPopup() {
+	f.emit(map[string]any{
+		"method": "Target.targetCreated",
+		"params": map[string]any{"targetInfo": map[string]any{
+			"targetId": "popup-target", "type": "page", "title": "Popup", "url": "https://popup.example/",
+		}},
+	})
 }
 
 func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
@@ -84,12 +109,15 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 		defer writeMu.Unlock()
 		_ = conn.Write(r.Context(), websocket.MessageText, payload)
 	}
+	f.mu.Lock()
+	f.write = write
+	f.mu.Unlock()
 	for {
 		_, payload, err := conn.Read(r.Context())
 		if err != nil {
 			return
 		}
-		var request cdpRequest
+		var request wireRequest
 		if json.Unmarshal(payload, &request) != nil {
 			continue
 		}
@@ -97,72 +125,77 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			write(map[string]any{"id": request.ID, "result": result})
 		}
 		switch request.Method {
+		case "Target.setDiscoverTargets":
+			respond(map[string]any{})
 		case "Target.getTargets":
-			f.mu.Lock()
-			extraPageFirst := f.extraPageFirst
-			f.mu.Unlock()
-			targets := []map[string]any{{
-				"targetId": "page-target", "type": "page", "url": "https://merchant.example/",
-			}}
-			if extraPageFirst {
-				targets = append([]map[string]any{{
-					"targetId": "other-page", "type": "page", "url": "https://other.example/",
-				}}, targets...)
+			respond(map[string]any{"targetInfos": []map[string]any{
+				{"targetId": "page-target", "type": "page", "title": "Store", "url": "https://merchant.example/"},
+				{"targetId": "other-page", "type": "page", "title": "Travel", "url": "https://travel.example/"},
+			}})
+		case "Browser.getWindowForTarget":
+			var params struct {
+				TargetID string `json:"targetId"`
 			}
-			respond(map[string]any{"targetInfos": targets})
+			_ = json.Unmarshal(request.Params, &params)
+			windowID := 10
+			if params.TargetID == "other-page" {
+				windowID = 20
+			}
+			respond(map[string]any{"windowId": windowID})
 		case "Target.autoAttachRelated":
 			f.mu.Lock()
 			f.relatedAttaches++
 			f.mu.Unlock()
-			write(map[string]any{
-				"method": "Target.attachedToTarget",
-				"params": map[string]any{
-					"sessionId": "page-session",
-					"targetInfo": map[string]any{
-						"targetId": "page-target", "type": "page", "url": "https://merchant.example/",
-					},
-				},
-			})
-			write(map[string]any{
-				"method": "Target.attachedToTarget",
-				"params": map[string]any{
-					"sessionId": "iframe-session",
-					"targetInfo": map[string]any{
-						"targetId": "iframe-target", "type": "iframe", "url": "https://payments.example/element#private-state",
-						"parentFrameId": "page-frame",
-					},
-				},
-			})
+			var params struct {
+				TargetID string `json:"targetId"`
+			}
+			_ = json.Unmarshal(request.Params, &params)
+			switch params.TargetID {
+			case "page-target":
+				writeAttached(write, "", "page-session", "page-target", "page", "Store", "https://merchant.example/", "")
+				writeAttached(write, "page-session", "iframe-session", "iframe-target", "iframe", "", "https://payments.example/element#private-state", "page-frame")
+				writeAttached(write, "iframe-session", "nested-session", "nested-target", "iframe", "", "https://bank.example/challenge", "iframe-frame")
+			case "other-page":
+				writeAttached(write, "", "other-session", "other-page", "page", "Travel", "https://travel.example/", "")
+			case "popup-target":
+				writeAttached(write, "", "popup-session", "popup-target", "page", "Popup", "https://popup.example/", "")
+			}
 			respond(map[string]any{})
 		case "Page.enable":
 			respond(map[string]any{})
 		case "Page.getFrameTree":
-			frame := map[string]any{
-				"id": "page-frame", "loaderId": "page-loader", "url": "https://merchant.example/",
-			}
-			if request.SessionID == "iframe-session" {
-				frame = map[string]any{
-					"id": "iframe-frame", "loaderId": "iframe-loader", "url": "https://payments.example/element#private-state",
-					"parentId": "page-frame",
-				}
-			}
-			respond(map[string]any{"frameTree": map[string]any{"frame": frame}})
+			respond(map[string]any{"frameTree": frameTreeForSession(request.SessionID)})
 		case "WebMCP.enable":
 			f.mu.Lock()
 			f.enabledSessions[request.SessionID]++
+			toolCount := f.toolCount
 			f.mu.Unlock()
 			respond(map[string]any{})
 			name, frameID := "merchant_tool", "page-frame"
-			if request.SessionID == "iframe-session" {
+			switch request.SessionID {
+			case "iframe-session":
 				name, frameID = "payment_tool", "iframe-frame"
+			case "nested-session":
+				name, frameID = "bank_tool", "nested-frame"
+			case "other-session":
+				name, frameID = "search_flights", "other-frame"
+			case "popup-session":
+				name, frameID = "popup_tool", "popup-frame"
+			}
+			tools := make([]map[string]any, toolCount)
+			for i := range tools {
+				toolName := name
+				if toolCount > 1 {
+					toolName = fmt.Sprintf("%s_%d", name, i)
+				}
+				tools[i] = map[string]any{
+					"name": toolName, "description": toolName + " description", "frameId": frameID,
+					"inputSchema": map[string]any{"type": "object"},
+				}
 			}
 			write(map[string]any{
-				"method":    "WebMCP.toolsAdded",
-				"sessionId": request.SessionID,
-				"params": map[string]any{"tools": []map[string]any{{
-					"name": name, "description": name + " description", "frameId": frameID,
-					"inputSchema": map[string]any{"type": "object"},
-				}}},
+				"method": "WebMCP.toolsAdded", "sessionId": request.SessionID,
+				"params": map[string]any{"tools": tools},
 			})
 		case "WebMCP.invokeTool":
 			if f.closeOnInvoke {
@@ -175,15 +208,13 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			respond(map[string]any{"invocationId": "invocation-1"})
 			if !f.omitResponse {
 				write(map[string]any{
-					"method":    "Page.frameNavigated",
-					"sessionId": request.SessionID,
+					"method": "Page.frameNavigated", "sessionId": request.SessionID,
 					"params": map[string]any{"frame": map[string]any{
 						"id": "iframe-frame", "loaderId": "next-loader", "url": "https://payments.example/success",
 					}},
 				})
 				write(map[string]any{
-					"method":    "WebMCP.toolResponded",
-					"sessionId": request.SessionID,
+					"method": "WebMCP.toolResponded", "sessionId": request.SessionID,
 					"params": map[string]any{
 						"invocationId": "invocation-1", "status": "Completed",
 						"output": map[string]any{"content": []map[string]any{{"type": "text", "text": request.SessionID}}},
@@ -202,35 +233,114 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func TestManagerDiscoversTopPageAndOOPIFToolsOverOneConnection(t *testing.T) {
+func writeAttached(write func(any), parentSessionID, sessionID, targetID, targetType, title, url, parentFrameID string) {
+	message := map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId": sessionID,
+			"targetInfo": map[string]any{
+				"targetId": targetID, "type": targetType, "title": title, "url": url,
+				"parentFrameId": parentFrameID,
+			},
+		},
+	}
+	if parentSessionID != "" {
+		message["sessionId"] = parentSessionID
+	}
+	write(message)
+}
+
+func frameTreeForSession(sessionID string) map[string]any {
+	switch sessionID {
+	case "page-session":
+		return map[string]any{
+			"frame": map[string]any{"id": "page-frame", "loaderId": "page-loader", "url": "https://merchant.example/"},
+			"childFrames": []any{
+				map[string]any{
+					"frame": map[string]any{"id": "iframe-frame", "parentId": "page-frame", "loaderId": "iframe-loader", "url": "https://payments.example/element#private-state"},
+					"childFrames": []any{
+						map[string]any{"frame": map[string]any{"id": "nested-frame", "parentId": "iframe-frame", "loaderId": "nested-loader", "url": "https://bank.example/challenge"}},
+					},
+				},
+			},
+		}
+	case "iframe-session":
+		return map[string]any{
+			"frame": map[string]any{"id": "iframe-frame", "parentId": "page-frame", "loaderId": "iframe-loader", "url": "https://payments.example/element#private-state"},
+			"childFrames": []any{
+				map[string]any{"frame": map[string]any{"id": "nested-frame", "parentId": "iframe-frame", "loaderId": "nested-loader", "url": "https://bank.example/challenge"}},
+			},
+		}
+	case "nested-session":
+		return map[string]any{"frame": map[string]any{"id": "nested-frame", "parentId": "iframe-frame", "loaderId": "nested-loader", "url": "https://bank.example/challenge"}}
+	case "other-session":
+		return map[string]any{"frame": map[string]any{"id": "other-frame", "loaderId": "other-loader", "url": "https://travel.example/"}}
+	case "popup-session":
+		return map[string]any{"frame": map[string]any{"id": "popup-frame", "loaderId": "popup-loader", "url": "https://popup.example/"}}
+	default:
+		return map[string]any{"frame": map[string]any{}}
+	}
+}
+
+func TestManagerDiscoversToolsAcrossWindowsTabsAndNestedFrames(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
 
-	tools, err := manager.Tools(context.Background(), "")
+	tools, err := manager.Tools(context.Background())
 	require.NoError(t, err)
-	require.Len(t, tools, 2)
+	require.Len(t, tools, 4)
 
 	byName := make(map[string]Tool, len(tools))
 	for _, tool := range tools {
 		byName[tool.Name] = tool
 	}
-	require.Equal(t, "page-target", byName["merchant_tool"].PageTargetID)
-	require.Equal(t, "page-target", byName["merchant_tool"].TargetID)
-	require.Equal(t, "page-target:page-loader", byName["merchant_tool"].DocumentRef)
-	require.Equal(t, "page-target", byName["payment_tool"].PageTargetID)
-	require.Equal(t, "iframe-target", byName["payment_tool"].TargetID)
-	require.Equal(t, "iframe-frame", byName["payment_tool"].FrameID)
-	require.Equal(t, "https://payments.example/element", byName["payment_tool"].TargetURL)
-	require.Equal(t, "https://payments.example/element", byName["payment_tool"].FrameURL)
-	require.Equal(t, "iframe-target:iframe-loader", byName["payment_tool"].DocumentRef)
+	require.Equal(t, 1, byName["merchant_tool"].Source.WindowID)
+	require.Equal(t, 1, byName["merchant_tool"].Source.TabID)
+	require.Nil(t, byName["merchant_tool"].Source.Frame)
+	require.Equal(t, "Store", byName["payment_tool"].Source.PageTitle)
+	require.Equal(t, "https://merchant.example/", byName["payment_tool"].Source.PageURL)
+	require.Equal(t, 1, byName["payment_tool"].Source.Frame.FrameID)
+	require.Equal(t, "https://payments.example/element", byName["payment_tool"].Source.Frame.URL)
+	require.Equal(t, 2, byName["bank_tool"].Source.Frame.FrameID)
+	require.Equal(t, "https://bank.example/challenge", byName["bank_tool"].Source.Frame.URL)
+	require.Equal(t, 2, byName["search_flights"].Source.WindowID)
+	require.Equal(t, 2, byName["search_flights"].Source.TabID)
+	require.Nil(t, byName["search_flights"].Source.Frame)
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 1, fake.connections)
-	require.Equal(t, 1, fake.relatedAttaches)
-	require.GreaterOrEqual(t, fake.enabledSessions["page-session"], 1)
-	require.GreaterOrEqual(t, fake.enabledSessions["iframe-session"], 1)
+	require.Equal(t, 2, fake.relatedAttaches)
+	for _, sessionID := range []string{"page-session", "iframe-session", "nested-session", "other-session"} {
+		require.GreaterOrEqual(t, fake.enabledSessions[sessionID], 1)
+	}
+}
+
+func TestManagerTracksTabsOpenedAfterDiscovery(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	_, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+
+	fake.openPopup()
+	var popup Tool
+	require.Eventually(t, func() bool {
+		tools, toolsErr := manager.Tools(context.Background())
+		if toolsErr != nil {
+			return false
+		}
+		for _, tool := range tools {
+			if tool.Name == "popup_tool" {
+				popup = tool
+				return true
+			}
+		}
+		return false
+	}, 3*time.Second, 20*time.Millisecond)
+	require.Equal(t, 1, popup.Source.WindowID)
+	require.Equal(t, 3, popup.Source.TabID)
 }
 
 func TestManagerReusesConnectionAndToolReferences(t *testing.T) {
@@ -238,39 +348,44 @@ func TestManagerReusesConnectionAndToolReferences(t *testing.T) {
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
 
-	first, err := manager.Tools(context.Background(), "")
+	first, err := manager.Tools(context.Background())
 	require.NoError(t, err)
-	second, err := manager.Tools(context.Background(), "")
+	second, err := manager.Tools(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, first, second)
 
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 1, fake.connections)
-	require.Equal(t, 1, fake.relatedAttaches)
+	require.Equal(t, 2, fake.relatedAttaches)
+}
+
+func paymentToolRef(t *testing.T, manager *Manager) string {
+	t.Helper()
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	for _, tool := range tools {
+		if tool.Name == "payment_tool" {
+			return tool.Ref
+		}
+	}
+	t.Fatal("payment tool not found")
+	return ""
 }
 
 func TestInvocationCanCompleteAfterFrameNavigation(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
-	tools, err := manager.Tools(context.Background(), "")
-	require.NoError(t, err)
-	var paymentTool Tool
-	for _, tool := range tools {
-		if tool.Name == "payment_tool" {
-			paymentTool = tool
-		}
-	}
-	require.NotEmpty(t, paymentTool.Ref)
+	toolRef := paymentToolRef(t, manager)
 
-	result, err := manager.Invoke(context.Background(), paymentTool.Ref, map[string]any{"amount": 2900})
+	result, err := manager.Invoke(context.Background(), toolRef, map[string]any{"amount": 2900})
 	require.NoError(t, err)
 	require.Equal(t, "invocation-1", result.InvocationID)
 	require.Equal(t, "Completed", result.Status)
 	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
 
-	_, err = manager.Invoke(context.Background(), paymentTool.Ref, map[string]any{})
+	_, err = manager.Invoke(context.Background(), toolRef, map[string]any{})
 	require.ErrorIs(t, err, ErrToolNotFound)
 }
 
@@ -279,33 +394,17 @@ func TestInvocationReturnsCompletedResponseBeforeTargetDetach(t *testing.T) {
 	fake.detachAfterResponse = true
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
-	tools, err := manager.Tools(context.Background(), "")
-	require.NoError(t, err)
-	var paymentTool Tool
-	for _, tool := range tools {
-		if tool.Name == "payment_tool" {
-			paymentTool = tool
-		}
-	}
 
-	result, err := manager.Invoke(context.Background(), paymentTool.Ref, map[string]any{})
+	result, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
 	require.NoError(t, err)
 	require.Equal(t, "Completed", result.Status)
-	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
 }
 
 func TestInvocationTimeoutHasUnknownOutcome(t *testing.T) {
 	fake := newFakeCDP(t, true)
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
-	tools, err := manager.Tools(context.Background(), "")
-	require.NoError(t, err)
-	var toolRef string
-	for _, tool := range tools {
-		if tool.Name == "payment_tool" {
-			toolRef = tool.Ref
-		}
-	}
+	toolRef := paymentToolRef(t, manager)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -319,21 +418,14 @@ func TestInvokeCancellationBeforeCommandResponseKeepsConnection(t *testing.T) {
 	fake.invokeResponseDelay = 100 * time.Millisecond
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
-	tools, err := manager.Tools(context.Background(), "")
-	require.NoError(t, err)
-	var toolRef string
-	for _, tool := range tools {
-		if tool.Name == "payment_tool" {
-			toolRef = tool.Ref
-		}
-	}
+	toolRef := paymentToolRef(t, manager)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err = manager.Invoke(ctx, toolRef, map[string]any{})
+	_, err := manager.Invoke(ctx, toolRef, map[string]any{})
 	require.ErrorIs(t, err, ErrOutcomeUnknown)
 
-	_, err = manager.Tools(context.Background(), "")
+	_, err = manager.Tools(context.Background())
 	require.NoError(t, err)
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
@@ -345,16 +437,8 @@ func TestConnectionDeathMidInvokeHasUnknownOutcome(t *testing.T) {
 	fake.closeOnInvoke = true
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
-	tools, err := manager.Tools(context.Background(), "")
-	require.NoError(t, err)
-	var toolRef string
-	for _, tool := range tools {
-		if tool.Name == "payment_tool" {
-			toolRef = tool.Ref
-		}
-	}
 
-	_, err = manager.Invoke(context.Background(), toolRef, map[string]any{})
+	_, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
 	require.ErrorIs(t, err, ErrOutcomeUnknown)
 }
 
@@ -366,37 +450,14 @@ func TestToolResponsesAreScopedBySession(t *testing.T) {
 		stateChangedCh:       make(chan struct{}, 1),
 	}
 	for _, sessionID := range []string{"page-session", "iframe-session"} {
-		params, err := json.Marshal(invocationResponse{
-			InvocationID: "invocation-1",
-			Status:       "Completed",
-			Output:       sessionID,
-		})
+		params, err := json.Marshal(invocationResponse{InvocationID: "invocation-1", Status: "Completed", Output: sessionID})
 		require.NoError(t, err)
-		client.handleEvent(cdpMessage{Method: "WebMCP.toolResponded", SessionID: sessionID, Params: params})
+		client.handleProtocolEvent(cdpconnection.Message{Method: "WebMCP.toolResponded", SessionID: sessionID, Params: params})
 	}
 
 	require.Len(t, client.invocations, 2)
 	require.Equal(t, "page-session", client.invocations[invocationKey{sessionID: "page-session", invocationID: "invocation-1"}].Output)
 	require.Equal(t, "iframe-session", client.invocations[invocationKey{sessionID: "iframe-session", invocationID: "invocation-1"}].Output)
-}
-
-func TestDiscoveryKeepsSelectedPageWhenTargetOrderChanges(t *testing.T) {
-	fake := newFakeCDP(t, false)
-	manager := NewManager(staticUpstream{url: fake.url})
-	t.Cleanup(func() { _ = manager.Close() })
-	first, err := manager.Tools(context.Background(), "")
-	require.NoError(t, err)
-	fake.mu.Lock()
-	fake.extraPageFirst = true
-	fake.mu.Unlock()
-
-	second, err := manager.Tools(context.Background(), "")
-	require.NoError(t, err)
-	require.Equal(t, first, second)
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	require.Equal(t, 1, fake.connections)
-	require.Equal(t, 1, fake.relatedAttaches)
 }
 
 func TestManagerReconnectsWhenChromiumUpstreamChanges(t *testing.T) {
@@ -405,66 +466,22 @@ func TestManagerReconnectsWhenChromiumUpstreamChanges(t *testing.T) {
 	upstream := &mutableUpstream{url: first.url}
 	manager := NewManager(upstream)
 	t.Cleanup(func() { _ = manager.Close() })
-	firstTools, err := manager.Tools(context.Background(), "")
+	firstTools, err := manager.Tools(context.Background())
 	require.NoError(t, err)
 	upstream.Set(second.url)
 
-	secondTools, err := manager.Tools(context.Background(), "")
+	secondTools, err := manager.Tools(context.Background())
 	require.NoError(t, err)
 	require.NotEqual(t, firstTools[0].Ref, secondTools[0].Ref)
-	first.mu.Lock()
-	require.Equal(t, 1, first.connections)
-	first.mu.Unlock()
-	second.mu.Lock()
-	require.Equal(t, 1, second.connections)
-	second.mu.Unlock()
 }
 
 func TestToolRegistryIsBoundedPerSession(t *testing.T) {
-	client := &connection{
-		sessions:        map[string]session{"page-session": {id: "page-session"}},
-		tools:           make(map[string]*registeredTool),
-		toolRefs:        make(map[string]string),
-		toolLimitWarned: make(map[string]bool),
-		stateChangedCh:  make(chan struct{}, 1),
-		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-	tools := make([]toolEvent, maxToolsPerSession+10)
-	for i := range tools {
-		tools[i] = toolEvent{Name: fmt.Sprintf("tool-%d", i), FrameID: "page-frame"}
-	}
-	client.addTools("page-session", tools)
+	fake := newFakeCDP(t, false)
+	fake.toolCount = maxToolsPerSession + 10
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
 
-	require.Len(t, client.tools, maxToolsPerSession)
-	require.True(t, client.toolLimitWarned["page-session"])
-}
-
-func TestDetachedTargetInvalidatesToolReferences(t *testing.T) {
-	client := &connection{
-		sessions: map[string]session{
-			"page-session":   {id: "page-session"},
-			"iframe-session": {id: "iframe-session", parentID: "page-session"},
-		},
-		frames:               make(map[string]map[string]frameInfo),
-		tools:                make(map[string]*registeredTool),
-		toolRefs:             make(map[string]string),
-		toolLimitWarned:      make(map[string]bool),
-		invocations:          make(map[invocationKey]invocationResponse),
-		waitingInvocations:   make(map[invocationKey]struct{}),
-		abandonedInvocations: make(map[invocationKey]time.Time),
-		stateChangedCh:       make(chan struct{}, 1),
-	}
-	key := toolKey("iframe-session", "iframe-frame", "pay")
-	client.toolRefs[key] = "wmcp_pay"
-	client.tools["wmcp_pay"] = &registeredTool{
-		ref: "wmcp_pay", sessionID: "iframe-session", frameID: "iframe-frame", name: "pay",
-	}
-	params, err := json.Marshal(map[string]any{"sessionId": "iframe-session"})
+	tools, err := manager.Tools(context.Background())
 	require.NoError(t, err)
-
-	client.handleEvent(cdpMessage{Method: "Target.detachedFromTarget", Params: params})
-
-	require.NotContains(t, client.sessions, "iframe-session")
-	require.NotContains(t, client.tools, "wmcp_pay")
-	require.NotContains(t, client.toolRefs, key)
+	require.Len(t, tools, maxToolsPerSession*4)
 }

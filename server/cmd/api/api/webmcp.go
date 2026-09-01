@@ -18,12 +18,8 @@ const (
 	maxWebMCPInputBytes            = 1 << 20
 )
 
-func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPToolsRequestObject) (oapi.GetWebMCPToolsResponseObject, error) {
-	targetID := ""
-	if request.Params.TargetId != nil {
-		targetID = *request.Params.TargetId
-	}
-	tools, err := s.webmcp.Tools(ctx, targetID)
+func (s *ApiService) GetWebMCPTools(ctx context.Context, _ oapi.GetWebMCPToolsRequestObject) (oapi.GetWebMCPToolsResponseObject, error) {
+	tools, err := s.webmcp.Tools(ctx)
 	if err != nil {
 		if errors.Is(err, webmcpclient.ErrNoPageTarget) {
 			return oapi.GetWebMCPTools404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: err.Error()}}, nil
@@ -39,14 +35,22 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 			inputSchema = make(map[string]any)
 		}
 		responseTool := oapi.WebMCPTool{
-			ToolRef:      tool.Ref,
-			Name:         tool.Name,
-			Description:  tool.Description,
-			InputSchema:  inputSchema,
-			PageTargetId: tool.PageTargetID,
-			TargetId:     tool.TargetID,
-			TargetType:   tool.TargetType,
-			FrameId:      tool.FrameID,
+			ToolRef:     tool.Ref,
+			Name:        tool.Name,
+			Description: tool.Description,
+			InputSchema: inputSchema,
+			Source: oapi.WebMCPToolSource{
+				WindowId:  tool.Source.WindowID,
+				TabId:     tool.Source.TabID,
+				PageTitle: tool.Source.PageTitle,
+				PageUrl:   tool.Source.PageURL,
+			},
+		}
+		if tool.Source.Frame != nil {
+			responseTool.Source.Frame = &oapi.WebMCPToolFrame{
+				FrameId: tool.Source.Frame.FrameID,
+				Url:     tool.Source.Frame.URL,
+			}
 		}
 		if tool.Annotations != nil {
 			responseTool.Annotations = &oapi.WebMCPToolAnnotations{
@@ -56,10 +60,6 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 				Autosubmit:       tool.Annotations.Autosubmit,
 			}
 		}
-		responseTool.TargetUrl = nonEmptyString(tool.TargetURL)
-		responseTool.FrameUrl = nonEmptyString(tool.FrameURL)
-		responseTool.ParentFrameId = nonEmptyString(tool.ParentFrameID)
-		responseTool.DocumentRef = nonEmptyString(tool.DocumentRef)
 		responseTools = append(responseTools, responseTool)
 	}
 	return oapi.GetWebMCPTools200JSONResponse{Tools: responseTools}, nil

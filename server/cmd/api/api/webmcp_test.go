@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,13 +18,11 @@ type fakeWebMCPClient struct {
 	toolsErr  error
 	result    webmcpclient.InvocationResult
 	invokeErr error
-	targetID  string
 	toolRef   string
 	input     map[string]any
 }
 
-func (f *fakeWebMCPClient) Tools(_ context.Context, targetID string) ([]webmcpclient.Tool, error) {
-	f.targetID = targetID
+func (f *fakeWebMCPClient) Tools(_ context.Context) ([]webmcpclient.Tool, error) {
 	return f.tools, f.toolsErr
 }
 
@@ -37,36 +36,47 @@ func (f *fakeWebMCPClient) Close() error { return nil }
 
 func TestGetWebMCPToolsMapsRegistrationContext(t *testing.T) {
 	client := &fakeWebMCPClient{tools: []webmcpclient.Tool{{
-		Ref:           "wmcp_test",
-		Name:          "pay",
-		Description:   "Pay for the order",
-		Annotations:   &webmcpclient.Annotations{Consequential: true},
-		PageTargetID:  "page-target",
-		TargetID:      "iframe-target",
-		TargetType:    "iframe",
-		TargetURL:     "https://payments.example/element",
-		FrameID:       "iframe-frame",
-		FrameURL:      "https://payments.example/element",
-		ParentFrameID: "page-frame",
-		DocumentRef:   "iframe-target:loader-1",
+		Ref:         "wmcp_test",
+		Name:        "pay",
+		Description: "Pay for the order",
+		Annotations: &webmcpclient.Annotations{Consequential: true},
+		Source: webmcpclient.ToolSource{
+			WindowID:  2,
+			TabID:     3,
+			PageTitle: "Store",
+			PageURL:   "https://merchant.example/cart",
+			Frame:     &webmcpclient.ToolFrame{FrameID: 7, URL: "https://payments.example/element"},
+		},
 	}}}
 	service := &ApiService{webmcp: client}
-	targetID := "page-target"
 
-	response, err := service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{
-		Params: oapi.GetWebMCPToolsParams{TargetId: &targetID},
-	})
+	response, err := service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{})
 	require.NoError(t, err)
 	body := response.(oapi.GetWebMCPTools200JSONResponse)
-	require.Equal(t, targetID, client.targetID)
 	require.Len(t, body.Tools, 1)
 	tool := body.Tools[0]
 	require.Equal(t, "wmcp_test", tool.ToolRef)
-	require.Equal(t, "iframe-target", tool.TargetId)
-	require.Equal(t, "iframe-frame", tool.FrameId)
-	require.Equal(t, "iframe-target:loader-1", *tool.DocumentRef)
+	require.Equal(t, 2, tool.Source.WindowId)
+	require.Equal(t, 3, tool.Source.TabId)
+	require.Equal(t, "Store", tool.Source.PageTitle)
+	require.Equal(t, 7, tool.Source.Frame.FrameId)
+	require.Equal(t, "https://payments.example/element", tool.Source.Frame.Url)
 	require.Empty(t, tool.InputSchema)
 	require.True(t, tool.Annotations.Consequential)
+}
+
+func TestGetWebMCPToolsSerializesNullFrameForTopLevelTool(t *testing.T) {
+	client := &fakeWebMCPClient{tools: []webmcpclient.Tool{{
+		Ref: "wmcp_test", Name: "search", Source: webmcpclient.ToolSource{
+			WindowID: 1, TabID: 1, PageTitle: "Travel", PageURL: "https://travel.example/",
+		},
+	}}}
+	service := &ApiService{webmcp: client}
+	response, err := service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	payload, err := json.Marshal(response.(oapi.GetWebMCPTools200JSONResponse))
+	require.NoError(t, err)
+	require.JSONEq(t, `{"tools":[{"tool_ref":"wmcp_test","name":"search","description":"","input_schema":{},"source":{"frame":null,"page_title":"Travel","page_url":"https://travel.example/","tab_id":1,"window_id":1}}]}`, string(payload))
 }
 
 func TestInvokeWebMCPToolReturnsPageResult(t *testing.T) {

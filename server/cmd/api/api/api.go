@@ -42,7 +42,7 @@ type OTLPExporter interface {
 var _ OTLPExporter = (*events.OTLPExportController)(nil)
 
 type webMCPClient interface {
-	Tools(ctx context.Context, targetID string) ([]webmcpclient.Tool, error)
+	Tools(ctx context.Context) ([]webmcpclient.Tool, error)
 	Invoke(ctx context.Context, toolRef string, input map[string]any) (webmcpclient.InvocationResult, error)
 	Close() error
 }

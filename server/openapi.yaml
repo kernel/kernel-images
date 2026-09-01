@@ -1358,26 +1358,21 @@ paths:
 
   /webmcp/tools:
     get:
-      summary: Discover WebMCP tools in the active page and its frames
+      summary: Discover WebMCP tools across the browser
       description: |
-        Lazily attaches one internal CDP connection to a page target and returns a snapshot of
-        native WebMCP tools registered by its current documents. Cross-origin iframe targets are
-        followed through CDP auto-attach. The server consumes WebMCP events internally; callers do
-        not need to maintain a CDP connection or subscribe to an event stream.
+        Returns a snapshot of native WebMCP tools available across the browser. The snapshot includes
+        tools registered by every open tab and by embedded content within those tabs.
+
+        On the first request, Kernel starts monitoring the browser. Tabs and windows that are already
+        open are included, and tabs, windows, and embedded content opened later are tracked automatically.
+        Tools are removed when the tab or embedded frame that registered them closes or navigates away.
+
+        Each tool includes an opaque tool_ref that identifies its exact live registration, along with
+        information about the window, tab, and optional embedded frame that provided it. Use that tool_ref
+        to invoke the tool. Callers do not need to manage browser debugging connections or subscribe to
+        browser events.
       operationId: getWebMCPTools
       x-telemetry-category: control
-      parameters:
-        - name: target_id
-          in: query
-          required: false
-          description: >-
-            Optional page target to inspect. When omitted, the current discovery target is retained;
-            the first page target reported by Chromium is used only on initial discovery. Explicitly
-            switching targets resets the WebMCP attachment and makes running invocation outcomes unknown.
-          schema:
-            type: string
-            minLength: 1
-            maxLength: 128
       responses:
         "200":
           description: Current WebMCP tool snapshot.
@@ -1394,10 +1389,10 @@ paths:
     post:
       summary: Invoke a discovered WebMCP tool
       description: |
-        Invokes the registration identified by tool_ref and waits for Chromium's matching
-        WebMCP.toolResponded event. Navigation during execution is allowed. If the owning CDP
-        session disappears or the request times out after invocation begins, the server reports
-        outcome_unknown and never retries the tool automatically.
+        Invokes the exact live registration identified by tool_ref and waits for its result.
+        Navigation during execution is allowed. If the tab or embedded frame disappears, or the
+        request times out after invocation begins, the server reports outcome_unknown and never
+        retries the tool automatically.
       operationId: invokeWebMCPTool
       x-telemetry-category: control
       requestBody:
@@ -6254,22 +6249,50 @@ components:
           type: boolean
         autosubmit:
           type: boolean
+    WebMCPToolFrame:
+      type: object
+      additionalProperties: false
+      required: [frame_id, url]
+      properties:
+        frame_id:
+          type: integer
+          minimum: 1
+          description: Monotonically increasing identifier for this embedded frame during the current browser process.
+        url:
+          type: string
+          description: Current frame URL with the fragment omitted.
+    WebMCPToolSource:
+      type: object
+      additionalProperties: false
+      required: [window_id, tab_id, page_title, page_url, frame]
+      properties:
+        window_id:
+          type: integer
+          minimum: 1
+          description: Monotonically increasing identifier for the browser window during the current browser process.
+        tab_id:
+          type: integer
+          minimum: 1
+          description: Monotonically increasing identifier for the tab during the current browser process.
+        page_title:
+          type: string
+          description: Current title of the top-level page.
+        page_url:
+          type: string
+          description: Current URL of the top-level page with the fragment omitted.
+        frame:
+          allOf:
+            - $ref: "#/components/schemas/WebMCPToolFrame"
+          nullable: true
+          description: Embedded frame that registered the tool, or null when the top-level page registered it.
     WebMCPTool:
       type: object
       additionalProperties: false
-      required:
-        - tool_ref
-        - name
-        - description
-        - input_schema
-        - page_target_id
-        - target_id
-        - target_type
-        - frame_id
+      required: [tool_ref, name, description, input_schema, source]
       properties:
         tool_ref:
           type: string
-          description: Opaque reference for invoking this exact live registration. It becomes invalid when its document or CDP session is replaced.
+          description: Opaque reference for invoking this exact live registration. It becomes invalid when its document or browser process is replaced.
         name:
           type: string
         description:
@@ -6279,29 +6302,8 @@ components:
           additionalProperties: true
         annotations:
           $ref: "#/components/schemas/WebMCPToolAnnotations"
-        page_target_id:
-          type: string
-          description: CDP target ID of the selected top-level page.
-        target_id:
-          type: string
-          description: CDP target ID owning the registration. For an out-of-process iframe this differs from page_target_id.
-        target_type:
-          type: string
-          description: CDP target type, normally page or iframe.
-        target_url:
-          type: string
-          description: Owning target URL with the fragment omitted.
-        frame_id:
-          type: string
-          description: Page.FrameId supplied by Chromium's WebMCP domain.
-        frame_url:
-          type: string
-          description: Current frame URL with the fragment omitted.
-        parent_frame_id:
-          type: string
-        document_ref:
-          type: string
-          description: Reference derived from the owning target and current Page.LoaderId. It changes when the frame commits a new document.
+        source:
+          $ref: "#/components/schemas/WebMCPToolSource"
     WebMCPToolsResponse:
       type: object
       additionalProperties: false

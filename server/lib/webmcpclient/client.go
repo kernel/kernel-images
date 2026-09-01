@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
-	"github.com/coder/websocket"
+	"github.com/kernel/kernel-images/server/lib/browsersurface"
+	"github.com/kernel/kernel-images/server/lib/cdpconnection"
+	"github.com/nrednav/cuid2"
 )
 
 const (
@@ -21,26 +23,15 @@ const (
 	maxAbandonedInvocations = 256
 )
 
-var errCommandOutcomeUnknown = errors.New("CDP command outcome is unknown")
-
 type connection struct {
-	conn   *websocket.Conn
-	ctx    context.Context
-	cancel context.CancelFunc
+	protocol *cdpconnection.Client
+	surface  *browsersurface.Tracker
 
-	nextID  atomic.Int64
-	writeMu sync.Mutex
-
-	pendingMu sync.Mutex
-	pending   map[int64]chan commandResult
-
-	targetMu sync.Mutex
+	startMu sync.Mutex
+	started bool
 
 	stateMu              sync.RWMutex
-	rootTargetID         string
-	rootSessionID        string
-	sessions             map[string]session
-	frames               map[string]map[string]frameInfo
+	enabledSessions      map[string]bool
 	tools                map[string]*registeredTool
 	toolRefs             map[string]string
 	toolLimitWarned      map[string]bool
@@ -50,24 +41,19 @@ type connection struct {
 	stateChangedCh       chan struct{}
 	logger               *slog.Logger
 
-	closed    chan struct{}
-	closeOnce sync.Once
+	eventsCancel func()
+	eventsDone   chan struct{}
+	closed       chan struct{}
+	closeOnce    sync.Once
 }
 
-func dial(ctx context.Context, url string) (*connection, error) {
-	ws, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{CompressionMode: websocket.CompressionDisabled})
-	if err != nil {
-		return nil, fmt.Errorf("WebMCP: dial Chromium DevTools: %w", err)
-	}
-	ws.SetReadLimit(8 * 1024 * 1024)
-	clientCtx, cancel := context.WithCancel(context.Background())
-	c := &connection{
-		conn:                 ws,
-		ctx:                  clientCtx,
-		cancel:               cancel,
-		pending:              make(map[int64]chan commandResult),
-		sessions:             make(map[string]session),
-		frames:               make(map[string]map[string]frameInfo),
+func newConnection(protocol *cdpconnection.Client) *connection {
+	surface := browsersurface.New(protocol)
+	events, cancel := surface.Subscribe()
+	client := &connection{
+		protocol:             protocol,
+		surface:              surface,
+		enabledSessions:      make(map[string]bool),
 		tools:                make(map[string]*registeredTool),
 		toolRefs:             make(map[string]string),
 		toolLimitWarned:      make(map[string]bool),
@@ -76,18 +62,32 @@ func dial(ctx context.Context, url string) (*connection, error) {
 		abandonedInvocations: make(map[invocationKey]time.Time),
 		stateChangedCh:       make(chan struct{}, 1),
 		logger:               slog.Default(),
+		eventsCancel:         cancel,
+		eventsDone:           make(chan struct{}),
 		closed:               make(chan struct{}),
 	}
-	go c.readLoop()
-	return c, nil
+	go client.eventLoop(events)
+	return client
+}
+
+func (c *connection) start(ctx context.Context) error {
+	c.startMu.Lock()
+	defer c.startMu.Unlock()
+	if c.started {
+		return nil
+	}
+	if err := c.surface.Start(ctx); err != nil {
+		return err
+	}
+	c.started = true
+	return nil
 }
 
 func (c *connection) close() error {
 	c.closeOnce.Do(func() {
-		c.cancel()
-		c.conn.CloseNow()
+		c.eventsCancel()
+		_ = c.protocol.Close()
 		close(c.closed)
-		c.failPending(errCommandOutcomeUnknown)
 	})
 	return nil
 }
@@ -97,175 +97,194 @@ func (c *connection) isClosed() bool {
 	case <-c.closed:
 		return true
 	default:
-		return false
+		return c.protocol.IsClosed()
 	}
 }
 
-func (c *connection) readLoop() {
-	for {
-		_, payload, err := c.conn.Read(c.ctx)
-		if err != nil {
-			_ = c.close()
-			return
+func (c *connection) eventLoop(events <-chan browsersurface.Event) {
+	defer close(c.eventsDone)
+	for event := range events {
+		switch event.Kind {
+		case browsersurface.EventSessionReady:
+			go c.enableSession(event.SessionID)
+		case browsersurface.EventSessionRemoved:
+			c.removeSession(event.SessionID)
+		case browsersurface.EventDocumentChanged:
+			c.stateMu.Lock()
+			c.removeFrameToolsLocked(event.SessionID, event.FrameID)
+			c.stateMu.Unlock()
+			c.signalStateChanged()
+		case browsersurface.EventFrameRemoved:
+			c.stateMu.Lock()
+			c.removeFrameToolsAcrossSessionsLocked(event.FrameID)
+			c.stateMu.Unlock()
+			c.signalStateChanged()
+		case browsersurface.EventProtocol:
+			c.handleProtocolEvent(event.Message)
 		}
-		var message cdpMessage
-		if json.Unmarshal(payload, &message) != nil {
-			continue
+	}
+}
+
+func (c *connection) enableSession(sessionID string) {
+	c.stateMu.Lock()
+	if c.enabledSessions[sessionID] {
+		c.stateMu.Unlock()
+		return
+	}
+	c.enabledSessions[sessionID] = true
+	c.stateMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := c.surface.Send(ctx, "WebMCP.enable", nil, sessionID); err != nil {
+		c.stateMu.Lock()
+		delete(c.enabledSessions, sessionID)
+		c.stateMu.Unlock()
+		if !c.isClosed() && c.surface.SessionExists(sessionID) {
+			c.logger.Warn("failed to enable WebMCP session", "session_id", sessionID, "err", err)
 		}
-		if message.ID != 0 {
-			c.pendingMu.Lock()
-			responseCh := c.pending[message.ID]
-			delete(c.pending, message.ID)
-			c.pendingMu.Unlock()
-			if responseCh != nil {
-				if message.Error != nil {
-					responseCh <- commandResult{err: message.Error}
-				} else {
-					responseCh <- commandResult{result: message.Result}
+		return
+	}
+	c.signalStateChanged()
+}
+
+func (c *connection) handleProtocolEvent(message cdpconnection.Message) {
+	switch message.Method {
+	case "WebMCP.toolsAdded":
+		var event struct {
+			Tools []toolEvent `json:"tools"`
+		}
+		if json.Unmarshal(message.Params, &event) == nil {
+			c.addTools(message.SessionID, event.Tools)
+		}
+	case "WebMCP.toolsRemoved":
+		var event struct {
+			Tools []struct {
+				Name    string `json:"name"`
+				FrameID string `json:"frameId"`
+			} `json:"tools"`
+		}
+		if json.Unmarshal(message.Params, &event) == nil {
+			c.stateMu.Lock()
+			for _, tool := range event.Tools {
+				c.removeToolLocked(toolKey(message.SessionID, tool.FrameID, tool.Name))
+			}
+			c.stateMu.Unlock()
+			c.signalStateChanged()
+		}
+	case "WebMCP.toolResponded":
+		var response invocationResponse
+		if json.Unmarshal(message.Params, &response) == nil {
+			key := invocationKey{sessionID: message.SessionID, invocationID: response.InvocationID}
+			c.stateMu.Lock()
+			c.pruneAbandonedInvocationsLocked()
+			if _, abandoned := c.abandonedInvocations[key]; abandoned {
+				delete(c.abandonedInvocations, key)
+			} else {
+				if len(c.invocations) >= maxCompletedInvocations {
+					for existing := range c.invocations {
+						if _, waiting := c.waitingInvocations[existing]; !waiting {
+							delete(c.invocations, existing)
+							break
+						}
+					}
 				}
+				c.invocations[key] = response
 			}
-			continue
+			c.stateMu.Unlock()
+			c.signalStateChanged()
 		}
-		c.handleEvent(message)
 	}
 }
 
-func (c *connection) failPending(err error) {
-	c.pendingMu.Lock()
-	defer c.pendingMu.Unlock()
-	for id, responseCh := range c.pending {
-		responseCh <- commandResult{err: err}
-		delete(c.pending, id)
+func (c *connection) addTools(sessionID string, tools []toolEvent) {
+	if !c.surface.SessionExists(sessionID) {
+		return
 	}
-}
-
-func (c *connection) send(ctx context.Context, method string, params any, sessionID string) (json.RawMessage, error) {
-	id := c.nextID.Add(1)
-	var rawParams json.RawMessage
-	if params != nil {
-		encoded, err := json.Marshal(params)
-		if err != nil {
-			return nil, fmt.Errorf("WebMCP: marshal %s parameters: %w", method, err)
-		}
-		rawParams = encoded
-	}
-	payload, err := json.Marshal(cdpRequest{ID: id, Method: method, Params: rawParams, SessionID: sessionID})
-	if err != nil {
-		return nil, fmt.Errorf("WebMCP: marshal %s request: %w", method, err)
-	}
-	responseCh := make(chan commandResult, 1)
-	c.pendingMu.Lock()
-	c.pending[id] = responseCh
-	c.pendingMu.Unlock()
-
-	c.writeMu.Lock()
-	err = c.conn.Write(ctx, websocket.MessageText, payload)
-	c.writeMu.Unlock()
-	if err != nil {
-		c.pendingMu.Lock()
-		delete(c.pending, id)
-		c.pendingMu.Unlock()
-		return nil, fmt.Errorf("WebMCP: write %s: %w", method, err)
-	}
-
-	select {
-	case response := <-responseCh:
-		if response.err != nil {
-			return nil, fmt.Errorf("WebMCP: %s: %w", method, response.err)
-		}
-		return response.result, nil
-	case <-ctx.Done():
-		c.pendingMu.Lock()
-		delete(c.pending, id)
-		c.pendingMu.Unlock()
-		return nil, fmt.Errorf("WebMCP: %s: %w", method, ctx.Err())
-	case <-c.closed:
-		return nil, fmt.Errorf("WebMCP: %s: %w", method, errCommandOutcomeUnknown)
-	}
-}
-
-func (c *connection) selectTarget(ctx context.Context, requestedTargetID string) error {
-	c.targetMu.Lock()
-	defer c.targetMu.Unlock()
-
-	raw, err := c.send(ctx, "Target.getTargets", nil, "")
-	if err != nil {
-		return err
-	}
-	var result struct {
-		TargetInfos []targetInfo `json:"targetInfos"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return fmt.Errorf("WebMCP: decode Target.getTargets: %w", err)
-	}
-	c.stateMu.RLock()
-	currentTargetID := c.rootTargetID
-	_, currentSessionAlive := c.sessions[c.rootSessionID]
-	c.stateMu.RUnlock()
-	var selected targetInfo
-	if requestedTargetID == "" && currentSessionAlive {
-		for _, target := range result.TargetInfos {
-			if target.Type == "page" && target.TargetID == currentTargetID {
-				selected = target
-				break
-			}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	tracked := 0
+	for _, existing := range c.tools {
+		if existing.sessionID == sessionID {
+			tracked++
 		}
 	}
-	if selected.TargetID == "" {
-		for _, target := range result.TargetInfos {
-			if target.Type != "page" {
+	for _, tool := range tools {
+		key := toolKey(sessionID, tool.FrameID, tool.Name)
+		ref := c.toolRefs[key]
+		if ref == "" {
+			if tracked >= maxToolsPerSession {
+				if !c.toolLimitWarned[sessionID] {
+					c.toolLimitWarned[sessionID] = true
+					c.logger.Warn("WebMCP tool limit reached", "session_id", sessionID, "limit", maxToolsPerSession)
+				}
 				continue
 			}
-			if requestedTargetID == "" || requestedTargetID == target.TargetID {
-				selected = target
-				break
-			}
+			ref = "wmcp_" + cuid2.Generate()
+			c.toolRefs[key] = ref
+			tracked++
+		}
+		c.tools[ref] = &registeredTool{
+			ref:         ref,
+			sessionID:   sessionID,
+			name:        tool.Name,
+			description: tool.Description,
+			inputSchema: tool.InputSchema,
+			annotations: tool.Annotations,
+			frameID:     tool.FrameID,
 		}
 	}
-	if selected.TargetID == "" {
-		return ErrNoPageTarget
-	}
+	c.signalStateChanged()
+}
 
+func (c *connection) toolsSnapshot() []Tool {
 	c.stateMu.RLock()
-	alreadySelected := c.rootTargetID == selected.TargetID && c.sessions[c.rootSessionID].id != ""
-	previousTargetID := c.rootTargetID
-	c.stateMu.RUnlock()
-	if alreadySelected {
-		return nil
-	}
-	if previousTargetID != "" {
-		_ = c.close()
-		return errors.New("WebMCP: selected page target changed")
-	}
-
-	c.stateMu.Lock()
-	c.clearStateLocked()
-	c.rootTargetID = selected.TargetID
-	c.stateMu.Unlock()
-	if _, err := c.send(ctx, "Target.autoAttachRelated", map[string]any{
-		"targetId":               selected.TargetID,
-		"waitForDebuggerOnStart": false,
-		"filter": []map[string]any{
-			{"type": "page"},
-			{"type": "iframe"},
-		},
-	}, ""); err != nil {
-		return err
-	}
-
-	c.stateMu.Lock()
-	for id, sess := range c.sessions {
-		if sess.target.TargetID == selected.TargetID {
-			c.rootSessionID = id
-			break
+	defer c.stateMu.RUnlock()
+	result := make([]Tool, 0, len(c.tools))
+	for _, tool := range c.tools {
+		location, ok := c.surface.Resolve(tool.sessionID, tool.frameID)
+		if !ok {
+			continue
 		}
+		source := ToolSource{
+			WindowID:  location.WindowID,
+			TabID:     location.TabID,
+			PageTitle: location.PageTitle,
+			PageURL:   location.PageURL,
+		}
+		if location.Frame != nil {
+			source.Frame = &ToolFrame{FrameID: location.Frame.ID, URL: location.Frame.URL}
+		}
+		result = append(result, Tool{
+			Ref:         tool.ref,
+			Name:        tool.name,
+			Description: tool.description,
+			InputSchema: tool.inputSchema,
+			Annotations: tool.annotations,
+			Source:      source,
+		})
 	}
-	rootSessionID := c.rootSessionID
-	c.stateMu.Unlock()
-	if rootSessionID == "" {
-		return fmt.Errorf("WebMCP: Chromium did not attach the selected page target")
-	}
-	return c.initializeSession(rootSessionID, selected.Type)
+	sort.Slice(result, func(i, j int) bool {
+		left, right := result[i], result[j]
+		if left.Source.WindowID != right.Source.WindowID {
+			return left.Source.WindowID < right.Source.WindowID
+		}
+		if left.Source.TabID != right.Source.TabID {
+			return left.Source.TabID < right.Source.TabID
+		}
+		leftFrame, rightFrame := 0, 0
+		if left.Source.Frame != nil {
+			leftFrame = left.Source.Frame.FrameID
+		}
+		if right.Source.Frame != nil {
+			rightFrame = right.Source.Frame.FrameID
+		}
+		if leftFrame != rightFrame {
+			return leftFrame < rightFrame
+		}
+		return left.Name < right.Name
+	})
+	return result
 }
 
 func (c *connection) waitForSettled(ctx context.Context) {
@@ -303,13 +322,12 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		return InvocationResult{}, ErrToolNotFound
 	}
 	sessionID, frameID, name := tool.sessionID, tool.frameID, tool.name
-	_, sessionAlive := c.sessions[sessionID]
 	c.stateMu.RUnlock()
-	if !sessionAlive {
+	if !c.sessionExists(sessionID) {
 		return InvocationResult{}, ErrToolNotFound
 	}
 
-	raw, err := c.send(ctx, "WebMCP.invokeTool", map[string]any{
+	raw, err := c.surface.Send(ctx, "WebMCP.invokeTool", map[string]any{
 		"frameId":  frameID,
 		"toolName": name,
 		"input":    input,
@@ -317,7 +335,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 	if err != nil {
 		unknownOutcome := errors.Is(err, context.Canceled) ||
 			errors.Is(err, context.DeadlineExceeded) ||
-			errors.Is(err, errCommandOutcomeUnknown) ||
+			errors.Is(err, cdpconnection.ErrOutcomeUnknown) ||
 			!c.sessionExists(sessionID)
 		if unknownOutcome {
 			return InvocationResult{}, ErrOutcomeUnknown
@@ -350,9 +368,8 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 				ErrorText:    response.ErrorText,
 			}, nil
 		}
-		_, alive := c.sessions[sessionID]
 		c.stateMu.Unlock()
-		if !alive || c.isClosed() {
+		if !c.sessionExists(sessionID) || c.executionClosed() {
 			c.stateMu.Lock()
 			abandoned := c.abandonInvocationLocked(key)
 			c.stateMu.Unlock()
@@ -384,9 +401,103 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 	}
 }
 
+func (c *connection) executionClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	case <-c.eventsDone:
+		return true
+	default:
+		return false
+	}
+}
+
 func (c *connection) sessionExists(sessionID string) bool {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
-	_, ok := c.sessions[sessionID]
-	return ok
+	return c.enabledSessions[sessionID]
+}
+
+func (c *connection) removeSession(sessionID string) {
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	delete(c.enabledSessions, sessionID)
+	delete(c.toolLimitWarned, sessionID)
+	for key := range c.waitingInvocations {
+		if key.sessionID == sessionID {
+			c.abandonInvocationLocked(key)
+		}
+	}
+	for ref, tool := range c.tools {
+		if tool.sessionID == sessionID {
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
+			delete(c.tools, ref)
+		}
+	}
+	c.signalStateChanged()
+}
+
+func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
+	for ref, tool := range c.tools {
+		if tool.sessionID == sessionID && tool.frameID == frameID {
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
+			delete(c.tools, ref)
+		}
+	}
+}
+
+func (c *connection) removeFrameToolsAcrossSessionsLocked(frameID string) {
+	for ref, tool := range c.tools {
+		if tool.frameID == frameID {
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
+			delete(c.tools, ref)
+		}
+	}
+}
+
+func (c *connection) removeToolLocked(key string) {
+	ref := c.toolRefs[key]
+	delete(c.toolRefs, key)
+	delete(c.tools, ref)
+}
+
+func (c *connection) abandonInvocationLocked(key invocationKey) bool {
+	if _, completed := c.invocations[key]; completed {
+		return false
+	}
+	delete(c.waitingInvocations, key)
+	c.pruneAbandonedInvocationsLocked()
+	if len(c.abandonedInvocations) >= maxAbandonedInvocations {
+		var oldest invocationKey
+		var oldestAt time.Time
+		for candidate, abandonedAt := range c.abandonedInvocations {
+			if oldestAt.IsZero() || abandonedAt.Before(oldestAt) {
+				oldest = candidate
+				oldestAt = abandonedAt
+			}
+		}
+		delete(c.abandonedInvocations, oldest)
+	}
+	c.abandonedInvocations[key] = time.Now()
+	return true
+}
+
+func (c *connection) pruneAbandonedInvocationsLocked() {
+	cutoff := time.Now().Add(-10 * time.Minute)
+	for invocationID, abandonedAt := range c.abandonedInvocations {
+		if abandonedAt.Before(cutoff) {
+			delete(c.abandonedInvocations, invocationID)
+		}
+	}
+}
+
+func (c *connection) signalStateChanged() {
+	select {
+	case c.stateChangedCh <- struct{}{}:
+	default:
+	}
+}
+
+func toolKey(sessionID, frameID, name string) string {
+	return sessionID + "\x00" + frameID + "\x00" + name
 }

@@ -1,31 +1,35 @@
 package webmcpclient
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 )
 
 var (
-	ErrNoPageTarget   = errors.New("no page target found")
+	ErrNoPageTarget   = errors.New("no browser tabs found")
 	ErrToolNotFound   = errors.New("WebMCP tool not found")
 	ErrOutcomeUnknown = errors.New("WebMCP invocation outcome is unknown")
 )
 
 type Tool struct {
-	Ref           string
-	Name          string
-	Description   string
-	InputSchema   map[string]any
-	Annotations   *Annotations
-	PageTargetID  string
-	TargetID      string
-	TargetType    string
-	TargetURL     string
-	FrameID       string
-	FrameURL      string
-	ParentFrameID string
-	DocumentRef   string
+	Ref         string
+	Name        string
+	Description string
+	InputSchema map[string]any
+	Annotations *Annotations
+	Source      ToolSource
+}
+
+type ToolSource struct {
+	WindowID  int
+	TabID     int
+	PageTitle string
+	PageURL   string
+	Frame     *ToolFrame
+}
+
+type ToolFrame struct {
+	FrameID int
+	URL     string
 }
 
 type Annotations struct {
@@ -40,61 +44,6 @@ type InvocationResult struct {
 	Status       string
 	Output       any
 	ErrorText    string
-}
-
-type cdpRequest struct {
-	ID        int64           `json:"id"`
-	Method    string          `json:"method"`
-	Params    json.RawMessage `json:"params,omitempty"`
-	SessionID string          `json:"sessionId,omitempty"`
-}
-
-type cdpMessage struct {
-	ID        int64           `json:"id,omitempty"`
-	Method    string          `json:"method,omitempty"`
-	Params    json.RawMessage `json:"params,omitempty"`
-	Result    json.RawMessage `json:"result,omitempty"`
-	Error     *cdpError       `json:"error,omitempty"`
-	SessionID string          `json:"sessionId,omitempty"`
-}
-
-type cdpError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
-}
-
-func (e *cdpError) Error() string {
-	return fmt.Sprintf("CDP error %d: %s", e.Code, e.Message)
-}
-
-type commandResult struct {
-	result json.RawMessage
-	err    error
-}
-
-type targetInfo struct {
-	TargetID      string `json:"targetId"`
-	Type          string `json:"type"`
-	URL           string `json:"url"`
-	ParentFrameID string `json:"parentFrameId,omitempty"`
-}
-
-type session struct {
-	id       string
-	parentID string
-	target   targetInfo
-}
-
-type frameInfo struct {
-	ID       string `json:"id"`
-	ParentID string `json:"parentId,omitempty"`
-	LoaderID string `json:"loaderId"`
-	URL      string `json:"url"`
-}
-
-type frameTree struct {
-	Frame       frameInfo   `json:"frame"`
-	ChildFrames []frameTree `json:"childFrames,omitempty"`
 }
 
 type registeredTool struct {
