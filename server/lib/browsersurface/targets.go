@@ -3,6 +3,7 @@ package browsersurface
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -57,18 +58,10 @@ func (t *Tracker) attachPage(tabID int, target targetInfo) {
 	if !windowAssigned {
 		t.assignFallbackWindow(target.TargetID, tabID)
 	}
-	attachCtx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
-	_, err = t.protocol.Send(attachCtx, "Target.autoAttachRelated", map[string]any{
-		"targetId":               target.TargetID,
-		"waitForDebuggerOnStart": false,
-		"filter": []map[string]any{
-			{"type": "page"},
-			{"type": "iframe"},
-		},
-	}, "")
-	cancel()
-	if err == nil {
+	if err := t.attachTarget(target); err == nil {
 		return
+	} else if !t.protocol.IsClosed() {
+		t.logger.Warn("failed to attach browser tab", "tab_id", tabID, "err", err)
 	}
 	t.stateMu.Lock()
 	if t.tabsByTarget[target.TargetID] == tabID {
@@ -76,40 +69,50 @@ func (t *Tracker) attachPage(tabID int, target targetInfo) {
 	}
 	t.stateMu.Unlock()
 	t.signalChanged()
-	if !t.protocol.IsClosed() {
-		t.logger.Warn("failed to attach browser tab", "tab_id", tabID, "err", err)
-	}
 }
 
-func (t *Tracker) trackRelatedTarget(targetID string) {
+func (t *Tracker) attachTarget(target targetInfo) error {
+	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
+	defer cancel()
+	raw, err := t.protocol.Send(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": target.TargetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return err
+	}
+	var result struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return err
+	}
+	if result.SessionID == "" {
+		return fmt.Errorf("attach browser target: missing session ID")
+	}
+	t.addSession(result.SessionID, "", target)
+	return nil
+}
+
+func (t *Tracker) trackFrameTarget(target targetInfo) {
 	t.stateMu.Lock()
-	if t.relatedTargets[targetID] {
+	if t.trackingFrameTarget[target.TargetID] {
 		t.stateMu.Unlock()
 		return
 	}
-	t.relatedTargets[targetID] = true
+	t.trackingFrameTarget[target.TargetID] = true
 	t.stateMu.Unlock()
 
 	go func() {
-		ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
-		defer cancel()
-		_, err := t.protocol.Send(ctx, "Target.autoAttachRelated", map[string]any{
-			"targetId":               targetID,
-			"waitForDebuggerOnStart": false,
-			"filter": []map[string]any{
-				{"type": "iframe"},
-			},
-		}, "")
-		if err == nil {
+		if err := t.attachTarget(target); err == nil {
 			return
+		} else if !t.protocol.IsClosed() {
+			t.logger.Warn("failed to attach browser frame", "target_id", target.TargetID, "err", err)
 		}
 		t.stateMu.Lock()
-		delete(t.relatedTargets, targetID)
+		delete(t.trackingFrameTarget, target.TargetID)
 		t.stateMu.Unlock()
 		t.signalChanged()
-		if !t.protocol.IsClosed() {
-			t.logger.Warn("failed to attach related browser frames", "target_id", targetID, "err", err)
-		}
 	}()
 }
 
@@ -119,9 +122,9 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 	for targetID := range t.tabsByTarget {
 		known = append(known, targetID)
 	}
-	knownRelated := make([]string, 0, len(t.relatedTargets))
-	for targetID := range t.relatedTargets {
-		knownRelated = append(knownRelated, targetID)
+	knownFrames := make([]string, 0, len(t.trackingFrameTarget))
+	for targetID := range t.trackingFrameTarget {
+		knownFrames = append(knownFrames, targetID)
 	}
 	t.stateMu.RUnlock()
 
@@ -136,15 +139,15 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		return err
 	}
 	active := make(map[string]bool)
-	activeRelated := make(map[string]bool)
+	activeFrames := make(map[string]bool)
 	for _, target := range result.TargetInfos {
 		switch target.Type {
 		case "page":
 			active[target.TargetID] = true
 			t.trackPage(target, true)
 		case "iframe":
-			activeRelated[target.TargetID] = true
-			t.trackRelatedTarget(target.TargetID)
+			activeFrames[target.TargetID] = true
+			t.trackFrameTarget(target)
 		}
 	}
 	for _, targetID := range known {
@@ -154,9 +157,9 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		t.removeTarget(targetID)
 	}
 	t.stateMu.Lock()
-	for _, targetID := range knownRelated {
-		if !activeRelated[targetID] {
-			delete(t.relatedTargets, targetID)
+	for _, targetID := range knownFrames {
+		if !activeFrames[targetID] {
+			delete(t.trackingFrameTarget, targetID)
 		}
 	}
 	t.stateMu.Unlock()
@@ -207,6 +210,10 @@ func (t *Tracker) updateTarget(target targetInfo) {
 	}
 	t.stateMu.Unlock()
 	t.signalChanged()
+	if target.Type == "iframe" {
+		t.trackFrameTarget(target)
+		return
+	}
 	if target.Type == "page" && !knownTab {
 		t.trackPage(target, true)
 		return
@@ -238,7 +245,7 @@ func (t *Tracker) updateTabTargetLocked(target targetInfo) {
 
 func (t *Tracker) removeTarget(targetID string) {
 	t.stateMu.Lock()
-	delete(t.relatedTargets, targetID)
+	delete(t.trackingFrameTarget, targetID)
 	var removedSessions []string
 	if tabID := t.tabsByTarget[targetID]; tabID != 0 {
 		removedSessions = t.removeTabLocked(tabID)

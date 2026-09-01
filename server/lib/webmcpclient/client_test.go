@@ -52,7 +52,7 @@ type fakeCDP struct {
 
 	mu                      sync.Mutex
 	connections             int
-	relatedAttaches         int
+	targetAttaches          int
 	invocationCount         int
 	enabledSessions         map[string]int
 	omitResponse            bool
@@ -155,26 +155,37 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 				windowID = 20
 			}
 			respond(map[string]any{"windowId": windowID})
-		case "Target.autoAttachRelated":
+		case "Target.attachToTarget":
 			f.mu.Lock()
-			f.relatedAttaches++
+			f.targetAttaches++
 			f.mu.Unlock()
 			var params struct {
 				TargetID string `json:"targetId"`
 			}
 			_ = json.Unmarshal(request.Params, &params)
+			sessionID := map[string]string{
+				"page-target": "page-session", "iframe-target": "iframe-session", "nested-target": "nested-session",
+				"other-page": "other-session", "popup-target": "popup-session",
+			}[params.TargetID]
+			respond(map[string]any{"sessionId": sessionID})
 			switch params.TargetID {
 			case "page-target":
-				writeAttached(write, "", "page-session", "page-target", "page", "Store", "https://merchant.example/", "")
-				writeAttached(write, "page-session", "iframe-session", "iframe-target", "iframe", "", "https://payments.example/element#private-state", "page-frame")
+				write(map[string]any{
+					"method": "Target.targetCreated",
+					"params": map[string]any{"targetInfo": map[string]any{
+						"targetId": "iframe-target", "type": "iframe", "url": "https://payments.example/element#private-state",
+						"parentFrameId": "page-frame",
+					}},
+				})
 			case "iframe-target":
-				writeAttached(write, "iframe-session", "nested-session", "nested-target", "iframe", "", "https://bank.example/challenge", "iframe-frame")
-			case "other-page":
-				writeAttached(write, "", "other-session", "other-page", "page", "Travel", "https://travel.example/", "")
-			case "popup-target":
-				writeAttached(write, "", "popup-session", "popup-target", "page", "Popup", "https://popup.example/", "")
+				write(map[string]any{
+					"method": "Target.targetCreated",
+					"params": map[string]any{"targetInfo": map[string]any{
+						"targetId": "nested-target", "type": "iframe", "url": "https://bank.example/challenge",
+						"parentFrameId": "iframe-frame",
+					}},
+				})
 			}
-			respond(map[string]any{})
 		case "Page.enable":
 			respond(map[string]any{})
 		case "Page.getFrameTree":
@@ -274,23 +285,6 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeAttached(write func(any), parentSessionID, sessionID, targetID, targetType, title, url, parentFrameID string) {
-	message := map[string]any{
-		"method": "Target.attachedToTarget",
-		"params": map[string]any{
-			"sessionId": sessionID,
-			"targetInfo": map[string]any{
-				"targetId": targetID, "type": targetType, "title": title, "url": url,
-				"parentFrameId": parentFrameID,
-			},
-		},
-	}
-	if parentSessionID != "" {
-		message["sessionId"] = parentSessionID
-	}
-	write(message)
-}
-
 func frameTreeForSession(sessionID string) map[string]any {
 	switch sessionID {
 	case "page-session":
@@ -341,7 +335,7 @@ func TestManagerDiscoversToolsAcrossWindowsTabsAndNestedFrames(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 1, fake.connections)
-	require.Equal(t, 4, fake.relatedAttaches)
+	require.Equal(t, 4, fake.targetAttaches)
 	for _, sessionID := range []string{"page-session", "iframe-session", "nested-session", "other-session"} {
 		require.GreaterOrEqual(t, fake.enabledSessions[sessionID], 1)
 	}
@@ -387,7 +381,7 @@ func TestManagerReusesConnectionAndToolReferences(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 1, fake.connections)
-	require.Equal(t, 4, fake.relatedAttaches)
+	require.Equal(t, 4, fake.targetAttaches)
 }
 
 func paymentToolRef(t *testing.T, manager *Manager) string {

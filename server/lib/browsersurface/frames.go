@@ -40,9 +40,6 @@ func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInf
 	t.bindSessionsLocked()
 	t.stateMu.Unlock()
 	t.signalChanged()
-	if target.Type == "iframe" {
-		t.trackRelatedTarget(target.TargetID)
-	}
 	go t.initializeSession(sessionID)
 }
 
@@ -267,7 +264,13 @@ func (t *Tracker) removeSessionLocked(sessionID string) []string {
 	}
 	removed := make([]string, 0, len(toRemove))
 	for id := range toRemove {
-		if _, ok := t.sessions[id]; ok {
+		if sess := t.sessions[id]; sess != nil {
+			switch sess.target.Type {
+			case "page":
+				t.trackingTarget[sess.target.TargetID] = false
+			case "iframe":
+				delete(t.trackingFrameTarget, sess.target.TargetID)
+			}
 			delete(t.sessions, id)
 			removed = append(removed, id)
 		}

@@ -31,18 +31,18 @@ type Tracker struct {
 	started  bool
 	startErr error
 
-	stateMu        sync.RWMutex
-	nextWindowID   int
-	nextTabID      int
-	nextFrameID    int
-	windows        map[int64]window
-	tabs           map[int]*tab
-	tabsByTarget   map[string]int
-	frames         map[string]*frame
-	sessions       map[string]*session
-	trackingTarget map[string]bool
-	relatedTargets map[string]bool
-	stateChanged   chan struct{}
+	stateMu             sync.RWMutex
+	nextWindowID        int
+	nextTabID           int
+	nextFrameID         int
+	windows             map[int64]window
+	tabs                map[int]*tab
+	tabsByTarget        map[string]int
+	frames              map[string]*frame
+	sessions            map[string]*session
+	trackingTarget      map[string]bool
+	trackingFrameTarget map[string]bool
+	stateChanged        chan struct{}
 
 	subMu       sync.Mutex
 	nextSubID   int
@@ -54,20 +54,20 @@ type Tracker struct {
 func New(protocol Protocol) *Tracker {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Tracker{
-		protocol:       protocol,
-		ctx:            ctx,
-		cancel:         cancel,
-		logger:         slog.Default(),
-		windows:        make(map[int64]window),
-		tabs:           make(map[int]*tab),
-		tabsByTarget:   make(map[string]int),
-		frames:         make(map[string]*frame),
-		sessions:       make(map[string]*session),
-		trackingTarget: make(map[string]bool),
-		relatedTargets: make(map[string]bool),
-		stateChanged:   make(chan struct{}, 1),
-		subscribers:    make(map[int]*subscriber),
-		closed:         make(chan struct{}),
+		protocol:            protocol,
+		ctx:                 ctx,
+		cancel:              cancel,
+		logger:              slog.Default(),
+		windows:             make(map[int64]window),
+		tabs:                make(map[int]*tab),
+		tabsByTarget:        make(map[string]int),
+		frames:              make(map[string]*frame),
+		sessions:            make(map[string]*session),
+		trackingTarget:      make(map[string]bool),
+		trackingFrameTarget: make(map[string]bool),
+		stateChanged:        make(chan struct{}, 1),
+		subscribers:         make(map[int]*subscriber),
+		closed:              make(chan struct{}),
 	}
 }
 
@@ -82,7 +82,10 @@ func (t *Tracker) Start(ctx context.Context) error {
 
 	if _, err := t.protocol.Send(ctx, "Target.setDiscoverTargets", map[string]any{
 		"discover": true,
-		"filter":   []map[string]any{{"type": "page"}},
+		"filter": []map[string]any{
+			{"type": "page"},
+			{"type": "iframe"},
+		},
 	}, ""); err != nil {
 		t.startErr = fmt.Errorf("start browser surface discovery: %w", err)
 		return t.startErr
@@ -102,6 +105,11 @@ func (t *Tracker) Start(ctx context.Context) error {
 	for _, target := range result.TargetInfos {
 		if target.Type == "page" {
 			t.trackPage(target, false)
+		}
+	}
+	for _, target := range result.TargetInfos {
+		if target.Type == "iframe" {
+			t.trackFrameTarget(target)
 		}
 	}
 	return nil

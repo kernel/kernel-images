@@ -12,8 +12,13 @@ func (t *Tracker) handleProtocolEvent(message cdpconnection.Message) {
 		var event struct {
 			TargetInfo targetInfo `json:"targetInfo"`
 		}
-		if json.Unmarshal(message.Params, &event) == nil && event.TargetInfo.Type == "page" {
-			t.trackPage(event.TargetInfo, true)
+		if json.Unmarshal(message.Params, &event) == nil {
+			switch event.TargetInfo.Type {
+			case "page":
+				t.trackPage(event.TargetInfo, true)
+			case "iframe":
+				t.trackFrameTarget(event.TargetInfo)
+			}
 		}
 	case "Target.targetInfoChanged":
 		var event struct {

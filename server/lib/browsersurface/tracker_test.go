@@ -57,7 +57,7 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 		windowID := f.windowIDs[targetID]
 		f.mu.Unlock()
 		return marshal(map[string]any{"windowId": windowID}), nil
-	case "Target.autoAttachRelated":
+	case "Target.attachToTarget":
 		targetID := params.(map[string]any)["targetId"].(string)
 		f.mu.Lock()
 		f.attachCalls[targetID]++
@@ -67,15 +67,10 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 			return nil, errors.New("temporary attach failure")
 		}
 		f.mu.Unlock()
-		switch targetID {
-		case "page-a":
-			f.emitAttached("session-a", "page-a", "Store", "https://store.example/")
-		case "page-b":
-			f.emitAttached("session-b", "page-b", "Travel", "https://travel.example/")
-		case "late-page":
-			f.emitAttached("late-session", "late-page", "Late", "https://late.example/")
-		}
-		return marshal(map[string]any{}), nil
+		sessionID := map[string]string{
+			"page-a": "session-a", "page-b": "session-b", "late-page": "late-session", "oopif": "oopif-session",
+		}[targetID]
+		return marshal(map[string]any{"sessionId": sessionID}), nil
 	case "Page.enable":
 		return marshal(map[string]any{}), nil
 	case "Page.getFrameTree":
@@ -163,8 +158,7 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Nil(t, root.Frame)
 
-	protocol.emitTarget("Target.attachedToTarget", map[string]any{
-		"sessionId": "oopif-session",
+	protocol.emitTarget("Target.targetCreated", map[string]any{
 		"targetInfo": map[string]any{
 			"targetId": "oopif", "type": "iframe", "url": "https://cross-origin.example/",
 			"parentFrameId": "root-a",
@@ -255,6 +249,21 @@ func TestTrackerRetriesTabsAfterAttachFailure(t *testing.T) {
 		location, ok := tracker.Resolve("session-a", "root-a")
 		return ok && location.TabID == 1
 	}, time.Second, 10*time.Millisecond)
+	protocol.mu.Lock()
+	require.Equal(t, 2, protocol.attachCalls["page-a"])
+	protocol.mu.Unlock()
+}
+
+func TestTrackerReattachesPageAfterSessionDetach(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+	require.Eventually(t, func() bool { return tracker.SessionExists("session-a") }, time.Second, 10*time.Millisecond)
+
+	protocol.emitTarget("Target.detachedFromTarget", map[string]any{"sessionId": "session-a"})
+	require.Eventually(t, func() bool { return !tracker.SessionExists("session-a") }, time.Second, 10*time.Millisecond)
+	require.NoError(t, tracker.RefreshTargets(context.Background()))
+	require.Eventually(t, func() bool { return tracker.SessionExists("session-a") }, time.Second, 10*time.Millisecond)
 	protocol.mu.Lock()
 	require.Equal(t, 2, protocol.attachCalls["page-a"])
 	protocol.mu.Unlock()
