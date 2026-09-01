@@ -134,6 +134,15 @@ func (f *fakeProtocol) setWindow(targetID string, windowID int) {
 	f.mu.Unlock()
 }
 
+func TestTrackerRejectsProtocolWithoutEvents(t *testing.T) {
+	protocol := newFakeProtocol()
+	protocol.events = nil
+	tracker := New(protocol)
+
+	err := tracker.Start(context.Background())
+	require.EqualError(t, err, "start browser surface discovery: protocol events are unavailable")
+}
+
 func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	protocol := newFakeProtocol()
 	tracker := New(protocol)

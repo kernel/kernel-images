@@ -168,6 +168,10 @@ func (c *Client) Send(ctx context.Context, method string, params any, sessionID 
 
 	responseCh := make(chan commandResult, 1)
 	c.pendingMu.Lock()
+	if c.IsClosed() {
+		c.pendingMu.Unlock()
+		return nil, fmt.Errorf("read: %w", ErrOutcomeUnknown)
+	}
 	c.pending[id] = responseCh
 	c.pendingMu.Unlock()
 
@@ -253,16 +257,15 @@ func (c *Client) readLoop() {
 
 		c.pendingMu.Lock()
 		responseCh := c.pending[message.ID]
-		delete(c.pending, message.ID)
+		if responseCh != nil {
+			if message.Error != nil {
+				responseCh <- commandResult{err: message.Error}
+			} else {
+				responseCh <- commandResult{result: message.Result}
+			}
+			delete(c.pending, message.ID)
+		}
 		c.pendingMu.Unlock()
-		if responseCh == nil {
-			continue
-		}
-		if message.Error != nil {
-			responseCh <- commandResult{err: message.Error}
-		} else {
-			responseCh <- commandResult{result: message.Result}
-		}
 	}
 }
 

@@ -78,6 +78,10 @@ func (t *Tracker) Start(ctx context.Context) error {
 		return t.startErr
 	}
 	t.started = true
+	if t.protocol.Events() == nil {
+		t.startErr = fmt.Errorf("start browser surface discovery: protocol events are unavailable")
+		return t.startErr
+	}
 	go t.eventLoop()
 
 	if _, err := t.protocol.Send(ctx, "Target.setDiscoverTargets", map[string]any{

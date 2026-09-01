@@ -543,6 +543,73 @@ func TestClientCorrelatesConcurrentCommandsAndPreservesEvents(t *testing.T) {
 	}
 }
 
+func TestClientPreservesResponseBeforeDisconnect(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_, payload, err := conn.Read(r.Context())
+		if err != nil {
+			return
+		}
+		var request cdpRequest
+		if json.Unmarshal(payload, &request) != nil {
+			return
+		}
+		response, _ := json.Marshal(map[string]any{
+			"id": request.ID, "result": map[string]any{"completed": true},
+		})
+		_ = conn.Write(r.Context(), websocket.MessageText, response)
+	}))
+	defer server.Close()
+
+	client, err := Dial(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, err)
+	defer client.Close()
+
+	raw, err := client.Send(context.Background(), "Test.complete", nil, "")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"completed":true}`, string(raw))
+}
+
+func TestEventClientCloseUnblocksFullEventStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		event, _ := json.Marshal(map[string]any{"method": "Test.event"})
+		for {
+			if conn.Write(r.Context(), websocket.MessageText, event) != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client, err := DialWithEvents(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return len(client.Events()) == cap(client.events)
+	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, client.Close())
+
+	drained := make(chan struct{})
+	go func() {
+		for range client.Events() {
+		}
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-time.After(time.Second):
+		t.Fatal("event stream did not close")
+	}
+}
+
 func TestClientMarksInFlightCommandUnknownOnDisconnect(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
