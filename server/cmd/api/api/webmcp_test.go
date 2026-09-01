@@ -132,6 +132,22 @@ func TestInvokeWebMCPToolReturnsNotFoundForStaleReference(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestInvokeWebMCPToolRejectsMissingInputAndInvalidReference(t *testing.T) {
+	for _, body := range []*oapi.WebMCPInvokeRequest{
+		{ToolRef: "wmcp_test"},
+		{ToolRef: "", Input: map[string]any{}},
+		{ToolRef: strings.Repeat("x", 129), Input: map[string]any{}},
+	} {
+		client := &fakeWebMCPClient{}
+		service := &ApiService{webmcp: client}
+		response, err := service.InvokeWebMCPTool(context.Background(), oapi.InvokeWebMCPToolRequestObject{Body: body})
+		require.NoError(t, err)
+		_, ok := response.(oapi.InvokeWebMCPTool400JSONResponse)
+		require.True(t, ok)
+		require.Empty(t, client.toolRef)
+	}
+}
+
 func TestInvokeWebMCPToolRejectsTimeoutOutsideBounds(t *testing.T) {
 	for _, timeoutSec := range []int{0, -1, 121} {
 		t.Run(fmt.Sprintf("timeout_%d", timeoutSec), func(t *testing.T) {

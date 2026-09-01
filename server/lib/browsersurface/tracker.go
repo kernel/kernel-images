@@ -41,6 +41,7 @@ type Tracker struct {
 	frames         map[string]*frame
 	sessions       map[string]*session
 	trackingTarget map[string]bool
+	relatedTargets map[string]bool
 	stateChanged   chan struct{}
 
 	subMu       sync.Mutex
@@ -63,6 +64,7 @@ func New(protocol Protocol) *Tracker {
 		frames:         make(map[string]*frame),
 		sessions:       make(map[string]*session),
 		trackingTarget: make(map[string]bool),
+		relatedTargets: make(map[string]bool),
 		stateChanged:   make(chan struct{}, 1),
 		subscribers:    make(map[int]*subscriber),
 		closed:         make(chan struct{}),

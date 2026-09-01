@@ -52,6 +52,13 @@ func (t *Tracker) handleProtocolEvent(message cdpconnection.Message) {
 		if json.Unmarshal(message.Params, &event) == nil {
 			t.attachFrame(message.SessionID, event.FrameID, event.ParentFrameID)
 		}
+	case "Page.frameStartedLoading":
+		var event struct {
+			FrameID string `json:"frameId"`
+		}
+		if json.Unmarshal(message.Params, &event) == nil {
+			t.publish(Event{Kind: EventDocumentInvalidated, SessionID: message.SessionID, FrameID: event.FrameID})
+		}
 	case "Page.frameNavigated":
 		var event struct {
 			Frame frameInfo `json:"frame"`

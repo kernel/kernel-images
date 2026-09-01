@@ -81,11 +81,47 @@ func (t *Tracker) attachPage(tabID int, target targetInfo) {
 	}
 }
 
+func (t *Tracker) trackRelatedTarget(targetID string) {
+	t.stateMu.Lock()
+	if t.relatedTargets[targetID] {
+		t.stateMu.Unlock()
+		return
+	}
+	t.relatedTargets[targetID] = true
+	t.stateMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
+		defer cancel()
+		_, err := t.protocol.Send(ctx, "Target.autoAttachRelated", map[string]any{
+			"targetId":               targetID,
+			"waitForDebuggerOnStart": false,
+			"filter": []map[string]any{
+				{"type": "iframe"},
+			},
+		}, "")
+		if err == nil {
+			return
+		}
+		t.stateMu.Lock()
+		delete(t.relatedTargets, targetID)
+		t.stateMu.Unlock()
+		t.signalChanged()
+		if !t.protocol.IsClosed() {
+			t.logger.Warn("failed to attach related browser frames", "target_id", targetID, "err", err)
+		}
+	}()
+}
+
 func (t *Tracker) RefreshTargets(ctx context.Context) error {
 	t.stateMu.RLock()
 	known := make([]string, 0, len(t.tabsByTarget))
 	for targetID := range t.tabsByTarget {
 		known = append(known, targetID)
+	}
+	knownRelated := make([]string, 0, len(t.relatedTargets))
+	for targetID := range t.relatedTargets {
+		knownRelated = append(knownRelated, targetID)
 	}
 	t.stateMu.RUnlock()
 
@@ -100,12 +136,16 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		return err
 	}
 	active := make(map[string]bool)
+	activeRelated := make(map[string]bool)
 	for _, target := range result.TargetInfos {
-		if target.Type != "page" {
-			continue
+		switch target.Type {
+		case "page":
+			active[target.TargetID] = true
+			t.trackPage(target, true)
+		case "iframe":
+			activeRelated[target.TargetID] = true
+			t.trackRelatedTarget(target.TargetID)
 		}
-		active[target.TargetID] = true
-		t.trackPage(target, true)
 	}
 	for _, targetID := range known {
 		if active[targetID] {
@@ -113,6 +153,13 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		}
 		t.removeTarget(targetID)
 	}
+	t.stateMu.Lock()
+	for _, targetID := range knownRelated {
+		if !activeRelated[targetID] {
+			delete(t.relatedTargets, targetID)
+		}
+	}
+	t.stateMu.Unlock()
 	return nil
 }
 
@@ -191,6 +238,7 @@ func (t *Tracker) updateTabTargetLocked(target targetInfo) {
 
 func (t *Tracker) removeTarget(targetID string) {
 	t.stateMu.Lock()
+	delete(t.relatedTargets, targetID)
 	var removedSessions []string
 	if tabID := t.tabsByTarget[targetID]; tabID != 0 {
 		removedSessions = t.removeTabLocked(tabID)

@@ -69,9 +69,15 @@ type invocationResponse struct {
 	Status       string `json:"status"`
 	Output       any    `json:"output,omitempty"`
 	ErrorText    string `json:"errorText,omitempty"`
+	observedAt   uint64
 }
 
 type invocationKey struct {
 	sessionID    string
 	invocationID string
+}
+
+type documentKey struct {
+	sessionID string
+	frameID   string
 }

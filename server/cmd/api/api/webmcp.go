@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/oapi"
@@ -68,6 +69,13 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, _ oapi.GetWebMCPToolsRe
 func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWebMCPToolRequestObject) (oapi.InvokeWebMCPToolResponseObject, error) {
 	if request.Body == nil {
 		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body is required"}}, nil
+	}
+	toolRefLength := utf8.RuneCountInString(request.Body.ToolRef)
+	if toolRefLength < 1 || toolRefLength > 128 {
+		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "tool_ref must be between 1 and 128 characters"}}, nil
+	}
+	if request.Body.Input == nil {
+		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "input is required and must be an object"}}, nil
 	}
 	inputJSON, err := json.Marshal(request.Body.Input)
 	if err != nil || len(inputJSON) > maxWebMCPInputBytes {

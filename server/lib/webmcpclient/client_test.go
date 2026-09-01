@@ -50,17 +50,18 @@ type fakeCDP struct {
 	server *httptest.Server
 	url    string
 
-	mu                  sync.Mutex
-	connections         int
-	relatedAttaches     int
-	enabledSessions     map[string]int
-	omitResponse        bool
-	closeOnInvoke       bool
-	detachAfterResponse bool
-	invokeResponseDelay time.Duration
-	toolCount           int
-	popupOpen           bool
-	write               func(any)
+	mu                   sync.Mutex
+	connections          int
+	relatedAttaches      int
+	enabledSessions      map[string]int
+	omitResponse         bool
+	closeOnInvoke        bool
+	detachAfterResponse  bool
+	navigateBeforeResult bool
+	invokeResponseDelay  time.Duration
+	toolCount            int
+	popupOpen            bool
+	write                func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
@@ -164,6 +165,7 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			case "page-target":
 				writeAttached(write, "", "page-session", "page-target", "page", "Store", "https://merchant.example/", "")
 				writeAttached(write, "page-session", "iframe-session", "iframe-target", "iframe", "", "https://payments.example/element#private-state", "page-frame")
+			case "iframe-target":
 				writeAttached(write, "iframe-session", "nested-session", "nested-target", "iframe", "", "https://bank.example/challenge", "iframe-frame")
 			case "other-page":
 				writeAttached(write, "", "other-session", "other-page", "page", "Travel", "https://travel.example/", "")
@@ -217,18 +219,33 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			respond(map[string]any{"invocationId": "invocation-1"})
 			if !f.omitResponse {
+				if f.navigateBeforeResult {
+					write(map[string]any{
+						"method": "Page.frameStartedLoading", "sessionId": request.SessionID,
+						"params": map[string]any{"frameId": "iframe-frame"},
+					})
+				}
+				output := any(map[string]any{"content": []map[string]any{{"type": "text", "text": request.SessionID}}})
+				if f.navigateBeforeResult {
+					output = []any{}
+				}
+				write(map[string]any{
+					"method": "WebMCP.toolResponded", "sessionId": request.SessionID,
+					"params": map[string]any{
+						"invocationId": "invocation-1", "status": "Completed", "output": output,
+					},
+				})
+				if !f.navigateBeforeResult {
+					write(map[string]any{
+						"method": "Page.frameStartedLoading", "sessionId": request.SessionID,
+						"params": map[string]any{"frameId": "iframe-frame"},
+					})
+				}
 				write(map[string]any{
 					"method": "Page.frameNavigated", "sessionId": request.SessionID,
 					"params": map[string]any{"frame": map[string]any{
 						"id": "iframe-frame", "loaderId": "next-loader", "url": "https://payments.example/success",
 					}},
-				})
-				write(map[string]any{
-					"method": "WebMCP.toolResponded", "sessionId": request.SessionID,
-					"params": map[string]any{
-						"invocationId": "invocation-1", "status": "Completed",
-						"output": map[string]any{"content": []map[string]any{{"type": "text", "text": request.SessionID}}},
-					},
 				})
 				if f.detachAfterResponse {
 					write(map[string]any{
@@ -310,7 +327,7 @@ func TestManagerDiscoversToolsAcrossWindowsTabsAndNestedFrames(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 1, fake.connections)
-	require.Equal(t, 2, fake.relatedAttaches)
+	require.Equal(t, 4, fake.relatedAttaches)
 	for _, sessionID := range []string{"page-session", "iframe-session", "nested-session", "other-session"} {
 		require.GreaterOrEqual(t, fake.enabledSessions[sessionID], 1)
 	}
@@ -356,7 +373,7 @@ func TestManagerReusesConnectionAndToolReferences(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 1, fake.connections)
-	require.Equal(t, 2, fake.relatedAttaches)
+	require.Equal(t, 4, fake.relatedAttaches)
 }
 
 func paymentToolRef(t *testing.T, manager *Manager) string {
@@ -372,7 +389,7 @@ func paymentToolRef(t *testing.T, manager *Manager) string {
 	return ""
 }
 
-func TestInvocationCanCompleteAfterFrameNavigation(t *testing.T) {
+func TestInvocationPreservesResponseObservedBeforeFrameNavigation(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
@@ -384,8 +401,31 @@ func TestInvocationCanCompleteAfterFrameNavigation(t *testing.T) {
 	require.Equal(t, "Completed", result.Status)
 	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
 
+	require.Eventually(t, func() bool {
+		tools, toolsErr := manager.Tools(context.Background())
+		if toolsErr != nil {
+			return false
+		}
+		for _, tool := range tools {
+			if tool.Ref == toolRef {
+				return false
+			}
+		}
+		return true
+	}, time.Second, 10*time.Millisecond)
 	_, err = manager.Invoke(context.Background(), toolRef, map[string]any{})
 	require.ErrorIs(t, err, ErrToolNotFound)
+}
+
+func TestInvocationNavigationBeforeResponseHasUnknownOutcome(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.navigateBeforeResult = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+
+	result, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
+	require.ErrorIs(t, err, ErrOutcomeUnknown)
+	require.Equal(t, "invocation-1", result.InvocationID)
 }
 
 func TestInvocationReturnsCompletedResponseBeforeTargetDetach(t *testing.T) {
@@ -444,7 +484,7 @@ func TestConnectionDeathMidInvokeHasUnknownOutcome(t *testing.T) {
 func TestToolResponsesAreScopedBySession(t *testing.T) {
 	client := &connection{
 		invocations:          make(map[invocationKey]invocationResponse),
-		waitingInvocations:   make(map[invocationKey]struct{}),
+		waitingInvocations:   make(map[invocationKey]string),
 		abandonedInvocations: make(map[invocationKey]time.Time),
 		stateChangedCh:       make(chan struct{}, 1),
 	}

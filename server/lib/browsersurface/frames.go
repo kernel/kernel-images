@@ -40,6 +40,9 @@ func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInf
 	t.bindSessionsLocked()
 	t.stateMu.Unlock()
 	t.signalChanged()
+	if target.Type == "iframe" {
+		t.trackRelatedTarget(target.TargetID)
+	}
 	go t.initializeSession(sessionID)
 }
 

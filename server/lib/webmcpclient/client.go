@@ -21,6 +21,7 @@ const (
 	maxToolsPerSession      = 256
 	maxCompletedInvocations = 256
 	maxAbandonedInvocations = 256
+	maxDocumentChanges      = 1024
 )
 
 type connection struct {
@@ -36,8 +37,10 @@ type connection struct {
 	toolRefs             map[string]string
 	toolLimitWarned      map[string]bool
 	invocations          map[invocationKey]invocationResponse
-	waitingInvocations   map[invocationKey]struct{}
+	waitingInvocations   map[invocationKey]string
 	abandonedInvocations map[invocationKey]time.Time
+	documentChanges      map[documentKey]uint64
+	eventSequence        uint64
 	stateChangedCh       chan struct{}
 	logger               *slog.Logger
 
@@ -58,8 +61,9 @@ func newConnection(protocol *cdpconnection.Client) *connection {
 		toolRefs:             make(map[string]string),
 		toolLimitWarned:      make(map[string]bool),
 		invocations:          make(map[invocationKey]invocationResponse),
-		waitingInvocations:   make(map[invocationKey]struct{}),
+		waitingInvocations:   make(map[invocationKey]string),
 		abandonedInvocations: make(map[invocationKey]time.Time),
+		documentChanges:      make(map[documentKey]uint64),
 		stateChangedCh:       make(chan struct{}, 1),
 		logger:               slog.Default(),
 		eventsCancel:         cancel,
@@ -109,6 +113,13 @@ func (c *connection) eventLoop(events <-chan browsersurface.Event) {
 			go c.enableSession(event.SessionID)
 		case browsersurface.EventSessionRemoved:
 			c.removeSession(event.SessionID)
+		case browsersurface.EventDocumentInvalidated:
+			c.stateMu.Lock()
+			c.markDocumentChangedLocked(documentKey{sessionID: event.SessionID, frameID: event.FrameID})
+			c.abandonFrameInvocationsLocked(event.SessionID, event.FrameID)
+			c.removeFrameToolsLocked(event.SessionID, event.FrameID)
+			c.stateMu.Unlock()
+			c.signalStateChanged()
 		case browsersurface.EventDocumentChanged:
 			c.stateMu.Lock()
 			c.removeFrameToolsLocked(event.SessionID, event.FrameID)
@@ -116,6 +127,12 @@ func (c *connection) eventLoop(events <-chan browsersurface.Event) {
 			c.signalStateChanged()
 		case browsersurface.EventFrameRemoved:
 			c.stateMu.Lock()
+			for _, tool := range c.tools {
+				if tool.frameID == event.FrameID {
+					c.markDocumentChangedLocked(documentKey{sessionID: tool.sessionID, frameID: event.FrameID})
+				}
+			}
+			c.abandonFrameInvocationsAcrossSessionsLocked(event.FrameID)
 			c.removeFrameToolsAcrossSessionsLocked(event.FrameID)
 			c.stateMu.Unlock()
 			c.signalStateChanged()
@@ -177,10 +194,10 @@ func (c *connection) handleProtocolEvent(message cdpconnection.Message) {
 		if json.Unmarshal(message.Params, &response) == nil {
 			key := invocationKey{sessionID: message.SessionID, invocationID: response.InvocationID}
 			c.stateMu.Lock()
+			c.eventSequence++
+			response.observedAt = c.eventSequence
 			c.pruneAbandonedInvocationsLocked()
-			if _, abandoned := c.abandonedInvocations[key]; abandoned {
-				delete(c.abandonedInvocations, key)
-			} else {
+			if _, abandoned := c.abandonedInvocations[key]; !abandoned {
 				if len(c.invocations) >= maxCompletedInvocations {
 					for existing := range c.invocations {
 						if _, waiting := c.waitingInvocations[existing]; !waiting {
@@ -322,6 +339,8 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		return InvocationResult{}, ErrToolNotFound
 	}
 	sessionID, frameID, name := tool.sessionID, tool.frameID, tool.name
+	document := documentKey{sessionID: sessionID, frameID: frameID}
+	startedAfterChange := c.documentChanges[document]
 	c.stateMu.RUnlock()
 	if !c.sessionExists(sessionID) {
 		return InvocationResult{}, ErrToolNotFound
@@ -351,7 +370,16 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 
 	key := invocationKey{sessionID: sessionID, invocationID: started.InvocationID}
 	c.stateMu.Lock()
-	c.waitingInvocations[key] = struct{}{}
+	c.waitingInvocations[key] = frameID
+	if changedAt := c.documentChanges[document]; changedAt > startedAfterChange {
+		response, completed := c.invocations[key]
+		if !completed || response.observedAt >= changedAt {
+			delete(c.invocations, key)
+			c.forceAbandonInvocationLocked(key)
+			c.stateMu.Unlock()
+			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
+		}
+	}
 	c.stateMu.Unlock()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
@@ -367,6 +395,11 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 				Output:       response.Output,
 				ErrorText:    response.ErrorText,
 			}, nil
+		}
+		if _, abandoned := c.abandonedInvocations[key]; abandoned {
+			delete(c.abandonedInvocations, key)
+			c.stateMu.Unlock()
+			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}
 		c.stateMu.Unlock()
 		if !c.sessionExists(sessionID) || c.executionClosed() {
@@ -423,6 +456,11 @@ func (c *connection) removeSession(sessionID string) {
 	defer c.stateMu.Unlock()
 	delete(c.enabledSessions, sessionID)
 	delete(c.toolLimitWarned, sessionID)
+	for document := range c.documentChanges {
+		if document.sessionID == sessionID {
+			delete(c.documentChanges, document)
+		}
+	}
 	for key := range c.waitingInvocations {
 		if key.sessionID == sessionID {
 			c.abandonInvocationLocked(key)
@@ -435,6 +473,38 @@ func (c *connection) removeSession(sessionID string) {
 		}
 	}
 	c.signalStateChanged()
+}
+
+func (c *connection) markDocumentChangedLocked(document documentKey) {
+	c.eventSequence++
+	if _, exists := c.documentChanges[document]; !exists && len(c.documentChanges) >= maxDocumentChanges {
+		var oldest documentKey
+		oldestSequence := ^uint64(0)
+		for candidate, sequence := range c.documentChanges {
+			if sequence < oldestSequence {
+				oldest = candidate
+				oldestSequence = sequence
+			}
+		}
+		delete(c.documentChanges, oldest)
+	}
+	c.documentChanges[document] = c.eventSequence
+}
+
+func (c *connection) abandonFrameInvocationsLocked(sessionID, frameID string) {
+	for key, invocationFrameID := range c.waitingInvocations {
+		if key.sessionID == sessionID && invocationFrameID == frameID {
+			c.abandonInvocationLocked(key)
+		}
+	}
+}
+
+func (c *connection) abandonFrameInvocationsAcrossSessionsLocked(frameID string) {
+	for key, invocationFrameID := range c.waitingInvocations {
+		if invocationFrameID == frameID {
+			c.abandonInvocationLocked(key)
+		}
+	}
 }
 
 func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
@@ -465,6 +535,11 @@ func (c *connection) abandonInvocationLocked(key invocationKey) bool {
 	if _, completed := c.invocations[key]; completed {
 		return false
 	}
+	c.forceAbandonInvocationLocked(key)
+	return true
+}
+
+func (c *connection) forceAbandonInvocationLocked(key invocationKey) {
 	delete(c.waitingInvocations, key)
 	c.pruneAbandonedInvocationsLocked()
 	if len(c.abandonedInvocations) >= maxAbandonedInvocations {
@@ -479,7 +554,6 @@ func (c *connection) abandonInvocationLocked(key invocationKey) bool {
 		delete(c.abandonedInvocations, oldest)
 	}
 	c.abandonedInvocations[key] = time.Now()
-	return true
 }
 
 func (c *connection) pruneAbandonedInvocationsLocked() {

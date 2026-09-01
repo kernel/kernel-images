@@ -19,6 +19,7 @@ const (
 	EventProtocol EventKind = iota
 	EventSessionReady
 	EventSessionRemoved
+	EventDocumentInvalidated
 	EventDocumentChanged
 	EventFrameRemoved
 )

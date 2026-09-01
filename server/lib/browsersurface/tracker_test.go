@@ -174,6 +174,11 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 		location, resolved := tracker.Resolve("oopif-session", "oopif")
 		return resolved && location.Frame != nil && location.Frame.ID == 3
 	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		protocol.mu.Lock()
+		defer protocol.mu.Unlock()
+		return protocol.attachCalls["oopif"] == 1
+	}, time.Second, 10*time.Millisecond)
 
 	require.Equal(t, Snapshot{
 		Windows: []WindowInfo{{ID: 1}, {ID: 2}},
