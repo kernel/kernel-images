@@ -13,12 +13,13 @@ import (
 )
 
 type fakeProtocol struct {
-	mu             sync.Mutex
-	windowIDs      map[string]int
-	attachFailures int
-	attachCalls    map[string]int
-	events         chan cdpconnection.Message
-	closed         chan struct{}
+	mu                  sync.Mutex
+	windowIDs           map[string]int
+	attachFailures      int
+	attachCalls         map[string]int
+	beforeTargetsResult func()
+	events              chan cdpconnection.Message
+	closed              chan struct{}
 }
 
 func newFakeProtocol() *fakeProtocol {
@@ -39,6 +40,13 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 	case "Target.setDiscoverTargets":
 		return marshal(map[string]any{}), nil
 	case "Target.getTargets":
+		f.mu.Lock()
+		beforeResult := f.beforeTargetsResult
+		f.beforeTargetsResult = nil
+		f.mu.Unlock()
+		if beforeResult != nil {
+			beforeResult()
+		}
 		return marshal(map[string]any{"targetInfos": []map[string]any{
 			{"targetId": "page-a", "type": "page", "title": "Store", "url": "https://store.example/"},
 			{"targetId": "page-b", "type": "page", "title": "Travel", "url": "https://travel.example/"},
@@ -192,6 +200,36 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, 1, moved.TabID)
 	require.Equal(t, 2, moved.WindowID)
+}
+
+func TestTrackerRefreshDoesNotRemoveTabCreatedAfterSnapshot(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+	protocol.mu.Lock()
+	protocol.beforeTargetsResult = func() {
+		protocol.emitTarget("Target.targetCreated", map[string]any{"targetInfo": map[string]any{
+			"targetId": "concurrent", "type": "page", "title": "Concurrent", "url": "https://concurrent.example/",
+		}})
+		require.Eventually(t, func() bool {
+			for _, tab := range tracker.Snapshot().Tabs {
+				if tab.PageURL == "https://concurrent.example/" {
+					return true
+				}
+			}
+			return false
+		}, time.Second, 10*time.Millisecond)
+	}
+	protocol.mu.Unlock()
+
+	require.NoError(t, tracker.RefreshTargets(context.Background()))
+	found := false
+	for _, tab := range tracker.Snapshot().Tabs {
+		if tab.PageURL == "https://concurrent.example/" {
+			found = true
+		}
+	}
+	require.True(t, found)
 }
 
 func TestTrackerRetriesTabsAfterAttachFailure(t *testing.T) {

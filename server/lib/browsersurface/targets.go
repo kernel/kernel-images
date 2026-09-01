@@ -82,6 +82,13 @@ func (t *Tracker) attachPage(tabID int, target targetInfo) {
 }
 
 func (t *Tracker) RefreshTargets(ctx context.Context) error {
+	t.stateMu.RLock()
+	known := make([]string, 0, len(t.tabsByTarget))
+	for targetID := range t.tabsByTarget {
+		known = append(known, targetID)
+	}
+	t.stateMu.RUnlock()
+
 	raw, err := t.protocol.Send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
 		return err
@@ -100,15 +107,10 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		active[target.TargetID] = true
 		t.trackPage(target, true)
 	}
-	t.stateMu.RLock()
-	var removed []string
-	for targetID := range t.tabsByTarget {
-		if !active[targetID] {
-			removed = append(removed, targetID)
+	for _, targetID := range known {
+		if active[targetID] {
+			continue
 		}
-	}
-	t.stateMu.RUnlock()
-	for _, targetID := range removed {
 		t.removeTarget(targetID)
 	}
 	return nil
