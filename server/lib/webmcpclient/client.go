@@ -354,8 +354,11 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		c.stateMu.Unlock()
 		if !alive || c.isClosed() {
 			c.stateMu.Lock()
-			c.abandonInvocationLocked(key)
+			abandoned := c.abandonInvocationLocked(key)
 			c.stateMu.Unlock()
+			if !abandoned {
+				continue
+			}
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}
 		select {
@@ -363,13 +366,19 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		case <-ticker.C:
 		case <-ctx.Done():
 			c.stateMu.Lock()
-			c.abandonInvocationLocked(key)
+			abandoned := c.abandonInvocationLocked(key)
 			c.stateMu.Unlock()
+			if !abandoned {
+				continue
+			}
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		case <-c.closed:
 			c.stateMu.Lock()
-			c.abandonInvocationLocked(key)
+			abandoned := c.abandonInvocationLocked(key)
 			c.stateMu.Unlock()
+			if !abandoned {
+				continue
+			}
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}
 	}

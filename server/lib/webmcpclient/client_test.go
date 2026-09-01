@@ -50,6 +50,7 @@ type fakeCDP struct {
 	enabledSessions     map[string]int
 	omitResponse        bool
 	closeOnInvoke       bool
+	detachAfterResponse bool
 	invokeResponseDelay time.Duration
 	extraPageFirst      bool
 }
@@ -188,6 +189,12 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 						"output": map[string]any{"content": []map[string]any{{"type": "text", "text": request.SessionID}}},
 					},
 				})
+				if f.detachAfterResponse {
+					write(map[string]any{
+						"method": "Target.detachedFromTarget",
+						"params": map[string]any{"sessionId": request.SessionID},
+					})
+				}
 			}
 		default:
 			write(map[string]any{"id": request.ID, "error": map[string]any{"code": -32601, "message": "unknown method"}})
@@ -265,6 +272,26 @@ func TestInvocationCanCompleteAfterFrameNavigation(t *testing.T) {
 
 	_, err = manager.Invoke(context.Background(), paymentTool.Ref, map[string]any{})
 	require.ErrorIs(t, err, ErrToolNotFound)
+}
+
+func TestInvocationReturnsCompletedResponseBeforeTargetDetach(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.detachAfterResponse = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	tools, err := manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	var paymentTool Tool
+	for _, tool := range tools {
+		if tool.Name == "payment_tool" {
+			paymentTool = tool
+		}
+	}
+
+	result, err := manager.Invoke(context.Background(), paymentTool.Ref, map[string]any{})
+	require.NoError(t, err)
+	require.Equal(t, "Completed", result.Status)
+	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
 }
 
 func TestInvocationTimeoutHasUnknownOutcome(t *testing.T) {

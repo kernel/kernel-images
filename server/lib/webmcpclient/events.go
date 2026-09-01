@@ -324,8 +324,10 @@ func (c *connection) removeToolLocked(key string) {
 	delete(c.tools, ref)
 }
 
-func (c *connection) abandonInvocationLocked(key invocationKey) {
-	delete(c.invocations, key)
+func (c *connection) abandonInvocationLocked(key invocationKey) bool {
+	if _, completed := c.invocations[key]; completed {
+		return false
+	}
 	delete(c.waitingInvocations, key)
 	c.pruneAbandonedInvocationsLocked()
 	if len(c.abandonedInvocations) >= maxAbandonedInvocations {
@@ -340,6 +342,7 @@ func (c *connection) abandonInvocationLocked(key invocationKey) {
 		delete(c.abandonedInvocations, oldest)
 	}
 	c.abandonedInvocations[key] = time.Now()
+	return true
 }
 
 func (c *connection) pruneAbandonedInvocationsLocked() {
