@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -13,9 +14,14 @@ import (
 )
 
 const (
-	settleDelay = 200 * time.Millisecond
-	settleLimit = 2 * time.Second
+	settleDelay             = 200 * time.Millisecond
+	settleLimit             = 2 * time.Second
+	maxToolsPerSession      = 256
+	maxCompletedInvocations = 256
+	maxAbandonedInvocations = 256
 )
+
+var errCommandOutcomeUnknown = errors.New("CDP command outcome is unknown")
 
 type connection struct {
 	conn   *websocket.Conn
@@ -37,9 +43,12 @@ type connection struct {
 	frames               map[string]map[string]frameInfo
 	tools                map[string]*registeredTool
 	toolRefs             map[string]string
-	invocations          map[string]invocationResponse
-	abandonedInvocations map[string]time.Time
+	toolLimitWarned      map[string]bool
+	invocations          map[invocationKey]invocationResponse
+	waitingInvocations   map[invocationKey]struct{}
+	abandonedInvocations map[invocationKey]time.Time
 	stateChangedCh       chan struct{}
+	logger               *slog.Logger
 
 	closed    chan struct{}
 	closeOnce sync.Once
@@ -61,9 +70,12 @@ func dial(ctx context.Context, url string) (*connection, error) {
 		frames:               make(map[string]map[string]frameInfo),
 		tools:                make(map[string]*registeredTool),
 		toolRefs:             make(map[string]string),
-		invocations:          make(map[string]invocationResponse),
-		abandonedInvocations: make(map[string]time.Time),
+		toolLimitWarned:      make(map[string]bool),
+		invocations:          make(map[invocationKey]invocationResponse),
+		waitingInvocations:   make(map[invocationKey]struct{}),
+		abandonedInvocations: make(map[invocationKey]time.Time),
 		stateChangedCh:       make(chan struct{}, 1),
+		logger:               slog.Default(),
 		closed:               make(chan struct{}),
 	}
 	go c.readLoop()
@@ -75,7 +87,7 @@ func (c *connection) close() error {
 		c.cancel()
 		c.conn.CloseNow()
 		close(c.closed)
-		c.failPending(errors.New("WebMCP: CDP connection closed"))
+		c.failPending(errCommandOutcomeUnknown)
 	})
 	return nil
 }
@@ -168,7 +180,7 @@ func (c *connection) send(ctx context.Context, method string, params any, sessio
 		c.pendingMu.Unlock()
 		return nil, fmt.Errorf("WebMCP: %s: %w", method, ctx.Err())
 	case <-c.closed:
-		return nil, errors.New("WebMCP: CDP connection closed")
+		return nil, fmt.Errorf("WebMCP: %s: %w", method, errCommandOutcomeUnknown)
 	}
 }
 
@@ -186,14 +198,28 @@ func (c *connection) selectTarget(ctx context.Context, requestedTargetID string)
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return fmt.Errorf("WebMCP: decode Target.getTargets: %w", err)
 	}
+	c.stateMu.RLock()
+	currentTargetID := c.rootTargetID
+	_, currentSessionAlive := c.sessions[c.rootSessionID]
+	c.stateMu.RUnlock()
 	var selected targetInfo
-	for _, target := range result.TargetInfos {
-		if target.Type != "page" {
-			continue
+	if requestedTargetID == "" && currentSessionAlive {
+		for _, target := range result.TargetInfos {
+			if target.Type == "page" && target.TargetID == currentTargetID {
+				selected = target
+				break
+			}
 		}
-		if requestedTargetID == "" || requestedTargetID == target.TargetID {
-			selected = target
-			break
+	}
+	if selected.TargetID == "" {
+		for _, target := range result.TargetInfos {
+			if target.Type != "page" {
+				continue
+			}
+			if requestedTargetID == "" || requestedTargetID == target.TargetID {
+				selected = target
+				break
+			}
 		}
 	}
 	if selected.TargetID == "" {
@@ -289,11 +315,11 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		"input":    input,
 	}, sessionID)
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			_ = c.close()
-			return InvocationResult{}, ErrOutcomeUnknown
-		}
-		if !c.sessionExists(sessionID) {
+		unknownOutcome := errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) ||
+			errors.Is(err, errCommandOutcomeUnknown) ||
+			!c.sessionExists(sessionID)
+		if unknownOutcome {
 			return InvocationResult{}, ErrOutcomeUnknown
 		}
 		return InvocationResult{}, err
@@ -305,12 +331,17 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		return InvocationResult{}, fmt.Errorf("WebMCP: invalid invokeTool response")
 	}
 
+	key := invocationKey{sessionID: sessionID, invocationID: started.InvocationID}
+	c.stateMu.Lock()
+	c.waitingInvocations[key] = struct{}{}
+	c.stateMu.Unlock()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		c.stateMu.Lock()
-		if response, ok := c.invocations[started.InvocationID]; ok {
-			delete(c.invocations, started.InvocationID)
+		if response, ok := c.invocations[key]; ok {
+			delete(c.invocations, key)
+			delete(c.waitingInvocations, key)
 			c.stateMu.Unlock()
 			return InvocationResult{
 				InvocationID: response.InvocationID,
@@ -322,6 +353,9 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		_, alive := c.sessions[sessionID]
 		c.stateMu.Unlock()
 		if !alive || c.isClosed() {
+			c.stateMu.Lock()
+			c.abandonInvocationLocked(key)
+			c.stateMu.Unlock()
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}
 		select {
@@ -329,12 +363,13 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		case <-ticker.C:
 		case <-ctx.Done():
 			c.stateMu.Lock()
-			delete(c.invocations, started.InvocationID)
-			c.abandonedInvocations[started.InvocationID] = time.Now()
-			c.pruneAbandonedInvocationsLocked()
+			c.abandonInvocationLocked(key)
 			c.stateMu.Unlock()
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		case <-c.closed:
+			c.stateMu.Lock()
+			c.abandonInvocationLocked(key)
+			c.stateMu.Unlock()
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}
 	}

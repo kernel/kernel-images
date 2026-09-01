@@ -121,3 +121,8 @@ type invocationResponse struct {
 	Output       any    `json:"output,omitempty"`
 	ErrorText    string `json:"errorText,omitempty"`
 }
+
+type invocationKey struct {
+	sessionID    string
+	invocationID string
+}

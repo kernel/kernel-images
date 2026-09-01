@@ -6948,7 +6948,7 @@ type StreamTelemetryEventsParamsReplay string
 
 // GetWebMCPToolsParams defines parameters for GetWebMCPTools.
 type GetWebMCPToolsParams struct {
-	// TargetId Optional page target to inspect. When omitted, the first page target reported by Chromium is used.
+	// TargetId Optional page target to inspect. When omitted, the current discovery target is retained; the first page target reported by Chromium is used only on initial discovery. Explicitly switching targets resets the WebMCP attachment and makes running invocation outcomes unknown.
 	TargetId *string `form:"target_id,omitempty" json:"target_id,omitempty"`
 }
 
@@ -24934,8 +24934,10 @@ var swaggerSpec = []string{
 	"MhJMj0Dk/WmkfakB8gNwUjbzO67IGfYFVmfDamEyNP4N23mKeMs/yWLOuHM8mwqs1Jc0p169mz6404xj",
 	"5ToVynuFNJFpySpe2ql2TI+HSiFZbaPXtnl3PZojYiZ5NMGpswP20h8Z+trIiVRM4pEFm4MddqgQlwSE",
 	"1ehqMoVegquBg0DHlGxJphU6HdQRMuBhhMX8RXQwcz1Ufl0UJevNuAQmKMYX58H7aNXIz+JIUHoGusZ0",
-	"FElf4tS2Z62zGIGGmpPttPeYSpEl00jRv2g+vwT7QHTjle3OJsVXLxaSSmf841sgVj54/uTpnwC0Mv7/",
-	"71vC1JjDlQzDJFYN6YvSObjPlEJS57Za0OmUAhewhF6xwHZ4IbGb6Pvnz/8ZAAD//02rPePrbwMA",
+	"FElf4tS2Z62zGIGGmpPttPeYSpEl00jjTJLEzMNr0kZ/5gUhRXtPpPnlJYAIIiavrKDjg98ElHSSF3UD",
+	"A/a6cTlyI8m/DmvlfUGKCdPc4/LM4ASvcjYD15LgNZpbAqmKZWT3u1JfsaWLhQzYGf/4FligD54/efon",
+	"QNiM///71ls1FnwlHTKtXENVoioN7jP/kRa6rcN0lKYoC0iRX0wwdF6i7SbG6fPn/wwAAP//EuxzAJhw",
+	"AwA=",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

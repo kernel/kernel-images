@@ -1370,7 +1370,10 @@ paths:
         - name: target_id
           in: query
           required: false
-          description: Optional page target to inspect. When omitted, the first page target reported by Chromium is used.
+          description: >-
+            Optional page target to inspect. When omitted, the current discovery target is retained;
+            the first page target reported by Chromium is used only on initial discovery. Explicitly
+            switching targets resets the WebMCP attachment and makes running invocation outcomes unknown.
           schema:
             type: string
             minLength: 1

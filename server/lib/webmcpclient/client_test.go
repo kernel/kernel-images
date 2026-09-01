@@ -3,6 +3,9 @@ package webmcpclient
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,15 +23,35 @@ type staticUpstream struct {
 
 func (u staticUpstream) Current() string { return u.url }
 
+type mutableUpstream struct {
+	mu  sync.RWMutex
+	url string
+}
+
+func (u *mutableUpstream) Current() string {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.url
+}
+
+func (u *mutableUpstream) Set(url string) {
+	u.mu.Lock()
+	u.url = url
+	u.mu.Unlock()
+}
+
 type fakeCDP struct {
 	server *httptest.Server
 	url    string
 
-	mu              sync.Mutex
-	connections     int
-	relatedAttaches int
-	enabledSessions map[string]int
-	omitResponse    bool
+	mu                  sync.Mutex
+	connections         int
+	relatedAttaches     int
+	enabledSessions     map[string]int
+	omitResponse        bool
+	closeOnInvoke       bool
+	invokeResponseDelay time.Duration
+	extraPageFirst      bool
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
@@ -74,9 +97,18 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		switch request.Method {
 		case "Target.getTargets":
-			respond(map[string]any{"targetInfos": []map[string]any{{
+			f.mu.Lock()
+			extraPageFirst := f.extraPageFirst
+			f.mu.Unlock()
+			targets := []map[string]any{{
 				"targetId": "page-target", "type": "page", "url": "https://merchant.example/",
-			}}})
+			}}
+			if extraPageFirst {
+				targets = append([]map[string]any{{
+					"targetId": "other-page", "type": "page", "url": "https://other.example/",
+				}}, targets...)
+			}
+			respond(map[string]any{"targetInfos": targets})
 		case "Target.autoAttachRelated":
 			f.mu.Lock()
 			f.relatedAttaches++
@@ -132,6 +164,13 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 				}}},
 			})
 		case "WebMCP.invokeTool":
+			if f.closeOnInvoke {
+				conn.CloseNow()
+				return
+			}
+			if f.invokeResponseDelay > 0 {
+				time.Sleep(f.invokeResponseDelay)
+			}
 			respond(map[string]any{"invocationId": "invocation-1"})
 			if !f.omitResponse {
 				write(map[string]any{
@@ -146,7 +185,7 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 					"sessionId": request.SessionID,
 					"params": map[string]any{
 						"invocationId": "invocation-1", "status": "Completed",
-						"output": map[string]any{"content": []map[string]any{{"type": "text", "text": "paid"}}},
+						"output": map[string]any{"content": []map[string]any{{"type": "text", "text": request.SessionID}}},
 					},
 				})
 			}
@@ -222,7 +261,7 @@ func TestInvocationCanCompleteAfterFrameNavigation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "invocation-1", result.InvocationID)
 	require.Equal(t, "Completed", result.Status)
-	require.Equal(t, "paid", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
+	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
 
 	_, err = manager.Invoke(context.Background(), paymentTool.Ref, map[string]any{})
 	require.ErrorIs(t, err, ErrToolNotFound)
@@ -246,4 +285,159 @@ func TestInvocationTimeoutHasUnknownOutcome(t *testing.T) {
 	result, err := manager.Invoke(ctx, toolRef, map[string]any{})
 	require.ErrorIs(t, err, ErrOutcomeUnknown)
 	require.Equal(t, "invocation-1", result.InvocationID)
+}
+
+func TestInvokeCancellationBeforeCommandResponseKeepsConnection(t *testing.T) {
+	fake := newFakeCDP(t, true)
+	fake.invokeResponseDelay = 100 * time.Millisecond
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	tools, err := manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	var toolRef string
+	for _, tool := range tools {
+		if tool.Name == "payment_tool" {
+			toolRef = tool.Ref
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err = manager.Invoke(ctx, toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrOutcomeUnknown)
+
+	_, err = manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	require.Equal(t, 1, fake.connections)
+}
+
+func TestConnectionDeathMidInvokeHasUnknownOutcome(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.closeOnInvoke = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	tools, err := manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	var toolRef string
+	for _, tool := range tools {
+		if tool.Name == "payment_tool" {
+			toolRef = tool.Ref
+		}
+	}
+
+	_, err = manager.Invoke(context.Background(), toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrOutcomeUnknown)
+}
+
+func TestToolResponsesAreScopedBySession(t *testing.T) {
+	client := &connection{
+		invocations:          make(map[invocationKey]invocationResponse),
+		waitingInvocations:   make(map[invocationKey]struct{}),
+		abandonedInvocations: make(map[invocationKey]time.Time),
+		stateChangedCh:       make(chan struct{}, 1),
+	}
+	for _, sessionID := range []string{"page-session", "iframe-session"} {
+		params, err := json.Marshal(invocationResponse{
+			InvocationID: "invocation-1",
+			Status:       "Completed",
+			Output:       sessionID,
+		})
+		require.NoError(t, err)
+		client.handleEvent(cdpMessage{Method: "WebMCP.toolResponded", SessionID: sessionID, Params: params})
+	}
+
+	require.Len(t, client.invocations, 2)
+	require.Equal(t, "page-session", client.invocations[invocationKey{sessionID: "page-session", invocationID: "invocation-1"}].Output)
+	require.Equal(t, "iframe-session", client.invocations[invocationKey{sessionID: "iframe-session", invocationID: "invocation-1"}].Output)
+}
+
+func TestDiscoveryKeepsSelectedPageWhenTargetOrderChanges(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	first, err := manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	fake.mu.Lock()
+	fake.extraPageFirst = true
+	fake.mu.Unlock()
+
+	second, err := manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	require.Equal(t, 1, fake.connections)
+	require.Equal(t, 1, fake.relatedAttaches)
+}
+
+func TestManagerReconnectsWhenChromiumUpstreamChanges(t *testing.T) {
+	first := newFakeCDP(t, false)
+	second := newFakeCDP(t, false)
+	upstream := &mutableUpstream{url: first.url}
+	manager := NewManager(upstream)
+	t.Cleanup(func() { _ = manager.Close() })
+	firstTools, err := manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	upstream.Set(second.url)
+
+	secondTools, err := manager.Tools(context.Background(), "")
+	require.NoError(t, err)
+	require.NotEqual(t, firstTools[0].Ref, secondTools[0].Ref)
+	first.mu.Lock()
+	require.Equal(t, 1, first.connections)
+	first.mu.Unlock()
+	second.mu.Lock()
+	require.Equal(t, 1, second.connections)
+	second.mu.Unlock()
+}
+
+func TestToolRegistryIsBoundedPerSession(t *testing.T) {
+	client := &connection{
+		sessions:        map[string]session{"page-session": {id: "page-session"}},
+		tools:           make(map[string]*registeredTool),
+		toolRefs:        make(map[string]string),
+		toolLimitWarned: make(map[string]bool),
+		stateChangedCh:  make(chan struct{}, 1),
+		logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	tools := make([]toolEvent, maxToolsPerSession+10)
+	for i := range tools {
+		tools[i] = toolEvent{Name: fmt.Sprintf("tool-%d", i), FrameID: "page-frame"}
+	}
+	client.addTools("page-session", tools)
+
+	require.Len(t, client.tools, maxToolsPerSession)
+	require.True(t, client.toolLimitWarned["page-session"])
+}
+
+func TestDetachedTargetInvalidatesToolReferences(t *testing.T) {
+	client := &connection{
+		sessions: map[string]session{
+			"page-session":   {id: "page-session"},
+			"iframe-session": {id: "iframe-session", parentID: "page-session"},
+		},
+		frames:               make(map[string]map[string]frameInfo),
+		tools:                make(map[string]*registeredTool),
+		toolRefs:             make(map[string]string),
+		toolLimitWarned:      make(map[string]bool),
+		invocations:          make(map[invocationKey]invocationResponse),
+		waitingInvocations:   make(map[invocationKey]struct{}),
+		abandonedInvocations: make(map[invocationKey]time.Time),
+		stateChangedCh:       make(chan struct{}, 1),
+	}
+	key := toolKey("iframe-session", "iframe-frame", "pay")
+	client.toolRefs[key] = "wmcp_pay"
+	client.tools["wmcp_pay"] = &registeredTool{
+		ref: "wmcp_pay", sessionID: "iframe-session", frameID: "iframe-frame", name: "pay",
+	}
+	params, err := json.Marshal(map[string]any{"sessionId": "iframe-session"})
+	require.NoError(t, err)
+
+	client.handleEvent(cdpMessage{Method: "Target.detachedFromTarget", Params: params})
+
+	require.NotContains(t, client.sessions, "iframe-session")
+	require.NotContains(t, client.tools, "wmcp_pay")
+	require.NotContains(t, client.toolRefs, key)
 }

@@ -35,7 +35,14 @@ func (c *connection) handleEvent(message cdpMessage) {
 		rootTargetID := c.rootTargetID
 		c.stateMu.RUnlock()
 		if event.TargetInfo.TargetID != rootTargetID {
-			go func() { _ = c.initializeSession(event.SessionID, event.TargetInfo.Type) }()
+			go func() {
+				if err := c.initializeSession(event.SessionID, event.TargetInfo.Type); err != nil && !c.isClosed() {
+					c.logger.Warn("failed to initialize WebMCP target",
+						"target_id", event.TargetInfo.TargetID,
+						"target_type", event.TargetInfo.Type,
+						"err", err)
+				}
+			}()
 		}
 	case "Target.detachedFromTarget":
 		var event struct {
@@ -117,12 +124,21 @@ func (c *connection) handleEvent(message cdpMessage) {
 	case "WebMCP.toolResponded":
 		var response invocationResponse
 		if json.Unmarshal(message.Params, &response) == nil {
+			key := invocationKey{sessionID: message.SessionID, invocationID: response.InvocationID}
 			c.stateMu.Lock()
 			c.pruneAbandonedInvocationsLocked()
-			if _, abandoned := c.abandonedInvocations[response.InvocationID]; abandoned {
-				delete(c.abandonedInvocations, response.InvocationID)
+			if _, abandoned := c.abandonedInvocations[key]; abandoned {
+				delete(c.abandonedInvocations, key)
 			} else {
-				c.invocations[response.InvocationID] = response
+				if len(c.invocations) >= maxCompletedInvocations {
+					for existing := range c.invocations {
+						if _, waiting := c.waitingInvocations[existing]; !waiting {
+							delete(c.invocations, existing)
+							break
+						}
+					}
+				}
+				c.invocations[key] = response
 			}
 			c.stateMu.Unlock()
 			c.signalStateChanged()
@@ -175,12 +191,26 @@ func (c *connection) addTools(sessionID string, tools []toolEvent) {
 	if _, ok := c.sessions[sessionID]; !ok {
 		return
 	}
+	tracked := 0
+	for _, existing := range c.tools {
+		if existing.sessionID == sessionID {
+			tracked++
+		}
+	}
 	for _, tool := range tools {
 		key := toolKey(sessionID, tool.FrameID, tool.Name)
 		ref := c.toolRefs[key]
 		if ref == "" {
+			if tracked >= maxToolsPerSession {
+				if !c.toolLimitWarned[sessionID] {
+					c.toolLimitWarned[sessionID] = true
+					c.logger.Warn("WebMCP tool limit reached", "session_id", sessionID, "limit", maxToolsPerSession)
+				}
+				continue
+			}
 			ref = "wmcp_" + cuid2.Generate()
 			c.toolRefs[key] = ref
+			tracked++
 		}
 		c.tools[ref] = &registeredTool{
 			ref:         ref,
@@ -250,6 +280,12 @@ func (c *connection) removeSession(sessionID string) {
 	for id := range toRemove {
 		delete(c.sessions, id)
 		delete(c.frames, id)
+		delete(c.toolLimitWarned, id)
+		for key := range c.waitingInvocations {
+			if key.sessionID == id {
+				c.abandonInvocationLocked(key)
+			}
+		}
 		for ref, tool := range c.tools {
 			if tool.sessionID == id {
 				delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
@@ -267,8 +303,10 @@ func (c *connection) clearStateLocked() {
 	c.frames = make(map[string]map[string]frameInfo)
 	c.tools = make(map[string]*registeredTool)
 	c.toolRefs = make(map[string]string)
-	c.invocations = make(map[string]invocationResponse)
-	c.abandonedInvocations = make(map[string]time.Time)
+	c.toolLimitWarned = make(map[string]bool)
+	c.invocations = make(map[invocationKey]invocationResponse)
+	c.waitingInvocations = make(map[invocationKey]struct{})
+	c.abandonedInvocations = make(map[invocationKey]time.Time)
 }
 
 func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
@@ -284,6 +322,24 @@ func (c *connection) removeToolLocked(key string) {
 	ref := c.toolRefs[key]
 	delete(c.toolRefs, key)
 	delete(c.tools, ref)
+}
+
+func (c *connection) abandonInvocationLocked(key invocationKey) {
+	delete(c.invocations, key)
+	delete(c.waitingInvocations, key)
+	c.pruneAbandonedInvocationsLocked()
+	if len(c.abandonedInvocations) >= maxAbandonedInvocations {
+		var oldest invocationKey
+		var oldestAt time.Time
+		for candidate, abandonedAt := range c.abandonedInvocations {
+			if oldestAt.IsZero() || abandonedAt.Before(oldestAt) {
+				oldest = candidate
+				oldestAt = abandonedAt
+			}
+		}
+		delete(c.abandonedInvocations, oldest)
+	}
+	c.abandonedInvocations[key] = time.Now()
 }
 
 func (c *connection) pruneAbandonedInvocationsLocked() {

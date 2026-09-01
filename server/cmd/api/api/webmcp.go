@@ -14,6 +14,7 @@ import (
 
 const (
 	defaultWebMCPInvocationTimeout = 60 * time.Second
+	maxWebMCPInvocationTimeoutSec  = 120
 	maxWebMCPInputBytes            = 1 << 20
 )
 
@@ -74,6 +75,9 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	}
 	timeout := defaultWebMCPInvocationTimeout
 	if request.Body.TimeoutSec != nil {
+		if *request.Body.TimeoutSec < 1 || *request.Body.TimeoutSec > maxWebMCPInvocationTimeoutSec {
+			return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "timeout_sec must be between 1 and 120"}}, nil
+		}
 		timeout = time.Duration(*request.Body.TimeoutSec) * time.Second
 	}
 	invokeCtx, cancel := context.WithTimeout(ctx, timeout)
