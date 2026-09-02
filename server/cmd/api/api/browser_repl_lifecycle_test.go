@@ -22,49 +22,47 @@ import (
 func TestBrowserReplValidation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	resp, err := svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{Body: nil})
+	resp, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{Body: nil})
 	require.NoError(t, err)
-	require.IsType(t, oapi.ExecuteBrowserCode400JSONResponse{}, resp)
+	require.IsType(t, oapi.ExecuteBrowserRepl400JSONResponse{}, resp)
 
 	empty := ""
-	resp, err = svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
-		Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: empty},
+	resp, err = svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+		Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: empty},
 	})
 	require.NoError(t, err)
-	require.IsType(t, oapi.ExecuteBrowserCode400JSONResponse{}, resp)
+	require.IsType(t, oapi.ExecuteBrowserRepl400JSONResponse{}, resp)
 
 	require.Nil(t, svc.browserRepl)
 }
 
 func TestBrowserReplPersistenceAndStableID(t *testing.T) {
 	svc := newBrowserReplSvc(t)
-	r := requireExec(t, svc, "var counter = 40; counter + 2", float64(42))
+	r := requireExec(t, svc, "var counter = 40; repl.write(JSON.stringify(counter + 2))", float64(42))
 	require.NotEmpty(t, r.ReplId)
-	require.Equal(t, r.ReplId, requireExec(t, svc, "counter", float64(40)).ReplId)
-	requireExec(t, svc, "const added = await Promise.resolve(5); added", float64(5))
-	requireExec(t, svc, "added + counter", float64(45))
-	requireExec(t, svc, `const { readFileSync } = await import("fs"); typeof readFileSync`, "function")
-	requireExec(t, svc, "repl.id", r.ReplId)
+	require.Equal(t, r.ReplId, requireExec(t, svc, "repl.write(JSON.stringify(counter))", float64(40)).ReplId)
+	requireExec(t, svc, "const added = await Promise.resolve(5); repl.write(JSON.stringify(added))", float64(5))
+	requireExec(t, svc, "repl.write(JSON.stringify(added + counter))", float64(45))
+	requireExec(t, svc, `const { readFileSync } = await import("fs"); repl.write(JSON.stringify(typeof readFileSync))`, "function")
+	requireExec(t, svc, "repl.write(JSON.stringify(repl.id))", r.ReplId)
 }
 
 func TestBrowserReplReset(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "var ephemeral = 1; ephemeral"})
+	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "var ephemeral = 1; ephemeral"})
 	require.True(t, r1.Success)
 	oldID := r1.ReplId
 	oldPid := svc.browserRepl.cmd.Process.Pid
 
 	reset := true
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "", Reset: &reset})
+	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "", Reset: &reset})
 	require.True(t, r2.Success)
 	require.NotEmpty(t, r2.ReplId)
 	require.NotEqual(t, oldID, r2.ReplId, "reset must generate a new CUID2")
 	require.False(t, processAlive(oldPid), "reset must kill the previous REPL process")
 
-	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "typeof ephemeral"})
-	require.True(t, r3.Success)
-	require.Equal(t, "undefined", r3.Result, "reset must clear all prior bindings")
+	r3 := requireExec(t, svc, `repl.write(JSON.stringify(typeof ephemeral))`, "undefined")
 	require.Equal(t, r2.ReplId, r3.ReplId)
 }
 
@@ -72,20 +70,20 @@ func TestBrowserReplErrorKeepsREPL(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	failed := requireExecError(t, svc, "var survives = true; throw new Error('boom')", "boom")
 	require.True(t, failed.ReplTerminated == nil || !*failed.ReplTerminated)
-	require.Equal(t, failed.ReplId, requireExec(t, svc, "survives", true).ReplId)
+	require.Equal(t, failed.ReplId, requireExec(t, svc, "repl.write(JSON.stringify(survives))", true).ReplId)
 }
 
 func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 	require.True(t, r1.Success)
 	oldID := r1.ReplId
 	oldPid := svc.browserRepl.cmd.Process.Pid
 
 	timeoutSec := 1
 	start := time.Now()
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code:       "while (true) {}",
 		TimeoutSec: &timeoutSec,
 	})
@@ -102,7 +100,7 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 
 	require.Nil(t, svc.browserRepl)
 
-	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
+	r3 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "'fresh'"})
 	require.True(t, r3.Success)
 	require.NotEqual(t, oldID, r3.ReplId, "the next request lazily starts a fresh REPL")
 }
@@ -110,14 +108,14 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 func TestBrowserReplInterruptibleTimeoutTerminates(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 	require.True(t, r1.Success)
 	oldID := r1.ReplId
 	oldPid := svc.browserRepl.cmd.Process.Pid
 
 	timeoutSec := 1
 	start := time.Now()
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code:       `setTimeout(() => repl.write("LEAKED-LATE-OUTPUT"), 2000); await new Promise(() => {})`,
 		TimeoutSec: &timeoutSec,
 	})
@@ -134,12 +132,12 @@ func TestBrowserReplInterruptibleTimeoutTerminates(t *testing.T) {
 	require.Nil(t, svc.browserRepl, "no replacement starts until the next request")
 
 	time.Sleep(2500 * time.Millisecond)
-	r3 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
+	r3 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "'fresh'"})
 	require.True(t, r3.Success)
 	require.NotEqual(t, oldID, r3.ReplId, "the next request lazily starts a fresh REPL")
 	if r3.Content != nil {
 		for _, item := range *r3.Content {
-			if txt, err := item.AsBrowserExecutionTextContent(); err == nil {
+			if txt, err := item.AsBrowserReplTextContent(); err == nil {
 				require.NotContains(t, txt.Text, "LEAKED-LATE-OUTPUT",
 					"output from a terminated execution must not leak into a later execution")
 			}
@@ -150,7 +148,7 @@ func TestBrowserReplInterruptibleTimeoutTerminates(t *testing.T) {
 func TestBrowserReplCrashRecovery(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "var before = 1"})
+	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "var before = 1"})
 	require.True(t, r1.Success)
 
 	require.NoError(t, svc.browserRepl.cmd.Process.Kill())
@@ -159,7 +157,7 @@ func TestBrowserReplCrashRecovery(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'recovered'"})
+	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "'recovered'"})
 	require.True(t, r2.Success, "error: %v", r2.Error)
 	require.NotEqual(t, r1.ReplId, r2.ReplId, "crash recovery must use a new CUID2")
 }
@@ -167,7 +165,7 @@ func TestBrowserReplCrashRecovery(t *testing.T) {
 func TestBrowserReplShutdownKillsChild(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 	require.True(t, r1.Success)
 	pid := svc.browserRepl.cmd.Process.Pid
 	require.True(t, processAlive(pid))
@@ -185,7 +183,7 @@ func TestBrowserReplShutdownKillsChild(t *testing.T) {
 func TestBrowserReplSerializesConcurrentRequests(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r1 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "globalThis.seq = []; 1"})
+	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "globalThis.seq = []; 1"})
 	require.True(t, r1.Success)
 
 	const n = 8
@@ -195,14 +193,16 @@ func TestBrowserReplSerializesConcurrentRequests(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
-				Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "seq.push(seq.length); seq[seq.length - 1]"},
+			resp, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+				Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: "var concurrentValue = seq.push(seq.length) - 1; repl.write(JSON.stringify(concurrentValue))"},
 			})
 			assert.NoError(t, err)
-			if typed, ok := resp.(oapi.ExecuteBrowserCode200JSONResponse); ok && typed.Success {
-				if v, ok := typed.Result.(float64); ok {
-					results[int(v)] = float64(v)
-				}
+			if typed, ok := resp.(oapi.ExecuteBrowserRepl200JSONResponse); ok && typed.Success && typed.Content != nil {
+				text, textErr := (*typed.Content)[0].AsBrowserReplTextContent()
+				assert.NoError(t, textErr)
+				var v float64
+				assert.NoError(t, json.Unmarshal([]byte(text.Text), &v))
+				results[int(v)] = v
 			}
 		}()
 	}
@@ -229,17 +229,15 @@ func TestBrowserReplContentOrdering(t *testing.T) {
 		const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 		await repl.emitImage(png);
 		repl.write("after");
-		"done"
 	`
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: code})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "done", r.Result)
 	require.NotNil(t, r.Content)
 	require.Len(t, *r.Content, 6)
 
-	textAt := func(i int) oapi.BrowserExecutionTextContent {
+	textAt := func(i int) oapi.BrowserReplTextContent {
 		t.Helper()
-		v, err := (*r.Content)[i].AsBrowserExecutionTextContent()
+		v, err := (*r.Content)[i].AsBrowserReplTextContent()
 		require.NoError(t, err, "content item %d should be text", i)
 		return v
 	}
@@ -253,7 +251,7 @@ func TestBrowserReplContentOrdering(t *testing.T) {
 	require.Equal(t, "write", string(textAt(3).Channel))
 	require.Equal(t, "{ k: 1 }", textAt(3).Text)
 
-	img, err := (*r.Content)[4].AsBrowserExecutionImageContent()
+	img, err := (*r.Content)[4].AsBrowserReplImageContent()
 	require.NoError(t, err, "content item 4 should be an image")
 	require.Equal(t, "image/png", img.MimeType)
 	require.NotEmpty(t, img.DataB64)
@@ -265,19 +263,19 @@ func TestBrowserReplContentOrdering(t *testing.T) {
 func TestBrowserReplImageValidation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `await repl.emitImage("data:text/html;base64,PGI+eDwvYj4=")`,
 	})
 	require.False(t, r.Success)
 	require.Contains(t, *r.Error, "image/*")
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `await repl.emitImage(Buffer.from("not an image at all"))`,
 	})
 	require.False(t, r.Success)
 	require.Contains(t, *r.Error, "unrecognized image data")
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`
 			const png = Buffer.from(%q, "base64");
 			const u8 = new Uint8Array(png);                       // context-realm Uint8Array
@@ -286,120 +284,37 @@ func TestBrowserReplImageValidation(t *testing.T) {
 			await repl.emitImage(new DataView(u8.buffer));        // DataView
 			await repl.emitImage({ bytes: new Uint8Array(png) }); // bytes form
 			await repl.emitImage({ bytes: u8.buffer, mimeType: "image/png" });
-			"image-inputs-ok"
 		`, fakeCDPTinyPNG),
 	})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "image-inputs-ok", r.Result)
 	require.NotNil(t, r.Content)
 	imageCount := 0
 	for _, item := range *r.Content {
-		if img, err := item.AsBrowserExecutionImageContent(); err == nil && img.Type == "image" {
+		if img, err := item.AsBrowserReplImageContent(); err == nil && img.Type == "image" {
 			imageCount++
 			require.Equal(t, "image/png", img.MimeType)
 		}
 	}
 	require.Equal(t, 5, imageCount, "every documented ImageInput form must emit an image")
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "'alive'"})
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "'alive'"})
 	require.True(t, r.Success)
 }
 
 func TestBrowserReplTruncation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `repl.write("x".repeat(400 * 1024)); "ok"`,
 	})
 	require.True(t, r.Success)
 	require.NotNil(t, r.ContentTruncated)
 	require.True(t, *r.ContentTruncated)
 	require.NotNil(t, r.Content)
-	v, err := (*r.Content)[0].AsBrowserExecutionTextContent()
+	v, err := (*r.Content)[0].AsBrowserReplTextContent()
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(v.Text), 256*1024)
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
-		Code: `"y".repeat(400 * 1024)`,
-	})
-	require.True(t, r.Success)
-	require.NotNil(t, r.ResultTruncated)
-	require.True(t, *r.ResultTruncated)
-	require.NotNil(t, r.ResultRepr)
-}
-
-func TestBrowserReplResultEdgeValues(t *testing.T) {
-	svc := newBrowserReplSvc(t)
-
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "10n"})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Contains(t, *r.ResultRepr, "10n")
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "const c = {}; c.self = c; c"})
-	require.True(t, r.Success)
-	require.NotNil(t, r.ResultRepr)
-	require.Contains(t, *r.ResultRepr, "Circular")
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "undefined"})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Equal(t, "undefined", *r.ResultRepr)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "null"})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.Nil(t, r.ResultRepr)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `new Map([["k", "v"]])`})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Contains(t, *r.ResultRepr, "Map(1)")
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `/regex/gi`})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Contains(t, *r.ResultRepr, "/regex/gi")
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `new Date("2024-01-02T03:04:05Z")`})
-	require.True(t, r.Success)
-	require.Equal(t, "2024-01-02T03:04:05.000Z", r.Result)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `({a: [1, 2, 3], b: "str", c: {d: null}})`})
-	require.True(t, r.Success)
-	plain, ok := r.Result.(map[string]any)
-	require.True(t, ok, "expected object result, got %T", r.Result)
-	require.Equal(t, []any{float64(1), float64(2), float64(3)}, plain["a"])
-	require.Equal(t, "str", plain["b"])
-	require.Equal(t, map[string]any{"d": nil}, plain["c"])
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "NaN"})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Equal(t, "NaN", *r.ResultRepr)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1/0"})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Equal(t, "Infinity", *r.ResultRepr)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "-1/0"})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Equal(t, "-Infinity", *r.ResultRepr)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `const resultErr = new Error("result-eval-error"); resultErr`})
-	require.True(t, r.Success)
-	require.Nil(t, r.Result)
-	require.NotNil(t, r.ResultRepr)
-	require.Contains(t, *r.ResultRepr, "result-eval-error")
 }
 
 func TestBrowserReplImageSizeLimits(t *testing.T) {
@@ -407,14 +322,14 @@ func TestBrowserReplImageSizeLimits(t *testing.T) {
 
 	const pngHeader = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`const big = Buffer.concat([Buffer.from("%s", "base64"), Buffer.alloc(9 * 1024 * 1024)]); await repl.emitImage(big)`, pngHeader),
 	})
 	require.False(t, r.Success)
 	require.NotNil(t, r.Error)
 	require.Contains(t, *r.Error, "per-image limit")
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`
 			const mk = () => Buffer.concat([Buffer.from("%s", "base64"), Buffer.alloc(6 * 1024 * 1024)]);
 			await repl.emitImage(mk());
@@ -430,10 +345,10 @@ func TestBrowserReplImageSizeLimits(t *testing.T) {
 	images := 0
 	sawDropNote := false
 	for _, item := range *r.Content {
-		if img, err := item.AsBrowserExecutionImageContent(); err == nil && img.Type == "image" {
+		if img, err := item.AsBrowserReplImageContent(); err == nil && img.Type == "image" {
 			images++
 		}
-		if txt, err := item.AsBrowserExecutionTextContent(); err == nil && strings.Contains(txt.Text, "aggregate response image limit") {
+		if txt, err := item.AsBrowserReplTextContent(); err == nil && strings.Contains(txt.Text, "aggregate response image limit") {
 			sawDropNote = true
 		}
 	}
@@ -444,47 +359,46 @@ func TestBrowserReplImageSizeLimits(t *testing.T) {
 func TestBrowserReplRequestWireLimitIsNonDestructive(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
-	initial := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	initial := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
 	require.True(t, initial.Success, "initial request failed: %v", initial.Error)
 
-	maxBodyCode := strings.Repeat("a", maxBrowserExecuteBodyBytes-64)
-	body, err := json.Marshal(oapi.ExecuteBrowserCodeJSONRequestBody{Code: maxBodyCode})
+	maxBodyCode := strings.Repeat("a", maxBrowserReplBodyBytes-64)
+	body, err := json.Marshal(oapi.ExecuteBrowserReplJSONRequestBody{Code: maxBodyCode})
 	require.NoError(t, err)
-	require.LessOrEqual(t, len(body), maxBrowserExecuteBodyBytes)
-	resp, err := svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
-		Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: maxBodyCode},
+	require.LessOrEqual(t, len(body), maxBrowserReplBodyBytes)
+	resp, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+		Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: maxBodyCode},
 	})
 	require.NoError(t, err)
-	badRequest, ok := resp.(oapi.ExecuteBrowserCode400JSONResponse)
+	badRequest, ok := resp.(oapi.ExecuteBrowserRepl400JSONResponse)
 	require.True(t, ok, "expected a clean 400, got %T", resp)
 	require.Contains(t, badRequest.Message, "code too large")
 
-	stillAlive := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	stillAlive := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
 	require.True(t, stillAlive.Success, "REPL did not survive oversized request: %v", stillAlive.Error)
-	require.Equal(t, initial.Result, stillAlive.Result)
 	require.Equal(t, initial.ReplId, stillAlive.ReplId)
 
 	htmlCode := `"` + strings.Repeat("<", 1_300_000) + `"`
 	htmlBody := []byte(`{"code":` + strconv.Quote(htmlCode) + `}`)
-	require.LessOrEqual(t, len(htmlBody), maxBrowserExecuteBodyBytes)
+	require.LessOrEqual(t, len(htmlBody), maxBrowserReplBodyBytes)
 	prepared, err := prepareBrowserReplRequest(htmlCode, 60*time.Second)
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(prepared.bytes)-1, maxBrowserReplRequestLineBytes)
-	htmlResult := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: htmlCode})
+	htmlResult := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: htmlCode})
 	require.True(t, htmlResult.Success, "HTML-heavy request failed: %v", htmlResult.Error)
 	require.Equal(t, initial.ReplId, htmlResult.ReplId)
 
-	oversizedHTMLCode := strings.Repeat("<", maxBrowserExecuteBodyBytes-64)
+	oversizedHTMLCode := strings.Repeat("<", maxBrowserReplBodyBytes-64)
 	rawHTMLBody := []byte(`{"code":"` + oversizedHTMLCode + `"}`)
-	require.LessOrEqual(t, len(rawHTMLBody), maxBrowserExecuteBodyBytes)
-	resp, err = svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
-		Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: oversizedHTMLCode},
+	require.LessOrEqual(t, len(rawHTMLBody), maxBrowserReplBodyBytes)
+	resp, err = svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+		Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: oversizedHTMLCode},
 	})
 	require.NoError(t, err)
-	badRequest, ok = resp.(oapi.ExecuteBrowserCode400JSONResponse)
+	badRequest, ok = resp.(oapi.ExecuteBrowserRepl400JSONResponse)
 	require.True(t, ok, "expected a clean HTML-heavy 400, got %T", resp)
 	require.Contains(t, badRequest.Message, "code too large")
-	stillAlive = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	stillAlive = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
 	require.True(t, stillAlive.Success, "REPL did not survive HTML-heavy request: %v", stillAlive.Error)
 	require.Equal(t, initial.ReplId, stillAlive.ReplId)
 }
@@ -493,16 +407,16 @@ func TestBrowserReplTimeoutSecValidation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
 	for _, v := range []int{-5, 0, 301, 100000} {
-		resp, err := svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{
-			Body: &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1", TimeoutSec: &v},
+		resp, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+			Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1", TimeoutSec: &v},
 		})
 		require.NoError(t, err)
-		require.IsType(t, oapi.ExecuteBrowserCode400JSONResponse{}, resp, "timeout_sec=%d must be rejected", v)
+		require.IsType(t, oapi.ExecuteBrowserRepl400JSONResponse{}, resp, "timeout_sec=%d must be rejected", v)
 	}
 	require.Nil(t, svc.browserRepl, "invalid requests must not start a REPL")
 
 	for _, v := range []int{1, 300} {
-		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1", TimeoutSec: &v})
+		r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1", TimeoutSec: &v})
 		require.True(t, r.Success, "timeout_sec=%d must be accepted: %v", v, r.Error)
 	}
 }
@@ -542,6 +456,7 @@ type fakeCDPServer struct {
 	scrollY            int64
 	maxScrollY         int64
 	wheelDispatchCount int
+	screenshotData     string
 
 	http *httptest.Server
 }
@@ -555,6 +470,7 @@ func newFakeCDPServer(t *testing.T) *fakeCDPServer {
 		conns:            map[*websocket.Conn]struct{}{},
 		rendererHrefs:    map[string]string{"target-page-1": "https://example.com/"},
 		pendingHrefPolls: map[string]int{},
+		screenshotData:   fakeCDPTinyPNG,
 		targets: []fakeCDPTarget{
 			{ID: "target-page-1", Type: "page", Title: "Example Domain", URL: "https://example.com/"},
 			{ID: "target-internal-1", Type: "page", Title: "New Tab", URL: "chrome://newtab/"},
@@ -752,6 +668,26 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 	case "Page.enable", "DOM.enable", "Runtime.enable", "Network.enable":
 		return map[string]any{}, nil, nil
 	case "Page.navigate":
+		var p struct {
+			URL string `json:"url"`
+		}
+		_ = json.Unmarshal(params, &p)
+		if sessionID != "" && p.URL != "" {
+			targetID := strings.TrimPrefix(sessionID, "session-")
+			f.mu.Lock()
+			if f.delayCommit.Load() {
+				f.pendingHrefPolls[targetID] = 3
+			} else {
+				f.rendererHrefs[targetID] = p.URL
+			}
+			for i := range f.targets {
+				if f.targets[i].ID == targetID {
+					f.targets[i].URL = p.URL
+					break
+				}
+			}
+			f.mu.Unlock()
+		}
 		return map[string]any{"frameId": "frame-1", "loaderId": "loader-1"}, nil, nil
 	case "Page.getLayoutMetrics":
 		return map[string]any{
@@ -759,7 +695,10 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 			"cssContentSize":    map[string]any{"width": 800, "height": 2000},
 		}, nil, nil
 	case "Page.captureScreenshot":
-		return map[string]any{"data": fakeCDPTinyPNG}, nil, nil
+		f.mu.Lock()
+		data := f.screenshotData
+		f.mu.Unlock()
+		return map[string]any{"data": data}, nil, nil
 	case "Input.dispatchMouseEvent", "Input.insertText":
 		if method == "Input.dispatchMouseEvent" && strings.Contains(string(params), "mouseWheel") {
 			var p struct {
@@ -864,8 +803,12 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 		}
 	case expr == "document.readyState":
 		return "complete"
-	case strings.HasPrefix(expr, "(function (selector, requireVisible)"):
+	case strings.HasPrefix(expr, "(function elementState"):
 		return !strings.Contains(expr, `"#never"`)
+	case strings.HasPrefix(expr, "(function resolveFillTarget"):
+		return map[string]any{"status": "ready"}
+	case strings.HasPrefix(expr, "(async function resolveClickTarget"):
+		return map[string]any{"status": "ready", "x": 10, "y": 20}
 	case strings.HasPrefix(expr, "(function (selector, value)"),
 		strings.HasPrefix(expr, "(function (selector, key, opts)"):
 		return true

@@ -73,11 +73,13 @@ export OUTPUT_DIR=/tmp/recordings
 - **YAML Spec**: `GET /spec.yaml`
 - **JSON Spec**: `GET /spec.json`
 
-### Persistent Browser REPL
+### Browser REPL
 
-`POST /browser/execute` evaluates JavaScript in a persistent Node.js
-runtime that is preloaded with browser-control helpers and an unrestricted
-`cdp()` escape hatch.
+`POST /repl` evaluates JavaScript in the Browser REPL, a persistent Node.js
+runtime preloaded with browser-control helpers and an unrestricted `cdp()`
+escape hatch. See [`docs/repl.md`](docs/repl.md) for the execution model,
+output guidance, examples, failure semantics, limits, and a reference for every
+helper.
 
 - The runtime starts lazily on the first request and is owned directly by the
   API process. API restart/shutdown kills it (with Linux parent-death
@@ -86,7 +88,7 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   stable across calls and Chromium reconnects, and changes after an API
   restart, `reset: true`, an execution timeout, or a REPL crash.
 - Top-level `await`, persistent `let`/`const`/`var`/function/class bindings,
-  dynamic `import()`, and implicit final-expression results are supported.
+  and dynamic `import()` are supported.
   Persistent names are live context-global accessors, so closures and timers
   observe later-cell assignments. Function declarations are lowered through
   those accessors too, including same-cell closures and assignments. `var`
@@ -98,9 +100,9 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   failed declaration with a new name or use `reset: true`. Function `.name` is
   preserved; `Function.prototype.toString()` may expose the generated internal
   alias. Static top-level imports are rejected; use dynamic `import()` instead.
-  The implicit result is always the value of the final expression statement, so
-  end the snippet with an expression to return a value. Top-level `return` is
-  rejected.
+  Expression values are not returned automatically: use `repl.write(...)` for
+  final text and `repl.emitImage(...)` for images. Console methods are captured
+  for debugging and intermediate values. Top-level `return` is rejected.
 - A timeout is destructive (JavaScript cannot be interrupted safely): the API
   kills the REPL process group and responds with `repl_terminated: true` and
   the terminated REPL's ID. The next request lazily starts a fresh REPL.
@@ -108,29 +110,19 @@ runtime that is preloaded with browser-control helpers and an unrestricted
   `repl.write`, `stdout` = `console.log/info/debug`, `stderr` =
   `console.warn/error`) and images (`repl.emitImage`, base64 with MIME
   sniffing). Limits: 8 MiB per image, 16 MiB aggregate image data, 256 KiB
-  combined text, and 256 KiB serialized result per response; violations set
-  `content_truncated` / `result_truncated` instead of failing silently; stray
+  combined text per response; violations set `content_truncated` instead of
+  failing silently; stray
   output, including images emitted between executions, is capped at 1,000
   items and reports `content_truncated` when older items are discarded.
   Request bodies are limited to 8 MiB before strict decoding, and the API
   rejects any marshaled daemon request that would exceed
   the daemon's 8 MiB newline-delimited request-line limit without terminating
   the REPL. HTML-sensitive code is sent without JSON HTML escaping.
-- `capture_screenshot()` stays file-oriented (returns a VM path); emit it
+- `captureScreenshot()` stays file-oriented (returns a VM path); emit it
   explicitly with `await repl.emitImage({ path })`.
-- Helpers are exposed both as bare globals (`goto_url`, `page_info`,
-  `click_at_xy`, `type_text`, `fill_input`, `press_key`, `scroll`,
-  `capture_screenshot`, `list_tabs`, `current_tab`, `switch_tab`, `new_tab`,
-  `close_tab`, `ensure_real_tab`, `iframe_target`, `wait`, `wait_for_load`,
-  `wait_for_element`, `wait_for_network_idle`, `js`, `dispatch_key`,
-  `upload_file`, `http_get`, `start_recording`, `stop_recording`,
-  `recording_dir`, `drain_events`, `cdp`) and on the frozen `browser`
-  namespace. Recording helpers delegate to the Kernel recording API.
-  `press_key` accepts modifiers as an array (`["Control"]`) or an object
-  (`{ctrl: true}`). Wait-style helpers (`wait_for_load`, `wait_for_element`,
-  `wait_for_network_idle`) clamp their internal deadline to just below the
-  request's `timeout_sec`, so a routine wait miss returns the helper's own
-  error instead of tying the destructive execution timeout.
+- Helpers are exposed as bare globals and on the frozen `browser` namespace.
+  See [`docs/repl.md`](docs/repl.md#browser-helpers) for every helper's
+  signature and behavior.
 - The REPL connects to the browser through the DevTools proxy on
   `ws://127.0.0.1:9222`, lazily on the first browser helper call; pure
   Node.js code runs fine while Chromium is down, and the connection is

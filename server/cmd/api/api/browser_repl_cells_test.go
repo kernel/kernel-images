@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -11,7 +10,6 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -22,21 +20,21 @@ import (
 func TestBrowserReplPersistentClosureIdentity(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	requireExec(t, svc, `let closureCount = 0; function incrementClosureCount() { return ++closureCount; }`, nil)
-	requireExec(t, svc, `incrementClosureCount()`, float64(1))
-	requireExec(t, svc, `incrementClosureCount()`, float64(2))
-	requireExec(t, svc, `closureCount = 10`, float64(10))
-	requireExec(t, svc, `incrementClosureCount()`, float64(11))
-	requireExec(t, svc, `setTimeout(() => { closureCount += 5; }, 1); undefined`, nil)
-	requireExec(t, svc, `await new Promise(resolve => setTimeout(resolve, 10)); closureCount`, float64(16))
+	requireExec(t, svc, `repl.write(JSON.stringify(incrementClosureCount()))`, float64(1))
+	requireExec(t, svc, `repl.write(JSON.stringify(incrementClosureCount()))`, float64(2))
+	requireExec(t, svc, `closureCount = 10; repl.write(JSON.stringify(closureCount))`, float64(10))
+	requireExec(t, svc, `repl.write(JSON.stringify(incrementClosureCount()))`, float64(11))
+	requireExec(t, svc, `setTimeout(() => { closureCount += 5; }, 1)`, nil)
+	requireExec(t, svc, `await new Promise(resolve => setTimeout(resolve, 10)); repl.write(JSON.stringify(closureCount))`, float64(16))
 }
 
 func TestBrowserReplFunctionDeclarationsUsePersistentAccessor(t *testing.T) {
 	svc := newBrowserReplSvc(t)
-	requireExec(t, svc, `function replFunctionValue() { return 1; } function replFunctionClosure() { return replFunctionValue(); } replFunctionValue = () => 3; replFunctionClosure()`, float64(3))
+	requireExec(t, svc, `function replFunctionValue() { return 1; } function replFunctionClosure() { return replFunctionValue(); } replFunctionValue = () => 3; repl.write(JSON.stringify(replFunctionClosure()))`, float64(3))
 	requireExec(t, svc, `function replFunctionValue() { return 2; }`, nil)
-	requireExec(t, svc, `replFunctionClosure()`, float64(2))
-	requireExec(t, svc, `function replDuplicate() { return 1; } function replDuplicate() { return 2; } replDuplicate()`, float64(2))
-	requireExec(t, svc, `function replFunctionNameProbe() {} replFunctionNameProbe.name`, "replFunctionNameProbe")
+	requireExec(t, svc, `repl.write(JSON.stringify(replFunctionClosure()))`, float64(2))
+	requireExec(t, svc, `function replDuplicate() { return 1; } function replDuplicate() { return 2; } repl.write(JSON.stringify(replDuplicate()))`, float64(2))
+	requireExec(t, svc, `function replFunctionNameProbe() {} repl.write(JSON.stringify(replFunctionNameProbe.name))`, "replFunctionNameProbe")
 }
 
 func TestBrowserReplBracelessVarPreservesControlFlow(t *testing.T) {
@@ -45,14 +43,14 @@ func TestBrowserReplBracelessVarPreservesControlFlow(t *testing.T) {
 		code string
 		want any
 	}{
-		{`if (false) var bracelessIfX = 1, bracelessIfY = 2; typeof bracelessIfY`, "undefined"},
-		{`do var bracelessDoX = 1, bracelessDoY = 2; while (false); bracelessDoX + bracelessDoY`, float64(3)},
-		{`for (const bracelessForElement of [1, 2]) var bracelessForX = bracelessForElement, bracelessForY = bracelessForElement * 2; bracelessForY`, float64(4)},
-		{`var bracelessCommentX = 1 /* comma, stays */, bracelessCommentY = 2; bracelessCommentX + bracelessCommentY`, float64(3)},
-		{`var replVarLog = []; if (false) var replIfNoInit; replVarLog.push('ran'); replVarLog`, []interface{}{"ran"}},
-		{`do var replDoNoInit; while (false); typeof replDoNoInit`, "undefined"},
-		{`for (let replForIndex = 0; replForIndex < 1; replForIndex++) var replForNoInit; typeof replForNoInit`, "undefined"},
-		{`for (const replForOfIndex of [1]) var replForOfNoInit; typeof replForOfNoInit`, "undefined"},
+		{`if (false) var bracelessIfX = 1, bracelessIfY = 2; repl.write(JSON.stringify(typeof bracelessIfY))`, "undefined"},
+		{`do var bracelessDoX = 1, bracelessDoY = 2; while (false); repl.write(JSON.stringify(bracelessDoX + bracelessDoY))`, float64(3)},
+		{`for (const bracelessForElement of [1, 2]) var bracelessForX = bracelessForElement, bracelessForY = bracelessForElement * 2; repl.write(JSON.stringify(bracelessForY))`, float64(4)},
+		{`var bracelessCommentX = 1 /* comma, stays */, bracelessCommentY = 2; repl.write(JSON.stringify(bracelessCommentX + bracelessCommentY))`, float64(3)},
+		{`var replVarLog = []; if (false) var replIfNoInit; replVarLog.push('ran'); repl.write(JSON.stringify(replVarLog))`, []interface{}{"ran"}},
+		{`do var replDoNoInit; while (false); repl.write(JSON.stringify(typeof replDoNoInit))`, "undefined"},
+		{`for (let replForIndex = 0; replForIndex < 1; replForIndex++) var replForNoInit; repl.write(JSON.stringify(typeof replForNoInit))`, "undefined"},
+		{`for (const replForOfIndex of [1]) var replForOfNoInit; repl.write(JSON.stringify(typeof replForOfNoInit))`, "undefined"},
 	} {
 		requireExec(t, svc, test.code, test.want)
 	}
@@ -61,22 +59,22 @@ func TestBrowserReplBracelessVarPreservesControlFlow(t *testing.T) {
 func TestBrowserReplStrayOutputBufferResetsAndPropagatesTruncation(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	const size = 256 * 1024
-	requireExec(t, svc, fmt.Sprintf(`setTimeout(() => { repl.write("a".repeat(%d)); repl.write("dropped"); }, 10); "scheduled"`, size), "scheduled")
+	requireExec(t, svc, fmt.Sprintf(`setTimeout(() => { repl.write("a".repeat(%d)); repl.write("dropped"); }, 10)`, size), nil)
 	time.Sleep(50 * time.Millisecond)
 
-	r := requireExec(t, svc, `"drain"`, "drain")
+	r := requireExec(t, svc, `void 0`, nil)
 	require.True(t, *r.ContentTruncated)
 	require.Len(t, *r.Content, 1)
-	content, err := (*r.Content)[0].AsBrowserExecutionTextContent()
+	content, err := (*r.Content)[0].AsBrowserReplTextContent()
 	require.NoError(t, err)
 	require.Len(t, content.Text, size)
 
-	requireExec(t, svc, fmt.Sprintf(`setTimeout(() => repl.write("b".repeat(%d)), 10); "scheduled"`, size), "scheduled")
+	requireExec(t, svc, fmt.Sprintf(`setTimeout(() => repl.write("b".repeat(%d)), 10)`, size), nil)
 	time.Sleep(50 * time.Millisecond)
-	r = requireExec(t, svc, `"second drain"`, "second drain")
+	r = requireExec(t, svc, `void 0`, nil)
 	require.False(t, *r.ContentTruncated)
 	require.Len(t, *r.Content, 1)
-	content, err = (*r.Content)[0].AsBrowserExecutionTextContent()
+	content, err = (*r.Content)[0].AsBrowserReplTextContent()
 	require.NoError(t, err)
 	require.Len(t, content.Text, size)
 }
@@ -84,27 +82,27 @@ func TestBrowserReplStrayOutputBufferResetsAndPropagatesTruncation(t *testing.T)
 func TestBrowserReplStrayItemLimitsPropagateTruncation(t *testing.T) {
 	t.Run("text", func(t *testing.T) {
 		svc := newBrowserReplSvc(t)
-		requireExec(t, svc, `setTimeout(() => { for (let i = 0; i < 1500; i++) repl.write("s" + i); }, 10); "scheduled"`, "scheduled")
+		requireExec(t, svc, `setTimeout(() => { for (let i = 0; i < 1500; i++) repl.write("s" + i); }, 10)`, nil)
 		time.Sleep(50 * time.Millisecond)
-		r := requireExec(t, svc, `"drain"`, "drain")
+		r := requireExec(t, svc, `void 0`, nil)
 		require.True(t, *r.ContentTruncated)
 		require.Len(t, *r.Content, 1000)
-		first, err := (*r.Content)[0].AsBrowserExecutionTextContent()
+		first, err := (*r.Content)[0].AsBrowserReplTextContent()
 		require.NoError(t, err)
 		require.Equal(t, "s500", first.Text)
 	})
 
 	t.Run("images", func(t *testing.T) {
 		svc := newBrowserReplSvc(t)
-		requireExec(t, svc, `const png = Buffer.from([137, 80, 78, 71, 0, 0, 0, 0, 0]); setTimeout(async () => { for (let i = 0; i < 1500; i++) await repl.emitImage(png); }, 10); "scheduled"`, "scheduled")
+		requireExec(t, svc, `const png = Buffer.from([137, 80, 78, 71, 0, 0, 0, 0, 0]); setTimeout(async () => { for (let i = 0; i < 1500; i++) await repl.emitImage(png); }, 10)`, nil)
 		time.Sleep(50 * time.Millisecond)
-		r := requireExec(t, svc, `"drain"`, "drain")
+		r := requireExec(t, svc, `void 0`, nil)
 		require.True(t, *r.ContentTruncated)
 		require.Len(t, *r.Content, 1000)
 		for _, item := range *r.Content {
-			image, err := item.AsBrowserExecutionImageContent()
+			image, err := item.AsBrowserReplImageContent()
 			require.NoError(t, err)
-			require.Equal(t, oapi.BrowserExecutionImageContentType("image"), image.Type)
+			require.Equal(t, oapi.BrowserReplImageContentType("image"), image.Type)
 		}
 	})
 }
@@ -124,20 +122,20 @@ func TestBrowserReplNestedVarBindingsPersist(t *testing.T) {
 		{`try { throw new Error("expected"); } catch (error) { var browserReplCatchVar = 13; }`, "browserReplCatchVar", 13},
 	} {
 		requireExec(t, svc, test.declaration, nil)
-		requireExec(t, svc, test.name, test.value)
+		requireExec(t, svc, `repl.write(JSON.stringify(`+test.name+`))`, test.value)
 	}
 }
 
 func TestBrowserReplPartialDeclaratorInitialization(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	requireExecError(t, svc, `let partialDeclaratorA = 17, partialDeclaratorB = (() => { throw new Error("boom"); })();`, "boom")
-	requireExec(t, svc, `partialDeclaratorA`, float64(17))
+	requireExec(t, svc, `repl.write(JSON.stringify(partialDeclaratorA))`, float64(17))
 }
 
 func TestBrowserReplErrorStackUsesCellLines(t *testing.T) {
 	t.Run("after multiline function", func(t *testing.T) {
 		svc := newBrowserReplSvc(t)
-		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "function stackLineHelper() {\n  return 1;\n}\nconst stackLineValue = stackLineHelper();\nthrow new Error(\"line probe\");"})
+		r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "function stackLineHelper() {\n  return 1;\n}\nconst stackLineValue = stackLineHelper();\nthrow new Error(\"line probe\");"})
 		require.False(t, r.Success)
 		require.NotNil(t, r.Stack)
 		require.Contains(t, *r.Stack, ".mjs:5:", *r.Stack)
@@ -145,7 +143,7 @@ func TestBrowserReplErrorStackUsesCellLines(t *testing.T) {
 
 	t.Run("inside multiline function", func(t *testing.T) {
 		svc := newBrowserReplSvc(t)
-		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "function stackLineHelper() {\n  throw new Error(\"line probe\");\n}\nstackLineHelper();"})
+		r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "function stackLineHelper() {\n  throw new Error(\"line probe\");\n}\nstackLineHelper();"})
 		require.False(t, r.Success)
 		require.NotNil(t, r.Stack)
 		require.Contains(t, *r.Stack, ".mjs:2:", *r.Stack)
@@ -153,14 +151,14 @@ func TestBrowserReplErrorStackUsesCellLines(t *testing.T) {
 
 	t.Run("inside second multiline declarator", func(t *testing.T) {
 		svc := newBrowserReplSvc(t)
-		r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "let stackDeclaratorA = 1,\n    stackDeclaratorB = (() => { throw new Error(\"line2boom\") })();"})
+		r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "let stackDeclaratorA = 1,\n    stackDeclaratorB = (() => { throw new Error(\"line2boom\") })();"})
 		require.False(t, r.Success)
 		require.NotNil(t, r.Stack)
 		require.Contains(t, *r.Stack, ".mjs:2:")
 	})
 
 	svc := newBrowserReplSvc(t)
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "let stackLineProbe = 1;\nthrow new Error(\"line probe\");"})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "let stackLineProbe = 1;\nthrow new Error(\"line probe\");"})
 	require.False(t, r.Success)
 	require.NotNil(t, r.Stack)
 	require.True(t, strings.Contains(*r.Stack, "browser-repl-cell-") && strings.Contains(*r.Stack, ".mjs:2:"), *r.Stack)
@@ -174,31 +172,29 @@ func TestBrowserReplObjectRestDestructuring(t *testing.T) {
 	}{
 		{
 			name: "var",
-			code: `var { a, ...rest } = { a: 1, b: 2, c: 3 }; a + rest.b + rest.c`,
+			code: `var { a, ...rest } = { a: 1, b: 2, c: 3 }; repl.write(JSON.stringify(a + rest.b + rest.c))`,
 			want: float64(6),
 		},
 		{
 			name: "let",
-			code: `let { a, ...rest } = { a: 1, b: 2 }; a + rest.b`,
+			code: `let { a, ...rest } = { a: 1, b: 2 }; repl.write(JSON.stringify(a + rest.b))`,
 			want: float64(3),
 		},
 		{
 			name: "const",
-			code: `const { a, ...rest } = { a: 1, b: 2 }; a + rest.b`,
+			code: `const { a, ...rest } = { a: 1, b: 2 }; repl.write(JSON.stringify(a + rest.b))`,
 			want: float64(3),
 		},
 		{
 			name: "var for-of head",
-			code: `for (var { a, ...rest } of [{ a: 4, b: 5 }]) {} a + rest.b`,
+			code: `for (var { a, ...rest } of [{ a: 4, b: 5 }]) {} repl.write(JSON.stringify(a + rest.b))`,
 			want: float64(9),
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			svc := newBrowserReplSvc(t)
-			r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: test.code})
-			require.True(t, r.Success, "code failed: %v", r.Error)
-			require.Equal(t, test.want, r.Result)
+			requireExec(t, svc, test.code, test.want)
 		})
 	}
 }
@@ -207,31 +203,31 @@ func TestBrowserReplConstLetSemantics(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	await_ := "await new Promise(r => setTimeout(r, 1)); "
 
-	requireExec(t, svc, `const qaConst = 1; `+await_+`'declared'`, "declared")
-	requireExecError(t, svc, `const qaConst = 2; `+await_+`qaConst`, "Identifier 'qaConst' has already been declared")
-	requireExecError(t, svc, `qaConst = 99; `+await_+`qaConst`, "Assignment to constant variable.")
+	requireExec(t, svc, `const qaConst = 1; `+await_+`repl.write(JSON.stringify('declared'))`, "declared")
+	requireExecError(t, svc, `const qaConst = 2; `+await_+`repl.write(JSON.stringify(qaConst))`, "Identifier 'qaConst' has already been declared")
+	requireExecError(t, svc, `qaConst = 99; `+await_+`repl.write(JSON.stringify(qaConst))`, "Assignment to constant variable.")
 	requireExecError(t, svc, `qaConst = 99`, "Assignment to constant variable.")
-	requireExec(t, svc, `qaConst`, float64(1))
+	requireExec(t, svc, `repl.write(JSON.stringify(qaConst))`, float64(1))
 
-	requireExec(t, svc, `let qaLet = 10; `+await_+`qaLet`, float64(10))
-	requireExecError(t, svc, `let qaLet = 11; `+await_+`qaLet`, "Identifier 'qaLet' has already been declared")
-	requireExec(t, svc, `qaLet = 42; `+await_+`qaLet`, float64(42))
-	requireExec(t, svc, `qaLet`, float64(42))
+	requireExec(t, svc, `let qaLet = 10; `+await_+`repl.write(JSON.stringify(qaLet))`, float64(10))
+	requireExecError(t, svc, `let qaLet = 11; `+await_+`repl.write(JSON.stringify(qaLet))`, "Identifier 'qaLet' has already been declared")
+	requireExec(t, svc, `qaLet = 42; `+await_+`repl.write(JSON.stringify(qaLet))`, float64(42))
+	requireExec(t, svc, `repl.write(JSON.stringify(qaLet))`, float64(42))
 
-	requireExec(t, svc, `class QaClass { hi() { return 'hi' } }; `+await_+`new QaClass().hi()`, "hi")
+	requireExec(t, svc, `class QaClass { hi() { return 'hi' } }; `+await_+`repl.write(JSON.stringify(new QaClass().hi()))`, "hi")
 	requireExecError(t, svc, `class QaClass {}; `+await_+`1`, "Identifier 'QaClass' has already been declared")
-	requireExec(t, svc, `var qaVar = 1; `+await_+`qaVar`, float64(1))
-	requireExec(t, svc, `var qaVar = 2; `+await_+`qaVar`, float64(2))
-	requireExec(t, svc, `function qaFn() { return 1 }; `+await_+`qaFn()`, float64(1))
-	requireExec(t, svc, `function qaFn() { return 2 }; `+await_+`qaFn()`, float64(2))
+	requireExec(t, svc, `var qaVar = 1; `+await_+`repl.write(JSON.stringify(qaVar))`, float64(1))
+	requireExec(t, svc, `var qaVar = 2; `+await_+`repl.write(JSON.stringify(qaVar))`, float64(2))
+	requireExec(t, svc, `function qaFn() { return 1 }; `+await_+`repl.write(JSON.stringify(qaFn()))`, float64(1))
+	requireExec(t, svc, `function qaFn() { return 2 }; `+await_+`repl.write(JSON.stringify(qaFn()))`, float64(2))
 
-	requireExec(t, svc, `const { a: qaA, b: qaB } = { a: 1, b: 2 }; `+await_+`qaA + qaB`, float64(3))
+	requireExec(t, svc, `const { a: qaA, b: qaB } = { a: 1, b: 2 }; `+await_+`repl.write(JSON.stringify(qaA + qaB))`, float64(3))
 	requireExecError(t, svc, `qaA = 5`, "Assignment to constant variable.")
 	requireExec(t, svc, `const qaFastConst = 'fc'`, nil)
 	requireExecError(t, svc, `const qaFastConst = 'x'; `+await_+`1`, "Identifier 'qaFastConst' has already been declared")
-	requireExec(t, svc, `const qaAsyncConst = 'ac'; `+await_+`1`, float64(1))
+	requireExec(t, svc, `const qaAsyncConst = 'ac'; `+await_+`repl.write(JSON.stringify(1))`, float64(1))
 	requireExecError(t, svc, `const qaAsyncConst = 'x'`, "Identifier 'qaAsyncConst' has already been declared")
-	requireExec(t, svc, `qaAsyncConst`, "ac")
+	requireExec(t, svc, `repl.write(JSON.stringify(qaAsyncConst))`, "ac")
 
 	requireExecError(t, svc, `let qaFailLet = (() => { throw new Error('initfail') })(); 1`, "initfail")
 	requireExecError(t, svc, `let qaFailLet = 2; 2`, "Identifier 'qaFailLet' has already been declared")
@@ -243,29 +239,15 @@ func TestBrowserReplConstLetSemantics(t *testing.T) {
 
 	requireExec(t, svc, `const qaInitEscape = globalThis[Object.getOwnPropertyNames(globalThis).find(name => name.startsWith('__browser_repl_init_'))]`, nil)
 	requireExecError(t, svc, `qaInitEscape.qaConst = 2`, "revoked")
-	requireExec(t, svc, `typeof globalThis["__browser_repl_init_target"]`, "undefined")
-	requireExec(t, svc, `repl.id`, svc.browserRepl.id)
+	requireExec(t, svc, `repl.write(JSON.stringify(typeof globalThis["__browser_repl_init_target"]))`, "undefined")
+	requireExec(t, svc, `repl.write(JSON.stringify(repl.id))`, svc.browserRepl.id)
 }
 
-func TestBrowserReplTrailingBlockResult(t *testing.T) {
+func TestBrowserReplIgnoresExpressionValues(t *testing.T) {
 	svc := newBrowserReplSvc(t)
-
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
-		Code: `try { await new Promise(r => setTimeout(r, 1)); 'after' } catch { 'caught' }`,
-	})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await Promise.resolve(); ({ignored: true})`})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.NotNil(t, r.ResultRepr)
-	require.Equal(t, "undefined", *r.ResultRepr)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `try { 42 } catch {}`})
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "undefined", *r.ResultRepr)
-
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{
-		Code: `await new Promise(r => setTimeout(r, 1)); 'tail'`,
-	})
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "tail", r.Result)
+	require.Empty(t, *r.Content)
 }
 
 func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
@@ -279,7 +261,7 @@ func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
 	fake.swallowNextWheel = true
 	fake.mu.Unlock()
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done"`})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	fake.mu.Lock()
 	count := fake.wheelDispatchCount
@@ -290,14 +272,14 @@ func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
 	require.NotNil(t, r.Content)
 	sawNote := false
 	for _, item := range *r.Content {
-		txt, err := item.AsBrowserExecutionTextContent()
+		txt, err := item.AsBrowserReplTextContent()
 		if err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once") {
 			sawNote = true
 		}
 	}
 	require.True(t, sawNote, "the retry must be surfaced as a stderr content item, got %v", r.Content)
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done2"`})
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done2"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	fake.mu.Lock()
 	count = fake.wheelDispatchCount
@@ -307,7 +289,7 @@ func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
 	require.Equal(t, int64(1400), y)
 	if r.Content != nil {
 		for _, item := range *r.Content {
-			txt, err := item.AsBrowserExecutionTextContent()
+			txt, err := item.AsBrowserReplTextContent()
 			require.False(t, err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once"),
 				"no retry expected once the pipeline is awake")
 		}
@@ -317,7 +299,7 @@ func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
 	fake.maxScrollY = 0
 	fake.swallowNextWheel = true
 	fake.mu.Unlock()
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done3"`})
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done3"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	fake.mu.Lock()
 	count = fake.wheelDispatchCount
@@ -347,20 +329,20 @@ func TestBrowserReplScrollWaitsForAsyncWheelApplication(t *testing.T) {
 		return fake.wheelDispatchCount
 	}
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done"`})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Eventually(t, func() bool { return scrollY() == 700 }, 3*time.Second, 20*time.Millisecond,
 		"the wheel must apply exactly once")
 	require.Equal(t, 1, wheelCount(), "an asynchronously-applied wheel must not be retried")
 	if r.Content != nil {
 		for _, item := range *r.Content {
-			txt, err := item.AsBrowserExecutionTextContent()
+			txt, err := item.AsBrowserReplTextContent()
 			require.False(t, err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once"),
 				"no retry expected when the wheel applies within the settle window")
 		}
 	}
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await scroll(100, 100, 0, 700); "done2"`})
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done2"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	require.Eventually(t, func() bool { return scrollY() == 1400 }, 3*time.Second, 20*time.Millisecond,
 		"the second scroll must move the offset by exactly one delta")
@@ -373,7 +355,7 @@ func TestBrowserReplAttachActivatesTarget(t *testing.T) {
 
 	svc := newBrowserReplSvc(t)
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `await ensure_real_tab(); "done"`})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await ensureRealTab(); "done"`})
 	require.True(t, r.Success, "error: %v", r.Error)
 
 	fake.mu.Lock()
@@ -412,9 +394,8 @@ func TestBrowserReplOrphanedDaemonKilled(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1 + 1"})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1 + 1"})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, float64(2), r.Result)
 	require.NotEqual(t, "rogue0000000000000000000", r.ReplId)
 
 	deadline = time.Now().Add(3 * time.Second)
@@ -436,9 +417,9 @@ func TestBrowserReplOrphanedDaemonKilled(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	r2 := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "repl.id"})
+	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
-	require.Equal(t, r.ReplId, r2.Result)
+	require.Equal(t, r.ReplId, r2.ReplId)
 }
 
 func TestBrowserReplOrphanedDaemonKilledOnChildDeath(t *testing.T) {
@@ -449,7 +430,7 @@ func TestBrowserReplOrphanedDaemonKilledOnChildDeath(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	socketPath := browserReplSocketPath()
 
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1 + 1"})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1 + 1"})
 	require.True(t, r.Success, "error: %v", r.Error)
 
 	svc.browserReplMu.Lock()
@@ -482,9 +463,8 @@ func TestBrowserReplOrphanedDaemonKilledOnChildDeath(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	r = execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: "1 + 1"})
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1 + 1"})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, float64(2), r.Result)
 	require.NotEqual(t, "rogue0000000000000000000", r.ReplId)
 
 	deadline = time.Now().Add(3 * time.Second)
@@ -507,82 +487,37 @@ func TestBrowserReplOrphanedDaemonKilledOnChildDeath(t *testing.T) {
 	}
 }
 
-func TestBrowserReplRecordingIDAlias(t *testing.T) {
-	fake := newFakeCDPServer(t)
-
-	var mu sync.Mutex
-	var startBody, stopBody map[string]any
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		switch r.URL.Path {
-		case "/recording/start":
-			_ = json.Unmarshal(body, &startBody)
-		case "/recording/stop":
-			_ = json.Unmarshal(body, &stopBody)
-		}
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{}`))
-	}))
-	t.Cleanup(api.Close)
-	apiPort := api.URL[strings.LastIndex(api.URL, ":")+1:]
-
-	t.Setenv("CDP_ENDPOINT", fake.wsURL())
-	t.Setenv("KERNEL_API_PORT", apiPort)
-
-	svc := newBrowserReplSvc(t)
-
-	r := execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: `
-		const started = await start_recording({ recorder_id: "custom-rec-1" });
-		const stopped = await stop_recording({ recorder_id: "custom-rec-1" });
-		({ started: started.recorder_id, stopped: stopped.recorder_id })
-	`})
-	require.True(t, r.Success, "error: %v", r.Error)
-	res, ok := r.Result.(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "custom-rec-1", res["started"])
-	require.Equal(t, "custom-rec-1", res["stopped"])
-
-	mu.Lock()
-	defer mu.Unlock()
-	require.Equal(t, "custom-rec-1", startBody["id"], "recorder_id maps to the API's id field")
-	require.NotContains(t, startBody, "recorder_id", "the alias must not leak to the API")
-	require.Equal(t, "custom-rec-1", stopBody["id"])
-	require.NotContains(t, stopBody, "recorder_id")
-}
-
-func TestStrictBrowserExecuteBodyMiddleware(t *testing.T) {
+func TestStrictBrowserReplBodyMiddleware(t *testing.T) {
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 	})
-	handler := StrictBrowserExecuteBodyMiddleware(next)
+	handler := StrictBrowserReplBodyMiddleware(next)
 
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(`{"code":"1","bogus":1}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repl", strings.NewReader(`{"code":"1","bogus":1}`)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), `unknown field \"bogus\"`)
 
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(`{"code":"1","timeout_sec":5,"reset":false}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repl", strings.NewReader(`{"code":"1","timeout_sec":5,"reset":false}`)))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.JSONEq(t, `{"code":"1","timeout_sec":5,"reset":false}`, rec.Body.String())
 
 	rec = httptest.NewRecorder()
-	huge := `{"code":"` + strings.Repeat("x", maxBrowserExecuteBodyBytes) + `"}`
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(huge)))
+	huge := `{"code":"` + strings.Repeat("x", maxBrowserReplBodyBytes) + `"}`
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repl", strings.NewReader(huge)))
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 	require.Contains(t, rec.Body.String(), "request body exceeds")
 
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/browser/execute", strings.NewReader(`{nope`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repl", strings.NewReader(`{nope`)))
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/browser/execute", nil))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repl", nil))
 	require.Equal(t, http.StatusOK, rec.Code)
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/playwright/execute", strings.NewReader(`{"code":"1","bogus":1}`)))

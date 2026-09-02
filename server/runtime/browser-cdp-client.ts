@@ -72,7 +72,7 @@ const INTERNAL_URL_PREFIXES = [
   'chrome-untrusted://',
   'devtools://',
   'edge://',
-  'about:srcdoc',
+  'about:',
 ];
 
 export function isInternalUrl(url: string): boolean {
@@ -246,7 +246,7 @@ export class CdpClient {
       }
     }
 
-    if (method.startsWith('Network.')) {
+    if (method.startsWith('Network.') && sessionId === this.sessionId) {
       this.lastNetworkActivity = Date.now();
       const requestId = params?.requestId;
       if (method === 'Network.requestWillBeSent' && requestId) {
@@ -384,7 +384,7 @@ export class CdpClient {
     }));
   }
 
-  async attach(targetId: string): Promise<void> {
+  async attach(targetId: string): Promise<string> {
     await this.ensureConnected();
     const res = await this.browserCommand<{ sessionId: string }>('Target.attachToTarget', {
       targetId,
@@ -393,6 +393,8 @@ export class CdpClient {
     this.sessionId = res.sessionId;
     this.targetId = targetId;
     this.pendingDialog = null;
+    this.inFlightRequests.clear();
+    this.lastNetworkActivity = Date.now();
     // Make the attached target the foreground tab. In headless Chromium a
     // hidden tab's JavaScript dialogs are auto-cancelled
     // (Page.javascriptDialogClosed with result:false fires immediately
@@ -406,6 +408,7 @@ export class CdpClient {
     }
     this.rendererResponsive = await this.enableDomains(this.sessionId);
     await this.dismissStaleDialog();
+    return this.sessionId;
   }
 
   private async enableDomains(sessionId: string): Promise<boolean> {
@@ -441,7 +444,7 @@ export class CdpClient {
       dismissed = this.pendingDialog ?? { type: 'unknown', message: '', since: Date.now() };
     } catch {
       // No dialog is showing (or the command could not be answered in
-      // time). Leave pendingDialog untouched so page_info still reports a
+      // time). Leave pendingDialog untouched so pageInfo still reports a
       // detected dialog and the caller can retry the dismissal explicitly.
     }
     if (dismissed) {
@@ -573,19 +576,7 @@ export class CdpClient {
     });
     const sessionId = res.sessionId;
     try {
-      const evalRes = await this.send<any>(
-        'Runtime.evaluate',
-        { expression, awaitPromise: true, returnByValue: true },
-        sessionId,
-      );
-      if (evalRes.exceptionDetails) {
-        const desc =
-          evalRes.exceptionDetails.exception?.description ??
-          evalRes.exceptionDetails.text ??
-          'evaluation failed';
-        throw new Error(desc);
-      }
-      return evalRes.result?.value as T;
+      return await this.evaluate(sessionId, expression);
     } finally {
       try {
         await this.browserCommand('Target.detachFromTarget', { sessionId });
@@ -595,18 +586,39 @@ export class CdpClient {
     }
   }
 
-  drainEvents(): CdpEvent[] {
-    const mine: CdpEvent[] = [];
-    const rest: CdpEvent[] = [];
-    for (const ev of this.events) {
-      if (ev.sessionId && ev.sessionId === this.sessionId) {
-        mine.push(ev);
-      } else {
-        rest.push(ev);
-      }
+  async evaluate<T = any>(sessionId: string, expression: string): Promise<T> {
+    const evalRes = await this.send<any>(
+      'Runtime.evaluate',
+      { expression, awaitPromise: true, returnByValue: true },
+      sessionId,
+    );
+    if (evalRes.exceptionDetails || evalRes.result?.subtype === 'error') {
+      const desc =
+        evalRes.result?.description ??
+        evalRes.exceptionDetails?.exception?.description ??
+        evalRes.exceptionDetails?.text ??
+        'evaluation failed';
+      throw new Error(desc);
     }
-    this.events = rest;
-    return mine;
+    if ('value' in (evalRes.result ?? {})) {
+      return evalRes.result.value as T;
+    }
+    return this.decodeUnserializable(evalRes.result?.unserializableValue) as T;
+  }
+
+  private decodeUnserializable(value: unknown): unknown {
+    if (value === 'NaN') return Number.NaN;
+    if (value === 'Infinity') return Number.POSITIVE_INFINITY;
+    if (value === '-Infinity') return Number.NEGATIVE_INFINITY;
+    if (value === '-0') return -0;
+    if (typeof value === 'string' && /^-?\d+n$/.test(value)) return BigInt(value.slice(0, -1));
+    return undefined;
+  }
+
+  drainEvents(): CdpEvent[] {
+    const events = this.events;
+    this.events = [];
+    return events;
   }
 
   networkIdleState(): { inFlight: number; lastActivity: number } {

@@ -1,14 +1,35 @@
-# Persistent Browser REPL API
+# Browser REPL API
 
 **Status: Implemented**
 
 ## Decision
 
-`POST /browser/execute` evaluates JavaScript in a persistent Node runtime preloaded with browser helpers. The public contract is a browser runtime, not a CDP executor; raw CDP remains available through `cdp()`.
+`POST /repl` evaluates JavaScript in the Browser REPL, a persistent Node runtime preloaded with browser helpers. The public contract is a browser runtime, not a CDP executor; raw CDP remains available through `cdp()`.
 
 The API process directly owns one lazily started REPL child. State is intentionally lost after API restart, explicit reset, timeout, crash, OOM, or protocol corruption. Each new child receives a CUID2 `repl_id`.
 
 This endpoint is unrestricted code execution inside the browser VM. Its `vm.Context` stores state but is not a security boundary.
+
+## Public API surface
+
+The REPL is scoped to an individual browser instance, so its HTTP path does not repeat the browser namespace:
+
+```text
+POST /repl
+operationId: executeBrowserRepl
+```
+
+The OpenAPI contract uses `BrowserReplRequest`, `BrowserReplResult`, `BrowserReplContent`, `BrowserReplTextContent`, and `BrowserReplImageContent`. The generated Go handler is `ExecuteBrowserRepl`, and strict request-body decoding is applied specifically to `POST /repl`.
+
+This naming is intended to support an object-oriented SDK surface without exposing the instance transport:
+
+```ts
+const browser = await kernel.browsers.create();
+await browser.repl({code: "const x = 41"});
+await browser.repl({code: "x + 1"});
+```
+
+SDK implementation lives outside this repository.
 
 ## HTTP contract
 
@@ -16,7 +37,7 @@ Request:
 
 ```json
 {
-  "code": "const title = (await page_info()).title; repl.write(title); title",
+  "code": "const title = (await pageInfo()).title; repl.write(title); title",
   "timeout_sec": 60,
   "reset": false
 }
@@ -27,7 +48,7 @@ Request:
 - Unknown fields are rejected.
 - The API rejects request bodies and marshaled daemon envelopes above 8 MiB.
 
-Successful responses contain `success`, `repl_id`, the final expression in `result` or `result_repr`, ordered `content`, truncation flags, and `duration_ms`. Failures may additionally contain `error`, `stack`, and `repl_terminated`.
+Successful responses contain `success`, `repl_id`, ordered `content`, `content_truncated`, and `duration_ms`. Failures may additionally contain `error`, `stack`, and `repl_terminated`.
 
 `repl_id` stays stable across normal calls and Chromium reconnects. A destructive failure response carries the terminated ID; no replacement starts until the next request.
 
@@ -40,27 +61,26 @@ Content is an ordered union:
 {image, mime_type: image/*, data_b64}
 ```
 
-`result` is limited to JSON-compatible primitives, arrays, plain objects, and Dates, serialized without invoking user hooks. Other values use bounded `util.inspect` in `result_repr`; this preserves distinctions such as undefined versus null and represents BigInt, circular values, Maps, regular expressions, and class instances.
+Expression values are not returned automatically. Output is optional: an execution may produce zero content, use `repl.write(...)` or `repl.emitImage(...)`, call console methods, or combine them.
 
 Limits:
 
 - 8 MiB per image
 - 16 MiB aggregate images per response
 - 256 KiB text per response
-- 256 KiB serialized result
 - 1,000 buffered items produced between executions
 - 48 MiB daemon response
 
-Dropping or truncating output sets `content_truncated` or `result_truncated`.
+Dropping or truncating output sets `content_truncated`.
 
 ## Evaluation model
 
-Each request is one JavaScript cell evaluated as a fresh `vm.SourceTextModule`. Meriyah, installed from an exact lockfile, identifies declarations, binding patterns, static module syntax, and the final expression.
+Each request is one JavaScript cell evaluated as a fresh `vm.SourceTextModule`. Meriyah, installed from an exact lockfile, identifies declarations, binding patterns, and static module syntax.
 
 The runtime supports:
 
 - top-level `await`
-- implicit final-expression results
+- optional text and image output through `repl` and console methods
 - persistent `var`, `let`, `const`, function, and class bindings
 - dynamic `import()`
 
@@ -77,22 +97,11 @@ Lowering covers destructuring, nested top-level `var`, loop declaration heads, f
 Helpers are available both as bare globals and through a frozen `browser` object:
 
 ```js
-await goto_url("https://example.com");
-await browser.goto_url("https://example.com");
+await gotoUrl("https://example.com");
+await browser.gotoUrl("https://example.com");
 ```
 
-The v1 helper surface is:
-
-```text
-cdp, drain_events, goto_url, page_info, click_at_xy, type_text,
-fill_input, press_key, scroll, dispatch_key, capture_screenshot,
-list_tabs, current_tab, switch_tab, new_tab, close_tab, ensure_real_tab,
-iframe_target, wait, wait_for_load, wait_for_element,
-wait_for_network_idle, js, upload_file, http_get, start_recording,
-stop_recording, recording_dir
-```
-
-Recording helpers delegate to the existing recording API. Wait helpers and CDP commands clamp their deadlines below the request deadline so routine helper failures return cleanly instead of destructively timing out the REPL.
+The complete helper reference, including signatures, behavior, and examples, lives in [`server/docs/repl.md`](../server/docs/repl.md). It covers navigation and page state, input, screenshots, tabs and iframe targets, waiting, page JavaScript, uploads, HTTP, raw CDP, and event draining. Wait helpers and CDP commands clamp their deadlines below the request deadline so routine helper failures return cleanly instead of destructively timing out the REPL.
 
 ### REPL helpers
 
@@ -104,10 +113,10 @@ type Repl = {
 };
 ```
 
-`repl.write` emits text without adding a newline. Console log/info/debug use stdout; warn/error use stderr. `emitImage` accepts PNG, JPEG, or WebP bytes, an image data URL, or a VM-local path. Screenshots remain file-oriented and are emitted explicitly:
+These helpers are optional. `repl.write` emits a dedicated `write` content item without adding a newline and formats non-string values with bounded inspection. Console log/info/debug are captured as stdout and warn/error as stderr. Expression values are intentionally ignored, and an execution may produce no output. `emitImage` accepts PNG, JPEG, or WebP bytes, an image data URL, or a VM-local path. Screenshots remain file-oriented and can optionally be emitted:
 
 ```js
-const path = await capture_screenshot("/tmp/page.png");
+const path = await captureScreenshot("/tmp/page.png");
 await repl.emitImage({path});
 ```
 
@@ -141,7 +150,7 @@ Coverage includes:
 
 - binding persistence, mutation, redeclaration, TDZ, closures, destructuring, partial failure, top-level await, dynamic import, and reset
 - stable/new `repl_id` behavior across normal calls, browser restart, timeout, crash, OOM, and API shutdown
-- strict serialization and absence of output leakage after terminated executions
-- ordered text/images, edge-value representation, pollution resistance, and all limits
-- every seeded browser helper, reconnect, tabs, input, iframe, dialog, network idle, uploads, screenshots, and recording delegation
+- zero-output executions, ordered text/images, and absence of output leakage after terminated executions
+- edge-value representation, pollution resistance, and all output limits
+- every seeded browser helper, reconnect, tabs, input, iframe, dialog, network idle, uploads, and screenshots
 - both headless and headful images plus OpenAPI regeneration and SSE regression checks

@@ -24,14 +24,14 @@ import (
 
 const (
 	defaultBrowserReplSocket = "/tmp/browser-repl.sock"
-	defaultBrowserReplScript = "/usr/local/lib/browser-repl.js"
+	defaultBrowserReplScript = "/usr/local/lib/browser-repl/browser-repl.js"
 	defaultBrowserReplHeapMB = 512
 
 	// The daemon caps each newline-delimited request line at this size.
 	// API requests are marshaled into this wire format before they are sent.
 	maxBrowserReplRequestLineBytes = 8 * 1024 * 1024
 	// Keep the HTTP envelope bounded before it is copied for strict decoding.
-	maxBrowserExecuteBodyBytes = maxBrowserReplRequestLineBytes
+	maxBrowserReplBodyBytes = maxBrowserReplRequestLineBytes
 
 	// browserReplStartupTimeout is how long the API waits for a freshly
 	// spawned REPL child to begin accepting socket connections.
@@ -288,12 +288,9 @@ type browserReplDaemonResponse struct {
 	ID               string            `json:"id"`
 	ReplID           string            `json:"repl_id"`
 	Success          bool              `json:"success"`
-	Result           json.RawMessage   `json:"result,omitempty"`
-	ResultRepr       *string           `json:"result_repr,omitempty"`
 	Error            string            `json:"error,omitempty"`
 	Stack            *string           `json:"stack,omitempty"`
 	Content          []json.RawMessage `json:"content,omitempty"`
-	ResultTruncated  bool              `json:"result_truncated"`
 	ContentTruncated bool              `json:"content_truncated"`
 	// TimedOut marks a daemon-side execution timeout. The daemon cannot
 	// interrupt the abandoned execution, so the API must kill the child
@@ -435,42 +432,41 @@ func isTimeoutErr(err error) bool {
 // browserReplTerminatedResponse builds the 200 response for a request that
 // destroyed the REPL (timeout, crash, or protocol corruption). It populates
 // the same optional fields as other failure paths (duration_ms and the
-// truncation flags) so clients can read them unconditionally; partial
+// content truncation flag) so clients can read them unconditionally; partial
 // content is never available here because the child died without answering.
-func browserReplTerminatedResponse(replID string, err error, durationMs int) oapi.ExecuteBrowserCode200JSONResponse {
+func browserReplTerminatedResponse(replID string, err error, durationMs int) oapi.ExecuteBrowserRepl200JSONResponse {
 	errMsg := err.Error()
 	terminated := true
 	notTruncated := false
-	return oapi.ExecuteBrowserCode200JSONResponse{
+	return oapi.ExecuteBrowserRepl200JSONResponse{
 		Success:          false,
 		ReplId:           replID,
 		Error:            &errMsg,
 		ReplTerminated:   &terminated,
 		DurationMs:       &durationMs,
-		ResultTruncated:  &notTruncated,
 		ContentTruncated: &notTruncated,
 	}
 }
 
-// StrictBrowserExecuteBodyMiddleware enforces additionalProperties: false on
-// POST /browser/execute. The generated strict-server decoder silently drops
+// StrictBrowserReplBodyMiddleware enforces additionalProperties: false on
+// POST /repl. The generated strict-server decoder silently drops
 // unknown fields, so without this middleware a request like
 // {"code":"1","bogus":1} would be accepted despite the published schema.
 // Malformed JSON and type errors are left to the strict handler's own 400
 // handling; only unknown fields are policed here.
-func StrictBrowserExecuteBodyMiddleware(next http.Handler) http.Handler {
+func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/browser/execute" || r.Body == nil {
+		if r.Method != http.MethodPost || r.URL.Path != "/repl" || r.Body == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
-		limitedBody := http.MaxBytesReader(w, r.Body, maxBrowserExecuteBodyBytes)
+		limitedBody := http.MaxBytesReader(w, r.Body, maxBrowserReplBodyBytes)
 		body, err := io.ReadAll(limitedBody)
 		_ = r.Body.Close()
 		if err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
-				http.Error(w, fmt.Sprintf("request body exceeds %d bytes", maxBrowserExecuteBodyBytes), http.StatusRequestEntityTooLarge)
+				http.Error(w, fmt.Sprintf("request body exceeds %d bytes", maxBrowserReplBodyBytes), http.StatusRequestEntityTooLarge)
 				return
 			}
 			http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -480,7 +476,7 @@ func StrictBrowserExecuteBodyMiddleware(next http.Handler) http.Handler {
 
 		dec := json.NewDecoder(bytes.NewReader(body))
 		dec.DisallowUnknownFields()
-		var probe oapi.ExecuteBrowserCodeRequest
+		var probe oapi.BrowserReplRequest
 		if err := dec.Decode(&probe); err != nil && strings.HasPrefix(err.Error(), "json: unknown field") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
@@ -493,17 +489,17 @@ func StrictBrowserExecuteBodyMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// ExecuteBrowserCode implements POST /browser/execute. The API process owns
+// ExecuteBrowserRepl implements POST /repl. The API process owns
 // the REPL child directly: lazy startup, CUID2 repl_id, destructive timeout,
 // explicit reset, and termination on API shutdown.
-func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.ExecuteBrowserCodeRequestObject) (oapi.ExecuteBrowserCodeResponseObject, error) {
+func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {
 	s.browserReplMu.Lock()
 	defer s.browserReplMu.Unlock()
 
 	log := logger.FromContext(ctx)
 
 	if request.Body == nil {
-		return oapi.ExecuteBrowserCode400JSONResponse{
+		return oapi.ExecuteBrowserRepl400JSONResponse{
 			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
 				Message: "request body is required",
 			},
@@ -513,7 +509,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 	reset := request.Body.Reset != nil && *request.Body.Reset
 	code := request.Body.Code
 	if code == "" && !reset {
-		return oapi.ExecuteBrowserCode400JSONResponse{
+		return oapi.ExecuteBrowserRepl400JSONResponse{
 			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
 				Message: "code is required (it may be empty only when reset is true)",
 			},
@@ -523,7 +519,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 	timeout := 60 * time.Second
 	if request.Body.TimeoutSec != nil {
 		if *request.Body.TimeoutSec < browserReplMinTimeoutSec || *request.Body.TimeoutSec > browserReplMaxTimeoutSec {
-			return oapi.ExecuteBrowserCode400JSONResponse{
+			return oapi.ExecuteBrowserRepl400JSONResponse{
 				BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
 					Message: fmt.Sprintf("timeout_sec must be between %d and %d", browserReplMinTimeoutSec, browserReplMaxTimeoutSec),
 				},
@@ -537,7 +533,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 		var err error
 		preparedRequest, err = prepareBrowserReplRequest(code, timeout)
 		if err != nil {
-			return oapi.ExecuteBrowserCode400JSONResponse{
+			return oapi.ExecuteBrowserRepl400JSONResponse{
 				BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
 					Message: err.Error(),
 				},
@@ -551,7 +547,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 
 	if err := s.ensureBrowserReplLocked(ctx); err != nil {
 		log.Error("failed to start browser REPL", "error", err)
-		return oapi.ExecuteBrowserCode500JSONResponse{
+		return oapi.ExecuteBrowserRepl500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
 				Message: fmt.Sprintf("failed to start browser REPL: %v", err),
 			},
@@ -562,7 +558,7 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 
 	// Reset with no code: just start a fresh REPL.
 	if code == "" {
-		return oapi.ExecuteBrowserCode200JSONResponse{
+		return oapi.ExecuteBrowserRepl200JSONResponse{
 			Success: true,
 			ReplId:  replID,
 		}, nil
@@ -624,23 +620,13 @@ func (s *ApiService) ExecuteBrowserCode(ctx context.Context, request oapi.Execut
 
 // browserReplMapResponse converts a daemon response into the public API
 // shape, decoding typed content items through the generated union.
-func browserReplMapResponse(resp *browserReplDaemonResponse) (oapi.ExecuteBrowserCode200JSONResponse, error) {
-	out := oapi.ExecuteBrowserCode200JSONResponse{
+func browserReplMapResponse(resp *browserReplDaemonResponse) (oapi.ExecuteBrowserRepl200JSONResponse, error) {
+	out := oapi.ExecuteBrowserRepl200JSONResponse{
 		Success:          resp.Success,
 		ReplId:           resp.ReplID,
-		ResultRepr:       resp.ResultRepr,
 		Stack:            resp.Stack,
-		ResultTruncated:  &resp.ResultTruncated,
 		ContentTruncated: &resp.ContentTruncated,
 		DurationMs:       &resp.DurationMs,
-	}
-
-	if len(resp.Result) > 0 && string(resp.Result) != "null" {
-		var result interface{}
-		if err := json.Unmarshal(resp.Result, &result); err != nil {
-			return out, fmt.Errorf("failed to decode result: %w", err)
-		}
-		out.Result = result
 	}
 
 	if resp.Error != "" {
@@ -648,9 +634,9 @@ func browserReplMapResponse(resp *browserReplDaemonResponse) (oapi.ExecuteBrowse
 	}
 
 	if resp.Content != nil {
-		content := make([]oapi.BrowserExecutionContent, 0, len(resp.Content))
+		content := make([]oapi.BrowserReplContent, 0, len(resp.Content))
 		for i, raw := range resp.Content {
-			var item oapi.BrowserExecutionContent
+			var item oapi.BrowserReplContent
 			if err := json.Unmarshal(raw, &item); err != nil {
 				return out, fmt.Errorf("failed to decode content item %d: %w", i, err)
 			}

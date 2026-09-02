@@ -1308,12 +1308,12 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
-  /browser/execute:
+  /repl:
     post:
-      summary: Execute JavaScript in a persistent browser REPL
+      summary: Execute JavaScript in the Browser REPL
       description: |
-        Execute code in a persistent Node.js runtime preloaded with browser-control
-        helpers (goto_url, page_info, click_at_xy, capture_screenshot, tab management,
+        Execute code in the Browser REPL, a persistent Node.js runtime preloaded with browser-control
+        helpers (gotoUrl, pageInfo, click, captureScreenshot, tab management,
         and more) plus an unrestricted `cdp()` escape hatch. Top-level bindings persist
         across calls until the API process exits, the REPL is reset, or the REPL is
         terminated after a crash or timeout. Persistent names are live context-global
@@ -1321,7 +1321,9 @@ paths:
         use the same accessor path, including same-cell closures and assignments. `var` in
         top-level nested statements persists, while function and nested-block locals do not.
         Lexical names are reserved after linking, so retry a failed declaration with a new
-        name or reset the REPL.
+        name or reset the REPL. Expression values are not returned automatically.
+        Output is optional: code may produce no content, call `repl.write(...)` or
+        `repl.emitImage(...)`, use console methods, or combine those mechanisms.
 
         The runtime starts lazily on the first request and is owned directly by the API
         process: an API restart kills it, and the next request starts a fresh REPL with a
@@ -1331,21 +1333,21 @@ paths:
 
         This endpoint is unrestricted code execution inside the browser VM, equivalent in
         trust level to the process and Playwright execution APIs. It is not sandboxed.
-      operationId: executeBrowserCode
+      operationId: executeBrowserRepl
       requestBody:
         description: JSON request bodies are limited to 8 MiB before strict decoding. The API rejects a marshaled daemon request over the daemon's 8 MiB newline-delimited request-line limit as a non-destructive 400.
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ExecuteBrowserCodeRequest"
+              $ref: "#/components/schemas/BrowserReplRequest"
       responses:
         "200":
           description: Code executed (success or structured failure)
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ExecuteBrowserCodeResult"
+                $ref: "#/components/schemas/BrowserReplResult"
         "400":
           $ref: "#/components/responses/BadRequestError"
         "500":
@@ -3967,9 +3969,9 @@ components:
           type: string
           description: Standard error from the execution
       additionalProperties: false
-    ExecuteBrowserCodeRequest:
+    BrowserReplRequest:
       type: object
-      description: Request to execute code in the persistent browser REPL
+      description: Request to execute code in the Browser REPL
       required: [code]
       properties:
         code:
@@ -3988,7 +3990,9 @@ components:
             linking, so retry a failed declaration with a new name or reset the REPL.
             A failed lexical initializer leaves that name in the TDZ; assignments
             cannot initialize it. Static top-level imports are rejected; use dynamic
-            `import()`. The implicit result is always the value of the final expression statement.
+            `import()`. Expression values are not returned automatically. Output is
+            optional; code may produce no content, call `repl.write(...)` or
+            `repl.emitImage(...)`, use console methods, or combine those mechanisms.
             May be empty only when reset is true. The HTTP body is limited to 8 MiB,
             and the API rejects a fully encoded daemon request over the daemon's 8 MiB
             request-line limit without terminating the REPL.
@@ -4003,9 +4007,9 @@ components:
           description: Terminate the current REPL, start a fresh one, and then evaluate code.
           default: false
       additionalProperties: false
-    ExecuteBrowserCodeResult:
+    BrowserReplResult:
       type: object
-      description: Result of code execution in the persistent browser REPL
+      description: Result of Browser REPL code execution
       required: [success, repl_id]
       properties:
         success:
@@ -4017,11 +4021,6 @@ components:
             CUID2 identifying the exact state-holding REPL process used for this
             execution. Stable across calls and Chromium reconnects; changes after
             an API restart, explicit reset, execution timeout, or REPL crash.
-        result:
-          description: JSON-compatible value of the final expression (if any)
-        result_repr:
-          type: string
-          description: Bounded util.inspect rendering when the final value is not JSON-compatible
         error:
           type: string
           description: Error message if execution failed
@@ -4030,12 +4029,9 @@ components:
           description: Stack trace if execution failed
         content:
           type: array
-          description: Ordered text/image output produced by the execution
+          description: Optional ordered text/image output produced by the execution; omitted or empty when no output was produced
           items:
-            $ref: "#/components/schemas/BrowserExecutionContent"
-        result_truncated:
-          type: boolean
-          description: True if the serialized result exceeded the response limit and was replaced by result_repr
+            $ref: "#/components/schemas/BrowserReplContent"
         content_truncated:
           type: boolean
           description: True if text or image output was dropped or truncated due to response limits, including the 1,000-item cap on stray output buffered between executions
@@ -4049,17 +4045,17 @@ components:
           type: integer
           description: Wall-clock execution time in milliseconds
       additionalProperties: false
-    BrowserExecutionContent:
+    BrowserReplContent:
       description: Ordered discriminated union of execution output items.
       oneOf:
-        - $ref: "#/components/schemas/BrowserExecutionTextContent"
-        - $ref: "#/components/schemas/BrowserExecutionImageContent"
+        - $ref: "#/components/schemas/BrowserReplTextContent"
+        - $ref: "#/components/schemas/BrowserReplImageContent"
       discriminator:
         propertyName: type
         mapping:
-          text: "#/components/schemas/BrowserExecutionTextContent"
-          image: "#/components/schemas/BrowserExecutionImageContent"
-    BrowserExecutionTextContent:
+          text: "#/components/schemas/BrowserReplTextContent"
+          image: "#/components/schemas/BrowserReplImageContent"
+    BrowserReplTextContent:
       type: object
       required: [type, channel, text]
       properties:
@@ -4075,7 +4071,7 @@ components:
         text:
           type: string
       additionalProperties: false
-    BrowserExecutionImageContent:
+    BrowserReplImageContent:
       type: object
       required: [type, mime_type, data_b64]
       properties:

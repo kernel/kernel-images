@@ -18,7 +18,6 @@ export interface CellAnalysis {
   bindings: CellBinding[];
   edits: SourceEdit[];
   hoistedFunctions: Array<{ name: string; alias: string }>;
-  finalExpression?: { statementStart: number; statementEnd: number; expressionStart: number; expressionEnd: number };
 }
 
 export const STATIC_IMPORT_ERROR =
@@ -325,22 +324,7 @@ export function analyzeCell(
   }
   const hoistedFunctions = [...hoistedByName.values()];
 
-  const last = ast.body[ast.body.length - 1];
-  return {
-    source,
-    bindings,
-    edits,
-    hoistedFunctions,
-    finalExpression:
-      last?.type === 'ExpressionStatement'
-        ? {
-            statementStart: range(last)[0],
-            statementEnd: range(last)[1],
-            expressionStart: range(last.expression)[0],
-            expressionEnd: range(last.expression)[1],
-          }
-        : undefined,
-  };
+  return { source, bindings, edits, hoistedFunctions };
 }
 
 export function applyEdits(source: string, edits: SourceEdit[]): string {

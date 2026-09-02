@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os/exec"
@@ -12,18 +13,34 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func replError(r *instanceoapi.ExecuteBrowserCodeResult) string {
+func replError(r *instanceoapi.BrowserReplResult) string {
 	if r.Error != nil {
 		return *r.Error
 	}
 	return "<nil>"
 }
 
-func executeBrowserCode(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, body instanceoapi.ExecuteBrowserCodeJSONRequestBody) *instanceoapi.ExecuteBrowserCodeResult {
+func replJSONWrite(t *testing.T, r *instanceoapi.BrowserReplResult) any {
 	t.Helper()
-	rsp, err := client.ExecuteBrowserCodeWithResponse(ctx, body)
-	require.NoError(t, err, "browser execute request error: %v", err)
-	require.Equal(t, http.StatusOK, rsp.StatusCode(), "unexpected status for browser execute: %s body=%s", rsp.Status(), string(rsp.Body))
+	require.NotNil(t, r.Content)
+	for i := len(*r.Content) - 1; i >= 0; i-- {
+		text, err := (*r.Content)[i].AsBrowserReplTextContent()
+		if err != nil || text.Channel != instanceoapi.BrowserReplTextContentChannelWrite {
+			continue
+		}
+		var value any
+		require.NoError(t, json.Unmarshal([]byte(text.Text), &value))
+		return value
+	}
+	t.Fatal("response has no repl.write content")
+	return nil
+}
+
+func executeBrowserRepl(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, body instanceoapi.ExecuteBrowserReplJSONRequestBody) *instanceoapi.BrowserReplResult {
+	t.Helper()
+	rsp, err := client.ExecuteBrowserReplWithResponse(ctx, body)
+	require.NoError(t, err, "Browser REPL request error: %v", err)
+	require.Equal(t, http.StatusOK, rsp.StatusCode(), "unexpected status for Browser REPL: %s body=%s", rsp.Status(), string(rsp.Body))
 	require.NotNil(t, rsp.JSON200, "expected JSON200 response, got nil")
 	return rsp.JSON200
 }
@@ -44,7 +61,7 @@ func restartChromium(t *testing.T, ctx context.Context, c *TestContainer, client
 	require.NoError(t, c.WaitDevTools(ctx), "DevTools not ready after chromium restart")
 }
 
-func TestBrowserReplExecuteAPI(t *testing.T) {
+func TestBrowserReplAPI(t *testing.T) {
 	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
@@ -60,12 +77,12 @@ func TestBrowserReplExecuteAPI(t *testing.T) {
 	} {
 		t.Run(image.name, func(t *testing.T) {
 			t.Parallel()
-			runBrowserReplExecuteAPI(t, image.image)
+			runBrowserReplAPI(t, image.image)
 		})
 	}
 }
 
-func runBrowserReplExecuteAPI(t *testing.T, image string) {
+func runBrowserReplAPI(t *testing.T, image string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -79,52 +96,217 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 	require.NoError(t, err)
 
 	t.Run("persistence and stable repl id", func(t *testing.T) {
-		r1 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r1 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `var counter = 40; counter + 2`,
 		})
 		require.True(t, r1.Success, "error: %s", replError(r1))
 		require.NotEmpty(t, r1.ReplId)
 
-		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			Code: `const added = await Promise.resolve(2); counter + added`,
+		r2 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `const added = await Promise.resolve(2); repl.write(JSON.stringify(counter + added))`,
 		})
 		require.True(t, r2.Success, "error: %s", replError(r2))
 		require.Equal(t, r1.ReplId, r2.ReplId, "repl_id must be stable across calls")
 
-		resultBytes, _ := r2.Result.(float64)
+		resultBytes, _ := replJSONWrite(t, r2).(float64)
 		require.Equal(t, float64(42), resultBytes)
 	})
 
 	t.Run("browser helpers", func(t *testing.T) {
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
-				await ensure_real_tab();
-				await goto_url("https://example.com");
-				await wait_for_load();
-				const info = await page_info();
-				repl.write(info.title);
-				info.title;
+				await ensureRealTab();
+				await gotoUrl("https://example.com");
+				await waitForLoad();
+				const info = await pageInfo();
+				repl.write(JSON.stringify(info.title));
 			`,
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
-		require.Equal(t, "Example Domain", r.Result)
+		require.Equal(t, "Example Domain", replJSONWrite(t, r))
 		require.NotNil(t, r.Content)
 		require.NotEmpty(t, *r.Content)
-		first, err := (*r.Content)[0].AsBrowserExecutionTextContent()
+		first, err := (*r.Content)[0].AsBrowserReplTextContent()
 		require.NoError(t, err)
-		require.Equal(t, "Example Domain", first.Text)
+		require.Equal(t, `"Example Domain"`, first.Text)
+	})
+
+	t.Run("selector interaction and element states", func(t *testing.T) {
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `
+				await ensureRealTab();
+				await gotoUrl("data:text/html,<body></body>");
+				await waitForLoad();
+				await js(() => {
+					document.body.innerHTML = ` + "`" + `
+						<button class="action" hidden>hidden duplicate</button>
+						<button class="action">Search</button>
+						<input class="field" hidden>
+						<input class="field">
+						<div id="status" hidden>ready</div>
+						<div id="remove-me"></div>
+					` + "`" + `;
+					globalThis.__clickCount = 0;
+					document.querySelectorAll(".action")[1].addEventListener("click", () => {
+						globalThis.__clickCount++;
+						const status = document.querySelector("#status");
+						status.hidden = false;
+						setTimeout(() => { status.hidden = true; }, 250);
+					});
+				});
+
+				const attached = await waitForElement(".action", {state: "attached", timeoutSec: 2});
+				await click(".action");
+				const visible = await waitForElement("#status", {state: "visible", timeoutSec: 2});
+				await fillInput(".field", "hello", {timeoutSec: 2});
+				const hidden = await waitForElement("#status", {state: "hidden", timeoutSec: 2});
+				await js(() => setTimeout(() => document.querySelector("#remove-me").remove(), 50));
+				const detached = await waitForElement("#remove-me", {state: "detached", timeoutSec: 2});
+				const state = await js(() => ({
+					clickCount: globalThis.__clickCount,
+					value: [...document.querySelectorAll(".field")].find(element => !element.hidden).value,
+				}));
+				repl.write(JSON.stringify({attached, visible, hidden, detached, ...state}));
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		state, ok := replJSONWrite(t, r).(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, true, state["attached"])
+		require.Equal(t, true, state["visible"])
+		require.Equal(t, true, state["hidden"])
+		require.Equal(t, true, state["detached"])
+		require.Equal(t, float64(1), state["clickCount"])
+		require.Equal(t, "hello", state["value"])
+	})
+
+	t.Run("cross-origin iframe target evaluation", func(t *testing.T) {
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `
+				await gotoUrl("data:text/html,<body></body>");
+				await waitForLoad();
+				await js(() => {
+					const iframe = document.createElement("iframe");
+					iframe.src = "https://example.com";
+					document.body.append(iframe);
+				});
+				var crossOriginFrame = null;
+				for (let attempt = 0; attempt < 50 && !crossOriginFrame; attempt++) {
+					crossOriginFrame = await iframeTarget("example.com");
+					if (!crossOriginFrame) await waitMs(100);
+				}
+				if (!crossOriginFrame) throw new Error("cross-origin iframe target did not appear");
+				var crossOriginState = await js(
+					() => ({title: document.title, host: location.host}),
+					{targetId: crossOriginFrame.targetId},
+				);
+				repl.write(JSON.stringify({target: crossOriginFrame, state: crossOriginState}));
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		result, ok := replJSONWrite(t, r).(map[string]interface{})
+		require.True(t, ok)
+		target, ok := result["target"].(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "iframe", target["type"])
+		state, ok := result["state"].(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "example.com", state["host"])
+		require.Equal(t, "Example Domain", state["title"])
+	})
+
+	t.Run("page evaluation modes", func(t *testing.T) {
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `
+				await ensureRealTab();
+				await gotoUrl("data:text/html,<title>page-evaluation</title><main>hello</main>");
+				await waitForLoad();
+				await js("globalThis.__browserReplEvaluationCount = 0");
+				const result = {
+					expression: await js("1 + 1"),
+					promiseExpression: await js("Promise.resolve(3)"),
+					asyncFunction: await js(async () => {
+						globalThis.__browserReplEvaluationCount++;
+						const value = await Promise.resolve(4);
+						return { value, count: globalThis.__browserReplEvaluationCount };
+					}),
+					argument: await js(({ a, b, edge }) => ({
+						sum: a + b,
+						nan: Number.isNaN(edge.nan),
+						negativeZero: Object.is(edge.negativeZero, -0),
+						bigint: edge.bigint.toString(),
+					}), { arg: { a: 2, b: 3, edge: { nan: NaN, negativeZero: -0, bigint: 42n } } }),
+				};
+				repl.write(JSON.stringify(result));
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		result, ok := replJSONWrite(t, r).(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, float64(2), result["expression"])
+		require.Equal(t, float64(3), result["promiseExpression"])
+		asyncResult, ok := result["asyncFunction"].(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, float64(4), asyncResult["value"])
+		require.Equal(t, float64(1), asyncResult["count"], "the page function executes exactly once")
+		argument, ok := result["argument"].(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, float64(5), argument["sum"])
+		require.Equal(t, true, argument["nan"])
+		require.Equal(t, true, argument["negativeZero"])
+		require.Equal(t, "42", argument["bigint"])
+	})
+
+	t.Run("US keyboard normalization", func(t *testing.T) {
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `
+				await ensureRealTab();
+				await gotoUrl("data:text/html,<input id=q autofocus>");
+				await waitForElement("#q", {state: "visible", timeoutSec: 10});
+				await js(() => {
+					globalThis.__keyEvents = [];
+					const input = document.querySelector("#q");
+					input.addEventListener("keydown", event => {
+						globalThis.__keyEvents.push({ key: event.key, code: event.code, keyCode: event.keyCode, shift: event.shiftKey });
+					});
+					input.focus();
+				});
+				await pressKey("ENTER");
+				await pressKey("Digit1", ["shift"]);
+				await pressKey("Esc");
+				const events = await js(() => globalThis.__keyEvents);
+				repl.write(JSON.stringify(events));
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		events, ok := replJSONWrite(t, r).([]interface{})
+		require.True(t, ok)
+		require.Len(t, events, 3)
+		for i, expected := range []struct {
+			key  string
+			code string
+		}{
+			{key: "Enter", code: "Enter"},
+			{key: "!", code: "Digit1"},
+			{key: "Escape", code: "Escape"},
+		} {
+			event, ok := events[i].(map[string]interface{})
+			require.True(t, ok)
+			require.Equal(t, expected.key, event["key"])
+			require.Equal(t, expected.code, event["code"])
+		}
 	})
 
 	t.Run("tab management and screenshots", func(t *testing.T) {
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
-				const before = (await list_tabs()).length;
-				const tab = await new_tab("https://example.com");
-				await wait_for_load();
-				const tabs = await list_tabs();
-				const shot = await capture_screenshot("/tmp/e2e-repl.png", false, 800);
+				const before = (await listTabs(false)).length;
+				const tab = await newTab("https://example.com");
+				await waitForLoad();
+				const tabs = await listTabs();
+				const shot = await captureScreenshot("/tmp/e2e-repl.png", false, 800);
 				await repl.emitImage({ path: shot });
-				await close_tab(tab.id);
+				await closeTab(tab);
 				({ before, after: tabs.length, shot });
 			`,
 		})
@@ -132,7 +314,7 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		require.NotNil(t, r.Content)
 		var sawImage bool
 		for _, item := range *r.Content {
-			if img, err := item.AsBrowserExecutionImageContent(); err == nil && img.Type == "image" {
+			if img, err := item.AsBrowserReplImageContent(); err == nil && img.Type == "image" {
 				sawImage = true
 				require.Equal(t, "image/png", img.MimeType)
 				require.NotEmpty(t, img.DataB64)
@@ -141,13 +323,13 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		require.True(t, sawImage, "expected an emitted screenshot image in content")
 	})
 
-	t.Run("pending dialogs reported by page_info", func(t *testing.T) {
+	t.Run("pending dialogs reported by pageInfo", func(t *testing.T) {
 		timeoutSec := 60
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			TimeoutSec: &timeoutSec,
 			Code: `
-				await ensure_real_tab();
-				await goto_url("data:text/html,<title>dlg</title><p>x</p>");
+				await ensureRealTab();
+				await gotoUrl("data:text/html,<title>dlg</title><p>x</p>");
 				const seen = [];
 				for (const [type, source] of [
 					["alert", 'alert("hello-alert")'],
@@ -155,45 +337,45 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 					["prompt", 'prompt("hello-prompt")'],
 				]) {
 					await cdp("Runtime.evaluate", { expression: "setTimeout(() => { " + source + "; }, 100)" });
-					await wait(1);
+					await waitMs(1000);
 					let info = null;
 					for (let i = 0; i < 20; i++) {
-						info = await page_info();
+						info = await pageInfo();
 						if (info.dialog) break;
-						await wait(0.2);
+						await waitMs(200);
 					}
 					seen.push({ want: type, got: info.dialog && info.dialog.type, message: info.dialog && info.dialog.message, url: info.url });
 					if (info.dialog) {
 						await cdp("Page.handleJavaScriptDialog", { accept: true });
-						await wait(0.3);
+						await waitMs(300);
 					}
 				}
-				seen;
+				repl.write(JSON.stringify(seen));
 			`,
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
-		seen, ok := r.Result.([]interface{})
-		require.True(t, ok, "expected array result, got %T", r.Result)
+		seen, ok := replJSONWrite(t, r).([]interface{})
+		require.True(t, ok, "expected array result, got %T", replJSONWrite(t, r))
 		require.Len(t, seen, 3)
 		for i, want := range []string{"alert", "confirm", "prompt"} {
 			entry, ok := seen[i].(map[string]interface{})
 			require.True(t, ok)
 			require.Equal(t, want, entry["want"])
-			require.Equal(t, want, entry["got"], "page_info must report the pending %s dialog", want)
+			require.Equal(t, want, entry["got"], "pageInfo must report the pending %s dialog", want)
 			require.Contains(t, entry["message"], "hello-"+want)
-			require.Contains(t, entry["url"], "data:text/html", "page_info still reports last-known target metadata")
+			require.Contains(t, entry["url"], "data:text/html", "pageInfo still reports last-known target metadata")
 		}
 	})
 
 	t.Run("stale pre-attach dialog does not brick the endpoint", func(t *testing.T) {
 		timeoutSec := 60
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			TimeoutSec: &timeoutSec,
 			Code: `
-				await ensure_real_tab();
-				await goto_url("data:text/html,<title>stale-dialog</title><p>x</p>");
+				await ensureRealTab();
+				await gotoUrl("data:text/html,<title>stale-dialog</title><p>x</p>");
 				await js("setTimeout(() => alert('stale'), 50)");
-				await wait(0.5);
+				await waitMs(500);
 				"dialog-open"
 			`,
 		})
@@ -209,73 +391,55 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		time.Sleep(time.Second)
 
 		shortTimeout := 10
-		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r2 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			TimeoutSec: &shortTimeout,
-			Code:       `await page_info()`,
+			Code:       `await pageInfo()`,
 		})
-		require.False(t, r2.Success, "page_info on a frozen renderer must fail")
+		require.False(t, r2.Success, "pageInfo on a frozen renderer must fail")
 		require.NotNil(t, r2.Error)
 		require.True(t, r2.ReplTerminated == nil || !*r2.ReplTerminated,
 			"a frozen renderer must not destroy the REPL: %s", replError(r2))
 
-		r3 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			Code: `(await list_tabs()).length`,
+		r3 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `(await listTabs()).length`,
 		})
 		require.True(t, r3.Success, "error: %s", replError(r3))
 		require.Equal(t, r2.ReplId, r3.ReplId, "the REPL must survive the frozen renderer")
 
-		r4 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r4 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			TimeoutSec: &timeoutSec,
 			Code: `
 				await cdp("Page.reload");
-				await wait(1);
-				const info = await page_info();
-				({ url: info.url, title: info.title })
+				await waitMs(1000);
+				const info = await pageInfo();
+				repl.write(JSON.stringify({ url: info.url, title: info.title }))
 			`,
 		})
 		require.True(t, r4.Success, "error: %s", replError(r4))
 		require.Equal(t, r2.ReplId, r4.ReplId, "recovery must not replace the REPL")
-		recovered, ok := r4.Result.(map[string]interface{})
-		require.True(t, ok, "expected object result, got %T", r4.Result)
+		recovered, ok := replJSONWrite(t, r4).(map[string]interface{})
+		require.True(t, ok, "expected object result, got %T", replJSONWrite(t, r4))
 		require.Contains(t, recovered["url"], "data:text/html")
 	})
 
-	t.Run("recording with custom recorder id", func(t *testing.T) {
-		timeoutSec := 60
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			TimeoutSec: &timeoutSec,
-			Code: `
-				const started = await start_recording({ id: "e2e-custom" });
-				await wait(0.5);
-				const stopped = await stop_recording({ id: "e2e-custom" });
-				({ started: started.recorder_id, stopped: stopped.recorder_id });
-			`,
-		})
-		require.True(t, r.Success, "error: %s", replError(r))
-		res, ok := r.Result.(map[string]interface{})
-		require.True(t, ok, "expected object result, got %T", r.Result)
-		require.Equal(t, "e2e-custom", res["started"])
-		require.Equal(t, "e2e-custom", res["stopped"])
-	})
-
 	t.Run("chromium restart preserves repl id and bindings", func(t *testing.T) {
-		r1 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			Code: `var restartToken = "pre-restart"; await ensure_real_tab(); restartToken`,
+		r1 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `var restartToken = "pre-restart"; await ensureRealTab(); repl.write(JSON.stringify(restartToken))`,
 		})
 		require.True(t, r1.Success, "error: %s", replError(r1))
-		require.Equal(t, "pre-restart", r1.Result)
+		require.Equal(t, "pre-restart", replJSONWrite(t, r1))
 
 		restartChromium(t, ctx, c, client)
 
 		timeoutSec := 60
-		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			Code:       `const restartInfo = await page_info(); ({ token: restartToken, url: restartInfo.url })`,
+		r2 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code:       `const restartInfo = await pageInfo(); repl.write(JSON.stringify({ token: restartToken, url: restartInfo.url }))`,
 			TimeoutSec: &timeoutSec,
 		})
 		require.True(t, r2.Success, "error: %s", replError(r2))
 		require.Equal(t, r1.ReplId, r2.ReplId, "a Chromium restart must not change repl_id")
-		res, ok := r2.Result.(map[string]interface{})
-		require.True(t, ok, "expected object result, got %T", r2.Result)
+		res, ok := replJSONWrite(t, r2).(map[string]interface{})
+		require.True(t, ok, "expected object output, got %T", replJSONWrite(t, r2))
 		require.Equal(t, "pre-restart", res["token"], "bindings survive a Chromium restart")
 	})
 
@@ -283,49 +447,49 @@ func runBrowserReplExecuteAPI(t *testing.T, image string) {
 		restartChromium(t, ctx, c, client)
 
 		timeoutSec := 60
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			TimeoutSec: &timeoutSec,
 			Code: `
-				await ensure_real_tab();
-				await goto_url("data:text/html,<title>dlg-restart</title><p>x</p>");
+				await ensureRealTab();
+				await gotoUrl("data:text/html,<title>dlg-restart</title><p>x</p>");
 				await cdp("Runtime.evaluate", { expression: "setTimeout(() => { alert('post-restart'); }, 100)" });
-				await wait(1);
+				await waitMs(1000);
 				let restartDlgInfo = null;
 				for (let i = 0; i < 20; i++) {
-					restartDlgInfo = await page_info();
+					restartDlgInfo = await pageInfo();
 					if (restartDlgInfo.dialog) break;
-					await wait(0.2);
+					await waitMs(200);
 				}
 				const restartDlgType = restartDlgInfo.dialog && restartDlgInfo.dialog.type;
 				if (restartDlgInfo.dialog) {
 					await cdp("Page.handleJavaScriptDialog", { accept: true });
 				}
-				restartDlgType;
+				repl.write(JSON.stringify(restartDlgType));
 			`,
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
-		require.Equal(t, "alert", r.Result, "page_info must report a dialog opened after a chromium restart")
+		require.Equal(t, "alert", replJSONWrite(t, r), "pageInfo must report a dialog opened after a chromium restart")
 	})
 
 	t.Run("reset clears bindings and changes repl id", func(t *testing.T) {
-		before := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			Code: `repl.id`,
+		before := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `repl.write(JSON.stringify(repl.id))`,
 		})
 		require.True(t, before.Success)
 
 		reset := true
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code:  "",
 			Reset: &reset,
 		})
 		require.True(t, r.Success)
-		require.NotEqual(t, before.Result, r.ReplId, "reset must produce a new repl_id")
+		require.NotEqual(t, before.ReplId, r.ReplId, "reset must produce a new repl_id")
 
-		r2 := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
-			Code: `typeof counter`,
+		r2 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `repl.write(JSON.stringify(typeof counter))`,
 		})
 		require.True(t, r2.Success)
-		require.Equal(t, "undefined", r2.Result, "reset must clear prior bindings")
+		require.Equal(t, "undefined", replJSONWrite(t, r2), "reset must clear prior bindings")
 	})
 }
 
@@ -364,12 +528,12 @@ func runBrowserReplTimeoutTerminates(t *testing.T, image string) {
 	require.NoError(t, err)
 
 	t.Run("uninterruptible loop", func(t *testing.T) {
-		warm := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+		warm := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 		require.True(t, warm.Success)
 
 		timeoutSec := 2
 		start := time.Now()
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code:       "while (true) {}",
 			TimeoutSec: &timeoutSec,
 		})
@@ -383,19 +547,19 @@ func runBrowserReplTimeoutTerminates(t *testing.T, image string) {
 		require.Contains(t, *r.Error, "execution timed out after 2000ms", "timeout paths share one message")
 		require.Less(t, elapsed, 15*time.Second, "timeout must kill the REPL promptly")
 
-		fresh := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
+		fresh := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: "'fresh'"})
 		require.True(t, fresh.Success)
 		require.NotEqual(t, warm.ReplId, fresh.ReplId, "the next request starts a fresh REPL with a new ID")
 		fmt.Println("timeout recovery complete, new repl_id:", fresh.ReplId)
 	})
 
 	t.Run("unresolved promise", func(t *testing.T) {
-		warm := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "1"})
+		warm := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 		require.True(t, warm.Success)
 
 		timeoutSec := 2
 		start := time.Now()
-		r := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code:       "await new Promise(() => {})",
 			TimeoutSec: &timeoutSec,
 		})
@@ -407,7 +571,7 @@ func runBrowserReplTimeoutTerminates(t *testing.T, image string) {
 		require.True(t, *r.ReplTerminated, "an interruptible timeout is still destructive")
 		require.Less(t, elapsed, 30*time.Second, "timeout must kill the REPL promptly")
 
-		fresh := executeBrowserCode(t, ctx, client, instanceoapi.ExecuteBrowserCodeJSONRequestBody{Code: "'fresh'"})
+		fresh := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: "'fresh'"})
 		require.True(t, fresh.Success)
 		require.NotEqual(t, warm.ReplId, fresh.ReplId, "the next request starts a fresh REPL with a new ID")
 	})

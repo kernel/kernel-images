@@ -1,6 +1,14 @@
 
 import { writeFileSync } from 'fs';
-import { CdpClient, CdpTarget, isCdpCommandTimeout, isInternalUrl } from './browser-cdp-client';
+import sharp from 'sharp';
+import { CdpClient, isCdpCommandTimeout, isInternalUrl } from './browser-cdp-client';
+import {
+  buildFunctionCallExpression,
+  normalizeJsOptions,
+  type JsOptions,
+  type PageFunction,
+} from './page-evaluation';
+import { resolveUSKey, supportedUSKeyNames } from './us-keyboard-layout';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -12,19 +20,63 @@ const SCROLL_SETTLE_POLL_MS = 25;
 // Leave time for helper errors to beat the destructive execution deadline.
 const EXECUTION_DEADLINE_MARGIN_MS = 500;
 
-const API_PORT = process.env.KERNEL_API_PORT || process.env.PORT || '10001';
-const API_BASE = `http://127.0.0.1:${API_PORT}`;
-
-export interface RecordingState {
-  recorderId: string;
-  dir: string | null;
-}
-
 interface ScrollProbe {
   x: number;
   y: number;
   maxX: number;
   maxY: number;
+}
+
+type MouseButton = 'left' | 'right' | 'middle';
+type ElementWaitState = 'attached' | 'detached' | 'visible' | 'hidden';
+
+interface ClickPoint {
+  x: number;
+  y: number;
+}
+
+interface ClickOptions {
+  button?: MouseButton;
+  clickCount?: number;
+  timeoutSec?: number;
+}
+
+interface WaitForElementOptions {
+  state?: ElementWaitState;
+  timeoutSec?: number;
+}
+
+interface FillInputOptions {
+  clearFirst?: boolean;
+  timeoutSec?: number;
+}
+
+function optionsObject(raw: unknown, helper: string): Record<string, unknown> {
+  if (raw === undefined) return {};
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`${helper}: options must be an object`);
+  }
+  return raw as Record<string, unknown>;
+}
+
+function rejectUnknownOptions(
+  options: Record<string, unknown>,
+  allowed: readonly string[],
+  helper: string,
+): void {
+  for (const key of Object.keys(options)) {
+    if (!allowed.includes(key)) {
+      throw new Error(`${helper}: unknown option: ${key}`);
+    }
+  }
+}
+
+function nonNegativeSeconds(value: unknown, fallback: number, helper: string): number {
+  if (value === undefined) return fallback;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${helper}: timeoutSec must be a non-negative finite number`);
+  }
+  return value;
 }
 
 // Do not verify wheels that may target an inner scroller or document edge.
@@ -36,16 +88,6 @@ function scrollShouldHaveMoved(before: ScrollProbe, deltaX: number, deltaY: numb
 
 function scrollOffsetChanged(before: ScrollProbe, after: ScrollProbe): boolean {
   return after.x !== before.x || after.y !== before.y;
-}
-
-// The recording API accepts `id`; helper responses expose `recorder_id`.
-function normalizeRecordingOpts(opts?: Record<string, unknown>): Record<string, unknown> {
-  const body: Record<string, unknown> = { ...(opts ?? {}) };
-  if (body.id === undefined && typeof body.recorder_id === 'string') {
-    body.id = body.recorder_id;
-  }
-  delete body.recorder_id;
-  return body;
 }
 
 const MODIFIER_SUGAR: Record<string, string> = {
@@ -61,7 +103,13 @@ function normalizeKeyModifiers(modifiers?: string[] | Record<string, boolean>): 
     return [];
   }
   if (Array.isArray(modifiers)) {
-    return modifiers;
+    return modifiers.map((name) => {
+      const canonical = MODIFIER_SUGAR[String(name).toLowerCase()];
+      if (canonical === undefined) {
+        throw new Error(`pressKey: unknown modifier: ${name} (expected Alt, Control, Meta, or Shift)`);
+      }
+      return canonical;
+    });
   }
   if (typeof modifiers === 'object') {
     const out: string[] = [];
@@ -69,7 +117,7 @@ function normalizeKeyModifiers(modifiers?: string[] | Record<string, boolean>): 
       if (!on) continue;
       const canonical = MODIFIER_SUGAR[name.toLowerCase()];
       if (canonical === undefined) {
-        throw new Error(`press_key: unknown modifier: ${name} (expected Alt, Control, Meta, or Shift)`);
+        throw new Error(`pressKey: unknown modifier: ${name} (expected Alt, Control, Meta, or Shift)`);
       }
       if (!out.includes(canonical)) {
         out.push(canonical);
@@ -78,13 +126,12 @@ function normalizeKeyModifiers(modifiers?: string[] | Record<string, boolean>): 
     return out;
   }
   throw new Error(
-    'press_key: modifiers must be an array drawn from Alt, Control, Meta, Shift (or an object like {ctrl: true})',
+    'pressKey: modifiers must be an array drawn from Alt, Control, Meta, Shift (or an object like {ctrl: true})',
   );
 }
 
 export class BrowserHelpers {
   private readonly client: CdpClient;
-  private activeRecording: RecordingState | null = null;
 
   executionDeadlineMs: number | null = null;
   onLog?: (message: string) => void;
@@ -129,11 +176,7 @@ export class BrowserHelpers {
   // Navigation + page state
 
   gotoUrl = async (url: string): Promise<unknown> => {
-    const res = await this.client.sessionCommand<any>('Page.navigate', { url });
-    if (res.errorText) {
-      throw new Error(`navigation to ${url} failed: ${res.errorText}`);
-    }
-    return { url, frame_id: res.frameId, loader_id: res.loaderId ?? null };
+    return this.client.sessionCommand('Page.navigate', { url });
   };
 
   pageInfo = async (): Promise<Record<string, unknown>> => {
@@ -183,47 +226,116 @@ export class BrowserHelpers {
 
   // Input
 
-  clickAtXy = async (x: number, y: number): Promise<void> => {
+  click = async (target: string | ClickPoint, rawOptions?: ClickOptions): Promise<void> => {
+    const options = optionsObject(rawOptions, 'click');
+    rejectUnknownOptions(options, ['button', 'clickCount', 'timeoutSec'], 'click');
+
+    const button = options.button ?? 'left';
+    if (button !== 'left' && button !== 'right' && button !== 'middle') {
+      throw new Error('click: button must be left, right, or middle');
+    }
+    const clickCount = options.clickCount ?? 1;
+    if (!Number.isInteger(clickCount) || (clickCount as number) <= 0) {
+      throw new Error('click: clickCount must be a positive integer');
+    }
+
+    let point: ClickPoint;
+    if (typeof target === 'string') {
+      if (target.length === 0) throw new Error('click: selector must not be empty');
+      point = await this.waitForClickablePoint(
+        target,
+        nonNegativeSeconds(options.timeoutSec, 10, 'click'),
+      );
+    } else {
+      if (
+        target === null ||
+        typeof target !== 'object' ||
+        typeof target.x !== 'number' ||
+        !Number.isFinite(target.x) ||
+        typeof target.y !== 'number' ||
+        !Number.isFinite(target.y)
+      ) {
+        throw new Error('click: target must be a selector or finite {x, y} coordinates');
+      }
+      if (options.timeoutSec !== undefined) {
+        throw new Error('click: timeoutSec is only supported for selector targets');
+      }
+      point = { x: target.x, y: target.y };
+    }
+
     await this.client.sessionCommand('Input.dispatchMouseEvent', {
-      type: 'mousePressed',
-      x,
-      y,
-      button: 'left',
-      clickCount: 1,
+      type: 'mouseMoved',
+      x: point.x,
+      y: point.y,
+      button: 'none',
     });
-    await this.client.sessionCommand('Input.dispatchMouseEvent', {
-      type: 'mouseReleased',
-      x,
-      y,
-      button: 'left',
-      clickCount: 1,
-    });
+    const buttons = button === 'left' ? 1 : button === 'right' ? 2 : 4;
+    for (let count = 1; count <= (clickCount as number); count++) {
+      await this.client.sessionCommand('Input.dispatchMouseEvent', {
+        type: 'mousePressed',
+        x: point.x,
+        y: point.y,
+        button,
+        buttons,
+        clickCount: count,
+      });
+      await this.client.sessionCommand('Input.dispatchMouseEvent', {
+        type: 'mouseReleased',
+        x: point.x,
+        y: point.y,
+        button,
+        buttons: 0,
+        clickCount: count,
+      });
+    }
   };
 
   typeText = async (text: string): Promise<void> => {
     await this.client.sessionCommand('Input.insertText', { text });
   };
 
-  fillInput = async (selector: string, value: string): Promise<void> => {
-    await this.evaluateInPage(
-      `(function (selector, value) {
-        const el = document.querySelector(selector);
-        if (!el) throw new Error('no element matches selector: ' + selector);
-        el.focus();
-        const proto = el instanceof HTMLTextAreaElement
-          ? HTMLTextAreaElement.prototype
-          : HTMLInputElement.prototype;
-        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
-        if (descriptor && descriptor.set) {
-          descriptor.set.call(el, value);
-        } else {
-          el.value = value;
-        }
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
-      })(${JSON.stringify(selector)}, ${JSON.stringify(value)})`,
-    );
+  fillInput = async (
+    selector: string,
+    text: string,
+    rawOptions?: FillInputOptions,
+  ): Promise<void> => {
+    if (typeof selector !== 'string' || selector.length === 0) {
+      throw new Error('fillInput: selector must be a non-empty string');
+    }
+    if (typeof text !== 'string') {
+      throw new Error('fillInput: text must be a string');
+    }
+    const options = optionsObject(rawOptions, 'fillInput');
+    rejectUnknownOptions(options, ['clearFirst', 'timeoutSec'], 'fillInput');
+    const clearFirst = options.clearFirst ?? true;
+    if (typeof clearFirst !== 'boolean') {
+      throw new Error('fillInput: clearFirst must be a boolean');
+    }
+    const timeoutSec = nonNegativeSeconds(options.timeoutSec, 10, 'fillInput');
+    await this.waitForFillTarget(selector, timeoutSec);
+
+    if (clearFirst) {
+      const modifiers = process.platform === 'darwin' ? 4 : 2;
+      const selectAll = {
+        key: 'a',
+        code: 'KeyA',
+        modifiers,
+        windowsVirtualKeyCode: 65,
+        nativeVirtualKeyCode: 65,
+      };
+      await this.client.sessionCommand('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...selectAll });
+      await this.client.sessionCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...selectAll });
+      await this.pressKey('Backspace');
+    }
+    for (const char of text) {
+      await this.pressKey(char);
+    }
+    await this.evaluateInPage(`(() => {
+      const el = document.activeElement;
+      if (!el) return;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    })()`);
   };
 
   private static readonly MODIFIER_BITS: Record<string, number> = {
@@ -233,69 +345,67 @@ export class BrowserHelpers {
     Shift: 8,
   };
 
-  private static readonly KEY_DEFS: Record<
-    string,
-    { windowsVirtualKeyCode: number; code: string; key: string; text?: string }
-  > = {
-    Enter: { windowsVirtualKeyCode: 13, code: 'Enter', key: 'Enter', text: '\r' },
-    Tab: { windowsVirtualKeyCode: 9, code: 'Tab', key: 'Tab' },
-    Escape: { windowsVirtualKeyCode: 27, code: 'Escape', key: 'Escape' },
-    Backspace: { windowsVirtualKeyCode: 8, code: 'Backspace', key: 'Backspace' },
-    Delete: { windowsVirtualKeyCode: 46, code: 'Delete', key: 'Delete' },
-    ArrowLeft: { windowsVirtualKeyCode: 37, code: 'ArrowLeft', key: 'ArrowLeft' },
-    ArrowUp: { windowsVirtualKeyCode: 38, code: 'ArrowUp', key: 'ArrowUp' },
-    ArrowRight: { windowsVirtualKeyCode: 39, code: 'ArrowRight', key: 'ArrowRight' },
-    ArrowDown: { windowsVirtualKeyCode: 40, code: 'ArrowDown', key: 'ArrowDown' },
-    Home: { windowsVirtualKeyCode: 36, code: 'Home', key: 'Home' },
-    End: { windowsVirtualKeyCode: 35, code: 'End', key: 'End' },
-    PageUp: { windowsVirtualKeyCode: 33, code: 'PageUp', key: 'PageUp' },
-    PageDown: { windowsVirtualKeyCode: 34, code: 'PageDown', key: 'PageDown' },
-    Space: { windowsVirtualKeyCode: 32, code: 'Space', key: ' ', text: ' ' },
-  };
-
-  pressKey = async (key: string, modifiers?: string[] | Record<string, boolean>): Promise<void> => {
+  pressKey = async (
+    key: string,
+    modifiers?: number | string[] | Record<string, boolean>,
+  ): Promise<void> => {
     let modifierBits = 0;
-    for (const m of normalizeKeyModifiers(modifiers)) {
-      const bit = BrowserHelpers.MODIFIER_BITS[m];
-      if (bit === undefined) {
-        throw new Error(`press_key: unknown modifier: ${m} (expected Alt, Control, Meta, or Shift)`);
+    if (typeof modifiers === 'number') {
+      if (!Number.isInteger(modifiers) || modifiers < 0 || modifiers > 15) {
+        throw new Error('pressKey: numeric modifiers must be a bitfield from 0 to 15');
       }
-      modifierBits |= bit;
+      modifierBits = modifiers;
+    } else {
+      for (const m of normalizeKeyModifiers(modifiers)) {
+        const bit = BrowserHelpers.MODIFIER_BITS[m];
+        if (bit === undefined) {
+          throw new Error(`pressKey: unknown modifier: ${m} (expected Alt, Control, Meta, or Shift)`);
+        }
+        modifierBits |= bit;
+      }
     }
 
-    let def = BrowserHelpers.KEY_DEFS[key];
-    if (!def) {
-      if (key.length === 1) {
-        const upper = key.toUpperCase();
-        def = {
-          windowsVirtualKeyCode: upper.charCodeAt(0),
-          code: /^[a-zA-Z]$/.test(key) ? `Key${upper}` : key,
-          key,
-          text: key,
-        };
-      } else {
-        throw new Error(
-          `unknown key: ${key} (use a single character or one of ${Object.keys(BrowserHelpers.KEY_DEFS).join(', ')})`,
-        );
-      }
+    let def;
+    try {
+      def = resolveUSKey(key, (modifierBits & BrowserHelpers.MODIFIER_BITS.Shift) !== 0);
+    } catch {
+      throw new Error(
+        `unknown key: ${key} (use one Unicode character or a supported US-layout key such as ${
+          supportedUSKeyNames().slice(0, 20).join(', ')
+        })`,
+      );
     }
 
     const base = {
       code: def.code,
       key: def.key,
-      windowsVirtualKeyCode: def.windowsVirtualKeyCode,
-      nativeVirtualKeyCode: def.windowsVirtualKeyCode,
+      windowsVirtualKeyCode: def.keyCode,
+      nativeVirtualKeyCode: def.keyCode,
       modifiers: modifierBits,
+      location: def.location,
+      isKeypad: def.location === 3,
+      unmodifiedText: def.unmodifiedText,
     };
+    const shortcut = (modifierBits & (1 | 2 | 4)) !== 0;
+    const printable = [...def.key].length === 1 && !!def.text && !shortcut;
     await this.client.sessionCommand('Input.dispatchKeyEvent', {
       ...base,
-      type: def.text ? 'keyDown' : 'rawKeyDown',
-      ...(def.text ? { text: def.text } : {}),
+      type: 'keyDown',
+      ...(!printable && def.text && !shortcut ? { text: def.text } : {}),
     });
+    if (printable) {
+      await this.client.sessionCommand('Input.dispatchKeyEvent', {
+        ...base,
+        type: 'char',
+        text: def.text,
+      });
+    }
     await this.client.sessionCommand('Input.dispatchKeyEvent', { ...base, type: 'keyUp' });
   };
 
-  scroll = async (x: number, y: number, deltaX = 0, deltaY = 0): Promise<void> => {
+  scroll = async (x: number, y: number, dy = -300, dx = 0): Promise<void> => {
+    const deltaX = dx;
+    const deltaY = dy;
     const dispatch = async (): Promise<boolean> => {
       try {
         await this.client.sessionCommand(
@@ -398,20 +508,28 @@ export class BrowserHelpers {
     }
   }
 
-  dispatchKey = async (
-    selector: string,
-    key: string,
-    opts?: Record<string, unknown>,
-  ): Promise<void> => {
+  dispatchKey = async (selector: string, key = 'Enter', event = 'keypress'): Promise<void> => {
+    const keyCodes: Record<string, number> = {
+      Enter: 13,
+      Tab: 9,
+      Escape: 27,
+      Backspace: 8,
+      ' ': 32,
+      ArrowLeft: 37,
+      ArrowUp: 38,
+      ArrowRight: 39,
+      ArrowDown: 40,
+    };
+    const keyCode = keyCodes[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);
     await this.evaluateInPage(
-      `(function (selector, key, opts) {
+      `(function (selector, key, event, keyCode) {
         const el = document.querySelector(selector);
-        if (!el) throw new Error('no element matches selector: ' + selector);
-        const init = Object.assign({ key, bubbles: true, cancelable: true }, opts || {});
-        el.dispatchEvent(new KeyboardEvent('keydown', init));
-        el.dispatchEvent(new KeyboardEvent('keyup', init));
-        return true;
-      })(${JSON.stringify(selector)}, ${JSON.stringify(key)}, ${JSON.stringify(opts ?? null)})`,
+        if (!el) return;
+        el.focus();
+        el.dispatchEvent(new KeyboardEvent(event, {
+          key, code: key, keyCode, which: keyCode, bubbles: true,
+        }));
+      })(${JSON.stringify(selector)}, ${JSON.stringify(key)}, ${JSON.stringify(event)}, ${keyCode})`,
     );
   };
 
@@ -422,52 +540,33 @@ export class BrowserHelpers {
     fullPage = false,
     maxDim?: number,
   ): Promise<string> => {
-    const outPath = path ?? `/tmp/screenshot-${Date.now()}.png`;
-
-    const metrics = await this.client.sessionCommand<any>('Page.getLayoutMetrics');
-    const viewport = metrics.cssLayoutViewport ?? metrics.layoutViewport;
-    let width: number;
-    let height: number;
-    if (fullPage) {
-      const content = metrics.cssContentSize ?? metrics.contentSize;
-      width = Math.ceil(content.width);
-      height = Math.ceil(content.height);
-    } else {
-      width = Math.ceil(viewport.clientWidth);
-      height = Math.ceil(viewport.clientHeight);
-    }
-
-    let scale = 1;
-    if (maxDim && maxDim > 0) {
-      const largest = Math.max(width, height);
-      if (largest > maxDim) {
-        scale = maxDim / largest;
-      }
-    }
-
+    const outPath = path ?? '/tmp/shot.png';
     const shot = await this.client.sessionCommand<any>('Page.captureScreenshot', {
       format: 'png',
-      clip: { x: 0, y: 0, width, height, scale },
-      ...(fullPage ? { captureBeyondViewport: true } : {}),
+      captureBeyondViewport: fullPage,
     });
-    writeFileSync(outPath, Buffer.from(shot.data, 'base64'));
+    let bytes = Buffer.from(shot.data, 'base64');
+    if (maxDim !== undefined) {
+      if (!Number.isInteger(maxDim) || maxDim <= 0) {
+        throw new Error('captureScreenshot: maxDim must be a positive integer');
+      }
+      bytes = await sharp(bytes)
+        .resize({ width: maxDim, height: maxDim, fit: 'inside', withoutEnlargement: true })
+        .png()
+        .toBuffer();
+    }
+    writeFileSync(outPath, bytes);
     return outPath;
   };
 
   // Tabs
 
-  listTabs = async (includeInternal = false): Promise<Record<string, unknown>[]> => {
+  listTabs = async (includeChrome = true): Promise<Record<string, unknown>[]> => {
     const targets = await this.client.listTargets();
     return targets
       .filter((t) => t.type === 'page')
-      .filter((t) => includeInternal || !isInternalUrl(t.url))
-      .map((t) => ({
-        id: t.targetId,
-        url: t.url,
-        title: t.title,
-        internal: isInternalUrl(t.url),
-        attached: t.targetId === this.client.targetId,
-      }));
+      .filter((t) => includeChrome || !isInternalUrl(t.url))
+      .map((t) => ({ targetId: t.targetId, title: t.title, url: t.url }));
   };
 
   currentTab = async (): Promise<Record<string, unknown>> => {
@@ -477,38 +576,54 @@ export class BrowserHelpers {
     if (!current) {
       throw new Error('attached target no longer exists');
     }
-    return {
-      id: current.targetId,
-      url: current.url,
-      title: current.title,
-      internal: isInternalUrl(current.url),
-      attached: true,
-    };
+    return { targetId: current.targetId, url: current.url, title: current.title };
   };
 
-  switchTab = async (targetId: string): Promise<Record<string, unknown>> => {
-    await this.client.attach(targetId);
-    return this.currentTab();
+  private targetId(target: unknown): string {
+    if (typeof target === 'string') return target;
+    if (target && typeof target === 'object' && typeof (target as any).targetId === 'string') {
+      return (target as any).targetId;
+    }
+    throw new Error('expected a targetId string or a tab object returned by currentTab/listTabs');
+  }
+
+  switchTab = async (target: unknown): Promise<string> => {
+    return this.client.attach(this.targetId(target));
   };
 
-  newTab = async (url?: string): Promise<Record<string, unknown>> => {
+  newTab = async (url = 'about:blank'): Promise<string> => {
+    if (url !== 'about:blank') {
+      try {
+        const current = await this.currentTab();
+        const currentUrl = String(current.url ?? '');
+        if (
+          currentUrl === '' ||
+          currentUrl === 'about:blank' ||
+          currentUrl.startsWith('about:blank#') ||
+          /^(chrome:\/\/(newtab|new-tab-page)|edge:\/\/newtab|about:newtab)/.test(currentUrl)
+        ) {
+          await this.gotoUrl(url);
+          return current.targetId as string;
+        }
+      } catch {
+        // No attached reusable tab; create one below.
+      }
+    }
     await this.client.ensureConnected();
     const created = await this.client.browserCommand<{ targetId: string }>('Target.createTarget', {
-      url: url ?? 'about:blank',
+      url: 'about:blank',
     });
     await this.client.attach(created.targetId);
-    // Target.createTarget resolves before the initial navigation commits;
-    // wait (best effort) so an immediate page_info/list_tabs observes the
-    // requested URL rather than about:blank.
-    if (url && url !== 'about:blank') {
+    if (url !== 'about:blank') {
+      await this.gotoUrl(url);
       await this.client.waitForNavigationCommit(created.targetId, 5_000);
     }
-    return this.currentTab();
+    return created.targetId;
   };
 
-  closeTab = async (targetId?: string): Promise<void> => {
+  closeTab = async (target?: unknown): Promise<void> => {
     await this.client.ensureConnected();
-    const id = targetId ?? this.client.targetId;
+    const id = target === undefined ? this.client.targetId : this.targetId(target);
     if (!id) {
       throw new Error('no tab is attached and no target id was provided');
     }
@@ -518,135 +633,133 @@ export class BrowserHelpers {
       this.client.targetId = null;
     }
     // Target.closeTarget resolves before the target is fully destroyed;
-    // wait (best effort) so an immediate list_tabs no longer counts the
+    // wait (best effort) so an immediate listTabs call no longer counts the
     // closed tab.
     await this.client.waitForTargetGone(id, 5_000);
   };
 
-  ensureRealTab = async (): Promise<Record<string, unknown>> => {
-    const target: CdpTarget = await this.client.ensureRealTab();
-    return {
-      id: target.targetId,
-      url: target.url,
-      title: target.title,
-      internal: isInternalUrl(target.url),
-      attached: true,
-    };
+  ensureRealTab = async (): Promise<Record<string, unknown> | null> => {
+    const tabs = await this.listTabs(false);
+    if (tabs.length === 0) return null;
+    try {
+      const current = await this.currentTab();
+      if (!isInternalUrl(String(current.url ?? ''))) return current;
+    } catch {
+      // No usable attached target; attach the first real page below.
+    }
+    await this.switchTab(tabs[0]);
+    return tabs[0];
   };
 
   iframeTarget = async (urlSubstring: string): Promise<Record<string, unknown> | null> => {
     const targets = await this.client.listTargets();
     const match = targets.find((t) => t.type === 'iframe' && t.url.includes(urlSubstring));
     if (!match) return null;
-    return { id: match.targetId, url: match.url, title: match.title, type: match.type };
+    return { targetId: match.targetId, url: match.url, title: match.title, type: match.type };
   };
 
   // Waiting
 
-  wait = async (seconds: number): Promise<void> => {
-    await new Promise((resolve) => setTimeout(resolve, seconds * 1000));
+  waitMs = async (milliseconds = 1_000): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, milliseconds));
   };
 
-  waitForLoad = async (state = 'complete', timeoutSec = 30): Promise<string> => {
-    const { deadline, clamped } = this.waitDeadline(timeoutSec * 1000);
-    const order = ['loading', 'interactive', 'complete'];
-    const want = order.indexOf(state);
-    if (want === -1) {
-      throw new Error(`unknown ready state: ${state} (expected loading, interactive, or complete)`);
-    }
-    let current = 'loading';
-    for (;;) {
-      // Check the deadline before issuing another CDP command: near the
-      // deadline the command's own clamped timeout would otherwise
-      // preempt this helper's (clearer) timeout error.
-      if (Date.now() > deadline) {
-        throw new Error(
-          `timed out waiting for readyState ${state} (still ${current})` +
-            (clamped ? ' (bounded by the execution timeout)' : ''),
-        );
-      }
+  waitForLoad = async (timeoutSec = 15): Promise<boolean> => {
+    const { deadline } = this.waitDeadline(timeoutSec * 1000);
+    while (Date.now() <= deadline) {
       const res = await this.client.sessionCommand<any>('Runtime.evaluate', {
         expression: 'document.readyState',
         returnByValue: true,
       });
-      current = res.result?.value ?? 'loading';
-      if (order.indexOf(current) >= want) {
-        return current;
-      }
-      await this.wait(0.1);
+      if (res.result?.value === 'complete') return true;
+      await this.waitMs(300);
     }
+    return false;
   };
 
   waitForElement = async (
     selector: string,
-    opts?: { visible?: boolean; timeout_sec?: number },
+    rawOptions?: WaitForElementOptions,
   ): Promise<boolean> => {
-    if (opts !== undefined && opts !== null && (typeof opts !== 'object' || Array.isArray(opts))) {
-      throw new Error('wait_for_element: opts must be an object {visible, timeout_sec}');
+    if (typeof selector !== 'string' || selector.length === 0) {
+      throw new Error('waitForElement: selector must be a non-empty string');
     }
-    const timeoutMs = (opts?.timeout_sec ?? 30) * 1000;
-    const { deadline, clamped } = this.waitDeadline(timeoutMs);
+    const options = optionsObject(rawOptions, 'waitForElement');
+    rejectUnknownOptions(options, ['state', 'timeoutSec'], 'waitForElement');
+    const state = options.state ?? 'visible';
+    if (state !== 'attached' && state !== 'detached' && state !== 'visible' && state !== 'hidden') {
+      throw new Error('waitForElement: state must be attached, detached, visible, or hidden');
+    }
+    const timeoutSec = nonNegativeSeconds(options.timeoutSec, 10, 'waitForElement');
+    const { deadline } = this.waitDeadline(timeoutSec * 1000);
     for (;;) {
-      // Check the deadline before issuing another CDP command: near the
-      // deadline the command's own clamped timeout would otherwise
-      // preempt this helper's (clearer) timeout error.
-      if (Date.now() > deadline) {
-        throw new Error(
-          `timed out waiting for element: ${selector}` +
-            (clamped ? ' (bounded by the execution timeout)' : ''),
-        );
-      }
       const found = await this.evaluateInPage(
-        `(function (selector, requireVisible) {
-          const el = document.querySelector(selector);
-          if (!el) return false;
-          if (!requireVisible) return true;
-          const rect = el.getBoundingClientRect();
-          const style = getComputedStyle(el);
-          return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none';
-        })(${JSON.stringify(selector)}, ${opts?.visible === true})`,
+        `(function elementState(selector, state) {
+          const elements = [...document.querySelectorAll(selector)];
+          const visible = (el) => {
+            if (!el.isConnected || el.getClientRects().length === 0) return false;
+            if (typeof el.checkVisibility === 'function') {
+              return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+            }
+            const style = getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          };
+          if (state === 'attached') return elements.length > 0;
+          if (state === 'detached') return elements.length === 0;
+          const visibleCount = elements.filter(visible).length;
+          return state === 'visible' ? visibleCount > 0 : visibleCount === 0;
+        })(${JSON.stringify(selector)}, ${JSON.stringify(state)})`,
       );
       if (found) return true;
-      await this.wait(0.1);
+      if (Date.now() >= deadline) return false;
+      await this.waitMs(Math.min(100, Math.max(0, deadline - Date.now())));
     }
   };
 
-  waitForNetworkIdle = async (idleSec = 0.5, timeoutSec = 30): Promise<void> => {
-    const { deadline, clamped } = this.waitDeadline(timeoutSec * 1000);
+  waitForNetworkIdle = async (idleSec = 0.5, timeoutSec = 30): Promise<boolean> => {
+    const { deadline } = this.waitDeadline(timeoutSec * 1000);
     for (;;) {
       const { inFlight, lastActivity } = this.client.networkIdleState();
       const now = Date.now();
       if (inFlight === 0 && now - lastActivity >= idleSec * 1000) {
-        return;
+        return true;
       }
       if (now > deadline) {
-        throw new Error(
-          `timed out waiting for network idle (${inFlight} requests in flight)` +
-            (clamped ? ' (bounded by the execution timeout)' : ''),
-        );
+        return false;
       }
-      await this.wait(0.1);
+      await this.waitMs(100);
     }
   };
 
   // JavaScript evaluation + uploads
 
-  js = async (code: string, targetId?: string): Promise<unknown> => {
-    if (targetId !== undefined && targetId !== null && typeof targetId !== 'string') {
-      // A natural mistake is passing an options object ({target: id}) given
-      // other helpers take opts objects; that used to surface a raw CDP
-      // 'Invalid parameters' error from Target.attachToTarget.
-      throw new Error('js: target must be a target id string (see iframe_target/list_tabs)');
+  js = async (
+    expressionOrFunction: string | PageFunction,
+    rawOptions?: JsOptions,
+  ): Promise<unknown> => {
+    const options = normalizeJsOptions(rawOptions);
+    let expression: string;
+    if (typeof expressionOrFunction === 'string') {
+      if (Object.prototype.hasOwnProperty.call(options, 'arg')) {
+        throw new Error('js: arg is only supported when evaluating a page function');
+      }
+      expression = expressionOrFunction;
+    } else if (typeof expressionOrFunction === 'function') {
+      expression = buildFunctionCallExpression(expressionOrFunction, options.arg);
+    } else {
+      throw new Error('js: expected a JavaScript expression string or page function');
     }
-    if (targetId) {
-      return this.client.evaluateOnTarget(targetId, code);
+
+    if (options.targetId) {
+      return this.client.evaluateOnTarget(options.targetId, expression);
     }
-    return this.evaluateInPage(code);
+    return this.evaluateInPage(expression);
   };
 
-  uploadFile = async (selector: string, paths: string[]): Promise<void> => {
-    if (!Array.isArray(paths) || paths.length === 0) {
-      throw new Error('upload_file requires a non-empty array of VM-local file paths');
+  uploadFile = async (selector: string, path: string | string[]): Promise<void> => {
+    const paths = typeof path === 'string' ? [path] : path;
+    if (!Array.isArray(paths) || paths.length === 0 || paths.some((item) => typeof item !== 'string')) {
+      throw new Error('uploadFile requires a VM-local file path or a non-empty array of paths');
     }
     const doc = await this.client.sessionCommand<any>('DOM.getDocument', { depth: 0 });
     const queried = await this.client.sessionCommand<any>('DOM.querySelector', {
@@ -664,102 +777,185 @@ export class BrowserHelpers {
 
   // HTTP
 
-  httpGet = async (url: string): Promise<string> => {
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`GET ${url} failed with status ${res.status}`);
+  httpGet = async (
+    url: string,
+    headers?: Record<string, string>,
+    timeoutSec = 20,
+  ): Promise<string> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
+    try {
+      const res = await fetch(url, {
+        headers: { 'user-agent': 'Mozilla/5.0', 'accept-encoding': 'gzip', ...(headers ?? {}) },
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        throw new Error(`GET ${url} failed with status ${res.status}`);
+      }
+      return res.text();
+    } finally {
+      clearTimeout(timer);
     }
-    return res.text();
-  };
-
-  // Recording (delegates to the Kernel recording API)
-
-  startRecording = async (opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const body = normalizeRecordingOpts(opts);
-    const res = await fetch(`${API_BASE}/recording/start`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (res.status === 409) {
-      throw new Error('a recording is already in progress');
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`failed to start recording (status ${res.status}): ${text}`);
-    }
-    const recorderId = typeof body.id === 'string' && body.id !== '' ? body.id : 'default';
-    this.activeRecording = { recorderId, dir: process.env.OUTPUT_DIR ?? null };
-    return { recorder_id: recorderId };
-  };
-
-  stopRecording = async (opts?: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const body = normalizeRecordingOpts(opts);
-    const res = await fetch(`${API_BASE}/recording/stop`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`failed to stop recording (status ${res.status}): ${text}`);
-    }
-    const recorderId = this.activeRecording?.recorderId ?? 'default';
-    this.activeRecording = null;
-    return { recorder_id: recorderId };
-  };
-
-  recordingDir = async (): Promise<string | null> => {
-    return this.activeRecording ? this.activeRecording.dir : null;
   };
 
   // Internals
 
-  private async evaluateInPage(expression: string): Promise<any> {
-    const res = await this.client.sessionCommand<any>('Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    });
-    if (res.exceptionDetails) {
-      const desc =
-        res.exceptionDetails.exception?.description ?? res.exceptionDetails.text ?? 'evaluation failed';
-      throw new Error(desc);
+  private async waitForClickablePoint(selector: string, timeoutSec: number): Promise<ClickPoint> {
+    const { deadline } = this.waitDeadline(timeoutSec * 1000);
+    let lastStatus = 'not found';
+    for (;;) {
+      const result = await this.evaluateInPage(
+        `(async function resolveClickTarget(selector) {
+          const visible = (el) => {
+            if (!el.isConnected || el.getClientRects().length === 0) return false;
+            if (typeof el.checkVisibility === 'function') {
+              return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+            }
+            const style = getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          };
+          const candidates = [...document.querySelectorAll(selector)].filter(visible);
+          if (candidates.length === 0) return { status: 'not visible' };
+          if (candidates.length > 1) return { status: 'multiple', count: candidates.length };
+          const el = candidates[0];
+          if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') {
+            return { status: 'disabled' };
+          }
+          el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+          const before = el.getBoundingClientRect();
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          if (!el.isConnected || !visible(el)) return { status: 'detached or hidden' };
+          const after = el.getBoundingClientRect();
+          const stable =
+            Math.abs(before.x - after.x) < 0.25 &&
+            Math.abs(before.y - after.y) < 0.25 &&
+            Math.abs(before.width - after.width) < 0.25 &&
+            Math.abs(before.height - after.height) < 0.25;
+          if (!stable) return { status: 'moving' };
+          const left = Math.max(0, after.left);
+          const right = Math.min(innerWidth, after.right);
+          const top = Math.max(0, after.top);
+          const bottom = Math.min(innerHeight, after.bottom);
+          if (right <= left || bottom <= top) return { status: 'outside viewport' };
+          const x = left + (right - left) / 2;
+          const y = top + (bottom - top) / 2;
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || (hit !== el && !el.contains(hit))) {
+            return {
+              status: 'intercepted',
+              hit: hit ? hit.tagName.toLowerCase() : null,
+            };
+          }
+          return { status: 'ready', x, y };
+        })(${JSON.stringify(selector)})`,
+      ) as { status?: string; count?: number; x?: number; y?: number };
+
+      if (result?.status === 'ready' && typeof result.x === 'number' && typeof result.y === 'number') {
+        return { x: result.x, y: result.y };
+      }
+      if (result?.status === 'multiple') {
+        throw new Error(
+          `click: selector ${JSON.stringify(selector)} matches ${result.count} visible elements; use a more specific selector`,
+        );
+      }
+      lastStatus = result?.status ?? 'not actionable';
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `click: selector ${JSON.stringify(selector)} was not actionable within ${timeoutSec}s (${lastStatus})`,
+        );
+      }
+      await this.waitMs(Math.min(50, Math.max(0, deadline - Date.now())));
     }
-    return res.result?.value;
+  }
+
+  private async waitForFillTarget(selector: string, timeoutSec: number): Promise<void> {
+    const { deadline } = this.waitDeadline(timeoutSec * 1000);
+    let lastStatus = 'not found';
+    for (;;) {
+      const result = await this.evaluateInPage(
+        `(function resolveFillTarget(selector) {
+          const visible = (el) => {
+            if (!el.isConnected || el.getClientRects().length === 0) return false;
+            if (typeof el.checkVisibility === 'function') {
+              return el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+            }
+            const style = getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
+          };
+          const candidates = [...document.querySelectorAll(selector)].filter(visible);
+          if (candidates.length === 0) return { status: 'not visible' };
+          if (candidates.length > 1) return { status: 'multiple', count: candidates.length };
+          const el = candidates[0];
+          if (el.matches(':disabled') || el.getAttribute('aria-disabled') === 'true') {
+            return { status: 'disabled' };
+          }
+          const tag = el.tagName;
+          const inputType = tag === 'INPUT' ? (el.getAttribute('type') || 'text').toLowerCase() : null;
+          const textInput = tag === 'INPUT' && ![
+            'button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit',
+          ].includes(inputType);
+          const editable =
+            ((textInput || tag === 'TEXTAREA') && !el.readOnly) ||
+            el.isContentEditable;
+          if (!editable) return { status: 'not editable' };
+          el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+          el.focus();
+          if (!el.isConnected || (document.activeElement !== el && !el.contains(document.activeElement))) {
+            return { status: 'could not focus' };
+          }
+          return { status: 'ready' };
+        })(${JSON.stringify(selector)})`,
+      ) as { status?: string; count?: number };
+
+      if (result?.status === 'ready') return;
+      if (result?.status === 'multiple') {
+        throw new Error(
+          `fillInput: selector ${JSON.stringify(selector)} matches ${result.count} visible elements; use a more specific selector`,
+        );
+      }
+      lastStatus = result?.status ?? 'not editable';
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `fillInput: selector ${JSON.stringify(selector)} was not editable within ${timeoutSec}s (${lastStatus})`,
+        );
+      }
+      await this.waitMs(Math.min(50, Math.max(0, deadline - Date.now())));
+    }
+  }
+
+  private async evaluateInPage(expression: string): Promise<any> {
+    await this.client.ensureAttached();
+    return this.client.evaluate(this.client.sessionId!, expression);
   }
 }
 
 export function buildBrowserGlobals(helpers: BrowserHelpers): Record<string, unknown> {
   const namespace = {
     cdp: helpers.cdp,
-    drain_events: helpers.drainEvents,
-    goto_url: helpers.gotoUrl,
-    page_info: helpers.pageInfo,
-    click_at_xy: helpers.clickAtXy,
-    type_text: helpers.typeText,
-    fill_input: helpers.fillInput,
-    press_key: helpers.pressKey,
+    drainEvents: helpers.drainEvents,
+    gotoUrl: helpers.gotoUrl,
+    pageInfo: helpers.pageInfo,
+    click: helpers.click,
+    typeText: helpers.typeText,
+    fillInput: helpers.fillInput,
+    pressKey: helpers.pressKey,
     scroll: helpers.scroll,
-    capture_screenshot: helpers.captureScreenshot,
-    list_tabs: helpers.listTabs,
-    current_tab: helpers.currentTab,
-    switch_tab: helpers.switchTab,
-    new_tab: helpers.newTab,
-    close_tab: helpers.closeTab,
-    ensure_real_tab: helpers.ensureRealTab,
-    iframe_target: helpers.iframeTarget,
-    wait: helpers.wait,
-    wait_for_load: helpers.waitForLoad,
-    wait_for_element: helpers.waitForElement,
-    wait_for_network_idle: helpers.waitForNetworkIdle,
+    captureScreenshot: helpers.captureScreenshot,
+    listTabs: helpers.listTabs,
+    currentTab: helpers.currentTab,
+    switchTab: helpers.switchTab,
+    newTab: helpers.newTab,
+    closeTab: helpers.closeTab,
+    ensureRealTab: helpers.ensureRealTab,
+    iframeTarget: helpers.iframeTarget,
+    waitMs: helpers.waitMs,
+    waitForLoad: helpers.waitForLoad,
+    waitForElement: helpers.waitForElement,
+    waitForNetworkIdle: helpers.waitForNetworkIdle,
     js: helpers.js,
-    dispatch_key: helpers.dispatchKey,
-    upload_file: helpers.uploadFile,
-    http_get: helpers.httpGet,
-    start_recording: helpers.startRecording,
-    stop_recording: helpers.stopRecording,
-    recording_dir: helpers.recordingDir,
+    dispatchKey: helpers.dispatchKey,
+    uploadFile: helpers.uploadFile,
+    httpGet: helpers.httpGet,
   };
   const browser = Object.freeze({ ...namespace });
   return { browser, ...namespace };

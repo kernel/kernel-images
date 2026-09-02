@@ -383,16 +383,20 @@ RUN esbuild /tmp/playwright-daemon.ts \
 # Copy and install the browser REPL's pinned Meriyah dependency before bundling.
 COPY server/runtime/ /tmp/browser-repl/
 RUN npm ci --ignore-scripts --no-audit --no-fund --omit=dev --prefix /tmp/browser-repl \
-    && mkdir -p /usr/local/share/doc/kernel-images/meriyah \
+    && mkdir -p /usr/local/lib/browser-repl /usr/local/share/doc/kernel-images/meriyah /usr/local/share/doc/kernel-images/sharp \
     && cp /tmp/browser-repl/node_modules/meriyah/LICENSE.md /usr/local/share/doc/kernel-images/meriyah/LICENSE.md \
     && cp /tmp/browser-repl/node_modules/meriyah/package.json /usr/local/share/doc/kernel-images/meriyah/package.json \
+    && cp /tmp/browser-repl/node_modules/sharp/LICENSE /usr/local/share/doc/kernel-images/sharp/LICENSE \
+    && cp /tmp/browser-repl/node_modules/sharp/package.json /usr/local/share/doc/kernel-images/sharp/package.json \
+    && cp -a /tmp/browser-repl/node_modules /usr/local/lib/browser-repl/node_modules \
     && esbuild /tmp/browser-repl/browser-repl.ts \
       --bundle \
       --platform=node \
       --target=node22 \
       --format=cjs \
       --supported:dynamic-import=true \
-      --outfile=/usr/local/lib/browser-repl.js \
+      --external:sharp \
+      --outfile=/usr/local/lib/browser-repl/browser-repl.js \
     && rm -rf /tmp/browser-repl
 
 RUN useradd -m -s /bin/bash kernel

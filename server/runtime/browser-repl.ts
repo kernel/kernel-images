@@ -17,7 +17,6 @@ const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
 const MAX_TEXT_BYTES = 256 * 1024; // combined text per response
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // per emitted image
 const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024; // aggregate image data per response
-const MAX_RESULT_BYTES = 256 * 1024; // serialized result
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024; // incoming request line
 const MAX_STRAY_ITEMS = 1000; // buffered output produced outside an execution
 
@@ -25,12 +24,8 @@ const MAX_STRAY_ITEMS = 1000; // buffered output produced outside an execution
 // modification inside the context cannot corrupt protocol framing or result
 // serialization.
 const safeStringify = JSON.stringify;
-const safeParse = JSON.parse;
 const safeInspect = util.inspect;
 const safeFormat = util.format;
-const safeDateToISOString = Date.prototype.toISOString;
-const safeGetPrototypeOf = Object.getPrototypeOf;
-const safeKeys = Object.keys;
 
 // Content collection
 
@@ -307,148 +302,10 @@ const context: vm.Context = vm.createContext(
 
 contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, unknown>;
 
-// The context realm's Object.prototype. User values are created in the vm
-// context's realm, whose intrinsics differ from the daemon's, so plain-object
-// detection must compare against the context realm's prototype.
-const contextObjectPrototype: object = vm.runInContext('Object.prototype', context) as object;
-
-// Evaluation
-
 const cellRuntime = new CellRuntime(context, contextGlobal);
 
-async function evaluate(code: string): Promise<unknown> {
-  const result = await cellRuntime.evaluate(code);
-  return result.value;
-}
-
-// Result serialization
-
-interface SerializedResult {
-  result?: unknown;
-  result_repr?: string;
-  result_truncated: boolean;
-}
-
-function isErrorLike(value: unknown): value is Error {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    typeof (value as any).message === 'string' &&
-    typeof (value as any).stack === 'string' &&
-    /Error$/.test((value as any).constructor?.name ?? '')
-  );
-}
-
-// Serialize without invoking user-controlled toJSON hooks or getters.
-function toJsonText(value: unknown): string | undefined {
-  const seen = new Set<object>();
-
-  const write = (v: unknown): string | undefined => {
-    if (v === null) return 'null';
-    switch (typeof v) {
-      case 'boolean':
-        return v ? 'true' : 'false';
-      case 'number':
-        // Nested non-finite numbers follow JSON.stringify and become null;
-        // top-level non-finite numbers are routed to the repr by the caller.
-        return Number.isFinite(v) ? safeStringify(v) : 'null';
-      case 'string':
-        return safeStringify(v);
-      case 'bigint':
-        // JSON.stringify throws on bigint anywhere; route the whole value
-        // to the repr.
-        throw new Error('bigint is not JSON-compatible');
-      default:
-        // undefined, function, symbol: not representable; the caller
-        // decides between skip (object property), null (array element),
-        // and the repr fallback (top level).
-        if (typeof v !== 'object') return undefined;
-        break;
-    }
-
-    const obj = v as object;
-    // Dates serialize through the pristine toISOString. Cross-realm safe:
-    // the method reads internal slots, not context-realm prototypes. Throws
-    // for non-Dates and invalid Dates, which fall through to the plain
-    // object check (a Date's prototype is not Object.prototype, so invalid
-    // Dates end up in the repr as "Invalid Date").
-    try {
-      return safeStringify(safeDateToISOString.call(obj));
-    } catch {
-      // Not a Date; continue.
-    }
-
-    const isArray = Array.isArray(obj);
-    const proto = safeGetPrototypeOf(obj);
-    const isPlain = proto === null || proto === contextObjectPrototype || proto === Object.prototype;
-    if (!isArray && !isPlain) {
-      // Map, RegExp, class instances, etc.: JSON.stringify would silently
-      // produce {} or lossy output; route the whole value to the repr.
-      throw new Error('non-plain object is not JSON-compatible');
-    }
-    if (seen.has(obj)) {
-      // JSON.stringify throws on circular structures; route to the repr.
-      throw new Error('circular structure is not JSON-compatible');
-    }
-    seen.add(obj);
-    try {
-      if (isArray) {
-        const arr = obj as unknown[];
-        const parts: string[] = [];
-        for (let i = 0; i < arr.length; i++) {
-          const text = write(arr[i]);
-          // JSON.stringify serializes undefined/function/symbol array
-          // elements as null.
-          parts.push(text === undefined ? 'null' : text);
-        }
-        return `[${parts.join(',')}]`;
-      }
-      const parts: string[] = [];
-      for (const key of safeKeys(obj)) {
-        const text = write((obj as Record<string, unknown>)[key]);
-        // JSON.stringify skips undefined/function/symbol properties.
-        if (text === undefined) continue;
-        parts.push(`${safeStringify(key)}:${text}`);
-      }
-      return `{${parts.join(',')}}`;
-    } finally {
-      seen.delete(obj);
-    }
-  };
-
-  try {
-    return write(value);
-  } catch {
-    // Proxy traps, throwing getters, etc.
-    return undefined;
-  }
-}
-
-function serializeResult(value: unknown): SerializedResult {
-  if (value === undefined) {
-    // Surface undefined explicitly so it is distinguishable from null.
-    return { result_repr: 'undefined', result_truncated: false };
-  }
-  if (isErrorLike(value)) {
-    return { result_repr: String((value as any).stack ?? (value as any).message), result_truncated: false };
-  }
-  // JSON.stringify silently converts NaN/Infinity to null and -0 to 0;
-  // surface them through the repr instead of dropping the value.
-  if (typeof value === 'number' && (!Number.isFinite(value) || Object.is(value, -0))) {
-    return { result_repr: boundedInspect(value), result_truncated: false };
-  }
-  const json = toJsonText(value);
-  if (json === undefined) {
-    // Not JSON-compatible: functions, symbols, bigint, Map, RegExp, class
-    // instances, circular structures, throwing getters, etc.
-    return { result_repr: boundedInspect(value), result_truncated: false };
-  }
-  if (Buffer.byteLength(json) > MAX_RESULT_BYTES) {
-    return { result_repr: boundedInspect(value), result_truncated: true };
-  }
-  // Re-parse with the pristine parser so the framing serializer never sees
-  // context-realm objects (and their potentially polluted prototypes).
-  return { result: safeParse(json), result_truncated: false };
+async function evaluate(code: string): Promise<void> {
+  await cellRuntime.evaluate(code);
 }
 
 // Request handling
@@ -463,12 +320,9 @@ interface ExecuteResponse {
   id: string;
   repl_id: string;
   success: boolean;
-  result?: unknown;
-  result_repr?: string;
   error?: string;
   stack?: string;
   content: ContentItem[];
-  result_truncated: boolean;
   content_truncated: boolean;
   timed_out?: boolean;
   exiting?: boolean;
@@ -513,13 +367,11 @@ async function executeRequest(
       }, timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
     });
-    const value = await Promise.race([evaluate(request.code), timeoutPromise]);
-    const serialized = serializeResult(value);
+    await Promise.race([evaluate(request.code), timeoutPromise]);
     return {
       id: request.id,
       repl_id: REPL_ID,
       success: true,
-      ...serialized,
       content: collector.items,
       content_truncated: collector.truncated,
       duration_ms: Date.now() - start,
@@ -532,7 +384,6 @@ async function executeRequest(
       error: String(err?.message ?? err),
       stack: typeof err?.stack === 'string' ? err.stack : undefined,
       content: collector.items,
-      result_truncated: false,
       content_truncated: collector.truncated,
       // A timed-out execution is merely abandoned, not interrupted: its code
       // is still running. The API parent must kill this process (it does,
@@ -580,7 +431,6 @@ function enqueueExecution(request: ExecuteRequest, respond: (response: ExecuteRe
         success: false,
         error: `internal daemon error: ${String(err?.message ?? err)}`,
         content: [],
-        result_truncated: false,
         content_truncated: false,
         duration_ms: 0,
       };
@@ -633,7 +483,6 @@ function handleConnection(socket: Socket): void {
       success: false,
       error: `request exceeds the ${MAX_REQUEST_BYTES} byte limit`,
       content: [],
-      result_truncated: false,
       content_truncated: false,
       duration_ms: 0,
     });
@@ -666,7 +515,6 @@ function handleConnection(socket: Socket): void {
           success: false,
           error: 'invalid JSON request',
           content: [],
-          result_truncated: false,
           content_truncated: false,
           duration_ms: 0,
         });
@@ -680,7 +528,6 @@ function handleConnection(socket: Socket): void {
           success: false,
           error: 'invalid request: missing id or code',
           content: [],
-          result_truncated: false,
           content_truncated: false,
           duration_ms: 0,
         });
@@ -750,7 +597,6 @@ function onUncaughtException(err: unknown): void {
         error: `uncaught exception in browser REPL process: ${message}`,
         stack: typeof stack === 'string' ? stack : undefined,
         content: inFlight.collector.items,
-        result_truncated: false,
         content_truncated: inFlight.collector.truncated,
         exiting: true,
         duration_ms: Date.now() - inFlight.start,

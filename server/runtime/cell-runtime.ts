@@ -4,16 +4,11 @@ import {
   alreadyDeclaredError,
   analyzeCell,
   applyEdits,
-  bindingNames,
   canRedeclare,
   type CellAnalysis,
   type CellBinding,
   type CellBindingKind,
 } from './cell-analysis';
-
-export interface CellEvaluation {
-  value: unknown;
-}
 
 type PersistentBinding = CellBinding & { initialized: boolean; value?: unknown };
 
@@ -27,16 +22,14 @@ export class CellRuntime {
     private readonly contextGlobal: Record<PropertyKey, unknown>,
   ) {}
 
-  async evaluate(source: string): Promise<CellEvaluation> {
+  async evaluate(source: string): Promise<void> {
     const cellSequence = this.sequence++;
     const initializationTargetName = `__browser_repl_init_${cellSequence}_${randomBytes(16).toString('hex')}`;
     const initializationTarget = `globalThis[${JSON.stringify(initializationTargetName)}]`;
     const analysis = analyzeCell(source, initializationTarget);
     this.precheck(analysis.bindings);
 
-    const currentNames = bindingNames(analysis.bindings);
-    const resultName = analysis.finalExpression ? this.freshResultName(currentNames) : undefined;
-    const generated = this.buildSource(analysis, resultName, initializationTarget);
+    const generated = this.buildSource(analysis, initializationTarget);
 
     const module = new vm.SourceTextModule(generated, {
       context: this.context,
@@ -82,8 +75,7 @@ export class CellRuntime {
       delete this.contextGlobal[initializationTargetName];
     }
 
-    const value = resultName ? Reflect.get(module.namespace, resultName) : undefined;
-    return { value };
+    return;
   }
 
   private precheck(bindings: CellBinding[]): void {
@@ -152,34 +144,15 @@ export class CellRuntime {
     }
   }
 
-  private freshResultName(names: Set<string>): string {
-    let candidate = `__browser_repl_result_${this.sequence}`;
-    while (names.has(candidate) || this.declarations.has(candidate) || this.values.has(candidate)) candidate += '_';
-    return candidate;
-  }
-
-  private buildSource(
-    analysis: CellAnalysis,
-    resultName: string | undefined,
-    initializationTarget: string,
-  ): string {
-    const edits = [...analysis.edits];
-    if (analysis.finalExpression && resultName) {
-      const { statementStart, statementEnd, expressionStart, expressionEnd } = analysis.finalExpression;
-      edits.push({
-        start: statementStart,
-        end: statementEnd,
-        text: `const ${resultName} = (${analysis.source.slice(expressionStart, expressionEnd)});`,
-      });
-    }
-    const body = applyEdits(analysis.source, edits);
+  private buildSource(analysis: CellAnalysis, initializationTarget: string): string {
+    const body = applyEdits(analysis.source, analysis.edits);
     const prelude = analysis.hoistedFunctions
       .map(({ name, alias }) =>
         `Object.defineProperty(${alias}, "name", { value: ${JSON.stringify(name)}, configurable: true }); ` +
         `${initializationTarget}[${JSON.stringify(name)}] = ${alias};`,
       )
       .join(' ');
-    return `${prelude}\n${body}${resultName ? `\nexport { ${resultName} };` : ''}`;
+    return `${prelude}\n${body}`;
   }
 
   private exposeGlobal(binding: PersistentBinding): void {

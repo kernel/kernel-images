@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -33,19 +34,12 @@ func ensureBrowserReplBundle(t *testing.T) string {
 			browserReplBundleErr = fmt.Errorf("esbuild not available: %w", err)
 			return
 		}
-		dir, err := os.MkdirTemp("", "browser-repl-bundle")
-		if err != nil {
-			browserReplBundleErr = err
-			return
-		}
-		browserReplBundlePath = filepath.Join(dir, "browser-repl.js")
-
 		stagingDir, err := os.MkdirTemp("", "browser-repl-runtime")
 		if err != nil {
 			browserReplBundleErr = err
 			return
 		}
-		defer os.RemoveAll(stagingDir)
+		browserReplBundlePath = filepath.Join(stagingDir, "browser-repl.js")
 		entries, err := os.ReadDir(filepath.Join(serverRootDir(), "runtime"))
 		if err != nil {
 			browserReplBundleErr = err
@@ -83,6 +77,7 @@ func ensureBrowserReplBundle(t *testing.T) string {
 			"--target=node22",
 			"--format=cjs",
 			"--supported:dynamic-import=true",
+			"--external:sharp",
 			"--outfile="+browserReplBundlePath,
 		)
 		cmd.Dir = stagingDir
@@ -129,29 +124,43 @@ func newBrowserReplSvc(t *testing.T) *ApiService {
 	return svc
 }
 
-func execBrowserCode(t *testing.T, svc *ApiService, body *oapi.ExecuteBrowserCodeJSONRequestBody) oapi.ExecuteBrowserCode200JSONResponse {
+func executeBrowserRepl(t *testing.T, svc *ApiService, body *oapi.ExecuteBrowserReplJSONRequestBody) oapi.ExecuteBrowserRepl200JSONResponse {
 	t.Helper()
-	resp, err := svc.ExecuteBrowserCode(context.Background(), oapi.ExecuteBrowserCodeRequestObject{Body: body})
+	resp, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{Body: body})
 	require.NoError(t, err)
-	typed, ok := resp.(oapi.ExecuteBrowserCode200JSONResponse)
+	typed, ok := resp.(oapi.ExecuteBrowserRepl200JSONResponse)
 	require.True(t, ok, "expected 200 response, got %T", resp)
 	return typed
 }
 
-func execCode(t *testing.T, svc *ApiService, code string) oapi.ExecuteBrowserCode200JSONResponse {
+func execCode(t *testing.T, svc *ApiService, code string) oapi.ExecuteBrowserRepl200JSONResponse {
 	t.Helper()
-	return execBrowserCode(t, svc, &oapi.ExecuteBrowserCodeJSONRequestBody{Code: code})
+	return executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: code})
 }
 
-func requireExec(t *testing.T, svc *ApiService, code string, want any) oapi.ExecuteBrowserCode200JSONResponse {
+func requireExec(t *testing.T, svc *ApiService, code string, want any) oapi.ExecuteBrowserRepl200JSONResponse {
 	t.Helper()
 	resp := execCode(t, svc, code)
 	require.True(t, resp.Success, "code %q failed: %v", code, resp.Error)
-	require.Equal(t, want, resp.Result, "code: %q", code)
+	if want == nil {
+		return resp
+	}
+	require.NotNil(t, resp.Content, "code %q emitted no content", code)
+	for i := len(*resp.Content) - 1; i >= 0; i-- {
+		text, err := (*resp.Content)[i].AsBrowserReplTextContent()
+		if err != nil || text.Channel != oapi.BrowserReplTextContentChannelWrite {
+			continue
+		}
+		var got any
+		require.NoError(t, json.Unmarshal([]byte(text.Text), &got), "code: %q", code)
+		require.Equal(t, want, got, "code: %q", code)
+		return resp
+	}
+	t.Fatalf("code %q emitted no repl.write content", code)
 	return resp
 }
 
-func requireExecError(t *testing.T, svc *ApiService, code, contains string) oapi.ExecuteBrowserCode200JSONResponse {
+func requireExecError(t *testing.T, svc *ApiService, code, contains string) oapi.ExecuteBrowserRepl200JSONResponse {
 	t.Helper()
 	resp := execCode(t, svc, code)
 	require.False(t, resp.Success, "expected code %q to fail", code)
