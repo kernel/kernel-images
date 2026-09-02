@@ -170,6 +170,39 @@ func TestIsValidationErr_Nil(t *testing.T) {
 	assert.False(t, isValidationErr(nil))
 }
 
+func TestNormalizeXdotoolKeySequence(t *testing.T) {
+	tests := map[string]string{
+		"ctrl+-":         "ctrl+minus",
+		"Ctrl + -":       "Ctrl+minus",
+		"minus":          "minus",
+		"Ctrl+Shift+Tab": "Ctrl+Shift+Tab",
+	}
+	for input, expected := range tests {
+		t.Run(input, func(t *testing.T) {
+			assert.Equal(t, expected, normalizeXdotoolKeySequence(input))
+		})
+	}
+}
+
+func TestXdotoolKeyError(t *testing.T) {
+	tests := []struct {
+		name       string
+		output     string
+		validation bool
+	}{
+		{name: "invalid sequence", output: "Error: Invalid key sequence 'ctrl+wat'", validation: true},
+		{name: "conversion failure", output: "Failure converting key sequence 'ctrl+wat' to keycodes", validation: true},
+		{name: "execution failure", output: "xdo_send_keysequence_window reported an error", validation: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := xdotoolKeyError("failed to press keys", []byte(tt.output))
+			assert.Equal(t, tt.validation, isValidationErr(err))
+			assert.Contains(t, err.Error(), tt.output)
+		})
+	}
+}
+
 func TestGaussianDelay(t *testing.T) {
 	const n = 10000
 	meanMs := 10
