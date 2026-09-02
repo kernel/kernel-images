@@ -407,6 +407,21 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this.emit('error', (event as ErrorEvent).error)
   }
 
+  private postParentMessage(message: Record<string, unknown>) {
+    if (window.parent === window) {
+      return
+    }
+
+    let targetOrigin = '*'
+    try {
+      if (document.referrer) {
+        targetOrigin = new URL(document.referrer).origin
+      }
+    } catch (e) {}
+
+    window.parent.postMessage(message, targetOrigin)
+  }
+
   private onConnected() {
     if (this._timeout) {
       clearTimeout(this._timeout)
@@ -424,6 +439,14 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
   private onTimeout() {
     this.emit('debug', `connection timeout`)
+    this.postParentMessage({
+      type: 'KERNEL_CONNECTION_TIMEOUT',
+      reason: 'connection timeout',
+      iceConnectionState: this._peer?.iceConnectionState ?? this._state,
+      connectionState: this._peer?.connectionState,
+      signalingState: this._peer?.signalingState,
+      socketOpen: this.socketOpen,
+    })
     if (this._timeout) {
       clearTimeout(this._timeout)
       this._timeout = undefined
