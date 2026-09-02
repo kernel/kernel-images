@@ -18,6 +18,12 @@ export interface BaseEvents {
   error: (error: Error) => void
 }
 
+type IceCandidateSummary = {
+  candidateType?: string
+  protocol?: string
+  addressFamily?: 'ipv4' | 'ipv6' | 'unknown'
+}
+
 export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _ws?: WebSocket
   protected _ws_heartbeat?: number
@@ -28,6 +34,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _state: RTCIceConnectionState = 'disconnected'
   protected _id = ''
   protected _candidates: RTCIceCandidate[] = []
+  private _localIceCandidates: IceCandidateSummary[] = []
+  private _remoteIceCandidates: IceCandidateSummary[] = []
 
   get id() {
     return this._id
@@ -134,6 +142,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this._state = 'disconnected'
     this._displayname = undefined
     this._id = ''
+    this._localIceCandidates = []
+    this._remoteIceCandidates = []
   }
 
   public sendData(event: 'wheel', data: { x: number; y: number; controlKey?: boolean }): void
@@ -272,6 +282,10 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       }
 
       const init = event.candidate.toJSON()
+      const summary = this.summarizeIceCandidate(init.candidate)
+      if (summary) {
+        this._localIceCandidates.push(summary)
+      }
       this.emit('debug', `sending local ICE candidate`, init)
 
       this._ws!.send(
@@ -372,6 +386,10 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     if (event === EVENT.SIGNAL.CANDIDATE) {
       const { data } = payload as SignalCandidatePayload
       const candidate: RTCIceCandidate = JSON.parse(data)
+      const summary = this.summarizeIceCandidate(candidate.candidate)
+      if (summary) {
+        this._remoteIceCandidates.push(summary)
+      }
       if (this._peer) {
         this._peer.addIceCandidate(candidate)
       } else {
@@ -387,6 +405,30 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     } else {
       this[EVENT.MESSAGE](event, payload)
     }
+  }
+
+  private summarizeIceCandidate(candidate: string | undefined): IceCandidateSummary | undefined {
+    if (!candidate) {
+      return undefined
+    }
+
+    const parts = candidate.trim().split(/\s+/)
+    const address = parts[4]
+    const typeIndex = parts.indexOf('typ')
+
+    return {
+      protocol: parts[2]?.toLowerCase(),
+      candidateType: typeIndex >= 0 ? parts[typeIndex + 1] : undefined,
+      addressFamily: this.addressFamily(address),
+    }
+  }
+
+  private addressFamily(address: string | undefined): 'ipv4' | 'ipv6' | 'unknown' {
+    if (!address) {
+      return 'unknown'
+    }
+
+    return address.includes(':') ? 'ipv6' : 'ipv4'
   }
 
   private onData(e: MessageEvent) {
@@ -446,6 +488,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       connectionState: this._peer?.connectionState,
       signalingState: this._peer?.signalingState,
       socketOpen: this.socketOpen,
+      localCandidates: this._localIceCandidates.slice(-10),
+      remoteCandidates: this._remoteIceCandidates.slice(-10),
     })
     if (this._timeout) {
       clearTimeout(this._timeout)
