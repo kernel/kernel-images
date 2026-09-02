@@ -24,6 +24,8 @@ type IceCandidateSummary = {
   addressFamily?: 'ipv4' | 'ipv6' | 'unknown'
 }
 
+type IceTransportPolicy = 'all' | 'relay'
+
 export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _ws?: WebSocket
   protected _ws_heartbeat?: number
@@ -36,6 +38,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _candidates: RTCIceCandidate[] = []
   private _localIceCandidates: IceCandidateSummary[] = []
   private _remoteIceCandidates: IceCandidateSummary[] = []
+  private _iceTransportPolicy: IceTransportPolicy = 'all'
 
   get id() {
     return this._id
@@ -144,6 +147,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this._id = ''
     this._localIceCandidates = []
     this._remoteIceCandidates = []
+    this._iceTransportPolicy = 'all'
   }
 
   public sendData(event: 'wheel', data: { x: number; y: number; controlKey?: boolean }): void
@@ -227,9 +231,12 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     if (lite !== true) {
+      this._iceTransportPolicy = this.iceTransportPolicy()
       this._peer = new RTCPeerConnection({
         iceServers: servers,
+        iceTransportPolicy: this._iceTransportPolicy,
       })
+      this.emit('debug', `created peer with ICE transport policy: ${this._iceTransportPolicy}`)
     } else {
       this._peer = new RTCPeerConnection()
     }
@@ -407,6 +414,11 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
   }
 
+  private iceTransportPolicy(): IceTransportPolicy {
+    const attempt = Number(new URL(location.href).searchParams.get('kernelLiveViewAttempt') || '0')
+    return Number.isFinite(attempt) && attempt > 0 ? 'relay' : 'all'
+  }
+
   private summarizeIceCandidate(candidate: string | undefined): IceCandidateSummary | undefined {
     if (!candidate) {
       return undefined
@@ -459,7 +471,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       if (document.referrer) {
         targetOrigin = new URL(document.referrer).origin
       }
-    } catch (e) {}
+    } catch {}
 
     window.parent.postMessage(message, targetOrigin)
   }
@@ -488,6 +500,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       connectionState: this._peer?.connectionState,
       signalingState: this._peer?.signalingState,
       socketOpen: this.socketOpen,
+      iceTransportPolicy: this._iceTransportPolicy,
       localCandidates: this._localIceCandidates.slice(-10),
       remoteCandidates: this._remoteIceCandidates.slice(-10),
     })
