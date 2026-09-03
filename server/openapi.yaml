@@ -1678,8 +1678,8 @@ paths:
     delete:
       summary: Release a bounded scale-to-zero lease.
       description: >
-        Idempotently releases the named lease. Scale-to-zero is re-enabled when
-        no request, permanent pin, or other bounded lease remains.
+        Idempotently releases the named lease. The VM may scale to zero again
+        once all leases are released and scale-to-zero is enabled.
       operationId: releaseScaleToZeroLease
       x-telemetry-category: platform
       parameters:
