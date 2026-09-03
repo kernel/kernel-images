@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/scaletozero"
 )
 
 var scaleToZeroLeaseIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -33,6 +35,9 @@ func (s *ApiService) AcquireScaleToZeroLease(ctx context.Context, req oapi.Acqui
 	}
 	ttl := time.Duration(req.Params.TtlSeconds) * time.Second
 	if err := s.stz.AcquireLease(ctx, req.LeaseId, ttl); err != nil {
+		if errors.Is(err, scaletozero.ErrLeaseLimit) {
+			return oapi.AcquireScaleToZeroLease409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: scaletozero.ErrLeaseLimit.Error()}}, nil
+		}
 		logger.FromContext(ctx).Error("failed to acquire scale-to-zero lease", "err", err, "lease_id", req.LeaseId)
 		return oapi.AcquireScaleToZeroLease500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to acquire scale-to-zero lease"}}, nil
 	}

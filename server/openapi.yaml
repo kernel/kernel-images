@@ -1671,6 +1671,8 @@ paths:
           description: Lease acquired or renewed
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
     delete:

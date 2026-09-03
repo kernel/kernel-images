@@ -2,6 +2,7 @@ package scaletozero
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,6 +18,9 @@ const (
 	unikraftScaleToZeroFile = "/uk/libukp/scale_to_zero_disable"
 	maxScaleToZeroLeases    = 1024
 )
+
+// ErrLeaseLimit indicates that the controller cannot accept another distinct lease.
+var ErrLeaseLimit = errors.New("scale-to-zero lease limit reached")
 
 type Controller interface {
 	// Disable turns scale-to-zero off.
@@ -121,14 +125,15 @@ func (o *Oncer) Enable(ctx context.Context) error {
 }
 
 type DebouncedController struct {
-	ctrl          Controller
-	cooldown      time.Duration
-	mu            sync.Mutex
-	disabled      bool
-	activeCount   int
-	pinned        bool
-	leases        map[string]*lease
-	reenableTimer *time.Timer
+	ctrl                Controller
+	cooldown            time.Duration
+	mu                  sync.Mutex
+	disabled            bool
+	activeCount         int
+	pinned              bool
+	leases              map[string]*lease
+	reenableTimer       *time.Timer
+	scheduleLeaseExpiry func(time.Duration, func()) *time.Timer
 }
 
 type lease struct {
@@ -137,7 +142,7 @@ type lease struct {
 
 // NewDebouncedController creates a DebouncedController with no re-enable cooldown.
 func NewDebouncedController(ctrl Controller) *DebouncedController {
-	return &DebouncedController{ctrl: ctrl}
+	return &DebouncedController{ctrl: ctrl, scheduleLeaseExpiry: time.AfterFunc}
 }
 
 // NewDebouncedControllerWithCooldown creates a DebouncedController that delays
@@ -145,7 +150,7 @@ func NewDebouncedController(ctrl Controller) *DebouncedController {
 // releases. A new Disable call during the cooldown cancels the pending
 // re-enable, avoiding rapid toggling from sequential requests.
 func NewDebouncedControllerWithCooldown(ctrl Controller, cooldown time.Duration) *DebouncedController {
-	return &DebouncedController{ctrl: ctrl, cooldown: cooldown}
+	return &DebouncedController{ctrl: ctrl, cooldown: cooldown, scheduleLeaseExpiry: time.AfterFunc}
 }
 
 func (c *DebouncedController) Disable(ctx context.Context) error {
@@ -246,7 +251,7 @@ func (c *DebouncedController) AcquireLease(ctx context.Context, id string, ttl t
 	}
 	previous := c.leases[id]
 	if previous == nil && len(c.leases) >= maxScaleToZeroLeases {
-		return fmt.Errorf("scale-to-zero lease limit reached")
+		return ErrLeaseLimit
 	}
 	if c.reenableTimer != nil {
 		c.reenableTimer.Stop()
@@ -262,7 +267,7 @@ func (c *DebouncedController) AcquireLease(ctx context.Context, id string, ttl t
 		previous.timer.Stop()
 	}
 	current := &lease{}
-	current.timer = time.AfterFunc(ttl, func() {
+	current.timer = c.scheduleLeaseExpiry(ttl, func() {
 		c.expireLease(id, current)
 	})
 	c.leases[id] = current

@@ -426,6 +426,53 @@ func TestDebouncedControllerLeaseRenewalExtendsExpiry(t *testing.T) {
 	}, time.Second, 5*time.Millisecond)
 }
 
+func TestDebouncedControllerLeaseRenewalSurvivesStaleExpiry(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+	expiryStarted := make(chan struct{})
+	resumeExpiry := make(chan struct{})
+	expiryDone := make(chan struct{})
+	var resumeOnce sync.Once
+	t.Cleanup(func() {
+		resumeOnce.Do(func() { close(resumeExpiry) })
+	})
+
+	scheduled := 0
+	c.scheduleLeaseExpiry = func(_ time.Duration, expire func()) *time.Timer {
+		timer := time.NewTimer(time.Hour)
+		scheduled++
+		if scheduled == 1 {
+			go func() {
+				close(expiryStarted)
+				<-resumeExpiry
+				expire()
+				close(expiryDone)
+			}()
+		}
+		return timer
+	}
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Millisecond))
+	<-expiryStarted
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Hour))
+
+	c.mu.Lock()
+	renewed := c.leases["download"]
+	c.mu.Unlock()
+	resumeOnce.Do(func() { close(resumeExpiry) })
+	<-expiryDone
+
+	c.mu.Lock()
+	require.Same(t, renewed, c.leases["download"])
+	c.mu.Unlock()
+	mock.mu.Lock()
+	require.Zero(t, mock.enableCalls)
+	mock.mu.Unlock()
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+}
+
 func TestDebouncedControllerLeaseReleaseIsIndependentOfPermanentPin(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
