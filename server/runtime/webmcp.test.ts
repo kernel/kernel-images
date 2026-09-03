@@ -66,6 +66,24 @@ test('invokes an exact tool reference with input and timeout', async () => {
   });
 });
 
+test('returns non-autosubmit form activation without waiting for submission', async () => {
+  const client = createWebMCPClient({
+    apiBaseUrl: 'http://127.0.0.1:10001',
+    fetchImpl: async () =>
+      jsonResponse({
+        invocation_id: 'invocation-1',
+        status: 'awaiting_user_action',
+        output: {message: 'Form fields populated; submission has not started.'},
+      }),
+  });
+
+  const result = await client.invokeTool('wmcp_fill', {email: 'buyer@example.com'});
+  assert.equal(result.status, 'awaiting_user_action');
+  assert.deepEqual(result.output, {
+    message: 'Form fields populated; submission has not started.',
+  });
+});
+
 test('preserves structured WebMCP failures', async () => {
   const client = createWebMCPClient({
     apiBaseUrl: 'http://127.0.0.1:10001',

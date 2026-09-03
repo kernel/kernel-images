@@ -1389,10 +1389,10 @@ paths:
     post:
       summary: Invoke a discovered WebMCP tool
       description: |
-        Invokes the exact live registration identified by tool_ref and waits for its result.
-        Navigation during execution is allowed. If the tab or embedded frame disappears, or the
-        request times out after invocation begins, the server reports outcome_unknown and never
-        retries the tool automatically.
+        Invokes the exact live registration identified by tool_ref. Non-autosubmit declarative form
+        tools return after their fields are populated with an awaiting_user_action status. Other tools
+        wait for a terminal result, including across navigation. If the request times out after invocation
+        begins, the server reports outcome_unknown and never retries the tool automatically.
       operationId: invokeWebMCPTool
       x-telemetry-category: control
       requestBody:
@@ -1404,7 +1404,7 @@ paths:
               $ref: "#/components/schemas/WebMCPInvokeRequest"
       responses:
         "200":
-          description: Chromium reported the tool's terminal result.
+          description: Chromium accepted the invocation and either populated a non-autosubmit form or reported a terminal result.
           content:
             application/json:
               schema:
@@ -6345,7 +6345,8 @@ components:
           type: string
         status:
           type: string
-          enum: [completed, canceled, error]
+          enum: [completed, canceled, error, awaiting_user_action]
+          description: awaiting_user_action means a non-autosubmit declarative form was populated but not submitted.
         output:
           description: Untrusted page-provided output. Callers must treat it as potentially malicious input.
         error_text:

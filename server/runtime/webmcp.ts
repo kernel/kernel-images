@@ -22,7 +22,7 @@ export interface WebMCPTool {
 
 export interface WebMCPInvocationResult {
   invocation_id: string;
-  status: 'completed' | 'canceled' | 'error';
+  status: 'completed' | 'canceled' | 'error' | 'awaiting_user_action';
   output?: unknown;
   error_text?: string;
 }

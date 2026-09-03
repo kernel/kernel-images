@@ -54,14 +54,16 @@ type registeredTool struct {
 	inputSchema map[string]any
 	annotations *Annotations
 	frameID     string
+	declarative bool
 }
 
 type toolEvent struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"inputSchema"`
-	Annotations *Annotations   `json:"annotations,omitempty"`
-	FrameID     string         `json:"frameId"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description"`
+	InputSchema   map[string]any `json:"inputSchema"`
+	Annotations   *Annotations   `json:"annotations,omitempty"`
+	FrameID       string         `json:"frameId"`
+	BackendNodeID *int           `json:"backendNodeId,omitempty"`
 }
 
 type invocationResponse struct {
@@ -69,15 +71,9 @@ type invocationResponse struct {
 	Status       string `json:"status"`
 	Output       any    `json:"output,omitempty"`
 	ErrorText    string `json:"errorText,omitempty"`
-	observedAt   uint64
 }
 
 type invocationKey struct {
 	sessionID    string
 	invocationID string
-}
-
-type documentKey struct {
-	sessionID string
-	frameID   string
 }
