@@ -172,8 +172,10 @@ func TestIsValidationErr_Nil(t *testing.T) {
 
 func TestNormalizeXdotoolKeySequence(t *testing.T) {
 	tests := map[string]string{
+		"-":              "minus",
 		"ctrl+-":         "ctrl+minus",
 		"Ctrl + -":       "Ctrl+minus",
+		"Ctrl++":         "Ctrl++",
 		"minus":          "minus",
 		"Ctrl+Shift+Tab": "Ctrl+Shift+Tab",
 	}
@@ -190,8 +192,8 @@ func TestXdotoolKeyError(t *testing.T) {
 		output     string
 		validation bool
 	}{
-		{name: "invalid sequence", output: "Error: Invalid key sequence 'ctrl+wat'", validation: true},
-		{name: "conversion failure", output: "Failure converting key sequence 'ctrl+wat' to keycodes", validation: true},
+		{name: "invalid sequence", output: "Error: Invalid key sequence 'ctrl+-'", validation: true},
+		{name: "conversion failure", output: "Failure converting key sequence 'ctrl+-' to keycodes", validation: true},
 		{name: "execution failure", output: "xdo_send_keysequence_window reported an error", validation: false},
 	}
 	for _, tt := range tests {
