@@ -51,6 +51,7 @@ func CategoryForType(eventType string) (oapi.TelemetryEventCategory, bool) {
 }
 
 var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
+	"AcquireScaleToZeroLease":    oapi.TelemetryEventCategory("platform"),
 	"BatchComputerAction":        oapi.TelemetryEventCategory("control"),
 	"ChromiumConfigure":          oapi.TelemetryEventCategory("platform"),
 	"ClickMouse":                 oapi.TelemetryEventCategory("control"),
@@ -92,6 +93,7 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"PutTelemetry":               oapi.TelemetryEventCategory("platform"),
 	"ReadClipboard":              oapi.TelemetryEventCategory("control"),
 	"ReadFile":                   oapi.TelemetryEventCategory("platform"),
+	"ReleaseScaleToZeroLease":    oapi.TelemetryEventCategory("platform"),
 	"Scroll":                     oapi.TelemetryEventCategory("control"),
 	"SetCursor":                  oapi.TelemetryEventCategory("control"),
 	"SetFilePermissions":         oapi.TelemetryEventCategory("platform"),

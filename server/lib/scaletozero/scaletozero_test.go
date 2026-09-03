@@ -389,3 +389,66 @@ func TestDebouncedControllerUnpinRetryableAfterEnableFailure(t *testing.T) {
 	require.NoError(t, c.Unpin(t.Context()))
 	assert.Equal(t, 2, mock.enableCalls)
 }
+
+func TestDebouncedControllerLeaseExpires(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", 25*time.Millisecond))
+	require.Equal(t, 1, mock.disableCalls)
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.enableCalls == 1
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestDebouncedControllerLeaseRenewalExtendsExpiry(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", 50*time.Millisecond))
+	time.Sleep(30 * time.Millisecond)
+	require.NoError(t, c.AcquireLease(t.Context(), "download", 70*time.Millisecond))
+	time.Sleep(35 * time.Millisecond)
+
+	mock.mu.Lock()
+	require.Zero(t, mock.enableCalls)
+	mock.mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.enableCalls == 1
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestDebouncedControllerLeaseReleaseIsIndependentOfPermanentPin(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.Pin(t.Context()))
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Second))
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+	require.Zero(t, mock.enableCalls)
+
+	require.NoError(t, c.Unpin(t.Context()))
+	require.Equal(t, 1, mock.enableCalls)
+}
+
+func TestDebouncedControllerLeaseReleaseWaitsForOtherLeases(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "first", time.Second))
+	require.NoError(t, c.AcquireLease(t.Context(), "second", time.Second))
+	require.NoError(t, c.ReleaseLease(t.Context(), "first"))
+	require.Zero(t, mock.enableCalls)
+
+	require.NoError(t, c.ReleaseLease(t.Context(), "second"))
+	require.Equal(t, 1, mock.enableCalls)
+}

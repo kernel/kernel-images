@@ -1644,6 +1644,56 @@ paths:
           description: Scale-to-zero enabled
         "500":
           $ref: "#/components/responses/InternalError"
+  /scaletozero/leases/{lease_id}:
+    put:
+      summary: Acquire or renew a bounded scale-to-zero lease.
+      description: >
+        Prevents the VM from scaling to zero until the lease is released or
+        expires. Repeating the request with the same lease ID renews its expiry.
+      operationId: acquireScaleToZeroLease
+      x-telemetry-category: platform
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9_-]{1,128}$"
+        - name: ttl_seconds
+          in: query
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 300
+      responses:
+        "204":
+          description: Lease acquired or renewed
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      summary: Release a bounded scale-to-zero lease.
+      description: >
+        Idempotently releases the named lease. Scale-to-zero is re-enabled when
+        no request, permanent pin, or other bounded lease remains.
+      operationId: releaseScaleToZeroLease
+      x-telemetry-category: platform
+      parameters:
+        - name: lease_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9_-]{1,128}$"
+      responses:
+        "204":
+          description: Lease released
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
 components:
   schemas:
     ExtensionUploadMultipart:

@@ -2,7 +2,9 @@ package scaletozero
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -36,6 +38,11 @@ type PinnedController interface {
 	// Unpin releases the pin. If no request-driven holders remain,
 	// scale-to-zero is re-enabled (honoring any configured cooldown).
 	Unpin(ctx context.Context) error
+	// AcquireLease holds scale-to-zero disabled for a bounded duration. Calling
+	// it again with the same ID renews the lease.
+	AcquireLease(ctx context.Context, id string, ttl time.Duration) error
+	// ReleaseLease releases a bounded lease before it expires.
+	ReleaseLease(ctx context.Context, id string) error
 }
 
 type unikraftCloudController struct {
@@ -82,10 +89,12 @@ type NoopController struct{}
 
 func NewNoopController() *NoopController { return &NoopController{} }
 
-func (NoopController) Disable(context.Context) error { return nil }
-func (NoopController) Enable(context.Context) error  { return nil }
-func (NoopController) Pin(context.Context) error     { return nil }
-func (NoopController) Unpin(context.Context) error   { return nil }
+func (NoopController) Disable(context.Context) error                             { return nil }
+func (NoopController) Enable(context.Context) error                              { return nil }
+func (NoopController) Pin(context.Context) error                                 { return nil }
+func (NoopController) Unpin(context.Context) error                               { return nil }
+func (NoopController) AcquireLease(context.Context, string, time.Duration) error { return nil }
+func (NoopController) ReleaseLease(context.Context, string) error                { return nil }
 
 // Oncer wraps a Controller and ensures that Disable and Enable are called at most once.
 type Oncer struct {
@@ -115,7 +124,12 @@ type DebouncedController struct {
 	disabled      bool
 	activeCount   int
 	pinned        bool
+	leases        map[string]*lease
 	reenableTimer *time.Timer
+}
+
+type lease struct {
+	timer *time.Timer
 }
 
 // NewDebouncedController creates a DebouncedController with no re-enable cooldown.
@@ -213,10 +227,71 @@ func (c *DebouncedController) Unpin(ctx context.Context) error {
 	return nil
 }
 
-// maybeReenableLocked re-enables scale-to-zero if no holders (request-driven or
-// pin) remain. Caller must hold c.mu.
+func (c *DebouncedController) AcquireLease(ctx context.Context, id string, ttl time.Duration) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("lease id is required")
+	}
+	if ttl <= 0 {
+		return fmt.Errorf("lease ttl must be positive")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.reenableTimer != nil {
+		c.reenableTimer.Stop()
+		c.reenableTimer = nil
+	}
+	if !c.disabled {
+		if err := c.ctrl.Disable(ctx); err != nil {
+			return err
+		}
+		c.disabled = true
+	}
+	if c.leases == nil {
+		c.leases = make(map[string]*lease)
+	}
+	if current := c.leases[id]; current != nil {
+		current.timer.Stop()
+	}
+	current := &lease{}
+	current.timer = time.AfterFunc(ttl, func() {
+		c.expireLease(id, current)
+	})
+	c.leases[id] = current
+	return nil
+}
+
+func (c *DebouncedController) ReleaseLease(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("lease id is required")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if current := c.leases[id]; current != nil {
+		current.timer.Stop()
+		delete(c.leases, id)
+	}
+	return c.maybeReenableLocked(ctx)
+}
+
+func (c *DebouncedController) expireLease(id string, expired *lease) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.leases[id] != expired {
+		return
+	}
+	delete(c.leases, id)
+	_ = c.maybeReenableLocked(context.Background())
+}
+
+// maybeReenableLocked re-enables scale-to-zero if no holders (request-driven,
+// permanent pin, or lease) remain. Caller must hold c.mu.
 func (c *DebouncedController) maybeReenableLocked(ctx context.Context) error {
-	if c.activeCount > 0 || c.pinned || !c.disabled {
+	if c.activeCount > 0 || c.pinned || len(c.leases) > 0 || !c.disabled {
 		return nil
 	}
 
@@ -235,7 +310,7 @@ func (c *DebouncedController) maybeReenableLocked(ctx context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
-		if c.activeCount > 0 || c.pinned || !c.disabled {
+		if c.activeCount > 0 || c.pinned || len(c.leases) > 0 || !c.disabled {
 			return
 		}
 
