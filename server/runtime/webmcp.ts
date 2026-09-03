@@ -48,16 +48,22 @@ export class WebMCPRequestError extends Error {
 
   constructor(statusCode: number, body: unknown) {
     const fields = isRecord(body) ? body : {};
-    const message =
+    const code = typeof fields.code === 'string' ? fields.code : undefined;
+    const invocationId =
+      typeof fields.invocation_id === 'string' ? fields.invocation_id : undefined;
+    const detail =
       typeof fields.message === 'string'
         ? fields.message
-        : `WebMCP request failed with status ${statusCode}`;
-    super(message);
+        : `request failed with status ${statusCode}`;
+    // The Playwright daemon only forwards error.message, so the message itself
+    // must identify this as a WebMCP failure and carry the code and invocation.
+    const parts = [`WebMCP ${code ?? 'error'}`];
+    if (invocationId) parts.push(`invocation ${invocationId}`);
+    super(`${parts.join(', ')}: ${detail}`);
     this.name = 'WebMCPRequestError';
     this.statusCode = statusCode;
-    this.code = typeof fields.code === 'string' ? fields.code : undefined;
-    this.invocationId =
-      typeof fields.invocation_id === 'string' ? fields.invocation_id : undefined;
+    this.code = code;
+    this.invocationId = invocationId;
     this.body = body;
   }
 }
