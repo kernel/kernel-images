@@ -246,6 +246,9 @@ func (c *DebouncedController) AcquireLease(ctx context.Context, id string, ttl t
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.scheduleLeaseExpiry == nil {
+		c.scheduleLeaseExpiry = time.AfterFunc
+	}
 	if c.leases == nil {
 		c.leases = make(map[string]*lease)
 	}

@@ -391,6 +391,16 @@ func TestDebouncedControllerUnpinRetryableAfterEnableFailure(t *testing.T) {
 	assert.Equal(t, 2, mock.enableCalls)
 }
 
+func TestDebouncedControllerLeaseDefaultsExpiryScheduler(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockScaleToZeroer{}
+	c := &DebouncedController{ctrl: mock}
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Hour))
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+	require.Equal(t, 1, mock.enableCalls)
+}
+
 func TestDebouncedControllerLeaseExpires(t *testing.T) {
 	t.Parallel()
 	mock := &mockScaleToZeroer{}
