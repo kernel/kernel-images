@@ -58,6 +58,7 @@ type fakeCDP struct {
 	omitResponse             bool
 	closeOnInvoke            bool
 	detachAfterResponse      bool
+	detachBeforeResponse     bool
 	navigateBeforeResult     bool
 	nonAutosubmitDeclarative bool
 	invokeResponseDelay      time.Duration
@@ -255,6 +256,7 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			nonAutosubmitDeclarative := f.nonAutosubmitDeclarative
 			navigateBeforeResult := f.navigateBeforeResult
 			detachAfterResponse := f.detachAfterResponse
+			detachBeforeResponse := f.detachBeforeResponse
 			f.mu.Unlock()
 			if closeOnInvoke {
 				conn.CloseNow()
@@ -265,6 +267,13 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			}
 			respond(map[string]any{"invocationId": invocationID})
 			if nonAutosubmitDeclarative && request.SessionID == "iframe-session" {
+				continue
+			}
+			if detachBeforeResponse {
+				write(map[string]any{
+					"method": "Target.detachedFromTarget",
+					"params": map[string]any{"sessionId": request.SessionID},
+				})
 				continue
 			}
 			if !omitResponse {
@@ -496,6 +505,17 @@ func TestInvocationReturnsCompletedResponseBeforeTargetDetach(t *testing.T) {
 	require.Equal(t, "Completed", result.Status)
 }
 
+func TestInvocationReturnsUnknownWhenTargetDetachesBeforeResponse(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.detachBeforeResponse = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+
+	result, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
+	require.ErrorIs(t, err, ErrOutcomeUnknown)
+	require.Equal(t, "invocation-1", result.InvocationID)
+}
+
 func TestInvocationTimeoutHasUnknownOutcome(t *testing.T) {
 	fake := newFakeCDP(t, true)
 	manager := NewManager(staticUpstream{url: fake.url})
@@ -541,7 +561,7 @@ func TestConnectionDeathMidInvokeHasUnknownOutcome(t *testing.T) {
 func TestToolResponsesAreScopedBySession(t *testing.T) {
 	client := &connection{
 		invocations:          make(map[invocationKey]invocationResponse),
-		waitingInvocations:   make(map[invocationKey]struct{}),
+		waitingInvocations:   make(map[invocationKey]string),
 		abandonedInvocations: make(map[invocationKey]time.Time),
 		stateChangedCh:       make(chan struct{}, 1),
 	}

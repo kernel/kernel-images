@@ -36,7 +36,7 @@ type connection struct {
 	toolRefs             map[string]string
 	toolLimitWarned      map[string]bool
 	invocations          map[invocationKey]invocationResponse
-	waitingInvocations   map[invocationKey]struct{}
+	waitingInvocations   map[invocationKey]string
 	abandonedInvocations map[invocationKey]time.Time
 	stateChangedCh       chan struct{}
 	logger               *slog.Logger
@@ -58,7 +58,7 @@ func newConnection(protocol *cdpclient.Client) *connection {
 		toolRefs:             make(map[string]string),
 		toolLimitWarned:      make(map[string]bool),
 		invocations:          make(map[invocationKey]invocationResponse),
-		waitingInvocations:   make(map[invocationKey]struct{}),
+		waitingInvocations:   make(map[invocationKey]string),
 		abandonedInvocations: make(map[invocationKey]time.Time),
 		stateChangedCh:       make(chan struct{}, 1),
 		logger:               slog.Default(),
@@ -116,6 +116,7 @@ func (c *connection) eventLoop(events <-chan browsersurface.Event) {
 			c.signalStateChanged()
 		case browsersurface.EventFrameRemoved:
 			c.stateMu.Lock()
+			c.abandonFrameInvocationsAcrossSessionsLocked(event.FrameID)
 			c.removeFrameToolsAcrossSessionsLocked(event.FrameID)
 			c.stateMu.Unlock()
 			c.signalStateChanged()
@@ -373,7 +374,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		}, nil
 	}
 	c.stateMu.Lock()
-	c.waitingInvocations[key] = struct{}{}
+	c.waitingInvocations[key] = frameID
 	c.stateMu.Unlock()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
@@ -395,7 +396,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}
 		c.stateMu.Unlock()
-		if c.executionClosed() {
+		if !c.sessionExists(sessionID) || c.executionClosed() {
 			c.stateMu.Lock()
 			abandoned := c.abandonInvocationLocked(key)
 			c.stateMu.Unlock()
@@ -449,6 +450,11 @@ func (c *connection) removeSession(sessionID string) {
 	defer c.stateMu.Unlock()
 	delete(c.enabledSessions, sessionID)
 	delete(c.toolLimitWarned, sessionID)
+	for key := range c.waitingInvocations {
+		if key.sessionID == sessionID {
+			c.abandonInvocationLocked(key)
+		}
+	}
 	for ref, tool := range c.tools {
 		if tool.sessionID == sessionID {
 			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
@@ -456,6 +462,14 @@ func (c *connection) removeSession(sessionID string) {
 		}
 	}
 	c.signalStateChanged()
+}
+
+func (c *connection) abandonFrameInvocationsAcrossSessionsLocked(frameID string) {
+	for key, invocationFrameID := range c.waitingInvocations {
+		if invocationFrameID == frameID {
+			c.abandonInvocationLocked(key)
+		}
+	}
 }
 
 func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
