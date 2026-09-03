@@ -290,6 +290,10 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 							"id": "page-frame", "loaderId": "next-loader", "url": "https://merchant.example/complete",
 						}},
 					})
+					write(map[string]any{
+						"method": "Page.frameDetached", "sessionId": "page-session",
+						"params": map[string]any{"frameId": "iframe-frame", "reason": "remove"},
+					})
 				}
 				if navigateBeforeResult {
 					write(map[string]any{

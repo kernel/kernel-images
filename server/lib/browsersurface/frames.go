@@ -236,8 +236,11 @@ func (t *Tracker) navigateFrame(sessionID string, info frameInfo) {
 
 func (t *Tracker) removeFrame(frameID string) {
 	t.stateMu.Lock()
-	removed := append(t.removeFrameChildrenLocked(frameID), frameID)
-	delete(t.frames, frameID)
+	removed := t.removeFrameChildrenLocked(frameID)
+	if _, exists := t.frames[frameID]; exists {
+		removed = append(removed, frameID)
+		delete(t.frames, frameID)
+	}
 	t.stateMu.Unlock()
 	for _, removedID := range removed {
 		t.publish(Event{Kind: EventFrameRemoved, FrameID: removedID})
