@@ -2,7 +2,10 @@ package scaletozero
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,7 +14,13 @@ import (
 
 // Unikraft scale-to-zero control file
 // https://unikraft.cloud/docs/api/v1/instances/#scaletozero_app
-const unikraftScaleToZeroFile = "/uk/libukp/scale_to_zero_disable"
+const (
+	unikraftScaleToZeroFile = "/uk/libukp/scale_to_zero_disable"
+	maxScaleToZeroLeases    = 1024
+)
+
+// ErrLeaseLimit indicates that the controller cannot accept another distinct lease.
+var ErrLeaseLimit = errors.New("scale-to-zero lease limit reached")
 
 type Controller interface {
 	// Disable turns scale-to-zero off.
@@ -36,6 +45,11 @@ type PinnedController interface {
 	// Unpin releases the pin. If no request-driven holders remain,
 	// scale-to-zero is re-enabled (honoring any configured cooldown).
 	Unpin(ctx context.Context) error
+	// AcquireLease holds scale-to-zero disabled for a bounded duration. Calling
+	// it again with the same ID renews the lease.
+	AcquireLease(ctx context.Context, id string, ttl time.Duration) error
+	// ReleaseLease releases a bounded lease before it expires.
+	ReleaseLease(ctx context.Context, id string) error
 }
 
 type unikraftCloudController struct {
@@ -82,10 +96,12 @@ type NoopController struct{}
 
 func NewNoopController() *NoopController { return &NoopController{} }
 
-func (NoopController) Disable(context.Context) error { return nil }
-func (NoopController) Enable(context.Context) error  { return nil }
-func (NoopController) Pin(context.Context) error     { return nil }
-func (NoopController) Unpin(context.Context) error   { return nil }
+func (NoopController) Disable(context.Context) error                             { return nil }
+func (NoopController) Enable(context.Context) error                              { return nil }
+func (NoopController) Pin(context.Context) error                                 { return nil }
+func (NoopController) Unpin(context.Context) error                               { return nil }
+func (NoopController) AcquireLease(context.Context, string, time.Duration) error { return nil }
+func (NoopController) ReleaseLease(context.Context, string) error                { return nil }
 
 // Oncer wraps a Controller and ensures that Disable and Enable are called at most once.
 type Oncer struct {
@@ -109,18 +125,24 @@ func (o *Oncer) Enable(ctx context.Context) error {
 }
 
 type DebouncedController struct {
-	ctrl          Controller
-	cooldown      time.Duration
-	mu            sync.Mutex
-	disabled      bool
-	activeCount   int
-	pinned        bool
-	reenableTimer *time.Timer
+	ctrl                Controller
+	cooldown            time.Duration
+	mu                  sync.Mutex
+	disabled            bool
+	activeCount         int
+	pinned              bool
+	leases              map[string]*lease
+	reenableTimer       *time.Timer
+	scheduleLeaseExpiry func(time.Duration, func()) *time.Timer
+}
+
+type lease struct {
+	timer *time.Timer
 }
 
 // NewDebouncedController creates a DebouncedController with no re-enable cooldown.
 func NewDebouncedController(ctrl Controller) *DebouncedController {
-	return &DebouncedController{ctrl: ctrl}
+	return &DebouncedController{ctrl: ctrl, scheduleLeaseExpiry: time.AfterFunc}
 }
 
 // NewDebouncedControllerWithCooldown creates a DebouncedController that delays
@@ -128,7 +150,7 @@ func NewDebouncedController(ctrl Controller) *DebouncedController {
 // releases. A new Disable call during the cooldown cancels the pending
 // re-enable, avoiding rapid toggling from sequential requests.
 func NewDebouncedControllerWithCooldown(ctrl Controller, cooldown time.Duration) *DebouncedController {
-	return &DebouncedController{ctrl: ctrl, cooldown: cooldown}
+	return &DebouncedController{ctrl: ctrl, cooldown: cooldown, scheduleLeaseExpiry: time.AfterFunc}
 }
 
 func (c *DebouncedController) Disable(ctx context.Context) error {
@@ -213,10 +235,81 @@ func (c *DebouncedController) Unpin(ctx context.Context) error {
 	return nil
 }
 
-// maybeReenableLocked re-enables scale-to-zero if no holders (request-driven or
-// pin) remain. Caller must hold c.mu.
+func (c *DebouncedController) AcquireLease(ctx context.Context, id string, ttl time.Duration) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("lease id is required")
+	}
+	if ttl <= 0 {
+		return fmt.Errorf("lease ttl must be positive")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.scheduleLeaseExpiry == nil {
+		c.scheduleLeaseExpiry = time.AfterFunc
+	}
+	if c.leases == nil {
+		c.leases = make(map[string]*lease)
+	}
+	previous := c.leases[id]
+	if previous == nil && len(c.leases) >= maxScaleToZeroLeases {
+		return ErrLeaseLimit
+	}
+	if c.reenableTimer != nil {
+		c.reenableTimer.Stop()
+		c.reenableTimer = nil
+	}
+	if !c.disabled {
+		if err := c.ctrl.Disable(ctx); err != nil {
+			return err
+		}
+		c.disabled = true
+	}
+	if previous != nil {
+		previous.timer.Stop()
+	}
+	current := &lease{}
+	current.timer = c.scheduleLeaseExpiry(ttl, func() {
+		c.expireLease(id, current)
+	})
+	c.leases[id] = current
+	return nil
+}
+
+func (c *DebouncedController) ReleaseLease(ctx context.Context, id string) error {
+	if strings.TrimSpace(id) == "" {
+		return fmt.Errorf("lease id is required")
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if current := c.leases[id]; current != nil {
+		current.timer.Stop()
+		delete(c.leases, id)
+	}
+	return c.maybeReenableLocked(ctx)
+}
+
+func (c *DebouncedController) expireLease(id string, expired *lease) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.leases[id] != expired {
+		return
+	}
+	delete(c.leases, id)
+	ctx := context.Background()
+	if err := c.maybeReenableLocked(ctx); err != nil {
+		logger.FromContext(ctx).Error("failed to re-enable scale-to-zero after lease expiry", "err", err, "lease_id", id)
+	}
+}
+
+// maybeReenableLocked re-enables scale-to-zero if no holders (request-driven,
+// permanent pin, or lease) remain. Caller must hold c.mu.
 func (c *DebouncedController) maybeReenableLocked(ctx context.Context) error {
-	if c.activeCount > 0 || c.pinned || !c.disabled {
+	if c.activeCount > 0 || c.pinned || len(c.leases) > 0 || !c.disabled {
 		return nil
 	}
 
@@ -235,13 +328,16 @@ func (c *DebouncedController) maybeReenableLocked(ctx context.Context) error {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 
-		if c.activeCount > 0 || c.pinned || !c.disabled {
+		if c.activeCount > 0 || c.pinned || len(c.leases) > 0 || !c.disabled {
 			return
 		}
 
-		if c.ctrl.Enable(context.Background()) == nil {
-			c.disabled = false
+		ctx := context.Background()
+		if err := c.ctrl.Enable(ctx); err != nil {
+			logger.FromContext(ctx).Error("failed to re-enable scale-to-zero after cooldown", "err", err)
+			return
 		}
+		c.disabled = false
 	})
 
 	return nil

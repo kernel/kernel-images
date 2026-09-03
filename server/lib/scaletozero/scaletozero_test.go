@@ -2,6 +2,7 @@ package scaletozero
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -388,4 +389,156 @@ func TestDebouncedControllerUnpinRetryableAfterEnableFailure(t *testing.T) {
 	mock.enableErr = nil
 	require.NoError(t, c.Unpin(t.Context()))
 	assert.Equal(t, 2, mock.enableCalls)
+}
+
+func TestDebouncedControllerLeaseDefaultsExpiryScheduler(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockScaleToZeroer{}
+	c := &DebouncedController{ctrl: mock}
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Hour))
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+	require.Equal(t, 1, mock.enableCalls)
+}
+
+func TestDebouncedControllerLeaseExpires(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", 25*time.Millisecond))
+	require.Equal(t, 1, mock.disableCalls)
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.enableCalls == 1
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestDebouncedControllerLeaseRenewalExtendsExpiry(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", 50*time.Millisecond))
+	time.Sleep(30 * time.Millisecond)
+	require.NoError(t, c.AcquireLease(t.Context(), "download", 70*time.Millisecond))
+	time.Sleep(35 * time.Millisecond)
+
+	mock.mu.Lock()
+	require.Zero(t, mock.enableCalls)
+	mock.mu.Unlock()
+
+	require.Eventually(t, func() bool {
+		mock.mu.Lock()
+		defer mock.mu.Unlock()
+		return mock.enableCalls == 1
+	}, time.Second, 5*time.Millisecond)
+}
+
+func TestDebouncedControllerLeaseRenewalSurvivesStaleExpiry(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+	expiryStarted := make(chan struct{})
+	resumeExpiry := make(chan struct{})
+	expiryDone := make(chan struct{})
+	var resumeOnce sync.Once
+	t.Cleanup(func() {
+		resumeOnce.Do(func() { close(resumeExpiry) })
+	})
+
+	scheduled := 0
+	c.scheduleLeaseExpiry = func(_ time.Duration, expire func()) *time.Timer {
+		timer := time.NewTimer(time.Hour)
+		scheduled++
+		if scheduled == 1 {
+			go func() {
+				close(expiryStarted)
+				<-resumeExpiry
+				expire()
+				close(expiryDone)
+			}()
+		}
+		return timer
+	}
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Millisecond))
+	<-expiryStarted
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Hour))
+
+	c.mu.Lock()
+	renewed := c.leases["download"]
+	c.mu.Unlock()
+	resumeOnce.Do(func() { close(resumeExpiry) })
+	<-expiryDone
+
+	c.mu.Lock()
+	require.Same(t, renewed, c.leases["download"])
+	c.mu.Unlock()
+	mock.mu.Lock()
+	require.Zero(t, mock.enableCalls)
+	mock.mu.Unlock()
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+}
+
+func TestDebouncedControllerLeaseReleaseIsIndependentOfPermanentPin(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.Pin(t.Context()))
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Second))
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+	require.Zero(t, mock.enableCalls)
+
+	require.NoError(t, c.Unpin(t.Context()))
+	require.Equal(t, 1, mock.enableCalls)
+}
+
+func TestDebouncedControllerLeaseReleaseWaitsForOtherLeases(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "first", time.Second))
+	require.NoError(t, c.AcquireLease(t.Context(), "second", time.Second))
+	require.NoError(t, c.ReleaseLease(t.Context(), "first"))
+	require.Zero(t, mock.enableCalls)
+
+	require.NoError(t, c.ReleaseLease(t.Context(), "second"))
+	require.Equal(t, 1, mock.enableCalls)
+}
+
+func TestDebouncedControllerLeaseReleaseRetriesEnable(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Second))
+	mock.enableErr = assert.AnError
+	require.Error(t, c.ReleaseLease(t.Context(), "download"))
+
+	mock.enableErr = nil
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+	require.Equal(t, 2, mock.enableCalls)
+}
+
+func TestDebouncedControllerBoundsLeases(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+	c.leases = make(map[string]*lease, maxScaleToZeroLeases)
+	for i := range maxScaleToZeroLeases {
+		c.leases[fmt.Sprintf("lease-%d", i)] = &lease{timer: time.NewTimer(time.Hour)}
+	}
+	t.Cleanup(func() {
+		for _, lease := range c.leases {
+			lease.timer.Stop()
+		}
+	})
+
+	require.Error(t, c.AcquireLease(t.Context(), "one-too-many", time.Second))
+	require.Zero(t, mock.disableCalls)
 }
