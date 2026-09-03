@@ -2,6 +2,7 @@ package scaletozero
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -451,4 +452,36 @@ func TestDebouncedControllerLeaseReleaseWaitsForOtherLeases(t *testing.T) {
 
 	require.NoError(t, c.ReleaseLease(t.Context(), "second"))
 	require.Equal(t, 1, mock.enableCalls)
+}
+
+func TestDebouncedControllerLeaseReleaseRetriesEnable(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+
+	require.NoError(t, c.AcquireLease(t.Context(), "download", time.Second))
+	mock.enableErr = assert.AnError
+	require.Error(t, c.ReleaseLease(t.Context(), "download"))
+
+	mock.enableErr = nil
+	require.NoError(t, c.ReleaseLease(t.Context(), "download"))
+	require.Equal(t, 2, mock.enableCalls)
+}
+
+func TestDebouncedControllerBoundsLeases(t *testing.T) {
+	t.Parallel()
+	mock := &mockScaleToZeroer{}
+	c := NewDebouncedController(mock)
+	c.leases = make(map[string]*lease, maxScaleToZeroLeases)
+	for i := range maxScaleToZeroLeases {
+		c.leases[fmt.Sprintf("lease-%d", i)] = &lease{timer: time.NewTimer(time.Hour)}
+	}
+	t.Cleanup(func() {
+		for _, lease := range c.leases {
+			lease.timer.Stop()
+		}
+	})
+
+	require.Error(t, c.AcquireLease(t.Context(), "one-too-many", time.Second))
+	require.Zero(t, mock.disableCalls)
 }

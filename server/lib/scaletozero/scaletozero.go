@@ -13,7 +13,10 @@ import (
 
 // Unikraft scale-to-zero control file
 // https://unikraft.cloud/docs/api/v1/instances/#scaletozero_app
-const unikraftScaleToZeroFile = "/uk/libukp/scale_to_zero_disable"
+const (
+	unikraftScaleToZeroFile = "/uk/libukp/scale_to_zero_disable"
+	maxScaleToZeroLeases    = 1024
+)
 
 type Controller interface {
 	// Disable turns scale-to-zero off.
@@ -238,6 +241,13 @@ func (c *DebouncedController) AcquireLease(ctx context.Context, id string, ttl t
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.leases == nil {
+		c.leases = make(map[string]*lease)
+	}
+	previous := c.leases[id]
+	if previous == nil && len(c.leases) >= maxScaleToZeroLeases {
+		return fmt.Errorf("scale-to-zero lease limit reached")
+	}
 	if c.reenableTimer != nil {
 		c.reenableTimer.Stop()
 		c.reenableTimer = nil
@@ -248,11 +258,8 @@ func (c *DebouncedController) AcquireLease(ctx context.Context, id string, ttl t
 		}
 		c.disabled = true
 	}
-	if c.leases == nil {
-		c.leases = make(map[string]*lease)
-	}
-	if current := c.leases[id]; current != nil {
-		current.timer.Stop()
+	if previous != nil {
+		previous.timer.Stop()
 	}
 	current := &lease{}
 	current.timer = time.AfterFunc(ttl, func() {
@@ -285,7 +292,10 @@ func (c *DebouncedController) expireLease(id string, expired *lease) {
 		return
 	}
 	delete(c.leases, id)
-	_ = c.maybeReenableLocked(context.Background())
+	ctx := context.Background()
+	if err := c.maybeReenableLocked(ctx); err != nil {
+		logger.FromContext(ctx).Error("failed to re-enable scale-to-zero after lease expiry", "err", err, "lease_id", id)
+	}
 }
 
 // maybeReenableLocked re-enables scale-to-zero if no holders (request-driven,
@@ -314,9 +324,12 @@ func (c *DebouncedController) maybeReenableLocked(ctx context.Context) error {
 			return
 		}
 
-		if c.ctrl.Enable(context.Background()) == nil {
-			c.disabled = false
+		ctx := context.Background()
+		if err := c.ctrl.Enable(ctx); err != nil {
+			logger.FromContext(ctx).Error("failed to re-enable scale-to-zero after cooldown", "err", err)
+			return
 		}
+		c.disabled = false
 	})
 
 	return nil
