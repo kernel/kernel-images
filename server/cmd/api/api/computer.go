@@ -37,6 +37,27 @@ func isValidationErr(err error) bool {
 	return errors.As(err, &ve)
 }
 
+func normalizeXdotoolKeySequence(sequence string) string {
+	parts := strings.Split(sequence, "+")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "-" {
+			part = "minus"
+		}
+		parts[i] = part
+	}
+	return strings.Join(parts, "+")
+}
+
+func xdotoolKeyError(message string, output []byte) error {
+	msg := fmt.Sprintf("%s. out=%s", message, string(output))
+	if strings.Contains(string(output), "Invalid key sequence") ||
+		strings.Contains(string(output), "Failure converting key sequence") {
+		return &validationError{msg: msg}
+	}
+	return &executionError{msg: msg}
+}
+
 func (s *ApiService) doMoveMouse(ctx context.Context, body oapi.MoveMouseRequest) error {
 	log := logger.FromContext(ctx)
 
@@ -839,6 +860,19 @@ func (s *ApiService) doPressKey(ctx context.Context, body oapi.PressKeyRequest) 
 		return &validationError{msg: "duration must be >= 0 milliseconds"}
 	}
 
+	keys := make([]string, len(body.Keys))
+	for i, key := range body.Keys {
+		keys[i] = normalizeXdotoolKeySequence(key)
+	}
+	body.Keys = keys
+	if body.HoldKeys != nil {
+		holdKeys := make([]string, len(*body.HoldKeys))
+		for i, key := range *body.HoldKeys {
+			holdKeys[i] = normalizeXdotoolKeySequence(key)
+		}
+		body.HoldKeys = &holdKeys
+	}
+
 	// If duration is provided and >0, hold all keys down, sleep, then release.
 	if body.Duration != nil && *body.Duration > 0 {
 		argsDown := []string{}
@@ -864,7 +898,7 @@ func (s *ApiService) doPressKey(ctx context.Context, body oapi.PressKeyRequest) 
 				}
 			}
 			_, _ = defaultXdoTool.Run(ctx, argsUp...)
-			return &executionError{msg: fmt.Sprintf("failed to press keys (keydown). out=%s", string(output))}
+			return xdotoolKeyError("failed to press keys (keydown)", output)
 		}
 
 		d := time.Duration(*body.Duration) * time.Millisecond
@@ -916,7 +950,7 @@ func (s *ApiService) doPressKey(ctx context.Context, body oapi.PressKeyRequest) 
 	output, err := defaultXdoTool.Run(ctx, args...)
 	if err != nil {
 		log.Error("xdotool command failed", "err", err, "output", string(output))
-		return &executionError{msg: fmt.Sprintf("failed to press keys. out=%s", string(output))}
+		return xdotoolKeyError("failed to press keys", output)
 	}
 	return nil
 }
