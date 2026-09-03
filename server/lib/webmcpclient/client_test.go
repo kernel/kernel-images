@@ -50,23 +50,24 @@ type fakeCDP struct {
 	server *httptest.Server
 	url    string
 
-	mu                       sync.Mutex
-	connections              int
-	targetAttaches           int
-	invocationCount          int
-	enabledSessions          map[string]int
-	omitResponse             bool
-	closeOnInvoke            bool
-	detachAfterResponse      bool
-	detachBeforeResponse     bool
-	navigateBeforeResult     bool
-	nonAutosubmitDeclarative bool
-	invokeResponseDelay      time.Duration
-	toolCount                int
-	popupOpen                bool
-	iframeOpen               bool
-	nestedFrameOpen          bool
-	write                    func(any)
+	mu                         sync.Mutex
+	connections                int
+	targetAttaches             int
+	invocationCount            int
+	enabledSessions            map[string]int
+	omitResponse               bool
+	closeOnInvoke              bool
+	detachAfterResponse        bool
+	detachBeforeResponse       bool
+	navigateBeforeResult       bool
+	parentNavigateBeforeResult bool
+	nonAutosubmitDeclarative   bool
+	invokeResponseDelay        time.Duration
+	toolCount                  int
+	popupOpen                  bool
+	iframeOpen                 bool
+	nestedFrameOpen            bool
+	write                      func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
@@ -255,6 +256,7 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			omitResponse := f.omitResponse
 			nonAutosubmitDeclarative := f.nonAutosubmitDeclarative
 			navigateBeforeResult := f.navigateBeforeResult
+			parentNavigateBeforeResult := f.parentNavigateBeforeResult
 			detachAfterResponse := f.detachAfterResponse
 			detachBeforeResponse := f.detachBeforeResponse
 			f.mu.Unlock()
@@ -277,6 +279,18 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if !omitResponse {
+				if parentNavigateBeforeResult {
+					write(map[string]any{
+						"method": "Page.frameStartedLoading", "sessionId": "page-session",
+						"params": map[string]any{"frameId": "page-frame"},
+					})
+					write(map[string]any{
+						"method": "Page.frameNavigated", "sessionId": "page-session",
+						"params": map[string]any{"frame": map[string]any{
+							"id": "page-frame", "loaderId": "next-loader", "url": "https://merchant.example/complete",
+						}},
+					})
+				}
 				if navigateBeforeResult {
 					write(map[string]any{
 						"method": "Page.frameStartedLoading", "sessionId": request.SessionID,
@@ -476,6 +490,17 @@ func TestInvocationPreservesResponseObservedAfterFrameNavigation(t *testing.T) {
 	require.Equal(t, "invocation-1", result.InvocationID)
 	require.Equal(t, "Completed", result.Status)
 	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
+}
+
+func TestInvocationPreservesIframeResponseAfterParentNavigation(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.parentNavigateBeforeResult = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+
+	result, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
+	require.NoError(t, err)
+	require.Equal(t, "Completed", result.Status)
 }
 
 func TestNonAutosubmitDeclarativeInvocationReturnsAfterPopulatingForm(t *testing.T) {

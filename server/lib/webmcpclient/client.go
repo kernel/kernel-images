@@ -114,6 +114,11 @@ func (c *connection) eventLoop(events <-chan browsersurface.Event) {
 			c.removeFrameToolsLocked(event.SessionID, event.FrameID)
 			c.stateMu.Unlock()
 			c.signalStateChanged()
+		case browsersurface.EventFrameInvalidated:
+			c.stateMu.Lock()
+			c.removeFrameToolsAcrossSessionsLocked(event.FrameID)
+			c.stateMu.Unlock()
+			c.signalStateChanged()
 		case browsersurface.EventFrameRemoved:
 			c.stateMu.Lock()
 			c.abandonFrameInvocationsAcrossSessionsLocked(event.FrameID)

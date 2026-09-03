@@ -21,6 +21,7 @@ const (
 	EventSessionRemoved
 	EventDocumentInvalidated
 	EventDocumentChanged
+	EventFrameInvalidated
 	EventFrameRemoved
 )
 

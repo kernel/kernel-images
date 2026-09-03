@@ -228,7 +228,7 @@ func (t *Tracker) navigateFrame(sessionID string, info frameInfo) {
 	}
 	t.stateMu.Unlock()
 	for _, frameID := range removed {
-		t.publish(Event{Kind: EventFrameRemoved, FrameID: frameID})
+		t.publish(Event{Kind: EventFrameInvalidated, FrameID: frameID})
 	}
 	t.publish(Event{Kind: EventDocumentChanged, SessionID: sessionID, FrameID: info.ID})
 	t.signalChanged()
