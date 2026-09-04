@@ -209,6 +209,7 @@
 
     shakeKbd = false
     wasConnected = false
+    readOnlyOverride: boolean | null = null
 
     get volume() {
       const numberParam = parseFloat(new URL(location.href).searchParams.get('volume') || '1.0')
@@ -224,6 +225,10 @@
     }
 
     get isReadOnlyMode() {
+      if (this.readOnlyOverride !== null) {
+        return this.readOnlyOverride
+      }
+
       const params = new URL(location.href).searchParams
       const value = params.get('readOnly') || params.get('readonly') || params.get('ro')
       return typeof value === 'string' && ['1', 'true', 'yes'].includes(value.toLowerCase())
@@ -326,11 +331,42 @@
       }
 
       if (this.isReadOnlyMode) {
-        // Disable implicit hosting so the user doesn't automatically gain control
-        this.$accessor.remote.setImplicitHosting(false)
-        // Lock the session locally to block any input even if hosting is later requested
-        this.$accessor.remote.setLocked(true)
+        this.applyReadOnlyMode(true, false)
       }
+    }
+
+    mounted() {
+      window.addEventListener('message', this.onParentMessage)
+    }
+
+    beforeDestroy() {
+      window.removeEventListener('message', this.onParentMessage)
+    }
+
+    private onParentMessage(event: MessageEvent) {
+      if (event.source !== window.parent) return
+      if (this.parentOrigin !== '*' && event.origin !== this.parentOrigin) return
+
+      const data = event.data as { type?: string; readOnly?: unknown }
+      if (data?.type !== 'KERNEL_SET_READ_ONLY' || typeof data.readOnly !== 'boolean') return
+
+      this.applyReadOnlyMode(data.readOnly, true)
+    }
+
+    private applyReadOnlyMode(readOnly: boolean, releaseControl: boolean) {
+      this.readOnlyOverride = readOnly
+
+      if (readOnly) {
+        if (releaseControl) {
+          this.$accessor.remote.release()
+        }
+        this.$accessor.remote.setImplicitHosting(false)
+        this.$accessor.remote.setLocked(true)
+        return
+      }
+
+      this.$accessor.remote.setLocked(false)
+      this.$accessor.remote.setImplicitHosting(true)
     }
 
     // KERNEL: end custom resolution, frame rate, and readOnly control via query params

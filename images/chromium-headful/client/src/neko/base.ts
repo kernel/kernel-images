@@ -18,6 +18,14 @@ export interface BaseEvents {
   error: (error: Error) => void
 }
 
+type IceCandidateSummary = {
+  candidateType?: string
+  protocol?: string
+  addressFamily?: 'ipv4' | 'ipv6' | 'unknown'
+}
+
+type IceTransportPolicy = 'all' | 'relay'
+
 export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _ws?: WebSocket
   protected _ws_heartbeat?: number
@@ -28,6 +36,9 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _state: RTCIceConnectionState = 'disconnected'
   protected _id = ''
   protected _candidates: RTCIceCandidate[] = []
+  private _localIceCandidates: IceCandidateSummary[] = []
+  private _remoteIceCandidates: IceCandidateSummary[] = []
+  private _iceTransportPolicy: IceTransportPolicy = 'all'
 
   get id() {
     return this._id
@@ -134,6 +145,9 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this._state = 'disconnected'
     this._displayname = undefined
     this._id = ''
+    this._localIceCandidates = []
+    this._remoteIceCandidates = []
+    this._iceTransportPolicy = 'all'
   }
 
   public sendData(event: 'wheel', data: { x: number; y: number; controlKey?: boolean }): void
@@ -217,9 +231,12 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     if (lite !== true) {
+      this._iceTransportPolicy = this.iceTransportPolicy()
       this._peer = new RTCPeerConnection({
         iceServers: servers,
+        iceTransportPolicy: this._iceTransportPolicy,
       })
+      this.emit('debug', `created peer with ICE transport policy: ${this._iceTransportPolicy}`)
     } else {
       this._peer = new RTCPeerConnection()
     }
@@ -272,6 +289,10 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       }
 
       const init = event.candidate.toJSON()
+      const summary = this.summarizeIceCandidate(init.candidate)
+      if (summary) {
+        this._localIceCandidates.push(summary)
+      }
       this.emit('debug', `sending local ICE candidate`, init)
 
       this._ws!.send(
@@ -372,6 +393,10 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     if (event === EVENT.SIGNAL.CANDIDATE) {
       const { data } = payload as SignalCandidatePayload
       const candidate: RTCIceCandidate = JSON.parse(data)
+      const summary = this.summarizeIceCandidate(candidate.candidate)
+      if (summary) {
+        this._remoteIceCandidates.push(summary)
+      }
       if (this._peer) {
         this._peer.addIceCandidate(candidate)
       } else {
@@ -387,6 +412,35 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     } else {
       this[EVENT.MESSAGE](event, payload)
     }
+  }
+
+  private iceTransportPolicy(): IceTransportPolicy {
+    const attempt = Number(new URL(location.href).searchParams.get('kernelLiveViewAttempt') || '0')
+    return Number.isFinite(attempt) && attempt > 0 ? 'relay' : 'all'
+  }
+
+  private summarizeIceCandidate(candidate: string | undefined): IceCandidateSummary | undefined {
+    if (!candidate) {
+      return undefined
+    }
+
+    const parts = candidate.trim().split(/\s+/)
+    const address = parts[4]
+    const typeIndex = parts.indexOf('typ')
+
+    return {
+      protocol: parts[2]?.toLowerCase(),
+      candidateType: typeIndex >= 0 ? parts[typeIndex + 1] : undefined,
+      addressFamily: this.addressFamily(address),
+    }
+  }
+
+  private addressFamily(address: string | undefined): 'ipv4' | 'ipv6' | 'unknown' {
+    if (!address) {
+      return 'unknown'
+    }
+
+    return address.includes(':') ? 'ipv6' : 'ipv4'
   }
 
   private onData(e: MessageEvent) {
@@ -407,6 +461,21 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this.emit('error', (event as ErrorEvent).error)
   }
 
+  private postParentMessage(message: Record<string, unknown>) {
+    if (window.parent === window) {
+      return
+    }
+
+    let targetOrigin = '*'
+    try {
+      if (document.referrer) {
+        targetOrigin = new URL(document.referrer).origin
+      }
+    } catch {}
+
+    window.parent.postMessage(message, targetOrigin)
+  }
+
   private onConnected() {
     if (this._timeout) {
       clearTimeout(this._timeout)
@@ -424,6 +493,17 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
   private onTimeout() {
     this.emit('debug', `connection timeout`)
+    this.postParentMessage({
+      type: 'KERNEL_CONNECTION_TIMEOUT',
+      reason: 'connection timeout',
+      iceConnectionState: this._peer?.iceConnectionState ?? this._state,
+      connectionState: this._peer?.connectionState,
+      signalingState: this._peer?.signalingState,
+      socketOpen: this.socketOpen,
+      iceTransportPolicy: this._iceTransportPolicy,
+      localCandidates: this._localIceCandidates.slice(-10),
+      remoteCandidates: this._remoteIceCandidates.slice(-10),
+    })
     if (this._timeout) {
       clearTimeout(this._timeout)
       this._timeout = undefined

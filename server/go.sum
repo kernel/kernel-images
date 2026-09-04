@@ -255,6 +255,8 @@ github.com/kernel/hypeman-go v0.20.0 h1:9kEMjtlko5oYSETwn9v829rJBv5GpcmoYjBjhjuw
 github.com/kernel/hypeman-go v0.20.0/go.mod h1:guRrhyP9QW/ebUS1UcZ0uZLLJeGAAhDNzSi68U4M9hI=
 github.com/kernel/neko/server v0.0.0-20260213021128-abe9ac59a634 h1:Pn8Zag7TMXnMPdjz136NTjpGwI7rgx++BNzsH2b4w3I=
 github.com/kernel/neko/server v0.0.0-20260213021128-abe9ac59a634/go.mod h1:0+zactiySvtKwfe5JFjyNrSuQLA+EEPZl5bcfcZf1RM=
+github.com/kernel/neko/server v0.0.0-20260902162719-16605715b141 h1:v+5hfR6E9qEH8xQwHYaFfcoEmWs0wJhEqGmKQ0MvPws=
+github.com/kernel/neko/server v0.0.0-20260902162719-16605715b141/go.mod h1:06r88Ixwd/djXAxJTC7aLtsJ8pStQelzGoWDf0+H26E=
 github.com/klauspost/compress v1.18.3 h1:9PJRvfbmTabkOX8moIpXPbMMbYN60bWImDDU7L+/6zw=
 github.com/klauspost/compress v1.18.3/go.mod h1:R0h/fSBs8DE4ENlcrlib3PsXS61voFxhIs2DeRhCvJ4=
 github.com/klauspost/cpuid/v2 v2.2.7 h1:ZWSB3igEs+d0qvnxR/ZBzXVmxkgt8DdzP6m9pfuVLDM=
