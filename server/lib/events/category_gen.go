@@ -64,6 +64,7 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"DownloadRecording":          oapi.TelemetryEventCategory("platform"),
 	"DragMouse":                  oapi.TelemetryEventCategory("control"),
 	"EnableScaleToZero":          oapi.TelemetryEventCategory("platform"),
+	"ExecuteBrowserRepl":         oapi.TelemetryEventCategory("control"),
 	"ExecutePlaywrightCode":      oapi.TelemetryEventCategory("control"),
 	"FileInfo":                   oapi.TelemetryEventCategory("platform"),
 	"GetMousePosition":           oapi.TelemetryEventCategory("control"),

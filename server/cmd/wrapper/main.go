@@ -263,9 +263,70 @@ func main() {
 		enableScaleToZero()
 	}
 
-	// Block on supervisord; container exits when it does.
-	if err := supCmd.Wait(); err != nil {
+	// Block on supervisord; container exits when it does. The reaper owns
+	// waiting on supervisord from here on, so supCmd.Wait() must not be
+	// called past this point (the reaper would steal the exit status).
+	supExit := startReaper(supCmd.Process.Pid)
+	if err := <-supExit; err != nil {
 		logf("supervisord exited: %v", err)
+	}
+}
+
+// startReaper runs a PID 1 init-style reaper. The wrapper is the container's
+// PID 1, so any process orphaned by its parent — e.g. a browser REPL child
+// killed via pdeathsig after an abrupt API kill, or a log-aggregator tail
+// that exited — is reparented here and would linger as a zombie forever
+// without a waitpid loop. Supervisord's exit status is delivered on the
+// returned channel (and ends the reaper); every other reaped process is
+// logged and discarded.
+//
+// The reaper must start only after the boot sequence's last exec.Command
+// whose exit status is checked (init-envoy): a global waitpid races with
+// exec.Cmd.Wait and would steal exit statuses. The only later execs are the
+// shutdown-path supervisorctl (error ignored) and log-aggregator tail
+// respawns (never waited on), so losing the race there is harmless.
+func startReaper(supervisordPid int) <-chan error {
+	exit := make(chan error, 1)
+	go func() {
+		for {
+			var status syscall.WaitStatus
+			pid, err := syscall.Wait4(-1, &status, 0, nil)
+			if err != nil {
+				if err == syscall.EINTR {
+					continue
+				}
+				// ECHILD: no children at all (should not happen while
+				// supervisord runs); avoid a busy loop.
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+			if pid == supervisordPid {
+				exit <- waitStatusErr(status)
+				return
+			}
+			logf("reaped orphaned process pid=%d (%s)", pid, waitStatusString(status))
+		}
+	}()
+	return exit
+}
+
+// waitStatusErr renders a WaitStatus like exec.Cmd.Wait would: nil for a
+// clean exit, "exit status N" / "signal: X" otherwise.
+func waitStatusErr(status syscall.WaitStatus) error {
+	if status.Exited() && status.ExitStatus() == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s", waitStatusString(status))
+}
+
+func waitStatusString(status syscall.WaitStatus) string {
+	switch {
+	case status.Exited():
+		return fmt.Sprintf("exit status %d", status.ExitStatus())
+	case status.Signaled():
+		return fmt.Sprintf("signal: %s", status.Signal())
+	default:
+		return fmt.Sprintf("wait status %d", int(status))
 	}
 }
 

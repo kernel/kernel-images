@@ -1,0 +1,16 @@
+{
+  "name": "@kernel/browser-repl-runtime",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "meriyah": "7.3.1",
+    "playwright-core": "1.62.1",
+    "sharp": "0.34.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "typescript": "^5.6.3"
+  }
+}

@@ -1,5 +1,5 @@
 SHELL := /bin/bash
-.PHONY: oapi-generate build dev test test-unit test-runtime test-e2e clean
+.PHONY: oapi-generate runtime-typecheck build dev test test-unit test-runtime test-e2e clean
 
 BIN_DIR ?= $(CURDIR)/bin
 RECORDING_DIR ?= $(CURDIR)/recordings
@@ -14,6 +14,10 @@ $(RECORDING_DIR):
 # 1. Convert 3.1 → 3.0 since oapi-codegen doesn't support 3.1 yet (https://github.com/oapi-codegen/oapi-codegen/issues/373)
 # 2. Run oapi-codegen with our config (version pinned via go.mod tool directive)
 # 3. go mod tidy to pull deps
+runtime-typecheck:
+	npm ci --ignore-scripts --no-audit --no-fund --prefix ./runtime
+	npm run typecheck --prefix ./runtime
+
 oapi-generate:
 	pnpm i -g @apiture/openapi-down-convert
 	openapi-down-convert --input openapi.yaml --output openapi-3.0.yaml --allOf
@@ -39,7 +43,7 @@ test-unit:
 	go vet ./...
 	go test -v -race $$(go list ./... | grep -v /e2e$$)
 
-test-runtime:
+test-runtime: runtime-typecheck
 	node --test runtime/*.test.ts
 
 test-e2e:

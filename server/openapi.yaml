@@ -1458,6 +1458,55 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /repl:
+    post:
+      summary: Execute JavaScript in the Browser REPL
+      description: |
+        Execute code in the Browser REPL, a persistent Node.js runtime preloaded with browser-control
+        helpers (gotoUrl, pageInfo, click, captureScreenshot, tab management,
+        and more), the browser-wide `webmcp` client, plus an unrestricted `cdp()` escape hatch. `webmcp`
+        and `browser.webmcp` share one frozen client whose requests are scoped to the active execution.
+        A pinned `playwright-core` package can be loaded with dynamic `import()` and connected to
+        `process.env.CDP_ENDPOINT`; its module and browser objects persist like other bindings.
+        Top-level bindings persist
+        across calls until the API process exits, the REPL is reset, or the REPL is
+        terminated after a crash or timeout. Persistent names are live context-global
+        accessors, so closures and timers observe later-cell assignments; function declarations
+        use the same accessor path, including same-cell closures and assignments. `var` in
+        top-level nested statements persists, while function and nested-block locals do not.
+        Lexical names are reserved after linking, so retry a failed declaration with a new
+        name or reset the REPL. Expression values are not returned automatically.
+        Output is optional: code may produce no content, call `repl.write(...)` or
+        `repl.emitImage(...)`, use console methods, or combine those mechanisms.
+
+        The runtime starts lazily on the first request and is owned directly by the API
+        process: an API restart kills it, and the next request starts a fresh REPL with a
+        new CUID2 `repl_id`. A timeout is destructive (JavaScript cannot be interrupted
+        safely), so a timed-out execution terminates the REPL and the next request lazily
+        starts a new one.
+
+        This endpoint is unrestricted code execution inside the browser VM, equivalent in
+        trust level to the process and Playwright execution APIs. It is not sandboxed.
+      operationId: executeBrowserRepl
+      x-telemetry-category: control
+      requestBody:
+        description: JSON request bodies are limited to 8 MiB before strict decoding. The API rejects a marshaled daemon request over the daemon's 8 MiB newline-delimited request-line limit as a non-destructive 400.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserReplRequest"
+      responses:
+        "200":
+          description: Code executed (success or structured failure)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserReplResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /telemetry:
     get:
       summary: Get telemetry configuration
@@ -7115,6 +7164,122 @@ components:
         stderr:
           type: string
           description: Standard error from the execution
+      additionalProperties: false
+    BrowserReplRequest:
+      type: object
+      description: Request to execute code in the Browser REPL
+      required: [code]
+      properties:
+        code:
+          type: string
+          description: |
+            JavaScript evaluated in a persistent Node.js runtime.
+            Top-level bindings persist until the API process exits, the REPL is
+            reset, or the REPL is terminated after a crash or timeout. Persistent names
+            are live context-global accessors: closures and timers observe later-cell
+            assignments. Function declarations use the same accessor path, including
+            same-cell closures and assignments. Braceless multi-declarator `var`
+            statements retain their single-statement control-flow semantics. `var` in
+            top-level nested statements persists; function and nested-block locals do
+            not. Function `.name` is preserved; `Function.prototype.toString()` may
+            expose the generated internal alias. Lexical names are reserved after
+            linking, so retry a failed declaration with a new name or reset the REPL.
+            A failed lexical initializer leaves that name in the TDZ; assignments
+            cannot initialize it. Static top-level imports are rejected; use dynamic
+            `import()`. Expression values are not returned automatically. Output is
+            optional; code may produce no content, call `repl.write(...)` or
+            `repl.emitImage(...)`, use console methods, or combine those mechanisms.
+            May be empty only when reset is true. The HTTP body is limited to 8 MiB,
+            and the API rejects a fully encoded daemon request over the daemon's 8 MiB
+            request-line limit without terminating the REPL.
+        timeout_sec:
+          type: integer
+          description: Maximum execution time in seconds. Default is 60.
+          default: 60
+          minimum: 1
+          maximum: 300
+        reset:
+          type: boolean
+          description: Terminate the current REPL, start a fresh one, and then evaluate code.
+          default: false
+      additionalProperties: false
+    BrowserReplResult:
+      type: object
+      description: Result of Browser REPL code execution
+      required: [success, repl_id]
+      properties:
+        success:
+          type: boolean
+          description: Whether the code executed successfully
+        repl_id:
+          type: string
+          description: |
+            CUID2 identifying the exact state-holding REPL process used for this
+            execution. Stable across calls and Chromium reconnects; changes after
+            an API restart, explicit reset, execution timeout, or REPL crash.
+        error:
+          type: string
+          description: Error message if execution failed
+        stack:
+          type: string
+          description: Stack trace if execution failed
+        content:
+          type: array
+          description: Optional ordered text/image output produced by the execution; omitted or empty when no output was produced
+          items:
+            $ref: "#/components/schemas/BrowserReplContent"
+        content_truncated:
+          type: boolean
+          description: True if text or image output was dropped or truncated due to response limits, including the 1,000-item cap on stray output buffered between executions
+        repl_terminated:
+          type: boolean
+          description: |
+            True if the REPL identified by repl_id was terminated by this request
+            (timeout, protocol corruption, or a REPL crash/uncaught exception).
+            The next request lazily starts a fresh REPL with a new repl_id.
+        duration_ms:
+          type: integer
+          description: Wall-clock execution time in milliseconds
+      additionalProperties: false
+    BrowserReplContent:
+      description: Ordered discriminated union of execution output items.
+      oneOf:
+        - $ref: "#/components/schemas/BrowserReplTextContent"
+        - $ref: "#/components/schemas/BrowserReplImageContent"
+      discriminator:
+        propertyName: type
+        mapping:
+          text: "#/components/schemas/BrowserReplTextContent"
+          image: "#/components/schemas/BrowserReplImageContent"
+    BrowserReplTextContent:
+      type: object
+      required: [type, channel, text]
+      properties:
+        type:
+          type: string
+          enum: [text]
+        channel:
+          type: string
+          description: >-
+            write = repl.write, stdout = console.log/info/debug,
+            stderr = console.warn/error
+          enum: [write, stdout, stderr]
+        text:
+          type: string
+      additionalProperties: false
+    BrowserReplImageContent:
+      type: object
+      required: [type, mime_type, data_b64]
+      properties:
+        type:
+          type: string
+          enum: [image]
+        mime_type:
+          type: string
+          pattern: "^image/"
+        data_b64:
+          type: string
+          contentEncoding: base64
       additionalProperties: false
     SleepAction:
       type: object
