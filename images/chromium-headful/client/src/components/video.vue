@@ -731,16 +731,29 @@
     }
 
     async syncClipboard() {
-      if (this.clipboard_read_available && window.document.hasFocus()) {
+      if (!this.clipboard_read_available || !window.document.hasFocus()) {
+        return
+      }
+
+      if (window.self !== window.top) {
         try {
-          const text = await navigator.clipboard.readText()
-          if (this.clipboard !== text) {
-            this.$accessor.remote.setClipboard(text)
-            this.$accessor.remote.sendClipboard(text)
+          const permission = await navigator.permissions.query({ name: 'clipboard-read' as PermissionName })
+          if (permission.state !== 'granted') {
+            return
           }
-        } catch (err: any) {
-          this.$log.error(err)
+        } catch {
+          return
         }
+      }
+
+      try {
+        const text = await navigator.clipboard.readText()
+        if (this.clipboard !== text) {
+          this.$accessor.remote.setClipboard(text)
+          this.$accessor.remote.sendClipboard(text)
+        }
+      } catch (err: any) {
+        this.$log.error(err)
       }
     }
 
