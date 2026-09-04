@@ -92,12 +92,13 @@ func (s *Reference) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		http.Error(w, "runtime closed", http.StatusServiceUnavailable)
 		return
 	}
 	if existing, ok := s.operations[c.ID]; ok {
+		s.mu.Unlock()
 		if existing.command != c {
 			http.Error(w, "operation ID reused with different payload", http.StatusConflict)
 			return
@@ -126,6 +127,7 @@ func (s *Reference) submit(w http.ResponseWriter, r *http.Request) {
 		s.operations[c.ID] = operation{c, state}
 		s.appendLocked(c.ID, state, text)
 	}()
+	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]string{"id": c.ID, "state": "running"})

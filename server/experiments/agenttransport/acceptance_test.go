@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,13 @@ func setup(t *testing.T) (*controlledRunner, *httptest.Server) {
 	runner := &controlledRunner{started: make(chan struct{}), release: make(chan struct{})}
 	runtime := NewReference(runner)
 	server := httptest.NewServer(runtime)
-	t.Cleanup(func() { runtime.Close(); server.Close() })
+	t.Cleanup(func() {
+		runtime.Close()
+		server.Close()
+		if count := runner.executions.Load(); count > 1 {
+			t.Errorf("duplicate executions after draining workers: %d", count)
+		}
+	})
 	return runner, server
 }
 
@@ -78,11 +85,22 @@ func subscribe(t *testing.T, server *httptest.Server, cursor int) (*http.Respons
 
 func next(t *testing.T, scanner *bufio.Scanner) Event {
 	t.Helper()
+	sequence := 0
 	for scanner.Scan() {
+		if id, ok := strings.CutPrefix(scanner.Text(), "id: "); ok {
+			var err error
+			sequence, err = strconv.Atoi(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
 		if data, ok := strings.CutPrefix(scanner.Text(), "data: "); ok {
 			var event Event
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
 				t.Fatal(err)
+			}
+			if sequence == 0 || sequence != event.Sequence {
+				t.Fatalf("SSE id %d does not match event %+v", sequence, event)
 			}
 			return event
 		}
