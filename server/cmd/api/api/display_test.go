@@ -570,3 +570,21 @@ func TestAdjustParamsForRemainingBudget(t *testing.T) {
 		assert.Nil(t, adjusted.MaxDurationInSeconds, "should remain nil when not set")
 	})
 }
+
+func TestChromiumRunPatchDisplayDoesNotRelockChromiumConfig(t *testing.T) {
+	s := &ApiService{}
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
+
+	done := make(chan oapi.ChromiumConfigureResponseObject, 1)
+	go func() {
+		done <- chromiumRunPatchDisplay(context.Background(), s, nil)
+	}()
+
+	select {
+	case response := <-done:
+		require.IsType(t, oapi.ChromiumConfigure400JSONResponse{}, response)
+	case <-time.After(time.Second):
+		t.Fatal("chromiumRunPatchDisplay tried to reacquire chromiumConfigMu")
+	}
+}

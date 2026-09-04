@@ -36,10 +36,11 @@ func appendCSVInto(dst *[]string, csv string) {
 	}
 }
 
-// parseTokenStream extracts extension-related flags and collects non-extension flags.
-// It returns the list of non-extension tokens and, via references, fills the buckets for
-// --load-extension, --disable-extensions-except and a possible --disable-extensions token for that stream.
-func parseTokenStream(tokens []string, load, except *[]string, disableAll *string) (nonExt []string) {
+// parseTokenStream extracts extension-related and feature-list flags and collects the rest.
+// It returns the leftover tokens and, via references, fills the buckets for
+// --load-extension, --disable-extensions-except, --enable-features, --disable-features
+// and a possible --disable-extensions token for that stream.
+func parseTokenStream(tokens []string, load, except, enableFeatures, disableFeatures *[]string, disableAll *string) (nonExt []string) {
 	for _, tok := range tokens {
 		switch {
 		case strings.HasPrefix(tok, "--load-extension="):
@@ -48,6 +49,12 @@ func parseTokenStream(tokens []string, load, except *[]string, disableAll *strin
 		case strings.HasPrefix(tok, "--disable-extensions-except="):
 			val := strings.TrimPrefix(tok, "--disable-extensions-except=")
 			appendCSVInto(except, val)
+		case strings.HasPrefix(tok, "--enable-features="):
+			val := strings.TrimPrefix(tok, "--enable-features=")
+			appendCSVInto(enableFeatures, val)
+		case strings.HasPrefix(tok, "--disable-features="):
+			val := strings.TrimPrefix(tok, "--disable-features=")
+			appendCSVInto(disableFeatures, val)
 		case tok == "--disable-extensions":
 			*disableAll = tok
 		default:
@@ -71,6 +78,69 @@ func union(base, rt []string) []string {
 		seen[v] = struct{}{}
 		out = append(out, v)
 	}
+	return out
+}
+
+// canonicalEnableFeatureName strips trial/parameter decoration from an
+// --enable-features entry. Those go through ParseEnableFeatureString
+// (base/feature_list.cc), which terminates the name at the first of ':',
+// '.', or '<' — parameter, group, and study separators respectively.
+func canonicalEnableFeatureName(entry string) string {
+	return stripLeadingStar(cutAtFirst(entry, ":.<"))
+}
+
+// canonicalDisableFeatureName strips decoration from a --disable-features
+// entry. That list bypasses ParseEnableFeatureString and is parsed by
+// RegisterOverridesFromCommandLine, which only splits on '<'; dots and colons
+// are part of the name.
+func canonicalDisableFeatureName(entry string) string {
+	return stripLeadingStar(cutAtFirst(entry, "<"))
+}
+
+// cutAtFirst returns entry up to its first byte in separators, if any.
+func cutAtFirst(entry, separators string) string {
+	if i := strings.IndexAny(entry, separators); i >= 0 {
+		return entry[:i]
+	}
+	return entry
+}
+
+// stripLeadingStar removes the optional '*' default-reset prefix that
+// RegisterOverride consumes before inserting into its override map, so
+// *Foo and Foo collapse to one canonical key.
+func stripLeadingStar(name string) string {
+	return strings.TrimPrefix(name, "*")
+}
+
+// mergeFeatureEntries merges base and runtime feature-list entries into one
+// list holding a single entry per canonical feature name, preserving first-
+// seen order. A runtime entry replaces a base entry with the same canonical
+// name, and later entries replace earlier ones within a stream. Entries are
+// canonicalized with canon, which differs between the enable and disable
+// switches.
+//
+// This matters because Chromium's FeatureList registers overrides keyed by
+// canonical name and keeps only the FIRST entry per name (try_emplace in
+// base/feature_list.cc RegisterOverride). Emitting two decorated variants of
+// one feature (e.g. base Foo<StudyA plus runtime Foo<StudyB) would therefore
+// let the base configuration silently win; collapsing here makes the emitted
+// switch carry exactly one deliberate configuration per feature.
+func mergeFeatureEntries(baseVals, rtVals []string, canon func(string) string) []string {
+	index := make(map[string]int, len(baseVals)+len(rtVals))
+	out := make([]string, 0, len(baseVals)+len(rtVals))
+	add := func(vals []string) {
+		for _, v := range vals {
+			name := canon(v)
+			if pos, ok := index[name]; ok {
+				out[pos] = v
+				continue
+			}
+			index[name] = len(out)
+			out = append(out, v)
+		}
+	}
+	add(baseVals)
+	add(rtVals)
 	return out
 }
 
@@ -128,28 +198,52 @@ func ReadOptionalFlagFile(path string) ([]string, error) {
 // extensions_enabled() returns true, which is false when --disable-extensions-except is used.
 // Any paths from --disable-extensions-except are merged into --load-extension instead.
 //
-// Non-extension flags from both base and runtime are combined with deduplication (first occurrence preserved).
+// Feature-list flags (--enable-features / --disable-features) from both sources are also
+// merged into single comma-separated tokens. Chromium keeps only one value per switch, so
+// emitting duplicates would silently drop all but the last list. When a feature appears in
+// both lists Chromium disables it — disable wins over enable.
+//
+// Non-feature, non-extension flags from both base and runtime are combined with deduplication
+// (first occurrence preserved).
 func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	// Buckets
 	var (
-		baseNonExt     []string // Non-extension related flags contained in base
-		runtimeNonExt  []string // Non-extension related flags contained in runtime
-		baseLoad       []string // --load-extension flags contained in base
-		baseExcept     []string // --disable-extensions-except flags for base (parsed but not re-emitted)
-		rtLoad         []string // --load-extension flags contained in runtime
-		rtExcept       []string // --disable-extensions-except flags contained in runtime (parsed but not re-emitted)
-		baseDisableAll string   // --disable-extensions flag contained in base
-		rtDisableAll   string   // --disable-extensions flag contained in runtime
+		baseNonExt      []string // Non-extension related flags contained in base
+		runtimeNonExt   []string // Non-extension related flags contained in runtime
+		baseLoad        []string // --load-extension flags contained in base
+		baseExcept      []string // --disable-extensions-except flags for base (parsed but not re-emitted)
+		baseEnableFeat  []string // --enable-features values contained in base
+		baseDisableFeat []string // --disable-features values contained in base
+		rtLoad          []string // --load-extension flags contained in runtime
+		rtExcept        []string // --disable-extensions-except flags contained in runtime (parsed but not re-emitted)
+		rtEnableFeat    []string // --enable-features values contained in runtime
+		rtDisableFeat   []string // --disable-features values contained in runtime
+		baseDisableAll  string   // --disable-extensions flag contained in base
+		rtDisableAll    string   // --disable-extensions flag contained in runtime
 	)
 
-	baseNonExt = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisableAll)
-	runtimeNonExt = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtDisableAll)
+	baseNonExt = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseEnableFeat, &baseDisableFeat, &baseDisableAll)
+	runtimeNonExt = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtEnableFeat, &rtDisableFeat, &rtDisableAll)
 
 	// Merge extension lists - include paths from --disable-extensions-except in load paths
 	// since we no longer emit --disable-extensions-except
 	mergedLoad := union(baseLoad, rtLoad)
 	mergedLoad = union(mergedLoad, baseExcept)
 	mergedLoad = union(mergedLoad, rtExcept)
+
+	// Merge feature lists - one entry per canonical feature name, runtime
+	// replacing base on collision. A feature listed in both enable and disable
+	// stays in both; Chromium resolves that conflict as disabled.
+	mergedEnableFeat := mergeFeatureEntries(baseEnableFeat, rtEnableFeat, canonicalEnableFeatureName)
+	mergedDisableFeat := mergeFeatureEntries(baseDisableFeat, rtDisableFeat, canonicalDisableFeatureName)
+
+	var featureFlags []string
+	if len(mergedEnableFeat) > 0 {
+		featureFlags = append(featureFlags, "--enable-features="+strings.Join(mergedEnableFeat, ","))
+	}
+	if len(mergedDisableFeat) > 0 {
+		featureFlags = append(featureFlags, "--disable-features="+strings.Join(mergedDisableFeat, ","))
+	}
 
 	// Construct final extension-related flags respecting override semantics:
 	// 1) If runtime specifies --disable-extensions, it overrides everything extension related
@@ -169,6 +263,7 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 
 	// Combine and dedupe (preserving first occurrence)
 	combined := append(append([]string{}, baseNonExt...), runtimeNonExt...)
+	combined = append(combined, featureFlags...)
 	combined = append(combined, extFlags...)
 	seen := make(map[string]struct{}, len(combined))
 	final := make([]string, 0, len(combined))
@@ -242,4 +337,34 @@ func WriteFlagFile(path string, tokens []string) error {
 	// Ensure trailing newline for readability
 	data = append(data, '\n')
 	return os.WriteFile(path, data, 0o644)
+}
+
+// KernelDisableFeaturesPrefix is a kernel-namespaced switch for per-session feature
+// disabling. Chromium ignores unknown switches, so on images that predate translation
+// the token is inert instead of last-win clobbering boot-time --disable-features lists.
+const KernelDisableFeaturesPrefix = "--kernel-disable-features="
+
+// TranslateKernelDisableFeatures folds any --kernel-disable-features tokens into the
+// single --disable-features token and returns the result. Values are merged by
+// canonical feature name (runtime/kernel entries replacing base ones); ordering of
+// unrelated tokens is preserved. Idempotent.
+func TranslateKernelDisableFeatures(tokens []string) []string {
+	var kernelVals, disableVals []string
+	rest := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		switch {
+		case strings.HasPrefix(tok, KernelDisableFeaturesPrefix):
+			appendCSVInto(&kernelVals, strings.TrimPrefix(tok, KernelDisableFeaturesPrefix))
+		case strings.HasPrefix(tok, "--disable-features="):
+			appendCSVInto(&disableVals, strings.TrimPrefix(tok, "--disable-features="))
+		default:
+			rest = append(rest, tok)
+		}
+	}
+	if len(kernelVals) == 0 {
+		return tokens
+	}
+	merged := mergeFeatureEntries(disableVals, kernelVals, canonicalDisableFeatureName)
+	rest = append(rest, "--disable-features="+strings.Join(merged, ","))
+	return rest
 }

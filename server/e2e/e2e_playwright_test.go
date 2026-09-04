@@ -79,6 +79,181 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Contains(t, resultStr, "Example Domain", "expected result to contain 'Example Domain'")
 
 	t.Log("playwright execute API test passed")
+
+	t.Log("verifying WebMCP helpers in the Playwright execution scope")
+	webmcpRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const tools = await webmcp.listTools();
+			let failure;
+			try {
+				await webmcp.invokeTool('wmcp_missing', {});
+			} catch (error) {
+				failure = {
+					name: error.name,
+					statusCode: error.statusCode,
+					code: error.code ?? null,
+					invocationId: error.invocationId ?? null,
+					message: error.body?.message,
+				};
+			}
+			return { frozen: Object.isFrozen(webmcp), tools, failure };
+		`,
+	})
+	require.NoError(t, err, "WebMCP helper request error: %v", err)
+	require.Equal(t, http.StatusOK, webmcpRsp.StatusCode(), "unexpected status: %s body=%s", webmcpRsp.Status(), string(webmcpRsp.Body))
+	require.NotNil(t, webmcpRsp.JSON200)
+	require.True(t, webmcpRsp.JSON200.Success, "expected WebMCP helper execution to succeed")
+	helperResultBytes, err := json.Marshal(webmcpRsp.JSON200.Result)
+	require.NoError(t, err)
+	var helperResult struct {
+		Frozen  bool  `json:"frozen"`
+		Tools   []any `json:"tools"`
+		Failure struct {
+			Name         string  `json:"name"`
+			StatusCode   int     `json:"statusCode"`
+			Code         *string `json:"code"`
+			InvocationID *string `json:"invocationId"`
+			Message      string  `json:"message"`
+		} `json:"failure"`
+	}
+	require.NoError(t, json.Unmarshal(helperResultBytes, &helperResult))
+	require.True(t, helperResult.Frozen)
+	require.NotNil(t, helperResult.Tools)
+	require.Equal(t, "WebMCPRequestError", helperResult.Failure.Name)
+	require.Equal(t, http.StatusNotFound, helperResult.Failure.StatusCode)
+	require.Nil(t, helperResult.Failure.Code)
+	require.Nil(t, helperResult.Failure.InvocationID)
+	require.NotEmpty(t, helperResult.Failure.Message)
+
+	t.Log("verifying existing code may declare its own webmcp binding")
+	shadowedWebMCPRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const webmcp = 'user-defined';
+			return webmcp;
+		`,
+	})
+	require.NoError(t, err, "shadowed WebMCP request error: %v", err)
+	require.Equal(t, http.StatusOK, shadowedWebMCPRsp.StatusCode(), "unexpected status: %s body=%s", shadowedWebMCPRsp.Status(), string(shadowedWebMCPRsp.Body))
+	require.NotNil(t, shadowedWebMCPRsp.JSON200)
+	require.True(t, shadowedWebMCPRsp.JSON200.Success, "existing webmcp binding should remain valid")
+	require.Equal(t, "user-defined", shadowedWebMCPRsp.JSON200.Result)
+
+	// Reuse the same container/warm daemon connection to verify tab-binding
+	// behavior: `page` must bind to the browser's actual foreground tab, not
+	// just the most recently opened one (resolveActivePage in
+	// playwright-daemon.ts, backed by the image's Chrome 150+ CDP `tabActive`
+	// signal). Uses a `data:` URL for the second tab so the assertion doesn't
+	// depend on a second outbound network request.
+	t.Log("verifying page binds to the foreground tab")
+	openSecondTabRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const second = await context.newPage();
+			await second.goto('data:text/html,second-tab');
+			return context.pages().length;
+		`,
+	})
+	require.NoError(t, err, "open second tab request error: %v", err)
+	require.Equal(t, http.StatusOK, openSecondTabRsp.StatusCode(), "unexpected status: %s body=%s", openSecondTabRsp.Status(), string(openSecondTabRsp.Body))
+	require.NotNil(t, openSecondTabRsp.JSON200)
+	require.True(t, openSecondTabRsp.JSON200.Success, "expected open-second-tab success=true")
+	require.EqualValues(t, 2, openSecondTabRsp.JSON200.Result, "expected two open tabs")
+
+	// A fresh execute call must bind `page` to the newest tab, which is also
+	// the foreground one right after opening it.
+	urlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return page.url();`,
+	})
+	require.NoError(t, err, "url request error: %v", err)
+	require.Equal(t, http.StatusOK, urlRsp.StatusCode(), "unexpected status: %s body=%s", urlRsp.Status(), string(urlRsp.Body))
+	require.NotNil(t, urlRsp.JSON200)
+	require.True(t, urlRsp.JSON200.Success, "expected url request success=true")
+	require.Equal(t, "data:text/html,second-tab", urlRsp.JSON200.Result, "expected injected page to be the foreground tab")
+
+	// Bringing the original tab back to the foreground must flip which page
+	// gets injected. Select it by URL rather than context.pages()[0] -- relying
+	// on index/creation order would reintroduce the same undocumented ordering
+	// assumption this change removes. Tab-creation order alone can't
+	// distinguish this case from the one above -- only the CDP `tabActive`
+	// signal can.
+	bringToFrontRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const first = context.pages().find(candidate =>
+				candidate.url().includes('example.com')
+			);
+			if (!first) throw new Error('original page not found');
+			await first.bringToFront();
+			return first.url();
+		`,
+	})
+	require.NoError(t, err, "bring-to-front request error: %v", err)
+	require.Equal(t, http.StatusOK, bringToFrontRsp.StatusCode(), "unexpected status: %s body=%s", bringToFrontRsp.Status(), string(bringToFrontRsp.Body))
+	require.NotNil(t, bringToFrontRsp.JSON200)
+	require.True(t, bringToFrontRsp.JSON200.Success, "expected bring-to-front success=true")
+
+	refocusedUrlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return page.url();`,
+	})
+	require.NoError(t, err, "refocused url request error: %v", err)
+	require.Equal(t, http.StatusOK, refocusedUrlRsp.StatusCode(), "unexpected status: %s body=%s", refocusedUrlRsp.Status(), string(refocusedUrlRsp.Body))
+	require.NotNil(t, refocusedUrlRsp.JSON200)
+	require.True(t, refocusedUrlRsp.JSON200.Success, "expected refocused url request success=true")
+	require.Contains(t, refocusedUrlRsp.JSON200.Result, "example.com", "expected injected page to follow foreground focus, not tab-creation order")
+
+	t.Log("playwright foreground-tab binding test passed")
+
+	t.Log("verifying page resolution across browser contexts")
+	// Keep a newer blank page behind the foreground page so the newest-page
+	// fallback cannot satisfy the active-page assertion.
+	openSecondContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const firstContext = browser.contexts()[0];
+			const secondContext = await browser.newContext();
+			const secondPage = await secondContext.newPage();
+			await secondPage.goto('data:text/html,second-context');
+			await secondContext.newPage();
+			await Promise.all(firstContext.pages().map(page => page.close()));
+			await secondPage.bringToFront();
+			return {
+				contextCount: browser.contexts().length,
+				firstContextPageCount: firstContext.pages().length,
+				secondContextPageCount: secondContext.pages().length,
+			};
+		`,
+	})
+	require.NoError(t, err, "open second context request error: %v", err)
+	require.Equal(t, http.StatusOK, openSecondContextRsp.StatusCode(), "unexpected status: %s body=%s", openSecondContextRsp.Status(), string(openSecondContextRsp.Body))
+	require.NotNil(t, openSecondContextRsp.JSON200)
+	require.True(t, openSecondContextRsp.JSON200.Success, "expected open-second-context success=true")
+
+	setupResultBytes, err := json.Marshal(openSecondContextRsp.JSON200.Result)
+	require.NoError(t, err)
+	var setupResult struct {
+		ContextCount           int `json:"contextCount"`
+		FirstContextPageCount  int `json:"firstContextPageCount"`
+		SecondContextPageCount int `json:"secondContextPageCount"`
+	}
+	require.NoError(t, json.Unmarshal(setupResultBytes, &setupResult))
+	require.Equal(t, 2, setupResult.ContextCount, "expected two browser contexts")
+	require.Zero(t, setupResult.FirstContextPageCount, "expected the first context to remain open without pages")
+	require.Equal(t, 2, setupResult.SecondContextPageCount, "expected a foreground page and a newer fallback page in the second context")
+
+	crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return { url: page.url(), contextPageUrls: page.context().pages().map(candidate => candidate.url()) };`,
+	})
+	require.NoError(t, err, "cross-context request error: %v", err)
+	require.Equal(t, http.StatusOK, crossContextRsp.StatusCode(), "cross-context request returned %s body=%s", crossContextRsp.Status(), string(crossContextRsp.Body))
+	require.NotNil(t, crossContextRsp.JSON200)
+	require.True(t, crossContextRsp.JSON200.Success, "cross-context request failed")
+
+	resultBytes, err = json.Marshal(crossContextRsp.JSON200.Result)
+	require.NoError(t, err)
+	var crossContextResult struct {
+		URL             string   `json:"url"`
+		ContextPageURLs []string `json:"contextPageUrls"`
+	}
+	require.NoError(t, json.Unmarshal(resultBytes, &crossContextResult))
+	require.Equal(t, "data:text/html,second-context", crossContextResult.URL, "expected active-page resolution to select the foreground page, not the newer fallback page")
+	require.ElementsMatch(t, []string{"data:text/html,second-context", "about:blank"}, crossContextResult.ContextPageURLs, "expected the selected page to belong to the second context")
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
@@ -100,9 +275,21 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	timeoutSec := 2
+	setupReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `return await page.evaluate(() => document.body.dataset.timeoutMutation = "initial");`,
+	}
+	setupRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, setupReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, setupRsp.StatusCode())
+	require.NotNil(t, setupRsp.JSON200)
+	require.True(t, setupRsp.JSON200.Success)
+
+	timeoutSec := 1
 	timeoutReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
-		Code:       `await new Promise(r => setTimeout(r, 30000));`,
+		Code: `
+await page.waitForTimeout(2500);
+await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
+`,
 		TimeoutSec: &timeoutSec,
 	}
 
@@ -112,7 +299,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "playwright timeout request should return an API response")
-	require.Less(t, elapsed, 5*time.Second, "timeout response should arrive before the API socket read deadline")
+	require.Less(t, elapsed, 4*time.Second, "timeout response should arrive before the API socket read deadline")
 	require.Equal(t, http.StatusOK, timeoutRsp.StatusCode(), "unexpected status for timed-out playwright execute: %s body=%s", timeoutRsp.Status(), string(timeoutRsp.Body))
 	require.NotNil(t, timeoutRsp.JSON200, "expected JSON200 timeout response, got nil")
 	require.False(t, timeoutRsp.JSON200.Success, "expected success=false for timed-out playwright execution")
@@ -123,7 +310,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	require.NotContains(t, errorMsg, "i/o timeout", "daemon should return a timeout response before the API socket read deadline")
 
 	recoveryReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
-		Code: `return await page.evaluate(() => navigator.userAgent);`,
+		Code: `return await page.evaluate(() => document.body.dataset.timeoutMutation);`,
 	}
 
 	t.Log("executing normal playwright code after timed-out request")
@@ -138,6 +325,18 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 		return "nil"
 	}())
 	require.NotNil(t, recoveryRsp.JSON200.Result, "expected recovery result to be non-nil")
+	require.Equal(t, "initial", recoveryRsp.JSON200.Result)
+
+	// Wait past the abandoned script's delay. A response-only timeout lets that
+	// script wake up and mutate the page after the caller has moved on.
+	time.Sleep(2 * time.Second)
+	lateRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, recoveryReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, lateRsp.StatusCode())
+	require.NotNil(t, lateRsp.JSON200)
+	require.True(t, lateRsp.JSON200.Success)
+	require.NotNil(t, lateRsp.JSON200.Result)
+	require.Equal(t, "initial", lateRsp.JSON200.Result, "timed-out execution mutated the page after returning")
 
 	t.Log("playwright timeout regression test passed")
 }

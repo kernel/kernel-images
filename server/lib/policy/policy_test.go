@@ -146,6 +146,25 @@ func TestPolicy_ExtensionInstallForcelist(t *testing.T) {
 	assert.Len(t, forcelist, 2)
 }
 
+func TestAddExtensionRegistrationsAppliesBatch(t *testing.T) {
+	current := &Policy{
+		ExtensionInstallForcelist: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;http://old.example/update.xml"},
+		ExtensionSettings:         make(map[string]ExtensionSetting),
+	}
+	addExtensionRegistrations(current, []ExtensionRegistration{
+		{Name: "ordinary", ChromeExtensionID: "ordinary"},
+		{Name: "enterprise", ChromeExtensionID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RequiresEnterprisePolicy: true},
+	})
+
+	require.Contains(t, current.ExtensionSettings, "*")
+	require.Contains(t, current.ExtensionSettings, "ordinary")
+	enterprise := current.ExtensionSettings["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+	require.Equal(t, "force_installed", enterprise.InstallationMode)
+	require.Equal(t, []string{
+		"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa;http://127.0.0.1:10001/extensions/enterprise/update.xml",
+	}, current.ExtensionInstallForcelist)
+}
+
 func TestPolicy_EmptyPolicy(t *testing.T) {
 	// Test with minimal input
 	input := `{}`

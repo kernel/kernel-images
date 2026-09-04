@@ -823,6 +823,10 @@
         return
       }
 
+      if (!this.is_touch_device) {
+        this._overlay.focus()
+      }
+
       this.sendMousePos(e)
       this.$client.sendData('mousedown', { key: e.button + 1 })
     }

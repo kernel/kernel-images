@@ -21,6 +21,7 @@ const (
 	EventNetworkRequest       = "network_request"         // Network.requestWillBeSent
 	EventNetworkResponse      = "network_response"        // Network.loadingFinished (with prior responseReceived)
 	EventNetworkLoadingFailed = "network_loading_failed"  // Network.loadingFailed
+	EventProxyError           = "proxy_error"             // branded X-Kernel-Proxy-Error response classified as a proxy-layer failure
 	EventNavigation           = "page_navigation"         // Page.frameNavigated
 	EventDOMContentLoaded     = "page_dom_content_loaded" // Page.domContentEventFired
 	EventPageLoad             = "page_load"               // Page.loadEventFired

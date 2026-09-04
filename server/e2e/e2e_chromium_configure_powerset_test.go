@@ -44,6 +44,7 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 
 	matrix := []int{
 		matDisplay,
+		matStartURL,
 		matPolicy | matKioskFlags,
 		matExtension,
 		matDisplay | matPolicy | matKioskFlags | matExtension | matStartURL,
@@ -73,6 +74,9 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 			defer func() { _ = c.Stop(context.WithoutCancel(ctx)) }()
 
 			require.NoError(t, c.WaitReady(ctx))
+			require.NoError(t, c.WaitDevTools(ctx))
+			browserWebSocketBefore, err := fetchBrowserWebSocketURL(ctx, c)
+			require.NoError(t, err)
 
 			var body bytes.Buffer
 			w := multipart.NewWriter(&body)
@@ -82,15 +86,28 @@ func TestChromiumConfigureMultipartPowerset(t *testing.T) {
 			client, err := c.APIClient()
 			require.NoError(t, err)
 
-			rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, w.FormDataContentType(), io.NopCloser(bytes.NewReader(body.Bytes())))
+			rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, nil, w.FormDataContentType(), io.NopCloser(bytes.NewReader(body.Bytes())))
 			require.NoError(t, err)
 
 			require.Equal(t, http.StatusOK, rsp.StatusCode(),
 				"bits=%02x unexpected status=%s body=%s", bits, rsp.Status(), string(rsp.Body))
 			require.NotNil(t, rsp.JSON200, "want ok JSON")
 			require.True(t, rsp.JSON200.Ok)
+
+			browserWebSocketAfter, err := fetchBrowserWebSocketURL(ctx, c)
+			require.NoError(t, err)
+			if chromiumConfigurePowersetRestarts(bits) {
+				require.NotEqual(t, browserWebSocketBefore, browserWebSocketAfter, "restart path must replace the browser WebSocket identity")
+			} else {
+				require.Equal(t, browserWebSocketBefore, browserWebSocketAfter, "live path must preserve the browser WebSocket identity")
+			}
 		})
 	}
+}
+
+func chromiumConfigurePowersetRestarts(bits int) bool {
+	// This matrix runs against headless Xvfb, where display-only configure stays live.
+	return bits&(matPolicy|matKioskFlags|matExtension) != 0
 }
 
 func chromiumConfigurePowersetLabel(bits int) string {
@@ -200,7 +217,7 @@ func TestChromiumConfigureStartURLBareHost(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, mw.FormDataContentType(), io.NopCloser(bytes.NewReader(buf.Bytes())))
+	rsp, err := client.ChromiumConfigureWithBodyWithResponse(ctx, nil, mw.FormDataContentType(), io.NopCloser(bytes.NewReader(buf.Bytes())))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "%s", string(rsp.Body))
 	require.True(t, rsp.JSON200.Ok)

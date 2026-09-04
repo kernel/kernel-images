@@ -3,7 +3,12 @@ package cdpclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -17,47 +22,134 @@ type cdpRequest struct {
 	SessionID string          `json:"sessionId,omitempty"`
 }
 
-type cdpResponse struct {
-	ID     int64           `json:"id"`
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *cdpError       `json:"error,omitempty"`
+// ErrOutcomeUnknown means a CDP connection closed while a command was in
+// flight, so the caller cannot know whether Chromium applied it.
+var ErrOutcomeUnknown = errors.New("CDP command outcome is unknown")
+
+// Message is a response or event received from Chromium.
+type Message struct {
+	ID        int64           `json:"id,omitempty"`
+	Method    string          `json:"method,omitempty"`
+	Params    json.RawMessage `json:"params,omitempty"`
+	Result    json.RawMessage `json:"result,omitempty"`
+	Error     *Error          `json:"error,omitempty"`
+	SessionID string          `json:"sessionId,omitempty"`
 }
 
-type cdpError struct {
+// Error is a protocol error returned by Chromium.
+type Error struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 
-func (e *cdpError) Error() string {
+func (e *Error) Error() string {
 	return fmt.Sprintf("CDP error %d: %s", e.Code, e.Message)
 }
 
-// Client is a minimal CDP client that communicates over a browser-level
-// DevTools WebSocket connection.
-type Client struct {
-	conn   *websocket.Conn
-	nextID atomic.Int64
+type commandResult struct {
+	result json.RawMessage
+	err    error
 }
 
-// Dial opens a WebSocket connection to the given DevTools URL.
+// Client maintains one browser-level DevTools connection. Commands may be
+// sent concurrently. Clients created by DialWithEvents also expose protocol
+// events through Events.
+type Client struct {
+	conn   *websocket.Conn
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	nextID  atomic.Int64
+	writeMu sync.Mutex
+
+	pendingMu sync.Mutex
+	pending   map[int64]chan commandResult
+	events    chan Message
+
+	closed    chan struct{}
+	closeOnce sync.Once
+}
+
+// BrowserWebSocketURL reads Chrome's browser-level DevTools WebSocket URL.
+func BrowserWebSocketURL(ctx context.Context, versionURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, versionURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("get DevTools version: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("get DevTools version: %s", resp.Status)
+	}
+	var version struct {
+		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&version); err != nil {
+		return "", fmt.Errorf("decode DevTools version: %w", err)
+	}
+	if version.WebSocketDebuggerURL == "" {
+		return "", fmt.Errorf("DevTools version response has no browser WebSocket URL")
+	}
+	return version.WebSocketDebuggerURL, nil
+}
+
+// Dial opens a command-only DevTools connection. Protocol events are
+// discarded, preserving the behavior expected by existing short-lived users.
 func Dial(ctx context.Context, devtoolsURL string) (*Client, error) {
+	return dial(ctx, devtoolsURL, false)
+}
+
+// DialWithEvents opens a DevTools connection that delivers protocol events in
+// receive order through Events.
+func DialWithEvents(ctx context.Context, devtoolsURL string) (*Client, error) {
+	return dial(ctx, devtoolsURL, true)
+}
+
+func dial(ctx context.Context, devtoolsURL string, withEvents bool) (*Client, error) {
 	conn, _, err := websocket.Dial(ctx, devtoolsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dial devtools: %w", err)
 	}
-	conn.SetReadLimit(4 * 1024 * 1024)
-	return &Client{conn: conn}, nil
+	readLimit := int64(4 * 1024 * 1024)
+	var events chan Message
+	if withEvents {
+		readLimit = 8 * 1024 * 1024
+		events = make(chan Message, 256)
+	}
+	conn.SetReadLimit(readLimit)
+	clientCtx, cancel := context.WithCancel(context.Background())
+	client := &Client{
+		conn:    conn,
+		ctx:     clientCtx,
+		cancel:  cancel,
+		pending: make(map[int64]chan commandResult),
+		events:  events,
+		closed:  make(chan struct{}),
+	}
+	go client.readLoop()
+	return client, nil
 }
 
-// Close shuts down the WebSocket connection.
+// Close shuts down the WebSocket connection and unblocks pending commands.
 func (c *Client) Close() error {
-	return c.conn.Close(websocket.StatusNormalClosure, "done")
+	c.shutdown()
+	c.conn.CloseNow()
+	return nil
 }
 
-// send sends a CDP command and waits for the matching response, discarding
-// any intermediate events. This is safe for short-lived connections where the
-// caller controls the full message sequence.
-func (c *Client) send(ctx context.Context, method string, params any, sessionID string) (json.RawMessage, error) {
+func (c *Client) shutdown() {
+	c.closeOnce.Do(func() {
+		c.cancel()
+		close(c.closed)
+		c.failPending(ErrOutcomeUnknown)
+	})
+}
+
+// Send sends a CDP command and waits for its matching response.
+func (c *Client) Send(ctx context.Context, method string, params any, sessionID string) (json.RawMessage, error) {
 	id := c.nextID.Add(1)
 
 	var rawParams json.RawMessage
@@ -69,33 +161,120 @@ func (c *Client) send(ctx context.Context, method string, params any, sessionID 
 		rawParams = b
 	}
 
-	req := cdpRequest{ID: id, Method: method, Params: rawParams, SessionID: sessionID}
-	reqBytes, err := json.Marshal(req)
+	reqBytes, err := json.Marshal(cdpRequest{ID: id, Method: method, Params: rawParams, SessionID: sessionID})
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	if err := c.conn.Write(ctx, websocket.MessageText, reqBytes); err != nil {
+	responseCh := make(chan commandResult, 1)
+	c.pendingMu.Lock()
+	if c.IsClosed() {
+		c.pendingMu.Unlock()
+		return nil, fmt.Errorf("read: %w", ErrOutcomeUnknown)
+	}
+	c.pending[id] = responseCh
+	c.pendingMu.Unlock()
+
+	c.writeMu.Lock()
+	err = c.conn.Write(ctx, websocket.MessageText, reqBytes)
+	c.writeMu.Unlock()
+	if err != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
+	select {
+	case response := <-responseCh:
+		return response.result, response.err
+	case <-ctx.Done():
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
+		select {
+		case response := <-responseCh:
+			return response.result, response.err
+		default:
+			return nil, fmt.Errorf("read: %w", ctx.Err())
+		}
+	case <-c.closed:
+		select {
+		case response := <-responseCh:
+			return response.result, response.err
+		default:
+			return nil, fmt.Errorf("read: %w", ErrOutcomeUnknown)
+		}
+	}
+}
+
+// Events returns the event stream for clients created by DialWithEvents. It
+// returns nil for command-only clients.
+func (c *Client) Events() <-chan Message {
+	return c.events
+}
+
+// Done closes when the connection shuts down.
+func (c *Client) Done() <-chan struct{} {
+	return c.closed
+}
+
+// IsClosed reports whether the connection has shut down.
+func (c *Client) IsClosed() bool {
+	select {
+	case <-c.closed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) readLoop() {
+	if c.events != nil {
+		defer close(c.events)
+	}
 	for {
-		_, msg, err := c.conn.Read(ctx)
+		_, payload, err := c.conn.Read(c.ctx)
 		if err != nil {
-			return nil, fmt.Errorf("read: %w", err)
+			c.shutdown()
+			return
+		}
+		var message Message
+		if json.Unmarshal(payload, &message) != nil {
+			continue
+		}
+		if message.ID == 0 {
+			if c.events == nil {
+				continue
+			}
+			select {
+			case c.events <- message:
+			case <-c.closed:
+				return
+			}
+			continue
 		}
 
-		var resp cdpResponse
-		if err := json.Unmarshal(msg, &resp); err != nil {
-			continue // skip malformed messages
+		c.pendingMu.Lock()
+		responseCh := c.pending[message.ID]
+		if responseCh != nil {
+			if message.Error != nil {
+				responseCh <- commandResult{err: message.Error}
+			} else {
+				responseCh <- commandResult{result: message.Result}
+			}
+			delete(c.pending, message.ID)
 		}
-		if resp.ID != id {
-			continue // skip events and responses to other commands
-		}
-		if resp.Error != nil {
-			return nil, resp.Error
-		}
-		return resp.Result, nil
+		c.pendingMu.Unlock()
+	}
+}
+
+func (c *Client) failPending(err error) {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	for id, responseCh := range c.pending {
+		responseCh <- commandResult{err: err}
+		delete(c.pending, id)
 	}
 }
 
@@ -122,7 +301,7 @@ type BrowserVersion struct {
 // listener of a Chromium that has not yet wired up its CDP routes. A
 // Browser.getVersion round-trip rules out both cases.
 func (c *Client) GetBrowserVersion(ctx context.Context) (*BrowserVersion, error) {
-	raw, err := c.send(ctx, "Browser.getVersion", nil, "")
+	raw, err := c.Send(ctx, "Browser.getVersion", nil, "")
 	if err != nil {
 		return nil, fmt.Errorf("Browser.getVersion: %w", err)
 	}
@@ -131,6 +310,49 @@ func (c *Client) GetBrowserVersion(ctx context.Context) (*BrowserVersion, error)
 		return nil, fmt.Errorf("unmarshal Browser.getVersion: %w", err)
 	}
 	return &v, nil
+}
+
+// LoadUnpackedExtension installs an unpacked extension from an absolute path
+// visible to Chromium and returns its extension ID.
+func (c *Client) LoadUnpackedExtension(ctx context.Context, path string) (string, error) {
+	raw, err := c.Send(ctx, "Extensions.loadUnpacked", map[string]string{"path": path}, "")
+	if err != nil {
+		return "", fmt.Errorf("Extensions.loadUnpacked: %w", err)
+	}
+	var result struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", fmt.Errorf("unmarshal Extensions.loadUnpacked: %w", err)
+	}
+	if result.ID == "" {
+		return "", fmt.Errorf("Extensions.loadUnpacked returned no extension ID")
+	}
+	return result.ID, nil
+}
+
+// ExtensionInfo describes an unpacked extension known to Chromium.
+type ExtensionInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Path    string `json:"path"`
+	Enabled bool   `json:"enabled"`
+}
+
+// GetExtensions returns all unpacked extensions known to Chromium.
+func (c *Client) GetExtensions(ctx context.Context) ([]ExtensionInfo, error) {
+	raw, err := c.Send(ctx, "Extensions.getExtensions", nil, "")
+	if err != nil {
+		return nil, fmt.Errorf("Extensions.getExtensions: %w", err)
+	}
+	var result struct {
+		Extensions []ExtensionInfo `json:"extensions"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal Extensions.getExtensions: %w", err)
+	}
+	return result.Extensions, nil
 }
 
 // Histogram is a snapshot of a Chrome UMA histogram as returned by
@@ -155,7 +377,7 @@ type HistogramBucket struct {
 // reads Chrome's in-memory UMA histograms without attaching to any page.
 // query is a substring filter on the histogram name; empty returns all.
 func (c *Client) GetHistograms(ctx context.Context, query string) ([]Histogram, error) {
-	raw, err := c.send(ctx, "Browser.getHistograms", map[string]any{"query": query}, "")
+	raw, err := c.Send(ctx, "Browser.getHistograms", map[string]any{"query": query}, "")
 	if err != nil {
 		return nil, fmt.Errorf("Browser.getHistograms: %w", err)
 	}
@@ -170,7 +392,7 @@ func (c *Client) GetHistograms(ctx context.Context, query string) ([]Histogram, 
 
 // CountPageTargets returns the number of open page targets.
 func (c *Client) CountPageTargets(ctx context.Context) (int, error) {
-	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	targetsResult, err := c.Send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
 		return 0, fmt.Errorf("Target.getTargets: %w", err)
 	}
@@ -201,7 +423,7 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 	}
 	defer c.Close()
 
-	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	targetsResult, err := c.Send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
 		return fmt.Errorf("Target.getTargets: %w", err)
 	}
@@ -225,12 +447,12 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 			pageTargetID = t.TargetID
 			continue
 		}
-		_, _ = c.send(ctx, "Target.closeTarget", map[string]any{
+		_, _ = c.Send(ctx, "Target.closeTarget", map[string]any{
 			"targetId": t.TargetID,
 		}, "")
 	}
 	if pageTargetID == "" {
-		createResult, err := c.send(ctx, "Target.createTarget", map[string]any{
+		createResult, err := c.Send(ctx, "Target.createTarget", map[string]any{
 			"url": "about:blank",
 		}, "")
 		if err != nil {
@@ -245,7 +467,7 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 		pageTargetID = created.TargetID
 	}
 
-	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
+	attachResult, err := c.Send(ctx, "Target.attachToTarget", map[string]any{
 		"targetId": pageTargetID,
 		"flatten":  true,
 	}, "")
@@ -262,22 +484,109 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 	defer func() {
 		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_, _ = c.send(detachCtx, "Target.detachFromTarget", map[string]any{
+		_, _ = c.Send(detachCtx, "Target.detachFromTarget", map[string]any{
 			"sessionId": attach.SessionID,
 		}, "")
 	}()
 
-	if _, err := c.send(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID); err != nil {
+	if _, err := c.Send(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID); err != nil {
 		return fmt.Errorf("Page.navigate: %w", err)
 	}
 	return nil
+}
+
+// DispatchStartURLAndWait navigates through navigationURL and waits for
+// destination to load without resolving to Chrome's network error page.
+func DispatchStartURLAndWait(ctx context.Context, devtoolsURL, navigationURL, destination string) error {
+	if err := DispatchStartURL(ctx, devtoolsURL, navigationURL); err != nil {
+		return err
+	}
+
+	want, err := url.Parse(destination)
+	if err != nil {
+		return fmt.Errorf("parse destination: %w", err)
+	}
+	c, err := Dial(ctx, devtoolsURL)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	targetID, err := c.firstPageTargetID(ctx)
+	if err != nil {
+		return err
+	}
+	attachResult, err := c.Send(ctx, "Target.attachToTarget", map[string]any{
+		"targetId": targetID,
+		"flatten":  true,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Target.attachToTarget: %w", err)
+	}
+	var attach struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(attachResult, &attach); err != nil {
+		return fmt.Errorf("unmarshal attach: %w", err)
+	}
+	defer func() {
+		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = c.Send(detachCtx, "Target.detachFromTarget", map[string]any{
+			"sessionId": attach.SessionID,
+		}, "")
+	}()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	var lastState struct {
+		URL        string `json:"url"`
+		ReadyState string `json:"readyState"`
+	}
+	lastNavigate := time.Now()
+	for {
+		raw, evalErr := c.Send(ctx, "Runtime.evaluate", map[string]any{
+			"expression":    `JSON.stringify({url: location.href, readyState: document.readyState})`,
+			"returnByValue": true,
+		}, attach.SessionID)
+		if evalErr == nil {
+			var evaluated struct {
+				Result struct {
+					Value string `json:"value"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(raw, &evaluated); err == nil {
+				_ = json.Unmarshal([]byte(evaluated.Result.Value), &lastState)
+				current, parseErr := url.Parse(lastState.URL)
+				if parseErr == nil && relatedHosts(current.Hostname(), want.Hostname()) && lastState.ReadyState == "complete" {
+					return nil
+				}
+				if strings.HasPrefix(lastState.URL, "chrome-error://") && time.Since(lastNavigate) >= 250*time.Millisecond {
+					_, _ = c.Send(ctx, "Page.navigate", map[string]any{"url": navigationURL}, attach.SessionID)
+					lastNavigate = time.Now()
+				}
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for %s to load (last URL %q, state %q): %w", destination, lastState.URL, lastState.ReadyState, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func relatedHosts(a, b string) bool {
+	a = strings.ToLower(strings.TrimSuffix(a, "."))
+	b = strings.ToLower(strings.TrimSuffix(b, "."))
+	return a == b || strings.HasSuffix(a, "."+b) || strings.HasSuffix(b, "."+a)
 }
 
 // firstPageTargetID returns the targetId of the first page target reported
 // by Target.getTargets. Callers that need to operate on the user-facing
 // browser window (Emulation, Browser.* window bounds) use this to find it.
 func (c *Client) firstPageTargetID(ctx context.Context) (string, error) {
-	targetsResult, err := c.send(ctx, "Target.getTargets", nil, "")
+	targetsResult, err := c.Send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
 		return "", fmt.Errorf("Target.getTargets: %w", err)
 	}
@@ -324,7 +633,7 @@ func (c *Client) SetWindowBoundsMaximized(ctx context.Context) error {
 		return nil
 	}
 
-	if _, err := c.send(ctx, "Browser.setWindowBounds", map[string]any{
+	if _, err := c.Send(ctx, "Browser.setWindowBounds", map[string]any{
 		"windowId": bounds.WindowID,
 		"bounds":   map[string]any{"windowState": "maximized"},
 	}, ""); err != nil {
@@ -353,7 +662,7 @@ func (c *Client) GetWindowBounds(ctx context.Context) (WindowBounds, error) {
 		return WindowBounds{}, err
 	}
 
-	winRaw, err := c.send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": pageTargetID}, "")
+	winRaw, err := c.Send(ctx, "Browser.getWindowForTarget", map[string]any{"targetId": pageTargetID}, "")
 	if err != nil {
 		return WindowBounds{}, fmt.Errorf("Browser.getWindowForTarget: %w", err)
 	}
@@ -385,7 +694,7 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 		return err
 	}
 
-	attachResult, err := c.send(ctx, "Target.attachToTarget", map[string]any{
+	attachResult, err := c.Send(ctx, "Target.attachToTarget", map[string]any{
 		"targetId": pageTargetID,
 		"flatten":  true,
 	}, "")
@@ -400,7 +709,7 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 		return fmt.Errorf("unmarshal attach: %w", err)
 	}
 
-	_, err = c.send(ctx, "Emulation.setDeviceMetricsOverride", map[string]any{
+	_, err = c.Send(ctx, "Emulation.setDeviceMetricsOverride", map[string]any{
 		"width":             width,
 		"height":            height,
 		"deviceScaleFactor": 1,
@@ -410,7 +719,7 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 		return fmt.Errorf("Emulation.setDeviceMetricsOverride: %w", err)
 	}
 
-	_, _ = c.send(ctx, "Target.detachFromTarget", map[string]any{
+	_, _ = c.Send(ctx, "Target.detachFromTarget", map[string]any{
 		"sessionId": attach.SessionID,
 	}, "")
 

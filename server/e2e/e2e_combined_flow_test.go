@@ -138,20 +138,29 @@ func TestMultipleCDPConnectionsAfterRestart(t *testing.T) {
 	t.Log("[test] result: all CDP connections successful")
 }
 
-// uploadExtension uploads a simple MV3 extension and waits for Chromium to restart.
+// uploadExtension uploads an enterprise-policy extension and waits for Chromium to restart.
 func uploadExtension(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
 	t.Helper()
 
-	// Build simple MV3 extension zip in-memory
 	extDir := t.TempDir()
 	manifest := `{
     "manifest_version": 3,
     "version": "1.0",
     "name": "Test Extension for Combined Flow",
-    "description": "Minimal extension for testing CDP connections after restart"
+    "description": "Extension for testing CDP connections after restart",
+    "permissions": ["webRequest"]
 }`
 	err := os.WriteFile(filepath.Join(extDir, "manifest.json"), []byte(manifest), 0600)
 	require.NoError(t, err, "write manifest")
+
+	updateXML := `<?xml version="1.0" encoding="UTF-8"?>
+<gupdate xmlns="http://www.google.com/update2/response" protocol="2.0">
+  <app appid="aaaabbbbccccddddeeeeffffgggghhhh">
+    <updatecheck codebase="http://127.0.0.1:10001/extensions/combined-flow-test-ext/extension.crx" version="1.0"/>
+  </app>
+</gupdate>`
+	require.NoError(t, os.WriteFile(filepath.Join(extDir, "update.xml"), []byte(updateXML), 0600), "write update.xml")
+	require.NoError(t, os.WriteFile(filepath.Join(extDir, "extension.crx"), []byte("test crx"), 0600), "write extension.crx")
 
 	extZip, err := zipDirToBytes(extDir)
 	require.NoError(t, err, "zip ext")
@@ -169,9 +178,9 @@ func uploadExtension(t *testing.T, ctx context.Context, client *instanceoapi.Cli
 	require.NoError(t, err)
 
 	start := time.Now()
-	rsp, err := client.UploadExtensionsAndRestartWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+	rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
 	elapsed := time.Since(start)
-	require.NoError(t, err, "uploadExtensionsAndRestart request error")
+	require.NoError(t, err, "uploadExtensions request error")
 	require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
 	t.Logf("[extension] uploaded in %s", elapsed)
 }

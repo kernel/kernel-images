@@ -20,6 +20,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/webmcpclient"
 )
 
 type cdpMonitorController interface {
@@ -39,6 +40,12 @@ type OTLPExporter interface {
 }
 
 var _ OTLPExporter = (*events.OTLPExportController)(nil)
+
+type webMCPClient interface {
+	Tools(ctx context.Context) ([]webmcpclient.Tool, error)
+	Invoke(ctx context.Context, toolRef string, input map[string]any) (webmcpclient.InvocationResult, error)
+	Close() error
+}
 
 type ApiService struct {
 	// defaultRecorderID is used whenever the caller doesn't specify an explicit ID.
@@ -61,6 +68,10 @@ type ApiService struct {
 	upstreamMgr *devtoolsproxy.UpstreamManager
 	stz         scaletozero.PinnedController
 
+	// chromiumConfigMu serializes configuration changes that may restart Chromium
+	// or mutate its runtime flags and policies.
+	chromiumConfigMu sync.Mutex
+
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
 
@@ -81,6 +92,8 @@ type ApiService struct {
 	// running. The API process is the child's direct parent and sole
 	// supervisor; it never adopts orphaned REPLs from earlier API processes.
 	browserRepl *browserReplChild
+
+	webmcp webMCPClient
 
 	// policy management
 	policy *policy.Policy
@@ -164,6 +177,7 @@ func New(
 		telemetrySession:  telemetrySession,
 		cdpMonitor:        mon,
 		otlpExport:        otlpExport,
+		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}, nil
@@ -432,6 +446,7 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.terminateBrowserReplLocked(ctx, "api shutdown")
 	s.browserReplMu.Unlock()
 
+	_ = s.webmcp.Close()
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
 	s.cdpMonitor.Stop()

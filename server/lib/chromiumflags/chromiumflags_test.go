@@ -41,12 +41,16 @@ func TestAppendCSVInto(t *testing.T) {
 
 func TestParseTokenStream_BaseAndRuntime(t *testing.T) {
 	var (
-		baseLoad    []string
-		baseExcept  []string
-		rtLoad      []string
-		rtExcept    []string
-		baseDisable string
-		rtDisable   string
+		baseLoad       []string
+		baseExcept     []string
+		rtLoad         []string
+		rtExcept       []string
+		baseDisable    string
+		rtDisable      string
+		baseEnableFeat []string
+		baseDisFeat    []string
+		rtEnableFeat   []string
+		rtDisFeat      []string
 	)
 
 	baseTokens := []string{
@@ -62,8 +66,8 @@ func TestParseTokenStream_BaseAndRuntime(t *testing.T) {
 		"--foo",
 	}
 
-	baseNonExt := parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisable)
-	runtimeNonExt := parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtDisable)
+	baseNonExt := parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseEnableFeat, &baseDisFeat, &baseDisable)
+	runtimeNonExt := parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtEnableFeat, &rtDisFeat, &rtDisable)
 
 	if !reflect.DeepEqual(baseLoad, []string{"/e1", "/e2"}) {
 		t.Fatalf("base load-extension parsed incorrectly: %#v", baseLoad)
@@ -127,16 +131,20 @@ func TestOverrideSemantics_DisableRuntime_Wins(t *testing.T) {
 	runtimeTokens := parseFlags(runtimeFlags)
 
 	var (
-		baseLoad       []string
-		baseExcept     []string
-		rtLoad         []string
-		rtExcept       []string
-		baseDisable    string
-		runtimeDisable string
+		baseLoad        []string
+		baseExcept      []string
+		rtLoad          []string
+		rtExcept        []string
+		baseEnableFeat  []string
+		baseDisableFeat []string
+		rtEnableFeat    []string
+		rtDisableFeat   []string
+		baseDisable     string
+		runtimeDisable  string
 	)
 
-	_ = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseDisable)
-	_ = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &runtimeDisable)
+	_ = parseTokenStream(baseTokens, &baseLoad, &baseExcept, &baseEnableFeat, &baseDisableFeat, &baseDisable)
+	_ = parseTokenStream(runtimeTokens, &rtLoad, &rtExcept, &rtEnableFeat, &rtDisableFeat, &runtimeDisable)
 
 	var extFlags []string
 	if runtimeDisable != "" {
@@ -287,6 +295,30 @@ func TestMergeFlags(t *testing.T) {
 			runtimeFlags: []string{"--bar", "--load-extension=/e2", "--disable-extensions-except=/x2"},
 			want:         []string{"--foo", "--bar", "--load-extension=/e1,/e2,/x1,/x2"},
 		},
+		{
+			name:         "merge enable-features from base and runtime",
+			baseFlags:    []string{"--enable-features=WebMCPTesting"},
+			runtimeFlags: []string{"--enable-features=Foo"},
+			want:         []string{"--enable-features=WebMCPTesting,Foo"},
+		},
+		{
+			name:         "merge disable-features across sources",
+			baseFlags:    []string{"--disable-features=A,B"},
+			runtimeFlags: []string{"--disable-features=B,C"},
+			want:         []string{"--disable-features=A,B,C"},
+		},
+		{
+			name:         "runtime can opt out of a base-enabled feature via disable list",
+			baseFlags:    []string{"--enable-features=WebMCPTesting,DevToolsWebMCPSupport"},
+			runtimeFlags: []string{"--disable-features=WebMCPTesting"},
+			want:         []string{"--enable-features=WebMCPTesting,DevToolsWebMCPSupport", "--disable-features=WebMCPTesting"},
+		},
+		{
+			name:         "enable and disable features coexist across sources",
+			baseFlags:    []string{"--enable-features=A", "--disable-features=B"},
+			runtimeFlags: []string{"--enable-features=C", "--disable-features=D"},
+			want:         []string{"--enable-features=A,C", "--disable-features=B,D"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -294,6 +326,170 @@ func TestMergeFlags(t *testing.T) {
 			got := MergeFlags(tt.baseFlags, tt.runtimeFlags)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("MergeFlags() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTranslateKernelDisableFeatures(t *testing.T) {
+	tests := []struct {
+		name   string
+		tokens []string
+		want   []string
+	}{
+		{
+			name:   "no kernel tokens is a no-op",
+			tokens: []string{"--foo", "--disable-features=A,B"},
+			want:   nil,
+		},
+		{
+			name:   "kernel token folds into existing disable list",
+			tokens: []string{"--foo", "--disable-features=A,B", "--kernel-disable-features=WebMCPTesting"},
+			want:   []string{"--foo", "--disable-features=A,B,WebMCPTesting"},
+		},
+		{
+			name:   "kernel token creates a disable list when none exists",
+			tokens: []string{"--foo", "--kernel-disable-features=WebMCPTesting,DevToolsWebMCPSupport"},
+			want:   []string{"--foo", "--disable-features=WebMCPTesting,DevToolsWebMCPSupport"},
+		},
+		{
+			name:   "multiple kernel tokens and duplicates are unioned",
+			tokens: []string{"--kernel-disable-features=A", "--bar", "--kernel-disable-features=B,A"},
+			want:   []string{"--bar", "--disable-features=A,B"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TranslateKernelDisableFeatures(tt.tokens)
+			if tt.want == nil {
+				if !reflect.DeepEqual(got, tt.tokens) {
+					t.Fatalf("expected unchanged input:\n got: %#v\nwant: %#v", got, tt.tokens)
+				}
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("TranslateKernelDisableFeatures() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergeFeatureEntries(t *testing.T) {
+	enableCases := []struct {
+		name string
+		base []string
+		rt   []string
+		want []string
+	}{
+		{
+			name: "runtime decorated variant replaces base decorated variant",
+			base: []string{"Foo<TrialA"},
+			rt:   []string{"Foo<TrialB"},
+			want: []string{"Foo<TrialB"},
+		},
+		{
+			name: "runtime plain name replaces base decorated variant",
+			base: []string{"Foo<TrialA"},
+			rt:   []string{"Foo"},
+			want: []string{"Foo"},
+		},
+		{
+			name: "runtime decorated variant replaces base plain name",
+			base: []string{"Foo"},
+			rt:   []string{"Foo<TrialB"},
+			want: []string{"Foo<TrialB"},
+		},
+		{
+			name: "parameter-decorated variants collapse to one canonical name",
+			base: []string{"Foo:p/v1"},
+			rt:   []string{"Foo:p/v2"},
+			want: []string{"Foo:p/v2"},
+		},
+		{
+			name: "group-and-study decoration is stripped too",
+			base: []string{"Foo"},
+			rt:   []string{"Foo.G1<S"},
+			want: []string{"Foo.G1<S"},
+		},
+		{
+			name: "distinct canonical names both survive in order",
+			base: []string{"Foo<ParamA/1", "Bar"},
+			rt:   []string{"Bar<TrialB", "Baz"},
+			want: []string{"Foo<ParamA/1", "Bar<TrialB", "Baz"},
+		},
+		{
+			name: "later entry replaces earlier within a stream",
+			base: []string{"Foo<A", "Foo<B"},
+			rt:   nil,
+			want: []string{"Foo<B"},
+		},
+		{
+			name: "starred base is replaced by unstarred runtime",
+			base: []string{"*Foo"},
+			rt:   []string{"Foo"},
+			want: []string{"Foo"},
+		},
+		{
+			name: "unstarred base is replaced by starred runtime",
+			base: []string{"Foo"},
+			rt:   []string{"*Foo"},
+			want: []string{"*Foo"},
+		},
+	}
+
+	for _, tt := range enableCases {
+		t.Run("enable/"+tt.name, func(t *testing.T) {
+			got := mergeFeatureEntries(tt.base, tt.rt, canonicalEnableFeatureName)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeFeatureEntries() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+
+	disableCases := []struct {
+		name string
+		base []string
+		rt   []string
+		want []string
+	}{
+		{
+			name: "runtime trial variant replaces base trial variant",
+			base: []string{"Foo<A"},
+			rt:   []string{"Foo<B"},
+			want: []string{"Foo<B"},
+		},
+		{
+			name: "dotted names are distinct features on the disable switch",
+			base: []string{"Foo.G1"},
+			rt:   []string{"Foo.G2"},
+			want: []string{"Foo.G1", "Foo.G2"},
+		},
+		{
+			name: "colon stays in the name so param variants remain distinct",
+			base: []string{"Foo:p/v1"},
+			rt:   []string{"Foo:p/v2"},
+			want: []string{"Foo:p/v1", "Foo:p/v2"},
+		},
+		{
+			name: "starred base is replaced by unstarred runtime",
+			base: []string{"*Foo"},
+			rt:   []string{"Foo"},
+			want: []string{"Foo"},
+		},
+		{
+			name: "unstarred base is replaced by starred runtime",
+			base: []string{"Foo"},
+			rt:   []string{"*Foo"},
+			want: []string{"*Foo"},
+		},
+	}
+
+	for _, tt := range disableCases {
+		t.Run("disable/"+tt.name, func(t *testing.T) {
+			got := mergeFeatureEntries(tt.base, tt.rt, canonicalDisableFeatureName)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("mergeFeatureEntries() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
 			}
 		})
 	}

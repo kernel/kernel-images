@@ -20,6 +20,7 @@ import (
 	"time"
 
 	_ "github.com/glebarez/sqlite"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
@@ -258,7 +259,11 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 	extZip, err := zipDirToBytes(extDir)
 	require.NoError(t, err, "zip ext")
 
-	// Use new API to upload extension and restart Chromium
+	versionURL := "http" + strings.TrimPrefix(c.CDPURL(), "ws") + "json/version"
+	browserWebSocketBefore, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL before extension upload")
+
+	// Upload and activate the unpacked extension without restarting Chromium.
 	{
 		client, err := c.APIClient()
 		require.NoError(t, err)
@@ -273,12 +278,16 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		err = w.Close()
 		require.NoError(t, err)
 		start := time.Now()
-		rsp, err := client.UploadExtensionsAndRestartWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
 		elapsed := time.Since(start)
-		require.NoError(t, err, "uploadExtensionsAndRestart request error")
+		require.NoError(t, err, "uploadExtensions request error")
 		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
-		t.Logf("/chromium/upload-extensions-and-restart completed in %s (%d ms)", elapsed.String(), elapsed.Milliseconds())
+		t.Logf("/chromium/upload-extensions completed in %s (%d ms)", elapsed.String(), elapsed.Milliseconds())
 	}
+
+	browserWebSocketAfter, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after extension upload")
+	require.Equal(t, browserWebSocketBefore, browserWebSocketAfter, "Chromium restarted during unpacked extension upload")
 
 	// Verify the content script updated the title on an allowed URL
 	{
@@ -293,6 +302,118 @@ func TestExtensionUploadAndActivation(t *testing.T) {
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "title verify failed: %v output=%s", err, string(out))
 	}
+
+	// Stop Chromium to inject a transient CDP connection failure, then upload a valid
+	// extension. The fallback restart must activate it before returning success.
+	fallbackExtDir := t.TempDir()
+	fallbackManifest := `{
+    "manifest_version": 3,
+    "version": "1.0",
+    "name": "Fallback Test Extension",
+    "content_scripts": [{
+        "matches": ["https://www.sfmoma.org/*"],
+        "js": ["content-script.js"]
+    }]
+}`
+	require.NoError(t, os.WriteFile(filepath.Join(fallbackExtDir, "manifest.json"), []byte(fallbackManifest), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(fallbackExtDir, "content-script.js"), []byte(`document.title += " -- Fallback extension active";`), 0o600))
+	fallbackExtZip, err := zipDirToBytes(fallbackExtDir)
+	require.NoError(t, err, "zip fallback extension")
+	_, err = execCombinedOutputWithClient(ctx, c, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "stop", "chromium"})
+	require.NoError(t, err, "stop Chromium to inject transient CDP failure")
+	{
+		client, err := c.APIClient()
+		require.NoError(t, err)
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		fw, err := w.CreateFormFile("extensions.zip_file", "fallback-ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(fallbackExtZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "cdp-fallback-testext"))
+		require.NoError(t, w.Close())
+
+		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		require.NoError(t, err, "uploadExtensions fallback request error")
+		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+	}
+	browserWebSocketAfterFallback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after CDP fallback")
+	require.NotEqual(t, browserWebSocketAfter, browserWebSocketAfterFallback, "transient CDP failure did not fall back to restart")
+	{
+		cmd := exec.CommandContext(ctx, "pnpm", "exec", "tsx", "index.ts",
+			"verify-title-contains",
+			"--url", "https://www.sfmoma.org/",
+			"--substr", "Fallback extension active",
+			"--ws-url", c.CDPURL(),
+			"--timeout", "45000",
+		)
+		cmd.Dir = getPlaywrightPath()
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "fallback extension was not active after restart: %v output=%s", err, string(out))
+	}
+
+	// A mixed batch with an enterprise extension and a permanently invalid unpacked extension
+	// must verify the unpacked item after the policy-required restart, then roll back both items.
+	enterpriseExtDir, err := filepath.Abs("test-extension-enterprise")
+	require.NoError(t, err, "resolve enterprise extension fixture")
+	enterpriseExtZip, err := zipDirToBytes(enterpriseExtDir)
+	require.NoError(t, err, "zip enterprise extension")
+	invalidExtDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(invalidExtDir, "manifest.json"), []byte(`{
+    "manifest_version": 3,
+    "name": "Missing Version Extension"
+}`), 0o600))
+	invalidExtZip, err := zipDirToBytes(invalidExtDir)
+	require.NoError(t, err, "zip invalid extension")
+	{
+		client, err := c.APIClient()
+		require.NoError(t, err)
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		fw, err := w.CreateFormFile("extensions.zip_file", "enterprise-ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(enterpriseExtZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "mixed-enterprise-testext"))
+		fw, err = w.CreateFormFile("extensions.zip_file", "invalid-ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(invalidExtZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "mixed-invalid-testext"))
+		require.NoError(t, w.Close())
+
+		rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		require.NoError(t, err, "uploadExtensions mixed-batch request error")
+		require.Equal(t, http.StatusInternalServerError, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+	}
+	rollbackCheck := `test ! -e /home/kernel/extensions/mixed-enterprise-testext && test ! -e /home/kernel/extensions/mixed-invalid-testext && ! grep -q mixed-invalid-testext /chromium/flags && ! grep -q mixed-enterprise-testext /etc/chromium/policies/managed/policy.json`
+	_, err = execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", rollbackCheck})
+	require.NoError(t, err, "mixed extension state was not rolled back")
+	browserWebSocketAfterRollback, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after activation rollback")
+
+	// The legacy endpoint retains its unconditional restart behavior.
+	{
+		client, err := c.APIClient()
+		require.NoError(t, err)
+		var body bytes.Buffer
+		w := multipart.NewWriter(&body)
+		fw, err := w.CreateFormFile("extensions.zip_file", "ext.zip")
+		require.NoError(t, err)
+		_, err = io.Copy(fw, bytes.NewReader(extZip))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", "restart-testext"))
+		require.NoError(t, w.Close())
+
+		rsp, err := client.UploadExtensionsAndRestartWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+		require.NoError(t, err, "uploadExtensionsAndRestart request error")
+		require.Equal(t, http.StatusCreated, rsp.StatusCode(), "unexpected status: %s body=%s", rsp.Status(), string(rsp.Body))
+	}
+
+	browserWebSocketAfterRestart, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after legacy extension upload")
+	require.NotEqual(t, browserWebSocketAfterRollback, browserWebSocketAfterRestart, "legacy endpoint did not restart Chromium")
 }
 
 func TestScreenshotHeadless(t *testing.T) {

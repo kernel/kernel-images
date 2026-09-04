@@ -24,6 +24,12 @@ import (
 // This method automatically detects whether the system is running with Xorg (headful)
 // or Xvfb (headless) and uses the appropriate method to change resolution.
 func (s *ApiService) PatchDisplay(ctx context.Context, req oapi.PatchDisplayRequestObject) (oapi.PatchDisplayResponseObject, error) {
+	s.chromiumConfigMu.Lock()
+	defer s.chromiumConfigMu.Unlock()
+	return s.patchDisplayLocked(ctx, req)
+}
+
+func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDisplayRequestObject) (oapi.PatchDisplayResponseObject, error) {
 	log := logger.FromContext(ctx)
 
 	if req.Body == nil {
@@ -394,14 +400,16 @@ func (s *ApiService) backgroundResizeXvfb(ctx context.Context, width, height int
 
 // withCDPClient dials the current devtools upstream with a 10s timeout,
 // hands the connected client to fn, and closes the connection on return.
-// Lets the small per-call CDP helpers below avoid duplicating the dial +
-// timeout + defer-close scaffolding.
 func (s *ApiService) withCDPClient(ctx context.Context, fn func(context.Context, *cdpclient.Client) error) error {
+	return s.withCDPClientTimeout(ctx, 10*time.Second, fn)
+}
+
+func (s *ApiService) withCDPClientTimeout(ctx context.Context, timeout time.Duration, fn func(context.Context, *cdpclient.Client) error) error {
 	upstreamURL := s.upstreamMgr.Current()
 	if upstreamURL == "" {
 		return fmt.Errorf("devtools upstream not available")
 	}
-	cdpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	cdpCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	client, err := cdpclient.Dial(cdpCtx, upstreamURL)
 	if err != nil {

@@ -55,24 +55,27 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get -yqq update; \
     apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils;
 
-# Download FFmpeg (latest static build) for the recording server
+# Download a pinned FFmpeg static build for the recording server
 RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX-ffmpeg \
     <<-'EOT'
     set -eux
     FFMPEG_CACHE_PATH="/tmp/cache/ffmpeg"
+    FFMPEG_RELEASE="autobuild-2026-07-31-14-10"
+    FFMPEG_VERSION="n7.1.5-12-g1fdbca85aa"
     case ${TARGETARCH:-amd64} in
         "amd64") FFMPEG_TARGET_ARCH="64" ;;
         "arm64") FFMPEG_TARGET_ARCH="arm64" ;;
     esac
     FFMPEG_TARGET=linux${FFMPEG_TARGET_ARCH:?}
-    ARCHIVE_NAME="ffmpeg-n7.1-latest-${FFMPEG_TARGET}-gpl-7.1.tar.xz"
+    ARCHIVE_NAME="ffmpeg-${FFMPEG_VERSION}-${FFMPEG_TARGET}-gpl-7.1.tar.xz"
     FFMPEG_CACHED_ARCHIVE_PATH="$FFMPEG_CACHE_PATH/$ARCHIVE_NAME"
     FFMPEG_CACHED_ARCHIVE_CHECKSUM_PATH="$FFMPEG_CACHED_ARCHIVE_PATH.sha256"
-    URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/$ARCHIVE_NAME"
+    RELEASE_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_RELEASE"
+    URL="$RELEASE_URL/$ARCHIVE_NAME"
     TEMPORARY_SHA256_CHECKSUM_PATH=$(mktemp /tmp/tmp_sha256.XXXXXXXXXX)
     CONTINUE="true"
     echo "Downloading FFmpeg checksum"
-    if curl --connect-timeout 10 -fsSL "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/checksums.sha256" -o $TEMPORARY_SHA256_CHECKSUM_PATH; then
+    if curl --connect-timeout 10 -fsSL "$RELEASE_URL/checksums.sha256" -o $TEMPORARY_SHA256_CHECKSUM_PATH; then
         grep -F "$ARCHIVE_NAME" $TEMPORARY_SHA256_CHECKSUM_PATH > $FFMPEG_CACHED_ARCHIVE_CHECKSUM_PATH
     else
         echo "Failed to connect to ffmpeg static build provider for checksum."
@@ -153,10 +156,14 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     xclip \
     xdotool \
     fontconfig \
+    locales \
+    tzdata \
     fonts-noto-cjk \
     fonts-noto-color-emoji \
+    fonts-noto-mono \
     fonts-nanum \
     supervisor; \
+    locale-gen en_US.UTF-8 en_GB.UTF-8 en_CA.UTF-8 en_IE.UTF-8 en_SG.UTF-8; \
     fc-cache -f
 
 # sqlite3 for debugging the cookies file; unzip for the chrome-for-testing archives below.
@@ -166,7 +173,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     apt-get --no-install-recommends -y install sqlite3 unzip;
 
 # Install Chrome + ChromeDriver as a matched pair from chrome-for-testing so they cannot drift apart.
-ARG CHROME_VERSION=148.0.7778.97
+# Regional pack filenames preserve each locale identifier while reusing en-GB UI strings.
+ARG CHROME_VERSION=152.0.7977.42
 RUN set -eux; \
     curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -o /tmp/chrome.zip; \
     curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \
@@ -174,6 +182,7 @@ RUN set -eux; \
     unzip -q /tmp/cd.zip -d /tmp; \
     mv /opt/chrome-linux64 /opt/chrome-for-testing; \
     mv /opt/chrome-for-testing/chrome /opt/chrome-for-testing/chromium; \
+    for locale in en-CA en-IE en-SG; do cp /opt/chrome-for-testing/locales/en-GB.pak "/opt/chrome-for-testing/locales/${locale}.pak"; done; \
     ln -sf /opt/chrome-for-testing/chromium /usr/bin/chromium; \
     mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver; \
     chmod +x /usr/local/bin/chromedriver /opt/chrome-for-testing/chromium; \
@@ -264,7 +273,7 @@ COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launch
 COPY --from=server-builder /out/kernel-images-supervisord-shim /usr/local/bin/kernel-images-supervisord-shim
 
 # Copy and compile the Playwright daemon
-COPY server/runtime/playwright-daemon.ts /tmp/playwright-daemon.ts
+COPY server/runtime/playwright-daemon.ts server/runtime/page-target-id-cache.ts server/runtime/webmcp.ts /tmp/
 RUN esbuild /tmp/playwright-daemon.ts \
     --bundle \
     --platform=node \
@@ -274,7 +283,7 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:playwright-core \
     --external:patchright \
     --external:esbuild \
-    && rm /tmp/playwright-daemon.ts
+    && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts /tmp/webmcp.ts
 
 # Copy and install the browser REPL's pinned Meriyah dependency before bundling.
 COPY server/runtime/ /tmp/browser-repl/

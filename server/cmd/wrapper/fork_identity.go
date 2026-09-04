@@ -14,9 +14,9 @@ func forkIdentityWaitEnabled() (bool, error) {
 	return forkidentity.WaitEnabled()
 }
 
-func waitForForkIdentityIfEnabled(ctx context.Context, enabled bool) bool {
+func armForkIdentityWait(enabled bool) {
 	if !enabled {
-		return true
+		return
 	}
 	stopAll("envoy")
 
@@ -31,24 +31,28 @@ func waitForForkIdentityIfEnabled(ctx context.Context, enabled bool) bool {
 	if err := os.WriteFile(forkidentity.ReadyFile, []byte("waiting\n"), 0o644); err != nil {
 		fatalf("fork identity ready file: %v", err)
 	}
+}
+
+func waitForForkIdentityIfEnabled(ctx context.Context, enabled bool) (forkidentity.Payload, time.Time, bool) {
+	if !enabled {
+		return nil, time.Time{}, true
+	}
 
 	logf("fork identity waiting payload=%s", forkidentity.PayloadFile)
 	payload, err := waitForForkIdentityPayload(ctx)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			logf("fork identity wait canceled")
-			return false
+			return nil, time.Time{}, false
 		}
 		fatalf("fork identity payload wait: %v", err)
 	}
+	deadline := time.Now().Add(forkidentity.ApplyTimeout - forkidentity.ApplyResponseMargin)
 	if err := applyForkIdentityPayload(payload); err != nil {
 		fatalf("fork identity apply: %v", err)
 	}
-	if err := forkidentity.WriteAppliedMarker(payload.InstanceName()); err != nil {
-		fatalf("fork identity applied file: %v", err)
-	}
-	logf("fork identity applied instance=%s", payload.InstanceName())
-	return true
+	logf("fork identity environment applied instance=%s", payload.InstanceName())
+	return payload, deadline, true
 }
 
 func waitForForkIdentityPayload(ctx context.Context) (forkidentity.Payload, error) {
@@ -69,6 +73,13 @@ func waitForForkIdentityPayload(ctx context.Context) (forkidentity.Payload, erro
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
+}
+
+func writeForkIdentityAppliedMarker(instanceName string, allReady bool) error {
+	if !allReady {
+		return errors.New("services did not become ready")
+	}
+	return forkidentity.WriteAppliedMarker(instanceName)
 }
 
 func applyForkIdentityPayload(payload forkidentity.Payload) error {

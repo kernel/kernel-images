@@ -7,6 +7,7 @@ paths:
     post:
       summary: Start a screen recording. Only one recording per ID can be registered at a time.
       operationId: startRecording
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -27,6 +28,7 @@ paths:
     post:
       summary: Execute a command synchronously
       operationId: processExec
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -48,6 +50,7 @@ paths:
     post:
       summary: Execute a command asynchronously
       operationId: processSpawn
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -69,6 +72,7 @@ paths:
     get:
       summary: Get process status
       operationId: processStatus
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -93,6 +97,7 @@ paths:
     get:
       summary: Stream process stdout over SSE
       operationId: processStdoutStream
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -123,6 +128,7 @@ paths:
     post:
       summary: Write to process stdin
       operationId: processStdin
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -153,6 +159,7 @@ paths:
     post:
       summary: Send signal to process
       operationId: processKill
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -183,6 +190,7 @@ paths:
     post:
       summary: Resize a PTY-backed process
       operationId: processResize
+      x-telemetry-category: platform
       parameters:
         - name: process_id
           in: path
@@ -213,6 +221,7 @@ paths:
     post:
       summary: Stop the recording
       operationId: stopRecording
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -237,6 +246,7 @@ paths:
             type: string
             pattern: "^[a-zA-Z0-9-]+$"
       operationId: downloadRecording
+      x-telemetry-category: platform
       responses:
         "200":
           description: Recording file
@@ -276,6 +286,7 @@ paths:
     get:
       summary: List all recorders
       operationId: listRecorders
+      x-telemetry-category: platform
       responses:
         "200":
           description: List of recorders
@@ -291,6 +302,7 @@ paths:
     post:
       summary: Delete a previously recorded video file
       operationId: deleteRecording
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -315,6 +327,7 @@ paths:
         Records a named point in time during an active recording. At finalize
         the markers are injected into the output MP4 as chapter markers.
       operationId: markRecording
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -342,6 +355,7 @@ paths:
     post:
       summary: Simulate a mouse click action on the host computer
       operationId: clickMouse
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -359,6 +373,7 @@ paths:
     post:
       summary: Move the mouse cursor to the specified coordinates on the host computer
       operationId: moveMouse
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -376,6 +391,7 @@ paths:
     post:
       summary: Capture a screenshot of the host computer
       operationId: takeScreenshot
+      x-telemetry-category: control
       requestBody:
         required: false
         content:
@@ -398,6 +414,7 @@ paths:
     post:
       summary: Hide or show the cursor
       operationId: setCursor
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -419,6 +436,7 @@ paths:
     post:
       summary: Get the current mouse cursor position on the host computer
       operationId: getMousePosition
+      x-telemetry-category: control
       responses:
         "200":
           description: Current mouse position
@@ -432,6 +450,7 @@ paths:
     post:
       summary: Type text on the host computer
       operationId: typeText
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -454,6 +473,7 @@ paths:
         the X11 keysym definitions at https://cgit.freedesktop.org/xorg/proto/x11proto/plain/keysymdef.h
         The server honors millisecond-level durations using fractional sleeps under the hood.
       operationId: pressKey
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -476,6 +496,7 @@ paths:
         When both horizontal and vertical deltas are provided, the server applies them sequentially (vertical then horizontal)
         and batches wheel events using `xdotool click --repeat N --delay 0 <button>`.
       operationId: scroll
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -496,6 +517,7 @@ paths:
         Press and hold a mouse button, optionally wait for a short delay, then move along the given path and release.
         The path is a list of [x, y] coordinate pairs.
       operationId: dragMouse
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -519,6 +541,7 @@ paths:
         This is useful for chaining deterministic sequences of mouse and keyboard actions
         without paying network round-trip latency for each individual action.
       operationId: batchComputerAction
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -536,6 +559,7 @@ paths:
     post:
       summary: Read text from the system clipboard
       operationId: readClipboard
+      x-telemetry-category: control
       responses:
         "200":
           description: Clipboard content read successfully
@@ -549,6 +573,7 @@ paths:
     post:
       summary: Write text to the system clipboard
       operationId: writeClipboard
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -566,6 +591,7 @@ paths:
     get:
       summary: Stream logs over SSE
       operationId: logsStream
+      x-telemetry-category: platform
       parameters:
         - in: query
           name: source
@@ -609,6 +635,7 @@ paths:
     get:
       summary: Read file contents
       operationId: readFile
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -637,6 +664,7 @@ paths:
       summary: Download a directory as a ZIP archive
       description: Returns a ZIP file containing the contents of the specified directory.
       operationId: downloadDirZip
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -664,6 +692,7 @@ paths:
     put:
       summary: Write or create a file
       operationId: writeFile
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -701,6 +730,7 @@ paths:
       summary: Upload one or more files
       description: Allows uploading single or multiple files to the remote filesystem.
       operationId: uploadFiles
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -737,6 +767,7 @@ paths:
       summary: Upload a zip archive and extract it
       description: Upload a zip file and extract its contents to the specified destination path.
       operationId: uploadZip
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -770,6 +801,7 @@ paths:
         of the specified directory. Zstd offers significantly faster compression and
         decompression compared to zip while achieving better compression ratios.
       operationId: downloadDirZstd
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -814,6 +846,7 @@ paths:
         to the specified destination path. Zstd offers significantly faster decompression
         compared to zip.
       operationId: uploadZstd
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -849,6 +882,7 @@ paths:
     get:
       summary: List files in a directory
       operationId: listFiles
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -875,6 +909,7 @@ paths:
     put:
       summary: Create a new directory
       operationId: createDirectory
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -893,6 +928,7 @@ paths:
     put:
       summary: Delete a file
       operationId: deleteFile
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -913,6 +949,7 @@ paths:
     put:
       summary: Delete a directory
       operationId: deleteDirectory
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -933,6 +970,7 @@ paths:
     put:
       summary: Set file or directory permissions/ownership
       operationId: setFilePermissions
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -953,6 +991,7 @@ paths:
     get:
       summary: Get information about a file or directory
       operationId: fileInfo
+      x-telemetry-category: platform
       parameters:
         - name: path
           in: query
@@ -979,6 +1018,7 @@ paths:
     put:
       summary: Move or rename a file or directory
       operationId: movePath
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -999,6 +1039,7 @@ paths:
     post:
       summary: Watch a directory for changes
       operationId: startFsWatch
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1027,6 +1068,7 @@ paths:
     get:
       summary: Stream filesystem events for a watch
       operationId: streamFsEvents
+      x-telemetry-category: platform
       parameters:
         - name: watch_id
           in: path
@@ -1057,6 +1099,7 @@ paths:
     delete:
       summary: Stop watching a directory
       operationId: stopFsWatch
+      x-telemetry-category: platform
       parameters:
         - name: watch_id
           in: path
@@ -1076,6 +1119,7 @@ paths:
     patch:
       summary: Update display configuration
       operationId: patchDisplay
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1104,32 +1148,42 @@ paths:
         set runtime extension flags in /chromium/flags, restart Chromium via supervisord, and wait
         until the Chromium DevTools "listening" log line is observed before returning success.
       operationId: uploadExtensionsAndRestart
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
           multipart/form-data:
             schema:
-              type: object
-              properties:
-                extensions:
-                  type: array
-                  description: List of extensions to upload and activate
-                  items:
-                    type: object
-                    properties:
-                      zip_file:
-                        type: string
-                        format: binary
-                        description: Zip archive containing an unpacked Chromium extension (must include manifest.json)
-                      name:
-                        type: string
-                        description: Folder name to place the extension under /home/kernel/extensions/<name>
-                        pattern: "^[A-Za-z0-9._-]{1,255}$"
-                    required: [zip_file, name]
-              required: [extensions]
+              $ref: "#/components/schemas/ExtensionUploadMultipart"
       responses:
         "201":
           description: Extensions uploaded, Chromium restarted, and DevTools is ready
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /chromium/upload-extensions:
+    post:
+      summary: Upload and activate one or more unpacked extensions
+      description: |
+        Upload one or more extension zip archives and extract them under
+        /home/kernel/extensions/<name>. Ordinary unpacked extensions are activated immediately over
+        CDP without restarting Chromium, while their runtime flags are persisted for future starts.
+        Content scripts are applied to existing pages after their next navigation or reload.
+        Extensions that require enterprise policy still restart Chromium and wait for DevTools
+        readiness before returning success.
+      operationId: uploadExtensions
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/ExtensionUploadMultipart"
+      responses:
+        "201":
+          description: Extensions uploaded and activated
         "400":
           $ref: "#/components/responses/BadRequestError"
         "500":
@@ -1146,6 +1200,7 @@ paths:
         proxy-related policies, and policies required for CDP/automation) are blocked
         from override.
       operationId: patchChromiumPolicies
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1179,6 +1234,7 @@ paths:
         Merge new flags with existing ones, update /chromium/flags, restart Chromium via supervisord,
         and wait until the Chromium DevTools "listening" log line is observed before returning success.
       operationId: patchChromiumFlags
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1204,18 +1260,35 @@ paths:
     post:
       summary: Apply batched session and browser configuration plus optional navigation
       description: |
-        Optional multipart parts apply configuration while Chromium stays stopped once (policy,
-        flags, extensions, profile archive, optional display sizing), then Chromium is started exactly
-        once and DevTools readiness is awaited. Optional `start_url` dispatches a best-effort
-        navigation after readiness without waiting for page load. Bare hosts are normalized to
-        `https://`. Omit any part you do not need. At least one actionable part must be present.
-        Required configuration steps run in this order: policies, extensions, display, flags,
-        then profile archive. Chromium is started only once at the end. The endpoint is not
-        transactional: if a later required step fails, earlier successful side effects may remain
-        on the instance while the non-2xx error propagates.
+        Optional multipart parts apply browser and session configuration in one serialized request.
+        Profiles, nonempty policies, nonempty flags, and extensions use one Chromium stop/apply/start
+        cycle by default. Display-only and start_url-only requests stay live. Set
+        `extension_load_strategy=prefer_cdp` to attempt live CDP activation when extensions are present
+        without a profile, nonempty policies, or nonempty flags. Enterprise-policy extensions and CDP
+        activation failures fall back to one restart within the same request. The query parameter is
+        ignored by older images, which retain the default restart behavior.
+        Optional `start_url` dispatches a best-effort navigation after configuration and readiness
+        without waiting for page load. Bare hosts are normalized to `https://`. Omit any part you do
+        not need. At least one actionable part must be present. Required configuration steps run in
+        this order: policies, extensions, display, flags, then profile archive. The endpoint is not
+        transactional: if a later required step fails, earlier successful side effects may remain on
+        the instance while the non-2xx error propagates.
         Prefer this over separate `/chromium/*` and `/display` calls when multiple restart-triggering
         steps apply in one session configure.
       operationId: chromiumConfigure
+      x-telemetry-category: platform
+      parameters:
+        - name: extension_load_strategy
+          in: query
+          required: false
+          description: >-
+            Extension activation strategy. Omit or use `restart` to preserve unconditional restart
+            behavior for requests containing extensions. `prefer_cdp` attempts live activation for
+            eligible unpacked extensions and falls back to one restart when required.
+          schema:
+            type: string
+            enum: [restart, prefer_cdp]
+            default: restart
       requestBody:
         required: true
         content:
@@ -1283,14 +1356,91 @@ paths:
               schema:
                 $ref: "#/components/schemas/ChromiumConfigureError"
 
+  /webmcp/tools:
+    get:
+      summary: Discover WebMCP tools across the browser
+      description: |
+        Returns a snapshot of native WebMCP tools available across the browser. The snapshot includes
+        tools registered by every open tab and by embedded content within those tabs.
+
+        On the first request, Kernel starts monitoring the browser. Tabs and windows that are already
+        open are included, and tabs, windows, and embedded content opened later are tracked automatically.
+        Tools are removed when the tab or embedded frame that registered them closes or navigates away.
+
+        Each tool includes an opaque tool_ref that identifies its exact live registration, along with
+        information about the window, tab, and optional embedded frame that provided it. Use that tool_ref
+        to invoke the tool. Callers do not need to manage browser debugging connections or subscribe to
+        browser events.
+      operationId: getWebMCPTools
+      x-telemetry-category: control
+      responses:
+        "200":
+          description: Current WebMCP tool snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebMCPToolsResponse"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /webmcp/invoke:
+    post:
+      summary: Invoke a discovered WebMCP tool
+      description: |
+        Invokes the exact live registration identified by tool_ref. Non-autosubmit declarative form
+        tools return after their fields are populated with an awaiting_submission status. Other tools
+        wait for a terminal result, including across navigation. If the request times out after invocation
+        begins, the server reports outcome_unknown and never retries the tool automatically.
+      operationId: invokeWebMCPTool
+      x-telemetry-category: control
+      requestBody:
+        description: The raw JSON request body is limited to 1 MiB plus 4 KiB of envelope overhead before decoding.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebMCPInvokeRequest"
+      responses:
+        "200":
+          description: Chromium accepted the invocation and either populated a non-autosubmit form or reported a terminal result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebMCPInvocationResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
+        "504":
+          description: Invocation began, but its final outcome could not be observed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebMCPInvocationFailure"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
       description: |
         Execute arbitrary Playwright code in a fresh execution context against the browser running
-        on localhost:9222. The code has access to 'page', 'context', and 'browser' variables.
-        The result of the code execution is returned in the response.
+        on localhost:9222. The code has access to 'page', 'context', 'browser', and 'webmcp'
+        variables. 'webmcp.listTools()' returns the browser-wide WebMCP tool snapshot, and
+        'webmcp.invokeTool(toolRef, input?, { timeoutSec? })' invokes an exact registration through
+        the image's synchronous WebMCP API. WebMCP request failures throw a WebMCPRequestError with
+        statusCode, code, invocationId, and body fields. The result of the code execution is returned
+        in the response.
+
+        'page' is bound to an active tab reported by Chrome. In single-window sessions, this is
+        the foreground tab. When multiple browser windows are open, Chrome reports one active tab
+        per window and the selected window is unspecified. 'context' is the BrowserContext that owns
+        the selected page. If active-tab resolution races with a target change, execution falls back
+        to an existing page. Use 'browser.contexts()' to select a context or page explicitly.
       operationId: executePlaywrightCode
+      x-telemetry-category: control
       requestBody:
         required: true
         content:
@@ -1359,6 +1509,7 @@ paths:
         Returns the current telemetry configuration. Returns 404 if telemetry
         is not configured.
       operationId: getTelemetry
+      x-telemetry-category: platform
       responses:
         "200":
           description: Telemetry configuration
@@ -1377,6 +1528,7 @@ paths:
         true, or every category disabled) clears the configuration; this is
         idempotent when telemetry is not configured.
       operationId: putTelemetry
+      x-telemetry-category: platform
       requestBody:
         required: false
         content:
@@ -1408,6 +1560,7 @@ paths:
         current settings. Returns 404 if telemetry is not configured. Setting
         every configurable category to enabled: false clears the configuration.
       operationId: patchTelemetry
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1436,6 +1589,7 @@ paths:
         event is admitted, 204 when the event is filtered (no active session
         or the event's category is disabled), or 400 on validation failure.
       operationId: publishTelemetryEvent
+      x-telemetry-category: platform
       requestBody:
         required: true
         content:
@@ -1472,6 +1626,7 @@ paths:
         the event's `data` conforms to the matching `Browser*EventData`
         schema, selected by `type`.
       operationId: streamTelemetryEvents
+      x-telemetry-category: platform
       parameters:
         - in: header
           name: Last-Event-ID
@@ -1514,6 +1669,7 @@ paths:
         Prevents the VM from scaling to zero, regardless of HTTP traffic on it.
         Calling the API on this VM will wake it because Unikraft will automatically wake for any request to the VM.
       operationId: disableScaleToZero
+      x-telemetry-category: platform
       responses:
         "204":
           description: Scale-to-zero disabled
@@ -1526,6 +1682,7 @@ paths:
         Restores normal scale-to-zero behavior on this VM, allowing it to
         scale to zero again when idle. Call this when the VM no longer needs to be held awake.
       operationId: enableScaleToZero
+      x-telemetry-category: platform
       responses:
         "204":
           description: Scale-to-zero enabled
@@ -1533,6 +1690,28 @@ paths:
           $ref: "#/components/responses/InternalError"
 components:
   schemas:
+    ExtensionUploadMultipart:
+      type: object
+      required: [extensions]
+      properties:
+        extensions:
+          type: array
+          description: List of extensions to upload and activate
+          minItems: 1
+          maxItems: 20
+          items:
+            type: object
+            required: [zip_file, name]
+            properties:
+              zip_file:
+                type: string
+                format: binary
+                description: Zip archive containing an unpacked Chromium extension (maximum 50 MiB; must include manifest.json)
+              name:
+                type: string
+                description: Folder name to place the extension under /home/kernel/extensions/<name>
+                pattern: "^[A-Za-z0-9._-]{1,255}$"
+
     TelemetryEvent:
       type: object
       description: >
@@ -1560,6 +1739,7 @@ components:
             - page
             - interaction
             - control
+            - platform
             - connection
             - system
             - screenshot
@@ -1622,6 +1802,7 @@ components:
             - page
             - interaction
             - control
+            - platform
             - connection
             - system
             - screenshot
@@ -1658,8 +1839,8 @@ components:
         lightweight operational signals (control, connection, system, captcha).
         Within `browser`, only the categories you set enabled: true are
         captured; anything omitted is off. The CDP categories (console, network,
-        page, interaction) and `screenshot` are off by default and must be
-        opted into. A `browser` config with nothing enabled clears the
+        page, interaction), `screenshot` and `platform` are off by default and
+        must be opted into. A `browser` config with nothing enabled clears the
         telemetry configuration. The `monitor` category (CDP collector health)
         is not configurable here; it flows automatically whenever a CDP category
         is captured.
@@ -1709,8 +1890,11 @@ components:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: HTTP request/response metadata.
         control:
+          $ref: "#/components/schemas/BrowserTelemetryControlConfig"
+          description: Agent-driven actions against the browser — computer-control calls, Playwright code execution, screenshots, clipboard access, and browser-control commands sent over the CDP proxy.
+        platform:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
-          description: Agent-driven actions against the browser, such as inbound calls to the kernel-images-api server.
+          description: Calls that manage the VM rather than drive the browser (recording, filesystem, process, telemetry and browser configuration). Mostly platform-induced; off by default and opt-in.
         connection:
           $ref: "#/components/schemas/BrowserTelemetryCategoryConfig"
           description: Client attach/detach lifecycle for the CDP proxy and live view.
@@ -1737,6 +1921,42 @@ components:
             omitting this field (or sending an empty object `{}`) is a no-op; the
             category retains its current state. To enable or disable a category via
             PATCH, you must send an explicit `true` or `false`.
+      additionalProperties: false
+    BrowserTelemetryControlConfig:
+      type: object
+      description: >
+        Configuration for the control category. Same `enabled` semantics as any
+        other category, plus settings for the browser-control commands the CDP
+        proxy reports.
+      properties:
+        enabled:
+          type: boolean
+          description: >
+            Whether this category is captured. In PUT requests selection is opt-in:
+            omitting this field (or the whole category) leaves the category off, so
+            a PUT captures exactly the categories set to true. In PATCH requests,
+            omitting this field (or sending an empty object `{}`) is a no-op; the
+            category retains its current state. To enable or disable a category via
+            PATCH, you must send an explicit `true` or `false`.
+        cdp:
+          $ref: "#/components/schemas/BrowserTelemetryCdpControlConfig"
+      additionalProperties: false
+    BrowserTelemetryCdpControlConfig:
+      type: object
+      description: Settings for the `cdp_command` events the DevTools proxy reports.
+      properties:
+        excluded_methods:
+          type: array
+          description: >
+            Methods to leave out of the `cdp_command` stream. Omit the list (or
+            send an empty one) to report every supported method. Exclusion is a
+            telemetry setting only: an excluded command is still relayed to the
+            browser unchanged, it simply produces no event. Use it to drop the
+            highest-volume methods — `Input.dispatchMouseEvent` during a
+            humanized cursor path, or `Page.captureScreenshot` under a
+            screencast — without turning the whole category off.
+          items:
+            $ref: "#/components/schemas/BrowserCdpCommandMethod"
       additionalProperties: false
     BrowserCallStack:
       type: object
@@ -2088,6 +2308,64 @@ components:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
           $ref: "#/components/schemas/BrowserEventContext"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserProxyErrorEventData:
+      allOf:
+        - $ref: "#/components/schemas/BrowserEventContext"
+        - type: object
+          required: [request_id, code, status]
+          properties:
+            request_id:
+              type: string
+              description: CDP request identifier matching the originating request.
+            code:
+              type: string
+              enum: [destination_blocked, provider_blacklisted, provider_unreachable, proxy_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed]
+              description: >
+                Proxy-layer error code: the `X-Kernel-Proxy-Error` response
+                header value from a branded 5xx error page served by the metro
+                egress host-proxy. Values mirror what the proxy emits:
+                destination_blocked, provider_blacklisted, provider_unreachable,
+                proxy_unavailable, upstream_timeout, upstream_dns_failure,
+                upstream_connect_failed. Unknown header values are dropped.
+            status:
+              type: integer
+              description: HTTP response status of the branded error page (502).
+            method:
+              type: string
+              description: HTTP method of the failed request, when known.
+            resource_type:
+              type: string
+              description: CDP Network.ResourceType for the request, when known.
+    BrowserProxyErrorEvent:
+      type: object
+      description: >
+        A branded proxy-layer failure observed by the browser. Emitted when the
+        metro egress host-proxy serves a branded 5xx error page whose response
+        carries the `X-Kernel-Proxy-Error` header. Low-volume and carries a
+        typed code. Its value is per-session and per-URL attribution for
+        sessions that already capture the network stream: proxy failures are
+        only observable while the CDP network collector is running, so this is
+        an opt-in refinement of the raw network events rather than a default-on
+        alerting signal.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: proxy_error
+        category:
+          type: string
+          const: network
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserProxyErrorEventData"
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
@@ -2726,7 +3004,31 @@ components:
           description: Per-request identifier from the kernel-images-api request middleware.
         operation_id:
           type: string
-          description: OpenAPI operationId of the matched route (e.g. `processExec`, `takeScreenshot`).
+          description: Matched route's operation, named as the server names its handler (e.g. `TakeScreenshot`, `ExecutePlaywrightCode`).
+        status:
+          type: integer
+          description: HTTP response status code.
+        duration_ms:
+          type: number
+          description: Wall-clock duration of the handler in milliseconds.
+        code:
+          type: string
+          description: Source submitted to `executePlaywrightCode`, capped at 8192 bytes like every other captured string. A capped value is cut on a character boundary and ends in `...[truncated]`. Absent for every other operation.
+    BrowserPlatformApiCallEventData:
+      type: object
+      description: >
+        Per-call payload for `platform_api_call` events. Metadata only: a
+        platform call carries no submitted content, so there is no `code` field
+        as there is on `api_call`.
+      additionalProperties: false
+      required: [request_id, operation_id, status, duration_ms]
+      properties:
+        request_id:
+          type: string
+          description: Per-request identifier from the kernel-images-api request middleware.
+        operation_id:
+          type: string
+          description: Matched route's operation, named as the server names its handler (e.g. `ProcessExec`, `StartRecording`).
         status:
           type: integer
           description: HTTP response status code.
@@ -2735,7 +3037,11 @@ components:
           description: Wall-clock duration of the handler in milliseconds.
     BrowserApiCallEvent:
       type: object
-      description: An HTTP call handled by the kernel-images-api server.
+      description: >
+        A call that drives the browser, handled by the kernel-images-api server:
+        computer-control actions, Playwright code execution, screenshots and
+        clipboard access. Calls that manage the VM instead emit
+        `platform_api_call`.
       required: [ts, type, category, source]
       properties:
         ts:
@@ -2755,6 +3061,2573 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserPlatformApiCallEvent:
+      type: object
+      description: >
+        A call that manages the browser VM rather than driving the browser,
+        handled by the kernel-images-api server: recording lifecycle, filesystem
+        and process management, telemetry and browser configuration. These are
+        mostly platform-induced (e.g. profile save, replay capture) rather than
+        agent actions.
+      required: [ts, type, category, source]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: platform_api_call
+        category:
+          type: string
+          const: platform
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserPlatformApiCallEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserCdpMouseEventType:
+      type: string
+      description: >
+        Mouse event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
+      enum:
+        - mousePressed
+        - mouseReleased
+        - mouseMoved
+        - mouseWheel
+        - other
+    BrowserCdpKeyEventType:
+      type: string
+      description: >
+        Key event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
+      enum:
+        - keyDown
+        - keyUp
+        - rawKeyDown
+        - char
+        - other
+    BrowserCdpTouchEventType:
+      type: string
+      description: >
+        Touch event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
+      enum:
+        - touchStart
+        - touchEnd
+        - touchMove
+        - touchCancel
+        - other
+    BrowserCdpDragEventType:
+      type: string
+      description: >
+        Drag event phase. Canonical values from devtools-protocol@2d019e73.
+        `other` stands for a value outside that set, so a client cannot put
+        an arbitrary string into the stream.
+      enum:
+        - dragEnter
+        - dragOver
+        - drop
+        - dragCancel
+        - other
+    BrowserCdpMouseButton:
+      type: string
+      description: >
+        Mouse button named by a command. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - none
+        - left
+        - middle
+        - right
+        - back
+        - forward
+        - other
+    BrowserCdpPointerType:
+      type: string
+      description: >
+        Pointer that generated an input event. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - mouse
+        - pen
+        - other
+    BrowserCdpGestureSourceType:
+      type: string
+      description: >
+        Input source a synthesized gesture emulates. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - default
+        - touch
+        - mouse
+        - other
+    BrowserCdpScreenshotFormat:
+      type: string
+      description: >
+        Image format requested for a screenshot. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - jpeg
+        - png
+        - webp
+        - other
+    BrowserCdpSnapshotFormat:
+      type: string
+      description: >
+        Format requested for a page snapshot. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - mhtml
+        - other
+    BrowserCdpScreencastFormat:
+      type: string
+      description: >
+        Frame format requested for a screencast. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - jpeg
+        - png
+        - other
+    BrowserCdpWebLifecycleState:
+      type: string
+      description: >
+        Page lifecycle state applied. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - frozen
+        - active
+        - other
+    BrowserCdpPdfTransferMode:
+      type: string
+      description: >
+        How a generated PDF is returned. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - ReturnAsBase64
+        - ReturnAsStream
+        - other
+    BrowserCdpWindowState:
+      type: string
+      description: >
+        Browser window state requested. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - normal
+        - minimized
+        - maximized
+        - fullscreen
+        - other
+    BrowserCdpTransitionType:
+      type: string
+      description: >
+        Navigation reason reported by the caller. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - link
+        - typed
+        - address_bar
+        - auto_bookmark
+        - auto_subframe
+        - manual_subframe
+        - generated
+        - auto_toplevel
+        - form_submit
+        - reload
+        - keyword
+        - keyword_generated
+        - other
+    BrowserCdpReferrerPolicy:
+      type: string
+      description: >
+        Referrer policy named by a navigation. Canonical values from
+        devtools-protocol@2d019e73. `other` stands for a value outside that
+        set, so a client cannot put an arbitrary string into the stream.
+      enum:
+        - noReferrer
+        - noReferrerWhenDowngrade
+        - origin
+        - originWhenCrossOrigin
+        - sameOrigin
+        - strictOrigin
+        - strictOriginWhenCrossOrigin
+        - unsafeUrl
+        - other
+    BrowserCdpAutofillMode:
+      type: string
+      description: >
+        Which kind of value autofill filled. Canonical values from
+        devtools-protocol@2d019e73.
+      enum:
+        - card
+        - address
+    BrowserCdpDragMimeCategory:
+      type: string
+      description: >
+        Top-level MIME category of a drag item, from the IANA registry
+        rather than the protocol; a drag item's subtype names the file, so
+        only the category is reported. `other` stands for a value outside
+        that set, so a client cannot put an arbitrary string into the
+        stream.
+      enum:
+        - text
+        - image
+        - audio
+        - video
+        - application
+        - font
+        - model
+        - multipart
+        - message
+        - other
+    BrowserCdpCommandMethod:
+      type: string
+      description: >
+        A browser-control CDP method the proxy reports. The set covers the
+        commands an agent drives the browser with; configuration, DOM and
+        Runtime bookkeeping, and Chrome-specific UI commands are outside it.
+        Canonical definitions: devtools-protocol@2d019e73.
+      enum:
+        - Input.dispatchMouseEvent
+        - Input.dispatchKeyEvent
+        - Input.insertText
+        - Input.imeSetComposition
+        - Input.dispatchTouchEvent
+        - Input.dispatchDragEvent
+        - Input.cancelDragging
+        - Input.emulateTouchFromMouseEvent
+        - Input.synthesizePinchGesture
+        - Input.synthesizeScrollGesture
+        - Input.synthesizeTapGesture
+        - DOM.setFileInputFiles
+        - DOM.focus
+        - DOM.scrollIntoViewIfNeeded
+        - Page.bringToFront
+        - Page.captureScreenshot
+        - Page.captureSnapshot
+        - Page.handleJavaScriptDialog
+        - Page.navigate
+        - Page.navigateToHistoryEntry
+        - Page.reload
+        - Page.printToPDF
+        - Page.startScreencast
+        - Page.stopScreencast
+        - Page.stopLoading
+        - Page.close
+        - Page.setWebLifecycleState
+        - Target.activateTarget
+        - Target.closeTarget
+        - Target.createTarget
+        - Target.createBrowserContext
+        - Target.disposeBrowserContext
+        - Target.openDevTools
+        - Browser.cancelDownload
+        - Browser.close
+        - Browser.setWindowBounds
+        - Browser.setContentsSize
+        - Autofill.trigger
+    BrowserCdpInputDispatchMouseEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.dispatchMouseEvent` arguments. Canonical input:
+        `Input.dispatchMouseEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchMouseEvent
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpMouseEventType"
+          description: >
+            Mouse event phase: `mousePressed`, `mouseReleased`, `mouseMoved`
+            or `mouseWheel`. A value the protocol does not define is
+            reported as `other`.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        button:
+          $ref: "#/components/schemas/BrowserCdpMouseButton"
+          description: >
+            Button named by the command (`none`, `left`, `middle`, `right`,
+            `back`, `forward`). A value the protocol does not define is
+            reported as `other`.
+        buttons:
+          type: integer
+          description: >
+            Bit field of buttons held down. Non-zero on a `mouseMoved` means
+            the move is a drag path.
+        click_count:
+          type: integer
+          description: >
+            Number of times the button was clicked (2 is a double click).
+        delta_x:
+          type: number
+          format: double
+          description: >
+            Horizontal scroll delta, for `mouseWheel`.
+        delta_y:
+          type: number
+          format: double
+          description: >
+            Vertical scroll delta, for `mouseWheel`.
+        pointer_type:
+          $ref: "#/components/schemas/BrowserCdpPointerType"
+          description: >
+            Pointer that generated the event (`mouse` or `pen`). A value the
+            protocol does not define is reported as `other`.
+        force:
+          type: number
+          format: double
+          description: >
+            Normalized pressure, 0 to 1.
+        tangential_pressure:
+          type: number
+          format: double
+          description: >
+            Normalized tangential pressure, -1 to 1.
+        tilt_x:
+          type: number
+          format: double
+          description: >
+            Pen tilt from the Y-Z plane, in degrees.
+        tilt_y:
+          type: number
+          format: double
+          description: >
+            Pen tilt from the X-Z plane, in degrees.
+        twist:
+          type: integer
+          description: >
+            Pen clockwise rotation, in degrees.
+    BrowserCdpInputDispatchKeyEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.dispatchKeyEvent` arguments. Canonical input:
+        `Input.dispatchKeyEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchKeyEvent
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpKeyEventType"
+          description: >
+            Key event phase: `keyDown`, `keyUp`, `rawKeyDown` or `char`. A
+            value the protocol does not define is reported as `other`.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        text_length:
+          type: integer
+          description: >
+            Number of characters the command submitted. The text itself is
+            never captured.
+        named_key:
+          type: string
+          description: >
+            Key that commands the page rather than typing into it (e.g.
+            `Enter`, `Tab`, `ArrowDown`, `F5`). Keys that produce a
+            character are never captured; those are counted by
+            `text_length`.
+        location:
+          type: integer
+          description: >
+            Keyboard location (1=left, 2=right, 3=numpad).
+        auto_repeat:
+          type: boolean
+          description: >
+            Whether the event was generated by key repeat.
+        is_keypad:
+          type: boolean
+          description: >
+            Whether the key is on the numeric keypad.
+        is_system_key:
+          type: boolean
+          description: >
+            Whether the event is a system key event.
+        command_count:
+          type: integer
+          description: >
+            Number of editing commands (e.g. `selectAll`) carried by the
+            event.
+    BrowserCdpInputInsertTextCommandData:
+      type: object
+      description: >
+        Sanitized `Input.insertText` arguments. Canonical input:
+        `Input.insertText` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, text_length]
+      properties:
+        method:
+          type: string
+          const: Input.insertText
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        text_length:
+          type: integer
+          description: >
+            Number of characters inserted. The text itself is never
+            captured.
+    BrowserCdpInputImeSetCompositionCommandData:
+      type: object
+      description: >
+        Sanitized `Input.imeSetComposition` arguments. Canonical input:
+        `Input.imeSetComposition` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, text_length]
+      properties:
+        method:
+          type: string
+          const: Input.imeSetComposition
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        text_length:
+          type: integer
+          description: >
+            Number of characters in the composition. The text itself is
+            never captured.
+        selection_start:
+          type: integer
+          description: >
+            Selection start offset within the composition.
+        selection_end:
+          type: integer
+          description: >
+            Selection end offset within the composition.
+        replacement_start:
+          type: integer
+          description: >
+            Replacement range start offset.
+        replacement_end:
+          type: integer
+          description: >
+            Replacement range end offset.
+    BrowserCdpInputDispatchTouchEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.dispatchTouchEvent` arguments. Canonical input:
+        `Input.dispatchTouchEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, event_type, touch_point_count]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchTouchEvent
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpTouchEventType"
+          description: >
+            Touch event phase: `touchStart`, `touchEnd`, `touchMove` or
+            `touchCancel`. A value the protocol does not define is reported
+            as `other`.
+        touch_point_count:
+          type: integer
+          description: >
+            Number of active touch points the command carried.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate of the first touch point. Touch
+            coordinates live inside `touchPoints`, so this is the primary
+            point rather than a command-level argument.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate of the first touch point.
+        radius_x:
+          type: number
+          format: double
+          description: >
+            Horizontal radius of the first touch point.
+        radius_y:
+          type: number
+          format: double
+          description: >
+            Vertical radius of the first touch point.
+        rotation_angle:
+          type: number
+          format: double
+          description: >
+            Rotation of the first touch point, in degrees.
+        force:
+          type: number
+          format: double
+          description: >
+            Normalized pressure of the first touch point, 0 to 1.
+        tangential_pressure:
+          type: number
+          format: double
+          description: >
+            Normalized tangential pressure of the first touch point, -1 to
+            1.
+        tilt_x:
+          type: number
+          format: double
+          description: >
+            Tilt of the first touch point from the Y-Z plane, in degrees.
+        tilt_y:
+          type: number
+          format: double
+          description: >
+            Tilt of the first touch point from the X-Z plane, in degrees.
+        twist:
+          type: integer
+          description: >
+            Clockwise rotation of the first touch point, in degrees.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+    BrowserCdpInputDispatchDragEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.dispatchDragEvent` arguments. Canonical input:
+        `Input.dispatchDragEvent` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.dispatchDragEvent
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpDragEventType"
+          description: >
+            Drag event phase: `dragEnter`, `dragOver`, `drop` or
+            `dragCancel`. A value the protocol does not define is reported
+            as `other`.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        drag_item_count:
+          type: integer
+          description: >
+            Number of items in the drag payload. Item contents are never
+            captured.
+        drag_file_count:
+          type: integer
+          description: >
+            Number of files in the drag payload. File paths are never
+            captured.
+        drag_mime_categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrowserCdpDragMimeCategory"
+          description: >
+            Distinct top-level MIME categories of the drag items (e.g.
+            `text`, `image`, `application`). Subtypes and contents are never
+            captured. A value the protocol does not define is reported as
+            `other`.
+        drag_operations_mask:
+          type: integer
+          description: >
+            Bit field of allowed drag operations (1=copy, 2=link, 16=move).
+    BrowserCdpInputCancelDraggingCommandData:
+      type: object
+      description: >
+        Sanitized `Input.cancelDragging` arguments. Canonical input:
+        `Input.cancelDragging` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Input.cancelDragging
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+    BrowserCdpInputEmulateTouchFromMouseEventCommandData:
+      type: object
+      description: >
+        Sanitized `Input.emulateTouchFromMouseEvent` arguments. Canonical
+        input: `Input.emulateTouchFromMouseEvent` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, event_type]
+      properties:
+        method:
+          type: string
+          const: Input.emulateTouchFromMouseEvent
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        event_type:
+          $ref: "#/components/schemas/BrowserCdpMouseEventType"
+          description: >
+            Mouse event phase being emulated as touch. A value the protocol
+            does not define is reported as `other`.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        button:
+          $ref: "#/components/schemas/BrowserCdpMouseButton"
+          description: >
+            Button named by the command. A value the protocol does not
+            define is reported as `other`.
+        modifiers:
+          type: integer
+          description: >
+            Bit field of held modifier keys (1=Alt, 2=Ctrl, 4=Meta,
+            8=Shift).
+        click_count:
+          type: integer
+          description: >
+            Number of times the button was clicked.
+        delta_x:
+          type: number
+          format: double
+          description: >
+            Horizontal scroll delta.
+        delta_y:
+          type: number
+          format: double
+          description: >
+            Vertical scroll delta.
+    BrowserCdpInputSynthesizePinchGestureCommandData:
+      type: object
+      description: >
+        Sanitized `Input.synthesizePinchGesture` arguments. Canonical input:
+        `Input.synthesizePinchGesture` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Input.synthesizePinchGesture
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        scale_factor:
+          type: number
+          format: double
+          description: >
+            Relative scale of the pinch (>1 zooms in).
+        relative_speed:
+          type: integer
+          description: >
+            Relative pointer speed, in pixels per second.
+        gesture_source_type:
+          $ref: "#/components/schemas/BrowserCdpGestureSourceType"
+          description: >
+            Input source the synthesized gesture emulates. A value the
+            protocol does not define is reported as `other`.
+    BrowserCdpInputSynthesizeScrollGestureCommandData:
+      type: object
+      description: >
+        Sanitized `Input.synthesizeScrollGesture` arguments. Canonical
+        input: `Input.synthesizeScrollGesture` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Input.synthesizeScrollGesture
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        x_distance:
+          type: number
+          format: double
+          description: >
+            Horizontal scroll distance in CSS pixels; positive scrolls left.
+        y_distance:
+          type: number
+          format: double
+          description: >
+            Vertical scroll distance in CSS pixels; positive scrolls up.
+        x_overscroll:
+          type: number
+          format: double
+          description: >
+            Additional horizontal distance scrolled past the end.
+        y_overscroll:
+          type: number
+          format: double
+          description: >
+            Additional vertical distance scrolled past the end.
+        prevent_fling:
+          type: boolean
+          description: >
+            Whether fling was suppressed.
+        speed:
+          type: integer
+          description: >
+            Swipe speed in pixels per second.
+        gesture_source_type:
+          $ref: "#/components/schemas/BrowserCdpGestureSourceType"
+          description: >
+            Input source the synthesized gesture emulates. A value the
+            protocol does not define is reported as `other`.
+        repeat_count:
+          type: integer
+          description: >
+            Number of additional repeats of the scroll.
+        repeat_delay_ms:
+          type: integer
+          description: >
+            Delay between repeats, in milliseconds.
+    BrowserCdpInputSynthesizeTapGestureCommandData:
+      type: object
+      description: >
+        Sanitized `Input.synthesizeTapGesture` arguments. Canonical input:
+        `Input.synthesizeTapGesture` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Input.synthesizeTapGesture
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        x:
+          type: number
+          format: double
+          description: >
+            Viewport x coordinate in CSS pixels.
+        y:
+          type: number
+          format: double
+          description: >
+            Viewport y coordinate in CSS pixels.
+        duration:
+          type: integer
+          description: >
+            Duration between touchdown and touchup, in milliseconds.
+        tap_count:
+          type: integer
+          description: >
+            Number of times to tap (2 is a double tap).
+        gesture_source_type:
+          $ref: "#/components/schemas/BrowserCdpGestureSourceType"
+          description: >
+            Input source the synthesized gesture emulates. A value the
+            protocol does not define is reported as `other`.
+    BrowserCdpDomSetFileInputFilesCommandData:
+      type: object
+      description: >
+        Sanitized `DOM.setFileInputFiles` arguments. Canonical input:
+        `DOM.setFileInputFiles` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, file_count]
+      properties:
+        method:
+          type: string
+          const: DOM.setFileInputFiles
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        file_count:
+          type: integer
+          description: >
+            Number of files handed to the input. File paths are never
+            captured.
+        node_id:
+          type: integer
+          description: >
+            Opaque DOM node identifier the command targeted.
+        backend_node_id:
+          type: integer
+          description: >
+            Opaque backend DOM node identifier the command targeted.
+        object_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque Runtime remote object identifier the command targeted.
+            Clipped to 128 characters; a longer value is not a real
+            identifier.
+    BrowserCdpDomFocusCommandData:
+      type: object
+      description: >
+        Sanitized `DOM.focus` arguments. Canonical input: `DOM.focus` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: DOM.focus
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        node_id:
+          type: integer
+          description: >
+            Opaque DOM node identifier the command targeted.
+        backend_node_id:
+          type: integer
+          description: >
+            Opaque backend DOM node identifier the command targeted.
+        object_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque Runtime remote object identifier the command targeted.
+            Clipped to 128 characters; a longer value is not a real
+            identifier.
+    BrowserCdpDomScrollIntoViewIfNeededCommandData:
+      type: object
+      description: >
+        Sanitized `DOM.scrollIntoViewIfNeeded` arguments. Canonical input:
+        `DOM.scrollIntoViewIfNeeded` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: DOM.scrollIntoViewIfNeeded
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        node_id:
+          type: integer
+          description: >
+            Opaque DOM node identifier the command targeted.
+        backend_node_id:
+          type: integer
+          description: >
+            Opaque backend DOM node identifier the command targeted.
+        object_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque Runtime remote object identifier the command targeted.
+            Clipped to 128 characters; a longer value is not a real
+            identifier.
+        rect_x:
+          type: number
+          format: double
+          description: >
+            X offset of the rect the command scrolled to, relative to the
+            node.
+        rect_y:
+          type: number
+          format: double
+          description: >
+            Y offset of the rect the command scrolled to, relative to the
+            node.
+        rect_width:
+          type: number
+          format: double
+          description: >
+            Width of the rect the command scrolled to.
+        rect_height:
+          type: number
+          format: double
+          description: >
+            Height of the rect the command scrolled to.
+    BrowserCdpPageBringToFrontCommandData:
+      type: object
+      description: >
+        Sanitized `Page.bringToFront` arguments. Canonical input:
+        `Page.bringToFront` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.bringToFront
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+    BrowserCdpPageCaptureScreenshotCommandData:
+      type: object
+      description: >
+        Sanitized `Page.captureScreenshot` arguments. Canonical input:
+        `Page.captureScreenshot` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.captureScreenshot
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        format:
+          $ref: "#/components/schemas/BrowserCdpScreenshotFormat"
+          description: >
+            Image format requested (`jpeg`, `png` or `webp`). A value the
+            protocol does not define is reported as `other`.
+        quality:
+          type: integer
+          description: >
+            Compression quality, 0 to 100, for lossy formats.
+        from_surface:
+          type: boolean
+          description: >
+            Whether the capture was taken from the surface rather than the
+            view.
+        capture_beyond_viewport:
+          type: boolean
+          description: >
+            Whether the capture extended past the viewport.
+        optimize_for_speed:
+          type: boolean
+          description: >
+            Whether encoding favored speed over size.
+        clip_x:
+          type: number
+          format: double
+          description: >
+            Clip region x offset in CSS pixels.
+        clip_y:
+          type: number
+          format: double
+          description: >
+            Clip region y offset in CSS pixels.
+        clip_width:
+          type: number
+          format: double
+          description: >
+            Clip region width in CSS pixels.
+        clip_height:
+          type: number
+          format: double
+          description: >
+            Clip region height in CSS pixels.
+        clip_scale:
+          type: number
+          format: double
+          description: >
+            Clip region page scale factor.
+    BrowserCdpPageCaptureSnapshotCommandData:
+      type: object
+      description: >
+        Sanitized `Page.captureSnapshot` arguments. Canonical input:
+        `Page.captureSnapshot` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.captureSnapshot
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        format:
+          $ref: "#/components/schemas/BrowserCdpSnapshotFormat"
+          description: >
+            Snapshot format requested (`mhtml`). A value the protocol does
+            not define is reported as `other`.
+    BrowserCdpPageHandleJavaScriptDialogCommandData:
+      type: object
+      description: >
+        Sanitized `Page.handleJavaScriptDialog` arguments. Canonical input:
+        `Page.handleJavaScriptDialog` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, accept]
+      properties:
+        method:
+          type: string
+          const: Page.handleJavaScriptDialog
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        accept:
+          type: boolean
+          description: >
+            Whether the dialog was accepted or dismissed.
+        prompt_text_length:
+          type: integer
+          description: >
+            Number of characters entered into a prompt dialog. The text
+            itself is never captured.
+    BrowserCdpPageNavigateCommandData:
+      type: object
+      description: >
+        Sanitized `Page.navigate` arguments. Canonical input:
+        `Page.navigate` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.navigate
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        url_scheme:
+          type: string
+          maxLength: 32
+          description: >
+            Scheme of the destination URL (e.g. `https`, `about`, `data`).
+            The rest of the URL is never captured.
+        transition_type:
+          $ref: "#/components/schemas/BrowserCdpTransitionType"
+          description: >
+            Navigation reason reported by the caller (e.g. `link`, `typed`,
+            `reload`). A value the protocol does not define is reported as
+            `other`.
+        referrer_present:
+          type: boolean
+          description: >
+            Whether the command carried a referrer. The referrer itself is
+            never captured.
+        referrer_policy:
+          $ref: "#/components/schemas/BrowserCdpReferrerPolicy"
+          description: >
+            Referrer policy named by the command. A value the protocol does
+            not define is reported as `other`.
+        frame_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque frame identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
+    BrowserCdpPageNavigateToHistoryEntryCommandData:
+      type: object
+      description: >
+        Sanitized `Page.navigateToHistoryEntry` arguments. Canonical input:
+        `Page.navigateToHistoryEntry` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, entry_id]
+      properties:
+        method:
+          type: string
+          const: Page.navigateToHistoryEntry
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        entry_id:
+          type: integer
+          description: >
+            History entry the command navigated to.
+    BrowserCdpPageReloadCommandData:
+      type: object
+      description: >
+        Sanitized `Page.reload` arguments. Canonical input: `Page.reload` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.reload
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        ignore_cache:
+          type: boolean
+          description: >
+            Whether the reload bypassed the cache.
+        script_length:
+          type: integer
+          description: >
+            Number of characters in the injected script.
+        loader_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque document loader identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
+    BrowserCdpPagePrintToPdfCommandData:
+      type: object
+      description: >
+        Sanitized `Page.printToPDF` arguments. Canonical input:
+        `Page.printToPDF` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.printToPDF
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        landscape:
+          type: boolean
+          description: >
+            Whether the page was laid out in landscape.
+        scale:
+          type: number
+          format: double
+          description: >
+            Page render scale.
+        paper_width:
+          type: number
+          format: double
+          description: >
+            Paper width in inches.
+        paper_height:
+          type: number
+          format: double
+          description: >
+            Paper height in inches.
+        display_header_footer:
+          type: boolean
+          description: >
+            Whether a header and footer were rendered.
+        print_background:
+          type: boolean
+          description: >
+            Whether background graphics were printed.
+        margin_top:
+          type: number
+          format: double
+          description: >
+            Top margin in inches.
+        margin_bottom:
+          type: number
+          format: double
+          description: >
+            Bottom margin in inches.
+        margin_left:
+          type: number
+          format: double
+          description: >
+            Left margin in inches.
+        margin_right:
+          type: number
+          format: double
+          description: >
+            Right margin in inches.
+        prefer_css_page_size:
+          type: boolean
+          description: >
+            Whether the CSS page size was preferred over the paper size.
+        generate_tagged_pdf:
+          type: boolean
+          description: >
+            Whether a tagged (accessible) PDF was requested.
+        generate_document_outline:
+          type: boolean
+          description: >
+            Whether a document outline was embedded.
+        transfer_mode:
+          $ref: "#/components/schemas/BrowserCdpPdfTransferMode"
+          description: >
+            How the PDF was returned (`ReturnAsBase64` or `ReturnAsStream`).
+            A value the protocol does not define is reported as `other`.
+        page_ranges_present:
+          type: boolean
+          description: >
+            Whether a page range was supplied.
+        header_template_present:
+          type: boolean
+          description: >
+            Whether a header template was supplied. The template itself is
+            never captured.
+        footer_template_present:
+          type: boolean
+          description: >
+            Whether a footer template was supplied. The template itself is
+            never captured.
+    BrowserCdpPageStartScreencastCommandData:
+      type: object
+      description: >
+        Sanitized `Page.startScreencast` arguments. Canonical input:
+        `Page.startScreencast` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.startScreencast
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        format:
+          $ref: "#/components/schemas/BrowserCdpScreencastFormat"
+          description: >
+            Frame format requested (`jpeg` or `png`). A value the protocol
+            does not define is reported as `other`.
+        quality:
+          type: integer
+          description: >
+            Compression quality, 0 to 100.
+        max_width:
+          type: integer
+          description: >
+            Maximum frame width in pixels.
+        max_height:
+          type: integer
+          description: >
+            Maximum frame height in pixels.
+        every_nth_frame:
+          type: integer
+          description: >
+            Frame sampling interval.
+    BrowserCdpPageStopScreencastCommandData:
+      type: object
+      description: >
+        Sanitized `Page.stopScreencast` arguments. Canonical input:
+        `Page.stopScreencast` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.stopScreencast
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+    BrowserCdpPageStopLoadingCommandData:
+      type: object
+      description: >
+        Sanitized `Page.stopLoading` arguments. Canonical input:
+        `Page.stopLoading` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.stopLoading
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+    BrowserCdpPageCloseCommandData:
+      type: object
+      description: >
+        Sanitized `Page.close` arguments. Canonical input: `Page.close` in
+        devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Page.close
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+    BrowserCdpPageSetWebLifecycleStateCommandData:
+      type: object
+      description: >
+        Sanitized `Page.setWebLifecycleState` arguments. Canonical input:
+        `Page.setWebLifecycleState` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, state]
+      properties:
+        method:
+          type: string
+          const: Page.setWebLifecycleState
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        state:
+          $ref: "#/components/schemas/BrowserCdpWebLifecycleState"
+          description: >
+            Lifecycle state applied (`frozen` or `active`). A value the
+            protocol does not define is reported as `other`.
+    BrowserCdpTargetActivateTargetCommandData:
+      type: object
+      description: >
+        Sanitized `Target.activateTarget` arguments. Canonical input:
+        `Target.activateTarget` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, target_id]
+      properties:
+        method:
+          type: string
+          const: Target.activateTarget
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        target_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque target identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
+    BrowserCdpTargetCloseTargetCommandData:
+      type: object
+      description: >
+        Sanitized `Target.closeTarget` arguments. Canonical input:
+        `Target.closeTarget` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, target_id]
+      properties:
+        method:
+          type: string
+          const: Target.closeTarget
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        target_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque target identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
+    BrowserCdpTargetCreateTargetCommandData:
+      type: object
+      description: >
+        Sanitized `Target.createTarget` arguments. Canonical input:
+        `Target.createTarget` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Target.createTarget
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        url_scheme:
+          type: string
+          maxLength: 32
+          description: >
+            Scheme of the destination URL (e.g. `https`, `about`, `data`).
+            The rest of the URL is never captured.
+        left:
+          type: integer
+          description: >
+            Window x position in screen coordinates.
+        top:
+          type: integer
+          description: >
+            Window y position in screen coordinates.
+        width:
+          type: integer
+          description: >
+            Window width in DIP.
+        height:
+          type: integer
+          description: >
+            Window height in DIP.
+        window_state:
+          $ref: "#/components/schemas/BrowserCdpWindowState"
+          description: >
+            Window state requested (`normal`, `minimized`, `maximized`,
+            `fullscreen`). A value the protocol does not define is reported
+            as `other`.
+        browser_context_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque browser context identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
+        new_window:
+          type: boolean
+          description: >
+            Whether a new window was requested.
+        background:
+          type: boolean
+          description: >
+            Whether the target was created in the background.
+        for_tab:
+          type: boolean
+          description: >
+            Whether a tab target rather than a page target was created.
+        hidden:
+          type: boolean
+          description: >
+            Whether the target was created hidden.
+        enable_begin_frame_control:
+          type: boolean
+          description: >
+            Whether BeginFrame control was enabled (headless only).
+        focus:
+          type: boolean
+          description: >
+            Whether the new target was focused.
+    BrowserCdpTargetCreateBrowserContextCommandData:
+      type: object
+      description: >
+        Sanitized `Target.createBrowserContext` arguments. Canonical input:
+        `Target.createBrowserContext` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Target.createBrowserContext
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        dispose_on_detach:
+          type: boolean
+          description: >
+            Whether the context is disposed when the debugging session
+            detaches.
+        proxy_server_present:
+          type: boolean
+          description: >
+            Whether a proxy was configured. The proxy address is never
+            captured.
+        proxy_bypass_list_present:
+          type: boolean
+          description: >
+            Whether a proxy bypass list was configured.
+        universal_network_access_origin_count:
+          type: integer
+          description: >
+            Number of origins granted universal network access. The origins
+            themselves are never captured.
+    BrowserCdpTargetDisposeBrowserContextCommandData:
+      type: object
+      description: >
+        Sanitized `Target.disposeBrowserContext` arguments. Canonical input:
+        `Target.disposeBrowserContext` in devtools-protocol@2d019e73, pinned
+        at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, browser_context_id]
+      properties:
+        method:
+          type: string
+          const: Target.disposeBrowserContext
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        browser_context_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque browser context identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
+    BrowserCdpTargetOpenDevToolsCommandData:
+      type: object
+      description: >
+        Sanitized `Target.openDevTools` arguments. Canonical input:
+        `Target.openDevTools` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, target_id]
+      properties:
+        method:
+          type: string
+          const: Target.openDevTools
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        target_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque target identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
+        panel_id:
+          type: string
+          maxLength: 128
+          description: >
+            DevTools panel opened. Clipped to 128 characters; a longer value
+            is not a real identifier.
+    BrowserCdpBrowserCancelDownloadCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.cancelDownload` arguments. Canonical input:
+        `Browser.cancelDownload` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, download_guid]
+      properties:
+        method:
+          type: string
+          const: Browser.cancelDownload
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        download_guid:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque identifier of the download that was cancelled. Clipped to
+            128 characters; a longer value is not a real identifier.
+        browser_context_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque browser context identifier. Clipped to 128 characters; a
+            longer value is not a real identifier.
+    BrowserCdpBrowserCloseCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.close` arguments. Canonical input:
+        `Browser.close` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method]
+      properties:
+        method:
+          type: string
+          const: Browser.close
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+    BrowserCdpBrowserSetWindowBoundsCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.setWindowBounds` arguments. Canonical input:
+        `Browser.setWindowBounds` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, window_id]
+      properties:
+        method:
+          type: string
+          const: Browser.setWindowBounds
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        window_id:
+          type: integer
+          description: >
+            Browser window identifier.
+        left:
+          type: integer
+          description: >
+            Window x position in screen coordinates.
+        top:
+          type: integer
+          description: >
+            Window y position in screen coordinates.
+        width:
+          type: integer
+          description: >
+            Window width in DIP.
+        height:
+          type: integer
+          description: >
+            Window height in DIP.
+        window_state:
+          $ref: "#/components/schemas/BrowserCdpWindowState"
+          description: >
+            Window state requested (`normal`, `minimized`, `maximized`,
+            `fullscreen`). A value the protocol does not define is reported
+            as `other`.
+    BrowserCdpBrowserSetContentsSizeCommandData:
+      type: object
+      description: >
+        Sanitized `Browser.setContentsSize` arguments. Canonical input:
+        `Browser.setContentsSize` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, window_id]
+      properties:
+        method:
+          type: string
+          const: Browser.setContentsSize
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        window_id:
+          type: integer
+          description: >
+            Browser window identifier.
+        width:
+          type: integer
+          description: >
+            Contents width in DIP.
+        height:
+          type: integer
+          description: >
+            Contents height in DIP.
+    BrowserCdpAutofillTriggerCommandData:
+      type: object
+      description: >
+        Sanitized `Autofill.trigger` arguments. Canonical input:
+        `Autofill.trigger` in devtools-protocol@2d019e73, pinned at
+        https://github.com/ChromeDevTools/devtools-protocol/blob/2d019e73eb371d1d6985d26d395d78bd8f8a22ba/json/browser_protocol.json.
+        Every argument of this command has a retained or redacted decision
+        in lib/devtoolsproxy/testdata/cdp_arguments.yaml.
+      additionalProperties: false
+      required: [method, field_id]
+      properties:
+        method:
+          type: string
+          const: Autofill.trigger
+        session_id:
+          type: string
+          maxLength: 128
+          description: >
+            CDP session identifier the command was addressed to. Absent for
+            browser-level commands. Clipped to 128 characters.
+        command_id:
+          type: integer
+          format: int64
+          description: >
+            The command's JSON-RPC id, so the command can be joined to the
+            result the browser returned for it. Absent when the client sent
+            none.
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies the CDP proxy connection the command arrived on,
+            matching `cdp_connect` and `cdp_disconnect`. Two clients driving
+            the same browser are told apart by this.
+        field_id:
+          type: integer
+          description: >
+            Opaque backend node identifier of the field that was autofilled.
+        frame_id:
+          type: string
+          maxLength: 128
+          description: >
+            Opaque frame identifier. Clipped to 128 characters; a longer
+            value is not a real identifier.
+        mode:
+          $ref: "#/components/schemas/BrowserCdpAutofillMode"
+          description: >
+            What was filled: `card` or `address`. The values themselves are
+            never captured.
+        address_field_count:
+          type: integer
+          description: >
+            Number of address fields the command filled. Their names and
+            values are never captured.
+    BrowserCdpCommandEventData:
+      description: >
+        Per-command payload for `cdp_command` events, discriminated by
+        `method`. Each variant carries only the arguments approved for that
+        command: values that could hold a secret — typed and composition
+        text, URLs, referrers, scripts, templates, file paths, drag contents
+        and autofill values — are replaced by a length, a count, a presence
+        flag, an enum or a URL scheme and host.
+      oneOf:
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchMouseEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchKeyEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputInsertTextCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputImeSetCompositionCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchTouchEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputDispatchDragEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputCancelDraggingCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputEmulateTouchFromMouseEventCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputSynthesizePinchGestureCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputSynthesizeScrollGestureCommandData"
+        - $ref: "#/components/schemas/BrowserCdpInputSynthesizeTapGestureCommandData"
+        - $ref: "#/components/schemas/BrowserCdpDomSetFileInputFilesCommandData"
+        - $ref: "#/components/schemas/BrowserCdpDomFocusCommandData"
+        - $ref: "#/components/schemas/BrowserCdpDomScrollIntoViewIfNeededCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageBringToFrontCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageCaptureScreenshotCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageCaptureSnapshotCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageHandleJavaScriptDialogCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageNavigateCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageNavigateToHistoryEntryCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageReloadCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPagePrintToPdfCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageStartScreencastCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageStopScreencastCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageStopLoadingCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageCloseCommandData"
+        - $ref: "#/components/schemas/BrowserCdpPageSetWebLifecycleStateCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetActivateTargetCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetCloseTargetCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetCreateTargetCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetCreateBrowserContextCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetDisposeBrowserContextCommandData"
+        - $ref: "#/components/schemas/BrowserCdpTargetOpenDevToolsCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserCancelDownloadCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserCloseCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserSetWindowBoundsCommandData"
+        - $ref: "#/components/schemas/BrowserCdpBrowserSetContentsSizeCommandData"
+        - $ref: "#/components/schemas/BrowserCdpAutofillTriggerCommandData"
+      discriminator:
+        propertyName: method
+        mapping:
+          Input.dispatchMouseEvent: "#/components/schemas/BrowserCdpInputDispatchMouseEventCommandData"
+          Input.dispatchKeyEvent: "#/components/schemas/BrowserCdpInputDispatchKeyEventCommandData"
+          Input.insertText: "#/components/schemas/BrowserCdpInputInsertTextCommandData"
+          Input.imeSetComposition: "#/components/schemas/BrowserCdpInputImeSetCompositionCommandData"
+          Input.dispatchTouchEvent: "#/components/schemas/BrowserCdpInputDispatchTouchEventCommandData"
+          Input.dispatchDragEvent: "#/components/schemas/BrowserCdpInputDispatchDragEventCommandData"
+          Input.cancelDragging: "#/components/schemas/BrowserCdpInputCancelDraggingCommandData"
+          Input.emulateTouchFromMouseEvent: "#/components/schemas/BrowserCdpInputEmulateTouchFromMouseEventCommandData"
+          Input.synthesizePinchGesture: "#/components/schemas/BrowserCdpInputSynthesizePinchGestureCommandData"
+          Input.synthesizeScrollGesture: "#/components/schemas/BrowserCdpInputSynthesizeScrollGestureCommandData"
+          Input.synthesizeTapGesture: "#/components/schemas/BrowserCdpInputSynthesizeTapGestureCommandData"
+          DOM.setFileInputFiles: "#/components/schemas/BrowserCdpDomSetFileInputFilesCommandData"
+          DOM.focus: "#/components/schemas/BrowserCdpDomFocusCommandData"
+          DOM.scrollIntoViewIfNeeded: "#/components/schemas/BrowserCdpDomScrollIntoViewIfNeededCommandData"
+          Page.bringToFront: "#/components/schemas/BrowserCdpPageBringToFrontCommandData"
+          Page.captureScreenshot: "#/components/schemas/BrowserCdpPageCaptureScreenshotCommandData"
+          Page.captureSnapshot: "#/components/schemas/BrowserCdpPageCaptureSnapshotCommandData"
+          Page.handleJavaScriptDialog: "#/components/schemas/BrowserCdpPageHandleJavaScriptDialogCommandData"
+          Page.navigate: "#/components/schemas/BrowserCdpPageNavigateCommandData"
+          Page.navigateToHistoryEntry: "#/components/schemas/BrowserCdpPageNavigateToHistoryEntryCommandData"
+          Page.reload: "#/components/schemas/BrowserCdpPageReloadCommandData"
+          Page.printToPDF: "#/components/schemas/BrowserCdpPagePrintToPdfCommandData"
+          Page.startScreencast: "#/components/schemas/BrowserCdpPageStartScreencastCommandData"
+          Page.stopScreencast: "#/components/schemas/BrowserCdpPageStopScreencastCommandData"
+          Page.stopLoading: "#/components/schemas/BrowserCdpPageStopLoadingCommandData"
+          Page.close: "#/components/schemas/BrowserCdpPageCloseCommandData"
+          Page.setWebLifecycleState: "#/components/schemas/BrowserCdpPageSetWebLifecycleStateCommandData"
+          Target.activateTarget: "#/components/schemas/BrowserCdpTargetActivateTargetCommandData"
+          Target.closeTarget: "#/components/schemas/BrowserCdpTargetCloseTargetCommandData"
+          Target.createTarget: "#/components/schemas/BrowserCdpTargetCreateTargetCommandData"
+          Target.createBrowserContext: "#/components/schemas/BrowserCdpTargetCreateBrowserContextCommandData"
+          Target.disposeBrowserContext: "#/components/schemas/BrowserCdpTargetDisposeBrowserContextCommandData"
+          Target.openDevTools: "#/components/schemas/BrowserCdpTargetOpenDevToolsCommandData"
+          Browser.cancelDownload: "#/components/schemas/BrowserCdpBrowserCancelDownloadCommandData"
+          Browser.close: "#/components/schemas/BrowserCdpBrowserCloseCommandData"
+          Browser.setWindowBounds: "#/components/schemas/BrowserCdpBrowserSetWindowBoundsCommandData"
+          Browser.setContentsSize: "#/components/schemas/BrowserCdpBrowserSetContentsSizeCommandData"
+          Autofill.trigger: "#/components/schemas/BrowserCdpAutofillTriggerCommandData"
+    BrowserCdpCommandEvent:
+      type: object
+      description: >
+        A browser-control command a client sent over the CDP WebSocket proxy:
+        input gestures, navigation, dialog handling, file selection and
+        screenshots. Configuration commands and the DOM/Runtime traffic a client
+        library issues on the caller's behalf are not reported.
+
+        One event per browser-control command that reached the browser. The
+        command stream is not sampled, coalesced or reordered. An event is lost
+        only when the method is excluded by telemetry configuration, when the
+        command's arguments do not decode, or when classification cannot keep
+        up. Exclusions are counted in `cdp_disconnect.telemetry_excluded`; the
+        rest in `cdp_disconnect.telemetry_dropped`.
+      required: [ts, type, category, source, data]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: cdp_command
+        category:
+          type: string
+          const: control
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCdpCommandEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserCdpConnectEventData:
+      type: object
+      description: Per-connection payload for `cdp_connect` events.
+      additionalProperties: false
+      properties:
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies this CDP proxy connection, matching the `connection_id`
+            on the `cdp_command` events that arrived on it. Two clients driving
+            the same browser are told apart by this.
     BrowserCdpConnectEvent:
       type: object
       description: An external client (e.g. customer SDK, Playwright, Puppeteer) connected to the CDP WebSocket proxy on this VM.
@@ -2772,6 +5645,8 @@ components:
           const: connection
         source:
           $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCdpConnectEventData"
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
@@ -2781,12 +5656,37 @@ components:
       additionalProperties: false
       required: [duration_ms, message_count, reason]
       properties:
+        connection_id:
+          type: string
+          maxLength: 128
+          description: >
+            Identifies this CDP proxy connection, matching the `connection_id`
+            on the `cdp_command` events that arrived on it. Two clients driving
+            the same browser are told apart by this.
         duration_ms:
           type: number
           description: Wall-clock duration of the connection in milliseconds.
         message_count:
           type: integer
           description: Number of CDP messages relayed across the connection in either direction.
+        telemetry_excluded:
+          type: integer
+          description: >
+            Number of forwarded client commands that produced no `cdp_command`
+            event because their method is listed in
+            `control.cdp.excluded_methods`. Configuration rather than loss, so
+            it is counted apart from `telemetry_dropped`.
+        telemetry_dropped:
+          type: integer
+          description: >
+            Number of supported browser-control commands that were forwarded
+            to the browser but never classified, because the queue was full
+            or classification panicked. Every increment is a real lost
+            command — unsupported and excluded methods are filtered before
+            admission and never count toward this total. Telemetry loss
+            only; every command was still relayed to the browser. Always
+            present on images that report it; absent on images predating the
+            field, which is not the same as zero.
         reason:
           type: string
           description: >
@@ -2887,6 +5787,84 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserCaptchaSolveResultEventDataCaptchaType:
+      type: string
+      description: >
+        Captcha kind reported by the solver. Provider-specific task names are
+        normalized into this set: enterprise variants of reCAPTCHA collapse
+        into their version bucket (v2 / v3), `press_and_hold` covers
+        press-and-hold challenges, and unlisted kinds are reported as `other`.
+      enum:
+        - hcaptcha
+        - recaptcha_v2
+        - recaptcha_v3
+        - turnstile
+        - geetest
+        - press_and_hold
+        - other
+    BrowserCaptchaType:
+      $ref: "#/components/schemas/BrowserCaptchaSolveResultEventDataCaptchaType"
+    BrowserCaptchaChallengeID:
+      type: string
+      description: >
+        Opaque identifier shared by events from one visible challenge. An
+        image-grid captcha can retry with a fresh task per attempt, so one
+        `challenge_id` may be associated with multiple `task_id` values. A
+        producer may preserve it across a page reload when that reload is part
+        of the same challenge episode. It does not indicate task ordering or
+        challenge completion.
+    BrowserCaptchaSolveStartedEventData:
+      type: object
+      description: >
+        Per-task payload for `captcha_solve_started` events. Emitted when a
+        solver accepts a task, once per solver task. A single visible challenge
+        can produce many tasks, so consumers must not assume one started event
+        per challenge or pair events by arrival order. When present, `task_id`
+        correlates this event with a terminal `captcha_solve_result`, and
+        `challenge_id` groups tasks from one visible challenge. Delivery is not
+        ordered: a started event may arrive after its result, and either event
+        may be missing. Arrival or absence therefore does not indicate current
+        solve state.
+      additionalProperties: false
+      required: [captcha_type]
+      properties:
+        captcha_type:
+          $ref: "#/components/schemas/BrowserCaptchaType"
+        task_id:
+          type: string
+          description: >
+            Opaque producer-assigned identifier shared with the matching
+            `captcha_solve_result`.
+        challenge_id:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeID"
+        website_host:
+          type: string
+          description: Host of the page where the captcha is being solved. May be empty for solver tasks that carry no page URL (e.g. image-grid sub-tasks).
+        website_path:
+          type: string
+          description: Path of the page where the captcha is being solved. Query string excluded.
+    BrowserCaptchaSolveStartedEvent:
+      type: object
+      description: A captcha solver accepted a task.
+      required: [ts, type, category, source, data]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: captcha_solve_started
+        category:
+          type: string
+          const: captcha
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCaptchaSolveStartedEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     BrowserCaptchaSolveResultEventData:
       type: object
       description: Per-attempt payload for `captcha_solve_result` events.
@@ -2894,19 +5872,7 @@ components:
       required: [captcha_type, status, duration_ms]
       properties:
         captcha_type:
-          type: string
-          description: >
-            Captcha vendor family. Producers normalize provider-specific task
-            names into this set: enterprise variants of recaptcha collapse into
-            their version bucket (v2 / v3), and anything not covered (e.g.
-            DataDome, MtCaptcha, plain OCR) is reported as `other`.
-          enum:
-            - hcaptcha
-            - recaptcha_v2
-            - recaptcha_v3
-            - turnstile
-            - geetest
-            - other
+          $ref: "#/components/schemas/BrowserCaptchaType"
         status:
           type: string
           description: >
@@ -2921,10 +5887,16 @@ components:
             - abandoned
         duration_ms:
           type: number
-          description: Wall-clock duration from solve start to terminal outcome.
+          description: >
+            Wall-clock duration from solve start to terminal outcome. This is
+            the authoritative solve timing; do not derive duration from the
+            gap to a `captcha_solve_started` event, whose delivery and
+            sequencing are not guaranteed.
         task_id:
           type: string
-          description: Solver-assigned identifier. Opaque, useful for support cross-references.
+          description: Opaque producer-assigned identifier shared with the matching `captcha_solve_started`.
+        challenge_id:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeID"
         website_host:
           type: string
           description: Host of the page where the captcha was solved.
@@ -2953,6 +5925,81 @@ components:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
           $ref: "#/components/schemas/BrowserCaptchaSolveResultEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
+    BrowserCaptchaChallengeResultEventData:
+      type: object
+      description: Per-challenge payload for `captcha_challenge_result` events.
+      additionalProperties: false
+      required: [captcha_type, status, challenge_id, duration_ms]
+      properties:
+        captcha_type:
+          $ref: "#/components/schemas/BrowserCaptchaType"
+        status:
+          type: string
+          description: >
+            Terminal outcome of the visible challenge. `solved`: the page
+            observed the challenge clear after a solver attempt. For token
+            captchas this means a response token was present; for
+            press-and-hold it means the challenge page navigated away. `failure`:
+            the producer stopped after an explicit terminal solver failure or
+            exhausted its attempts while the challenge remained. `timeout`:
+            the producer's challenge-level wait budget expired while the
+            challenge remained. `abandoned`: observation ended without a
+            solved signal or an explicit terminal solver outcome, for example
+            because the widget was dismissed or the page unloaded.
+
+            `solved` describes the challenge, not the flow around it. A site
+            can still reject a valid token, and tokens expire, so this is not
+            proof that whatever the challenge was guarding succeeded.
+          enum:
+            - solved
+            - failure
+            - timeout
+            - abandoned
+          x-enum-varnames:
+            - ChallengeSolved
+            - ChallengeFailure
+            - ChallengeTimeout
+            - ChallengeAbandoned
+        challenge_id:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeID"
+        duration_ms:
+          type: number
+          description: >
+            Wall-clock duration from the challenge appearing to its terminal
+            outcome, covering every solver attempt in between.
+        website_host:
+          type: string
+          description: Host of the page the challenge appeared on.
+        website_path:
+          type: string
+          description: Path of the page the challenge appeared on. Query string excluded.
+    BrowserCaptchaChallengeResultEvent:
+      type: object
+      description: >
+        A visible captcha challenge reached a terminal outcome. Emitted once
+        per challenge. Wait for this event, rather than a task result, to
+        determine the overall challenge outcome. `captcha_solve_started` and
+        `captcha_solve_result` describe individual solver tasks and may occur
+        multiple times within one challenge.
+      required: [ts, type, category, source, data]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: captcha_challenge_result
+        category:
+          type: string
+          const: captcha
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeResultEventData"
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
@@ -3134,6 +6181,7 @@ components:
         - $ref: "#/components/schemas/BrowserNetworkResponseEvent"
         - $ref: "#/components/schemas/BrowserNetworkLoadingFailedEvent"
         - $ref: "#/components/schemas/BrowserNetworkIdleEvent"
+        - $ref: "#/components/schemas/BrowserProxyErrorEvent"
         - $ref: "#/components/schemas/BrowserPageNavigationEvent"
         - $ref: "#/components/schemas/BrowserPageDomContentLoadedEvent"
         - $ref: "#/components/schemas/BrowserPageLoadEvent"
@@ -3152,11 +6200,15 @@ components:
         - $ref: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
         - $ref: "#/components/schemas/BrowserMonitorInitFailedEvent"
         - $ref: "#/components/schemas/BrowserApiCallEvent"
+        - $ref: "#/components/schemas/BrowserPlatformApiCallEvent"
+        - $ref: "#/components/schemas/BrowserCdpCommandEvent"
         - $ref: "#/components/schemas/BrowserCdpConnectEvent"
         - $ref: "#/components/schemas/BrowserCdpDisconnectEvent"
         - $ref: "#/components/schemas/BrowserLiveViewConnectEvent"
         - $ref: "#/components/schemas/BrowserLiveViewDisconnectEvent"
+        - $ref: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
         - $ref: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+        - $ref: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
         - $ref: "#/components/schemas/BrowserSystemOomKillEvent"
         - $ref: "#/components/schemas/BrowserServiceCrashedEvent"
       discriminator:
@@ -3168,6 +6220,7 @@ components:
           network_response: "#/components/schemas/BrowserNetworkResponseEvent"
           network_loading_failed: "#/components/schemas/BrowserNetworkLoadingFailedEvent"
           network_idle: "#/components/schemas/BrowserNetworkIdleEvent"
+          proxy_error: "#/components/schemas/BrowserProxyErrorEvent"
           page_navigation: "#/components/schemas/BrowserPageNavigationEvent"
           page_dom_content_loaded: "#/components/schemas/BrowserPageDomContentLoadedEvent"
           page_load: "#/components/schemas/BrowserPageLoadEvent"
@@ -3186,11 +6239,15 @@ components:
           monitor_reconnect_failed: "#/components/schemas/BrowserMonitorReconnectFailedEvent"
           monitor_init_failed: "#/components/schemas/BrowserMonitorInitFailedEvent"
           api_call: "#/components/schemas/BrowserApiCallEvent"
+          platform_api_call: "#/components/schemas/BrowserPlatformApiCallEvent"
+          cdp_command: "#/components/schemas/BrowserCdpCommandEvent"
           cdp_connect: "#/components/schemas/BrowserCdpConnectEvent"
           cdp_disconnect: "#/components/schemas/BrowserCdpDisconnectEvent"
           live_view_connect: "#/components/schemas/BrowserLiveViewConnectEvent"
           live_view_disconnect: "#/components/schemas/BrowserLiveViewDisconnectEvent"
+          captcha_solve_started: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
           captcha_solve_result: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+          captcha_challenge_result: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
           system_oom_kill: "#/components/schemas/BrowserSystemOomKillEvent"
           service_crashed: "#/components/schemas/BrowserServiceCrashedEvent"
     TelemetryState:
@@ -3209,6 +6266,17 @@ components:
             Process-monotonic sequence number of the last published event.
             Does not reset across configuration changes.
           minimum: 0
+        dropped_events:
+          type: integer
+          format: int64
+          description: >-
+            Cumulative number of buffered events a consumer missed because it
+            fell behind the ring, summed across consumers and configuration
+            changes. A rising count means the stream is being produced faster
+            than it is being read; a steady one means nothing has been lost.
+            Always present on images that report it; absent on an image
+            predating the field, which is not the same as zero.
+          minimum: 0
         applied_at:
           type: string
           format: date-time
@@ -3216,6 +6284,129 @@ components:
             Wall-clock time at which the current configuration was applied.
             Omitted when telemetry is not configured.
       additionalProperties: false
+    WebMCPToolAnnotations:
+      type: object
+      description: Page-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
+      additionalProperties: false
+      required: [read_only, untrusted_content, consequential, autosubmit]
+      properties:
+        read_only:
+          type: boolean
+        untrusted_content:
+          type: boolean
+        consequential:
+          type: boolean
+        autosubmit:
+          type: boolean
+    WebMCPToolFrame:
+      type: object
+      additionalProperties: false
+      required: [frame_id, url]
+      properties:
+        frame_id:
+          type: integer
+          minimum: 1
+          description: Monotonically increasing identifier for this embedded frame during the current browser process.
+        url:
+          type: string
+          description: Current frame URL with the fragment omitted.
+    WebMCPToolSource:
+      type: object
+      additionalProperties: false
+      required: [window_id, tab_id, page_title, page_url, frame]
+      properties:
+        window_id:
+          type: integer
+          minimum: 1
+          description: Monotonically increasing identifier for the browser window during the current browser process.
+        tab_id:
+          type: integer
+          minimum: 1
+          description: Monotonically increasing identifier for the tab during the current browser process.
+        page_title:
+          type: string
+          description: Current title of the top-level page.
+        page_url:
+          type: string
+          description: Current URL of the top-level page with the fragment omitted.
+        frame:
+          allOf:
+            - $ref: "#/components/schemas/WebMCPToolFrame"
+          nullable: true
+          description: Embedded frame that registered the tool, or null when the top-level page registered it.
+    WebMCPTool:
+      type: object
+      additionalProperties: false
+      required: [tool_ref, name, description, input_schema, source]
+      properties:
+        tool_ref:
+          type: string
+          description: Opaque reference for invoking this exact live registration. It becomes invalid when its document or browser process is replaced.
+        name:
+          type: string
+        description:
+          type: string
+        input_schema:
+          type: object
+          additionalProperties: true
+        annotations:
+          $ref: "#/components/schemas/WebMCPToolAnnotations"
+        source:
+          $ref: "#/components/schemas/WebMCPToolSource"
+    WebMCPToolsResponse:
+      type: object
+      additionalProperties: false
+      required: [tools]
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/WebMCPTool"
+    WebMCPInvokeRequest:
+      type: object
+      additionalProperties: false
+      required: [tool_ref, input]
+      properties:
+        tool_ref:
+          type: string
+          minLength: 1
+          maxLength: 128
+        input:
+          type: object
+          description: Tool input, limited to 1 MiB after JSON serialization.
+          additionalProperties: true
+        timeout_sec:
+          type: integer
+          minimum: 1
+          maximum: 120
+          default: 60
+    WebMCPInvocationResult:
+      type: object
+      additionalProperties: false
+      required: [invocation_id, status]
+      properties:
+        invocation_id:
+          type: string
+        status:
+          type: string
+          enum: [completed, canceled, error, awaiting_submission]
+          description: awaiting_submission means a non-autosubmit declarative form was populated but not submitted.
+        output:
+          description: Untrusted page-provided output. Callers must treat it as potentially malicious input.
+        error_text:
+          type: string
+    WebMCPInvocationFailure:
+      type: object
+      additionalProperties: false
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [outcome_unknown]
+        message:
+          type: string
+        invocation_id:
+          type: string
     StartRecordingRequest:
       type: object
       properties:

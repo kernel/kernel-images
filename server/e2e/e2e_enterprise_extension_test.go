@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
@@ -82,9 +83,16 @@ func runEnterpriseExtensionTest(t *testing.T, image string) {
 
 	downloadLogBaseline := extensionDownloadLogSnapshot(t, ctx, c)
 
-	// Upload the enterprise test extension (with update.xml and .crx)
+	// Upload the enterprise test extension through the new endpoint and verify its policy
+	// requirement selects the restart path.
+	versionURL := "http" + strings.TrimPrefix(c.CDPURL(), "ws") + "json/version"
+	browserWebSocketBefore, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL before enterprise extension upload")
 	t.Log("[test] uploading enterprise test extension (with update.xml and .crx)")
 	uploadEnterpriseTestExtension(t, ctx, c)
+	browserWebSocketAfter, err := cdpclient.BrowserWebSocketURL(ctx, versionURL)
+	require.NoError(t, err, "get browser WebSocket URL after enterprise extension upload")
+	require.NotEqual(t, browserWebSocketBefore, browserWebSocketAfter, "enterprise extension did not restart Chromium")
 
 	// Check what files were extracted on the server
 	t.Log("[test] checking extracted extension files on server")
@@ -203,9 +211,9 @@ func uploadEnterpriseTestExtension(t *testing.T, ctx context.Context, c *TestCon
 	require.NoError(t, err)
 
 	start := time.Now()
-	rsp, err := client.UploadExtensionsAndRestartWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
+	rsp, err := client.UploadExtensionsWithBodyWithResponse(ctx, w.FormDataContentType(), &body)
 	elapsed := time.Since(start)
-	require.NoError(t, err, "uploadExtensionsAndRestart request error")
+	require.NoError(t, err, "uploadExtensions request error")
 
 	// The key assertion: this should return 201
 	require.Equal(t, http.StatusCreated, rsp.StatusCode(),

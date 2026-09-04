@@ -5,7 +5,11 @@ on:
 
 jobs:
   docker:
-    runs-on: ubuntu-latest
+    # Fork PRs get no secrets and now must not reach the self-hosted pool
+    # either: skipping here (rather than failing at registry login, as
+    # before) also skips the dependent e2e job via its needs chain.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux]
     permissions:
       contents: read
     steps:
@@ -17,6 +21,28 @@ jobs:
         shell: bash
         run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
+      # The docker build context must match the git tree exactly, including
+      # file modes: BuildKit's COPY cache key covers permission bits, and the
+      # runners' persistent _work checkouts carry modes frozen from whatever
+      # umask was active when each file was first written, which differs per
+      # runner and busts the layer cache on the shared builder.
+      - name: Reset workspace to a pristine build context
+        run: |
+          git checkout -- .
+          git clean -xdf
+          find . -path ./.git -prune -o -type f -perm -u+x -print0 | xargs -0 -r chmod 755
+          find . -path ./.git -prune -o -type f ! -perm -u+x -print0 | xargs -0 -r chmod 644
+
+      - name: Create isolated Docker config
+        run: |
+          DOCKER_CONFIG="$(mktemp -d "${RUNNER_TEMP}/docker-config.XXXXXX")"
+          echo "DOCKER_CONFIG=${DOCKER_CONFIG}" >> "$GITHUB_ENV"
+          # BUILDX_CONFIG defaults to $DOCKER_CONFIG/buildx; without this the
+          # isolated DOCKER_CONFIG above would hide the shared builder. The
+          # buildx-ci path (not the default ~/.docker/buildx) avoids the tree
+          # that root-run CI from other repos clobbers to root-owned.
+          echo "BUILDX_CONFIG=${HOME}/.docker/buildx-ci" >> "$GITHUB_ENV"
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
@@ -25,13 +51,16 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          name: deft-shared
+          cleanup: false
+          buildkitd-config: .github/buildkitd.toml
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
+          builder: deft-shared
           context: .
           file: images/chromium-headless/image/Dockerfile
           push: true
           tags: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

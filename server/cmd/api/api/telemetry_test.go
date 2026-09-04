@@ -12,6 +12,7 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,7 +29,8 @@ func allCategoriesDisabled() *oapi.BrowserTelemetryCategoriesConfig {
 		Network:     off(),
 		Page:        off(),
 		Interaction: off(),
-		Control:     off(),
+		Control:     &oapi.BrowserTelemetryControlConfig{Enabled: lo.ToPtr(false)},
+		Platform:    off(),
 		Connection:  off(),
 		System:      off(),
 		Screenshot:  off(),
@@ -206,7 +208,7 @@ func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
 	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
 		Body: &oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Control: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+				Control: &oapi.BrowserTelemetryControlConfig{Enabled: &tr},
 			},
 		},
 	})
@@ -216,7 +218,7 @@ func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
 	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
 		Body: &oapi.BrowserTelemetryConfig{
 			Browser: &oapi.BrowserTelemetryCategoriesConfig{
-				Control: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+				Control: &oapi.BrowserTelemetryControlConfig{Enabled: &f},
 			},
 		},
 	})
@@ -228,6 +230,47 @@ func TestTelemetryHandlersDriveMiddlewareToggle(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.False(t, TelemetryMiddlewareEnabled(), "all-disabled PUT should leave middleware off")
+}
+
+// The middleware is the sole producer of platform_api_call as well as api_call,
+// so a reader who migrates from control to platform must still get events.
+func TestTelemetryHandlersEnableMiddlewareForPlatformOnly(t *testing.T) {
+	ctx := context.Background()
+	t.Cleanup(DisableTelemetryMiddleware)
+
+	svc := newTestService(t, newMockRecordManager())
+
+	DisableTelemetryMiddleware()
+	tr, f := true, false
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Platform: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, TelemetryMiddlewareEnabled(), "PUT with platform=true should enable middleware")
+
+	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Control: &oapi.BrowserTelemetryControlConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, TelemetryMiddlewareEnabled(), "dropping control should leave the middleware on for platform")
+
+	_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Platform: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+	assert.False(t, TelemetryMiddlewareEnabled(), "dropping platform too should disable middleware")
 }
 
 func TestGetTelemetry(t *testing.T) {
@@ -251,6 +294,10 @@ func TestGetTelemetry(t *testing.T) {
 		r200, ok := resp.(oapi.GetTelemetry200JSONResponse)
 		require.True(t, ok)
 		assert.Equal(t, started.Config, r200.Config)
+		// Optional in the schema so an older image's response still validates,
+		// but always set here: absent would mean "not reported", not zero.
+		require.NotNil(t, r200.DroppedEvents)
+		assert.Zero(t, *r200.DroppedEvents)
 	})
 }
 
@@ -581,4 +628,79 @@ func (e *blockingStopExporter) Running() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.running
+}
+
+func TestCdpExcludedMethodsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	excluded := []oapi.BrowserCdpCommandMethod{"Input.dispatchMouseEvent", "Page.captureScreenshot"}
+	withExclusions := func() *oapi.BrowserTelemetryConfig {
+		return &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Control: &oapi.BrowserTelemetryControlConfig{
+					Enabled: lo.ToPtr(true),
+					Cdp:     &oapi.BrowserTelemetryCdpControlConfig{ExcludedMethods: &excluded},
+				},
+			},
+		}
+	}
+
+	t.Run("put stores them and the session exposes them to the proxy", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withExclusions()})
+		require.NoError(t, err)
+		created := resp.(oapi.PutTelemetry201JSONResponse)
+		require.NotNil(t, created.Config.Browser.Control.Cdp)
+		assert.Equal(t, excluded, *created.Config.Browser.Control.Cdp.ExcludedMethods)
+
+		// The proxy reads this set per command, so it has to reflect the config.
+		assert.Equal(t, map[string]struct{}{
+			"Input.dispatchMouseEvent": {},
+			"Page.captureScreenshot":   {},
+		}, svc.telemetrySession.ExcludedCdpMethods())
+	})
+
+	t.Run("patch leaves an omitted list alone and an empty list clears it", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withExclusions()})
+		require.NoError(t, err)
+
+		// Category toggle only: the exclusions are not mentioned, so they stand.
+		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				System: &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(true)},
+			},
+		}})
+		require.NoError(t, err)
+		assert.Len(t, svc.telemetrySession.ExcludedCdpMethods(), 2)
+
+		empty := []oapi.BrowserCdpCommandMethod{}
+		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Control: &oapi.BrowserTelemetryControlConfig{
+					Cdp: &oapi.BrowserTelemetryCdpControlConfig{ExcludedMethods: &empty},
+				},
+			},
+		}})
+		require.NoError(t, err)
+		assert.Empty(t, svc.telemetrySession.ExcludedCdpMethods())
+	})
+}
+
+// dropped_events was added to TelemetryState after it shipped, so it stays
+// optional: a response from an image that predates it must still decode, and
+// an old client's control block must still be a valid request.
+func TestTelemetryStateStaysCompatibleWithOlderImages(t *testing.T) {
+	var state oapi.TelemetryState
+	err := json.Unmarshal([]byte(`{"config":{},"seq":42}`), &state)
+	require.NoError(t, err)
+	assert.Nil(t, state.DroppedEvents, "absent means not reported, which is not zero")
+	assert.EqualValues(t, 42, state.Seq)
+
+	// A client that predates control.cdp sends only enabled, and still parses.
+	var cfg oapi.BrowserTelemetryConfig
+	err = json.Unmarshal([]byte(`{"browser":{"control":{"enabled":true}}}`), &cfg)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Browser.Control)
+	assert.True(t, *cfg.Browser.Control.Enabled)
+	assert.Nil(t, cfg.Browser.Control.Cdp)
 }

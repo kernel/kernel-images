@@ -108,8 +108,12 @@ func main() {
 	}
 
 	// Construct events pipeline
+	// Sized for the control stream's event rate rather than the operational
+	// signals it started with: browser-control CDP commands are one event per
+	// keystroke and two per click, so a form-filling session produces thousands
+	// where a session used to produce tens.
 	eventStream, err := events.NewEventStream(events.EventStreamConfig{
-		RingCapacity: 1024,
+		RingCapacity: 8192,
 	})
 	if err != nil {
 		slogger.Error("failed to create event stream", "err", err)
@@ -246,10 +250,14 @@ func main() {
 
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
+	r.Use(api.WebMCPRequestSizeMiddleware)
 	// Enforce additionalProperties: false on POST /repl.
 	r.Use(api.StrictBrowserReplBodyMiddleware)
-	strictHandler := oapi.NewStrictHandler(apiService, []oapi.StrictMiddlewareFunc{
+	strictHandler := oapi.NewStrictHandlerWithOptions(apiService, []oapi.StrictMiddlewareFunc{
 		api.TelemetryStrictMiddleware(),
+	}, oapi.StrictHTTPServerOptions{
+		RequestErrorHandlerFunc:  api.StrictRequestErrorHandler,
+		ResponseErrorHandlerFunc: api.StrictResponseErrorHandler,
 	})
 	oapi.HandlerFromMux(strictHandler, r)
 
@@ -323,8 +331,11 @@ func main() {
 	rDevtools.Get("/json/", jsonTargetHandler)
 	rDevtools.Get("/json/list", jsonTargetHandler)
 	rDevtools.Get("/json/list/", jsonTargetHandler)
+	// Checked once per forwarded client frame, so it reads the session's
+	// lock-free view rather than taking the telemetry lock.
+	controlEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Control) }
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, wsRegistry).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, telemetrySession.ExcludedCdpMethods, wsRegistry).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{
@@ -499,11 +510,10 @@ func mustFFmpeg() {
 func appliedS2Stream(cfg *config.Config) (string, bool) {
 	stream := cfg.S2Stream
 
-	// This process starts before the wrapper enters the wait, and entering it
-	// clears the applied marker and then writes the ready file. So a marker
-	// without a ready file predates this boot's wait: the wrapper is about to
-	// drop it and hold for a new handoff, and binding to it would pin the sinks
-	// to an identity nothing is going to use.
+	// The wrapper clears stale identity state and writes the ready file before
+	// starting this process. Its presence distinguishes a fork-wait boot; once
+	// the fork is applied, the marker and payload survive API restarts and must
+	// take precedence over the seed identity in the boot environment.
 	if _, err := os.Stat(forkidentity.ReadyFile); err != nil {
 		return stream, false
 	}

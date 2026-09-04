@@ -20,7 +20,7 @@ volume_name="${NAME}-flags"
 # RUN_AS_ROOT defaults to true in unikernel (for now, until we figure it out)
 RUN_AS_ROOT="${RUN_AS_ROOT:-true}"
 
-chromium_flags_default="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*"
+chromium_flags_default="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=* --enable-features=WebMCPTesting,DevToolsWebMCPSupport"
 if [[ "$RUN_AS_ROOT" == "true" ]]; then
   chromium_flags_default="$chromium_flags_default --no-sandbox --no-zygote"
 fi

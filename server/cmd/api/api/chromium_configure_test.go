@@ -5,9 +5,12 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,30 +30,95 @@ func TestPoliciesContentNonEmpty(t *testing.T) {
 	require.True(t, policiesContentNonEmpty(&real))
 }
 
-func TestChromiumConfigureActionableFlags(t *testing.T) {
-	emptyFlags := `{"flags":[]}`
-	realFlags := `{"flags":["--kiosk"]}`
+func TestChromiumConfigureModeFor(t *testing.T) {
+	stringPtr := func(value string) *string { return &value }
 
-	st := &chromiumConfigureState{chromiumFlagsJSON: &emptyFlags}
-	require.Equal(t, 0, cfgActionables(st))
-	require.False(t, chromiumNeedsStopCycle(st))
+	tests := []struct {
+		name     string
+		state    chromiumConfigureState
+		strategy oapi.ChromiumConfigureParamsExtensionLoadStrategy
+		want     chromiumConfigureMode
+	}{
+		{name: "no restart fields", strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "display only", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`)}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "start URL only", state: chromiumConfigureState{startURLRaw: stringPtr("https://example.com")}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "empty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{}`)}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "nonempty policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{"QuicAllowed":false}`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "invalid policies", state: chromiumConfigureState{chromePoliciesJSON: stringPtr(`{bad-json`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "empty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":[]}`)}, strategy: oapi.Restart, want: chromiumConfigureModeLive},
+		{name: "nonempty flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{"flags":["--kiosk"]}`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "invalid flags", state: chromiumConfigureState{chromiumFlagsJSON: stringPtr(`{bad-json`)}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "profile", state: chromiumConfigureState{hasProfile: true}, strategy: oapi.PreferCdp, want: chromiumConfigureModeRestart},
+		{name: "extensions default restart", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.Restart, want: chromiumConfigureModeRestart},
+		{name: "extensions prefer CDP", state: chromiumConfigureState{extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModePreferCDPExtensions},
+		{name: "display and extensions prefer CDP", state: chromiumConfigureState{displayJSON: stringPtr(`{"width":1280}`), extItems: []extensionZipItem{{name: "test"}}}, strategy: oapi.PreferCdp, want: chromiumConfigureModePreferCDPExtensions},
+	}
 
-	st = &chromiumConfigureState{chromiumFlagsJSON: &realFlags}
-	require.Equal(t, 1, cfgActionables(st))
-	require.True(t, chromiumNeedsStopCycle(st))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, chromiumConfigureModeFor(&tt.state, tt.strategy))
+		})
+	}
 }
 
-func TestChromiumConfigureActionablePolicies(t *testing.T) {
+func TestChromiumConfigureExtensionLoadStrategy(t *testing.T) {
+	strategy, msg := chromiumConfigureExtensionLoadStrategy(oapi.ChromiumConfigureParams{})
+	require.Empty(t, msg)
+	require.Equal(t, oapi.Restart, strategy)
+
+	preferCDP := oapi.PreferCdp
+	strategy, msg = chromiumConfigureExtensionLoadStrategy(oapi.ChromiumConfigureParams{ExtensionLoadStrategy: &preferCDP})
+	require.Empty(t, msg)
+	require.Equal(t, oapi.PreferCdp, strategy)
+
+	invalid := oapi.ChromiumConfigureParamsExtensionLoadStrategy("invalid")
+	_, msg = chromiumConfigureExtensionLoadStrategy(oapi.ChromiumConfigureParams{ExtensionLoadStrategy: &invalid})
+	require.Equal(t, "extension_load_strategy must be restart or prefer_cdp", msg)
+}
+
+func TestChromiumConfigureGeneratedClientQuery(t *testing.T) {
+	preferCDP := oapi.PreferCdp
+	req, err := oapi.NewChromiumConfigureRequestWithBody(
+		"http://example.test",
+		&oapi.ChromiumConfigureParams{ExtensionLoadStrategy: &preferCDP},
+		"multipart/form-data; boundary=test",
+		strings.NewReader("--test--"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, "prefer_cdp", req.URL.Query().Get("extension_load_strategy"))
+
+	req, err = oapi.NewChromiumConfigureRequestWithBody(
+		"http://example.test",
+		nil,
+		"multipart/form-data; boundary=test",
+		strings.NewReader("--test--"),
+	)
+	require.NoError(t, err)
+	require.Empty(t, req.URL.RawQuery)
+}
+
+func TestChromiumConfigureActionables(t *testing.T) {
+	emptyFlags := `{"flags":[]}`
+	realFlags := `{"flags":["--kiosk"]}`
 	emptyPolicies := `{}`
 	realPolicies := `{"QuicAllowed":false}`
 
-	st := &chromiumConfigureState{chromePoliciesJSON: &emptyPolicies}
-	require.Equal(t, 0, cfgActionables(st))
-	require.False(t, chromiumNeedsStopCycle(st))
+	tests := []struct {
+		name  string
+		state chromiumConfigureState
+		want  int
+	}{
+		{name: "empty flags", state: chromiumConfigureState{chromiumFlagsJSON: &emptyFlags}},
+		{name: "nonempty flags", state: chromiumConfigureState{chromiumFlagsJSON: &realFlags}, want: 1},
+		{name: "empty policies", state: chromiumConfigureState{chromePoliciesJSON: &emptyPolicies}},
+		{name: "nonempty policies", state: chromiumConfigureState{chromePoliciesJSON: &realPolicies}, want: 1},
+	}
 
-	st = &chromiumConfigureState{chromePoliciesJSON: &realPolicies}
-	require.Equal(t, 1, cfgActionables(st))
-	require.True(t, chromiumNeedsStopCycle(st))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, cfgActionables(&tt.state))
+		})
+	}
 }
 
 func TestChromiumStartURLSpec(t *testing.T) {
@@ -74,6 +142,24 @@ func TestChromiumStartURLSpec(t *testing.T) {
 	longURL := strings.Repeat("a", maxStartURLLen+1)
 	_, errs = chromiumStartURLSpec(&longURL)
 	require.NotEmpty(t, errs)
+}
+
+func TestStripProfileSessionRestore(t *testing.T) {
+	prepared := t.TempDir()
+	sessions := filepath.Join(prepared, "Default", "Sessions")
+	require.NoError(t, os.MkdirAll(sessions, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(sessions, "Session_123"), []byte("tabs"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(prepared, "Default", "Preferences"), []byte("{}"), 0o644))
+
+	require.NoError(t, stripProfileSessionRestore(prepared))
+
+	_, err := os.Stat(sessions)
+	require.True(t, os.IsNotExist(err))
+	_, err = os.Stat(filepath.Join(prepared, "Default", "Preferences"))
+	require.NoError(t, err)
+
+	// Absent Sessions directory is a no-op, not an error.
+	require.NoError(t, stripProfileSessionRestore(prepared))
 }
 
 func TestChromiumValidateFlags(t *testing.T) {

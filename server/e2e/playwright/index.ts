@@ -410,12 +410,12 @@ class CDPClient {
       console.log('[cdp] clicking Ping Service Worker button');
       const pingButton = this.page.getByRole('button', { name: 'Ping Service Worker' });
       await pingButton.click();
-      await this.page.waitForFunction(() => {
-        const status = document.querySelector('#status');
-        return status?.classList.contains('success') || status?.classList.contains('error');
-      }, undefined, { timeout });
-
-      const statusElement = this.page.locator('#status');
+      // Wait via locators, not waitForFunction: waitForFunction evals its
+      // predicate inside the page, and the popup's MV3 CSP (script-src 'self')
+      // intermittently blocks that eval while the service worker is still
+      // activating, failing the whole verification.
+      const statusElement = this.page.locator('#status.success, #status.error');
+      await statusElement.waitFor({ timeout });
       const statusText = await statusElement.textContent();
       console.log(`[cdp] status text: ${statusText}`);
 

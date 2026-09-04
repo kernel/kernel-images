@@ -133,7 +133,7 @@ func TestWebSocketProxyHandler_ProxiesEcho(t *testing.T) {
 	// seed current upstream to echo server including path/query (bypass tailing)
 	mgr.setCurrent((&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawQuery: u.RawQuery}).String())
 
-	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil)
+	proxy := WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil, nil)
 	proxySrv := httptest.NewServer(proxy)
 	defer proxySrv.Close()
 
@@ -191,7 +191,7 @@ func TestWebSocketProxyHandler_RegistryClosesClientWithGoingAway(t *testing.T) {
 	mgr.setCurrent((&url.URL{Scheme: "ws", Host: u.Host, Path: "/echo"}).String())
 
 	reg := wsdrain.New()
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, reg))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil, reg))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -520,7 +520,7 @@ func TestWebSocketProxyHandler_EmitsConnectAndDisconnect(t *testing.T) {
 	mgr.setCurrent(u.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -664,9 +664,9 @@ func TestResolveDisconnectReason(t *testing.T) {
 
 func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing.T) {
 	// Shorten the resolve wait so the test doesn't pay the production 10s.
-	prev := restartConfirmWait
-	restartConfirmWait = 1 * time.Second
-	defer func() { restartConfirmWait = prev }()
+	prev := getRestartConfirmWait()
+	setRestartConfirmWait(1 * time.Second)
+	defer setRestartConfirmWait(prev)
 
 	// Upstream A: echoes once, then closes (simulates Chromium dying mid-session).
 	upstreamA := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -695,7 +695,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -749,9 +749,9 @@ func TestWebSocketProxyHandler_EmitsUpstreamChangedOnMidStreamRestart(t *testing
 }
 
 func TestWebSocketProxyHandler_KicksClientOffStaleUpstreamOnURLChange(t *testing.T) {
-	prev := restartConfirmWait
-	restartConfirmWait = 500 * time.Millisecond
-	defer func() { restartConfirmWait = prev }()
+	prev := getRestartConfirmWait()
+	setRestartConfirmWait(500 * time.Millisecond)
+	defer setRestartConfirmWait(prev)
 
 	// Upstream stays alive until the proxy closes it from the watcher path.
 	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -779,7 +779,7 @@ func TestWebSocketProxyHandler_KicksClientOffStaleUpstreamOnURLChange(t *testing
 	mgr.setCurrent(urlA.String())
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -831,7 +831,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 	mgr.setCurrent(deadURL)
 
 	rp := &recordingPublisher{}
-	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, nil))
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), rp.publish, controlOn, nil, nil))
 	defer proxySrv.Close()
 
 	pu, _ := url.Parse(proxySrv.URL)
@@ -863,3 +863,6 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 		t.Fatalf("disconnect reason = %q, want %q", disconnect.Reason, oapi.UpstreamError)
 	}
 }
+
+// controlOn is the gate a proxy test needs to see cdp_command events at all.
+func controlOn() bool { return true }

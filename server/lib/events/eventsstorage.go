@@ -19,6 +19,7 @@ type Storage interface {
 // available event in the ring, not the current tail. Delivery is
 // at-least-once; consumers should dedupe by env.Seq.
 type StorageWriter struct {
+	es           *EventStream
 	reader       *Reader
 	storage      Storage
 	log          *slog.Logger
@@ -38,6 +39,7 @@ func NewStorageWriter(es *EventStream, storage Storage, log *slog.Logger) *Stora
 // rebuilt on demand does not replay the ring.
 func NewStorageWriterAfter(es *EventStream, storage Storage, log *slog.Logger, afterSeq uint64) *StorageWriter {
 	return &StorageWriter{
+		es:      es,
 		reader:  es.NewReader(afterSeq),
 		storage: storage,
 		log:     log,
@@ -89,6 +91,7 @@ func (w *StorageWriter) Drain(ctx context.Context) error {
 
 func (w *StorageWriter) processResult(ctx context.Context, res ReadResult) error {
 	if res.Dropped > 0 {
+		w.es.RecordDropped(res.Dropped)
 		w.log.Warn("storage writer: dropped events", "count", res.Dropped)
 		return nil
 	}

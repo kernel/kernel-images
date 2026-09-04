@@ -19,6 +19,18 @@ type telemetryCtxKey struct{}
 
 type telemetryRequestCtx struct {
 	operationID string
+	code        string
+}
+
+// RecordTelemetryCode attaches code submitted with the request to its api_call
+// event, capped like every other captured string. It is a no-op when telemetry
+// is off or the request is not one the middleware tracks.
+func RecordTelemetryCode(ctx context.Context, code string) {
+	tc, ok := ctx.Value(telemetryCtxKey{}).(*telemetryRequestCtx)
+	if !ok {
+		return
+	}
+	tc.code = events.TruncateCaptured(code, events.CapturedFieldCap)
 }
 
 // Process-wide toggle for the api_call middleware. Flipped by
@@ -35,9 +47,12 @@ func DisableTelemetryMiddleware() { telemetryMiddlewareEnabled.Store(false) }
 // TelemetryMiddlewareEnabled reports the current state.
 func TelemetryMiddlewareEnabled() bool { return telemetryMiddlewareEnabled.Load() }
 
-// TelemetryHTTPMiddleware emits a BrowserApiCallEvent per documented operation,
-// capturing the final status and wall-clock duration. publish is wired to
-// TelemetrySession.Publish; the middleware ignores the returns.
+// TelemetryHTTPMiddleware emits one event per documented operation, capturing
+// the final status and wall-clock duration. Operations that drive the browser
+// emit api_call under control; operations that manage the VM emit
+// platform_api_call under platform, per the operation's x-telemetry-category in
+// openapi.yaml. publish is wired to TelemetrySession.Publish; the middleware
+// ignores the returns.
 func TelemetryHTTPMiddleware(publish func(events.Event) (events.Envelope, bool)) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -55,21 +70,95 @@ func TelemetryHTTPMiddleware(publish func(events.Event) (events.Envelope, bool))
 			if tc.operationID == "" {
 				return
 			}
-			data, _ := json.Marshal(oapi.BrowserApiCallEventData{
-				RequestId:   chiMiddleware.GetReqID(ctx),
-				OperationId: tc.operationID,
-				Status:      ww.Status(),
-				DurationMs:  float32(time.Since(start).Microseconds()) / 1000.0,
-			})
+			eventType, category := apiCallEvent(tc.operationID)
+			data := apiCallEventData(category, tc, chiMiddleware.GetReqID(ctx), ww.Status(), time.Since(start))
 			publish(events.Event{
 				Ts:       time.Now().UnixMicro(),
-				Type:     "api_call",
-				Category: events.Control,
+				Type:     eventType,
+				Category: category,
 				Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
 				Data:     data,
 			})
 		})
 	}
+}
+
+// apiCallEventData marshals the payload for the resolved event type. The two
+// types have separate schemas and only api_call declares code, so a platform
+// call marshals the metadata-only type rather than a control payload that
+// happens to have the field unset.
+func apiCallEventData(category oapi.TelemetryEventCategory, tc *telemetryRequestCtx, requestID string, status int, duration time.Duration) []byte {
+	durationMs := float32(duration.Microseconds()) / 1000.0
+	if category != events.Control {
+		data, _ := json.Marshal(oapi.BrowserPlatformApiCallEventData{
+			RequestId:   requestID,
+			OperationId: tc.operationID,
+			Status:      status,
+			DurationMs:  durationMs,
+		})
+		return data
+	}
+	eventData := oapi.BrowserApiCallEventData{
+		RequestId:   requestID,
+		OperationId: tc.operationID,
+		Status:      status,
+		DurationMs:  durationMs,
+	}
+	if tc.code != "" {
+		eventData.Code = &tc.code
+	}
+	data, _ := json.Marshal(eventData)
+	return data
+}
+
+// apiCallEvent resolves the event type and category for an operation. An
+// operation missing from the generated map falls back to platform so an
+// unclassified route cannot dilute the control stream.
+func apiCallEvent(operationID string) (string, oapi.TelemetryEventCategory) {
+	if cat, ok := events.CategoryForOperation(operationID); ok && cat == events.Control {
+		return "api_call", events.Control
+	}
+	return "platform_api_call", events.Platform
+}
+
+// WebMCPRequestSizeMiddleware bounds invoke bodies before the generated JSON
+// decoder materializes them. The allowance above the input limit covers the
+// request envelope while keeping memory use bounded.
+func WebMCPRequestSizeMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/webmcp/invoke" {
+			r.Body = http.MaxBytesReader(w, r.Body, maxWebMCPRequestBytes)
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// StrictRequestErrorHandler preserves the existing plaintext contract outside
+// WebMCP, whose documented errors are JSON.
+func StrictRequestErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	if isWebMCPRequest(r) {
+		writeStrictError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadRequest)
+}
+
+func StrictResponseErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	if isWebMCPRequest(r) {
+		writeStrictError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+func isWebMCPRequest(r *http.Request) bool {
+	return r.URL.Path == "/webmcp/tools" || r.URL.Path == "/webmcp/invoke"
+}
+
+func writeStrictError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
 }
 
 // TelemetryStrictMiddleware records the matched OpenAPI operationId onto the

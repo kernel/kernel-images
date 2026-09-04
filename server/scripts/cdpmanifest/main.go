@@ -1,0 +1,217 @@
+// Command cdpmanifest regenerates the pinned CDP argument snapshot that
+// TestEveryCanonicalArgumentHasADecision checks the sanitizers against.
+//
+// The snapshot is what makes that check meaningful: comparing the sanitizers
+// against this repo's own OpenAPI enum only compares two copies of the same
+// list, and cannot notice a canonical argument nobody handled. The snapshot is
+// derived from the protocol instead, so an argument added upstream shows up as
+// a manifest gap the next time this runs.
+//
+// Usage:
+//
+//	curl -sLo /tmp/browser_protocol.json \
+//	  https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/<commit>/json/browser_protocol.json
+//	go run ./scripts/cdpmanifest -protocol /tmp/browser_protocol.json -commit <commit>
+//
+// It rewrites testdata/cdp_protocol_pinned.json in place. Review the diff: a
+// new argument there is a decision someone has to make in cdp_arguments.yaml.
+package main
+
+import (
+	"encoding/json"
+	"flag"
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+)
+
+// supportedMethods is the inventory the proxy reports. Kept here rather than
+// imported so this script stays a standalone tool; the test asserts the two
+// agree.
+var supportedMethods = []string{
+	"Autofill.trigger",
+	"Browser.cancelDownload",
+	"Browser.close",
+	"Browser.setContentsSize",
+	"Browser.setWindowBounds",
+	"DOM.focus",
+	"DOM.scrollIntoViewIfNeeded",
+	"DOM.setFileInputFiles",
+	"Input.cancelDragging",
+	"Input.dispatchDragEvent",
+	"Input.dispatchKeyEvent",
+	"Input.dispatchMouseEvent",
+	"Input.dispatchTouchEvent",
+	"Input.emulateTouchFromMouseEvent",
+	"Input.imeSetComposition",
+	"Input.insertText",
+	"Input.synthesizePinchGesture",
+	"Input.synthesizeScrollGesture",
+	"Input.synthesizeTapGesture",
+	"Page.bringToFront",
+	"Page.captureScreenshot",
+	"Page.captureSnapshot",
+	"Page.close",
+	"Page.handleJavaScriptDialog",
+	"Page.navigate",
+	"Page.navigateToHistoryEntry",
+	"Page.printToPDF",
+	"Page.reload",
+	"Page.setWebLifecycleState",
+	"Page.startScreencast",
+	"Page.stopLoading",
+	"Page.stopScreencast",
+	"Target.activateTarget",
+	"Target.closeTarget",
+	"Target.createBrowserContext",
+	"Target.createTarget",
+	"Target.disposeBrowserContext",
+	"Target.openDevTools",
+}
+
+type protocol struct {
+	Domains []struct {
+		Domain   string `json:"domain"`
+		Commands []struct {
+			Name       string     `json:"name"`
+			Parameters []property `json:"parameters"`
+		} `json:"commands"`
+		Types []struct {
+			ID         string     `json:"id"`
+			Type       string     `json:"type"`
+			Properties []property `json:"properties"`
+		} `json:"types"`
+	} `json:"domains"`
+}
+
+type property struct {
+	Name     string    `json:"name"`
+	Type     string    `json:"type"`
+	Ref      string    `json:"$ref"`
+	Optional bool      `json:"optional"`
+	Items    *property `json:"items"`
+}
+
+// Snapshot is the checked-in subset: every argument of every supported
+// command, including the fields of the object types they carry.
+type Snapshot struct {
+	Comment   string              `json:"_comment"`
+	Commit    string              `json:"commit"`
+	Permalink string              `json:"permalink"`
+	Commands  map[string][]string `json:"commands"`
+}
+
+func main() {
+	protocolPath := flag.String("protocol", "", "path to the pinned browser_protocol.json")
+	commit := flag.String("commit", "", "the devtools-protocol commit it came from")
+	out := flag.String("out", "lib/devtoolsproxy/testdata/cdp_protocol_pinned.json", "snapshot to rewrite")
+	flag.Parse()
+	if *protocolPath == "" || *commit == "" {
+		fmt.Fprintln(os.Stderr, "both -protocol and -commit are required")
+		os.Exit(2)
+	}
+
+	raw, err := os.ReadFile(*protocolPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "read protocol:", err)
+		os.Exit(1)
+	}
+	var proto protocol
+	if err := json.Unmarshal(raw, &proto); err != nil {
+		fmt.Fprintln(os.Stderr, "parse protocol:", err)
+		os.Exit(1)
+	}
+
+	// Index object types so an argument that carries one expands into its
+	// fields: a touch point's pressure is as much an argument as its x.
+	types := map[string][]property{}
+	for _, dom := range proto.Domains {
+		for _, t := range dom.Types {
+			if t.Type == "object" {
+				types[dom.Domain+"."+t.ID] = t.Properties
+				types[t.ID] = t.Properties
+			}
+		}
+	}
+
+	wanted := map[string]bool{}
+	for _, m := range supportedMethods {
+		wanted[m] = true
+	}
+
+	commands := map[string][]string{}
+	for _, dom := range proto.Domains {
+		for _, c := range dom.Commands {
+			method := dom.Domain + "." + c.Name
+			if !wanted[method] {
+				continue
+			}
+			args := []string{}
+			for _, p := range c.Parameters {
+				args = append(args, expand(p, "", types)...)
+			}
+			sort.Strings(args)
+			commands[method] = args
+		}
+	}
+	for _, m := range supportedMethods {
+		if _, ok := commands[m]; !ok {
+			fmt.Fprintf(os.Stderr, "supported method %s is not in the protocol at %s\n", m, *commit)
+			os.Exit(1)
+		}
+	}
+
+	snapshot := Snapshot{
+		Comment: "Generated by scripts/cdpmanifest from the pinned protocol. " +
+			"Every argument here needs a retained or redacted decision in cdp_arguments.yaml.",
+		Commit:    *commit,
+		Permalink: "https://github.com/ChromeDevTools/devtools-protocol/blob/" + *commit + "/json/browser_protocol.json",
+		Commands:  commands,
+	}
+	body, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "encode snapshot:", err)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(*out, append(body, '\n'), 0o644); err != nil {
+		fmt.Fprintln(os.Stderr, "write snapshot:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("wrote %s: %d commands\n", *out, len(commands))
+}
+
+// expand names an argument, and the fields of any object type it carries, as
+// dotted paths: touchPoints[].radiusX, bounds.left, data.items[].mimeType.
+// One level of nesting is enough for every type these commands use.
+func expand(p property, prefix string, types map[string][]property) []string {
+	name := p.Name
+	if prefix != "" {
+		name = prefix + "." + name
+	}
+
+	ref, isArray := p.Ref, false
+	if p.Type == "array" && p.Items != nil {
+		ref, isArray = p.Items.Ref, true
+	}
+	fields, isObject := types[ref]
+	if ref == "" || !isObject {
+		return []string{name}
+	}
+	if isArray {
+		name += "[]"
+	}
+	if strings.Count(name, ".") >= 2 {
+		// Deep enough: the leaf is named, and nothing these commands carry
+		// needs a third level.
+		return []string{name}
+	}
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		out = append(out, expand(f, name, types)...)
+	}
+	if len(out) == 0 {
+		return []string{name}
+	}
+	return out
+}

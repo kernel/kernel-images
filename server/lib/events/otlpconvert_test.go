@@ -74,6 +74,14 @@ func TestToLogRecord_PromotedAttributes(t *testing.T) {
 		assert.Equal(t, "https://x/y", attrs["url.full"].AsString())
 		assert.Equal(t, int64(404), attrs["http.response.status_code"].AsInt64())
 	})
+	t.Run("proxy_error_code", func(t *testing.T) {
+		// proxy_error carries code, promoted as its own attribute.
+		env := Envelope{Seq: 3, Event: Event{Type: "proxy_error", Category: Network,
+			Data: json.RawMessage(`{"code":"provider_unreachable","status":502}`)}}
+		rec := toLogRecord(env)
+		attrs := attrsOf(rec)
+		assert.Equal(t, "provider_unreachable", attrs["kernel.proxy_error_code"].AsString())
+	})
 	t.Run("console", func(t *testing.T) {
 		env := Envelope{Seq: 2, Event: Event{Type: "console_error", Category: Console,
 			Data: json.RawMessage(`{"level":"error","text":"boom"}`)}}
@@ -115,6 +123,7 @@ func TestToLogRecord_Severity(t *testing.T) {
 		"console_error":          log.SeverityError,
 		"service_crashed":        log.SeverityError,
 		"system_oom_kill":        log.SeverityError,
+		"proxy_error":            log.SeverityWarn, // no resource_type → not top-level document
 		"network_loading_failed": log.SeverityWarn,
 		"monitor_init_failed":    log.SeverityWarn,
 		"network_response":       log.SeverityInfo,
@@ -124,6 +133,13 @@ func TestToLogRecord_Severity(t *testing.T) {
 		rec := toLogRecord(Envelope{Event: Event{Type: typ}})
 		assert.Equalf(t, want, rec.Severity(), "severity for %q", typ)
 	}
+
+	// proxy_error severity is resource-type dependent: ERROR only for the
+	// top-level Document, WARN for subresources.
+	doc := toLogRecord(Envelope{Event: Event{Type: "proxy_error", Data: json.RawMessage(`{"resource_type":"Document","code":"destination_blocked","status":502}`)}})
+	assert.Equal(t, log.SeverityError, doc.Severity(), "Document proxy_error should be ERROR")
+	sub := toLogRecord(Envelope{Event: Event{Type: "proxy_error", Data: json.RawMessage(`{"resource_type":"Script","code":"provider_unreachable","status":502}`)}})
+	assert.Equal(t, log.SeverityWarn, sub.Severity(), "subresource proxy_error should be WARN")
 }
 
 func TestToLogRecord_Truncated(t *testing.T) {

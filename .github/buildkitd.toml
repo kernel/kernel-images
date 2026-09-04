@@ -1,0 +1,34 @@
+# GC config for the shared persistent builder (deft-shared) on the
+# self-hosted runners. Mirrors BuildKit's default policy structure with two
+# changes: cache-mount/local-context records survive 7 days of disuse instead
+# of 48h (api-ecs is path-filtered and can idle past 48h), and total builder
+# storage is capped at 150GB with a 100GB free-space floor.
+#
+# The authoritative copy is installed on the host by kernel/infra
+# (roles/dev_shared_buildx_builder); this copy is the fallback if a job ever
+# recreates the builder. Keep the two in sync. BuildKit reads this only at
+# builder creation; applying a change requires `docker buildx rm deft-shared`.
+[worker.oci]
+  gc = true
+
+[[worker.oci.gcpolicy]]
+  filters = ["type==source.local", "type==exec.cachemount", "type==source.git.checkout"]
+  keepDuration = "168h"
+  maxUsedSpace = "40GB"
+
+[[worker.oci.gcpolicy]]
+  keepDuration = "1440h"
+  reservedSpace = "10GB"
+  minFreeSpace = "100GB"
+  maxUsedSpace = "150GB"
+
+[[worker.oci.gcpolicy]]
+  reservedSpace = "10GB"
+  minFreeSpace = "100GB"
+  maxUsedSpace = "150GB"
+
+[[worker.oci.gcpolicy]]
+  all = true
+  reservedSpace = "10GB"
+  minFreeSpace = "100GB"
+  maxUsedSpace = "150GB"

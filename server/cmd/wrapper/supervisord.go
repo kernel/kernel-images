@@ -97,6 +97,17 @@ func tailFile(path string) {
 	for scanner.Scan() {
 		fmt.Printf("[%s] %s\n", label, scanner.Text())
 	}
+	// A clean scan ends when tail closes its stdout, i.e. when it has exited.
+	// A scan that ends on an error (a log line past the 1MB cap, say) leaves
+	// tail running, so kill it rather than block here forever.
+	//
+	// Either way we have to collect it: the wrapper is pid 1 in both the
+	// container and the unikernel, so a tail nobody waits on stays a zombie
+	// for the life of the instance.
+	if scanner.Err() != nil {
+		_ = cmd.Process.Kill()
+	}
+	_ = cmd.Wait()
 }
 
 func runStream(label, name string, args ...string) error {

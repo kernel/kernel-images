@@ -2,12 +2,91 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestArmForkIdentityWaitClearsStaleState(t *testing.T) {
+	dir := t.TempDir()
+	oldPayloadFile := forkidentity.PayloadFile
+	oldAppliedFile := forkidentity.AppliedFile
+	oldReadyFile := forkidentity.ReadyFile
+	forkidentity.PayloadFile = filepath.Join(dir, "fork-identity.json")
+	forkidentity.AppliedFile = filepath.Join(dir, "fork-identity-applied")
+	forkidentity.ReadyFile = filepath.Join(dir, "fork-identity-ready")
+	t.Cleanup(func() {
+		forkidentity.PayloadFile = oldPayloadFile
+		forkidentity.AppliedFile = oldAppliedFile
+		forkidentity.ReadyFile = oldReadyFile
+	})
+
+	require.NoError(t, os.WriteFile(forkidentity.PayloadFile, []byte("stale"), 0o600))
+	require.NoError(t, os.WriteFile(forkidentity.AppliedFile, []byte("stale"), 0o644))
+
+	armForkIdentityWait(true)
+
+	_, err := os.Stat(forkidentity.PayloadFile)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	_, err = os.Stat(forkidentity.AppliedFile)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	ready, err := os.ReadFile(forkidentity.ReadyFile)
+	require.NoError(t, err)
+	assert.Equal(t, "waiting\n", string(ready))
+}
+
+func TestForkIdentityAppliedMarkerRequiresEveryReadinessProbe(t *testing.T) {
+	dir := t.TempDir()
+	oldAppliedFile := forkidentity.AppliedFile
+	forkidentity.AppliedFile = filepath.Join(dir, "fork-identity-applied")
+	t.Cleanup(func() { forkidentity.AppliedFile = oldAppliedFile })
+
+	probeNames := []string{"cdp", "chromedriver", "envoy"}
+	for _, failedProbe := range probeNames {
+		t.Run(failedProbe, func(t *testing.T) {
+			probes := make([]probe, 0, len(probeNames))
+			for _, name := range probeNames {
+				ready := name != failedProbe
+				probes = append(probes, probe{name: name, fn: func() bool { return ready }})
+			}
+
+			durations, allReady := waitProbesReady(time.Now(), probes, 50*time.Millisecond)
+			require.False(t, allReady)
+			assert.NotContains(t, durations, failedProbe)
+			for _, name := range probeNames {
+				if name != failedProbe {
+					assert.Contains(t, durations, name)
+				}
+			}
+			require.Error(t, writeForkIdentityAppliedMarker("browser-1", allReady))
+			_, err := os.Stat(forkidentity.AppliedFile)
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+}
+
+func TestForkIdentityAppliedMarkerWrittenAfterReadiness(t *testing.T) {
+	dir := t.TempDir()
+	oldAppliedFile := forkidentity.AppliedFile
+	forkidentity.AppliedFile = filepath.Join(dir, "fork-identity-applied")
+	t.Cleanup(func() { forkidentity.AppliedFile = oldAppliedFile })
+
+	_, allReady := waitProbesReady(time.Now(), []probe{
+		{name: "cdp", fn: func() bool { return true }},
+		{name: "chromedriver", fn: func() bool { return true }},
+		{name: "envoy", fn: func() bool { return true }},
+	}, time.Second)
+	require.True(t, allReady)
+	require.NoError(t, writeForkIdentityAppliedMarker("browser-1", allReady))
+
+	applied, err := os.ReadFile(forkidentity.AppliedFile)
+	require.NoError(t, err)
+	assert.Equal(t, "browser-1\n", string(applied))
+}
 
 func TestApplyForkIdentityPayloadSetsAndClearsEnv(t *testing.T) {
 	t.Setenv("METRO_NAME", "old-metro")
