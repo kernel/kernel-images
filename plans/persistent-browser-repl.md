@@ -101,7 +101,9 @@ await gotoUrl("https://example.com");
 await browser.gotoUrl("https://example.com");
 ```
 
-The image's browser-wide WebMCP client is exposed with the same frozen identity as `webmcp` and `browser.webmcp`. It delegates to the existing loopback `/webmcp` API rather than duplicating tool tracking in the REPL's CDP client. Each request is bound to the active execution so unfinished invocations are aborted when the cell ends.
+The image's browser-wide WebMCP client is exposed with the same frozen identity as `webmcp` and `browser.webmcp`. It delegates to the existing loopback `/webmcp` API rather than duplicating tool tracking in the REPL's CDP client. Each request is bound to the active execution and clamped below its destructive deadline; unfinished invocations are aborted when the cell ends.
+
+`playwright-core` is an exact, lockfile-pinned runtime dependency available through dynamic `import("playwright-core")`. Callers may connect it to `process.env.CDP_ENDPOINT` and retain the resulting Playwright module, browser connection, context, and page objects across cells. This is opt-in rather than preloaded, and imported Playwright connections must be recreated after Chromium restarts. The frozen native `browser` namespace remains authoritative and is not replaced with a Playwright object.
 
 The complete helper reference, including signatures, behavior, and examples, lives in [`server/docs/repl.md`](../server/docs/repl.md). It covers navigation and page state, input, screenshots, tabs and iframe targets, waiting, page JavaScript, uploads, HTTP, raw CDP, and event draining. Wait helpers and CDP commands clamp their deadlines below the request deadline so routine helper failures return cleanly instead of destructively timing out the REPL.
 
@@ -155,4 +157,5 @@ Coverage includes:
 - zero-output executions, ordered text/images, and absence of output leakage after terminated executions
 - edge-value representation, pollution resistance, and all output limits
 - every seeded browser helper, reconnect, tabs, input, iframe, dialog, network idle, uploads, and screenshots
+- pinned Playwright Core import, cross-cell object identity, live CDP control, and explicit reconnection after Chromium restart
 - both headless and headful images plus OpenAPI regeneration and SSE regression checks

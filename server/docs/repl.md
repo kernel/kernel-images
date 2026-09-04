@@ -102,7 +102,35 @@ repl.write(JSON.stringify(result));
 
 Non-autosubmit declarative form tools return `status: "awaiting_submission"` after populating fields. Other invocations wait for a terminal result. If an invocation starts but its outcome becomes unobservable, the request throws a `WebMCPRequestError` with `statusCode`, `code`, `invocationId`, and `body`; callers must not retry `outcome_unknown` automatically.
 
-Every WebMCP request is bound to the active Browser REPL execution. Finishing or timing out a cell aborts unfinished requests, preventing unawaited invocations from leaking into later cells.
+Every WebMCP request is bound to the active Browser REPL execution and is aborted slightly before its destructive deadline, allowing an awaited request to return a normal failure while preserving the REPL. Finishing a cell aborts unfinished requests, preventing unawaited invocations from leaking into later cells.
+
+### Playwright Core
+
+`playwright-core` is installed as a pinned Browser REPL dependency. Load it with dynamic `import()` and connect it to the image's existing Chromium over CDP; do not launch or download another browser:
+
+```js
+var pw = await import("playwright-core");
+var pwBrowser = await pw.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+var pwContext = pwBrowser.contexts()[0];
+var pwPage = pwContext.pages()[0] ?? await pwContext.newPage();
+
+await pwPage.goto("https://example.com");
+repl.write(await pwPage.title());
+```
+
+The imported module and Playwright objects are ordinary persistent Browser REPL bindings, so later cells can reuse `pwBrowser`, `pwContext`, and `pwPage`. Use names such as `pwBrowser`; the bare `browser` name belongs to the frozen native helper namespace.
+
+Playwright has its own CDP connection alongside the native helpers. The native helper connection reconnects automatically after Chromium restarts, but an imported Playwright `Browser` becomes disconnected. Reconnect explicitly while preserving other REPL state:
+
+```js
+if (!pwBrowser.isConnected()) {
+  pwBrowser = await pw.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+  pwContext = pwBrowser.contexts()[0];
+  pwPage = pwContext.pages()[0] ?? await pwContext.newPage();
+}
+```
+
+A reset, execution timeout, crash, or API restart destroys the REPL process and therefore all imported modules, Playwright connections, and object bindings. Playwright return values are not emitted automatically; continue to use `repl.write(...)`, console methods, or `repl.emitImage(...)` for output.
 
 ### Page JavaScript
 

@@ -112,6 +112,48 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		require.Equal(t, float64(42), resultBytes)
 	})
 
+	t.Run("playwright core import persists", func(t *testing.T) {
+		r1 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `
+				var pwModule = await import("playwright-core");
+				var pwBrowserConnection = await pwModule.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+				var pwContext = pwBrowserConnection.contexts()[0];
+				var pwImportedPage = await pwContext.newPage();
+				await pwImportedPage.setContent("<title>Playwright in REPL</title><main>ready</main>");
+				var pwImportedPageIdentity = pwImportedPage;
+				repl.write(JSON.stringify({
+					connect: typeof pwModule.chromium.connectOverCDP,
+					title: await pwImportedPage.title(),
+				}));
+			`,
+		})
+		require.True(t, r1.Success, "error: %s", replError(r1))
+		first, ok := replJSONWrite(t, r1).(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "function", first["connect"])
+		require.Equal(t, "Playwright in REPL", first["title"])
+
+		r2 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `
+				repl.write(JSON.stringify({
+					samePage: pwImportedPage === pwImportedPageIdentity,
+					title: await pwImportedPage.title(),
+				}));
+				await pwImportedPage.close();
+			`,
+		})
+		require.True(t, r2.Success, "error: %s", replError(r2))
+		require.Equal(t, r1.ReplId, r2.ReplId)
+		second, ok := replJSONWrite(t, r2).(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, true, second["samePage"])
+		require.Equal(t, "Playwright in REPL", second["title"])
+
+		reset := true
+		resetResult := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: "", Reset: &reset})
+		require.True(t, resetResult.Success, "error: %s", replError(resetResult))
+	})
+
 	t.Run("browser helpers", func(t *testing.T) {
 		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
@@ -424,16 +466,43 @@ func runBrowserReplAPI(t *testing.T, image string) {
 
 	t.Run("chromium restart preserves repl id and bindings", func(t *testing.T) {
 		r1 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
-			Code: `var restartToken = "pre-restart"; await ensureRealTab(); repl.write(JSON.stringify(restartToken))`,
+			Code: `
+				var restartToken = "pre-restart";
+				var pwRestartModule = await import("playwright-core");
+				var pwRestartBrowser = await pwRestartModule.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+				await ensureRealTab();
+				repl.write(JSON.stringify({ token: restartToken, playwrightConnected: pwRestartBrowser.isConnected() }));
+			`,
 		})
 		require.True(t, r1.Success, "error: %s", replError(r1))
-		require.Equal(t, "pre-restart", replJSONWrite(t, r1))
+		before, ok := replJSONWrite(t, r1).(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "pre-restart", before["token"])
+		require.Equal(t, true, before["playwrightConnected"])
 
 		restartChromium(t, ctx, c, client)
 
 		timeoutSec := 60
 		r2 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
-			Code:       `const restartInfo = await pageInfo(); repl.write(JSON.stringify({ token: restartToken, url: restartInfo.url }))`,
+			Code: `
+				var restartInfo = await pageInfo();
+				for (var pwDisconnectAttempt = 0; pwDisconnectAttempt < 20 && pwRestartBrowser.isConnected(); pwDisconnectAttempt++) {
+					await waitMs(50);
+				}
+				var stalePlaywrightDisconnected = !pwRestartBrowser.isConnected();
+				var pwReplacementBrowser = await pwRestartModule.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+				var pwReplacementContext = pwReplacementBrowser.contexts()[0];
+				var pwReplacementPage = await pwReplacementContext.newPage();
+				await pwReplacementPage.setContent("<title>Playwright reconnected</title>");
+				var pwReplacementTitle = await pwReplacementPage.title();
+				await pwReplacementPage.close();
+				repl.write(JSON.stringify({
+					token: restartToken,
+					url: restartInfo.url,
+					stalePlaywrightDisconnected,
+					playwrightTitle: pwReplacementTitle,
+				}));
+			`,
 			TimeoutSec: &timeoutSec,
 		})
 		require.True(t, r2.Success, "error: %s", replError(r2))
@@ -441,6 +510,12 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		res, ok := replJSONWrite(t, r2).(map[string]interface{})
 		require.True(t, ok, "expected object output, got %T", replJSONWrite(t, r2))
 		require.Equal(t, "pre-restart", res["token"], "bindings survive a Chromium restart")
+		require.Equal(t, true, res["stalePlaywrightDisconnected"], "the old Playwright connection becomes stale")
+		require.Equal(t, "Playwright reconnected", res["playwrightTitle"], "Playwright can reconnect inside the same REPL")
+
+		reset := true
+		resetResult := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: "", Reset: &reset})
+		require.True(t, resetResult.Success, "error: %s", replError(resetResult))
 	})
 
 	t.Run("dialogs stay pending after a chromium restart", func(t *testing.T) {

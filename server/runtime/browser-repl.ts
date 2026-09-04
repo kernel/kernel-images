@@ -14,8 +14,12 @@ import { createWebMCPClient } from './webmcp';
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
 const REPL_ID = process.env.BROWSER_REPL_ID || 'unknown';
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
+// Keep the endpoint discoverable by dynamically imported browser clients even
+// when the image relies on the runtime's default rather than an explicit env.
+process.env.CDP_ENDPOINT = CDP_ENDPOINT;
 const KERNEL_API_ENDPOINT =
   process.env.KERNEL_API_ENDPOINT || `http://127.0.0.1:${process.env.PORT || '10001'}`;
+const WEBMCP_DEADLINE_MARGIN_MS = 500;
 
 // Output limits (decoded bytes unless noted).
 const MAX_TEXT_BYTES = 256 * 1024; // combined text per response
@@ -259,11 +263,18 @@ const webmcpExecution = new AsyncLocalStorage<AbortSignal>();
 const webmcp = createWebMCPClient({
   apiBaseUrl: KERNEL_API_ENDPOINT,
   signalProvider: () => {
-    const signal = webmcpExecution.getStore();
-    if (!signal) {
+    const executionSignal = webmcpExecution.getStore();
+    if (!executionSignal) {
       throw new Error('webmcp calls require an active Browser REPL execution');
     }
-    return signal;
+    const executionDeadline = helpers.executionDeadlineMs;
+    if (executionDeadline === null) return executionSignal;
+
+    const remainingMs = executionDeadline - WEBMCP_DEADLINE_MARGIN_MS - Date.now();
+    if (remainingMs <= 0) {
+      return AbortSignal.abort(new Error('WebMCP request exceeded the Browser REPL execution deadline'));
+    }
+    return AbortSignal.any([executionSignal, AbortSignal.timeout(remainingMs)]);
   },
 });
 const browserGlobals = buildBrowserGlobals(helpers);

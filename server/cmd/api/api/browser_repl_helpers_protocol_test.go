@@ -62,6 +62,19 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 				"source":       map[string]any{"window_id": 1, "tab_id": 2, "page_title": "Test", "page_url": "https://example.test", "frame": nil},
 			}}})
 		case "/webmcp/invoke":
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if request["tool_ref"] == "wmcp_slow" {
+				select {
+				case <-r.Context().Done():
+				case <-time.After(10 * time.Second):
+					_, _ = w.Write([]byte(`{"invocation_id":"late","status":"completed"}`))
+				}
+				return
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"invocation_id": "invocation-test", "status": "completed", "output": map[string]any{"ok": true},
 			})
@@ -214,6 +227,18 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	require.Contains(t, *timedOut.Error, "timed out after")
 	require.True(t, timedOut.ReplTerminated == nil || !*timedOut.ReplTerminated)
 	require.Equal(t, r.ReplId, timedOut.ReplId, "a clamped HTTP timeout must preserve the REPL")
+
+	started = time.Now()
+	webmcpTimedOut := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
+		Code:       `await webmcp.invokeTool("wmcp_slow", {}, {timeoutSec: 20})`,
+		TimeoutSec: &timeoutSec,
+	})
+	require.Less(t, time.Since(started), 2*time.Second)
+	require.False(t, webmcpTimedOut.Success)
+	require.NotNil(t, webmcpTimedOut.Error)
+	require.Contains(t, strings.ToLower(*webmcpTimedOut.Error), "timeout")
+	require.True(t, webmcpTimedOut.ReplTerminated == nil || !*webmcpTimedOut.ReplTerminated)
+	require.Equal(t, r.ReplId, webmcpTimedOut.ReplId, "a clamped WebMCP timeout must preserve the REPL")
 
 	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)

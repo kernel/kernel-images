@@ -28,6 +28,16 @@ func TestBrowserReplPersistentClosureIdentity(t *testing.T) {
 	requireExec(t, svc, `await new Promise(resolve => setTimeout(resolve, 10)); repl.write(JSON.stringify(closureCount))`, float64(16))
 }
 
+func TestBrowserReplCanPersistPlaywrightCoreImport(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	requireExec(t, svc, `var playwrightCore = await import("playwright-core"); var playwrightCoreReference = playwrightCore`, nil)
+	requireExec(t, svc, `repl.write(JSON.stringify({ same: playwrightCore === playwrightCoreReference, connect: typeof playwrightCore.chromium.connectOverCDP, endpoint: process.env.CDP_ENDPOINT }))`, map[string]interface{}{
+		"same":     true,
+		"connect":  "function",
+		"endpoint": "ws://127.0.0.1:9222",
+	})
+}
+
 func TestBrowserReplFunctionDeclarationsUsePersistentAccessor(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	requireExec(t, svc, `function replFunctionValue() { return 1; } function replFunctionClosure() { return replFunctionValue(); } replFunctionValue = () => 3; repl.write(JSON.stringify(replFunctionClosure()))`, float64(3))

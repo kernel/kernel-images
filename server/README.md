@@ -123,6 +123,10 @@ helper.
 - Helpers are exposed as bare globals and on the frozen `browser` namespace.
   See [`docs/repl.md`](docs/repl.md#browser-helpers) for every helper's
   signature and behavior.
+- A pinned `playwright-core` package is available through
+  `await import("playwright-core")`. Connect it to `process.env.CDP_ENDPOINT`
+  to use ordinary Playwright browser, context, and page objects as persistent
+  REPL bindings; reconnect those objects explicitly after Chromium restarts.
 - The REPL connects to the browser through the DevTools proxy on
   `ws://127.0.0.1:9222`, lazily on the first browser helper call; pure
   Node.js code runs fine while Chromium is down, and the connection is
