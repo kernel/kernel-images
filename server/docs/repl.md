@@ -1,6 +1,6 @@
 # Browser REPL
 
-`POST /repl` evaluates JavaScript in a persistent Node.js runtime associated with one browser instance. The runtime keeps top-level bindings between calls and includes browser-control helpers as both bare globals and properties of the frozen `browser` object.
+`POST /repl` evaluates JavaScript in a persistent Node.js runtime associated with one browser instance. The runtime keeps top-level bindings between calls and includes browser-control helpers as both bare globals and properties of the frozen `browser` object. The same frozen WebMCP client is available as `webmcp` and `browser.webmcp`.
 
 For operational guidance aimed at browser-control agents, see [repl-agent-guidance.md](repl-agent-guidance.md).
 
@@ -79,7 +79,30 @@ Every helper below is available directly and under `browser`, for example `await
 - **`waitForNetworkIdle(idleSec?, timeoutSec?)`** — Return `true` once no tracked requests remain in flight for the idle interval, or `false` on timeout. Defaults to 0.5 idle seconds and a 30-second timeout.
 - **`js(expressionOrFunction, options?)`** — Evaluate a string expression or invoke a page function in the attached page or `options.targetId`, and return its by-value result. String expressions and returned promises are awaited. Function mode supports `return`, `await`, and one explicit `options.arg` value without capturing Browser REPL closures. DevTools edge result values such as bigint, `NaN`, infinities, and `-0` are decoded.
 - **`uploadFile(selector, pathOrPaths)`** — Set a file input to one VM-local path or a non-empty array of paths.
-- **`httpGet(url, headers?, timeoutSec?)`** — Fetch a URL from the VM and return the response body as text. Supports custom headers and a default 20-second timeout; non-2xx responses throw.
+- **`httpGet(url, headers?, timeoutSec?)`** — Fetch a URL from the VM and return the response body as text. Supports custom headers and a default 20-second timeout; non-2xx responses throw. Its timeout is clamped below the active execution deadline.
+
+### WebMCP
+
+The frozen `webmcp` namespace delegates to the image's browser-wide WebMCP API. It is also available as `browser.webmcp`, with the same object identity:
+
+```js
+const tools = await webmcp.listTools();
+const search = tools.find(tool => tool.name === "search");
+if (!search) throw new Error("search tool not found");
+
+const result = await webmcp.invokeTool(
+  search.tool_ref,
+  {query: "CVG to SFO"},
+  {timeoutSec: 30},
+);
+repl.write(JSON.stringify(result));
+```
+
+`listTools()` returns tools registered across every open tab and embedded frame. Each tool includes its opaque live `tool_ref`, input schema, annotations, and source window/tab/frame. Invocation uses that exact registration, so callers do not switch the Browser REPL's attached target for frame-provided tools.
+
+Non-autosubmit declarative form tools return `status: "awaiting_submission"` after populating fields. Other invocations wait for a terminal result. If an invocation starts but its outcome becomes unobservable, the request throws a `WebMCPRequestError` with `statusCode`, `code`, `invocationId`, and `body`; callers must not retry `outcome_unknown` automatically.
+
+Every WebMCP request is bound to the active Browser REPL execution. Finishing or timing out a cell aborts unfinished requests, preventing unawaited invocations from leaking into later cells.
 
 ### Page JavaScript
 

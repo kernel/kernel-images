@@ -46,15 +46,33 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	fake := newFakeCDPServer(t)
 
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/health" {
+		switch r.URL.Path {
+		case "/health":
+			_, _ = w.Write([]byte("ok"))
+		case "/slow":
+			select {
+			case <-r.Context().Done():
+			case <-time.After(10 * time.Second):
+				_, _ = w.Write([]byte("late"))
+			}
+		case "/webmcp/tools":
+			_ = json.NewEncoder(w).Encode(map[string]any{"tools": []any{map[string]any{
+				"tool_ref": "wmcp_test", "name": "search", "description": "Search",
+				"input_schema": map[string]any{"type": "object"},
+				"source":       map[string]any{"window_id": 1, "tab_id": 2, "page_title": "Test", "page_url": "https://example.test", "frame": nil},
+			}}})
+		case "/webmcp/invoke":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"invocation_id": "invocation-test", "status": "completed", "output": map[string]any{"ok": true},
+			})
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		_, _ = w.Write([]byte("ok"))
 	}))
 	t.Cleanup(api.Close)
 
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+	t.Setenv("KERNEL_API_ENDPOINT", api.URL)
 
 	svc := newBrowserReplSvc(t)
 
@@ -123,6 +141,8 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 		const found = await waitForElement("#thing", {timeoutSec: 2, state: "visible"});
 		await waitForNetworkIdle(0.1, 5);
 		const echoed = await js("echo-me-please");
+		const tools = await webmcp.listTools();
+		const invocation = await browser.webmcp.invokeTool("wmcp_test", {query: "SFO"}, {timeoutSec: 2});
 		const frame = await iframeTarget("frame.example");
 		const noFrame = await iframeTarget("no-such-host");
 		let evs = [];
@@ -130,7 +150,18 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 			evs = await drainEvents();
 			if (evs.length === 0) await waitMs(100);
 		}
-		repl.write(JSON.stringify({ found, echoed, frameUrl: frame && frame.url, noFrame, eventCount: evs.length }))
+		repl.write(JSON.stringify({
+			found,
+			echoed,
+			frameUrl: frame && frame.url,
+			noFrame,
+			eventCount: evs.length,
+			webmcpFrozen: Object.isFrozen(webmcp),
+			webmcpShared: webmcp === browser.webmcp,
+			webmcpMethods: [typeof webmcp.listTools, typeof webmcp.invokeTool],
+			webmcpTool: tools[0].tool_ref,
+			webmcpInvocation: invocation,
+		}))
 	`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	waits, ok := requireJSONWrite(t, r).(map[string]any)
@@ -140,6 +171,14 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	require.Equal(t, "https://frame.example.com/widget", waits["frameUrl"])
 	require.Nil(t, waits["noFrame"])
 	require.GreaterOrEqual(t, waits["eventCount"], float64(1), "drainEvents returns buffered session events")
+	require.Equal(t, true, waits["webmcpFrozen"])
+	require.Equal(t, true, waits["webmcpShared"])
+	require.Equal(t, []any{"function", "function"}, waits["webmcpMethods"])
+	require.Equal(t, "wmcp_test", waits["webmcpTool"])
+	invocation, ok := waits["webmcpInvocation"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "invocation-test", invocation["invocation_id"])
+	require.Equal(t, "completed", invocation["status"])
 
 	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: fmt.Sprintf(`
 		const shot = await captureScreenshot("/tmp/fake-cdp-shot.png", false, 400);
@@ -163,9 +202,37 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	}
 	require.True(t, sawImage, "the captured screenshot is emitted as image content")
 
+	timeoutSec := 2
+	started := time.Now()
+	timedOut := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
+		Code:       fmt.Sprintf(`await httpGet(%q, undefined, 20)`, api.URL+"/slow"),
+		TimeoutSec: &timeoutSec,
+	})
+	require.Less(t, time.Since(started), 2*time.Second)
+	require.False(t, timedOut.Success)
+	require.NotNil(t, timedOut.Error)
+	require.Contains(t, *timedOut.Error, "timed out after")
+	require.True(t, timedOut.ReplTerminated == nil || !*timedOut.ReplTerminated)
+	require.Equal(t, r.ReplId, timedOut.ReplId, "a clamped HTTP timeout must preserve the REPL")
+
 	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)
 	require.Equal(t, r.ReplId, r2.ReplId)
+}
+
+func TestBrowserReplWaitForNetworkIdleAttachesBeforeObserving(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+	svc := newBrowserReplSvc(t)
+
+	started := time.Now()
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `repl.write(JSON.stringify(await waitForNetworkIdle(0.2, 2)))`,
+	})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, true, requireJSONWrite(t, r))
+	require.GreaterOrEqual(t, time.Since(started), 200*time.Millisecond,
+		"the first network-idle wait must attach and observe a complete idle interval")
 }
 
 func TestBrowserReplCaptureScreenshotMaxDim(t *testing.T) {
@@ -761,6 +828,10 @@ func TestBrowserReplHalfClosedClientReceivesResponse(t *testing.T) {
 
 func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 	fake := newFakeCDPServer(t)
+	fake.mu.Lock()
+	fake.targets[0].URL = "about:blank"
+	fake.rendererHrefs["target-page-1"] = "about:blank"
+	fake.mu.Unlock()
 	fake.delayCommit.Store(true)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
 
@@ -774,8 +845,9 @@ func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 	require.True(t, r.Success, "error: %v", r.Error)
 	res, ok := requireJSONWrite(t, r).(map[string]any)
 	require.True(t, ok)
+	require.Equal(t, "target-page-1", res["id"], "newTab should reuse the attached blank target")
 	require.Equal(t, "https://example.com/2", res["href"],
-		"newTab must wait for the renderer-level navigation commit, not just target metadata")
+		"newTab must wait for the reused target's renderer-level navigation commit")
 }
 
 func TestBrowserReplScrollFallback(t *testing.T) {

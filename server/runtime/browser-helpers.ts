@@ -603,6 +603,7 @@ export class BrowserHelpers {
           /^(chrome:\/\/(newtab|new-tab-page)|edge:\/\/newtab|about:newtab)/.test(currentUrl)
         ) {
           await this.gotoUrl(url);
+          await this.client.waitForNavigationCommit(current.targetId as string, 5_000);
           return current.targetId as string;
         }
       } catch {
@@ -717,6 +718,7 @@ export class BrowserHelpers {
   };
 
   waitForNetworkIdle = async (idleSec = 0.5, timeoutSec = 30): Promise<boolean> => {
+    await this.client.ensureAttached();
     const { deadline } = this.waitDeadline(timeoutSec * 1000);
     for (;;) {
       const { inFlight, lastActivity } = this.client.networkIdleState();
@@ -782,8 +784,16 @@ export class BrowserHelpers {
     headers?: Record<string, string>,
     timeoutSec = 20,
   ): Promise<string> => {
+    if (typeof timeoutSec !== 'number' || !Number.isFinite(timeoutSec) || timeoutSec < 0) {
+      throw new Error('httpGet: timeoutSec must be a non-negative finite number');
+    }
+    const { deadline } = this.waitDeadline(timeoutSec * 1000);
+    const timeoutMs = Math.max(0, deadline - Date.now());
+    if (timeoutMs === 0) {
+      throw new Error(`GET ${url} timed out before it could start`);
+    }
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutSec * 1000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
         headers: { 'user-agent': 'Mozilla/5.0', 'accept-encoding': 'gzip', ...(headers ?? {}) },
@@ -793,6 +803,11 @@ export class BrowserHelpers {
         throw new Error(`GET ${url} failed with status ${res.status}`);
       }
       return res.text();
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`GET ${url} timed out after ${timeoutMs}ms`);
+      }
+      throw err;
     } finally {
       clearTimeout(timer);
     }

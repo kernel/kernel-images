@@ -71,6 +71,7 @@ export class WebMCPRequestError extends Error {
 interface WebMCPClientOptions {
   apiBaseUrl: string;
   signal?: AbortSignal;
+  signalProvider?: () => AbortSignal;
   fetchImpl?: typeof fetch;
 }
 
@@ -91,12 +92,17 @@ async function responseBody(response: Response): Promise<unknown> {
 export function createWebMCPClient({
   apiBaseUrl,
   signal,
+  signalProvider,
   fetchImpl = fetch,
 }: WebMCPClientOptions): WebMCPClient {
+  if (signal && signalProvider) {
+    throw new Error('WebMCP client accepts signal or signalProvider, not both');
+  }
   const baseUrl = apiBaseUrl.replace(/\/+$/, '');
 
   const request = async (path: string, init?: RequestInit): Promise<unknown> => {
-    const response = await fetchImpl(`${baseUrl}${path}`, {...init, signal});
+    const requestSignal = signalProvider ? signalProvider() : signal;
+    const response = await fetchImpl(`${baseUrl}${path}`, {...init, signal: requestSignal});
     const body = await responseBody(response);
     if (!response.ok) throw new WebMCPRequestError(response.status, body);
     return body;
@@ -119,14 +125,25 @@ export function createWebMCPClient({
         headers: {'content-type': 'application/json'},
         body: JSON.stringify(payload),
       });
+      if (!isRecord(body) || typeof body.invocation_id !== 'string') {
+        throw new Error('WebMCP invocation response is invalid');
+      }
+      const status = body.status;
       if (
-        !isRecord(body) ||
-        typeof body.invocation_id !== 'string' ||
-        typeof body.status !== 'string'
+        status !== 'completed' &&
+        status !== 'canceled' &&
+        status !== 'error' &&
+        status !== 'awaiting_submission'
       ) {
         throw new Error('WebMCP invocation response is invalid');
       }
-      return body as WebMCPInvocationResult;
+      const result: WebMCPInvocationResult = {
+        invocation_id: body.invocation_id,
+        status,
+      };
+      if (Object.prototype.hasOwnProperty.call(body, 'output')) result.output = body.output;
+      if (typeof body.error_text === 'string') result.error_text = body.error_text;
+      return result;
     },
   };
 

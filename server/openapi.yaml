@@ -1464,7 +1464,9 @@ paths:
       description: |
         Execute code in the Browser REPL, a persistent Node.js runtime preloaded with browser-control
         helpers (gotoUrl, pageInfo, click, captureScreenshot, tab management,
-        and more) plus an unrestricted `cdp()` escape hatch. Top-level bindings persist
+        and more), the browser-wide `webmcp` client, plus an unrestricted `cdp()` escape hatch. `webmcp`
+        and `browser.webmcp` share one frozen client whose requests are scoped to the active execution.
+        Top-level bindings persist
         across calls until the API process exits, the REPL is reset, or the REPL is
         terminated after a crash or timeout. Persistent names are live context-global
         accessors, so closures and timers observe later-cell assignments; function declarations
@@ -1484,6 +1486,7 @@ paths:
         This endpoint is unrestricted code execution inside the browser VM, equivalent in
         trust level to the process and Playwright execution APIs. It is not sandboxed.
       operationId: executeBrowserRepl
+      x-telemetry-category: control
       requestBody:
         description: JSON request bodies are limited to 8 MiB before strict decoding. The API rejects a marshaled daemon request over the daemon's 8 MiB newline-delimited request-line limit as a non-destructive 400.
         required: true

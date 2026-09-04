@@ -101,6 +101,8 @@ await gotoUrl("https://example.com");
 await browser.gotoUrl("https://example.com");
 ```
 
+The image's browser-wide WebMCP client is exposed with the same frozen identity as `webmcp` and `browser.webmcp`. It delegates to the existing loopback `/webmcp` API rather than duplicating tool tracking in the REPL's CDP client. Each request is bound to the active execution so unfinished invocations are aborted when the cell ends.
+
 The complete helper reference, including signatures, behavior, and examples, lives in [`server/docs/repl.md`](../server/docs/repl.md). It covers navigation and page state, input, screenshots, tabs and iframe targets, waiting, page JavaScript, uploads, HTTP, raw CDP, and event draining. Wait helpers and CDP commands clamp their deadlines below the request deadline so routine helper failures return cleanly instead of destructively timing out the REPL.
 
 ### REPL helpers

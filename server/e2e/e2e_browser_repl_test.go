@@ -116,19 +116,19 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
 				await ensureRealTab();
-				await gotoUrl("https://example.com");
+				await gotoUrl("data:text/html,<title>Browser REPL Helper</title>");
 				await waitForLoad();
 				const info = await pageInfo();
 				repl.write(JSON.stringify(info.title));
 			`,
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
-		require.Equal(t, "Example Domain", replJSONWrite(t, r))
+		require.Equal(t, "Browser REPL Helper", replJSONWrite(t, r))
 		require.NotNil(t, r.Content)
 		require.NotEmpty(t, *r.Content)
 		first, err := (*r.Content)[0].AsBrowserReplTextContent()
 		require.NoError(t, err)
-		require.Equal(t, `"Example Domain"`, first.Text)
+		require.Equal(t, `"Browser REPL Helper"`, first.Text)
 	})
 
 	t.Run("selector interaction and element states", func(t *testing.T) {
@@ -187,17 +187,17 @@ func runBrowserReplAPI(t *testing.T, image string) {
 				await waitForLoad();
 				await js(() => {
 					const iframe = document.createElement("iframe");
-					iframe.src = "https://example.com";
+					iframe.src = "http://127.0.0.1:10001/spec.yaml";
 					document.body.append(iframe);
 				});
 				var crossOriginFrame = null;
 				for (let attempt = 0; attempt < 50 && !crossOriginFrame; attempt++) {
-					crossOriginFrame = await iframeTarget("example.com");
+					crossOriginFrame = await iframeTarget("127.0.0.1:10001/spec.yaml");
 					if (!crossOriginFrame) await waitMs(100);
 				}
 				if (!crossOriginFrame) throw new Error("cross-origin iframe target did not appear");
 				var crossOriginState = await js(
-					() => ({title: document.title, host: location.host}),
+					() => ({documentNodeType: document.nodeType}),
 					{targetId: crossOriginFrame.targetId},
 				);
 				repl.write(JSON.stringify({target: crossOriginFrame, state: crossOriginState}));
@@ -209,10 +209,10 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		target, ok := result["target"].(map[string]interface{})
 		require.True(t, ok)
 		require.Equal(t, "iframe", target["type"])
+		require.Contains(t, target["url"], "127.0.0.1:10001/spec.yaml")
 		state, ok := result["state"].(map[string]interface{})
 		require.True(t, ok)
-		require.Equal(t, "example.com", state["host"])
-		require.Equal(t, "Example Domain", state["title"])
+		require.Equal(t, float64(9), state["documentNodeType"])
 	})
 
 	t.Run("page evaluation modes", func(t *testing.T) {
@@ -301,7 +301,7 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
 				const before = (await listTabs(false)).length;
-				const tab = await newTab("https://example.com");
+				const tab = await newTab("data:text/html,<title>Screenshot Test</title><main>ready</main>");
 				await waitForLoad();
 				const tabs = await listTabs();
 				const shot = await captureScreenshot("/tmp/e2e-repl.png", false, 800);
@@ -491,42 +491,11 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		require.True(t, r2.Success)
 		require.Equal(t, "undefined", replJSONWrite(t, r2), "reset must clear prior bindings")
 	})
+
+	runBrowserReplTimeoutCases(t, ctx, client)
 }
 
-func TestBrowserReplTimeoutTerminates(t *testing.T) {
-	t.Parallel()
-
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
-
-	for _, image := range []struct {
-		name  string
-		image string
-	}{
-		{"Headless", headlessImage},
-		{"Headful", headfulImage},
-	} {
-		t.Run(image.name, func(t *testing.T) {
-			t.Parallel()
-			runBrowserReplTimeoutTerminates(t, image.image)
-		})
-	}
-}
-
-func runBrowserReplTimeoutTerminates(t *testing.T, image string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-
-	c := NewTestContainer(t, image)
-	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
-	defer c.Stop(ctx)
-
-	require.NoError(t, c.WaitReady(ctx), "api not ready")
-
-	client, err := c.APIClient()
-	require.NoError(t, err)
-
+func runBrowserReplTimeoutCases(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
 	t.Run("uninterruptible loop", func(t *testing.T) {
 		warm := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 		require.True(t, warm.Success)

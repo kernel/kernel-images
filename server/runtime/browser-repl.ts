@@ -1,6 +1,7 @@
 // Persistent, unrestricted JavaScript daemon owned by the API process.
 // Protocol and lifecycle invariants are documented in plans/persistent-browser-repl.md.
 
+import { AsyncLocalStorage } from 'async_hooks';
 import { createServer, Socket } from 'net';
 import { unlinkSync, existsSync, promises as fsp } from 'fs';
 import vm from 'vm';
@@ -8,10 +9,13 @@ import util from 'util';
 import { CdpClient } from './browser-cdp-client';
 import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
 import { CellRuntime } from './cell-runtime';
+import { createWebMCPClient } from './webmcp';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
 const REPL_ID = process.env.BROWSER_REPL_ID || 'unknown';
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
+const KERNEL_API_ENDPOINT =
+  process.env.KERNEL_API_ENDPOINT || `http://127.0.0.1:${process.env.PORT || '10001'}`;
 
 // Output limits (decoded bytes unless noted).
 const MAX_TEXT_BYTES = 256 * 1024; // combined text per response
@@ -251,6 +255,22 @@ const consoleCapture = {
 
 const cdpClient = new CdpClient(CDP_ENDPOINT);
 const helpers = new BrowserHelpers(cdpClient);
+const webmcpExecution = new AsyncLocalStorage<AbortSignal>();
+const webmcp = createWebMCPClient({
+  apiBaseUrl: KERNEL_API_ENDPOINT,
+  signalProvider: () => {
+    const signal = webmcpExecution.getStore();
+    if (!signal) {
+      throw new Error('webmcp calls require an active Browser REPL execution');
+    }
+    return signal;
+  },
+});
+const browserGlobals = buildBrowserGlobals(helpers);
+const browserNamespace = Object.freeze({
+  ...(browserGlobals.browser as Record<string, unknown>),
+  webmcp,
+});
 
 // Operational notes from helpers (e.g. a fallback activating) surface as
 // stderr content items in the active (or next) execution.
@@ -275,7 +295,9 @@ const context: vm.Context = vm.createContext(
   {
     console: consoleCapture,
     repl,
-    ...buildBrowserGlobals(helpers),
+    ...browserGlobals,
+    browser: browserNamespace,
+    webmcp,
     // Node conveniences. This endpoint is unrestricted code execution; the
     // context is a state container, not a sandbox.
     setTimeout,
@@ -349,6 +371,7 @@ async function executeRequest(
   drainedStray.drainInto(collector);
 
   activeCollector = collector;
+  const executionAbortController = new AbortController();
   const timeoutMs = request.timeout_ms ?? 60_000;
   // Let wait-style helpers and the CDP client clamp their internal
   // deadlines to just below this execution's deadline, so a routine helper
@@ -363,11 +386,17 @@ async function executeRequest(
     const timeoutPromise = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
         timedOut = true;
-        reject(new Error(`execution timed out after ${timeoutMs}ms`));
+        const error = new Error(`execution timed out after ${timeoutMs}ms`);
+        executionAbortController.abort(error);
+        reject(error);
       }, timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
     });
-    await Promise.race([evaluate(request.code), timeoutPromise]);
+    const evaluation = webmcpExecution.run(
+      executionAbortController.signal,
+      () => evaluate(request.code),
+    );
+    await Promise.race([evaluation, timeoutPromise]);
     return {
       id: request.id,
       repl_id: REPL_ID,
@@ -394,6 +423,9 @@ async function executeRequest(
     };
   } finally {
     if (timer) clearTimeout(timer);
+    if (!executionAbortController.signal.aborted) {
+      executionAbortController.abort(new Error('Browser REPL execution finished'));
+    }
     helpers.executionDeadlineMs = null;
     cdpClient.executionDeadlineMs = null;
     activeCollector = null;
