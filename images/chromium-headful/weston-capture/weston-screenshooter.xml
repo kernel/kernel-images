@@ -1,0 +1,9 @@
+<protocol name="weston_screenshooter">
+  <interface name="weston_screenshooter" version="1">
+    <request name="shoot">
+      <arg name="output" type="object" interface="wl_output"/>
+      <arg name="buffer" type="object" interface="wl_buffer"/>
+    </request>
+    <event name="done"/>
+  </interface>
+</protocol>

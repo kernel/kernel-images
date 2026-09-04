@@ -71,12 +71,12 @@ type FFmpegRecorder struct {
 	// chapter offsets to the media timeline; zero means never detected and
 	// callers fall back to startTime (stamped before the process spawned).
 	captureAnchor time.Time
-	ffmpegErr  error
-	exitCode   int
-	exited     chan struct{}
-	deleted    bool
-	markers    []Marker
-	stz        *scaletozero.Oncer
+	ffmpegErr     error
+	exitCode      int
+	exited        chan struct{}
+	deleted       bool
+	markers       []Marker
+	stz           *scaletozero.Oncer
 
 	// flight coordinates concurrent operations using different keys:
 	// - "stop": prevents multiple SIGINTs from being sent to ffmpeg
@@ -96,6 +96,9 @@ type FFmpegRecordingParams struct {
 	RecordAudio          *bool
 	AudioSource          *string
 	PulseServer          *string
+	// CaptureFrame supplies PNG frames for non-X11 display backends. When nil,
+	// Linux recordings use x11grab as before.
+	CaptureFrame func(context.Context) ([]byte, error)
 }
 
 func (p FFmpegRecordingParams) Validate() error {
@@ -178,6 +181,7 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 		RecordAudio:          config.RecordAudio,
 		AudioSource:          config.AudioSource,
 		PulseServer:          config.PulseServer,
+		CaptureFrame:         config.CaptureFrame,
 	}
 	if overrides.FrameRate != nil {
 		merged.FrameRate = overrides.FrameRate
@@ -202,6 +206,9 @@ func mergeFFmpegRecordingParams(config FFmpegRecordingParams, overrides FFmpegRe
 	}
 	if overrides.PulseServer != nil {
 		merged.PulseServer = overrides.PulseServer
+	}
+	if overrides.CaptureFrame != nil {
+		merged.CaptureFrame = overrides.CaptureFrame
 	}
 
 	return merged
@@ -253,6 +260,7 @@ func (p FFmpegRecordingParams) clone() FFmpegRecordingParams {
 		v := *p.PulseServer
 		c.PulseServer = &v
 	}
+	c.CaptureFrame = p.CaptureFrame
 	return c
 }
 
@@ -300,10 +308,25 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = os.Stderr
 	cmd.Stdout = os.Stdout
+	var frameInput io.WriteCloser
+	if fr.params.CaptureFrame != nil {
+		var err error
+		frameInput, err = cmd.StdinPipe()
+		if err != nil {
+			_ = fr.stz.Enable(context.WithoutCancel(ctx))
+			fr.cmd = nil
+			close(fr.exited)
+			fr.mu.Unlock()
+			return fmt.Errorf("failed to create frame input: %w", err)
+		}
+	}
 	fr.cmd = cmd
 	fr.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
+		if frameInput != nil {
+			_ = frameInput.Close()
+		}
 		_ = fr.stz.Enable(context.WithoutCancel(ctx))
 		fr.mu.Lock()
 		fr.ffmpegErr = err
@@ -315,6 +338,9 @@ func (fr *FFmpegRecorder) Start(ctx context.Context) error {
 
 	// Launch background waiter to capture process completion.
 	go fr.waitForCommand(ctx)
+	if frameInput != nil {
+		go fr.streamFrames(context.WithoutCancel(ctx), frameInput)
+	}
 
 	// Watch for ffmpeg's first output bytes to anchor chapter offsets to the
 	// media timeline rather than the pre-spawn startTime.
@@ -525,6 +551,37 @@ func (fr *FFmpegRecorder) Mark(name string) (string, int64, error) {
 	return name, now.Sub(fr.anchorLocked()).Milliseconds(), nil
 }
 
+func (fr *FFmpegRecorder) streamFrames(ctx context.Context, input io.WriteCloser) {
+	defer input.Close()
+	interval := time.Second / time.Duration(*fr.params.FrameRate)
+	next := time.Now()
+	for {
+		select {
+		case <-fr.exited:
+			return
+		default:
+		}
+
+		frame, err := fr.params.CaptureFrame(ctx)
+		if err != nil {
+			return
+		}
+		if _, err := input.Write(frame); err != nil {
+			return
+		}
+		next = next.Add(interval)
+		if delay := time.Until(next); delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-timer.C:
+			case <-fr.exited:
+				timer.Stop()
+				return
+			}
+		}
+	}
+}
+
 // watchCaptureStart stamps captureAnchor with the moment ffmpeg writes its
 // first output bytes. The muxer only writes them once the capture pipeline is
 // fully initialized (input opened, encoder ready, first frame in flight), so
@@ -705,20 +762,23 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 			"-i", fmt.Sprintf("%d:%s", *params.DisplayNum, audioDevice),
 		}
 	case "linux":
-		// When also capturing audio, give the x11grab input a larger packet queue
-		// so the video thread doesn't drop frames while the audio thread jitters
-		// during the mux (the default queue of 8 overflows with two live inputs).
-		// Omitted for video-only to keep that path identical to the pre-audio flags.
 		if recordAudio {
 			args = append(args, "-thread_queue_size", "512")
 		}
-		args = append(args,
-			// Input options for X11
-			"-f", "x11grab",
-			"-framerate", strconv.Itoa(*params.FrameRate),
-			// Input file
-			"-i", fmt.Sprintf(":%d", *params.DisplayNum), // X11 display
-		)
+		if params.CaptureFrame != nil {
+			args = append(args,
+				"-f", "image2pipe",
+				"-framerate", strconv.Itoa(*params.FrameRate),
+				"-vcodec", "png",
+				"-i", "pipe:0",
+			)
+		} else {
+			args = append(args,
+				"-f", "x11grab",
+				"-framerate", strconv.Itoa(*params.FrameRate),
+				"-i", fmt.Sprintf(":%d", *params.DisplayNum),
+			)
+		}
 		if recordAudio {
 			args = append(args, audioInputArgs(params)...)
 		}
@@ -737,10 +797,7 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 		// Video encoding
 		"-c:v", "libx264",
 	)
-	if recordAudio {
-		// Real-time-oriented encoding so ffmpeg keeps pace with the live audio+video
-		// mux instead of falling behind and drifting out of sync. Applied only when
-		// recording audio so the video-only path keeps its original encoding.
+	if recordAudio || params.CaptureFrame != nil {
 		args = append(args, "-preset", "veryfast", "-tune", "zerolatency")
 	}
 	args = append(args, []string{
@@ -752,7 +809,7 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 	// overwrites x11grab's timestamps with wall-clock time for stable playback.
 	// With audio we must not: it would stamp the separate video and audio inputs
 	// independently and desync them, so we keep their input PTS instead.
-	if !recordAudio {
+	if !recordAudio && params.CaptureFrame == nil {
 		args = append(args, "-use_wallclock_as_timestamps", "1")
 	}
 	args = append(args, []string{

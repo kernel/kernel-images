@@ -1,3 +1,5 @@
+ARG NEKO_IMAGE=ghcr.io/kernel/neko/base:3.0.8-v1.6.0
+
 FROM docker.io/golang:1.25.0 AS server-builder
 WORKDIR /workspace/server
 
@@ -70,7 +72,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache; \
     apt-get update; \
     apt-get --no-install-recommends -y install \
-    git gcc pkgconf autoconf automake libtool make xorg-dev xutils-dev;
+    git gcc pkgconf autoconf automake libtool make xorg-dev xutils-dev \
+    libwayland-dev wayland-protocols;
 COPY images/chromium-headful/xorg-deps/ /xorg/
 # build xf86-video-dummy v0.3.8 with RandR support
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
@@ -91,6 +94,20 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     ./configure; \
     make -j$(nproc); \
     make install;
+
+# Build the Weston-native Wayland capture helper. It uses Weston's
+# screenshooter protocol and a persistent wl_shm buffer, avoiding X11 capture.
+COPY images/chromium-headful/weston-capture/ /weston-capture/
+RUN set -eux; \
+    wayland-scanner client-header /weston-capture/weston-screenshooter.xml \
+        /weston-capture/weston-screenshooter-client-protocol.h; \
+    wayland-scanner private-code /weston-capture/weston-screenshooter.xml \
+        /weston-capture/weston-screenshooter-protocol.c; \
+    gcc -O2 -Wall -Wextra -Werror -o /usr/local/bin/weston-capture \
+        /weston-capture/weston-capture.c \
+        /weston-capture/weston-screenshooter-protocol.c \
+        $(pkg-config --cflags --libs wayland-client); \
+    strip /usr/local/bin/weston-capture;
 
 FROM docker.io/ubuntu:22.04 AS ffmpeg-downloader
 
@@ -161,7 +178,7 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
-FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.0 AS neko
+FROM ${NEKO_IMAGE} AS neko
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/ubuntu:22.04
 
@@ -189,6 +206,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     imagemagick \
     sudo \
     mutter \
+    weston \
     curl \
     # Network tools
     net-tools \
@@ -350,10 +368,13 @@ ENV WITHDOCKER=true
 
 COPY images/chromium-headful/xorg.conf /etc/neko/xorg.conf
 COPY images/chromium-headful/neko.yaml /etc/neko/neko.yaml
+COPY images/chromium-headful/start-neko.sh /usr/local/bin/start-neko.sh
+RUN chmod +x /usr/local/bin/start-neko.sh
 COPY --from=neko /usr/bin/neko /usr/bin/neko
 COPY --from=client /src/dist/ /var/www
 COPY --from=xorg-deps /usr/local/lib/xorg/modules/drivers/dummy_drv.so /usr/lib/xorg/modules/drivers/dummy_drv.so
 COPY --from=xorg-deps /usr/local/lib/xorg/modules/input/neko_drv.so /usr/lib/xorg/modules/input/neko_drv.so
+COPY --from=xorg-deps /usr/local/bin/weston-capture /usr/local/bin/weston-capture
 
 COPY shared/start-pulseaudio.sh /usr/local/bin/start-pulseaudio.sh
 RUN chmod +x /usr/local/bin/start-pulseaudio.sh

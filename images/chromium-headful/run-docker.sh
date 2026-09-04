@@ -12,6 +12,7 @@ mkdir -p "$HOST_RECORDINGS_DIR"
 
 # RUN_AS_ROOT defaults to false in docker
 RUN_AS_ROOT="${RUN_AS_ROOT:-false}"
+DISPLAY_BACKEND="${DISPLAY_BACKEND:-x11}"
 
 # Build Chromium flags file and mount
 CHROMIUM_FLAGS_DEFAULT="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=* --enable-features=WebMCPTesting,DevToolsWebMCPSupport"
@@ -65,6 +66,7 @@ RUN_ARGS=(
   -e WIDTH=1920
   -e TZ=${TZ:-'America/Los_Angeles'}
   -e RUN_AS_ROOT="$RUN_AS_ROOT"
+  -e DISPLAY_BACKEND="$DISPLAY_BACKEND"
   --mount type=bind,src="$FLAGS_FILE",dst=/chromium/flags
 )
 

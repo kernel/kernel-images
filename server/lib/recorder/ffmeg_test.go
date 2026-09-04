@@ -1,6 +1,7 @@
 package recorder
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -144,6 +145,23 @@ func TestFFmpegArgs_IncludesPulseAudioWhenEnabled(t *testing.T) {
 	assert.Contains(t, args, "aac")
 	assert.NotContains(t, args, "aresample=async=1")
 	assert.NotContains(t, args, "aresample=async=1:first_pts=0")
+}
+
+func TestFFmpegArgs_CaptureFrameUsesPipeInput(t *testing.T) {
+	tempDir := t.TempDir()
+	params := defaultParams(tempDir)
+	params.CaptureFrame = func(context.Context) ([]byte, error) { return []byte("png"), nil }
+
+	args, err := ffmpegArgs(params, filepath.Join(tempDir, "wayland.mp4"))
+	require.NoError(t, err)
+	assert.Contains(t, args, "image2pipe")
+	assert.Contains(t, args, "pipe:0")
+	assert.Contains(t, args, "-vcodec")
+	assert.Contains(t, args, "png")
+	assert.Contains(t, args, "veryfast")
+	assert.Contains(t, args, "zerolatency")
+	assert.NotContains(t, args, "x11grab")
+	assert.NotContains(t, args, "-use_wallclock_as_timestamps")
 }
 
 func TestFFmpegArgs_VideoOnlyKeepsLegacyFlags(t *testing.T) {

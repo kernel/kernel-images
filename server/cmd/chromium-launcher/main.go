@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/display"
 	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
@@ -56,19 +57,21 @@ func main() {
 	// Wait for devtools port to be available (handles SIGKILL socket cleanup delay)
 	waitForPort(internalPort, 5*time.Second)
 
-	// Wait for the X server. The wrapper starts chromium in parallel with
-	// xorg/xvfb, so the display socket may not be ready yet — without this
-	// gate chromium would fail on connect and supervisord would restart us.
-	if d := x11.WaitForDisplay(":1", 20*time.Second); d >= 20*time.Second {
-		fmt.Fprintf(os.Stderr, "warning: X display :1 not responsive after %s\n", d)
+	displayConfig, displayFlags, displayEnv, err := displayConfigFromEnv()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "display backend configuration failed: %v\n", err)
+		os.Exit(1)
 	}
 
-	// Headful: wait for mutter to register before exec'ing chromium. If
-	// chromium maps its window with no WM present, the CSD hint it sends has
-	// no listener; mutter starts later, reparents the existing window, and
-	// applies default SSD — i.e., the titlebar with the close X. Headless
-	// has no WM, so skip.
-	if !*headless {
+	// Wait for the selected display server. The wrapper starts the display
+	// service in parallel with Chromium, so the socket may not be ready yet.
+	if d := waitForDisplay(displayConfig, 20*time.Second); d >= 20*time.Second {
+		fmt.Fprintf(os.Stderr, "warning: %s display is not responsive after %s\n", displayConfig.Backend, d)
+	}
+
+	// Headful X11 needs Mutter to register before Chromium maps its window so
+	// Chromium's client-side decoration negotiation is handled correctly.
+	if !*headless && displayConfig.Backend == display.BackendX11 {
 		if d := x11.WaitForMutter(20 * time.Second); d >= 20*time.Second {
 			fmt.Fprintf(os.Stderr, "warning: mutter not registered after %s\n", d)
 		}
@@ -83,6 +86,7 @@ func main() {
 	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
 	final = chromiumflags.TranslateKernelDisableFeatures(final)
 	final = withDefaultPrivateNetworkBypass(final)
+	final = append(final, displayFlags...)
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
@@ -108,8 +112,8 @@ func main() {
 	// recorder's sink; the root path below relies on this inherited env, while the
 	// non-root path re-asserts them in its runuser env allowlist.
 	env := os.Environ()
+	env = append(env, displayEnv...)
 	env = append(env,
-		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
 		"PULSE_SERVER="+pulseServer,
 		"PULSE_SINK="+pulseSink,
@@ -143,17 +147,17 @@ func main() {
 	// daemon playback lands on: Chromium's AudioManagerPulse honors it to redirect
 	// playback into KernelOutput (see media/audio/pulse/audio_manager_pulse.cc
 	// GetDefaultOutputDeviceID), which is the sink the recorder captures.
-	inner := []string{
-		"env",
-		"DISPLAY=:1",
+	inner := []string{"env"}
+	inner = append(inner, displayEnv...)
+	inner = append(inner,
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
-		"PULSE_SERVER=" + pulseServer,
-		"PULSE_SINK=" + pulseSink,
+		"PULSE_SERVER="+pulseServer,
+		"PULSE_SINK="+pulseSink,
 		"XDG_CONFIG_HOME=/home/kernel/.config",
 		"XDG_CACHE_HOME=/home/kernel/.cache",
 		"HOME=/home/kernel",
 		*chromiumPath,
-	}
+	)
 	inner = append(inner, chromiumArgs...)
 	argv := append([]string{filepath.Base(runuserPath), "-u", "kernel", "--"}, inner...)
 	if err := syscall.Exec(runuserPath, argv, env); err != nil {
