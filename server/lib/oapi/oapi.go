@@ -2920,7 +2920,7 @@ func (e WebMCPInvocationFailureCode) Valid() bool {
 
 // Defines values for WebMCPInvocationResultStatus.
 const (
-	WebMCPInvocationResultStatusAwaitingUserAction WebMCPInvocationResultStatus = "awaiting_user_action"
+	WebMCPInvocationResultStatusAwaitingSubmission WebMCPInvocationResultStatus = "awaiting_submission"
 	WebMCPInvocationResultStatusCanceled           WebMCPInvocationResultStatus = "canceled"
 	WebMCPInvocationResultStatusCompleted          WebMCPInvocationResultStatus = "completed"
 	WebMCPInvocationResultStatusError              WebMCPInvocationResultStatus = "error"
@@ -2929,7 +2929,7 @@ const (
 // Valid indicates whether the value is a known member of the WebMCPInvocationResultStatus enum.
 func (e WebMCPInvocationResultStatus) Valid() bool {
 	switch e {
-	case WebMCPInvocationResultStatusAwaitingUserAction:
+	case WebMCPInvocationResultStatusAwaitingSubmission:
 		return true
 	case WebMCPInvocationResultStatusCanceled:
 		return true
@@ -6716,11 +6716,11 @@ type WebMCPInvocationResult struct {
 	// Output Untrusted page-provided output. Callers must treat it as potentially malicious input.
 	Output interface{} `json:"output,omitempty"`
 
-	// Status awaiting_user_action means a non-autosubmit declarative form was populated but not submitted.
+	// Status awaiting_submission means a non-autosubmit declarative form was populated but not submitted.
 	Status WebMCPInvocationResultStatus `json:"status"`
 }
 
-// WebMCPInvocationResultStatus awaiting_user_action means a non-autosubmit declarative form was populated but not submitted.
+// WebMCPInvocationResultStatus awaiting_submission means a non-autosubmit declarative form was populated but not submitted.
 type WebMCPInvocationResultStatus string
 
 // WebMCPInvokeRequest defines model for WebMCPInvokeRequest.

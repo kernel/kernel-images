@@ -507,7 +507,7 @@ func TestInvocationPreservesIframeResponseAfterParentNavigation(t *testing.T) {
 	require.Equal(t, "Completed", result.Status)
 }
 
-func TestNonAutosubmitDeclarativeInvocationReturnsAfterPopulatingForm(t *testing.T) {
+func TestNonAutosubmitDeclarativeInvocationAwaitsSubmissionAfterPopulatingForm(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	fake.nonAutosubmitDeclarative = true
 	manager := NewManager(staticUpstream{url: fake.url})
@@ -519,8 +519,9 @@ func TestNonAutosubmitDeclarativeInvocationReturnsAfterPopulatingForm(t *testing
 	result, err := manager.Invoke(ctx, toolRef, map[string]any{"cardNumber": "4242424242424242"})
 	require.NoError(t, err)
 	require.Equal(t, "invocation-1", result.InvocationID)
-	require.Equal(t, "awaiting_user_action", result.Status)
-	require.Equal(t, "Form fields populated; submission has not started.", result.Output.(map[string]any)["message"])
+	require.Equal(t, "awaiting_submission", result.Status)
+	require.Equal(t, true, result.Output.(map[string]any)["form_populated"])
+	require.Equal(t, false, result.Output.(map[string]any)["submitted"])
 }
 
 func TestInvocationReturnsCompletedResponseBeforeTargetDetach(t *testing.T) {

@@ -72,15 +72,16 @@ test('returns non-autosubmit form activation without waiting for submission', as
     fetchImpl: async () =>
       jsonResponse({
         invocation_id: 'invocation-1',
-        status: 'awaiting_user_action',
-        output: {message: 'Form fields populated; submission has not started.'},
+        status: 'awaiting_submission',
+        output: {form_populated: true, submitted: false},
       }),
   });
 
   const result = await client.invokeTool('wmcp_fill', {email: 'buyer@example.com'});
-  assert.equal(result.status, 'awaiting_user_action');
+  assert.equal(result.status, 'awaiting_submission');
   assert.deepEqual(result.output, {
-    message: 'Form fields populated; submission has not started.',
+    form_populated: true,
+    submitted: false,
   });
 });
 

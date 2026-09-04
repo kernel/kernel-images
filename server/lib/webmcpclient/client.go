@@ -327,7 +327,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		return InvocationResult{}, ErrToolNotFound
 	}
 	sessionID, frameID, name := tool.sessionID, tool.frameID, tool.name
-	awaitingUserAction := tool.declarative && (tool.annotations == nil || !tool.annotations.Autosubmit)
+	awaitingSubmission := tool.declarative && (tool.annotations == nil || !tool.annotations.Autosubmit)
 	c.stateMu.RUnlock()
 	if !c.sessionExists(sessionID) {
 		return InvocationResult{}, ErrToolNotFound
@@ -356,7 +356,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 	}
 
 	key := invocationKey{sessionID: sessionID, invocationID: started.InvocationID}
-	if awaitingUserAction {
+	if awaitingSubmission {
 		c.stateMu.Lock()
 		if response, completed := c.invocations[key]; completed {
 			delete(c.invocations, key)
@@ -372,9 +372,10 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		c.stateMu.Unlock()
 		return InvocationResult{
 			InvocationID: started.InvocationID,
-			Status:       "awaiting_user_action",
+			Status:       "awaiting_submission",
 			Output: map[string]any{
-				"message": "Form fields populated; submission has not started.",
+				"form_populated": true,
+				"submitted":      false,
 			},
 		}, nil
 	}
