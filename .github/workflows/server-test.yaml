@@ -99,6 +99,12 @@ jobs:
           cache: true
           cache-dependency-path: server/go.sum
 
+      - name: Run CDP telemetry browser regressions
+        run: go test -race ./lib/cdpmonitor -run '^(TestNetworkCapture|TestTelemetryConnection)' -count=1 -v
+        working-directory: server
+        env:
+          KERNEL_CDPMONITOR_CHROME_E2E: "1"
+
       - name: Compute short SHA for images
         id: vars
         shell: bash
