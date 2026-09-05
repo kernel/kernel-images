@@ -24,17 +24,18 @@ type controlledRunner struct {
 	once       sync.Once
 }
 
-func (r *controlledRunner) Run(ctx context.Context, prompt string, emit func(string)) error {
+func (r *controlledRunner) Run(ctx context.Context, prompt string, turn *Turn) error {
 	r.executions.Add(1)
 	r.once.Do(func() { close(r.started) })
-	emit("before disconnect")
+	if err := turn.Output("before disconnect"); err != nil {
+		return err
+	}
 	select {
 	case <-r.release:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	emit("after disconnect")
-	return nil
+	return turn.Output("after disconnect")
 }
 
 func setup(t *testing.T) (*controlledRunner, *httptest.Server) {
