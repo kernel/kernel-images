@@ -7,6 +7,11 @@ import (
 	"time"
 )
 
+// Shared/service workers and background pages can outlive their creating tab.
+func inheritsParentLifetime(targetType string) bool {
+	return targetType == "iframe" || targetType == "worker"
+}
+
 func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInfo) {
 	if !t.tracksTarget(target.Type) {
 		return
@@ -16,7 +21,7 @@ func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInf
 		t.stateMu.Unlock()
 		return
 	}
-	if target.Type != "page" && parentSessionID != "" && t.sessions[parentSessionID] == nil {
+	if inheritsParentLifetime(target.Type) && parentSessionID != "" && t.sessions[parentSessionID] == nil {
 		t.stateMu.Unlock()
 		return
 	}
@@ -37,7 +42,7 @@ func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInf
 		}
 	}
 	ownedParentID := ""
-	if target.Type != "page" {
+	if inheritsParentLifetime(target.Type) {
 		ownedParentID = parentSessionID
 	}
 	t.sessions[sessionID] = &session{id: sessionID, parentID: ownedParentID, target: target, tabID: tabID}
@@ -205,9 +210,12 @@ func (t *Tracker) bindSessionsLocked() {
 	for changed := true; changed; {
 		changed = false
 		for _, sess := range t.sessions {
+			if sess.target.Type != "page" && !inheritsParentLifetime(sess.target.Type) {
+				continue
+			}
 			// Explicit flat attachments have no parent session on the message.
 			// Recover it from target identity even when frame tracking is disabled.
-			if sess.target.Type != "page" && sess.parentID == "" {
+			if inheritsParentLifetime(sess.target.Type) && sess.parentID == "" {
 				for id, parent := range t.sessions {
 					if id != sess.id && parent.target.TargetID == sess.target.ParentFrameID {
 						sess.parentID = id
@@ -221,7 +229,7 @@ func (t *Tracker) bindSessionsLocked() {
 			}
 			if tabID := t.tabsByTarget[sess.target.TargetID]; tabID != 0 {
 				sess.tabID = tabID
-			} else if parent := t.sessions[sess.parentID]; parent != nil && parent.tabID != 0 {
+			} else if parent := t.sessions[sess.parentID]; parent != nil {
 				sess.tabID = parent.tabID
 			} else if parentFrame := t.frames[sess.target.ParentFrameID]; parentFrame != nil {
 				sess.tabID = parentFrame.tabID
