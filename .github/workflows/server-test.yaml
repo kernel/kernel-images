@@ -41,6 +41,17 @@ jobs:
         with:
           node-version: 22
 
+      - name: Set up Python for ACP interoperability tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned ACP bridge and client
+        run: |
+          python -m venv "$RUNNER_TEMP/acp"
+          "$RUNNER_TEMP/acp/bin/python" -m pip install -r server/runtime/acp/requirements.txt
+          echo "AGENT_PROXY_TEST_ACPREMOTE=$RUNNER_TEMP/acp/bin/acpremote" >> "$GITHUB_ENV"
+
       # categorygen's checks (unclassified route, category that isn't control or
       # platform, classified route with no handler) only run when the generator
       # does, and its only other caller is `make oapi-generate`, which needs the

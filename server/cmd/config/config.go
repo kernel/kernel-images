@@ -15,6 +15,9 @@ type Config struct {
 	// Server configuration
 	Port int `envconfig:"PORT" default:"10001"`
 
+	// Optional trusted launch catalog. Empty leaves the ACP endpoints disabled.
+	AgentConfigPath string `envconfig:"AGENT_CONFIG_PATH" default:""`
+
 	// Port for the Prometheus metrics endpoint. Served on a separate
 	// listener so scrapes bypass the scale-to-zero middleware and the
 	// external API surface.
@@ -89,6 +92,7 @@ func (c *Config) LogValue() slog.Value {
 	}
 	return slog.GroupValue(
 		slog.Int("port", c.Port),
+		slog.String("agent_config_path", c.AgentConfigPath),
 		slog.Int("metrics_port", c.MetricsPort),
 		slog.Int("frame_rate", c.FrameRate),
 		slog.Int("display_num", c.DisplayNum),
