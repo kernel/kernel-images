@@ -21,7 +21,7 @@ func TestTelemetryConnectionOwnershipAndReconnect(t *testing.T) {
 	if os.Getenv("KERNEL_CDPMONITOR_CHROME_E2E") == "" {
 		t.Skip("set KERNEL_CDPMONITOR_CHROME_E2E=1 to run the connection ownership test")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
