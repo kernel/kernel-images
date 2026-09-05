@@ -110,13 +110,16 @@ func findChromium(t *testing.T) string {
 	return ""
 }
 
-func launchChromium(t *testing.T, ctx context.Context, chrome string) string {
+func launchChromium(t *testing.T, ctx context.Context, chrome string, extraArgs ...string) string {
 	t.Helper()
 	dir := t.TempDir()
-	cmd := exec.CommandContext(ctx, chrome,
+	args := []string{
 		"--headless=new", "--no-sandbox", "--disable-gpu",
-		"--remote-debugging-port=0", "--user-data-dir="+dir, "about:blank",
-	)
+		"--remote-debugging-port=0", "--user-data-dir=" + dir,
+	}
+	args = append(args, extraArgs...)
+	args = append(args, "about:blank")
+	cmd := exec.CommandContext(ctx, chrome, args...)
 	stderr, err := cmd.StderrPipe()
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())

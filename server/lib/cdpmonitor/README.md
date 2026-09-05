@@ -8,6 +8,28 @@ The monitor is the browser-facing layer of the kernel browser logging pipeline. 
 
 Chrome can restart independently of the monitor. When that happens, `UpstreamProvider` pushes a new DevTools URL and the monitor reconnects automatically, emitting lifecycle events so consumers can track continuity.
 
+## Real-Chromium network regression tests
+
+From `server/`, with Chromium on `PATH`:
+
+```sh
+KERNEL_CDPMONITOR_CHROME_E2E=1 go test ./lib/cdpmonitor \
+  -run '^TestNetworkCaptureAcrossFrames$' -count=1 -v
+```
+
+The fixture uses local HTTP servers and forces site isolation; it needs no Kernel
+credentials or external websites. It checks sent and aborted POSTs from top-level,
+same-origin, cross-origin, and nested cross-origin frames, in default and isolated
+browser contexts, with frames created before and after the monitor starts. It
+verifies browser results and server-received bodies before asserting telemetry
+request/response bodies and failure correlation.
+
+These tests currently fail for cross-origin and nested cross-origin frames because
+the collector does not attach their OOPIF targets. Top-level and same-origin controls
+pass. They assert the desired behavior, not the current omission, and do not prescribe
+an attachment strategy. Without the environment variable they skip, matching the
+other real-Chromium tests in this package.
+
 ## Event taxonomy
 
 **CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` (classified from a branded 5xx response carrying the `X-Kernel-Proxy-Error` header), `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`. `proxy_error` is an opt-in per-session/per-URL refinement of the raw `network` events: it is only observable while the network category (CDP collector) is running, so it is not a default-on alerting signal.
