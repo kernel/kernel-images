@@ -23,13 +23,14 @@ import (
 )
 
 type Fixture struct {
-	URL        string
-	Probe      probe.Probe
-	Prompt     string
-	Dispatches func() int
-	ProcessID  func() int
-	Kill       func()
-	Timeout    time.Duration
+	URL         string
+	Probe       probe.Probe
+	Prompt      string
+	Dispatches  func() int
+	ForcedStops func() int
+	ProcessID   func() int
+	Kill        func()
+	Timeout     time.Duration
 }
 type Factory func(*testing.T) Fixture
 

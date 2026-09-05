@@ -125,8 +125,9 @@ ACP v1's prompt response means completion, not acceptance. The service's
 `accepted` event means the session service has journaled the command; it does
 **not** claim the agent has already accepted it. On cancellation the ACP driver
 sends `session/cancel` and waits up to five seconds for completion before killing
-the agent process group. It does not reuse an agent that failed to stop. It does
-not advertise client filesystem or terminal delegation; execution remains local
+the agent process group. A forced kill fails the harness cancellation gate; it
+is not silently counted as native cancellation support. It does not reuse an
+agent that failed to stop. It does not advertise client filesystem or terminal delegation; execution remains local
 to the agent. Unsupported server requests receive an explicit protocol error.
 
 `FileStore` appends and fsyncs before publishing events or releasing work. On

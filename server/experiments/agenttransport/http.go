@@ -111,11 +111,10 @@ func (s *Reference) stream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	controller := http.NewResponseController(w)
-	flush := func() error { return controller.Flush() }
 	if err := controller.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return
 	}
-	if err := flush(); err != nil {
+	if err := controller.Flush(); err != nil {
 		return
 	}
 	heartbeat := time.NewTicker(time.Second)
@@ -137,7 +136,7 @@ func (s *Reference) stream(w http.ResponseWriter, r *http.Request) {
 			if _, err := fmt.Fprintf(w, "id: %d\ndata: %s\n\n", event.Sequence, data); err != nil {
 				return
 			}
-			if err := flush(); err != nil {
+			if err := controller.Flush(); err != nil {
 				return
 			}
 			cursor = event.Sequence
@@ -153,7 +152,7 @@ func (s *Reference) stream(w http.ResponseWriter, r *http.Request) {
 			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
 				return
 			}
-			if err := flush(); err != nil {
+			if err := controller.Flush(); err != nil {
 				return
 			}
 		}

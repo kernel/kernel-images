@@ -168,5 +168,5 @@ func fixture(t *testing.T, dir string, config acp.Config, timeout time.Duration)
 	}
 	server := httptest.NewServer(runtime)
 	t.Cleanup(func() { runtime.Close(); server.Close() })
-	return acceptance.Fixture{URL: server.URL, Probe: probe.Probe{Dir: dir}, Prompt: prompt, Dispatches: client.Dispatches, ProcessID: client.PID, Kill: client.Close, Timeout: timeout}
+	return acceptance.Fixture{URL: server.URL, Probe: probe.Probe{Dir: dir}, Prompt: prompt, Dispatches: client.Dispatches, ForcedStops: client.ForcedStops, ProcessID: client.PID, Kill: client.Close, Timeout: timeout}
 }

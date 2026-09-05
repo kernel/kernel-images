@@ -57,6 +57,9 @@ func RunPermissions(t *testing.T, factory Factory) {
 				control := transport.Control{ID: "cancel-1", OperationID: command.ID}
 				controlPost(t, ctx, fixture.URL, "/cancel", control, 202)
 				waitState(t, ctx, fixture.URL, command.ID, "cancelled")
+				if fixture.ForcedStops() != 0 {
+					t.Fatal("agent did not acknowledge cancellation; driver had to kill it")
+				}
 				controlPost(t, ctx, fixture.URL, "/cancel", control, 202)
 				calls, err := fixture.Probe.Count()
 				if err != nil {

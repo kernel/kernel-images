@@ -66,6 +66,7 @@ type Client struct {
 	sessionID    string
 	Capabilities json.RawMessage
 	dispatches   atomic.Int32
+	forcedStops  atomic.Int32
 }
 
 func Start(ctx context.Context, config Config, stderr io.Writer) (*Client, error) {
@@ -168,8 +169,9 @@ func Start(ctx context.Context, config Config, stderr io.Writer) (*Client, error
 	}
 	return c, nil
 }
-func (c *Client) PID() int        { return c.command.Process.Pid }
-func (c *Client) Dispatches() int { return int(c.dispatches.Load()) }
+func (c *Client) PID() int         { return c.command.Process.Pid }
+func (c *Client) Dispatches() int  { return int(c.dispatches.Load()) }
+func (c *Client) ForcedStops() int { return int(c.forcedStops.Load()) }
 func (c *Client) Close() {
 	c.once.Do(func() {
 		close(c.stopped)
@@ -341,6 +343,7 @@ func (c *Client) Run(ctx context.Context, prompt string, turn *transport.Turn) e
 		defer cancel()
 		if result == nil {
 			if _, err := c.receive(drain, id, turn); err != nil {
+				c.forcedStops.Add(1)
 				c.Close()
 			}
 		}
