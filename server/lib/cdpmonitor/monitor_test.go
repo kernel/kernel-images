@@ -223,6 +223,28 @@ func TestSurfaceDiscovery(t *testing.T) {
 	m.sessionsMu.RUnlock()
 	assert.Equal(t, "target-xyz", info.targetID)
 	assert.Equal(t, "page", info.targetType)
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":  "session-abc",
+			"targetInfo": map[string]any{"targetId": "target-xyz", "type": "page"},
+		},
+	})
+	// Navigation is an ordered barrier after both attachment notifications.
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Page.frameNavigated", "sessionId": "session-abc",
+		"params": map[string]any{"frame": map[string]any{"id": "target-xyz", "url": "https://example.com/"}},
+	})
+	ec.waitFor(t, EventNavigation, time.Second)
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	opened := 0
+	for _, event := range ec.events {
+		if event.Type == EventTabOpened {
+			opened++
+		}
+	}
+	require.Equal(t, 1, opened)
 }
 
 // TestInjectScriptEvaluatesCurrentDocument verifies that when a page target

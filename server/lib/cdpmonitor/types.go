@@ -75,9 +75,10 @@ const targetTypePage = "page"
 
 // targetInfo holds metadata about an attached CDP target/session.
 type targetInfo struct {
-	targetID   string
-	url        string
-	targetType string
+	targetID      string
+	url           string
+	targetType    string
+	parentFrameID string
 }
 
 // cdpError is the JSON-RPC error object returned by Chrome.

@@ -29,11 +29,12 @@ const (
 )
 
 type SessionTarget struct {
-	ID       string
-	Type     string
-	URL      string
-	Title    string
-	OpenerID string
+	ID            string
+	Type          string
+	URL           string
+	Title         string
+	OpenerID      string
+	ParentFrameID string
 }
 
 type Event struct {
