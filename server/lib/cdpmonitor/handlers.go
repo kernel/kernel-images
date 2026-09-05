@@ -162,16 +162,6 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		if m.decodeParams(msg.Method, msg.Params, &p) {
 			m.handleTimelineEvent(p, msg.SessionID)
 		}
-	case "Target.attachedToTarget":
-		var p cdpTargetAttachedToTargetParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleAttachedToTarget(ctx, p)
-		}
-	case "Target.detachedFromTarget":
-		var p cdpTargetDetachedFromTargetParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleDetachedFromTarget(p)
-		}
 	case "Inspector.targetCrashed":
 		// No params; the crashed page is identified by the session it fires on.
 		m.handleTargetCrashed(msg.SessionID)
@@ -768,6 +758,9 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	cs := m.computedStates[sessionID]
 	m.sessionsMu.RUnlock()
 
+	if info.targetType == "iframe" && p.Frame.ParentID == "" {
+		p.Frame.ParentID = info.parentFrameID
+	}
 	data, _ := json.Marshal(oapi.BrowserPageNavigationEventData{
 		SessionId:     sessionID,
 		TargetId:      info.targetID,
@@ -864,9 +857,10 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 		return
 	}
 	m.sessions[p.SessionID] = targetInfo{
-		targetID:   p.TargetInfo.TargetID,
-		url:        p.TargetInfo.URL,
-		targetType: p.TargetInfo.Type,
+		targetID:      p.TargetInfo.TargetID,
+		url:           p.TargetInfo.URL,
+		targetType:    p.TargetInfo.Type,
+		parentFrameID: p.TargetInfo.ParentFrameID,
 	}
 	if p.TargetInfo.Type == targetTypePage {
 		m.computedStates[p.SessionID] = newComputedState(m.publish)

@@ -218,6 +218,7 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 			TargetInfo: cdpTargetTargetInfo{
 				TargetID: event.Target.ID, Type: event.Target.Type,
 				URL: event.Target.URL, Title: event.Target.Title, OpenerID: event.Target.OpenerID,
+				ParentFrameID: event.Target.ParentFrameID,
 			},
 		})
 	case browsersurface.EventSessionRemoved:
@@ -227,6 +228,15 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 		// discovered through enumeration whose attach response arrived first.
 		if event.Message.Method == "Target.attachedToTarget" || event.Message.Method == "Target.detachedFromTarget" {
 			return
+		}
+		// Preserve crash reporting even if Chrome has already detached the session.
+		if event.Message.SessionID != "" && event.Message.Method != "Inspector.targetCrashed" {
+			m.sessionsMu.RLock()
+			_, tracked := m.sessions[event.Message.SessionID]
+			m.sessionsMu.RUnlock()
+			if !tracked {
+				return
+			}
 		}
 		m.dispatchEvent(cdpMessage{
 			Method: event.Message.Method, Params: event.Message.Params, SessionID: event.Message.SessionID,
