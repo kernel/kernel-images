@@ -1,6 +1,6 @@
 # CDP Monitor
 
-The monitor is the browser-facing layer of the kernel browser logging pipeline. It connects to Chrome's DevTools endpoint, tracks all page sessions via CDP's `Target.setAutoAttach`, and converts raw CDP notifications into typed `events.Event` values for downstream consumers.
+The monitor is the browser-facing layer of the kernel browser logging pipeline. It owns a connection to Chrome's DevTools endpoint, uses `browsersurface` to track page, iframe, and worker sessions, and converts raw CDP notifications into typed `events.Event` values for downstream consumers.
 
 ## Overview
 
@@ -24,11 +24,12 @@ browser contexts, with frames created before and after the monitor starts. It
 verifies browser results and server-received bodies before asserting telemetry
 request/response bodies and failure correlation.
 
-These tests currently fail for cross-origin and nested cross-origin frames because
-the collector does not attach their OOPIF targets. Top-level and same-origin controls
-pass. They assert the desired behavior, not the current omission, and do not prescribe
-an attachment strategy. Without the environment variable they skip, matching the
-other real-Chromium tests in this package.
+All 32 cases assert successful capture, without prescribing an attachment strategy.
+`TestNetworkCaptureFromWorkers` covers dedicated, shared, and service workers;
+`TestTelemetryConnectionOwnershipAndReconnect` checks independent client ownership
+and fresh sessions after reconnect. Without the environment variable these tests
+skip, matching the other real-Chromium tests in this package. They exercise settled
+targets, not requests issued before their capture domains finish initializing.
 
 ## Event taxonomy
 
@@ -44,7 +45,9 @@ other real-Chromium tests in this package.
 
 | Concern | Where |
 | --- | --- |
-| WebSocket lifecycle (connect, read, reconnect) | `monitor.go` |
+| Connection ownership and reconnect | `monitor.go` |
+| CDP transport and command routing | `../cdpclient` |
+| Target discovery and attachment lifecycle | `../browsersurface` |
 | CDP domain setup per session | `domains.go` |
 | Event translation (CDP params to `events.Event`) | `handlers.go` |
 | Synthetic event state machines | `computed.go` |
@@ -55,53 +58,48 @@ other real-Chromium tests in this package.
 
 ## Internals
 
-### Reconnect model
+### Connection ownership and discovery
 
-`subscribeToUpstream` listens to `UpstreamProvider.Subscribe()` for new DevTools URLs. On each URL change (indicating Chrome restarted), `handleUpstreamRestart` tears down the existing connection, dials the new URL with capped-exponential backoff (250 ms → 500 ms → 1 s → 2 s, up to 10 attempts), then restarts `readLoop` and re-initializes all CDP sessions. `restartMu` serializes concurrent restart signals so rapid Chrome restarts do not produce overlapping reconnects.
+Each monitor owns a `cdpclient.Client` and a `browsersurface.Tracker`. No connection,
+CDP session, or tracker state is shared with WebMCP. Telemetry adds worker and
+background-page targets with `WithAdditionalTargets` and uses `WithoutLocations`: it receives attachment events without waiting for window
+lookup or frame-tree initialization, and enables its own capture domains.
 
-### Goroutines
+The tracker explicitly discovers and attaches pages, OOPIFs, shared workers, and
+service workers (and extension background pages). Dedicated workers require parent-session `Target.setAutoAttach`;
+that subscription is also installed on worker sessions to discover nested workers.
+Only `worker` targets match this auto-attach filter, avoiding duplicate attachment
+of explicitly discovered OOPIFs. WebMCP's default tracker still tracks page/frame
+locations and does not subscribe to workers.
 
-| Goroutine | Lifetime | Tracked by |
-| --- | --- | --- |
-| `readLoop` | one per WebSocket connection | `done` channel |
-| `subscribeToUpstream` | same as `lifecycleCtx` | `asyncWg` |
-| `sweepPendingRequests` | same as `lifecycleCtx` | `asyncWg` |
-| `initSession` | short-lived, one per connect or reconnect | `asyncWg` |
-| `attachExistingTargets` wrapper | short-lived, one per existing target on reconnect | `asyncWg` |
-| `enableDomains` + `injectScript` | short-lived, one per target attach | `asyncWg` |
-| `fetchResponseBody` | one per completed network request | `asyncWg` |
-| `captureScreenshot` | one per screenshot trigger | `asyncWg` |
+### Reconnect and shutdown
 
-`Stop()` cancels `lifecycleCtx`, waits for `readLoop` via `done`, then waits for all other goroutines via `asyncWg` before closing the connection.
+`subscribeToUpstream` listens for new DevTools URLs. `handleUpstreamRestart` cancels
+the current connection context, closes its protocol, stops consuming its events,
+and drains capture work before clearing state and constructing a new client/tracker.
+Dial retries use capped-exponential backoff (250 ms, 500 ms, 1 s, then 2 s; at most
+10 attempts). CDP sessions and pending requests never carry into the next connection.
 
-### Lock ordering
+`asyncWg` tracks the upstream listener and request sweeper. `captureWg` tracks
+tracker startup, domain initialization, body fetches, and screenshots. `Stop` cancels
+the lifecycle, waits for the lifecycle workers, and drains the current connection.
+Closing the protocol unblocks pending commands, including callers without the
+monitor's cancellation context.
 
-Locks must be acquired left to right. Never hold a lock on the left while acquiring one further right.
+### Synchronization
 
-```
-restartMu -> lifeMu -> pendReqMu -> computed.mu -> pendMu
-restartMu -> lifeMu -> sessionsMu
-```
+`restartMu` serializes connection replacement. `lifeMu` protects the connection
+pointer and lifecycle context/cancel function; it is released before waiting on
+connection or capture work. `sessionsMu` protects target metadata and computed-state
+lookup. `pendReqMu` protects requests keyed by **(CDP session ID, request ID)**;
+request IDs from different targets must not collide. Detaching a session removes
+only that session's requests.
 
-`computed.mu` and `sessionsMu` are never held simultaneously; `cs.stop()` and `cs.resetOnNavigation()` are called only after the relevant `sessionsMu` critical section is complete.
-
-`bindingRateMu` is independent of this ordering and is always acquired alone.
-
-| Lock | Protects |
-| --- | --- |
-| `restartMu` | Serializes `handleUpstreamRestart` to prevent overlapping reconnects from rapid Chrome restarts |
-| `lifeMu` | `conn`, `lifecycleCtx`, `cancel`, `done`, `readReady`: all fields that change during Start / Stop / reconnect |
-| `pendReqMu` | `pendingRequests` (requestId -&gt; `networkReqState`): in-flight network requests accumulating request/response metadata until `loadingFinished` |
-| `computed.mu` | All `computedState` fields: counters and timers for the `network_idle`, `page_layout_settled`, and `page_navigation_settled` state machines |
-| `pendMu` | `pending` (id -&gt; reply channel): in-flight CDP commands waiting for a response from Chrome |
-| `sessionsMu` | `sessions` (sessionID -&gt; `targetInfo`): the set of currently attached CDP targets (tabs, iframes, workers) |
-| `bindingRateMu` | `bindingLastSeen` (sessionID:eventType -&gt; time): rate-limit state for `__kernelEvent` binding calls |
-
-Fields that need no mutex use `sync/atomic`: `nextID`, `mainSessionID`, `running`, `lastScreenshotAt`, `screenshotInFlight`.
-
-### WebSocket concurrency
-
-`coder/websocket` guarantees one concurrent `Read` and one concurrent `Write` are safe on the same connection. `readLoop` is the sole reader. All writes go through `send`, which calls `conn.Write` directly; `conn.Write` is internally serialized by the library, so no external write mutex is needed.
+`computed.mu` and `sessionsMu` are never held simultaneously. Navigation updates
+can hold `pendReqMu` while acquiring `computed.mu`, not the reverse. Binding/proxy
+rate-limit locks are acquired independently. Screenshot state, the main page
+session, and running state use atomics. CDP reads and command-response routing are
+owned by `cdpclient`; the monitor consumes the tracker's ordered event subscription.
 
 ## Event data model
 

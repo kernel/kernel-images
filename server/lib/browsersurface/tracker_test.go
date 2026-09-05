@@ -17,11 +17,14 @@ type fakeProtocol struct {
 	windowIDs           map[string]int
 	attachFailures      int
 	attachCalls         map[string]int
+	autoAttachCalls     map[string]int
 	detachCalls         map[string]int
 	pageEnableFailures  map[string]int
 	pageEnableCalls     map[string]int
 	frameTreeFailures   map[string]int
 	beforeTargetsResult func()
+	targetInfos         []targetInfo
+	discoveredTypes     []string
 	events              chan cdpclient.Message
 	closed              chan struct{}
 }
@@ -30,6 +33,7 @@ func newFakeProtocol() *fakeProtocol {
 	return &fakeProtocol{
 		windowIDs:          map[string]int{"page-a": 10, "page-b": 20},
 		attachCalls:        make(map[string]int),
+		autoAttachCalls:    make(map[string]int),
 		detachCalls:        make(map[string]int),
 		pageEnableFailures: make(map[string]int),
 		pageEnableCalls:    make(map[string]int),
@@ -46,14 +50,28 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 	}
 	switch method {
 	case "Target.setDiscoverTargets":
+		f.mu.Lock()
+		for _, entry := range params.(map[string]any)["filter"].([]map[string]any) {
+			f.discoveredTypes = append(f.discoveredTypes, entry["type"].(string))
+		}
+		f.mu.Unlock()
+		return marshal(map[string]any{}), nil
+	case "Target.setAutoAttach":
+		f.mu.Lock()
+		f.autoAttachCalls[sessionID]++
+		f.mu.Unlock()
 		return marshal(map[string]any{}), nil
 	case "Target.getTargets":
 		f.mu.Lock()
 		beforeResult := f.beforeTargetsResult
+		targetInfos := f.targetInfos
 		f.beforeTargetsResult = nil
 		f.mu.Unlock()
 		if beforeResult != nil {
 			beforeResult()
+		}
+		if targetInfos != nil {
+			return marshal(map[string]any{"targetInfos": targetInfos}), nil
 		}
 		return marshal(map[string]any{"targetInfos": []map[string]any{
 			{"targetId": "page-a", "type": "page", "title": "Store", "url": "https://store.example/"},
@@ -77,6 +95,7 @@ func (f *fakeProtocol) Send(_ context.Context, method string, params any, sessio
 		f.mu.Unlock()
 		sessionID := map[string]string{
 			"page-a": "session-a", "page-b": "session-b", "late-page": "late-session", "oopif": "oopif-session",
+			"worker": "worker-session", "shared_worker": "shared-worker-session", "service_worker": "service-worker-session",
 		}[targetID]
 		return marshal(map[string]any{"sessionId": sessionID}), nil
 	case "Target.detachFromTarget":

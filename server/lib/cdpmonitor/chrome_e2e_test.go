@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -120,10 +121,15 @@ func launchChromium(t *testing.T, ctx context.Context, chrome string, extraArgs 
 	args = append(args, extraArgs...)
 	args = append(args, "about:blank")
 	cmd := exec.CommandContext(ctx, chrome, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stderr, err := cmd.StderrPipe()
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+	t.Cleanup(func() {
+		// Stop renderer/worker children before TempDir cleanup, not just Chrome's parent.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_, _ = cmd.Process.Wait()
+	})
 
 	// Chromium prints "DevTools listening on ws://..." to stderr once ready.
 	buf := make([]byte, 4096)
