@@ -3,6 +3,7 @@
 package agenttransport
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,8 +12,8 @@ import (
 )
 
 type Command struct {
-	ID     string `json:"id"`
-	Prompt string `json:"prompt"`
+	ID     string          `json:"id"`
+	Prompt json.RawMessage `json:"prompt"`
 }
 type Control struct {
 	ID          string `json:"id"`
@@ -31,7 +32,7 @@ type Event struct {
 	RequestID   string          `json:"requestId,omitempty"`
 }
 type Runner interface {
-	Run(context.Context, string, *Turn) error
+	Run(context.Context, json.RawMessage, *Turn) error
 }
 type Operation struct {
 	Command Command `json:"command"`
@@ -185,16 +186,29 @@ var ErrUnavailable = errors.New("runtime unavailable")
 var ErrUncertain = errors.New("agent outcome uncertain")
 
 func (s *Reference) Submit(c Command) (Operation, error) {
+	if c.ID == "" {
+		return Operation{}, ErrInvalidCommand
+	}
+	prompt, err := normalizePrompt(c.Prompt)
+	if err != nil {
+		return Operation{}, err
+	}
+	c.Prompt = prompt
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.fault != nil {
 		return Operation{}, ErrUnavailable
 	}
 	if op, ok := s.operations[c.ID]; ok {
-		if op.Command != c {
+		if !bytes.Equal(op.Command.Prompt, c.Prompt) {
 			return Operation{}, ErrConflict
 		}
-		return op, nil
+		return copyOperation(op), nil
+	}
+	if validator, ok := s.runner.(interface{ ValidatePrompt(json.RawMessage) error }); ok {
+		if err := validator.ValidatePrompt(c.Prompt); err != nil {
+			return Operation{}, err
+		}
 	}
 	for _, op := range s.operations {
 		if op.State == "running" || op.State == "cancelling" || op.State == "uncertain" {
@@ -210,7 +224,7 @@ func (s *Reference) Submit(c Command) (Operation, error) {
 	go func() {
 		defer s.workers.Done()
 		defer cancel()
-		err := s.runner.Run(ctx, c.Prompt, &Turn{s: s, id: c.ID, ctx: ctx})
+		err := s.runner.Run(ctx, append(json.RawMessage(nil), c.Prompt...), &Turn{s: s, id: c.ID, ctx: ctx})
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		state, text := "completed", ""
@@ -224,7 +238,7 @@ func (s *Reference) Submit(c Command) (Operation, error) {
 		_ = s.record(Event{OperationID: c.ID, Kind: state, Text: text})
 		delete(s.cancels, c.ID)
 	}()
-	return s.operations[c.ID], nil
+	return copyOperation(s.operations[c.ID]), nil
 }
 
 func (s *Reference) Control(c Control, permission bool) error {

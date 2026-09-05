@@ -24,7 +24,7 @@ type controlledRunner struct {
 	once       sync.Once
 }
 
-func (r *controlledRunner) Run(ctx context.Context, prompt string, turn *Turn) error {
+func (r *controlledRunner) Run(ctx context.Context, prompt json.RawMessage, turn *Turn) error {
 	r.executions.Add(1)
 	r.once.Do(func() { close(r.started) })
 	if err := turn.Output("before disconnect"); err != nil {
@@ -81,7 +81,9 @@ func subscribe(t *testing.T, server *httptest.Server, cursor int) (*http.Respons
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("subscribe: %d", response.StatusCode)
 	}
-	return response, bufio.NewScanner(response.Body)
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 4096), 16<<20)
+	return response, scanner
 }
 
 func next(t *testing.T, scanner *bufio.Scanner) Event {
@@ -122,7 +124,7 @@ func waitStarted(t *testing.T, runner *controlledRunner) {
 func TestDisconnectRetryAndReplay(t *testing.T) {
 	runner, server := setup(t)
 	response, scanner := subscribe(t, server, 0)
-	command := Command{"op-1", "perform a counted operation"}
+	command := Command{"op-1", TextPrompt("perform a counted operation")}
 	submit(t, server, command, http.StatusAccepted)
 	first := next(t, scanner)
 	second := next(t, scanner)
@@ -162,7 +164,7 @@ func TestLostSubmitResponseDoesNotRepeatExecution(t *testing.T) {
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-	command := Command{"lost-ack", "perform a counted operation"}
+	command := Command{"lost-ack", TextPrompt("perform a counted operation")}
 	body, _ := json.Marshal(command)
 	// Submit over TCP and deliberately never read the acknowledgement.
 	if _, err := fmt.Fprintf(conn, "POST /commands HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", len(body), body); err != nil {
@@ -189,7 +191,7 @@ func TestLostSubmitResponseDoesNotRepeatExecution(t *testing.T) {
 
 func TestConcurrentRetriesAndPayloadConflict(t *testing.T) {
 	runner, server := setup(t)
-	command := Command{"same-id", "original"}
+	command := Command{"same-id", TextPrompt("original")}
 	var group sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		group.Add(1)
@@ -197,7 +199,7 @@ func TestConcurrentRetriesAndPayloadConflict(t *testing.T) {
 	}
 	group.Wait()
 	waitStarted(t, runner)
-	submit(t, server, Command{"same-id", "different"}, http.StatusConflict)
+	submit(t, server, Command{"same-id", TextPrompt("different")}, http.StatusConflict)
 	if runner.executions.Load() != 1 {
 		t.Fatalf("executions: %d", runner.executions.Load())
 	}

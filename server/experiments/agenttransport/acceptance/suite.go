@@ -25,7 +25,7 @@ import (
 type Fixture struct {
 	URL         string
 	Probe       probe.Probe
-	Prompt      string
+	Prompt      json.RawMessage
 	Dispatches  func() int
 	ForcedStops func() int
 	ProcessID   func() int

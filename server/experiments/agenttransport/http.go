@@ -11,7 +11,7 @@ import (
 )
 
 func decode(w http.ResponseWriter, r *http.Request, value any) bool {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil {
 		http.Error(w, "invalid request", 400)
@@ -26,6 +26,9 @@ func decode(w http.ResponseWriter, r *http.Request, value any) bool {
 }
 func sendError(w http.ResponseWriter, err error) {
 	status := http.StatusServiceUnavailable
+	if errors.Is(err, ErrInvalidCommand) {
+		status = http.StatusBadRequest
+	}
 	if errors.Is(err, ErrConflict) {
 		status = http.StatusConflict
 	}
@@ -36,10 +39,6 @@ func (s *Reference) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && r.URL.Path == "/commands":
 		var c Command
 		if !decode(w, r, &c) {
-			return
-		}
-		if c.ID == "" || c.Prompt == "" {
-			http.Error(w, "id and prompt required", 400)
 			return
 		}
 		op, err := s.Submit(c)

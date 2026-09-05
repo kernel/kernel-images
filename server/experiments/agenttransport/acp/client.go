@@ -281,6 +281,11 @@ func (c *Client) receive(ctx context.Context, id json.RawMessage, turn *transpor
 				if !bytes.Equal(msg.ID, id) {
 					return nil, errors.New("unexpected ACP response ID")
 				}
+				if turn != nil {
+					if err := turn.Emit("acp", event.raw); err != nil {
+						return nil, err
+					}
+				}
 				if len(msg.Error) > 0 {
 					return nil, &RPCError{Detail: string(msg.Error)}
 				}
@@ -337,14 +342,17 @@ func (c *Client) receive(ctx context.Context, id json.RawMessage, turn *transpor
 		}
 	}
 }
-func (c *Client) Run(ctx context.Context, prompt string, turn *transport.Turn) error {
+func (c *Client) Run(ctx context.Context, prompt json.RawMessage, turn *transport.Turn) error {
 	c.callMu.Lock()
 	defer c.callMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := c.ValidatePrompt(prompt); err != nil {
+		return err
+	}
 	c.dispatches.Add(1)
-	id, err := c.request("session/prompt", map[string]any{"sessionId": c.sessionID, "prompt": []map[string]string{{"type": "text", "text": prompt}}})
+	id, err := c.request("session/prompt", map[string]any{"sessionId": c.sessionID, "prompt": prompt})
 	if err != nil {
 		c.Close()
 		return fmt.Errorf("%w: %v", transport.ErrUncertain, err)

@@ -4,6 +4,10 @@ An isolated **custom POST + SSE** session-service experiment and a reusable ACP 
 stdio harness driver. No production route is registered and no coding agent is
 installed automatically. Deterministic tests passing is not a real-harness pass.
 
+**Fan-out is on hold pending design alignment.** [DESIGN.md](DESIGN.md) proposes
+an ACP-first public binding, exact-session reset/resume, and scoped configuration.
+The REST routes below remain acceptance fixtures, not the proposed public API.
+
 ## Run the shared gates
 
 From `server/`:
@@ -34,6 +38,8 @@ calls or provider credentials are needed for the deterministic gates.
 | Retry contention | `TestConcurrentRetriesAndPayloadConflict` | Twenty concurrent duplicate submissions execute once; changed payload with the same ID is rejected. |
 | Cursor validation | `TestInvalidReplayCursor` | Malformed/negative cursors return 400; future cursors return 409. |
 | MCP fixture | `TestMCPToolBarrier` | MCP initialization, tool discovery, invocation, counted barrier, and release work independently of the agent. |
+| Content fidelity | `TestContentThroughHTTPACPAndJournal` | Text, image, audio, resource-link, embedded text/blob, annotations, and metadata survive HTTP, ACP, SSE, and journal recovery. Includes content above 64 KiB and preserved prompt results. |
+| Content admission | `TestContentRetryAndOwnership`, `TestInvalidPromptContent`, `TestPromptSizeLimit`, `TestUnsupportedContentDoesNotDispatch` | Formatting-insensitive retries, changed-content conflicts, owned buffers, bounded content, and capability rejection before dispatch. |
 
 The first six cases are exported through `acceptance.Run`, `RunPermissions`,
 `RunCrash`, and `RunPermissionCrash`. The **same assertions** run against real
@@ -111,7 +117,7 @@ evidence directory is configured, temporary evidence is deleted after the test.
 
 | Endpoint | Meaning |
 | --- | --- |
-| `POST /commands` | `{id,prompt}`; durable acceptance before local dispatch. Reusing an ID with a different payload returns 409. Returns `{id,state}` with 202, including for identical retries. |
+| `POST /commands` | `{id,prompt}` where `prompt` is an ACP content-block array, not a string; durable acceptance before local dispatch. Reusing an ID with a different payload returns 409. Returns `{id,state}` with 202, including for identical retries. |
 | `POST /permissions` | `{id,operationId,requestId,optionId}`; offered choices only, durable decision before releasing the blocked agent. Retry the same control ID/body. |
 | `POST /cancel` | `{id,operationId}`; durable cancellation request before signalling the turn. Retry the same control ID/body. Cancellation does not undo prior side effects. |
 | `GET /events` | SSE `id` equals event `sequence`. `Last-Event-ID` is the last **applied** event. Replay is exclusive of that cursor and seamlessly continues with live events. |
@@ -120,7 +126,11 @@ evidence directory is configured, temporary evidence is deleted after the test.
 Operation IDs and control IDs are stable application identities, not ACP JSON-RPC
 request IDs. There is one active turn per session. Admission checks happen after
 idempotency checks. HTTP detach never cancels the turn or restarts ACP. Original
-ACP `session/update` messages are retained as JSON payloads, not flattened text.
+ACP `session/update` messages and prompt results/errors are retained as JSON payloads,
+not flattened text. Encoded content arrays are limited to 4 MiB. Image, audio, and
+embedded-resource prompts require the agent's corresponding capability. A basic
+request is `{"id":"turn-1","prompt":[{"type":"text","text":"inspect the project"}]}`.
+Old string-prompt journals are not migrated; use a new evidence directory.
 
 ACP v1's prompt response means completion, not acceptance. The service's
 `accepted` event means the session service has journaled the command; it does
@@ -142,7 +152,8 @@ a fresh session explicitly instead of retrying effects automatically.
 
 ## Parallel assignment contract
 
-The common test driver is ready for per-harness compatibility work. Each agent
+The common test driver supplies the current gates; launch remains paused until
+the proposed lifecycle/configuration boundary is agreed. Each agent
 owns one harness adapter/configuration and its tests, **not** a new transport.
 
 | Harness | Starting integration | Additional acceptance work |
@@ -163,8 +174,10 @@ Self-contained assignment brief (substitute one harness):
 > permission-required configuration. Do not weaken assertions, auto-approve
 > permissions in the permission suite, change common wire semantics, or silently
 > accept ignored MCP/settings. Fix harness-specific plumbing or report the precise
-> incompatibility. Separately validate configuration changes, native session
-> history restoration, and (for Pi) one installed extension tool. Keep evidence
+> incompatibility. Separately validate supported prompt content, configuration changes, exact-ID native
+> session restoration in a fresh process (without automatically continuing tools),
+> and (for Pi) one installed extension tool. Record any ACP-to-native ID mapping,
+> persistent state directories, and whether config writes affect another session. Keep evidence
 > private, scrub logs before sharing, and report each case PASS / FAIL /
 > UNSUPPORTED / BLOCKED with evidence paths and operation IDs. SKIP is not PASS.
 > Return a PR, configuration instructions, capability matrix, and explicit
