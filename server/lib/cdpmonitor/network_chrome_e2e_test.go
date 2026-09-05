@@ -195,6 +195,7 @@ func TestNetworkCaptureAcrossFrames(t *testing.T) {
 							require.JSONEq(t, string(body), *request.PostData)
 							require.Equal(t, frame.target, request.TargetId)
 							require.Equal(t, frame.targetType, string(request.TargetType))
+							require.True(t, request.TargetType.Valid())
 							require.NotEmpty(t, request.SessionId)
 							require.NotNil(t, request.FrameId)
 							require.NotEmpty(t, *request.FrameId)

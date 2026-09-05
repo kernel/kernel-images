@@ -70,8 +70,6 @@ const (
 	timelineEventLCP         = "largest-contentful-paint"
 )
 
-const cdpMethodSetAutoAttach = "Target.setAutoAttach"
-
 // CDP target type for browser pages (as opposed to workers, iframes, etc.).
 const targetTypePage = "page"
 
@@ -102,6 +100,11 @@ type cdpMessage struct {
 	SessionID string          `json:"sessionId,omitempty"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     *cdpError       `json:"error,omitempty"`
+}
+
+type networkRequestKey struct {
+	sessionID string
+	requestID string
 }
 
 // networkReqState holds request + response metadata until loadingFinished.
