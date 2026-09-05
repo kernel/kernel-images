@@ -11,6 +11,35 @@ import (
 	transport "github.com/kernel/kernel-images/server/experiments/agenttransport"
 )
 
+func RunPermissionCrash(t *testing.T, factory Factory) {
+	t.Run("agent-crash-during-permission", func(t *testing.T) {
+		fixture := factory(t)
+		timeout := fixture.Timeout
+		if timeout == 0 {
+			timeout = 30 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		command := transport.Command{ID: "permission-crash", Prompt: fixture.Prompt}
+		data, _ := json.Marshal(command)
+		post(t, ctx, fixture.URL, data)
+		waitPermission(t, ctx, fixture.URL, command.ID)
+		fixture.Kill()
+		waitState(t, ctx, fixture.URL, command.ID, "uncertain")
+		if len(snapshot(t, ctx, fixture.URL).Permissions) != 0 {
+			t.Fatal("crashed agent left an actionable permission")
+		}
+		post(t, ctx, fixture.URL, data)
+		calls, err := fixture.Probe.Count()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls != 0 || fixture.Dispatches() != 1 {
+			t.Fatalf("crashed permission executed: tools=%d dispatches=%d", calls, fixture.Dispatches())
+		}
+	})
+}
+
 func RunCrash(t *testing.T, factory Factory) {
 	t.Run("agent-crash-fences-session", func(t *testing.T) {
 		fixture := factory(t)

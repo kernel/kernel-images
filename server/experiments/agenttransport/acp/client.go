@@ -53,20 +53,22 @@ type received struct {
 	err error
 }
 type Client struct {
-	command      *exec.Cmd
-	stdin        *os.File
-	stdout       *os.File
-	incoming     chan received
-	stopped      chan struct{}
-	exited       chan struct{}
-	once         sync.Once
-	sendMu       sync.Mutex
-	callMu       sync.Mutex
-	next         int
-	sessionID    string
-	Capabilities json.RawMessage
-	dispatches   atomic.Int32
-	forcedStops  atomic.Int32
+	command       *exec.Cmd
+	stdin         *os.File
+	stdout        *os.File
+	incoming      chan received
+	stopped       chan struct{}
+	exited        chan struct{}
+	processCtx    context.Context
+	processFailed context.CancelCauseFunc
+	once          sync.Once
+	sendMu        sync.Mutex
+	callMu        sync.Mutex
+	next          int
+	sessionID     string
+	Capabilities  json.RawMessage
+	dispatches    atomic.Int32
+	forcedStops   atomic.Int32
 }
 
 func Start(ctx context.Context, config Config, stderr io.Writer) (*Client, error) {
@@ -114,8 +116,13 @@ func Start(ctx context.Context, config Config, stderr io.Writer) (*Client, error
 	}
 	inputRead.Close()
 	outputWrite.Close()
-	c := &Client{command: command, stdin: inputWrite, stdout: outputRead, incoming: make(chan received, 64), stopped: make(chan struct{}), exited: make(chan struct{})}
-	go func() { _ = command.Wait(); close(c.exited) }()
+	processCtx, processFailed := context.WithCancelCause(context.Background())
+	c := &Client{command: command, stdin: inputWrite, stdout: outputRead, incoming: make(chan received, 64), stopped: make(chan struct{}), exited: make(chan struct{}), processCtx: processCtx, processFailed: processFailed}
+	go func() {
+		_ = command.Wait()
+		c.processFailed(fmt.Errorf("%w: agent process exited", transport.ErrUncertain))
+		close(c.exited)
+	}()
 	go c.read()
 	fail := func(err error) (*Client, error) { c.Close(); return nil, err }
 	result, err := c.call(ctx, "initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}, "clientInfo": map[string]string{"name": "transport-acceptance", "version": "1"}}, nil)
@@ -172,10 +179,12 @@ func Start(ctx context.Context, config Config, stderr io.Writer) (*Client, error
 func (c *Client) PID() int         { return c.command.Process.Pid }
 func (c *Client) Dispatches() int  { return int(c.dispatches.Load()) }
 func (c *Client) ForcedStops() int { return int(c.forcedStops.Load()) }
+func (c *Client) Kill()            { _ = syscall.Kill(-c.PID(), syscall.SIGKILL) }
 func (c *Client) Close() {
 	c.once.Do(func() {
+		c.processFailed(fmt.Errorf("%w: ACP client closed", transport.ErrUncertain))
 		close(c.stopped)
-		_ = syscall.Kill(-c.PID(), syscall.SIGKILL)
+		c.Kill()
 		c.stdin.Close()
 		c.stdout.Close()
 		<-c.exited
@@ -194,6 +203,7 @@ func split(data []byte, atEOF bool) (int, []byte, error) {
 	return 0, nil, nil
 }
 func (c *Client) read() {
+	defer c.processFailed(fmt.Errorf("%w: ACP stream ended", transport.ErrUncertain))
 	scanner := bufio.NewScanner(c.stdout)
 	scanner.Split(split)
 	scanner.Buffer(make([]byte, 4096), 8<<20)
@@ -310,7 +320,11 @@ func (c *Client) receive(ctx context.Context, id json.RawMessage, turn *transpor
 			}
 			outcome := map[string]string{"outcome": "cancelled"}
 			if turn != nil {
-				option, err := turn.Permission(string(msg.ID), msg.Params)
+				permissionCtx, cancel := context.WithCancelCause(ctx)
+				stop := context.AfterFunc(c.processCtx, func() { cancel(context.Cause(c.processCtx)) })
+				option, err := turn.Permission(permissionCtx, string(msg.ID), msg.Params)
+				stop()
+				cancel(nil)
 				if err == nil {
 					outcome = map[string]string{"outcome": "selected", "optionId": option}
 				} else if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {

@@ -75,7 +75,7 @@ func postControl(t *testing.T, url, path string, c Control, status int) {
 func TestPermissionDetachAndDecisionRetry(t *testing.T) {
 	var effects atomic.Int32
 	runtime := NewReference(runnerFunc(func(ctx context.Context, prompt string, turn *Turn) error {
-		option, err := turn.Permission("approval", json.RawMessage(`{"options":[{"optionId":"yes","kind":"allow_once","name":"Allow"},{"optionId":"no","kind":"reject_once","name":"Reject"}]}`))
+		option, err := turn.Permission(ctx, "approval", json.RawMessage(`{"options":[{"optionId":"yes","kind":"allow_once","name":"Allow"},{"optionId":"no","kind":"reject_once","name":"Reject"}]}`))
 		if err != nil {
 			return err
 		}
@@ -126,7 +126,7 @@ func TestPermissionDetachAndDecisionRetry(t *testing.T) {
 func TestCancelPendingPermissionAndRetry(t *testing.T) {
 	var effects atomic.Int32
 	runtime := NewReference(runnerFunc(func(ctx context.Context, prompt string, turn *Turn) error {
-		_, err := turn.Permission("approval", json.RawMessage(`{"options":[{"optionId":"yes"}]}`))
+		_, err := turn.Permission(ctx, "approval", json.RawMessage(`{"options":[{"optionId":"yes"}]}`))
 		if err == nil {
 			effects.Add(1)
 		}
@@ -187,7 +187,7 @@ func TestPermissionPersistenceFailureNeverApproves(t *testing.T) {
 	var effects atomic.Int32
 	store := &failingStore{failAt: 3}
 	runtime, err := NewRuntime(runnerFunc(func(ctx context.Context, prompt string, turn *Turn) error {
-		_, err := turn.Permission("p", json.RawMessage(`{"options":[{"optionId":"yes"}]}`))
+		_, err := turn.Permission(ctx, "p", json.RawMessage(`{"options":[{"optionId":"yes"}]}`))
 		if err == nil {
 			effects.Add(1)
 		}
@@ -235,7 +235,7 @@ func TestCrashHelper(t *testing.T) {
 				return nil
 			}
 			if stage == "permission" {
-				_, err := turn.Permission("p", json.RawMessage(`{"options":[{"optionId":"yes"}]}`))
+				_, err := turn.Permission(ctx, "p", json.RawMessage(`{"options":[{"optionId":"yes"}]}`))
 				return err
 			}
 			if err := turn.Output("started"); err != nil {

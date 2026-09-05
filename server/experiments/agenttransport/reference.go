@@ -304,7 +304,7 @@ func (t *Turn) Output(text string) error {
 	}
 	return t.s.record(Event{OperationID: t.id, Kind: "output", Text: text})
 }
-func (t *Turn) Permission(id string, payload json.RawMessage) (string, error) {
+func (t *Turn) Permission(ctx context.Context, id string, payload json.RawMessage) (string, error) {
 	encoded, _ := json.Marshal([]string{t.id, id})
 	key := string(encoded)
 	t.s.mu.Lock()
@@ -316,7 +316,10 @@ func (t *Turn) Permission(id string, payload json.RawMessage) (string, error) {
 		t.s.mu.Unlock()
 		return "", ErrConflict
 	}
-	err := t.ctx.Err()
+	err := context.Cause(ctx)
+	if err == nil {
+		err = t.ctx.Err()
+	}
 	if err == nil {
 		err = t.s.record(Event{OperationID: t.id, Kind: "permission_request", RequestID: key, Payload: payload})
 	}
@@ -329,10 +332,15 @@ func (t *Turn) Permission(id string, payload json.RawMessage) (string, error) {
 		decision, ok := t.s.decisions[key]
 		changed := t.s.changed
 		t.s.mu.Unlock()
+		if err := context.Cause(ctx); err != nil {
+			return "", err
+		}
 		if ok {
 			return decision, nil
 		}
 		select {
+		case <-ctx.Done():
+			return "", context.Cause(ctx)
 		case <-t.ctx.Done():
 			return "", t.ctx.Err()
 		case <-changed:

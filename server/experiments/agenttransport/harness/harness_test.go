@@ -62,6 +62,7 @@ func TestDeterministicACP(t *testing.T) {
 	acceptance.Run(t, factory(false))
 	acceptance.RunCrash(t, factory(false))
 	acceptance.RunPermissions(t, factory(true))
+	acceptance.RunPermissionCrash(t, factory(true))
 }
 
 type harnessConfig struct {
@@ -138,6 +139,7 @@ func TestRealHarness(t *testing.T) {
 		t.Run("permissions", func(t *testing.T) { t.Skip("NOT VALIDATED: permissionACP configuration not provided") })
 	} else {
 		acceptance.RunPermissions(t, factory(*config.PermissionACP))
+		acceptance.RunPermissionCrash(t, factory(*config.PermissionACP))
 	}
 }
 func fixture(t *testing.T, dir string, config acp.Config, timeout time.Duration) acceptance.Fixture {
@@ -168,5 +170,5 @@ func fixture(t *testing.T, dir string, config acp.Config, timeout time.Duration)
 	}
 	server := httptest.NewServer(runtime)
 	t.Cleanup(func() { runtime.Close(); server.Close() })
-	return acceptance.Fixture{URL: server.URL, Probe: probe.Probe{Dir: dir}, Prompt: prompt, Dispatches: client.Dispatches, ForcedStops: client.ForcedStops, ProcessID: client.PID, Kill: client.Close, Timeout: timeout}
+	return acceptance.Fixture{URL: server.URL, Probe: probe.Probe{Dir: dir}, Prompt: prompt, Dispatches: client.Dispatches, ForcedStops: client.ForcedStops, ProcessID: client.PID, Kill: client.Kill, Timeout: timeout}
 }

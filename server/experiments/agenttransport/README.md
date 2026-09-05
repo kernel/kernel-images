@@ -27,6 +27,7 @@ calls or provider credentials are needed for the deterministic gates.
 | Permission | `TestDeterministicACP/permission-detach-and-retry` | Pending request survives detach; only an offered `allow_once` option is selected; duplicate answers have one effect and conflicting answers fail. |
 | Cancellation | `TestDeterministicACP/cancel-pending-permission` | Cancel while approval is pending, retry cancellation, execute no tool, clear the pending request. |
 | Agent crash | `TestDeterministicACP/agent-crash-fences-session` | Kill the ACP process mid-tool; expose `uncertain`, do not resend the prompt, reject new work in that session. |
+| Crash during permission | `TestDeterministicACP/agent-crash-during-permission` | Kill the agent while approval is pending; unblock the permission wait, expose `uncertain`, remove the stale request, and execute no tool. |
 | Service restart | `TestJournalRecoveryAfterProcessKill` | Reopen after kill at accepted, tool-start, permission-pending, and completed boundaries. Completed stays completed; unfinished becomes uncertain. No automatic dispatch. |
 | Write failure | `TestPersistenceFailurePreventsDispatch`, `TestPermissionPersistenceFailureNeverApproves` | A failed journal write cannot acknowledge/dispatch a prompt or release an approval. The runtime becomes unavailable. |
 | Journal integrity | `TestJournalLockAndTornTail` | One owner, repair incomplete final records, reject complete corrupt records. |
@@ -34,9 +35,9 @@ calls or provider credentials are needed for the deterministic gates.
 | Cursor validation | `TestInvalidReplayCursor` | Malformed/negative cursors return 400; future cursors return 409. |
 | MCP fixture | `TestMCPToolBarrier` | MCP initialization, tool discovery, invocation, counted barrier, and release work independently of the agent. |
 
-The first five cases are exported through `acceptance.Run`, `RunPermissions`,
-and `RunCrash`. The **same assertions** run against real harnesses through
-`TestRealHarness`; each subtest gets a new agent and workspace.
+The first six cases are exported through `acceptance.Run`, `RunPermissions`,
+`RunCrash`, and `RunPermissionCrash`. The **same assertions** run against real
+harnesses through `TestRealHarness`; each subtest gets a new agent and workspace.
 
 ## Run a real harness
 
@@ -127,8 +128,9 @@ ACP v1's prompt response means completion, not acceptance. The service's
 sends `session/cancel` and waits up to five seconds for completion before killing
 the agent process group. A forced kill fails the harness cancellation gate; it
 is not silently counted as native cancellation support. It does not reuse an
-agent that failed to stop. It does not advertise client filesystem or terminal delegation; execution remains local
-to the agent. Unsupported server requests receive an explicit protocol error.
+agent that failed to stop. It does not advertise client filesystem or terminal
+delegation; execution remains local to the agent. Unsupported server requests
+receive an explicit protocol error.
 
 `FileStore` appends and fsyncs before publishing events or releasing work. On
 restart, a nonterminal operation becomes `uncertain`, its old permission requests
@@ -157,7 +159,7 @@ Self-contained assignment brief (substitute one harness):
 > named harness's configuration/wrapper/tests, on a separate branch. Record actual
 > binary/package versions and initialization capabilities. Use approved existing
 > credentials; if missing, report BLOCKED rather than creating accounts or storing
-> credentials. Run the five shared real-harness cases, including a separate
+> credentials. Run the six shared real-harness cases, including a separate
 > permission-required configuration. Do not weaken assertions, auto-approve
 > permissions in the permission suite, change common wire semantics, or silently
 > accept ignored MCP/settings. Fix harness-specific plumbing or report the precise
