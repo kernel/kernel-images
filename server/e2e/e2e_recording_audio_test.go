@@ -151,6 +151,10 @@ func TestReplayRecordingZombocomArchiveAudio(t *testing.T) {
 func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, playwrightCode string, outputPath string, minPeakLevel float64) {
 	t.Helper()
 
+	if outputPath != "" {
+		defer captureReplayAudioDiagnostics(t, c, outputPath)
+	}
+
 	client, err := c.APIClient()
 	require.NoError(t, err, "failed to create API client")
 
@@ -160,6 +164,7 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 	maxDuration := 120
 	maxFileSize := 100
 	recordAudio := true
+	startTime := time.Now()
 	startResp, err := client.StartRecordingWithResponse(ctx, instanceoapi.StartRecordingJSONRequestBody{
 		MaxDurationInSeconds: &maxDuration,
 		MaxFileSizeInMB:      &maxFileSize,
@@ -168,6 +173,7 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 	require.NoError(t, err, "POST /recording/start failed")
 	require.Equal(t, http.StatusCreated, startResp.StatusCode(), "unexpected start status: %s body=%s", startResp.Status(), string(startResp.Body))
 
+	t.Logf("[replay-audio] recording start took %s", time.Since(startTime))
 	stopped := false
 	defer func() {
 		if !stopped {
@@ -176,9 +182,11 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 		}
 	}()
 
+	playwrightStart := time.Now()
 	runResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: playwrightCode,
 	})
+	t.Logf("[replay-audio] playwright took %s", time.Since(playwrightStart))
 	require.NoError(t, err, "playwright request failed")
 	require.Equal(t, http.StatusOK, runResp.StatusCode(), "unexpected playwright status: %s body=%s", runResp.Status(), string(runResp.Body))
 	require.NotNil(t, runResp.JSON200, "expected playwright JSON response")
@@ -186,7 +194,9 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 		t.Fatalf("playwright execution failed: error=%s stderr=%s result=%#v", stringValue(runResp.JSON200.Error), stringValue(runResp.JSON200.Stderr), runResp.JSON200.Result)
 	}
 
+	stopTime := time.Now()
 	stopResp, err := client.StopRecordingWithResponse(ctx, instanceoapi.StopRecordingJSONRequestBody{})
+	t.Logf("[replay-audio] recording stop took %s; elapsed %s", time.Since(stopTime), time.Since(startTime))
 	stopped = true
 	require.NoError(t, err, "POST /recording/stop failed")
 	require.Equal(t, http.StatusOK, stopResp.StatusCode(), "unexpected stop status: %s body=%s", stopResp.Status(), string(stopResp.Body))
@@ -205,6 +215,7 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 	require.True(t, mp4HasAudioTrack(downloadResp.Body), "downloaded recording does not contain an audio track")
 	require.Greater(t, mp4AudioPeakLevel(t, ctx, c, recordingPath), minPeakLevel, "downloaded recording audio track is silent")
 	formatDuration, audioDuration := mp4Durations(t, ctx, c, recordingPath)
+	t.Logf("[replay-audio] format_duration=%.6f audio_duration=%.6f gap=%.6f", formatDuration, audioDuration, formatDuration-audioDuration)
 	require.GreaterOrEqual(t, audioDuration, formatDuration-2, "downloaded recording audio track ends before the recording does")
 }
 
