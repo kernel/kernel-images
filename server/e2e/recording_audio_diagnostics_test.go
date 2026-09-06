@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,8 +19,20 @@ func captureReplayAudioDiagnostics(t *testing.T, c *TestContainer, outputPath st
 		t.Logf("audio diagnostics: %v", err)
 		return
 	}
+	// A failed Playwright request still leaves a useful recording after cleanup.
+	if _, err := os.Stat(outputPath); os.IsNotExist(err) {
+		client, err := c.APIClient()
+		if err == nil {
+			response, err := client.DownloadRecordingWithResponse(ctx, nil)
+			if err == nil && response.StatusCode() == http.StatusOK {
+				if err := os.WriteFile(outputPath, response.Body, 0o644); err != nil {
+					t.Logf("audio diagnostics recording: %v", err)
+				}
+			}
+		}
+	}
 	commands := map[string][]string{
-		"probe.json":   {"ffprobe", "-v", "error", "-show_format", "-show_streams", "-show_packets", "-of", "json", "/tmp/e2e-recording-audio.mp4"},
+		"probe.json":   {"ffprobe", "-v", "error", "-show_format", "-show_streams", "-show_packets", "-of", "json", "/recordings/default.mp4"},
 		"services.log": {"sh", "-c", "for f in /var/log/supervisord/kernel-images-api /var/log/supervisord/pulseaudio /var/log/supervisord.log; do echo ==== $f; cat $f; done"},
 		"pulse.log":    {"sh", "-c", "PULSE_SERVER=unix:/tmp/pulse/native pactl list sinks; PULSE_SERVER=unix:/tmp/pulse/native pactl list source-outputs"},
 	}

@@ -51,6 +51,9 @@ jobs:
           git diff --exit-code -- lib/events/category_gen.go
         working-directory: server
 
+      - name: Install recording regression dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Run server unit tests
         run: make test-unit
         working-directory: server
