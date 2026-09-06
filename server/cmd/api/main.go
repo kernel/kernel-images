@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -377,6 +378,7 @@ func main() {
 		metrics.NewChromeCollector(upstreamMgr),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),
+		metrics.NewResponseDrainCollector(scaletozero.ResponseDrainOutcomeCounts, scaletozero.ActiveResponseHolds, scaletozero.FailClosedResponseHolds),
 	}
 	if otlpMetrics != nil {
 		metricsCollectors = append(metricsCollectors, metrics.NewOTLPCollector(otlpMetrics))
@@ -387,29 +389,22 @@ func main() {
 		Handler: rMetrics,
 	}
 
-	go func() {
-		slogger.Info("http server starting", "addr", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slogger.Error("http server failed", "err", err)
-			stop()
-		}
-	}()
-
-	go func() {
-		slogger.Info("devtools websocket proxy starting", "addr", srvDevtools.Addr)
-		if err := srvDevtools.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slogger.Error("devtools websocket proxy failed", "err", err)
-			stop()
-		}
-	}()
-
-	go func() {
-		slogger.Info("chromedriver proxy starting", "addr", srvChromeDriver.Addr)
-		if err := srvChromeDriver.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			slogger.Error("chromedriver proxy failed", "err", err)
-			stop()
-		}
-	}()
+	serveHTTP := func(name string, server *http.Server) {
+		go func() {
+			slogger.Info(name+" starting", "addr", server.Addr)
+			listener, err := net.Listen("tcp", server.Addr)
+			if err == nil {
+				err = scaletozero.Serve(server, listener)
+			}
+			if err != nil && err != http.ErrServerClosed {
+				slogger.Error(name+" failed", "err", err)
+				stop()
+			}
+		}()
+	}
+	serveHTTP("http server", srv)
+	serveHTTP("devtools websocket proxy", srvDevtools)
+	serveHTTP("chromedriver proxy", srvChromeDriver)
 
 	go func() {
 		slogger.Info("metrics server starting", "addr", srvMetrics.Addr)
