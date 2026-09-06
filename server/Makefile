@@ -46,7 +46,7 @@ test-e2e:
 	@echo ""
 	@echo "=== Running e2e tests (this may take a few minutes) ==="
 	@echo ""
-	go test -v -race -timeout 120m ./e2e/
+	go test -v -race -count=1 -timeout 120m ./e2e/
 
 clean:
 	@rm -rf $(BIN_DIR)
