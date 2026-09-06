@@ -41,6 +41,14 @@ func TestReplayRecordingIncludesAudioTrack(t *testing.T) {
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
 	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
 
+	// WIDTH/HEIGHT configure Xvfb, not headful Xorg. Apply the intended size
+	// through the API instead of recording the dummy display's 4K default.
+	initialWidth, initialHeight, err := getXRootResolution(ctx, c)
+	require.NoError(t, err)
+	t.Logf("[replay-audio] initial display=%dx%d", initialWidth, initialHeight)
+	patchDisplayExpectingOK(t, ctx, c, 1280, 720, 60)
+	waitForXRootResolution(t, ctx, c, 1280, 720, 15*time.Second)
+
 	// Verify the browser sees a real sound card over pure CDP/websocket. Chromium
 	// excludes PulseAudio monitor sources from enumerateDevices(), so the
 	// recorder's capture sink alone is invisible as an input. The standalone
