@@ -748,10 +748,8 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 		"-pix_fmt", "yuv420p", // Web-standard pixel format
 	}...)
 
-	// Timestamp handling for reliable playback. Single-input video-only capture
-	// overwrites x11grab's timestamps with wall-clock time for stable playback.
-	// With audio we must not: it would stamp the separate video and audio inputs
-	// independently and desync them, so we keep their input PTS instead.
+	// Keep the legacy timestamp options for video-only capture. Audio capture
+	// synchronizes the two device clocks with -isync on the PulseAudio input.
 	if !recordAudio {
 		args = append(args, "-use_wallclock_as_timestamps", "1")
 	}
@@ -783,6 +781,10 @@ func ffmpegArgs(params FFmpegRecordingParams, outputPath string) ([]string, erro
 func audioInputArgs(params FFmpegRecordingParams) []string {
 	return []string{
 		"-thread_queue_size", "512",
+		// Both devices use wall-clock timestamps, but open at different times.
+		// Without -isync, ffmpeg subtracts each input's start independently,
+		// shifting the later-opened audio earlier by the device startup gap.
+		"-isync", "0",
 		"-f", "pulse",
 		"-i", params.audioSource(),
 	}
