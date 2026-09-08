@@ -16,19 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWebMCPDeclarative(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	defer cancel()
-
-	c := NewTestContainer(t, headlessImage)
-	require.NoError(t, c.Start(ctx, ContainerConfig{}))
-	defer c.Stop(ctx)
-	require.NoError(t, c.WaitReady(ctx))
-
-	client, err := c.APIClient()
-	require.NoError(t, err)
+func testWebMCPDeclarative(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
+	t.Helper()
 
 	// Like the audio fixture, use file:// inside the instance to provide a secure
 	// context without external URLs or a Docker-only host-loopback bridge.
