@@ -2949,6 +2949,30 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserWebMCPInvocationStatus:
+      type: string
+      description: Observed WebMCP outcome. awaiting_submission means the form was populated, not submitted. outcome_unknown means the final outcome could not be observed and the invocation must not be retried automatically.
+      enum: [completed, canceled, error, awaiting_submission, outcome_unknown]
+      x-enum-varnames:
+        - BrowserWebMCPInvocationStatusCompleted
+        - BrowserWebMCPInvocationStatusCanceled
+        - BrowserWebMCPInvocationStatusError
+        - BrowserWebMCPInvocationStatusAwaitingSubmission
+        - BrowserWebMCPInvocationStatusOutcomeUnknown
+    BrowserWebMCPToolSource:
+      type: object
+      description: Tool location observed before invocation, so navigation during the call does not change attribution. URLs are capped at 8192 bytes on a character boundary with a trailing `...[truncated]` marker.
+      additionalProperties: false
+      required: [window_id, tab_id, page_url]
+      properties:
+        window_id:
+          type: integer
+        tab_id:
+          type: integer
+        page_url:
+          type: string
+        frame:
+          $ref: "#/components/schemas/WebMCPToolFrame"
     BrowserApiCallEventData:
       type: object
       description: Per-call payload for `api_call` events.
@@ -2970,6 +2994,31 @@ components:
         code:
           type: string
           description: Source submitted to `executePlaywrightCode`, capped at 8192 bytes like every other captured string. A capped value is cut on a character boundary and ends in `...[truncated]`. Absent for every other operation.
+        tool_ref:
+          type: string
+          description: Registration reference submitted to InvokeWebMCPTool, capped at 8192 bytes with a trailing `...[truncated]` marker. Absent for tool discovery.
+        tool_name:
+          type: string
+          description: Resolved WebMCP tool name, capped at 8192 bytes with a trailing `...[truncated]` marker. Absent when the registration could not be resolved.
+        tool_source:
+          $ref: "#/components/schemas/BrowserWebMCPToolSource"
+        input:
+          type: string
+          description: JSON-serialized WebMCP input, capped at 8192 bytes on a character boundary with a trailing `...[truncated]` marker. Clipped input need not be valid JSON. May contain credentials or personal data. Absent if input validation was not reached.
+        timeout_sec:
+          type: integer
+          description: Timeout explicitly submitted to InvokeWebMCPTool. Absent when the caller used the default.
+        invocation_id:
+          type: string
+          description: WebMCP invocation identifier when observed, capped at 8192 bytes with a trailing `...[truncated]` marker. May be absent even for outcome_unknown.
+        invocation_status:
+          $ref: "#/components/schemas/BrowserWebMCPInvocationStatus"
+        error_code:
+          type: string
+          description: WebMCP failure code when available, currently outcome_unknown. HTTP failures without a semantic outcome are represented by status alone.
+        error_text:
+          type: string
+          description: Page-provided WebMCP error text, capped at 8192 bytes on a character boundary with a trailing `...[truncated]` marker. Treat as untrusted content. Tool output is not captured.
     BrowserPlatformApiCallEventData:
       type: object
       description: >
@@ -2995,8 +3044,11 @@ components:
       type: object
       description: >
         A call that drives the browser, handled by the kernel-images-api server:
-        computer-control actions, Playwright code execution, screenshots and
-        clipboard access. Calls that manage the VM instead emit
+        computer-control actions, Playwright code execution, screenshots,
+        clipboard access, and WebMCP discovery and invocation. GetWebMCPTools has
+        no parameters and carries only request_id, operation_id, status and
+        duration_ms; the discovered tools are not captured. InvokeWebMCPTool adds
+        request and outcome fields when available. Calls that manage the VM instead emit
         `platform_api_call`.
       required: [ts, type, category, source]
       properties:

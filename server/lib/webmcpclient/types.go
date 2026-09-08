@@ -40,6 +40,8 @@ type Annotations struct {
 }
 
 type InvocationResult struct {
+	ToolName     string
+	Source       *ToolSource
 	InvocationID string
 	Status       string
 	Output       any

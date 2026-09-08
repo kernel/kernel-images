@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/webmcpclient"
@@ -71,6 +72,13 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	if request.Body == nil {
 		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body is required"}}, nil
 	}
+	var inputJSON []byte
+	var result webmcpclient.InvocationResult
+	var invokeErr error
+	defer func() {
+		recordWebMCPTelemetry(ctx, request.Body, inputJSON, result, invokeErr)
+	}()
+
 	toolRefLength := utf8.RuneCountInString(request.Body.ToolRef)
 	if toolRefLength < 1 || toolRefLength > 128 {
 		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "tool_ref must be between 1 and 128 characters"}}, nil
@@ -92,12 +100,12 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	invokeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	result, err := s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
-	if err != nil {
+	result, invokeErr = s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
+	if invokeErr != nil {
 		switch {
-		case errors.Is(err, webmcpclient.ErrToolNotFound):
+		case errors.Is(invokeErr, webmcpclient.ErrToolNotFound):
 			return oapi.InvokeWebMCPTool404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "WebMCP tool is no longer available; discover tools again"}}, nil
-		case errors.Is(err, webmcpclient.ErrOutcomeUnknown):
+		case errors.Is(invokeErr, webmcpclient.ErrOutcomeUnknown):
 			failure := oapi.WebMCPInvocationFailure{
 				Code:    oapi.OutcomeUnknown,
 				Message: "the invocation started, but its final outcome could not be observed; do not retry automatically",
@@ -105,7 +113,7 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 			failure.InvocationId = nonEmptyString(result.InvocationID)
 			return oapi.InvokeWebMCPTool504JSONResponse(failure), nil
 		default:
-			logger.FromContext(ctx).Error("failed to invoke WebMCP tool", "err", err)
+			logger.FromContext(ctx).Error("failed to invoke WebMCP tool", "err", invokeErr)
 			return oapi.InvokeWebMCPTool500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to invoke WebMCP tool"}}, nil
 		}
 	}
@@ -122,6 +130,43 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	}
 	response.ErrorText = nonEmptyString(result.ErrorText)
 	return response, nil
+}
+
+func recordWebMCPTelemetry(ctx context.Context, request *oapi.WebMCPInvokeRequest, inputJSON []byte, result webmcpclient.InvocationResult, invokeErr error) {
+	tc, ok := ctx.Value(telemetryCtxKey{}).(*telemetryRequestCtx)
+	if !ok {
+		return
+	}
+	captured := func(value string) *string {
+		return nonEmptyString(events.TruncateCaptured(value, events.CapturedFieldCap))
+	}
+	tc.data.ToolRef = captured(request.ToolRef)
+	tc.data.Input = captured(string(inputJSON))
+	tc.data.TimeoutSec = request.TimeoutSec
+	tc.data.ToolName = captured(result.ToolName)
+	tc.data.InvocationId = captured(result.InvocationID)
+	tc.data.ErrorText = captured(result.ErrorText)
+	if result.Source != nil {
+		tc.data.ToolSource = &oapi.BrowserWebMCPToolSource{
+			WindowId: result.Source.WindowID,
+			TabId:    result.Source.TabID,
+			PageUrl:  events.TruncateCaptured(result.Source.PageURL, events.CapturedFieldCap),
+		}
+		if frame := result.Source.Frame; frame != nil {
+			tc.data.ToolSource.Frame = &oapi.WebMCPToolFrame{
+				FrameId: frame.FrameID,
+				Url:     events.TruncateCaptured(frame.URL, events.CapturedFieldCap),
+			}
+		}
+	}
+	status := oapi.BrowserWebMCPInvocationStatus(strings.ToLower(result.Status))
+	if errors.Is(invokeErr, webmcpclient.ErrOutcomeUnknown) {
+		status = oapi.BrowserWebMCPInvocationStatusOutcomeUnknown
+		tc.data.ErrorCode = nonEmptyString("outcome_unknown")
+	}
+	if status.Valid() {
+		tc.data.InvocationStatus = &status
+	}
 }
 
 func nonEmptyString(value string) *string {
