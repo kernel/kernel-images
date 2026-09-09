@@ -39,11 +39,12 @@ test("changed server destinations or bindings cannot reuse existing credential a
 test("MCP stdio bindings remap without inheriting provider or unrelated credentials", () => {
   const source = 'process.stdout.write(JSON.stringify(process.env))';
   const output = execFileSync(process.execPath, [new URL("./mcp-command.mjs", import.meta.url).pathname,
-    JSON.stringify([["TOKEN", "KERNEL_CODEX_MCP_TEST"]]), process.execPath, "-e", source], {
+    JSON.stringify([["TOKEN", "KERNEL_CODEX_MCP_TEST"], ["__proto__", "KERNEL_CODEX_MCP_TEST"]]), process.execPath, "-e", source], {
     env: { PATH: process.env.PATH, KERNEL_CODEX_MCP_TEST: "mcp-fixture", CODEX_API_KEY: "provider-fixture", UNRELATED_SECRET: "unrelated-fixture" },
   });
   const env = JSON.parse(output);
   assert.equal(env.TOKEN, "mcp-fixture");
+  assert.equal(env.__proto__, "mcp-fixture");
   for (const name of ["CODEX_API_KEY", "UNRELATED_SECRET", "KERNEL_CODEX_MCP_TEST"]) assert.equal(env[name], undefined);
 });
 
