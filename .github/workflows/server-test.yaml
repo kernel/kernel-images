@@ -51,6 +51,9 @@ jobs:
           git diff --exit-code -- lib/events/category_gen.go
         working-directory: server
 
+      - name: Install recording regression dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: Run server unit tests
         run: make test-unit
         working-directory: server
@@ -99,6 +102,12 @@ jobs:
           cache: true
           cache-dependency-path: server/go.sum
 
+      - name: Run CDP telemetry browser regressions
+        run: go test -race ./lib/cdpmonitor -run '^(TestNetworkCapture|TestTelemetryConnection)' -count=1 -v
+        working-directory: server
+        env:
+          KERNEL_CDPMONITOR_CHROME_E2E: "1"
+
       - name: Compute short SHA for images
         id: vars
         shell: bash
@@ -133,3 +142,13 @@ jobs:
         env:
           E2E_CHROMIUM_HEADFUL_IMAGE: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}
           E2E_CHROMIUM_HEADLESS_IMAGE: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}
+          RECORDING_AUDIO_OUTPUT_PATH: ${{ runner.temp }}/replay-audio/recording.mp4
+
+      - name: Upload replay audio diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-audio-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/replay-audio/
+          retention-days: 14
+          if-no-files-found: warn
