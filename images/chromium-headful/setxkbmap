@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+/usr/bin/setxkbmap "$@"
+# Keep repeats client-driven; setxkbmap re-enables X auto-repeat.
+/usr/bin/xset r off
