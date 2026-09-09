@@ -100,13 +100,16 @@ func TestCodexNativeHTTPMCP(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(workspace, ".codex"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(workspace, ".codex", "config.toml"), []byte("[features]\nshell_snapshot = true\nshell_snapshot_v2 = true\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, ".codex", "config.toml"), []byte("[features]\nshell_snapshot = true\nshell_snapshot_v2 = true\nplugins = true\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	request(3, "session/new", map[string]any{"cwd": workspace, "mcpServers": []any{}})
 	eventually(t, func() bool { return initialized.Load() && listed.Load() })
 	conn.CloseNow()
 	eventually(t, func() bool { return len(h.slots) == 0 })
+	if _, err := os.Stat(filepath.Join(p.StateDir, "native", ".tmp", "plugins")); !os.IsNotExist(err) {
+		t.Fatal("native plugin catalog sync was not disabled")
+	}
 	if err := filepath.WalkDir(p.StateDir, func(path string, entry os.DirEntry, err error) error {
 		if err != nil {
 			return err

@@ -13,11 +13,11 @@ export function aliases(server) {
     .sort().map((name, index) => [name, prefix + index]);
 }
 
-// Native shell snapshots export the process environment, including bound keys.
+// Disable credential-bearing shell snapshots and unpinned plugin catalog sync.
 // Also enforce these settings as session overrides against project config.
 export const safetySettings = {
   cli_auth_credentials_store: "ephemeral",
-  features: { shell_snapshot: false, shell_snapshot_v2: false },
+  features: { shell_snapshot: false, shell_snapshot_v2: false, plugins: false },
 };
 
 export function settings(config) {

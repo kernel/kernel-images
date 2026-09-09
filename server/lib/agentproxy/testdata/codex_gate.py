@@ -350,6 +350,8 @@ with sqlite3.connect('/home/kernel/.agents/codex/native/state_5.sqlite') as db:
 key=os.environ['OPENAI_API_KEY'].encode()
 root=pathlib.Path('/home/kernel/.agents/codex')
 assert not (root/'native/auth.json').exists(), 'API key persisted in native auth file'
+assert not (root/'native/shell_snapshots').exists(), 'native shell snapshots unexpectedly enabled'
+assert not (root/'native/.tmp/plugins').exists(), 'native plugin catalog unexpectedly synced'
 for path in root.rglob('*'):
  if path.is_file():
   assert key not in path.read_bytes(), 'provider credential persisted in managed state'

@@ -41,6 +41,8 @@ configuration/logging variables from the child environment. Native shell snapsho
 are disabled (`features.shell_snapshot` and `shell_snapshot_v2`): their environment
 exports can persist provider/MCP keys. These flags and ephemeral auth storage are
 also supplied as native session overrides so project config cannot re-enable them.
+`features.plugins=false` disables native plugins and their automatic unpinned
+catalog clone/recommendations; native project skills remain available.
 
 ### Supported configuration
 
@@ -152,10 +154,12 @@ Unit tests cover configuration validation, HTTP concurrency/failure/recovery,
 native preparation, private files, no persisted credentials, environment
 isolation, native settings and safe credential-alias changes. A real native
 adapter/app-server test exercises streamable HTTP MCP initialize/tools-list with
-a bound fixture header, without a model prompt, and checks native state for
-fixture credentials even when project configuration requests shell snapshots.
-Native tests skip explicitly without the corresponding runtime environment
-variables. CI installs both runtimes.
+a bound fixture header, without a model prompt. It checks plugin sync is disabled
+and scans the resulting state for fixture keys. This handshake-only test does not
+reproduce native shell snapshot creation: the paid gate checks absence of the
+snapshot directory and scans all managed files after real turns. Node tests assert
+the safety flags in native config and session overrides. Native tests skip
+explicitly without the corresponding runtime variables. CI installs both runtimes.
 
 Opt-in paid gate, against a **fresh disposable image** with `OPENAI_API_KEY`:
 
