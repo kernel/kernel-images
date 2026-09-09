@@ -45,13 +45,17 @@ func geminiTestConfiguration() GeminiConfiguration {
 func TestGeminiValidation(t *testing.T) {
 	p := geminiTestOptions(t)
 	cases := map[string]func(*GeminiConfiguration){
-		"missing model":          func(c *GeminiConfiguration) { c.Launch.Model = "" },
-		"model flag":             func(c *GeminiConfiguration) { c.Launch.Model = "--yolo" },
-		"model interpolation":    func(c *GeminiConfiguration) { c.Launch.Model = "$HOME" },
-		"unknown credential":     func(c *GeminiConfiguration) { c.Launch.Credential = "absent" },
-		"unbounded turns":        func(c *GeminiConfiguration) { c.Shared.Settings.MaxSessionTurns = -1 },
-		"too many turns":         func(c *GeminiConfiguration) { c.Shared.Settings.MaxSessionTurns = 101 },
-		"untrusted stdio":        func(c *GeminiConfiguration) { c.Launch.TrustWorkspace = false },
+		"missing model":       func(c *GeminiConfiguration) { c.Launch.Model = "" },
+		"model flag":          func(c *GeminiConfiguration) { c.Launch.Model = "--yolo" },
+		"model interpolation": func(c *GeminiConfiguration) { c.Launch.Model = "$HOME" },
+		"unknown credential":  func(c *GeminiConfiguration) { c.Launch.Credential = "absent" },
+		"unbounded turns":     func(c *GeminiConfiguration) { c.Shared.Settings.MaxSessionTurns = -1 },
+		"too many turns":      func(c *GeminiConfiguration) { c.Shared.Settings.MaxSessionTurns = 101 },
+		"untrusted stdio":     func(c *GeminiConfiguration) { c.Launch.TrustWorkspace = false },
+		"untrusted HTTP": func(c *GeminiConfiguration) {
+			c.Launch.TrustWorkspace = false
+			c.Shared.MCPServers = c.Shared.MCPServers[1:]
+		},
 		"unknown MCP credential": func(c *GeminiConfiguration) { c.Shared.MCPServers[0].EnvBindings["DOCS_TOKEN"] = "absent" },
 		"duplicate MCP":          func(c *GeminiConfiguration) { c.Shared.MCPServers[1].Name = "docs" },
 		"prototype MCP":          func(c *GeminiConfiguration) { c.Shared.MCPServers[0].Name = "__proto__" },

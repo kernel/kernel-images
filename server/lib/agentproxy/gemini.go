@@ -67,12 +67,12 @@ func (p GeminiOptions) validateDesired(c GeminiConfiguration) error {
 	if err != nil {
 		return err
 	}
+	if len(c.Shared.MCPServers) != 0 && !c.Launch.TrustWorkspace {
+		return errors.New("Gemini MCP requires explicit trustWorkspace")
+	}
 	for _, s := range c.Shared.MCPServers {
 		if s.Name == "__proto__" || s.Name == "constructor" || s.Name == "prototype" {
 			return errors.New("reserved MCP server name")
-		}
-		if s.Command != "" && !c.Launch.TrustWorkspace {
-			return errors.New("Gemini stdio MCP requires explicit trustWorkspace")
 		}
 		for name := range s.EnvBindings {
 			if !geminiEnvName.MatchString(name) {

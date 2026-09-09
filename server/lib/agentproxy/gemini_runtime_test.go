@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -54,15 +58,62 @@ console.log(JSON.stringify({ok,args:process.argv.slice(2)}));`
 	}
 }
 
-func TestGeminiNativeInitialize(t *testing.T) {
+func TestGeminiNativeFreshSessionControls(t *testing.T) {
 	runtime := os.Getenv("AGENT_GEMINI_TEST_RUNTIME")
 	if runtime == "" {
 		t.Skip("set AGENT_GEMINI_TEST_RUNTIME for native ACP initialization")
 	}
+	for _, trust := range []bool{false, true} {
+		t.Run(fmt.Sprintf("trust=%t", trust), func(t *testing.T) {
+			testGeminiNativeFreshSessionControls(t, runtime, trust)
+		})
+	}
+}
+
+func testGeminiNativeFreshSessionControls(t *testing.T, runtime string, trust bool) {
 	p := geminiTestOptions(t)
 	p.RuntimeDir = runtime
+	var httpMCPInitialized atomic.Bool
+	mcp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer private-mcp-value" {
+			t.Error("native HTTP MCP credential binding was not resolved")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var request struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				ProtocolVersion string `json:"protocolVersion"`
+			} `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if len(request.ID) == 0 {
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		result := map[string]any{"tools": []any{}}
+		if request.Method == "initialize" {
+			httpMCPInitialized.Store(true)
+			result = map[string]any{"protocolVersion": request.Params.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{}}, "serverInfo": map[string]string{"name": "fixture", "version": "1"}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": result})
+	}))
+	defer mcp.Close()
 	c := geminiTestConfiguration()
-	c.Shared.MCPServers = make([]ManagedMCPServer, 0)
+	c.Shared.MCPServers = []ManagedMCPServer{{Name: "http-fixture", URL: mcp.URL, Transport: "http", HeaderBindings: map[string]CredentialHeader{"Authorization": {Credential: "docs", Prefix: "Bearer "}}}}
+	c.Launch.TrustWorkspace = trust
+	if !trust {
+		c.Shared.MCPServers = make([]ManagedMCPServer, 0)
+	}
 	desired, _ := json.Marshal(c)
 	launch, err := p.Prepare(context.Background(), t.TempDir(), desired)
 	if err != nil {
@@ -91,34 +142,77 @@ func TestGeminiNativeInitialize(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { cancel(); _ = cmd.Wait() }()
-	if _, err = stdin.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}` + "\n")); err != nil {
+	scanner := bufio.NewScanner(stdout)
+	seq := 0
+	call := func(method string, params any) json.RawMessage {
+		t.Helper()
+		seq++
+		data, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": seq, "method": method, "params": params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = stdin.Write(append(data, '\n')); err != nil {
+			t.Fatal(err)
+		}
+		for scanner.Scan() {
+			var response struct {
+				ID     int             `json:"id"`
+				Result json.RawMessage `json:"result"`
+				Error  json.RawMessage `json:"error"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &response) != nil || response.ID != seq {
+				continue
+			}
+			if len(response.Error) != 0 {
+				t.Fatalf("native %s failed (error output intentionally omitted)", method)
+			}
+			return response.Result
+		}
+		t.Fatalf("native %s did not respond: %v", method, scanner.Err())
+		return nil
+	}
+	initialized := call("initialize", map[string]any{"protocolVersion": 1, "clientCapabilities": map[string]any{}})
+	var info struct {
+		AgentInfo struct {
+			Version string `json:"version"`
+		} `json:"agentInfo"`
+		AuthMethods []struct {
+			ID string `json:"id"`
+		} `json:"authMethods"`
+	}
+	if err = json.Unmarshal(initialized, &info); err != nil {
 		t.Fatal(err)
 	}
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		var response struct {
-			ID     int `json:"id"`
-			Result struct {
-				AgentInfo struct {
-					Version string `json:"version"`
-				} `json:"agentInfo"`
-				AuthMethods []struct {
-					ID string `json:"id"`
-				} `json:"authMethods"`
-			} `json:"result"`
+	if info.AgentInfo.Version != geminiVersion {
+		t.Fatal("incorrect native agent version")
+	}
+	found := false
+	for _, method := range info.AuthMethods {
+		if method.ID == "gemini-api-key" {
+			found = true
 		}
-		if json.Unmarshal(scanner.Bytes(), &response) != nil || response.ID != 1 {
-			continue
-		}
-		if response.Result.AgentInfo.Version != geminiVersion {
-			t.Fatal("incorrect native agent version")
-		}
-		for _, method := range response.Result.AuthMethods {
-			if method.ID == "gemini-api-key" {
-				return
-			}
-		}
+	}
+	if !found {
 		t.Fatal("native API key authentication not advertised")
 	}
-	t.Fatal("native initialize did not respond", scanner.Err())
+	// These controls configure a session with a dummy key; none sends a prompt.
+	call("authenticate", map[string]string{"methodId": "gemini-api-key"})
+	created := call("session/new", map[string]any{"cwd": p.StateDir, "mcpServers": []any{}})
+	var session struct {
+		SessionID string `json:"sessionId"`
+	}
+	if err = json.Unmarshal(created, &session); err != nil || session.SessionID == "" {
+		t.Fatal("missing native session ID")
+	}
+	if trust && !httpMCPInitialized.Load() {
+		t.Fatal("native HTTP MCP did not initialize")
+	}
+	call("session/set_model", map[string]string{"sessionId": session.SessionID, "modelId": "gemini-2.5-flash"})
+	call("session/set_mode", map[string]string{"sessionId": session.SessionID, "modeId": "default"})
+	// ACP cancellation is a notification, not a request with a response.
+	cancelMessage, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": "session/cancel", "params": map[string]string{"sessionId": session.SessionID}})
+	if _, err = stdin.Write(append(cancelMessage, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	call("session/set_mode", map[string]string{"sessionId": session.SessionID, "modeId": "default"})
 }

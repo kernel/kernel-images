@@ -45,8 +45,8 @@ native `model.maxSessionTurns`. It bounds a session, not a wall-clock prompt
 execution time. ACP owns prompts, permissions, cancellation and session
 model/mode controls; the proxy does not transform or retry prompts.
 
-`trustWorkspace` defaults to false. Native stdio MCP requires it to be true;
-preparation rejects shared stdio servers otherwise. **Opting in trusts the remote
+`trustWorkspace` defaults to false. Native MCP (all transports) requires it to be
+true; preparation rejects shared MCP servers otherwise. **Opting in trusts the remote
 working directories supplied on this connection**, including their native
 `.gemini/settings.json`, context and policy files. Provision only trusted remote
 workspaces. Native settings can merge additional workspace MCP definitions with
@@ -54,7 +54,7 @@ managed definitions. This is not a sandbox or an isolated-settings guarantee.
 Hooks and extensions are disabled by the managed launch/settings, and generic
 project `.env` loading is disabled; native `.gemini/.env` behavior in trusted
 workspaces still applies. With trust off, native workspace executable settings
-are excluded and stdio MCP is unavailable. Native folder trust can also prevent
+are excluded and all MCP is unavailable. Native folder trust can also prevent
 operations; this configuration does not bypass that policy silently.
 
 ## Native shared settings and MCP
@@ -144,7 +144,10 @@ Unit tests cover configuration validation, secret-free private revision files,
 credential mapping and launch environment isolation, failed preparation retention,
 stale/concurrent writes, GET during preparation, restart recovery, preservation of
 native state and prior revision paths. Optional installed-runtime tests verify the
-pin and native ACP initialization without provider calls; CI enables these tests.
+pin, native ACP initialization/authentication/fresh sessions, model/mode controls,
+idle cancellation and HTTP MCP initialization with a bound header, without sending
+provider prompts. They cover both trusted and untrusted fresh sessions; CI enables
+these tests.
 
 The opt-in real-provider gate uses a **fresh disposable image** with `GEMINI_API_KEY`
 and `GEMINI_GATE_MCP_TOKEN=fixture-token` injected. Add a test-only catalog binding
@@ -165,8 +168,9 @@ restoring it in `finally`. **Never run it against a shared or non-disposable ima
 It outputs a boolean summary, not raw ACP messages or credentials.
 
 Validated on Linux amd64: headless image build and enabled packaged-image gate;
-local race tests including native initialization. Headful uses the identical
-runtime install stage but its full image/provider behavior is not independently
-verified. HTTP/SSE MCP interoperability, multimodal input, model switching,
+local race tests including native session controls and HTTP MCP initialization.
+The headful runtime stage was also built and verified as 0.58.0, but full headful
+image/provider behavior is not independently verified. HTTP MCP tool calls, SSE
+MCP interoperability, multimodal input, inference after model switching,
 cancellation during active inference, OAuth and platform gateway/TLS integration
-are not covered by this gate. Restoration is intentionally not exercised.
+are not covered by these tests. Restoration is intentionally not exercised.

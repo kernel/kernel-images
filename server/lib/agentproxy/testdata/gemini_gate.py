@@ -42,14 +42,14 @@ def remote(code):
     return base64.b64decode(response["stdout_b64"]).decode()
 
 
-def pids():
-    return set(json.loads(remote("""import pathlib,json
+def pids(include_mcp=False):
+    return set(json.loads(remote("import pathlib,json\ninclude_mcp=" + repr(include_mcp) + "\n" + """
 pids=[]
 for path in pathlib.Path('/proc').iterdir():
  if not path.name.isdigit():continue
  try:args=(path/'cmdline').read_bytes().split(bytes([0]))
  except (FileNotFoundError,ProcessLookupError,PermissionError):continue
- if b'/opt/kernel-agent/gemini/node_modules/@google/gemini-cli/bundle/gemini.js' in args:pids.append(path.name)
+ if b'/opt/kernel-agent/gemini/node_modules/@google/gemini-cli/bundle/gemini.js' in args or (include_mcp and any(a.startswith(b'/tmp/gemini-gate-') and a.endswith(b'/mcp.py') for a in args)):pids.append(path.name)
 print(json.dumps(pids))
 """)))
 
@@ -126,7 +126,8 @@ async def main():
         clients.append(first)
         session, _ = await first.call("session/new", {"cwd": workspace, "mcpServers": []})
         old = pids()
-        assert len(old) == 1
+        old_tree = pids(include_mcp=True)
+        assert len(old) == 1 and len(old_tree) > 1
         second = await Client().open()
         clients.append(second)
         override = {"name": "checkpoint", "command": python,
@@ -157,10 +158,10 @@ async def main():
         assert pids() == active
         await first.close()
         for _ in range(20):
-            if not old.intersection(pids()):
+            if not old_tree.intersection(pids(include_mcp=True)):
                 break
             await asyncio.sleep(0.5)
-        assert not old.intersection(pids()), "disconnect left native process alive"
+        assert not old_tree.intersection(pids(include_mcp=True)), "disconnect left native or MCP process alive"
         assert len(pids()) == 1, "disconnect killed another connection"
         text = await second.prompt(other["sessionId"], "Reply only with OK. Do not use tools.")
         assert "OK" in text, "existing connection failed after revision update"
@@ -171,18 +172,19 @@ async def main():
         assert fresh["sessionId"] not in (session["sessionId"], other["sessionId"])
         text = await third.prompt(fresh["sessionId"], "Reply only with READY. Do not use tools.")
         assert "READY" in text
-        print(json.dumps({"pass": True, "version": "0.58.0", "model": "gemini-2.5-flash", "prompts": 4,
+        summary = {"pass": True, "version": "0.58.0", "model": "gemini-2.5-flash", "prompts": 4,
             "authentication": True, "sharedMCP": True, "sessionMCPOverride": True, "credentialIsolation": True,
             "nativePermissions": True, "independentConnections": True, "retainedEffectiveRevision": True,
-            "newSessionsOnly": True, "reconnectDiscoveryLoadHistory": "unsupported; not exercised"}), flush=True)
+            "newSessionsOnly": True, "reconnectDiscoveryLoadHistory": "unsupported; not exercised"}
     finally:
         for client in clients:
             await client.close()
         for _ in range(20):
-            if not pids():
+            if not pids(include_mcp=True):
                 break
             await asyncio.sleep(0.5)
-        assert not pids(), "native processes remained after disconnect"
+        assert not pids(include_mcp=True), "native or MCP processes remained after disconnect"
+    print(json.dumps(summary), flush=True)
 
 
 asyncio.run(main())
