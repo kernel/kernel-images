@@ -18,6 +18,7 @@ type Config struct {
 	ACPRemote      string             `json:"acpremote"`
 	MaxConnections int                `json:"maxConnections"`
 	Harnesses      map[string]Harness `json:"harnesses"`
+	Pi             *PiOptions         `json:"pi,omitempty"`
 }
 
 type Harness struct {
@@ -64,7 +65,12 @@ func (c Config) validate() error {
 	if c.MaxConnections < 1 || c.MaxConnections > 64 {
 		return errors.New("maxConnections must be between 1 and 64")
 	}
-	if len(c.Harnesses) == 0 {
+	if c.Pi != nil {
+		if err := c.Pi.validate(); err != nil {
+			return err
+		}
+	}
+	if len(c.Harnesses) == 0 && c.Pi == nil {
 		return errors.New("at least one harness is required")
 	}
 	for name, harness := range c.Harnesses {

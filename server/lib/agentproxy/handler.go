@@ -20,20 +20,35 @@ type Handler struct {
 	logger   *slog.Logger
 	registry *wsdrain.Registry
 	slots    chan struct{}
+	pi       *configurationManager
 }
 
 func New(ctx context.Context, config Config, logger *slog.Logger, registry *wsdrain.Registry) (*Handler, error) {
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	return &Handler{ctx: ctx, config: config, logger: logger, registry: registry, slots: make(chan struct{}, config.MaxConnections)}, nil
+	h := &Handler{ctx: ctx, config: config, logger: logger, registry: registry, slots: make(chan struct{}, config.MaxConnections)}
+	if config.Pi != nil {
+		var err error
+		h.pi, err = newConfigurationManager(config.Pi.StateDir, *config.Pi)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return h, nil
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/agent/v1/harnesses":
 		names := make([]string, 0, len(h.config.Harnesses))
+		if h.pi != nil {
+			names = append(names, "pi")
+		}
 		for name := range h.config.Harnesses {
+			if name == "pi" && h.pi != nil {
+				continue
+			}
 			names = append(names, name)
 		}
 		sort.Strings(names)
@@ -41,6 +56,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(struct {
 			Configured []string `json:"configured"`
 		}{names})
+	case r.URL.Path == "/agent/v1/harnesses/pi/config" && h.pi != nil:
+		h.piConfiguration(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/agent/v1/acp":
 		h.connect(w, r)
 	default:
@@ -51,6 +68,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) connect(w http.ResponseWriter, r *http.Request) {
 	name := r.URL.Query().Get("harness")
 	harness, ok := h.config.Harnesses[name]
+	if name == "pi" && h.pi != nil {
+		harness, ok = h.pi.preparedLaunch()
+		if !ok {
+			http.Error(w, "pi configuration is not ready", http.StatusConflict)
+			return
+		}
+	}
 	if !ok {
 		http.Error(w, "harness is not configured", http.StatusNotFound)
 		return

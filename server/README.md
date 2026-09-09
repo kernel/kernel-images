@@ -71,10 +71,11 @@ export OUTPUT_DIR=/tmp/recordings
 
 ### Optional ACP agents
 
-The [ACP proxy](lib/agentproxy/README.md) exposes one WebSocket endpoint using
-`acpremote expose` and its per-connection process lifecycle. It is disabled by
-default and requires separately provisioned bridge and harness executables.
-The public declarative installer/configuration API is not implemented yet.
+The [ACP API](lib/agentproxy/README.md) exposes one WebSocket endpoint using
+`acpremote expose` and its per-connection process lifecycle. Browser images bundle
+a pinned Pi runtime and declarative configuration GET/PUT endpoints. Configure a
+provider credential binding before connecting. An empty `AGENT_CONFIG_PATH`
+disables these routes when running the server separately.
 
 ### API Documentation
 

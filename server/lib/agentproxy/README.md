@@ -1,142 +1,242 @@
-# ACP WebSocket proxy
+# ACP agents
 
-This is the first integration milestone for an ACP-first agent API: a real
-kernel-images route and an existing-client compatibility gate. It deliberately
-contains no conversation REST protocol, runtime resource, prompt journal,
-idempotency layer, session-ID translation, or delivery replay.
+The browser images bundle a pinned Pi reference implementation. Kernel manages
+configuration preparation and connection lifetime; ACP owns conversations.
+There is no runtime resource, conversation REST API, prompt journal, automatic
+prompt retry, or session-ID translation in the WebSocket proxy.
 
-## Implemented surface
+## API
 
-- `GET /agent/v1/harnesses` returns configured harness names. This is configuration
-  discovery, not a claim that a harness/model or every ACP capability is validated.
-- WebSocket `GET /agent/v1/acp?harness=pi` starts `acpremote expose` with the trusted
-  launch definition and proxies ACP messages unchanged.
-- Names are `pi`, `codex`, `claude`, and `gemini`. Only provisioned names are enabled.
-- `AGENT_CONFIG_PATH` enables the routes. Empty or invalid configuration leaves
-  them unavailable without breaking the browser's other APIs.
+| Endpoint | Behavior |
+| --- | --- |
+| `GET /agent/v1/harnesses` | Returns configured harness names, currently `{"configured":["pi"]}` in the packaged images. This does not mean a model credential is configured. |
+| `GET /agent/v1/harnesses/pi/config` | Returns desired/effective configuration, revisions, preparation status and an ETag. |
+| `PUT /agent/v1/harnesses/pi/config` | Validates, installs and checks the requested configuration, then activates it. Requires `If-Match` from GET. |
+| WebSocket `GET /agent/v1/acp?harness=pi` | Starts a connection-owned `acpremote expose` bridge and Pi adapter using the last ready launch definition. |
 
-These routes use the existing browser API authentication/routing boundary, like
-`/process/{process_id}/attach`; they do not introduce another public token scheme.
-Do not expose the image server directly to an untrusted network. Each internal
-bridge binds only to loopback and requires a generated bearer token; browser
-credentials and client headers are not forwarded to that bridge.
+The routes use the existing browser API routing/authentication boundary, like
+`/process/{process_id}/attach`. Do not expose the image server directly to an
+untrusted network. Internal bridge listeners bind to loopback and use independent
+random bearer tokens; client headers are not forwarded to them.
 
-## Lifecycle
+### Configuration example
 
-For each client connection the server starts a dedicated `acpremote expose`
-listener on an OS-assigned loopback port. Opening its upstream WebSocket starts
-one harness/adapter subprocess. The listener and subprocess are scoped to that
-attachment and are cleaned up when the connection ends. Multiple concurrent
-attachments are allowed within `maxConnections`; each may contain multiple ACP
-sessions if the selected harness supports them.
+Inject `OPENROUTER_API_KEY` into the image environment, then GET the configuration
+and use its ETag in PUT. The initial ETag is `"0"`.
 
-A disconnect is termination, not detach. On reconnect, a fresh subprocess may load
-an exact persisted native conversation with ACP `session/load` or `session/resume`.
-Native storage must survive connection cleanup. No output is retained by the proxy,
-and an interrupted tool's side effect is not automatically reconciled or repeated.
+```http
+PUT /agent/v1/harnesses/pi/config
+Content-Type: application/json
+If-Match: "0"
 
-The proxy retains no ACP state. It does not intercept initialize, permissions,
-model selection, MCP definitions, session IDs, or results/errors. Subprotocol
-`acp.v1` is accepted when offered; no subprotocol is required. Frame size is limited
-to 1 MiB to match acpremote 1.7.0's default. Downstream ping/pong uses a 20-second
-interval and timeout so a dead network connection cannot leave the agent running
-indefinitely while the proxy answers upstream pings.
-
-Server shutdown cancels startup and active connections. Bridge cleanup first asks
-the CLI to shut down gracefully, then kills the owned process group after at most
-six seconds so adapters cannot leave ordinary descendant processes behind. This
-is process cleanup, not a security sandbox for programs that deliberately daemonize
-outside their process group.
-
-## Trusted launch catalog (bootstrap, not the declarative public API)
-
-Install Python 3.11+ and the pinned transport dependencies in a private environment:
-
-```sh
-python3 -m venv /opt/kernel-agent/venv
-/opt/kernel-agent/venv/bin/python -m pip install -r server/runtime/acp/requirements.txt
-```
-
-The image does not install these dependencies or any harness automatically in this
-milestone. An operator must provision the environment and pinned harness/adapter
-binaries before enabling the feature. The bridge executable is expected to be
-acpremote 1.7.0; startup reads that CLI's loopback readiness banner, not agent output.
-
-Example catalog, assuming the executable and working directory are provisioned:
-
-```json
 {
-  "acpremote": "/opt/kernel-agent/venv/bin/acpremote",
-  "maxConnections": 8,
-  "harnesses": {
-    "gemini": {
-      "command": "/opt/kernel-agent/gemini/node_modules/.bin/gemini",
-      "args": ["--acp"],
-      "cwd": "/workspace",
-      "env": {"HOME": "/home/kernel"},
-      "inheritEnv": ["GEMINI_API_KEY"]
-    }
+  "launch": {
+    "provider": "openrouter",
+    "model": "z-ai/glm-5.3",
+    "thinking": "low",
+    "credential": "openrouter"
+  },
+  "shared": {
+    "extensions": [],
+    "mcpServers": []
   }
 }
 ```
 
-Set `AGENT_CONFIG_PATH` to this private file and restart the image server. Launch
-configuration is read once; editing the file does not hot-reload running processes.
-The catalog is limited to 64 KiB. Commands and working directories must be absolute.
-It is trusted operator input, not a mechanism for a WebSocket caller to supply a
-command, arguments, or environment. Agent stderr is discarded by this first
-integration; no transcript or secret-bearing log stream is exposed.
+The response, also returned by GET, has this shape:
 
-Only PATH, HOME, USER, LANG, TMPDIR, TERM and certificate paths are inherited by
-default. Provider credentials must be explicitly named by `inheritEnv`; a missing
-or empty required value rejects connection startup. `env` overrides inherited
-values and should contain nonsecret settings only. Neither is returned by discovery.
-
-All connections to a harness use the same configured environment and working
-directory. Shared configuration, extensions, MCP files and native history are not
-copied or deleted per connection. For Pi, explicitly setting `PI_CODING_AGENT_DIR`
-selects shared Pi state; project-local discovery remains Pi/adapter behavior.
-Clients must supply a working directory meaningful on the remote host. Local IDE
-files, terminal callbacks and local stdio MCP servers do not become remotely
-available automatically.
-
-## Acceptance checks
-
-The integration suite uses real acpremote processes and TCP WebSockets. Its
-stdlib-only ACP peer is deterministic: no provider credentials or model calls.
-
-```sh
-python3 -m venv /tmp/acp-test
-/tmp/acp-test/bin/python -m pip install -r runtime/acp/requirements.txt
-AGENT_PROXY_TEST_ACPREMOTE=/tmp/acp-test/bin/acpremote \
-  go test -race -v ./lib/agentproxy ./lib/wsproxy
+```json
+{
+  "revision": "<desired-revision>",
+  "status": "ready",
+  "desired": {"launch": {}, "shared": {}},
+  "effectiveRevision": "<last-ready-revision>",
+  "effective": {"launch": {}, "shared": {}}
+}
 ```
 
-Run from `server/`. CI installs the pinned bridge and sets the environment variable;
-without it, the external-process cases explicitly skip rather than claim a pass.
+The configuration objects above are abbreviated. `status` is `unconfigured`,
+`preparing`, `ready`, or `failed`. Before first preparation, desired/effective are
+null. Failed preparation retains the desired request and a safe `error` message,
+while effective configuration and existing connections retain the last ready
+revision. GET remains available during preparation. Effective means the last
+configuration prepared by this API, not an audit of out-of-band filesystem edits.
 
-The gates cover independent concurrent processes, multiple native sessions per
-connection, connection admission, termination during an in-flight prompt, exact-ID
-history load after reconnect, permissions, opaque content/metadata, server shutdown,
-message limits, and unresponsive clients. A separate case drives the unmodified
-`acpremote mirror` CLI using the official ACP Python SDK. No Kernel-specific client
-messages or headers are needed.
+PUT is synchronous, with preparation bounded to three minutes. Concurrent or stale
+writes return 409; missing If-Match returns 428; malformed JSON returns 400; invalid
+configuration or failed preparation returns 422. After failure, GET obtains the
+new desired revision for the next If-Match. Responses never contain credential
+values. The request limit is 1 MiB.
 
-ACP UI 0.1.16 at commit `cd9c3cb464a4b321bff652101953a64c07473e31` was also tested
-locally without source changes: initialization, session creation, streamed output,
-permission approval, disconnect, and exact-session restoration in a fresh process.
-This was a local WebSocket test with the deterministic peer, not a TLS/gateway or
-real-model test. The UI check is not yet part of CI.
+A ready revision means software/configuration preparation succeeded, not that a
+provider key has been authenticated or a remote MCP service is reachable.
 
-## Remaining work
+### Launch settings and credential bindings
 
-The public declarative configuration GET/PUT API, transactional preparation,
-harness/extension installers, and model-provider secret bindings remain a separate
-milestone. The bootstrap catalog is not their replacement. They should produce
-trusted launch definitions while making shared filesystem effects explicit.
+`provider` supports `openrouter`, `openai`, `anthropic`, and `google`. `model` is the
+native Pi model ID. `thinking` is one of `off`, `minimal`, `low`, `medium`, `high`,
+or `xhigh`; the pinned adapter does not expose `max`, and individual models may
+support only a subset. ACP model/mode
+controls can subsequently change a session's selection.
 
-Each harness still needs pinned native installation, capability/MCP/media tests,
-permission and native restoration checks, and shared-configuration verification.
-Successful fixture/client interoperability is not a blanket harness support claim.
-Platform-level routing/authentication and packaged-image tests with the feature
-enabled are also required before public availability.
+`credential` names an operator-defined environment binding, not a secret value.
+The packaged catalog binds `openrouter` to `OPENROUTER_API_KEY`, `openai` to
+`OPENAI_API_KEY`, `anthropic` to `ANTHROPIC_API_KEY`, and `google` to
+`GEMINI_API_KEY`. Only credentials referenced by the configuration are inherited
+by the launched agent. Missing/empty bindings reject preparation. GET returns the
+binding names supplied by the caller, not their environment implementation.
+
+### Extensions
+
+`shared.extensions` accepts at most 32 exact-version npm references, for example
+`npm:my-pi-extension@1.2.3`. Ranges, floating tags, git sources and local paths are
+not supported in this first contract. Packages are installed with Bun and
+lifecycle scripts disabled. Only extension resources are enabled from packages;
+package skills, prompt templates and themes are excluded.
+
+Preparation imports/initializes extensions in a separate preparation directory
+without inheriting provider credentials. Managed MCP server startup is disabled. An extension import/startup
+error prevents activation. Extensions requiring install scripts are unsupported.
+Extensions are executable, trusted code with browser filesystem access: atomic
+activation does not roll back arbitrary side effects performed by extension code.
+
+Project-local executable settings/resources are not automatically trusted. The
+managed runtime passes Pi's `--no-approve`; normal native context-file behavior
+remains available.
+
+### Shared MCP configuration
+
+At most 32 uniquely named servers are accepted. A stdio definition uses an
+absolute remote command:
+
+```json
+{
+  "name": "docs",
+  "command": "/usr/local/bin/docs-mcp",
+  "args": ["--read-only"],
+  "envBindings": {"DOCS_API_KEY": "docs-token"}
+}
+```
+
+An HTTP definition can bind request headers:
+
+```json
+{
+  "name": "docs",
+  "url": "https://example.com/mcp",
+  "transport": "http",
+  "headerBindings": {
+    "Authorization": {"credential": "docs-token", "prefix": "Bearer "}
+  }
+}
+```
+
+`docs-token` must be declared in the operator catalog's credential bindings.
+`transport` supports `http` (streamable HTTP) and `sse`. Embedded URL credentials,
+query parameters and fragments are rejected; use bindings for secrets. Interactive
+MCP OAuth is disabled in the managed extension; use explicit credential bindings.
+
+Standard ACP `mcpServers` on `session/new` and fresh-process `session/load` are
+also supported. They **override shared defaults by server name** for that native
+Pi session. They are kept in process memory rather than written into shared
+configuration; clients must supply them again when loading. Other shared servers
+remain available. Stdio MCP processes receive SDK platform-default environment
+variables plus explicitly supplied bindings/values, not the entire provider
+environment. The managed MCP extension uses an isolated explicit config, so
+ambient `.mcp.json` and imported host MCP settings do not participate.
+
+Pi-acp 0.0.33 otherwise accepts and stores MCP definitions without passing them to
+Pi. `runtime/acp/pi/patch-adapter.mjs` adds per-session environment handoff for
+create/load and advertises the implemented HTTP/SSE support. It is a guarded,
+version-specific adapter patch, not an interception layer in the Go proxy.
+
+## Lifetime and shared state
+
+Each connection starts its own loopback expose listener and agent process tree.
+Multiple connections and multiple native sessions per connection are supported.
+Disconnect terminates the owned processes; it does not delete saved sessions.
+Unresponsive clients are detected with a 20-second ping interval and pong timeout.
+Shutdown first requests graceful bridge cleanup, then escalates to process-group
+termination after six seconds. This is cleanup, not a sandbox against deliberately
+daemonized processes. WebSocket `acp.v1` is optional and the message limit is 1 MiB.
+
+Configuration activation atomically switches `current` to a prepared revision.
+New connections use the new launch definition; existing connections are not killed.
+All Pi processes in the browser share managed configuration and native session
+storage. Native history and the adapter's ID mapping remain outside the revision
+being replaced. Successful revisions are retained for existing processes;
+failed preparation directories are removed. There is no automatic GC of successful
+revisions yet, so repeated large extension installations consume disk space.
+
+Shared files can be observed dynamically by existing processes; there is no promise
+of complete revision isolation. New credentials require a fresh connection, and
+extensions/MCP services may require a fresh native session to reload. Native writes
+and direct filesystem edits are not reconciled back into the API's desired state.
+Saved sessions survive connection and API-process restarts in the same browser,
+not deletion/replacement of the browser itself.
+
+The reconnect contract is `initialize`, authenticate if needed, `session/list`,
+then `session/load` with the discovered exact ID. Load replays native history.
+`session/resume` is optional; acpremote 1.7.0 mirror currently rejects that method
+on its local router. Neither path guarantees interrupted-turn continuation,
+lossless event replay or exactly-once tool side effects.
+
+`cwd` and stdio MCP commands refer to the browser's filesystem. Client-local paths
+and terminals do not become remotely available automatically. Use the process/file
+APIs to provision an existing remote working directory.
+
+## Pins and operator configuration
+
+The runtime pins Pi **0.83.0**, pi-acp **0.0.33** with the MCP patch,
+pi-mcp-adapter **2.32.1**, acpremote **1.7.0**, ACP Python SDK **0.11.0**,
+websockets **15.0.1**, Python **3.12.11**, and Bun **1.4.0**. The runtime's Bun lockfile
+pins its JavaScript dependency resolution. User extension dependencies are resolved
+and recorded separately in each prepared revision.
+
+Images set `AGENT_CONFIG_PATH=/opt/kernel-agent/catalog.json`. An empty variable
+still disables the agent routes. Operators can replace the catalog to configure
+`pi.stateDir`, `pi.runtimeDir`, `pi.node`, credential bindings and an optional npm
+`registry`. The default state directory is `/home/kernel/.agents/pi`.
+
+The original trusted `harnesses` launch catalog remains supported for separately
+provisioned agents. Only Pi has a packaged declarative preparer here. The
+`Preparer` interface and common revision manager are the implementation boundary
+for subsequent harnesses; their native configuration support must be explicit.
+Gemini's future integration excludes reconnect/discovery/load until its ACP
+implementation satisfies that protocol gate.
+
+## Validation
+
+From `server/`:
+
+```sh
+cd runtime/acp/pi
+bun install --frozen-lockfile --ignore-scripts
+node patch-adapter.mjs
+cd ../../..
+AGENT_PI_TEST_RUNTIME="$PWD/runtime/acp/pi" \
+AGENT_PROXY_TEST_ACPREMOTE=/path/to/acp-venv/bin/acpremote \
+  go test -race ./lib/agentproxy ./lib/wsproxy
+```
+
+CI installs the pinned runtimes. Tests cover transactional activation, failure
+retention, restart recovery, optimistic concurrency, private files and responses,
+real npm-compatible fixture package installation/validation, plus the existing
+bridge/official-client lifecycle and content gates. Without the corresponding
+environment variables, external-runtime tests explicitly skip.
+
+The opt-in real-provider test requires a **fresh disposable image**, injected
+`OPENROUTER_API_KEY`, and a Python runner with `runtime/acp/requirements.txt`:
+
+```sh
+AGENT_API_URL=http://127.0.0.1:10001 \
+  /path/to/acp-venv/bin/python lib/agentproxy/testdata/pi_gate.py
+```
+
+It refuses to overwrite an existing configuration. It exercises independent
+connections, shared and session-overridden stdio MCP tools, updates while connected,
+failed preparation, process cleanup, and fresh-process discovery/load/history plus
+real-model recall. This paid-provider gate is not run automatically in CI.
+HTTP/SSE MCP interoperability and media/model behavior beyond these tests require
+additional validation; packaged headless-image testing is not a platform gateway
+or TLS/authentication integration test.

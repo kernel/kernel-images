@@ -109,6 +109,19 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
+FROM ghcr.io/astral-sh/uv:0.8.14 AS agent-uv
+FROM oven/bun:1.4.0 AS agent-bun
+FROM node:22-bullseye-slim AS agent-runtime
+COPY --from=agent-uv /uv /usr/local/bin/uv
+COPY --from=agent-bun /usr/local/bin/bun /usr/local/bin/bun
+ENV UV_PYTHON_INSTALL_DIR=/opt/kernel-agent/python
+RUN uv python install 3.12.11 && uv venv --python 3.12.11 /opt/kernel-agent/venv
+COPY server/runtime/acp/requirements.txt /opt/kernel-agent/requirements.txt
+RUN uv pip install --python /opt/kernel-agent/venv/bin/python -r /opt/kernel-agent/requirements.txt
+COPY server/runtime/acp/pi /opt/kernel-agent/pi
+RUN cd /opt/kernel-agent/pi && bun install --frozen-lockfile --ignore-scripts && node patch-adapter.mjs
+COPY server/runtime/acp/catalog.json /opt/kernel-agent/catalog.json
+
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/ubuntu:22.04
 
@@ -284,5 +297,9 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:patchright \
     --external:esbuild \
     && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts /tmp/webmcp.ts
+
+COPY --from=agent-runtime /opt/kernel-agent /opt/kernel-agent
+COPY --from=agent-bun /usr/local/bin/bun /usr/local/bin/bun
+ENV AGENT_CONFIG_PATH=/opt/kernel-agent/catalog.json
 
 ENTRYPOINT [ "/wrapper" ]
