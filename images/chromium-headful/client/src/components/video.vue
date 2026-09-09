@@ -221,6 +221,7 @@
   import { Component, Ref, Watch, Vue, Prop } from 'vue-property-decorator'
   import ResizeObserver from 'resize-observer-polyfill'
   import { elementRequestFullscreen, onFullscreenChange, isFullscreen, lockKeyboard, unlockKeyboard } from '~/utils'
+  import { isClipboardReadGranted } from '~/utils/clipboard'
 
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
@@ -731,16 +732,22 @@
     }
 
     async syncClipboard() {
-      if (this.clipboard_read_available && window.document.hasFocus()) {
-        try {
-          const text = await navigator.clipboard.readText()
-          if (this.clipboard !== text) {
-            this.$accessor.remote.setClipboard(text)
-            this.$accessor.remote.sendClipboard(text)
-          }
-        } catch (err: any) {
-          this.$log.error(err)
+      if (!this.clipboard_read_available || !window.document.hasFocus()) {
+        return
+      }
+
+      if (window.self !== window.top && !(await isClipboardReadGranted())) {
+        return
+      }
+
+      try {
+        const text = await navigator.clipboard.readText()
+        if (this.clipboard !== text) {
+          this.$accessor.remote.setClipboard(text)
+          this.$accessor.remote.sendClipboard(text)
         }
+      } catch (err: any) {
+        this.$log.error(err)
       }
     }
 
