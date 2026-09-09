@@ -221,6 +221,7 @@
   import { Component, Ref, Watch, Vue, Prop } from 'vue-property-decorator'
   import ResizeObserver from 'resize-observer-polyfill'
   import { elementRequestFullscreen, onFullscreenChange, isFullscreen, lockKeyboard, unlockKeyboard } from '~/utils'
+  import { isClipboardReadGranted } from '~/utils/clipboard'
 
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
@@ -735,15 +736,8 @@
         return
       }
 
-      if (window.self !== window.top) {
-        try {
-          const permission = await navigator.permissions.query({ name: 'clipboard-read' as PermissionName })
-          if (permission.state !== 'granted') {
-            return
-          }
-        } catch {
-          return
-        }
+      if (window.self !== window.top && !(await isClipboardReadGranted())) {
+        return
       }
 
       try {
