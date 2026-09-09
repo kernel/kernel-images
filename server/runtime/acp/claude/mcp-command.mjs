@@ -4,7 +4,7 @@ const [configPath, name] = process.argv.slice(2);
 const config = JSON.parse(readFileSync(configPath, "utf8"));
 const server = config.shared.mcpServers.find((server) => server.name === name);
 const bindings = JSON.parse(process.env.KERNEL_CLAUDE_BINDINGS);
-const env = {};
+const env = Object.create(null);
 for (const name of [
   "PATH",
   "HOME",

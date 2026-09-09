@@ -48,7 +48,10 @@ startup. Ready does not mean provider authentication or MCP connectivity succeed
 
 `shared.settings` supports native `language` and `alwaysThinkingEnabled`. These
 settings are validated with the pinned SDK resolver and passed to the native CLI
-as a revision-local `--settings` file. Arbitrary environment settings, hooks,
+as a revision-local `--settings` file. If the SDK already supplies `--settings`,
+shared defaults are merged underneath those native session settings into one CLI
+argument, preserving native model restrictions and provider-routing settings.
+Arbitrary environment settings, hooks,
 plugins, skills, commands, marketplaces and Pi npm extensions are **unsupported**
 by this preparer. No extension installation is implied by accepting a revision.
 
@@ -78,6 +81,11 @@ that revision; a new connection sees the new effective revision. Ambient MCP is
 excluded with `--strict-mcp-config`, and ambient CLI settings sources are disabled.
 The adapter's own native SettingsManager still reads native user/project metadata;
 this launcher is not a sandbox or a replacement for native trust/permissions.
+These revision guarantees describe the managed launch path, not a security boundary
+against native client overrides: `_meta.claudeCode.options.env` can replace wrapper
+paths, binding metadata or `CLAUDE_CONFIG_DIR`. Clients with access to this browser
+can also modify its files or read process environments through the process API.
+Such out-of-band/native overrides are not reconciled into desired/effective state.
 
 ACP `session/new` and `session/load` stdio MCP overrides are validated. Supply them
 again when loading; other shared server defaults remain. ACP-supplied stdio servers
@@ -112,9 +120,9 @@ image lifecycle limitation, not solved in this adapter.
 
 - `@agentclientprotocol/claude-agent-acp` **0.75.1** (unpatched).
 - `@anthropic-ai/claude-agent-sdk` **0.3.257**, including its exact-version platform
-  native binaries; `@agentclientprotocol/sdk` **1.4.0**.
-- `bun.lock` records transitive dependencies; installs use `--frozen-lockfile
-  --ignore-scripts` and retain optional native dependencies.
+  native binaries (CLI reports **2.1.257**); `@agentclientprotocol/sdk` **1.4.0**.
+- `bun.lock` records transitive dependencies; installs use
+  `--frozen-lockfile --ignore-scripts` and retain optional native dependencies.
 - Uses the images' Node 22 (requires Node >=22.15 for Linux `process.execve`), Bun
   **1.4.0**, and shared ACP bridge/client pins documented in the shared README.
 

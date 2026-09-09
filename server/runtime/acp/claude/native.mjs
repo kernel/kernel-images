@@ -28,7 +28,18 @@ if (args.includes("--input-format")) {
   } else if (Object.keys(servers).length) {
     args.push("--mcp-config", JSON.stringify({ mcpServers: servers }));
   }
-  args.push("--settings", join(dirname(configPath), "settings.json"));
+  const settingsPath = join(dirname(configPath), "settings.json");
+  const settingsIndex = args.indexOf("--settings");
+  if (settingsIndex !== -1) {
+    const value = args[settingsIndex + 1];
+    const supplied = JSON.parse(
+      value.trimStart().startsWith("{") ? value : readFileSync(value, "utf8"),
+    );
+    const shared = JSON.parse(readFileSync(settingsPath, "utf8"));
+    args[settingsIndex + 1] = JSON.stringify({ ...shared, ...supplied });
+  } else {
+    args.push("--settings", settingsPath);
+  }
   args.push("--setting-sources", "", "--strict-mcp-config");
 }
 process.execve(

@@ -17,6 +17,10 @@ function fixture(t) {
     `#!${process.execPath}\nconsole.log(JSON.stringify({args:process.argv.slice(2),env:process.env}));`,
     { mode: 0o700 },
   );
+  writeFileSync(
+    join(root, "settings.json"),
+    JSON.stringify({ language: "English", alwaysThinkingEnabled: false }),
+  );
   const config = join(root, "config.json");
   writeFileSync(
     config,
@@ -27,7 +31,7 @@ function fixture(t) {
             name: "docs",
             command: capture,
             args: ["fixture"],
-            envBindings: { DOCS_KEY: "docs-token" },
+            envBindings: { DOCS_KEY: "docs-token", ["__proto__"]: "docs-token" },
           },
           { name: "other", command: capture, args: [] },
         ],
@@ -83,6 +87,36 @@ test("native flags merge shared MCP underneath ACP names and disable ambient MCP
   assert.ok(!JSON.stringify(args).includes("provider-fixture"));
 });
 
+test("shared settings merge underneath native SDK settings without duplicate flags", (t) => {
+  const { root, env } = fixture(t);
+  const settings = {
+    language: "Spanish",
+    env: { ANTHROPIC_BASE_URL: "https://example.test" },
+    availableModels: ["haiku"],
+  };
+  const settingsPath = join(root, "session-settings.json");
+  writeFileSync(settingsPath, JSON.stringify(settings));
+  for (const supplied of [JSON.stringify(settings), settingsPath]) {
+    const { args } = run(
+      "native.mjs",
+      [
+        "--input-format",
+        "stream-json",
+        "--setting-sources=user,project,local",
+        "--settings",
+        supplied,
+      ],
+      env,
+    );
+    assert.equal(args.filter((arg) => arg === "--settings").length, 1);
+    assert.deepEqual(JSON.parse(args[args.indexOf("--settings") + 1]), {
+      alwaysThinkingEnabled: false,
+      ...settings,
+    });
+    assert.equal(args[args.lastIndexOf("--setting-sources") + 1], "");
+  }
+});
+
 test("native version/auth commands retain their original arguments", (t) => {
   const { env } = fixture(t);
   for (const args of [["--version"], ["auth", "status"]]) {
@@ -95,6 +129,7 @@ test("shared stdio receives only platform environment and explicit bindings", (t
   const result = run("mcp-command.mjs", [config, "docs"], env);
   assert.deepEqual(result.args, ["fixture"]);
   assert.equal(result.env.DOCS_KEY, "mcp-fixture");
+  assert.equal(result.env.__proto__, "mcp-fixture");
   for (const name of [
     "ANTHROPIC_API_KEY",
     "UNRELATED_SECRET",
