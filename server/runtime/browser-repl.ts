@@ -1,5 +1,4 @@
 // Persistent, unrestricted JavaScript daemon owned by the API process.
-// Protocol and lifecycle invariants are documented in plans/persistent-browser-repl.md.
 
 import { AsyncLocalStorage } from 'async_hooks';
 import { createServer, Socket } from 'net';
