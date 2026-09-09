@@ -107,7 +107,7 @@ func TestCodexNativeHTTPMCP(t *testing.T) {
 	eventually(t, func() bool { return initialized.Load() && listed.Load() })
 	conn.CloseNow()
 	eventually(t, func() bool { return len(h.slots) == 0 })
-	if _, err := os.Stat(filepath.Join(p.StateDir, "native", ".tmp", "plugins")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(p.StateDir, "native", ".tmp")); !os.IsNotExist(err) {
 		t.Fatal("native plugin catalog sync was not disabled")
 	}
 	if err := filepath.WalkDir(p.StateDir, func(path string, entry os.DirEntry, err error) error {
