@@ -815,6 +815,24 @@
       first.target.dispatchEvent(simulatedEvent)
     }
 
+    focusOverlay(e: MouseEvent) {
+      // Touch input is translated into an untrusted mouse event above. Keep the
+      // existing mobile-keyboard behavior while allowing a real mouse to focus
+      // the overlay on touch-capable devices.
+      if (this.is_touch_device && !e.isTrusted) {
+        return
+      }
+
+      const focus = () => {
+        if (this.hosting && !this.locked) {
+          this._overlay.focus()
+        }
+      }
+
+      focus()
+      window.setTimeout(focus, 0)
+    }
+
     onMouseDown(e: MouseEvent) {
       this.unmuteOnInteraction()
 
@@ -830,9 +848,7 @@
         return
       }
 
-      if (!this.is_touch_device) {
-        this._overlay.focus()
-      }
+      this.focusOverlay(e)
 
       this.sendMousePos(e)
       this.$client.sendData('mousedown', { key: e.button + 1 })
@@ -843,6 +859,7 @@
         return
       }
 
+      this.focusOverlay(e)
       this.sendMousePos(e)
       this.$client.sendData('mouseup', { key: e.button + 1 })
     }
