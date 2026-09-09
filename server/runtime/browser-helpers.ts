@@ -529,31 +529,6 @@ export class BrowserHelpers {
     );
   };
 
-  dispatchKey = async (selector: string, key = 'Enter', event = 'keypress'): Promise<void> => {
-    const keyCodes: Record<string, number> = {
-      Enter: 13,
-      Tab: 9,
-      Escape: 27,
-      Backspace: 8,
-      ' ': 32,
-      ArrowLeft: 37,
-      ArrowUp: 38,
-      ArrowRight: 39,
-      ArrowDown: 40,
-    };
-    const keyCode = keyCodes[key] ?? (key.length === 1 ? key.charCodeAt(0) : 0);
-    await this.evaluateInPage(
-      `(function (selector, key, event, keyCode) {
-        const el = document.querySelector(selector);
-        if (!el) return;
-        el.focus();
-        el.dispatchEvent(new KeyboardEvent(event, {
-          key, code: key, keyCode, which: keyCode, bubbles: true,
-        }));
-      })(${JSON.stringify(selector)}, ${JSON.stringify(key)}, ${JSON.stringify(event)}, ${keyCode})`,
-    );
-  };
-
   // Screenshots
 
   captureScreenshot = async (
@@ -1175,7 +1150,6 @@ export function buildBrowserGlobals(helpers: BrowserHelpers): Record<string, unk
     waitForElement: helpers.waitForElement,
     waitForNetworkIdle: helpers.waitForNetworkIdle,
     js: helpers.js,
-    dispatchKey: helpers.dispatchKey,
     uploadFile: helpers.uploadFile,
     httpGet: helpers.httpGet,
   };

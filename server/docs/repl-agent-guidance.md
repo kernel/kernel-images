@@ -38,7 +38,7 @@ captureScreenshot,
 listTabs, currentTab, switchTab, newTab, closeTab,
 ensureRealTab, iframeTarget,
 waitMs, waitForLoad, waitForElement, waitForNetworkIdle,
-js, dispatchKey, uploadFile, httpGet,
+js, uploadFile, httpGet,
 webmcp (also browser.webmcp)
 ```
 

@@ -161,11 +161,13 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 		await pressKey("Enter");
 		await pressKey("a", ["Shift"]);
 		await scroll(100, 100, 240, 0);
-		await dispatchKey("#q", "Enter");
-		repl.write(JSON.stringify("input-ok"))
+		repl.write(JSON.stringify({ status: "input-ok", dispatchKeyType: typeof dispatchKey }))
 	`})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "input-ok", requireJSONWrite(t, r))
+	inputResult, ok := requireJSONWrite(t, r).(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "input-ok", inputResult["status"])
+	require.Equal(t, "undefined", inputResult["dispatchKeyType"])
 
 	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `
 		const before = (await listTabs(false)).length;
