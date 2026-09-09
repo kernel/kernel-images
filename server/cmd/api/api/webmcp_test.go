@@ -98,6 +98,27 @@ func TestInvokeWebMCPToolReturnsPageResult(t *testing.T) {
 	require.Equal(t, true, body.Output.(map[string]any)["ok"])
 }
 
+func TestInvokeWebMCPToolReturnsAwaitingSubmission(t *testing.T) {
+	client := &fakeWebMCPClient{result: webmcpclient.InvocationResult{
+		InvocationID: "invocation-1",
+		Status:       "awaiting_submission",
+		Output: map[string]any{
+			"form_populated": true,
+			"submitted":      false,
+		},
+	}}
+	service := &ApiService{webmcp: client}
+
+	response, err := service.InvokeWebMCPTool(context.Background(), oapi.InvokeWebMCPToolRequestObject{
+		Body: &oapi.WebMCPInvokeRequest{ToolRef: "wmcp_fill", Input: map[string]any{"email": "buyer@example.com"}},
+	})
+	require.NoError(t, err)
+	body := response.(oapi.InvokeWebMCPTool200JSONResponse)
+	require.Equal(t, oapi.WebMCPInvocationResultStatusAwaitingSubmission, body.Status)
+	require.Equal(t, true, body.Output.(map[string]any)["form_populated"])
+	require.Equal(t, false, body.Output.(map[string]any)["submitted"])
+}
+
 func TestInvokeWebMCPToolReportsUnknownOutcome(t *testing.T) {
 	client := &fakeWebMCPClient{
 		result:    webmcpclient.InvocationResult{InvocationID: "invocation-1"},

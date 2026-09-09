@@ -14,7 +14,7 @@ mkdir -p "$HOST_RECORDINGS_DIR"
 RUN_AS_ROOT="${RUN_AS_ROOT:-false}"
 
 # Build Chromium flags file and mount
-CHROMIUM_FLAGS_DEFAULT="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=* --enable-features=WebMCPTesting,DevToolsWebMCPSupport"
+CHROMIUM_FLAGS_DEFAULT="--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=* --enable-features=WebMCPTesting,DevToolsWebMCPSupport --disable-search-engine-choice-screen --silent-debugger-extension-api"
 if [[ "$RUN_AS_ROOT" == "true" ]]; then
   CHROMIUM_FLAGS_DEFAULT="$CHROMIUM_FLAGS_DEFAULT --no-sandbox --no-zygote"
 fi

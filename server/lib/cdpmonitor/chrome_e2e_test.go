@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -110,34 +112,62 @@ func findChromium(t *testing.T) string {
 	return ""
 }
 
-func launchChromium(t *testing.T, ctx context.Context, chrome string) string {
+func launchChromium(t *testing.T, ctx context.Context, chrome string, extraArgs ...string) string {
 	t.Helper()
 	dir := t.TempDir()
-	cmd := exec.CommandContext(ctx, chrome,
+	args := []string{
 		"--headless=new", "--no-sandbox", "--disable-gpu",
-		"--remote-debugging-port=0", "--user-data-dir="+dir, "about:blank",
-	)
-	stderr, err := cmd.StderrPipe()
+		"--remote-debugging-port=0", "--user-data-dir=" + dir,
+	}
+	args = append(args, extraArgs...)
+	args = append(args, "about:blank")
+	cmd := exec.CommandContext(ctx, chrome, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stderr, stderrWriter, err := os.Pipe()
 	require.NoError(t, err)
+	defer stderrWriter.Close()
+	t.Cleanup(func() { _ = stderr.Close() })
+	cmd.Stderr = stderrWriter
 	require.NoError(t, cmd.Start())
-	t.Cleanup(func() { _ = cmd.Process.Kill(); _, _ = cmd.Process.Wait() })
+	_ = stderrWriter.Close()
+	t.Cleanup(func() {
+		// Stop renderer/worker children before TempDir cleanup, not just Chrome's parent.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+	})
 
-	// Chromium prints "DevTools listening on ws://..." to stderr once ready.
+	// Cold Chrome startup on CI can exceed 20 seconds; capture assertions keep
+	// their own deadlines after the browser is ready.
+	deadline := time.Now().Add(time.Minute)
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	url, err := readDevToolsURL(stderr, deadline)
+	require.NoError(t, err)
+	go func() { _, _ = io.Copy(io.Discard, stderr) }()
+	return url
+}
+
+func readDevToolsURL(stderr *os.File, deadline time.Time) (string, error) {
+	if err := stderr.SetReadDeadline(deadline); err != nil {
+		return "", err
+	}
+	defer stderr.SetReadDeadline(time.Time{})
 	buf := make([]byte, 4096)
-	deadline := time.Now().Add(20 * time.Second)
 	var out []byte
-	for time.Now().Before(deadline) {
+	for {
 		n, readErr := stderr.Read(buf)
 		out = append(out, buf[:n]...)
 		if url := extractDevToolsURL(out); url != "" {
-			return url
+			return url, nil
 		}
 		if readErr != nil {
-			break
+			return "", fmt.Errorf("chromium did not report a DevTools URL: %w; stderr:\n%s", readErr, out)
+		}
+		if len(out) > 64*1024 {
+			out = out[len(out)-64*1024:]
 		}
 	}
-	t.Fatalf("chromium did not report a DevTools URL; stderr:\n%s", string(out))
-	return ""
 }
 
 func extractDevToolsURL(b []byte) string {

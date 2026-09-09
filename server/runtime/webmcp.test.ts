@@ -66,6 +66,25 @@ test('invokes an exact tool reference with input and timeout', async () => {
   });
 });
 
+test('returns non-autosubmit form activation without waiting for submission', async () => {
+  const client = createWebMCPClient({
+    apiBaseUrl: 'http://127.0.0.1:10001',
+    fetchImpl: async () =>
+      jsonResponse({
+        invocation_id: 'invocation-1',
+        status: 'awaiting_submission',
+        output: {form_populated: true, submitted: false},
+      }),
+  });
+
+  const result = await client.invokeTool('wmcp_fill', {email: 'buyer@example.com'});
+  assert.equal(result.status, 'awaiting_submission');
+  assert.deepEqual(result.output, {
+    form_populated: true,
+    submitted: false,
+  });
+});
+
 test('preserves structured WebMCP failures', async () => {
   const client = createWebMCPClient({
     apiBaseUrl: 'http://127.0.0.1:10001',
@@ -85,11 +104,29 @@ test('preserves structured WebMCP failures', async () => {
     assert.equal(error.statusCode, 504);
     assert.equal(error.code, 'outcome_unknown');
     assert.equal(error.invocationId, 'invocation-1');
+    assert.equal(
+      error.message,
+      'WebMCP outcome_unknown, invocation invocation-1: do not retry automatically',
+    );
     assert.deepEqual(error.body, {
       code: 'outcome_unknown',
       message: 'do not retry automatically',
       invocation_id: 'invocation-1',
     });
+    return true;
+  });
+});
+
+test('names WebMCP failures without a structured body', async () => {
+  const client = createWebMCPClient({
+    apiBaseUrl: 'http://127.0.0.1:10001',
+    fetchImpl: async () => new Response('gateway timeout', {status: 504}),
+  });
+
+  await assert.rejects(client.listTools(), error => {
+    assert.ok(error instanceof WebMCPRequestError);
+    assert.equal(error.message, 'WebMCP error: request failed with status 504');
+    assert.equal(error.body, 'gateway timeout');
     return true;
   });
 });

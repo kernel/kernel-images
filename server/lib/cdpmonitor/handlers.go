@@ -101,6 +101,9 @@ func (m *Monitor) decodeParams(method string, params json.RawMessage, dst any) b
 func (m *Monitor) dispatchEvent(msg cdpMessage) {
 	m.lifeMu.Lock()
 	ctx := m.lifecycleCtx
+	if m.conn != nil {
+		ctx = m.conn.ctx
+	}
 	m.lifeMu.Unlock()
 
 	switch msg.Method {
@@ -158,16 +161,6 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		var p cdpPerformanceTimelineEventAddedParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
 			m.handleTimelineEvent(p, msg.SessionID)
-		}
-	case "Target.attachedToTarget":
-		var p cdpTargetAttachedToTargetParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleAttachedToTarget(ctx, p)
-		}
-	case "Target.detachedFromTarget":
-		var p cdpTargetDetachedFromTargetParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleDetachedFromTarget(p)
 		}
 	case "Inspector.targetCrashed":
 		// No params; the crashed page is identified by the session it fires on.
@@ -437,15 +430,16 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	// events, but only a single loadingFinished fires per chain. Only increment
 	// netPending for genuinely new requests to avoid permanently inflating the
 	// counter and blocking network_idle.
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
-	existing, isRedirect := m.pendingRequests[p.RequestID]
+	existing, isRedirect := m.pendingRequests[key]
 	addedAt := existing.addedAt
 	if !isRedirect {
 		addedAt = time.Now()
 	} else {
 		navSeq = existing.navSeq
 	}
-	m.pendingRequests[p.RequestID] = networkReqState{
+	m.pendingRequests[key] = networkReqState{
 		sessionID:    sessionID,
 		method:       p.Request.Method,
 		url:          p.Request.URL,
@@ -492,17 +486,18 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 }
 
 func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, sessionID string) {
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	var (
 		state networkReqState
 		ok    bool
 	)
-	if st, present := m.pendingRequests[p.RequestID]; present {
+	if st, present := m.pendingRequests[key]; present {
 		st.status = p.Response.Status
 		st.statusText = p.Response.StatusText
 		st.resHeaders = p.Response.Headers
 		st.mimeType = p.Response.MimeType
-		m.pendingRequests[p.RequestID] = st
+		m.pendingRequests[key] = st
 		state, ok = st, true
 	}
 	m.pendReqMu.Unlock()
@@ -545,10 +540,11 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 }
 
 func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoadingFinishedParams, sessionID string) {
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
-	state, ok := m.pendingRequests[p.RequestID]
+	state, ok := m.pendingRequests[key]
 	if ok {
-		delete(m.pendingRequests, p.RequestID)
+		delete(m.pendingRequests, key)
 	}
 	m.pendReqMu.Unlock()
 	if !ok {
@@ -561,7 +557,7 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 		cs.onLoadingFinished()
 	}
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
-	m.asyncWg.Go(func() {
+	m.captureWg.Go(func() {
 		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
 		var hdrs oapi.BrowserHttpHeaders
 		_ = json.Unmarshal(state.resHeaders, &hdrs)
@@ -625,10 +621,11 @@ func (m *Monitor) fetchResponseBody(ctx context.Context, requestID, sessionID st
 }
 
 func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID string) {
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
-	state, ok := m.pendingRequests[p.RequestID]
+	state, ok := m.pendingRequests[key]
 	if ok {
-		delete(m.pendingRequests, p.RequestID)
+		delete(m.pendingRequests, key)
 	}
 	m.pendReqMu.Unlock()
 
@@ -761,6 +758,9 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	cs := m.computedStates[sessionID]
 	m.sessionsMu.RUnlock()
 
+	if info.targetType == "iframe" && p.Frame.ParentID == "" {
+		p.Frame.ParentID = info.parentFrameID
+	}
 	data, _ := json.Marshal(oapi.BrowserPageNavigationEventData{
 		SessionId:     sessionID,
 		TargetId:      info.targetID,
@@ -772,9 +772,9 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	})
 	m.publishEvent(EventNavigation, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.frameNavigated", data, sessionID)
 
-	// Only reset state for top-level navigations; subframe (iframe) navigations
-	// should not disrupt main-page tracking.
-	if p.Frame.ParentID == "" {
+	// An OOPIF's local root can omit parentId. Only page targets can own
+	// top-level navigation state and screenshot triggers.
+	if p.Frame.ParentID == "" && info.targetType == targetTypePage {
 		m.mainSessionID.Store(sessionID)
 
 		navCtx := navContext{
@@ -852,10 +852,15 @@ func (m *Monitor) handleLoadEventFired(ctx context.Context, p cdpPageLoadEventFi
 // attached to is in p.SessionID.
 func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttachedToTargetParams) {
 	m.sessionsMu.Lock()
+	if _, exists := m.sessions[p.SessionID]; exists {
+		m.sessionsMu.Unlock()
+		return
+	}
 	m.sessions[p.SessionID] = targetInfo{
-		targetID:   p.TargetInfo.TargetID,
-		url:        p.TargetInfo.URL,
-		targetType: p.TargetInfo.Type,
+		targetID:      p.TargetInfo.TargetID,
+		url:           p.TargetInfo.URL,
+		targetType:    p.TargetInfo.Type,
+		parentFrameID: p.TargetInfo.ParentFrameID,
 	}
 	if p.TargetInfo.Type == targetTypePage {
 		m.computedStates[p.SessionID] = newComputedState(m.publish)
@@ -874,8 +879,8 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 	}
 
 	targetType := p.TargetInfo.Type
-	// Async to avoid blocking the readLoop.
-	m.asyncWg.Go(func() {
+	// Domain setup must not block delivery of protocol events.
+	m.captureWg.Go(func() {
 		m.enableDomains(ctx, p.SessionID, targetType)
 		if isPageLikeTarget(targetType) {
 			_ = m.injectScript(ctx, p.SessionID)
@@ -895,4 +900,11 @@ func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) 
 	if cs != nil {
 		cs.stop()
 	}
+	m.pendReqMu.Lock()
+	for key, request := range m.pendingRequests {
+		if request.sessionID == p.SessionID {
+			delete(m.pendingRequests, key)
+		}
+	}
+	m.pendReqMu.Unlock()
 }

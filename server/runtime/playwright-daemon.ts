@@ -11,9 +11,7 @@
 
 import { createServer, Socket } from 'net';
 import { unlinkSync, existsSync } from 'fs';
-import { transform } from 'esbuild';
-import { chromium as chromiumPW, Browser, CDPSession, Page } from 'playwright-core';
-import { chromium as chromiumPR } from 'patchright';
+import type { Browser, CDPSession, Page } from 'playwright-core';
 
 import { PageTargetIdCache } from './page-target-id-cache';
 import { createWebMCPClient } from './webmcp';
@@ -71,6 +69,7 @@ async function transformCode(code: string): Promise<string> {
   // Wrap in async function so top-level await/return are valid for esbuild
   const wrapped = `async function __userCode__() {\n${code}\n}`;
 
+  const { transform } = await import('esbuild');
   const result = await transform(wrapped, {
     loader: 'ts',
     target: 'es2022',
@@ -117,7 +116,11 @@ async function ensureBrowserConnection(): Promise<Browser> {
 
   connecting = true;
   try {
-    const chromium = USE_PATCHRIGHT ? chromiumPR : chromiumPW;
+    // Load the engine after socket binding, outside the API's short
+    // socket-ready deadline. Only initialize the selected engine.
+    const { chromium } = USE_PATCHRIGHT
+      ? await import('patchright')
+      : await import('playwright-core');
 
     if (browser) {
       try {
