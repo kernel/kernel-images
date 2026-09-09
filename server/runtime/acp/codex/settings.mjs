@@ -13,12 +13,19 @@ export function aliases(server) {
     .sort().map((name, index) => [name, prefix + index]);
 }
 
+// Native shell snapshots export the process environment, including bound keys.
+// Also enforce these settings as session overrides against project config.
+export const safetySettings = {
+  cli_auth_credentials_store: "ephemeral",
+  features: { shell_snapshot: false, shell_snapshot_v2: false },
+};
+
 export function settings(config) {
   return {
     model: config.launch.model,
     model_provider: "openai",
     model_reasoning_effort: config.launch.thinking,
-    cli_auth_credentials_store: "ephemeral",
+    ...safetySettings,
     forced_login_method: "api",
     web_search: config.shared.webSearch,
     developer_instructions: config.shared.instructions ?? "",

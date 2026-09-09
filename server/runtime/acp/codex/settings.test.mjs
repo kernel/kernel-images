@@ -24,6 +24,7 @@ test("native TOML round trips and contains references, never secret values", () 
   assert.equal(native.model, config.launch.model);
   assert.equal(native.developer_instructions, config.shared.instructions);
   assert.equal(native.cli_auth_credentials_store, "ephemeral");
+  assert.deepEqual(native.features, { shell_snapshot: false, shell_snapshot_v2: false });
   assert.deepEqual(native.mcp_servers.stdio.env_vars, aliases(config.shared.mcpServers[0]).map(([, alias]) => alias));
   assert.deepEqual(native.mcp_servers.http.env_http_headers, Object.fromEntries(aliases(config.shared.mcpServers[1])));
 });
@@ -68,6 +69,7 @@ test("launch preserves native home, sanitizes bindings and rejects replaced nati
     const env = run();
     assert.equal(env.CODEX_API_KEY, "provider-fixture");
     assert.equal(env.CODEX_HOME, home);
+    assert.deepEqual(JSON.parse(env.CODEX_CONFIG).features, { shell_snapshot: false, shell_snapshot_v2: false });
     for (const name of ["KEY_SOURCE", "MCP_SOURCE", "KERNEL_CODEX_BINDINGS", "UNRELATED_SECRET", "APP_SERVER_LOGS", "DEFAULT_AUTH_REQUEST"]) assert.equal(env[name], undefined);
     assert.equal(env[aliases(config.shared.mcpServers[1])[0][1]], "Bearer mcp-fixture");
     assert.equal(await readlink(join(home, "config.toml")), join(state, "current/config.toml"));

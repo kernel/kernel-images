@@ -1,6 +1,6 @@
 import { mkdir, readFile, readlink, symlink } from "node:fs/promises";
 import { join } from "node:path";
-import { adapter, aliases } from "./settings.mjs";
+import { adapter, aliases, safetySettings } from "./settings.mjs";
 import { run, platformEnvironment } from "./process.mjs";
 
 process.umask(0o077);
@@ -23,6 +23,7 @@ try {
 const env = {
   ...platformEnvironment(),
   CODEX_HOME: home,
+  CODEX_CONFIG: JSON.stringify(safetySettings),
   CODEX_API_KEY: credential(config.launch.credential),
   MODEL_PROVIDER: "openai",
   INITIAL_AGENT_MODE: config.launch.mode,

@@ -30,13 +30,13 @@ def http(method, path, data=None, revision=None):
 
 
 def pids():
-    code = """import pathlib,json
+    code = "import pathlib,json\nmcp = " + repr((workspace + "/mcp.py").encode()) + "\n" + """
 pids=[]
 for path in pathlib.Path('/proc').iterdir():
  if not path.name.isdigit():continue
  try:args=(path/'cmdline').read_bytes().split(bytes([0]))
  except (FileNotFoundError,ProcessLookupError,PermissionError):continue
- if any(a.startswith(b'/opt/kernel-agent/codex/') for a in args):pids.append(path.name)
+ if mcp in args or any(a.startswith(b'/opt/kernel-agent/codex/') for a in args):pids.append(path.name)
 print(json.dumps(pids))
 """
     status, result = http(
@@ -46,6 +46,25 @@ print(json.dumps(pids))
     )
     assert status == 200 and result["exit_code"] == 0, result
     return set(json.loads(base64.b64decode(result["stdout_b64"])))
+
+
+def native_settings():
+    code = """import pathlib,hashlib
+root=pathlib.Path('/home/kernel/.agents/codex')
+assert not (root/'native/auth.json').exists(), 'native auth file unexpectedly exists'
+assert (root/'native/config.toml').readlink() == root/'current/config.toml'
+print(hashlib.sha256((root/'current/config.toml').read_bytes()).hexdigest())
+"""
+    status, result = http("POST", "/process/exec", {
+        "command": "/opt/kernel-agent/venv/bin/python", "args": ["-c", code]
+    })
+    assert status == 200 and result["exit_code"] == 0, "native settings/auth check failed"
+    return base64.b64decode(result["stdout_b64"]).decode().strip()
+
+
+def assert_selection(session):
+    assert session["models"]["currentModelId"] == "gpt-5.4-mini[low]"
+    assert session["modes"]["currentModeId"] == "read-only"
 
 
 config_path = "/agent/v1/harnesses/codex/config"
@@ -178,6 +197,8 @@ async def main():
         session, _ = await first.call(
             "session/new", {"cwd": workspace, "mcpServers": []}
         )
+        assert_selection(session)
+        original_settings = native_settings()
         sid = session["sessionId"]
         old = pids()
         assert old
@@ -217,6 +238,7 @@ async def main():
         })
         assert status == 200 and calls["exit_code"] == 0
         assert set(base64.b64decode(calls["stdout_b64"]).decode().splitlines()) == {"shared", "session"}
+        assert native_settings() == original_settings, "session changed managed native settings"
         updated = json.loads(json.dumps(desired))
         updated["shared"]["mcpServers"][0]["args"][1] = "updated-shared"
         active = pids()
@@ -224,6 +246,8 @@ async def main():
             http, "PUT", config_path, updated, ready["revision"]
         )
         assert code == 200, (code, latest)
+        updated_settings = native_settings()
+        assert updated_settings != original_settings
         assert pids() == active, "configuration update restarted active connections"
         code, _ = http("PUT", config_path, updated, ready["revision"])
         assert code == 409, "stale If-Match accepted"
@@ -238,15 +262,33 @@ async def main():
             failed["status"] == "failed"
             and failed["effectiveRevision"] == latest["revision"]
         )
-        # Native forks persist real history without additional provider turns.
-        # More than the native 25-item page size forces cursor traversal.
+        # No-provider native forks supply padding for a second discovery page.
+        # Codex hides forks without their own user event; seed a fixture event
+        # and preview only on these IDs, never alter the original real history.
+        padding = []
         for _ in range(26):
             forked, _ = await first.call("session/fork", {
                 "sessionId": sid, "cwd": workspace, "mcpServers": []
             })
+            padding.append(forked["sessionId"])
             await first.call("session/close", {"sessionId": forked["sessionId"]})
         await first.close()
         assert not old.intersection(pids()), (old, pids())
+        seed = """import sqlite3,sys,json,datetime
+with sqlite3.connect('/home/kernel/.agents/codex/native/state_5.sqlite') as db:
+ for sid in json.loads(sys.argv[1]):
+  changed = db.execute("UPDATE threads SET preview='pagination fixture' WHERE id=? AND preview=''", (sid,)).rowcount
+  assert changed == 1
+  path = db.execute('SELECT rollout_path FROM threads WHERE id=?', (sid,)).fetchone()[0]
+  event = {'timestamp':datetime.datetime.now(datetime.UTC).isoformat(), 'type':'event_msg',
+           'payload':{'type':'user_message','message':'pagination fixture','images':[]}}
+  with open(path,'a') as f:f.write(json.dumps(event)+chr(10))
+"""
+        status, seeded = http("POST", "/process/exec", {
+            "command": "/opt/kernel-agent/venv/bin/python",
+            "args": ["-c", seed, json.dumps(padding)],
+        })
+        assert status == 200 and seeded["exit_code"] == 0
         text = await second.prompt(
             other["sessionId"], "Reply only with OK. Do not use tools."
         )
@@ -267,9 +309,10 @@ async def main():
             assert pages < 100, "pagination did not terminate"
         assert pages >= 2, "native history did not exercise pagination"
         assert any(s["sessionId"] == sid for s in sessions)
-        _, history = await reconnected.call(
+        loaded, history = await reconnected.call(
             "session/load", {"sessionId": sid, "cwd": workspace, "mcpServers": []}
         )
+        assert_selection(loaded)
         assert marker in json.dumps(history)
         text = await reconnected.prompt(
             sid,
@@ -281,6 +324,7 @@ async def main():
             "Call the checkpoint MCP tool once and return its output. Do not use other tools.",
         )
         assert "updated-shared" in text, text
+        assert native_settings() == updated_settings, "load/prompt changed managed native settings"
         summary = {
             "configurationUpdateKeepsConnections": True,
             "updatedSharedMCP": True,
@@ -291,13 +335,29 @@ async def main():
             "freshListLoadHistoryAndRecall": True,
             "sharedMCP": True,
             "sessionMCPAddition": True,
+            "noPersistedProviderCredential": True,
+            "nativeModelAndMode": True,
+            "nativeSettingsPreserved": True,
             "listPages": pages,
+            "paginationFixtureSessions": len(padding),
             "sessionId": sid,
         }
     finally:
         for c in clients:
             await c.close()
         assert not pids(), pids()
+        check = """import os,pathlib
+key=os.environ['OPENAI_API_KEY'].encode()
+root=pathlib.Path('/home/kernel/.agents/codex')
+assert not (root/'native/auth.json').exists(), 'API key persisted in native auth file'
+for path in root.rglob('*'):
+ if path.is_file():
+  assert key not in path.read_bytes(), 'provider credential persisted in managed state'
+"""
+        status, checked = http("POST", "/process/exec", {
+            "command": "/opt/kernel-agent/venv/bin/python", "args": ["-c", check]
+        })
+        assert status == 200 and checked["exit_code"] == 0, "persisted-credential check failed"
         (root / "summary.json").write_text(json.dumps(summary, indent=2))
         (root / "events.json").write_text(
             json.dumps([c.events for c in clients], indent=2)

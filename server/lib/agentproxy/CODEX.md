@@ -37,7 +37,10 @@ Reauthenticate on each fresh connection. The catalog's `codex.credentials` can
 add operator-defined binding names; requests contain names, never secret values.
 Only referenced bindings reach the launch wrapper. It passes the provider key
 under `CODEX_API_KEY` and removes binding source names and ambient adapter
-configuration/logging variables from the child environment.
+configuration/logging variables from the child environment. Native shell snapshots
+are disabled (`features.shell_snapshot` and `shell_snapshot_v2`): their environment
+exports can persist provider/MCP keys. These flags and ephemeral auth storage are
+also supplied as native session overrides so project config cannot re-enable them.
 
 ### Supported configuration
 
@@ -46,9 +49,12 @@ configuration/logging variables from the child environment.
 - `model`: native Codex model ID. `thinking`: `minimal`, `low`, `medium`, `high`,
   `xhigh`; the selected model may accept only a subset. ACP config/model controls
   can change a session's selection.
-- `mode`: `read-only`, `agent` (workspace-write), `agent-full-access`. These are
-  native adapter modes, not an additional Kernel sandbox. ACP owns permissions
-  and subsequent mode changes.
+- `mode`: `read-only`, `agent`, `agent-full-access`. In this pinned adapter,
+  the misleading `read-only` ID means **workspace-write with user approvals**
+  ("Ask for approval"), not a read-only filesystem. `agent` uses workspace-write
+  with native automatic review; `agent-full-access` disables sandbox approvals.
+  These are native adapter modes, not an additional Kernel sandbox. ACP owns
+  permissions and subsequent mode changes.
 - `shared.instructions`: native `developer_instructions` (up to 64 KiB).
   `shared.webSearch`: native `web_search`, `disabled`, `cached` or `live`.
 - `shared.mcpServers`: native stdio and streamable HTTP (up to 32 servers).
@@ -93,8 +99,10 @@ The common GET/PUT semantics apply: desired/effective revisions, safe failed
 preparation retention, required optimistic `If-Match`, 409 for stale or concurrent
 writes, private revision files and last-ready recovery after restart. Preparation
 is capped at 30 seconds, validates exact installed runtime versions and native
-TOML using `codex mcp list --json`, and does not authenticate, start MCP servers or
-call a provider. A ready revision is not proof of remote provider/MCP availability.
+TOML loading using `codex mcp list --json`, and does not authenticate, start MCP
+servers or call a provider. The native command is not strict schema/model
+validation; Go validates the supported fields and enums first. A ready revision
+is not proof of remote provider/MCP availability or model support.
 
 `/home/kernel/.agents/codex/native` is the stable `CODEX_HOME`; native sessions,
 SQLite state and history remain outside replaceable revisions. Its `config.toml`
@@ -142,8 +150,12 @@ AGENT_PROXY_TEST_ACPREMOTE=/path/to/acp-venv/bin/acpremote \
 
 Unit tests cover configuration validation, HTTP concurrency/failure/recovery,
 native preparation, private files, no persisted credentials, environment
-isolation, native settings and safe credential-alias changes. The native test
-skips explicitly without `AGENT_CODEX_TEST_RUNTIME`. CI installs both runtimes.
+isolation, native settings and safe credential-alias changes. A real native
+adapter/app-server test exercises streamable HTTP MCP initialize/tools-list with
+a bound fixture header, without a model prompt, and checks native state for
+fixture credentials even when project configuration requests shell snapshots.
+Native tests skip explicitly without the corresponding runtime environment
+variables. CI installs both runtimes.
 
 Opt-in paid gate, against a **fresh disposable image** with `OPENAI_API_KEY`:
 
@@ -154,9 +166,13 @@ AGENT_API_URL=http://127.0.0.1:10001 \
 
 This refuses to overwrite an existing configuration and uses small bounded
 `gpt-5.4-mini` turns. It tests independent connections, shared/session stdio MCP,
-updates and failed preparation while connected, disconnect cleanup and fresh
-list/load/history/model recall. Test transcripts are local private test evidence,
-not proxy output persistence. HTTP MCP, media, native extensions, cancellation
-mid-tool and provider/model combinations beyond the stated gates need separate
-validation. Packaged headless testing does not validate the platform gateway,
-TLS/authentication boundary, arm64 or headful desktop behavior.
+updates and failed preparation while connected, disconnect cleanup, absence of
+persisted provider credentials and fresh paginated list/load/history/model recall.
+To force two native discovery pages without 26 extra paid turns, the gate creates
+26 native forks and seeds only those pagination fixtures with a user event and
+preview in the pinned native storage format. The original real session and its
+history are never modified by fixture seeding. Test transcripts are local private
+evidence, not proxy output persistence. HTTP MCP tool invocation, media, native
+extensions, cancellation mid-tool and provider/model combinations beyond the
+stated gates need separate validation. Packaged headless testing does not validate
+the platform gateway, TLS/authentication boundary, arm64 or headful desktop behavior.
