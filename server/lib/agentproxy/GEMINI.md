@@ -19,6 +19,9 @@ Inject `GEMINI_API_KEY` into the browser environment. The packaged `google`
 credential binding selects that variable. An operator can instead bind `google`
 to `GOOGLE_API_KEY` in the catalog if that is where a Gemini Developer API key is
 provisioned. This does **not** select Vertex AI. Keys never go in the PUT body.
+This binding contract applies to the configuration API: native ACP `authenticate`
+can separately accept client-supplied API keys or gateway metadata in `_meta`,
+which the proxy does not inspect or rewrite.
 
 1. GET `/agent/v1/harnesses/gemini/config` and read its ETag.
 2. PUT the configuration with that ETag in `If-Match`.
@@ -41,8 +44,10 @@ provisioned. This does **not** select Vertex AI. Keys never go in the PUT body.
 
 `model` is a native Gemini model ID, not a provider-qualified Pi model.
 `maxSessionTurns` defaults to 20 when omitted/zero, accepts 1–100, and maps to
-native `model.maxSessionTurns`. It bounds a session, not a wall-clock prompt
-execution time. ACP owns prompts, permissions, cancellation and session
+native `model.maxSessionTurns`. This is a cumulative lifetime budget of model
+round-trips, including tool-continuation turns across all prompts; it never resets.
+After exhaustion, later prompts return `max_turn_requests`: create a fresh session.
+It is not a wall-clock prompt timeout. ACP owns prompts, permissions, cancellation and session
 model/mode controls; the proxy does not transform or retry prompts.
 
 `trustWorkspace` defaults to false. Native MCP (all transports) requires it to be
