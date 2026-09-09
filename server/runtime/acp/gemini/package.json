@@ -1,0 +1,8 @@
+{
+  "name": "kernel-gemini-acp-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@google/gemini-cli": "0.58.0"
+  }
+}

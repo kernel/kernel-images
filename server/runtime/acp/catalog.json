@@ -2,6 +2,14 @@
   "acpremote": "/opt/kernel-agent/venv/bin/acpremote",
   "maxConnections": 8,
   "harnesses": {},
+  "gemini": {
+    "stateDir": "/home/kernel/.agents/gemini",
+    "runtimeDir": "/opt/kernel-agent/gemini",
+    "node": "/usr/local/bin/node",
+    "credentials": {
+      "google": "GEMINI_API_KEY"
+    }
+  },
   "pi": {
     "stateDir": "/home/kernel/.agents/pi",
     "runtimeDir": "/opt/kernel-agent/pi",
