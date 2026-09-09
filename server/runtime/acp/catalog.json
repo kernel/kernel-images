@@ -2,6 +2,14 @@
   "acpremote": "/opt/kernel-agent/venv/bin/acpremote",
   "maxConnections": 8,
   "harnesses": {},
+  "codex": {
+    "stateDir": "/home/kernel/.agents/codex",
+    "runtimeDir": "/opt/kernel-agent/codex",
+    "node": "/usr/local/bin/node",
+    "credentials": {
+      "openai": "OPENAI_API_KEY"
+    }
+  },
   "pi": {
     "stateDir": "/home/kernel/.agents/pi",
     "runtimeDir": "/opt/kernel-agent/pi",

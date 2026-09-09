@@ -19,6 +19,7 @@ type Config struct {
 	MaxConnections int                `json:"maxConnections"`
 	Harnesses      map[string]Harness `json:"harnesses"`
 	Pi             *PiOptions         `json:"pi,omitempty"`
+	Codex          *CodexOptions      `json:"codex,omitempty"`
 }
 
 type Harness struct {
@@ -70,7 +71,12 @@ func (c Config) validate() error {
 			return err
 		}
 	}
-	if len(c.Harnesses) == 0 && c.Pi == nil {
+	if c.Codex != nil {
+		if err := c.Codex.validate(); err != nil {
+			return err
+		}
+	}
+	if len(c.Harnesses) == 0 && c.Pi == nil && c.Codex == nil {
 		return errors.New("at least one harness is required")
 	}
 	for name, harness := range c.Harnesses {
