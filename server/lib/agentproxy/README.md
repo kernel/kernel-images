@@ -1,7 +1,9 @@
 # ACP agents
 
-The browser images bundle a pinned Pi reference implementation. Kernel manages
-configuration preparation and connection lifetime; ACP owns conversations.
+The browser images bundle a pinned Pi reference implementation and an independent
+[Gemini reference](GEMINI.md). **Gemini supports new sessions only, not reconnect,
+discovery, load or history replay.** The Pi-specific contract below is unchanged.
+Kernel manages configuration preparation and connection lifetime; ACP owns conversations.
 There is no runtime resource, conversation REST API, prompt journal, automatic
 prompt retry, or session-ID translation in the WebSocket proxy.
 
@@ -9,7 +11,7 @@ prompt retry, or session-ID translation in the WebSocket proxy.
 
 | Endpoint | Behavior |
 | --- | --- |
-| `GET /agent/v1/harnesses` | Returns configured harness names, currently `{"configured":["pi"]}` in the packaged images. This does not mean a model credential is configured. |
+| `GET /agent/v1/harnesses` | Returns configured harness names, currently `{"configured":["gemini","pi"]}` in the packaged images. This does not mean a model credential is configured. |
 | `GET /agent/v1/harnesses/pi/config` | Returns desired/effective configuration, revisions, preparation status and an ETag. |
 | `PUT /agent/v1/harnesses/pi/config` | Validates, installs and checks the requested configuration, then activates it. Requires `If-Match` from GET. |
 | WebSocket `GET /agent/v1/acp?harness=pi` | Starts a connection-owned `acpremote expose` bridge and Pi adapter using the last ready launch definition. |
@@ -200,11 +202,11 @@ credential bindings and an optional npm
 `registry`. The default state directory is `/home/kernel/.agents/pi`.
 
 The original trusted `harnesses` launch catalog remains supported for separately
-provisioned agents. Only Pi has a packaged declarative preparer here. The
-`Preparer` interface and common revision manager are the implementation boundary
-for subsequent harnesses; their native configuration support must be explicit.
-Gemini's future integration excludes reconnect/discovery/load until its ACP
-implementation satisfies that protocol gate.
+provisioned agents. Pi and Gemini have separate packaged declarative preparers.
+The `Preparer` interface and common revision manager remain the implementation
+boundary for subsequent harnesses; their native configuration support must be
+explicit. See [Gemini's contract and validation](GEMINI.md) for its settings,
+authentication and new-sessions-only limitation.
 
 ## Validation
 
