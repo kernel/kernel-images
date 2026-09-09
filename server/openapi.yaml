@@ -1463,11 +1463,12 @@ paths:
       summary: Execute JavaScript in the Browser REPL
       description: |
         Execute code in the Browser REPL, a persistent Node.js runtime preloaded with browser-control
-        helpers (gotoUrl, pageInfo, click, captureScreenshot, tab management,
+        helpers (gotoUrl, pageInfo, click, waitForEvent, captureScreenshot, tab management,
         and more), the browser-wide `webmcp` client, plus an unrestricted `cdp()` escape hatch. `webmcp`
         and `browser.webmcp` share one frozen client whose requests are scoped to the active execution.
-        A pinned `playwright-core` package can be loaded with dynamic `import()` and connected to
-        `process.env.CDP_ENDPOINT`; its module and browser objects persist like other bindings.
+        Pinned `patchright` and `playwright-core` packages can be loaded with dynamic `import()` and
+        connected to `process.env.CDP_ENDPOINT`; their module and browser objects persist like other
+        bindings. Patchright matches the image's default Playwright execution engine.
         Top-level bindings persist
         across calls until the API process exits, the REPL is reset, or the REPL is
         terminated after a crash or timeout. Persistent names are live context-global

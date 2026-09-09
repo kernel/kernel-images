@@ -1,7 +1,7 @@
 
 import { writeFileSync } from 'fs';
 import sharp from 'sharp';
-import { CdpClient, isCdpCommandTimeout, isInternalUrl } from './browser-cdp-client';
+import { CdpClient, isCdpCommandTimeout, isInternalUrl, type CdpEvent } from './browser-cdp-client';
 import {
   buildFunctionCallExpression,
   normalizeJsOptions,
@@ -44,6 +44,12 @@ interface ClickOptions {
 interface WaitForElementOptions {
   state?: ElementWaitState;
   timeoutSec?: number;
+}
+
+interface WaitForEventOptions {
+  sessionId?: string | null;
+  timeoutSec?: number;
+  predicate?: (event: CdpEvent) => boolean;
 }
 
 interface FillInputOptions {
@@ -171,6 +177,46 @@ export class BrowserHelpers {
   drainEvents = async (): Promise<unknown[]> => {
     await this.client.ensureAttached();
     return this.client.drainEvents();
+  };
+
+  waitForEvent = (
+    method: string,
+    rawOptions?: WaitForEventOptions,
+  ): Promise<CdpEvent | null> => {
+    if (typeof method !== 'string' || method.trim() === '') {
+      throw new Error('waitForEvent: method must be a non-empty string');
+    }
+    const options = optionsObject(rawOptions, 'waitForEvent');
+    rejectUnknownOptions(options, ['sessionId', 'timeoutSec', 'predicate'], 'waitForEvent');
+    const timeoutSec = nonNegativeSeconds(options.timeoutSec, 30, 'waitForEvent');
+    const predicate = options.predicate;
+    if (predicate !== undefined && typeof predicate !== 'function') {
+      throw new Error('waitForEvent: predicate must be a function');
+    }
+
+    let sessionId: string | undefined;
+    if (Object.prototype.hasOwnProperty.call(options, 'sessionId')) {
+      if (
+        options.sessionId !== null &&
+        (typeof options.sessionId !== 'string' || options.sessionId === '')
+      ) {
+        throw new Error('waitForEvent: sessionId must be a non-empty string or null');
+      }
+      sessionId = options.sessionId === null ? undefined : options.sessionId as string;
+    } else {
+      if (!this.client.sessionId) {
+        throw new Error(
+          'waitForEvent: no target is attached; call ensureRealTab() or newTab() before arming a page event',
+        );
+      }
+      sessionId = this.client.sessionId;
+    }
+
+    return this.client.waitForEvent(method, {
+      sessionId,
+      timeoutMs: timeoutSec * 1000,
+      predicate: predicate as ((event: CdpEvent) => boolean) | undefined,
+    });
   };
 
   // Navigation + page state
@@ -948,6 +994,7 @@ export function buildBrowserGlobals(helpers: BrowserHelpers): Record<string, unk
   const namespace = {
     cdp: helpers.cdp,
     drainEvents: helpers.drainEvents,
+    waitForEvent: helpers.waitForEvent,
     gotoUrl: helpers.gotoUrl,
     pageInfo: helpers.pageInfo,
     click: helpers.click,

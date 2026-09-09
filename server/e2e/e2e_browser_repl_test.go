@@ -112,17 +112,21 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		require.Equal(t, float64(42), resultBytes)
 	})
 
-	t.Run("playwright core import persists", func(t *testing.T) {
+	t.Run("patchright and playwright core imports persist", func(t *testing.T) {
 		r1 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
-				var pwModule = await import("playwright-core");
-				var pwBrowserConnection = await pwModule.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+				var playwright = await import("patchright");
+				var vanillaPlaywright = await import("playwright-core");
+				var globallyInstalledEsbuild = await import("esbuild");
+				var pwBrowserConnection = await playwright.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
 				var pwContext = pwBrowserConnection.contexts()[0];
 				var pwImportedPage = await pwContext.newPage();
 				await pwImportedPage.setContent("<title>Playwright in REPL</title><main>ready</main>");
 				var pwImportedPageIdentity = pwImportedPage;
 				repl.write(JSON.stringify({
-					connect: typeof pwModule.chromium.connectOverCDP,
+					patchrightConnect: typeof playwright.chromium.connectOverCDP,
+					playwrightConnect: typeof vanillaPlaywright.chromium.connectOverCDP,
+					globalPackageImport: typeof (globallyInstalledEsbuild.transform ?? globallyInstalledEsbuild.default?.transform),
 					title: await pwImportedPage.title(),
 				}));
 			`,
@@ -130,7 +134,9 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		require.True(t, r1.Success, "error: %s", replError(r1))
 		first, ok := replJSONWrite(t, r1).(map[string]interface{})
 		require.True(t, ok)
-		require.Equal(t, "function", first["connect"])
+		require.Equal(t, "function", first["patchrightConnect"])
+		require.Equal(t, "function", first["playwrightConnect"])
+		require.Equal(t, "function", first["globalPackageImport"])
 		require.Equal(t, "Playwright in REPL", first["title"])
 
 		r2 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
@@ -157,20 +163,22 @@ func runBrowserReplAPI(t *testing.T, image string) {
 	t.Run("browser helpers", func(t *testing.T) {
 		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
-				await ensureRealTab();
+				if (!(await ensureRealTab())) await newTab();
+				var helperLoadPending = waitForEvent("Page.loadEventFired", {timeoutSec: 5});
 				await gotoUrl("data:text/html,<title>Browser REPL Helper</title>");
+				var helperLoadEvent = await helperLoadPending;
 				await waitForLoad();
 				const info = await pageInfo();
-				repl.write(JSON.stringify(info.title));
+				repl.write(JSON.stringify({title: info.title, eventMethod: helperLoadEvent && helperLoadEvent.method}));
 			`,
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
-		require.Equal(t, "Browser REPL Helper", replJSONWrite(t, r))
+		helperResult, ok := replJSONWrite(t, r).(map[string]interface{})
+		require.True(t, ok)
+		require.Equal(t, "Browser REPL Helper", helperResult["title"])
+		require.Equal(t, "Page.loadEventFired", helperResult["eventMethod"])
 		require.NotNil(t, r.Content)
 		require.NotEmpty(t, *r.Content)
-		first, err := (*r.Content)[0].AsBrowserReplTextContent()
-		require.NoError(t, err)
-		require.Equal(t, `"Browser REPL Helper"`, first.Text)
 	})
 
 	t.Run("selector interaction and element states", func(t *testing.T) {
@@ -468,8 +476,8 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		r1 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `
 				var restartToken = "pre-restart";
-				var pwRestartModule = await import("playwright-core");
-				var pwRestartBrowser = await pwRestartModule.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+				var playwright = await import("patchright");
+				var pwRestartBrowser = await playwright.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
 				await ensureRealTab();
 				repl.write(JSON.stringify({ token: restartToken, playwrightConnected: pwRestartBrowser.isConnected() }));
 			`,
@@ -490,7 +498,7 @@ func runBrowserReplAPI(t *testing.T, image string) {
 					await waitMs(50);
 				}
 				var stalePlaywrightDisconnected = !pwRestartBrowser.isConnected();
-				var pwReplacementBrowser = await pwRestartModule.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+				var pwReplacementBrowser = await playwright.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
 				var pwReplacementContext = pwReplacementBrowser.contexts()[0];
 				var pwReplacementPage = await pwReplacementContext.newPage();
 				await pwReplacementPage.setContent("<title>Playwright reconnected</title>");

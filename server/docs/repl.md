@@ -57,6 +57,7 @@ Every helper below is available directly and under `browser`, for example `await
 
 - **`cdp(method, params?, sessionId?)`** — Send an unrestricted DevTools Protocol command. Omit `sessionId` for the attached page session; pass a target session ID explicitly, or `null` for a browser-level command.
 - **`drainEvents()`** — Return and remove all buffered DevTools events across sessions. The connection-wide event ring retains at most the newest 500 events; each item includes its originating `sessionId` when DevTools supplied one.
+- **`waitForEvent(method, options?)`** — Arm a one-shot DevTools event waiter before triggering an action. It matches the attached page session by default; use `sessionId: null` for a browser-level event or a session ID for another target. `predicate(event)` receives `{method, params, sessionId?, time}`. It returns that event or `null` after `timeoutSec` (default `30`), while connection and predicate failures throw. Attach a page with `ensureRealTab()` or `newTab()` before using the default session.
 - **`gotoUrl(url)`** — Navigate the attached tab and return the raw `Page.navigate` result.
 - **`pageInfo()`** — Return URL, title, viewport, document dimensions, scroll offset, ready state, and any pending JavaScript dialog.
 - **`click(target, options?)`** — Click either a CSS selector or viewport coordinates such as `{x, y}`. Selector clicks wait for one visible, enabled, stable, unobscured match, scroll it into view, and dispatch physical mouse input. Coordinate clicks dispatch immediately. Options are `button`, `clickCount`, and selector-only `timeoutSec`.
@@ -104,13 +105,13 @@ Non-autosubmit declarative form tools return `status: "awaiting_submission"` aft
 
 Every WebMCP request is bound to the active Browser REPL execution and is aborted slightly before its destructive deadline, allowing an awaited request to return a normal failure while preserving the REPL. Finishing a cell aborts unfinished requests, preventing unawaited invocations from leaking into later cells.
 
-### Playwright Core
+### Patchright and Playwright Core
 
-`playwright-core` is installed as a pinned Browser REPL dependency. Load it with dynamic `import()` and connect it to the image's existing Chromium over CDP; do not launch or download another browser:
+`patchright` and `playwright-core` are installed as pinned Browser REPL dependencies. Patchright matches the default engine used by the image's Playwright execution service; load it with dynamic `import()` and connect it to the existing Chromium over CDP instead of launching or downloading another browser:
 
 ```js
-var pw = await import("playwright-core");
-var pwBrowser = await pw.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+var playwright = await import("patchright");
+var pwBrowser = await playwright.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
 var pwContext = pwBrowser.contexts()[0];
 var pwPage = pwContext.pages()[0] ?? await pwContext.newPage();
 
@@ -118,19 +119,44 @@ await pwPage.goto("https://example.com");
 repl.write(await pwPage.title());
 ```
 
-The imported module and Playwright objects are ordinary persistent Browser REPL bindings, so later cells can reuse `pwBrowser`, `pwContext`, and `pwPage`. Use names such as `pwBrowser`; the bare `browser` name belongs to the frozen native helper namespace.
+Use vanilla Playwright explicitly when desired:
 
-Playwright has its own CDP connection alongside the native helpers. The native helper connection reconnects automatically after Chromium restarts, but an imported Playwright `Browser` becomes disconnected. Reconnect explicitly while preserving other REPL state:
+```js
+var playwright = await import("playwright-core");
+```
+
+The imported module and browser objects are ordinary persistent Browser REPL bindings, so later cells can reuse `playwright`, `pwBrowser`, `pwContext`, and `pwPage`. Use a name such as `pwBrowser` for its browser connection; the bare `browser` name belongs to the frozen native helper namespace.
+
+Patchright and Playwright use their own CDP connection alongside the native helpers. The native helper connection reconnects automatically after Chromium restarts, but an imported browser connection becomes disconnected. Reconnect explicitly while preserving other REPL state:
 
 ```js
 if (!pwBrowser.isConnected()) {
-  pwBrowser = await pw.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+  pwBrowser = await playwright.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
   pwContext = pwBrowser.contexts()[0];
   pwPage = pwContext.pages()[0] ?? await pwContext.newPage();
 }
 ```
 
-A reset, execution timeout, crash, or API restart destroys the REPL process and therefore all imported modules, Playwright connections, and object bindings. Playwright return values are not emitted automatically; continue to use `repl.write(...)`, console methods, or `repl.emitImage(...)` for output.
+A reset, execution timeout, crash, or API restart destroys the REPL process and therefore all imported modules, browser connections, and object bindings. Return values are not emitted automatically; continue to use `repl.write(...)`, console methods, or `repl.emitImage(...)` for output.
+
+### Installing additional packages
+
+Packages installed globally through the process execution API are immediately available to bare dynamic imports. Pin a version when reproducibility matters:
+
+```http
+POST /process/exec
+Content-Type: application/json
+
+{"command":"npm","args":["install","-g","example-package@1.2.3"]}
+```
+
+Then use the package in the Browser REPL without `require`:
+
+```js
+var examplePackage = await import("example-package");
+```
+
+The installation lasts for the browser VM's lifetime. Node caches imported modules within the REPL process; after replacing an installed version, reset the REPL before importing it again. Do not install into `/usr/local/lib/browser-repl`, because that directory contains the REPL's own locked runtime dependencies.
 
 ### Page JavaScript
 
@@ -185,7 +211,21 @@ const heading = await js(() => document.querySelector("h1")?.textContent, {
 
 Not every iframe is a separate target. For lower-level frame cases, use `cdp()` with `Page.getFrameTree`, `Page.createIsolatedWorld`, and `Runtime.evaluate`; unrestricted CDP access remains the escape hatch for inspecting and manipulating frame execution contexts. Selector helpers operate on the currently attached target, while coordinate `click({x, y})` can interact with the composed viewport.
 
-Wait helpers and DevTools commands clamp internal deadlines below the request's `timeout_sec`, allowing waits to return `false` and command failures to return cleanly before the destructive execution timeout.
+Wait helpers and DevTools commands clamp internal deadlines below the request's `timeout_sec`, allowing waits to return `false` or `null` and command failures to return cleanly before the destructive execution timeout.
+
+Pre-arm `waitForEvent()` when synchronization depends on a DevTools event that could fire before its triggering command returns:
+
+```js
+if (!(await ensureRealTab())) await newTab();
+const completed = waitForEvent("Browser.downloadProgress", {
+  sessionId: null,
+  timeoutSec: 30,
+  predicate: event => event.params.state === "completed",
+});
+await click('[aria-label="Download"]');
+const event = await completed;
+if (!event) throw new Error("download did not complete");
+```
 
 ## Limits
 

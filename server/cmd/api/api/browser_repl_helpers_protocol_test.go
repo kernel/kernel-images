@@ -486,6 +486,60 @@ func TestBrowserReplEventRingBounded(t *testing.T) {
 	require.Equal(t, float64(500), requireJSONWrite(t, r), "old events are dropped at the ring capacity")
 }
 
+func TestBrowserReplWaitForEvent(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+	svc := newBrowserReplSvc(t)
+
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await ensureRealTab()`})
+	require.True(t, r.Success, "error: %v", r.Error)
+
+	fake.queueEvent(map[string]any{
+		"method":    "Network.loadingFinished",
+		"params":    map[string]any{"requestId": "ignored"},
+		"sessionId": "session-target-page-1",
+	})
+	fake.queueEvent(map[string]any{
+		"method":    "Network.loadingFinished",
+		"params":    map[string]any{"requestId": "wanted"},
+		"sessionId": "session-target-page-1",
+	})
+	fake.queueEvent(map[string]any{
+		"method": "Browser.downloadProgress",
+		"params": map[string]any{"guid": "download-1", "state": "completed"},
+	})
+
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `
+		var pageEventPending = waitForEvent("Network.loadingFinished", {
+			timeoutSec: 2,
+			predicate: event => event.params.requestId === "wanted",
+		});
+		var browserEventPending = waitForEvent("Browser.downloadProgress", {
+			sessionId: null,
+			timeoutSec: 2,
+		});
+		await cdp("Target.getTargets", undefined, null);
+		var pageEvent = await pageEventPending;
+		var browserEvent = await browserEventPending;
+		var missingEvent = await waitForEvent("Page.frameStoppedLoading", {timeoutSec: 0.05});
+		repl.write(JSON.stringify({
+			pageRequestId: pageEvent && pageEvent.params.requestId,
+			pageSessionId: pageEvent && pageEvent.sessionId,
+			browserGuid: browserEvent && browserEvent.params.guid,
+			browserSessionId: browserEvent && browserEvent.sessionId,
+			missingEvent,
+		}));
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	result, ok := requireJSONWrite(t, r).(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "wanted", result["pageRequestId"])
+	require.Equal(t, "session-target-page-1", result["pageSessionId"])
+	require.Equal(t, "download-1", result["browserGuid"])
+	require.Nil(t, result["browserSessionId"])
+	require.Nil(t, result["missingEvent"])
+}
+
 func TestBrowserReplReconnectPreservesState(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())

@@ -1,6 +1,6 @@
 # Browser REPL Agent Guidance
 
-Use `POST /repl` as the primary browser-control interface. Prefer its WebMCP and native browser helpers for concise automation; import the bundled `playwright-core` package when a task benefits from Playwright's broader API.
+Use `POST /repl` as the primary browser-control interface. Prefer its WebMCP and native browser helpers for concise automation; import the bundled `patchright` or `playwright-core` package when a task benefits from the broader Playwright API.
 
 For the complete API contract and lifecycle semantics, see [repl.md](repl.md).
 
@@ -32,7 +32,7 @@ Successful executions may emit text, images, console output, any combination of 
 Helpers are available as bare globals and under the frozen `browser` namespace:
 
 ```text
-cdp, drainEvents, gotoUrl, pageInfo,
+cdp, drainEvents, waitForEvent, gotoUrl, pageInfo,
 click, typeText, fillInput, pressKey, scroll,
 captureScreenshot,
 listTabs, currentTab, switchTab, newTab, closeTab,
@@ -50,6 +50,7 @@ waitMs(milliseconds = 1000)
 waitForLoad(timeoutSec = 15)
 waitForElement(selector, {state = "visible", timeoutSec = 10} = {})
 waitForNetworkIdle(idleSec = 0.5, timeoutSec = 30)
+waitForEvent(method, {sessionId?, timeoutSec = 30, predicate?} = {})
 click(selectorOrPoint, options?)
 fillInput(selector, text, {clearFirst = true, timeoutSec = 10} = {})
 pressKey(key, modifiers?)
@@ -128,31 +129,33 @@ Tools may come from any open tab or embedded frame; invocation routes through `t
 
 Use semantic selectors when the page does not expose the needed native tool, then coordinate interaction as the fallback.
 
-## Playwright Core when needed
+## Patchright or Playwright Core when needed
 
-The REPL guarantees a pinned `playwright-core` package. Load it dynamically and connect to the existing browser instead of launching another Chromium:
+The REPL guarantees pinned `patchright` and `playwright-core` packages. Patchright matches the image's default Playwright execution engine. Load it dynamically and connect to the existing browser instead of launching another Chromium:
 
 ```js
-var pw = await import("playwright-core");
-var pwBrowser = await pw.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
+var playwright = await import("patchright");
+var pwBrowser = await playwright.chromium.connectOverCDP(process.env.CDP_ENDPOINT);
 var pwContext = pwBrowser.contexts()[0];
 var pwPage = pwContext.pages()[0] ?? await pwContext.newPage();
 ```
 
-These are persistent bindings and can be reused by later requests. Keep the `pwBrowser` name because `browser` is the native helper namespace. Emit desired results explicitly:
+For vanilla Playwright, use `var playwright = await import("playwright-core")` instead. These are persistent bindings and can be reused by later requests. Keep the `pwBrowser` name because `browser` is the native helper namespace. Emit desired results explicitly:
 
 ```js
 await pwPage.goto("https://example.com");
 repl.write(await pwPage.title());
 ```
 
-Imported Playwright connections do not reconnect automatically after Chromium restarts. If `pwBrowser.isConnected()` is false, call `connectOverCDP()` again and refresh `pwContext` and `pwPage`. A REPL reset or destructive failure clears all of these bindings.
+Imported browser connections do not reconnect automatically after Chromium restarts. If `pwBrowser.isConnected()` is false, call `connectOverCDP()` again and refresh `pwContext` and `pwPage`. A REPL reset or destructive failure clears all of these bindings.
+
+Additional packages installed with `POST /process/exec` using `npm install -g package@version` are available through `await import("package")`. Prefer dynamic imports rather than `require`, pin versions for reproducibility, and reset the REPL after replacing an already imported package version.
 
 Use this order:
 
 1. Page-provided WebMCP tools
 2. Native semantic REPL helpers
-3. Imported Playwright Core
+3. Imported Patchright or Playwright Core
 4. Coordinate input
 5. Raw CDP
 
@@ -209,7 +212,21 @@ if (!(await waitForLoad(30))) {
 
 Use `waitForNetworkIdle()` only when no specific rendered element identifies completion. Network idleness alone does not prove that the desired UI exists.
 
-`drainEvents()` is useful for protocol diagnostics, but a generic DevTools event does not prove that an application completed its UI transition.
+`drainEvents()` is useful for protocol diagnostics, but a generic DevTools event does not prove that an application completed its UI transition. When a specific event is authoritative, arm `waitForEvent()` before the action so a fast event cannot race ahead of the waiter:
+
+```js
+if (!(await ensureRealTab())) await newTab();
+const finished = waitForEvent("Browser.downloadProgress", {
+  sessionId: null,
+  timeoutSec: 30,
+  predicate: event => event.params.state === "completed",
+});
+await click('[aria-label="Download"]');
+const event = await finished;
+if (!event) throw new Error("download did not complete");
+```
+
+The default matches the attached page session. Pass `sessionId: null` for browser-level events. A timeout returns `null`; protocol, connection, and predicate failures throw.
 
 ### Fixed delays
 

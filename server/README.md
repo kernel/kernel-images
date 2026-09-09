@@ -123,10 +123,13 @@ helper.
 - Helpers are exposed as bare globals and on the frozen `browser` namespace.
   See [`docs/repl.md`](docs/repl.md#browser-helpers) for every helper's
   signature and behavior.
-- A pinned `playwright-core` package is available through
-  `await import("playwright-core")`. Connect it to `process.env.CDP_ENDPOINT`
-  to use ordinary Playwright browser, context, and page objects as persistent
-  REPL bindings; reconnect those objects explicitly after Chromium restarts.
+- Pinned `patchright` and `playwright-core` packages are available through
+  dynamic `import()`. Patchright matches the image's default Playwright
+  execution engine. Connect either package to `process.env.CDP_ENDPOINT` to
+  use ordinary browser, context, and page objects as persistent REPL bindings;
+  reconnect those objects explicitly after Chromium restarts. Other packages
+  installed through `/process/exec` with `npm install -g package@version` are
+  available to bare dynamic `import("package")` calls.
 - The REPL connects to the browser through the DevTools proxy on
   `ws://127.0.0.1:9222`, lazily on the first browser helper call; pure
   Node.js code runs fine while Chromium is down, and the connection is

@@ -27,6 +27,14 @@ interface PendingCommand {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingEventWaiter {
+  method: string;
+  sessionId: string | undefined;
+  predicate?: (event: CdpEvent) => boolean;
+  accept: (event: CdpEvent) => void;
+  reject: (error: Error) => void;
+}
+
 const EVENT_RING_CAPACITY = 500;
 const CONNECT_TIMEOUT_MS = 10_000;
 // Individual CDP commands must not hang forever: Chromium occasionally never
@@ -86,6 +94,7 @@ export class CdpClient {
   private nextId = 1;
   private pending = new Map<number, PendingCommand>();
   private events: CdpEvent[] = [];
+  private eventWaiters = new Set<PendingEventWaiter>();
 
   private answeredInConnection = 0;
 
@@ -198,6 +207,7 @@ export class CdpClient {
       p.reject(err);
     }
     this.pending.clear();
+    for (const waiter of [...this.eventWaiters]) waiter.reject(err);
   }
 
   private onMessage(data: unknown): void {
@@ -229,7 +239,8 @@ export class CdpClient {
   }
 
   private onEvent(method: string, params: any, sessionId?: string): void {
-    this.events.push({ method, params, sessionId, time: Date.now() });
+    const event: CdpEvent = { method, params, sessionId, time: Date.now() };
+    this.events.push(event);
     if (this.events.length > EVENT_RING_CAPACITY) {
       this.events.splice(0, this.events.length - EVENT_RING_CAPACITY);
     }
@@ -266,6 +277,52 @@ export class CdpClient {
         this.pendingDialog = null;
       }
     }
+
+    for (const waiter of [...this.eventWaiters]) {
+      if (waiter.method !== method || waiter.sessionId !== sessionId) continue;
+      try {
+        if (!waiter.predicate || waiter.predicate(event)) waiter.accept(event);
+      } catch (err) {
+        waiter.reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    }
+  }
+
+  waitForEvent(
+    method: string,
+    options: {
+      sessionId?: string;
+      timeoutMs?: number;
+      predicate?: (event: CdpEvent) => boolean;
+    } = {},
+  ): Promise<CdpEvent | null> {
+    const { timeout } = this.effectiveCommandTimeout(options.timeoutMs);
+    if (timeout <= 0) return Promise.resolve(null);
+
+    return new Promise<CdpEvent | null>((resolve, reject) => {
+      let settled = false;
+      const finish = (error?: Error, event?: CdpEvent | null) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.eventWaiters.delete(waiter);
+        if (error) reject(error);
+        else resolve(event ?? null);
+      };
+      const waiter: PendingEventWaiter = {
+        method,
+        sessionId: options.sessionId,
+        predicate: options.predicate,
+        accept: (event) => finish(undefined, event),
+        reject: (error) => finish(error),
+      };
+      const timer = setTimeout(() => finish(undefined, null), timeout);
+      if (typeof timer.unref === 'function') timer.unref();
+      this.eventWaiters.add(waiter);
+      void this.ensureConnected().catch((err) =>
+        finish(err instanceof Error ? err : new Error(String(err))),
+      );
+    });
   }
 
   async browserCommand<T = any>(method: string, params?: unknown): Promise<T> {
