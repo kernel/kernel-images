@@ -64,6 +64,13 @@ jobs:
           node patch-adapter.mjs
           echo "AGENT_PI_TEST_RUNTIME=$PWD" >> "$GITHUB_ENV"
 
+      - name: Install pinned Claude reference runtime
+        working-directory: server/runtime/acp/claude
+        run: |
+          bun install --frozen-lockfile --ignore-scripts
+          node --test *.test.mjs
+          echo "AGENT_CLAUDE_TEST_RUNTIME=$PWD" >> "$GITHUB_ENV"
+
       # categorygen's checks (unclassified route, category that isn't control or
       # platform, classified route with no handler) only run when the generator
       # does, and its only other caller is `make oapi-generate`, which needs the

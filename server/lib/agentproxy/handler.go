@@ -21,6 +21,7 @@ type Handler struct {
 	registry *wsdrain.Registry
 	slots    chan struct{}
 	pi       *configurationManager
+	claude   *configurationManager
 }
 
 func New(ctx context.Context, config Config, logger *slog.Logger, registry *wsdrain.Registry) (*Handler, error) {
@@ -35,6 +36,13 @@ func New(ctx context.Context, config Config, logger *slog.Logger, registry *wsdr
 			return nil, err
 		}
 	}
+	if config.Claude != nil {
+		var err error
+		h.claude, err = newConfigurationManager(config.Claude.StateDir, *config.Claude)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return h, nil
 }
 
@@ -45,7 +53,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.pi != nil {
 			names = append(names, "pi")
 		}
+		if h.claude != nil {
+			names = append(names, "claude")
+		}
 		for name := range h.config.Harnesses {
+			if name == "claude" && h.claude != nil {
+				continue
+			}
 			if name == "pi" && h.pi != nil {
 				continue
 			}
@@ -58,6 +72,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}{names})
 	case r.URL.Path == "/agent/v1/harnesses/pi/config" && h.pi != nil:
 		h.piConfiguration(w, r)
+	case r.URL.Path == "/agent/v1/harnesses/claude/config" && h.claude != nil:
+		h.claudeConfiguration(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/agent/v1/acp":
 		h.connect(w, r)
 	default:
@@ -72,6 +88,13 @@ func (h *Handler) connect(w http.ResponseWriter, r *http.Request) {
 		harness, ok = h.pi.preparedLaunch()
 		if !ok {
 			http.Error(w, "pi configuration is not ready", http.StatusConflict)
+			return
+		}
+	}
+	if name == "claude" && h.claude != nil {
+		harness, ok = h.claude.preparedLaunch()
+		if !ok {
+			http.Error(w, "claude configuration is not ready", http.StatusConflict)
 			return
 		}
 	}
