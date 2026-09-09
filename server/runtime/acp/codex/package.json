@@ -1,0 +1,13 @@
+{
+  "name": "kernel-codex-acp-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@agentclientprotocol/codex-acp": "1.10.0",
+    "@openai/codex": "0.153.3",
+    "smol-toml": "1.4.2"
+  },
+  "overrides": {
+    "@openai/codex": "0.153.3"
+  }
+}

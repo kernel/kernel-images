@@ -120,6 +120,8 @@ COPY server/runtime/acp/requirements.txt /opt/kernel-agent/requirements.txt
 RUN uv pip install --python /opt/kernel-agent/venv/bin/python -r /opt/kernel-agent/requirements.txt
 COPY server/runtime/acp/pi /opt/kernel-agent/pi
 RUN cd /opt/kernel-agent/pi && bun install --frozen-lockfile --ignore-scripts && node patch-adapter.mjs
+COPY server/runtime/acp/codex /opt/kernel-agent/codex
+RUN cd /opt/kernel-agent/codex && bun install --frozen-lockfile --ignore-scripts
 COPY server/runtime/acp/catalog.json /opt/kernel-agent/catalog.json
 
 FROM node:22-bullseye-slim AS node-22
