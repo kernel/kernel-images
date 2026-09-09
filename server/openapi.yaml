@@ -1959,7 +1959,7 @@ components:
     BrowserTargetType:
       type: string
       description: CDP target type of the page that produced the event.
-      enum: [page, background_page, service_worker, shared_worker, other]
+      enum: [page, iframe, worker, background_page, service_worker, shared_worker, other]
     BrowserEventContext:
       type: object
       description: >
@@ -2926,7 +2926,7 @@ components:
       properties:
         step:
           type: string
-          description: The CDP method or initialization step that failed (e.g. Target.setAutoAttach).
+          description: The CDP method or initialization step that failed (e.g. browsersurface.Start).
     BrowserMonitorInitFailedEvent:
       type: object
       description: The CDP session could not be initialized.

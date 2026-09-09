@@ -58,6 +58,7 @@ func applyHeadlessDefaultFlags() {
 		"--no-service-autorun",
 		"--ozone-platform=headless",
 		"--password-store=basic",
+		"--silent-debugger-extension-api",
 		"--unsafely-disable-devtools-self-xss-warnings",
 		"--use-angle=swiftshader",
 		"--use-gl=angle",

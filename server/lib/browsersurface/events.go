@@ -2,11 +2,16 @@ package browsersurface
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 )
 
 func (t *Tracker) handleProtocolEvent(message cdpclient.Message) {
+	if !t.trackLocations && strings.HasPrefix(message.Method, "Page.") {
+		t.publish(Event{Kind: EventProtocol, SessionID: message.SessionID, Message: message})
+		return
+	}
 	switch message.Method {
 	case "Target.targetCreated":
 		var event struct {
@@ -16,8 +21,10 @@ func (t *Tracker) handleProtocolEvent(message cdpclient.Message) {
 			switch event.TargetInfo.Type {
 			case "page":
 				t.trackPage(event.TargetInfo, true)
-			case "iframe":
-				t.trackFrameTarget(event.TargetInfo)
+			default:
+				if t.tracksTarget(event.TargetInfo.Type) {
+					t.trackNonPageTarget(event.TargetInfo)
+				}
 			}
 		}
 	case "Target.targetInfoChanged":

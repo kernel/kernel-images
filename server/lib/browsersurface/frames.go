@@ -7,12 +7,21 @@ import (
 	"time"
 )
 
+// Shared/service workers and background pages can outlive their creating tab.
+func inheritsParentLifetime(targetType string) bool {
+	return targetType == "iframe" || targetType == "worker"
+}
+
 func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInfo) {
-	if target.Type != "page" && target.Type != "iframe" {
+	if !t.tracksTarget(target.Type) {
 		return
 	}
 	t.stateMu.Lock()
 	if _, exists := t.sessions[sessionID]; exists {
+		t.stateMu.Unlock()
+		return
+	}
+	if inheritsParentLifetime(target.Type) && parentSessionID != "" && t.sessions[parentSessionID] == nil {
 		t.stateMu.Unlock()
 		return
 	}
@@ -33,14 +42,35 @@ func (t *Tracker) addSession(sessionID, parentSessionID string, target targetInf
 		}
 	}
 	ownedParentID := ""
-	if target.Type == "iframe" {
+	if inheritsParentLifetime(target.Type) {
 		ownedParentID = parentSessionID
 	}
 	t.sessions[sessionID] = &session{id: sessionID, parentID: ownedParentID, target: target, tabID: tabID}
 	t.bindSessionsLocked()
 	t.stateMu.Unlock()
 	t.signalChanged()
-	go t.initializeSession(sessionID)
+	t.publish(Event{
+		Kind: EventSessionAttached, SessionID: sessionID,
+		Target: SessionTarget{ID: target.TargetID, Type: target.Type, URL: target.URL, Title: target.Title, OpenerID: target.OpenerID, ParentFrameID: target.ParentFrameID},
+	})
+	if t.tracksTarget("worker") && target.Type != "service_worker" {
+		go t.attachDedicatedWorkers(sessionID)
+	}
+	if t.trackLocations && (target.Type == "page" || target.Type == "iframe") {
+		go t.initializeSession(sessionID)
+	}
+}
+
+func (t *Tracker) attachDedicatedWorkers(sessionID string) {
+	ctx, cancel := context.WithTimeout(t.ctx, sessionInitTimeout)
+	defer cancel()
+	_, err := t.protocol.Send(ctx, "Target.setAutoAttach", map[string]any{
+		"autoAttach": true, "flatten": true, "waitForDebuggerOnStart": false,
+		"filter": []map[string]any{{"type": "worker"}},
+	}, sessionID)
+	if err != nil && ctx.Err() == nil && t.SessionExists(sessionID) {
+		t.logger.Warn("failed to attach dedicated workers", "session_id", sessionID, "err", err)
+	}
 }
 
 func (t *Tracker) initializeSession(sessionID string) {
@@ -177,25 +207,37 @@ func (t *Tracker) upsertFrameLocked(tabID int, info frameInfo) {
 }
 
 func (t *Tracker) bindSessionsLocked() {
-	for _, sess := range t.sessions {
-		if sess.tabID != 0 {
-			continue
-		}
-		if tabID := t.tabsByTarget[sess.target.TargetID]; tabID != 0 {
-			sess.tabID = tabID
-			continue
-		}
-		if sess.target.Type == "iframe" {
-			if parent := t.sessions[sess.parentID]; parent != nil && parent.tabID != 0 {
+	for changed := true; changed; {
+		changed = false
+		for _, sess := range t.sessions {
+			if sess.target.Type != "page" && !inheritsParentLifetime(sess.target.Type) {
+				continue
+			}
+			// Session-only tracking has no frame tree to associate descendants.
+			// Recover ownership without changing location-tracked initialization.
+			if !t.trackLocations && inheritsParentLifetime(sess.target.Type) && sess.parentID == "" {
+				for id, parent := range t.sessions {
+					if id != sess.id && parent.target.TargetID == sess.target.ParentFrameID {
+						sess.parentID = id
+						changed = true
+						break
+					}
+				}
+			}
+			if sess.tabID != 0 {
+				continue
+			}
+			if tabID := t.tabsByTarget[sess.target.TargetID]; tabID != 0 {
+				sess.tabID = tabID
+			} else if parent := t.sessions[sess.parentID]; parent != nil {
 				sess.tabID = parent.tabID
-				continue
-			}
-			if parentFrame := t.frames[sess.target.ParentFrameID]; parentFrame != nil {
+			} else if parentFrame := t.frames[sess.target.ParentFrameID]; parentFrame != nil {
 				sess.tabID = parentFrame.tabID
-				continue
-			}
-			if ownFrame := t.frames[sess.target.TargetID]; ownFrame != nil {
+			} else if ownFrame := t.frames[sess.target.TargetID]; ownFrame != nil {
 				sess.tabID = ownFrame.tabID
+			}
+			if sess.tabID != 0 {
+				changed = true
 			}
 		}
 	}
@@ -290,8 +332,8 @@ func (t *Tracker) removeSessionLocked(sessionID string) []string {
 			switch sess.target.Type {
 			case "page":
 				t.trackingTarget[sess.target.TargetID] = false
-			case "iframe":
-				delete(t.trackingFrameTarget, sess.target.TargetID)
+			default:
+				delete(t.trackingNonPageTarget, sess.target.TargetID)
 			}
 			delete(t.sessions, id)
 			removed = append(removed, id)
