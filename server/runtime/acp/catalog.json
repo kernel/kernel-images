@@ -2,6 +2,12 @@
   "acpremote": "/opt/kernel-agent/venv/bin/acpremote",
   "maxConnections": 8,
   "harnesses": {},
+  "claude": {
+    "stateDir": "/home/kernel/.agents/claude",
+    "runtimeDir": "/opt/kernel-agent/claude",
+    "node": "/usr/local/bin/node",
+    "credentials": { "anthropic": "ANTHROPIC_API_KEY" }
+  },
   "pi": {
     "stateDir": "/home/kernel/.agents/pi",
     "runtimeDir": "/opt/kernel-agent/pi",

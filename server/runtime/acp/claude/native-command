@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$KERNEL_CLAUDE_NODE" "$(dirname "$0")/native.mjs" "$@"
