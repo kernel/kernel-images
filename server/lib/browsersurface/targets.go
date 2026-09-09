@@ -41,7 +41,7 @@ func (t *Tracker) registerPage(target targetInfo) (int, bool) {
 	return tabID, true
 }
 
-func (t *Tracker) attachPage(tabID int, target targetInfo) {
+func (t *Tracker) assignPageWindow(tabID int, target targetInfo) {
 	windowCtx, cancel := context.WithTimeout(t.ctx, 2*time.Second)
 	raw, err := t.protocol.Send(windowCtx, "Browser.getWindowForTarget", map[string]any{"targetId": target.TargetID}, "")
 	cancel()
@@ -57,6 +57,12 @@ func (t *Tracker) attachPage(tabID int, target targetInfo) {
 	}
 	if !windowAssigned {
 		t.assignFallbackWindow(target.TargetID, tabID)
+	}
+}
+
+func (t *Tracker) attachPage(tabID int, target targetInfo) {
+	if t.trackLocations {
+		t.assignPageWindow(tabID, target)
 	}
 	if err := t.attachTarget(target); err == nil {
 		return
@@ -91,26 +97,39 @@ func (t *Tracker) attachTarget(target targetInfo) error {
 		return fmt.Errorf("attach browser target: missing session ID")
 	}
 	t.addSession(result.SessionID, "", target)
+	// The target can close while the attach command is in flight. Check after
+	// adding the session so a concurrent removal cannot leave it untracked.
+	t.stateMu.RLock()
+	tracking := t.trackingTarget[target.TargetID] || t.trackingNonPageTarget[target.TargetID]
+	t.stateMu.RUnlock()
+	if !tracking {
+		t.removeSession(result.SessionID)
+	}
 	return nil
 }
 
-func (t *Tracker) trackFrameTarget(target targetInfo) {
+func (t *Tracker) trackNonPageTarget(target targetInfo) {
+	// Dedicated workers are attached through their parent's Target domain;
+	// browser-wide enumeration/discovery does not reliably expose them.
+	if target.Type == "worker" {
+		return
+	}
 	t.stateMu.Lock()
-	if t.trackingFrameTarget[target.TargetID] {
+	if t.trackingNonPageTarget[target.TargetID] {
 		t.stateMu.Unlock()
 		return
 	}
-	t.trackingFrameTarget[target.TargetID] = true
+	t.trackingNonPageTarget[target.TargetID] = true
 	t.stateMu.Unlock()
 
 	go func() {
 		if err := t.attachTarget(target); err == nil {
 			return
 		} else if !t.protocol.IsClosed() {
-			t.logger.Warn("failed to attach browser frame", "target_id", target.TargetID, "err", err)
+			t.logger.Warn("failed to attach browser target", "target_id", target.TargetID, "type", target.Type, "err", err)
 		}
 		t.stateMu.Lock()
-		delete(t.trackingFrameTarget, target.TargetID)
+		delete(t.trackingNonPageTarget, target.TargetID)
 		t.stateMu.Unlock()
 		t.signalChanged()
 	}()
@@ -122,9 +141,9 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 	for targetID := range t.tabsByTarget {
 		known = append(known, targetID)
 	}
-	knownFrames := make([]string, 0, len(t.trackingFrameTarget))
-	for targetID := range t.trackingFrameTarget {
-		knownFrames = append(knownFrames, targetID)
+	knownNonPages := make([]string, 0, len(t.trackingNonPageTarget))
+	for targetID := range t.trackingNonPageTarget {
+		knownNonPages = append(knownNonPages, targetID)
 	}
 	t.stateMu.RUnlock()
 
@@ -139,15 +158,17 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		return err
 	}
 	active := make(map[string]bool)
-	activeFrames := make(map[string]bool)
+	activeNonPages := make(map[string]bool)
 	for _, target := range result.TargetInfos {
 		switch target.Type {
 		case "page":
 			active[target.TargetID] = true
 			t.trackPage(target, true)
-		case "iframe":
-			activeFrames[target.TargetID] = true
-			t.trackFrameTarget(target)
+		default:
+			if t.tracksTarget(target.Type) {
+				activeNonPages[target.TargetID] = true
+				t.trackNonPageTarget(target)
+			}
 		}
 	}
 	for _, targetID := range known {
@@ -156,8 +177,8 @@ func (t *Tracker) RefreshTargets(ctx context.Context) error {
 		}
 		t.removeTarget(targetID)
 	}
-	for _, targetID := range knownFrames {
-		if !activeFrames[targetID] {
+	for _, targetID := range knownNonPages {
+		if !activeNonPages[targetID] {
 			t.removeTarget(targetID)
 		}
 	}
@@ -208,15 +229,15 @@ func (t *Tracker) updateTarget(target targetInfo) {
 	}
 	t.stateMu.Unlock()
 	t.signalChanged()
-	if target.Type == "iframe" {
-		t.trackFrameTarget(target)
+	if target.Type != "page" && t.tracksTarget(target.Type) {
+		t.trackNonPageTarget(target)
 		return
 	}
 	if target.Type == "page" && !knownTab {
 		t.trackPage(target, true)
 		return
 	}
-	if target.Type == "page" {
+	if target.Type == "page" && t.trackLocations {
 		go func() {
 			ctx, cancel := context.WithTimeout(t.ctx, 2*time.Second)
 			defer cancel()
@@ -243,7 +264,7 @@ func (t *Tracker) updateTabTargetLocked(target targetInfo) {
 
 func (t *Tracker) removeTarget(targetID string) {
 	t.stateMu.Lock()
-	delete(t.trackingFrameTarget, targetID)
+	delete(t.trackingNonPageTarget, targetID)
 	var removedSessions []string
 	if tabID := t.tabsByTarget[targetID]; tabID != 0 {
 		removedSessions = t.removeTabLocked(tabID)
