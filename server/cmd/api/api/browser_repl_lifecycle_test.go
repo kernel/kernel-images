@@ -282,6 +282,33 @@ func TestBrowserReplResetKillsTermIgnoringDescendant(t *testing.T) {
 		"reset must kill descendants after the Node group leader exits")
 }
 
+func TestBrowserReplIdleCrashKillsDescendantsOnReplacement(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process-group lifecycle is only enforced on Linux")
+	}
+	svc := newBrowserReplSvc(t)
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `
+		var childProcess = await import("node:child_process");
+		var idleCrashChild = childProcess.spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {stdio: "ignore"});
+		repl.write(JSON.stringify(idleCrashChild.pid));
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	pid := int(requireJSONWrite(t, r).(float64))
+
+	svc.browserReplMu.Lock()
+	child := svc.browserRepl
+	svc.browserReplMu.Unlock()
+	require.NotNil(t, child)
+	require.NoError(t, child.cmd.Process.Kill())
+	require.Eventually(t, func() bool { return !processAlive(child.cmd.Process.Pid) }, 3*time.Second, 20*time.Millisecond)
+
+	fresh := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `repl.write("fresh")`})
+	require.True(t, fresh.Success, "error: %v", fresh.Error)
+	require.NotEqual(t, r.ReplId, fresh.ReplId)
+	require.Eventually(t, func() bool { return !processAlive(pid) }, 3*time.Second, 20*time.Millisecond,
+		"replacing an unexpectedly exited REPL must kill its remaining process group")
+}
+
 func TestBrowserReplShutdownObservesDeadlineDuringExecution(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	executionDone := make(chan error, 1)

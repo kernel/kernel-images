@@ -172,6 +172,8 @@ func (s *ApiService) ensureBrowserReplLocked(ctx context.Context) error {
 			log.Warn("browser REPL child exited unexpectedly; starting a fresh REPL",
 				"repl_id", child.id, "exit_err", err)
 			child.done = closedWaitChannel(err)
+			// The group leader exited, but descendants may still be alive.
+			_ = signalBrowserReplGroup(child.cmd, killSignal)
 			s.clearBrowserReplLocked(ctx, child)
 		default:
 			return nil
@@ -195,23 +197,10 @@ func (s *ApiService) clearBrowserReplLocked(ctx context.Context, child *browserR
 	if s.browserRepl == child {
 		s.browserRepl = nil
 	}
-	reapBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
+	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
 }
 
-// reapBrowserReplSocket kills any orphaned REPL daemon still listening on
-// the socket (one not spawned by this API process — pdeathsig covers
-// children the API itself spawned) and removes the socket file. The kill
-// must happen before the unlink: orphan detection matches the socket by
-// path in /proc/net/unix, so once the file is removed an orphan becomes
-// undetectable and would leak for the container lifetime.
-func reapBrowserReplSocket(log *slog.Logger, socketPath string) {
-	if conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
-		conn.Close()
-		if killed := killOrphanedBrowserRepl(socketPath); len(killed) > 0 {
-			log.Warn("killed orphaned browser REPL process(es) holding the socket",
-				"pids", killed, "socket", socketPath)
-		}
-	}
+func removeBrowserReplSocket(log *slog.Logger, socketPath string) {
 	if err := os.Remove(socketPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Warn("failed to remove stale browser REPL socket", "path", socketPath, "err", err)
 	}
@@ -224,12 +213,9 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 	socketPath := browserReplSocketPath()
 
-	// Never adopt state from a previous process. If something we do not own
-	// is still listening on the socket (an orphaned daemon started outside
-	// this API process — pdeathsig covers children the API itself spawned),
-	// kill it before removing the socket file so the orphan cannot leak for
-	// the container lifetime.
-	reapBrowserReplSocket(log, socketPath)
+	// Never adopt state from a previous process. Unlink any stale socket;
+	// Linux parent-death signaling handles daemons spawned by this API.
+	removeBrowserReplSocket(log, socketPath)
 
 	replID := cuid2.Generate()
 

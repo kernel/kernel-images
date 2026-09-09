@@ -4,12 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"os/exec"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -361,129 +357,6 @@ func TestBrowserReplAttachActivatesTarget(t *testing.T) {
 	activated := append([]string(nil), fake.activatedTargets...)
 	fake.mu.Unlock()
 	require.Contains(t, activated, "target-page-1", "attach must activate the attached target")
-}
-
-func TestBrowserReplOrphanedDaemonKilled(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("orphan detection requires /proc")
-	}
-	script := ensureBrowserReplBundle(t)
-	svc := newBrowserReplSvc(t)
-	socketPath := browserReplSocketPath()
-
-	rogue := exec.Command("node", script)
-	rogue.Env = append(os.Environ(),
-		"BROWSER_REPL_SOCKET="+socketPath,
-		"BROWSER_REPL_ID=rogue0000000000000000000",
-	)
-	require.NoError(t, rogue.Start())
-	t.Cleanup(func() {
-		_ = rogue.Process.Kill()
-		_, _ = rogue.Process.Wait()
-	})
-
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		require.False(t, time.Now().After(deadline), "rogue daemon never started listening")
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1 + 1"})
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.NotEqual(t, "rogue0000000000000000000", r.ReplId)
-
-	deadline = time.Now().Add(3 * time.Second)
-	for {
-		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", rogue.Process.Pid))
-		if err != nil {
-			break // gone
-		}
-		state := ""
-		if idx := strings.LastIndex(string(data), ")"); idx >= 0 {
-			if fields := strings.Fields(string(data)[idx+1:]); len(fields) > 0 {
-				state = fields[0]
-			}
-		}
-		if state == "Z" {
-			break
-		}
-		require.False(t, time.Now().After(deadline), "orphaned REPL process %d still alive", rogue.Process.Pid)
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
-	require.True(t, r2.Success)
-	require.Equal(t, r.ReplId, r2.ReplId)
-}
-
-func TestBrowserReplOrphanedDaemonKilledOnChildDeath(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("orphan detection requires /proc")
-	}
-	script := ensureBrowserReplBundle(t)
-	svc := newBrowserReplSvc(t)
-	socketPath := browserReplSocketPath()
-
-	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1 + 1"})
-	require.True(t, r.Success, "error: %v", r.Error)
-
-	svc.browserReplMu.Lock()
-	child := svc.browserRepl
-	svc.browserReplMu.Unlock()
-	require.NotNil(t, child)
-	require.NoError(t, child.cmd.Process.Kill())
-	time.Sleep(300 * time.Millisecond)
-
-	require.NoError(t, os.Remove(socketPath))
-	rogue := exec.Command("node", script)
-	rogue.Env = append(os.Environ(),
-		"BROWSER_REPL_SOCKET="+socketPath,
-		"BROWSER_REPL_ID=rogue0000000000000000000",
-	)
-	require.NoError(t, rogue.Start())
-	t.Cleanup(func() {
-		_ = rogue.Process.Kill()
-		_, _ = rogue.Process.Wait()
-	})
-
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		conn, err := net.DialTimeout("unix", socketPath, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			break
-		}
-		require.False(t, time.Now().After(deadline), "rogue daemon never started listening")
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1 + 1"})
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.NotEqual(t, "rogue0000000000000000000", r.ReplId)
-
-	deadline = time.Now().Add(3 * time.Second)
-	for {
-		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", rogue.Process.Pid))
-		if err != nil {
-			break // gone
-		}
-		state := ""
-		if idx := strings.LastIndex(string(data), ")"); idx >= 0 {
-			if fields := strings.Fields(string(data)[idx+1:]); len(fields) > 0 {
-				state = fields[0]
-			}
-		}
-		if state == "Z" {
-			break
-		}
-		require.False(t, time.Now().After(deadline), "orphaned REPL process %d still alive", rogue.Process.Pid)
-		time.Sleep(50 * time.Millisecond)
-	}
 }
 
 func TestStrictBrowserReplBodyMiddleware(t *testing.T) {
