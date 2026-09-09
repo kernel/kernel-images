@@ -77,6 +77,12 @@ func TestPiPreparesPackagesAndRetainsLastReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	bun, err := exec.LookPath("bun")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Preparation must use the configured executables, not PATH lookup.
+	t.Setenv("PATH", "")
 	good, bad := extensionArchive(t, false), extensionArchive(t, true)
 	var registry *httptest.Server
 	registry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -96,7 +102,7 @@ func TestPiPreparesPackagesAndRetainsLastReady(t *testing.T) {
 	}))
 	defer registry.Close()
 	t.Setenv("PI_TEST_KEY", "not-a-real-key")
-	p := PiOptions{StateDir: t.TempDir(), RuntimeDir: runtime, Node: node, Registry: registry.URL, Credentials: map[string]string{"provider": "PI_TEST_KEY"}}
+	p := PiOptions{StateDir: t.TempDir(), RuntimeDir: runtime, Node: node, Bun: bun, Registry: registry.URL, Credentials: map[string]string{"provider": "PI_TEST_KEY"}}
 	m, err := newConfigurationManager(p.StateDir, p)
 	if err != nil {
 		t.Fatal(err)

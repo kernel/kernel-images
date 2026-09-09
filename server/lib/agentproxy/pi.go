@@ -17,6 +17,7 @@ type PiOptions struct {
 	StateDir    string            `json:"stateDir"`
 	RuntimeDir  string            `json:"runtimeDir"`
 	Node        string            `json:"node"`
+	Bun         string            `json:"bun"`
 	Credentials map[string]string `json:"credentials"`
 	Registry    string            `json:"registry,omitempty"`
 }
@@ -40,7 +41,7 @@ var pinnedPackage = regexp.MustCompile(`^npm:(@[-a-z0-9_.]+/)?[a-z0-9][-a-z0-9_.
 var providerEnv = map[string]string{"openrouter": "OPENROUTER_API_KEY", "openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "google": "GEMINI_API_KEY"}
 
 func (p PiOptions) validate() error {
-	if !filepath.IsAbs(p.StateDir) || !filepath.IsAbs(p.RuntimeDir) || !filepath.IsAbs(p.Node) {
+	if !filepath.IsAbs(p.StateDir) || !filepath.IsAbs(p.RuntimeDir) || !filepath.IsAbs(p.Node) || !filepath.IsAbs(p.Bun) {
 		return errors.New("pi paths must be absolute")
 	}
 	for name, source := range p.Credentials {
@@ -101,7 +102,7 @@ func (p PiOptions) Prepare(ctx context.Context, dir string, desired json.RawMess
 	if registry == "" {
 		registry = "https://registry.npmjs.org"
 	}
-	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "PI_SKIP_VERSION_CHECK=1", "KERNEL_PI_REGISTRY=" + registry}
+	command.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + dir, "PI_SKIP_VERSION_CHECK=1", "KERNEL_PI_REGISTRY=" + registry, "KERNEL_PI_BUN=" + p.Bun}
 	err := command.Run()
 	if command.Process != nil {
 		// Extension validation must not leave preparation-time descendants running.

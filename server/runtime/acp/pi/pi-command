@@ -1,2 +1,2 @@
 #!/bin/sh
-exec node "$(dirname "$0")/pi-command.mjs" "$@"
+exec "${KERNEL_PI_NODE:?KERNEL_PI_NODE is required}" "${0%/*}/pi-command.mjs" "$@"

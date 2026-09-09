@@ -6,6 +6,7 @@
     "stateDir": "/home/kernel/.agents/pi",
     "runtimeDir": "/opt/kernel-agent/pi",
     "node": "/usr/local/bin/node",
+    "bun": "/usr/local/bin/bun",
     "credentials": {
       "openrouter": "OPENROUTER_API_KEY",
       "openai": "OPENAI_API_KEY",

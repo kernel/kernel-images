@@ -28,7 +28,7 @@ await writeFile(
 if (Object.keys(dependencies).length) {
   await new Promise((resolve, reject) => {
     const child = spawn(
-      "bun",
+      process.env.KERNEL_PI_BUN,
       [
         "install",
         "--ignore-scripts",

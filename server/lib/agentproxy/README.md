@@ -195,7 +195,8 @@ and recorded separately in each prepared revision.
 
 Images set `AGENT_CONFIG_PATH=/opt/kernel-agent/catalog.json`. An empty variable
 still disables the agent routes. Operators can replace the catalog to configure
-`pi.stateDir`, `pi.runtimeDir`, `pi.node`, credential bindings and an optional npm
+`pi.stateDir`, `pi.runtimeDir`, absolute `pi.node`/`pi.bun` executable paths,
+credential bindings and an optional npm
 `registry`. The default state directory is `/home/kernel/.agents/pi`.
 
 The original trusted `harnesses` launch catalog remains supported for separately

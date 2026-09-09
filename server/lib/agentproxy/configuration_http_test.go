@@ -13,7 +13,7 @@ import (
 
 func TestConfigurationHTTP(t *testing.T) {
 	t.Setenv("PI_HTTP_TEST_KEY", "private-provider-key")
-	options := &PiOptions{StateDir: t.TempDir(), RuntimeDir: "/runtime/pi", Node: "/bin/node", Credentials: map[string]string{"provider": "PI_HTTP_TEST_KEY"}}
+	options := &PiOptions{StateDir: t.TempDir(), RuntimeDir: "/runtime/pi", Node: "/bin/node", Bun: "/bin/bun", Credentials: map[string]string{"provider": "PI_HTTP_TEST_KEY"}}
 	h, err := New(context.Background(), Config{ACPRemote: "/bin/acpremote", MaxConnections: 1, Pi: options}, slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
 	if err != nil {
 		t.Fatal(err)
