@@ -66,12 +66,47 @@ const DIALOG_DISMISS_TIMEOUT_MS = 5_000;
 // command whose connection died before answering anything.
 const RECONNECT_RETRY_DELAY_MS = 150;
 
+// Only observational or idempotent setup commands may be replayed after a
+// connection closes before their acknowledgement arrives. Mutations and
+// Runtime.evaluate are exact-once: Chromium may have applied them already.
+const SAFE_RETRY_METHODS = new Set([
+  'Accessibility.getFullAXTree',
+  'Browser.getVersion',
+  'DOM.enable',
+  'DOM.getBoxModel',
+  'DOM.getContentQuads',
+  'DOM.getDocument',
+  'DOM.querySelector',
+  'DOM.querySelectorAll',
+  'DOM.resolveNode',
+  'Network.enable',
+  'Page.captureScreenshot',
+  'Page.enable',
+  'Page.getFrameTree',
+  'Page.getLayoutMetrics',
+  'Runtime.enable',
+  'SystemInfo.getInfo',
+  'Target.getTargets',
+]);
+
 export class CdpCommandTimeoutError extends Error {
   readonly cdpCommandTimeout = true;
 }
 
 export function isCdpCommandTimeout(err: unknown): boolean {
   return err instanceof CdpCommandTimeoutError || (err as any)?.cdpCommandTimeout === true;
+}
+
+export class CdpOutcomeUnknownError extends Error {
+  readonly outcomeUnknown = true;
+
+  constructor(method: string, cause: unknown) {
+    super(
+      `CDP ${method} outcome is unknown because the connection closed before its response; ` +
+        'the command was not retried',
+      { cause },
+    );
+  }
 }
 
 const INTERNAL_URL_PREFIXES = [
@@ -95,8 +130,6 @@ export class CdpClient {
   private pending = new Map<number, PendingCommand>();
   private events: CdpEvent[] = [];
   private eventWaiters = new Set<PendingEventWaiter>();
-
-  private answeredInConnection = 0;
 
   sessionId: string | null = null;
   targetId: string | null = null;
@@ -176,7 +209,6 @@ export class CdpClient {
       ws.addEventListener('open', () => {
         clearTimeout(timer);
         this.ws = ws;
-        this.answeredInConnection = 0;
         resolve();
       });
       ws.addEventListener('error', () => {
@@ -200,8 +232,8 @@ export class CdpClient {
     this.pendingDialog = null;
     this.rendererResponsive = true;
     this.inFlightRequests.clear();
-    const err = new Error('CDP connection closed');
-    (err as any).connectionNeverAnswered = this.answeredInConnection === 0;
+    const err = new Error('CDP connection closed before the command response arrived');
+    (err as any).connectionClosedBeforeResponse = true;
     for (const [, p] of this.pending) {
       clearTimeout(p.timer);
       p.reject(err);
@@ -224,7 +256,6 @@ export class CdpClient {
       if (!p) return;
       this.pending.delete(msg.id);
       clearTimeout(p.timer);
-      this.answeredInConnection++;
       if (msg.error) {
         p.reject(new Error(`CDP ${p.method} failed: ${msg.error.message} (code ${msg.error.code})`));
       } else {
@@ -333,12 +364,14 @@ export class CdpClient {
     try {
       return await this.sessionCommandOnce<T>(method, params, timeoutMs);
     } catch (err: any) {
-      if (!err?.connectionNeverAnswered) {
+      if (!err?.connectionClosedBeforeResponse) {
         throw err;
       }
-      // The connection died before answering a single command (e.g. the
-      // first call after a Chromium restart racing the DevTools proxy).
-      // The attached session died with it; re-attach and retry once.
+      if (!SAFE_RETRY_METHODS.has(method)) {
+        throw new CdpOutcomeUnknownError(method, err);
+      }
+      // The attached session died with the connection. Re-attach and replay
+      // only commands whose effects are observational or idempotent.
       return this.sessionCommandOnce<T>(method, params, timeoutMs);
     }
   }
@@ -362,12 +395,12 @@ export class CdpClient {
       // Session-routed commands belong to the dead connection's session;
       // their retry (with re-attach) is sessionCommand's job. Foreign
       // sessions (evaluateOnTarget) surface the error unchanged.
-      if (sessionId !== undefined || !err?.connectionNeverAnswered) {
+      if (sessionId !== undefined || !err?.connectionClosedBeforeResponse) {
         throw err;
       }
-      // The connection died before answering a single command, so the
-      // browser almost certainly never saw this one: reconnect and retry
-      // exactly once.
+      if (!SAFE_RETRY_METHODS.has(method)) {
+        throw new CdpOutcomeUnknownError(method, err);
+      }
       await new Promise((resolve) => setTimeout(resolve, RECONNECT_RETRY_DELAY_MS));
       return this.sendOnce<T>(method, params, sessionId, timeoutMs);
     }
@@ -400,7 +433,12 @@ export class CdpClient {
             message += ' (bounded by the execution timeout)';
           }
           message += rendererHint;
-          reject(new CdpCommandTimeoutError(message));
+          const error = new CdpCommandTimeoutError(message);
+          if (!SAFE_RETRY_METHODS.has(method)) {
+            error.message += ' (outcome unknown; command was not retried)';
+            (error as any).outcomeUnknown = true;
+          }
+          reject(error);
         }
       }, timeout);
       if (typeof timer.unref === 'function') timer.unref();
@@ -411,7 +449,7 @@ export class CdpClient {
         clearTimeout(timer);
         this.pending.delete(id);
         const sendErr = new Error(`failed to send CDP ${method}: ${err?.message ?? err}`);
-        (sendErr as any).connectionNeverAnswered = this.answeredInConnection === 0;
+        (sendErr as any).connectionClosedBeforeResponse = true;
         reject(sendErr);
       }
     });
@@ -443,6 +481,10 @@ export class CdpClient {
 
   async attach(targetId: string): Promise<string> {
     await this.ensureConnected();
+    if (this.targetId === targetId && this.sessionId) {
+      return this.sessionId;
+    }
+    const previousSessionId = this.sessionId;
     const res = await this.browserCommand<{ sessionId: string }>('Target.attachToTarget', {
       targetId,
       flatten: true,
@@ -465,6 +507,14 @@ export class CdpClient {
     }
     this.rendererResponsive = await this.enableDomains(this.sessionId);
     await this.dismissStaleDialog();
+    if (previousSessionId && previousSessionId !== this.sessionId) {
+      try {
+        await this.browserCommand('Target.detachFromTarget', { sessionId: previousSessionId });
+      } catch {
+        // Best effort. A connection failure already invalidated both sessions;
+        // other detach failures must not discard the newly attached target.
+      }
+    }
     return this.sessionId;
   }
 

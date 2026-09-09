@@ -3,6 +3,7 @@
 
 import { AsyncLocalStorage } from 'async_hooks';
 import { createServer, Socket } from 'net';
+import { StringDecoder } from 'string_decoder';
 import { unlinkSync, existsSync, promises as fsp } from 'fs';
 import vm from 'vm';
 import util from 'util';
@@ -23,9 +24,12 @@ const WEBMCP_DEADLINE_MARGIN_MS = 500;
 
 // Output limits (decoded bytes unless noted).
 const MAX_TEXT_BYTES = 256 * 1024; // combined text per response
+const MAX_ERROR_BYTES = 64 * 1024;
+const MAX_STACK_BYTES = 256 * 1024;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // per emitted image
 const MAX_TOTAL_IMAGE_BYTES = 16 * 1024 * 1024; // aggregate image data per response
 const MAX_REQUEST_BYTES = 8 * 1024 * 1024; // incoming request line
+const MAX_CONTENT_ITEMS = 10_000; // ordered items in one execution response
 const MAX_STRAY_ITEMS = 1000; // buffered output produced outside an execution
 
 // Private references retained before any user code runs so global/prototype
@@ -59,9 +63,13 @@ class Collector {
   private textBytes = 0;
   private imageBytes = 0;
 
-  constructor(private readonly maxItems?: number) {}
+  constructor(
+    private readonly maxItems?: number,
+    private readonly keepLatestItems = false,
+  ) {}
 
   addText(channel: TextChannel, text: string): void {
+    if (!this.reserveItem()) return;
     const bytes = Buffer.byteLength(text);
     if (this.textBytes + bytes > MAX_TEXT_BYTES) {
       const remaining = MAX_TEXT_BYTES - this.textBytes;
@@ -83,6 +91,7 @@ class Collector {
   }
 
   addImage(mimeType: string, bytes: Buffer): boolean {
+    if (!this.reserveItem()) return false;
     if (this.imageBytes + bytes.length > MAX_TOTAL_IMAGE_BYTES) {
       this.truncated = true;
       return false;
@@ -106,6 +115,16 @@ class Collector {
     target.truncated ||= this.truncated;
   }
 
+  private reserveItem(): boolean {
+    if (this.maxItems === undefined || this.items.length < this.maxItems) return true;
+    this.truncated = true;
+    if (!this.keepLatestItems) return false;
+    const removed = this.items.shift();
+    if (removed?.type === 'text') this.textBytes -= Buffer.byteLength(removed.text);
+    else if (removed) this.imageBytes -= Buffer.from(removed.data_b64, 'base64').length;
+    return true;
+  }
+
   private enforceItemLimit(): void {
     if (this.maxItems === undefined) return;
     while (this.items.length > this.maxItems) {
@@ -119,10 +138,21 @@ class Collector {
 }
 
 let activeCollector: Collector | null = null;
-let strayCollector = new Collector(MAX_STRAY_ITEMS);
+let strayCollector = new Collector(MAX_STRAY_ITEMS, true);
 
 function currentCollector(): Collector {
   return activeCollector ?? strayCollector;
+}
+
+function boundedProtocolText(value: unknown, maxBytes: number): string {
+  let text: string;
+  try {
+    text = String(value);
+  } catch {
+    return '<unprintable value>';
+  }
+  if (Buffer.byteLength(text) <= maxBytes) return text;
+  return Buffer.from(text, 'utf8').subarray(0, maxBytes).toString('utf8');
 }
 
 function boundedInspect(value: unknown): string {
@@ -158,7 +188,7 @@ function sniffImageMime(bytes: Buffer): string | null {
 }
 
 function isImageMime(mime: unknown): mime is string {
-  return typeof mime === 'string' && /^image\//.test(mime);
+  return typeof mime === 'string' && mime.length <= 128 && /^image\/[A-Za-z0-9.+-]+$/.test(mime);
 }
 
 // ArrayBuffer slot checks work across the VM and daemon realms.
@@ -183,7 +213,7 @@ async function normalizeImageInput(input: unknown): Promise<{ bytes: Buffer; mim
     }
     const mime = match[1];
     if (!isImageMime(mime)) {
-      throw new Error(`repl.emitImage: data URL MIME type must be image/*, got ${mime}`);
+      throw new Error('repl.emitImage: data URL MIME type must be a short image/* media type');
     }
     return { bytes: Buffer.from(match[2], 'base64'), mime };
   }
@@ -199,7 +229,7 @@ async function normalizeImageInput(input: unknown): Promise<{ bytes: Buffer; mim
     const obj = input as Record<string, unknown>;
     const explicitMime = obj.mimeType ?? (obj as any).mime_type;
     if (explicitMime !== undefined && !isImageMime(explicitMime)) {
-      throw new Error(`repl.emitImage: MIME type must be image/*, got ${String(explicitMime)}`);
+      throw new Error('repl.emitImage: MIME type must be a short image/* media type');
     }
     if (obj.bytes !== undefined) {
       const bytes = bytesToBuffer(obj.bytes);
@@ -367,7 +397,7 @@ async function executeRequest(
   respond: (response: ExecuteResponse) => void,
 ): Promise<ExecuteResponse> {
   const start = Date.now();
-  const collector = new Collector();
+  const collector = new Collector(MAX_CONTENT_ITEMS);
   // Track the in-flight execution so the uncaughtException handler can
   // answer it with a deterministic failure (including partial content)
   // before exiting, instead of leaving the caller with a bare EOF.
@@ -378,7 +408,7 @@ async function executeRequest(
   // collector owns its counters and truncation bit, so draining cannot leave
   // cumulative limits behind or hide dropped output.
   const drainedStray = strayCollector;
-  strayCollector = new Collector(MAX_STRAY_ITEMS);
+  strayCollector = new Collector(MAX_STRAY_ITEMS, true);
   drainedStray.drainInto(collector);
 
   activeCollector = collector;
@@ -421,8 +451,8 @@ async function executeRequest(
       id: request.id,
       repl_id: REPL_ID,
       success: false,
-      error: String(err?.message ?? err),
-      stack: typeof err?.stack === 'string' ? err.stack : undefined,
+      error: boundedProtocolText(err?.message ?? err, MAX_ERROR_BYTES),
+      stack: typeof err?.stack === 'string' ? boundedProtocolText(err.stack, MAX_STACK_BYTES) : undefined,
       content: collector.items,
       content_truncated: collector.truncated,
       // A timed-out execution is merely abandoned, not interrupted: its code
@@ -472,7 +502,7 @@ function enqueueExecution(request: ExecuteRequest, respond: (response: ExecuteRe
         id: request.id,
         repl_id: REPL_ID,
         success: false,
-        error: `internal daemon error: ${String(err?.message ?? err)}`,
+        error: `internal daemon error: ${boundedProtocolText(err?.message ?? err, MAX_ERROR_BYTES)}`,
         content: [],
         content_truncated: false,
         duration_ms: 0,
@@ -486,6 +516,8 @@ function enqueueExecution(request: ExecuteRequest, respond: (response: ExecuteRe
 
 function handleConnection(socket: Socket): void {
   let buffer = '';
+  let bufferedBytes = 0;
+  const decoder = new StringDecoder('utf8');
   // The server sets allowHalfOpen, so a client that half-closes (SHUT_WR)
   // after sending its request still receives the execution response. The
   // daemon ends its own side once the client has ended and every queued
@@ -533,12 +565,14 @@ function handleConnection(socket: Socket): void {
   };
 
   socket.on('data', (data) => {
-    buffer += data.toString();
+    bufferedBytes += data.length;
+    buffer += decoder.write(data);
 
     let newlineIndex: number;
     while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
       const line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
+      bufferedBytes -= Buffer.byteLength(line) + 1;
       // The size cap applies per accumulated line, independent of how the
       // request was chunked: a single write containing the newline is
       // rejected exactly like a slow flood that never sends one.
@@ -581,7 +615,7 @@ function handleConnection(socket: Socket): void {
       enqueueExecution(request, (response) => respond(response, () => pendingRequests--));
     }
 
-    if (Buffer.byteLength(buffer) > MAX_REQUEST_BYTES) {
+    if (bufferedBytes > MAX_REQUEST_BYTES) {
       rejectOversized();
       return;
     }
@@ -637,8 +671,8 @@ function onUncaughtException(err: unknown): void {
         id: inFlight.request.id,
         repl_id: REPL_ID,
         success: false,
-        error: `uncaught exception in browser REPL process: ${message}`,
-        stack: typeof stack === 'string' ? stack : undefined,
+        error: `uncaught exception in browser REPL process: ${boundedProtocolText(message, MAX_ERROR_BYTES)}`,
+        stack: typeof stack === 'string' ? boundedProtocolText(stack, MAX_STACK_BYTES) : undefined,
         content: inFlight.collector.items,
         content_truncated: inFlight.collector.truncated,
         exiting: true,

@@ -95,7 +95,13 @@ function globalPattern(
 ): string {
   switch (pattern.type) {
     case 'Identifier':
-      return `${initialize ? initializationTarget : 'globalThis'}[${JSON.stringify(pattern.name)}]`;
+      // Lexical declarations initialize through the private target. `var`
+      // writes stay as identifier assignments so JavaScript lexical lookup is
+      // preserved: inside `catch (error)`, `var error = value` initializes the
+      // catch binding rather than bypassing it to write the persistent global.
+      return initialize
+        ? `${initializationTarget}[${JSON.stringify(pattern.name)}]`
+        : pattern.name;
     case 'AssignmentPattern':
       return `${globalPattern(asPattern(pattern.left), source, initialize, initializationTarget)} = ${source.slice(...range(pattern.right!))}`;
     case 'RestElement':

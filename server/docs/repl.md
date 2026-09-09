@@ -55,16 +55,17 @@ await repl.emitImage({path});
 
 Every helper below is available directly and under `browser`, for example `await gotoUrl(url)` and `await browser.gotoUrl(url)`.
 
-- **`cdp(method, params?, sessionId?)`** — Send an unrestricted DevTools Protocol command. Omit `sessionId` for the attached page session; pass a target session ID explicitly, or `null` for a browser-level command.
+- **`cdp(method, params?, sessionId?)`** — Send an unrestricted DevTools Protocol command. Omit `sessionId` for the attached page session; pass a target session ID explicitly, or `null` for a browser-level command. After a connection loss, only observational or idempotent setup commands may retry; mutations and page evaluation throw with an unknown outcome instead of risking duplicate execution.
 - **`drainEvents()`** — Return and remove all buffered DevTools events across sessions. The connection-wide event ring retains at most the newest 500 events; each item includes its originating `sessionId` when DevTools supplied one.
 - **`waitForEvent(method, options?)`** — Arm a one-shot DevTools event waiter before triggering an action. It matches the attached page session by default; use `sessionId: null` for a browser-level event or a session ID for another target. `predicate(event)` receives `{method, params, sessionId?, time}`. It returns that event or `null` after `timeoutSec` (default `30`), while connection and predicate failures throw. Attach a page with `ensureRealTab()` or `newTab()` before using the default session.
 - **`gotoUrl(url)`** — Navigate the attached tab and return the raw `Page.navigate` result.
 - **`pageInfo()`** — Return URL, title, viewport, document dimensions, scroll offset, ready state, and any pending JavaScript dialog.
-- **`click(target, options?)`** — Click either a CSS selector or viewport coordinates such as `{x, y}`. Selector clicks wait for one visible, enabled, stable, unobscured match, scroll it into view, and dispatch physical mouse input. Coordinate clicks dispatch immediately. Options are `button`, `clickCount`, and selector-only `timeoutSec`.
+- **`accessibilitySnapshot()`** — Return `{url, title, nodes}` from Chromium's computed accessibility tree. Each non-ignored DOM-backed node has `backendNodeId`, role, compacted accessible name, optional value, and control states. `backendNodeId` is Chromium's `DOM.BackendNodeId`; it can be passed directly to element helpers but becomes stale when navigation or DOM replacement removes that node.
+- **`click(target, options?)`** — Click a CSS selector, an accessibility node or `{backendNodeId}`, or viewport coordinates `{x, y}`. Selector and backend-node clicks wait for a visible, enabled, stable, unobscured target, scroll it into view, and dispatch physical mouse input. Coordinate clicks dispatch immediately. Options are `button`, `clickCount`, and element-only `timeoutSec`.
 - **`typeText(text)`** — Insert text into the currently focused element.
-- **`fillInput(selector, text, options?)`** — Wait for one visible, enabled, editable match, scroll and focus it, optionally clear it, type with physical-style key events, and dispatch `input` and `change`. Options are `clearFirst` (default `true`) and `timeoutSec` (default `10`).
+- **`fillInput(target, text, options?)`** — Target a selector, accessibility node, or `{backendNodeId}`; wait until it is visible, enabled, and editable; scroll and focus it; optionally clear it; type with physical-style key events; then dispatch `input` and `change`. Options are `clearFirst` (default `true`) and `timeoutSec` (default `10`).
 - **`pressKey(key, modifiers?)`** — Send a physical-style key press using a self-contained US keyboard layout. Multi-character key names are case-insensitive and common aliases such as `Return`, `Esc`, and `Spacebar` are normalized. Single characters retain their exact case. Modifiers may be the DevTools bitfield (`1=Alt`, `2=Control`, `4=Meta`, `8=Shift`), an array such as `["Control"]`, or an object such as `{ctrl: true}`.
-- **`scroll(x, y, dy?, dx?)`** — Dispatch a wheel event at viewport coordinates. Vertical `dy` defaults to `-300`; horizontal `dx` defaults to `0`. It retries a swallowed first wheel and falls back to `window.scrollBy` if the DevTools command wedges.
+- **`scroll(x, y, dy?, dx?)`** — Dispatch one wheel event at viewport coordinates. Vertical `dy` defaults to `-300`; horizontal `dx` defaults to `0`. It never retries or substitutes another scrolling mechanism when the outcome is unknown; verify the resulting scroll state explicitly.
 - **`dispatchKey(selector, key?, event?)`** — Dispatch one page-JavaScript keyboard event with `keyCode` and `which` on a selected element. Defaults to `key="Enter"` and `event="keypress"`; unlike `pressKey`, it does not synthesize native browser input.
 - **`captureScreenshot(path?, fullPage?, maxDim?)`** — Capture a PNG to a VM-local path and return that path. The default is `/tmp/shot.png`. When set, `maxDim` post-processes the captured pixels so neither output dimension exceeds the positive integer limit, without enlargement. It does not emit the image automatically.
 - **`listTabs(includeChrome?)`** — List page targets as `{targetId, title, url}`. Internal browser pages are included by default; pass `false` to exclude them.
@@ -76,11 +77,20 @@ Every helper below is available directly and under `browser`, for example `await
 - **`iframeTarget(urlSubstring)`** — Find an out-of-process iframe target and return `{targetId, url, title, type}`, or return `null`. Use that `targetId` with `js(..., {targetId})` to inspect or manipulate cross-origin frame content.
 - **`waitMs(milliseconds?)`** — Sleep for a number of milliseconds, defaulting to `1000`.
 - **`waitForLoad(timeoutSec?)`** — Poll until `document.readyState === "complete"`; return `true` when loaded or `false` after the default 15-second timeout.
-- **`waitForElement(selector, options?)`** — Poll until the selector reaches `state: "attached" | "detached" | "visible" | "hidden"`; return `true` on success or `false` after `timeoutSec` (default `10`). State defaults to `"visible"`, and all matches are considered so a hidden duplicate cannot mask a visible match.
+- **`waitForElement(target, options?)`** — Poll until a selector, accessibility node, or `{backendNodeId}` reaches `state: "attached" | "detached" | "visible" | "hidden"`; return `true` on success or `false` after `timeoutSec` (default `10`). State defaults to `"visible"`, and all selector matches are considered so a hidden duplicate cannot mask a visible match.
 - **`waitForNetworkIdle(idleSec?, timeoutSec?)`** — Return `true` once no tracked requests remain in flight for the idle interval, or `false` on timeout. Defaults to 0.5 idle seconds and a 30-second timeout.
 - **`js(expressionOrFunction, options?)`** — Evaluate a string expression or invoke a page function in the attached page or `options.targetId`, and return its by-value result. String expressions and returned promises are awaited. Function mode supports `return`, `await`, and one explicit `options.arg` value without capturing Browser REPL closures. DevTools edge result values such as bigint, `NaN`, infinities, and `-0` are decoded.
-- **`uploadFile(selector, pathOrPaths)`** — Set a file input to one VM-local path or a non-empty array of paths.
+- **`uploadFile(target, pathOrPaths)`** — Set a selector-, accessibility-node-, or `{backendNodeId}`-targeted file input to one VM-local path or a non-empty array of paths.
 - **`httpGet(url, headers?, timeoutSec?)`** — Fetch a URL from the VM and return the response body as text. Supports custom headers and a default 20-second timeout; non-2xx responses throw. Its timeout is clamped below the active execution deadline.
+
+A snapshot-to-action loop avoids inventing selectors:
+
+```js
+const snapshot = await accessibilitySnapshot();
+const submit = snapshot.nodes.find(node => node.role === "button" && node.name === "Submit");
+if (!submit) throw new Error("Submit button not found");
+await click(submit);
+```
 
 ### WebMCP
 
@@ -233,7 +243,11 @@ if (!event) throw new Error("download did not complete");
 - 8 MiB per image
 - 16 MiB aggregate image data per response
 - 256 KiB aggregate text per response
+- 64 KiB error and 256 KiB stack text per response
+- 10,000 ordered output items per execution
 - 1,000 output items buffered between executions
 - 48 MiB daemon response
 
 Dropping or truncating output sets `content_truncated`.
+
+`BROWSER_REPL_HEAP_MB` configures V8 old-space only. It is not a total RSS, CPU, or subprocess-tree quota. The Browser REPL has the same unrestricted process access and VM-level resource boundary as `/process/exec`; browser-VM/container resource controls remain the total process-tree budget.

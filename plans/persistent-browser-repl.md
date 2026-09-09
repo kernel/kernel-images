@@ -67,7 +67,8 @@ Limits:
 
 - 8 MiB per image
 - 16 MiB aggregate images per response
-- 256 KiB text per response
+- 256 KiB emitted text, 64 KiB error text, and 256 KiB stack text per response
+- 10,000 ordered items per execution
 - 1,000 buffered items produced between executions
 - 48 MiB daemon response
 
@@ -105,7 +106,7 @@ The image's browser-wide WebMCP client is exposed with the same frozen identity 
 
 `patchright` and `playwright-core` are exact, lockfile-pinned runtime dependencies available through dynamic `import()`. Patchright matches the image's default Playwright execution engine, while callers can explicitly choose vanilla Playwright Core. Either may connect to `process.env.CDP_ENDPOINT` and retain the resulting module, browser connection, context, and page objects across cells. This is opt-in rather than preloaded, and imported connections must be recreated after Chromium restarts. The frozen native `browser` namespace remains authoritative and is not replaced with an imported browser object.
 
-The complete helper reference, including signatures, behavior, and examples, lives in [`server/docs/repl.md`](../server/docs/repl.md). It covers navigation and page state, input, screenshots, tabs and iframe targets, waiting, page JavaScript, uploads, HTTP, raw CDP, and event draining. Wait helpers and CDP commands clamp their deadlines below the request deadline so routine helper failures return cleanly instead of destructively timing out the REPL.
+The complete helper reference, including signatures, behavior, and examples, lives in [`server/docs/repl.md`](../server/docs/repl.md). It covers navigation and page state, compact accessibility snapshots with DOM backend-node actions, input, screenshots, tabs and iframe targets, waiting, page JavaScript, uploads, HTTP, raw CDP, and event draining. Wait helpers and CDP commands clamp their deadlines below the request deadline so routine helper failures return cleanly instead of destructively timing out the REPL.
 
 ### REPL helpers
 
@@ -134,7 +135,7 @@ The API serializes calls and is the sole supervisor. Startup creates a process g
 
 The browser connection is lazy. Pure Node code works while Chromium is unavailable. The runtime maintains one browser WebSocket, one attached target/session, bounded events, network state, and pending dialog state. Chromium restart clears browser connection state only; the next helper reconnects without changing JavaScript bindings or `repl_id`.
 
-Attach activates the target for deterministic dialog and input behavior. Domain enables and session commands are bounded so a renderer frozen behind a dialog returns a recovery error while browser-level tab commands remain available. A stale frozen tab can be reloaded, replaced, or closed.
+Attach activates the target for deterministic dialog and input behavior, reuses same-target sessions, and detaches the previous owned session when switching. Domain enables and session commands are bounded so a renderer frozen behind a dialog returns a recovery error while browser-level tab commands remain available. A stale frozen tab can be reloaded, replaced, or closed. Connection recovery retries only observational or idempotent setup commands; mutation and page-evaluation commands report an unknown outcome rather than risking duplicate execution.
 
 ## Failure semantics
 
@@ -146,7 +147,7 @@ The child and API both serialize requests. Transport is newline-delimited JSON o
 
 ## Security and integrity
 
-Callers can access Node built-ins, installed packages, filesystem, network, environment, processes, and CDP. Service integrity comes from bounded inputs/outputs, private serializer references resistant to prototype pollution, process destruction after unsafe failures, a configurable heap cap, and keeping protocol traffic off process stdout.
+Callers can access Node built-ins, installed packages, filesystem, network, environment, processes, and CDP. Service integrity comes from bounded inputs/outputs, private serializer references resistant to prototype pollution, process destruction after unsafe failures, a configurable V8 old-space cap, and keeping protocol traffic off process stdout. The heap setting is not a total RSS, CPU, or subprocess-tree quota; the Browser REPL intentionally shares the browser VM/container resource boundary used by unrestricted process execution.
 
 ## Verification
 

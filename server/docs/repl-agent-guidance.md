@@ -32,7 +32,7 @@ Successful executions may emit text, images, console output, any combination of 
 Helpers are available as bare globals and under the frozen `browser` namespace:
 
 ```text
-cdp, drainEvents, waitForEvent, gotoUrl, pageInfo,
+cdp, drainEvents, waitForEvent, gotoUrl, pageInfo, accessibilitySnapshot,
 click, typeText, fillInput, pressKey, scroll,
 captureScreenshot,
 listTabs, currentTab, switchTab, newTab, closeTab,
@@ -48,11 +48,11 @@ Common signatures:
 js(expressionOrFunction, options?)
 waitMs(milliseconds = 1000)
 waitForLoad(timeoutSec = 15)
-waitForElement(selector, {state = "visible", timeoutSec = 10} = {})
+waitForElement(selectorOrAccessibilityNode, {state = "visible", timeoutSec = 10} = {})
 waitForNetworkIdle(idleSec = 0.5, timeoutSec = 30)
 waitForEvent(method, {sessionId?, timeoutSec = 30, predicate?} = {})
-click(selectorOrPoint, options?)
-fillInput(selector, text, {clearFirst = true, timeoutSec = 10} = {})
+click(selectorOrAccessibilityNodeOrPoint, options?)
+fillInput(selectorOrAccessibilityNode, text, {clearFirst = true, timeoutSec = 10} = {})
 pressKey(key, modifiers?)
 ```
 
@@ -238,7 +238,18 @@ Use `waitMs()` only when a real pacing delay is unavoidable. Do not hide arbitra
 
 ## Semantic interaction
 
-Prefer semantic DOM and accessibility metadata over generated CSS classes.
+Prefer semantic DOM and accessibility metadata over generated CSS classes. When selectors are unclear, inspect Chromium's computed accessibility tree and act on the returned node directly:
+
+```js
+const snapshot = await accessibilitySnapshot();
+const search = snapshot.nodes.find(node =>
+  node.role === "button" && node.name === "Search",
+);
+if (!search) throw new Error("Search button not found");
+await click(search);
+```
+
+Each node's `backendNodeId` is Chromium's DOM-backed node identity. It is intentionally named after the CDP field rather than `snapshotNodeId`: it interoperates with raw `DOM.*` commands and can become stale after navigation or DOM replacement. `click`, `fillInput`, `waitForElement`, and `uploadFile` accept the snapshot node or `{backendNodeId}`.
 
 After each significant action, verify the resulting state rather than assuming the action succeeded:
 

@@ -55,6 +55,16 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				_, _ = w.Write([]byte("late"))
 			}
+		case "/slow-body":
+			w.WriteHeader(http.StatusOK)
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			select {
+			case <-r.Context().Done():
+			case <-time.After(10 * time.Second):
+				_, _ = w.Write([]byte("late"))
+			}
 		case "/webmcp/tools":
 			_ = json.NewEncoder(w).Encode(map[string]any{"tools": []any{map[string]any{
 				"tool_ref": "wmcp_test", "name": "search", "description": "Search",
@@ -116,6 +126,33 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	require.Nil(t, nav["dialog"])
 	require.Equal(t, "complete", nav["ready"])
 	require.Equal(t, float64(3), nav["targetCount"])
+
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `
+		var axSnapshot = await accessibilitySnapshot();
+		var axButton = axSnapshot.nodes[0];
+		var axTextbox = axSnapshot.nodes[1];
+		await click(axButton);
+		await fillInput(axTextbox, "LAX");
+		var axVisible = await waitForElement(axButton, {state: "visible", timeoutSec: 1});
+		await uploadFile(axTextbox, "/tmp/example.txt");
+		repl.write(JSON.stringify({ snapshot: axSnapshot, axVisible }));
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	axResult, ok := requireJSONWrite(t, r).(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, axResult["axVisible"])
+	snapshot, ok := axResult["snapshot"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "https://example.com/", snapshot["url"])
+	require.Equal(t, "Example Domain", snapshot["title"])
+	nodes, ok := snapshot["nodes"].([]any)
+	require.True(t, ok)
+	require.Len(t, nodes, 2, "ignored nodes and nodes without backend IDs are omitted")
+	button := nodes[0].(map[string]any)
+	require.Equal(t, float64(77), button["backendNodeId"])
+	require.Equal(t, "button", button["role"])
+	require.Equal(t, "Search flights", button["name"])
+	require.Equal(t, false, button["disabled"])
 
 	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `
 		await click({x: 10, y: 20}, {clickCount: 2});
@@ -218,7 +255,7 @@ func TestBrowserReplHelpersWithFakeCDP(t *testing.T) {
 	timeoutSec := 2
 	started := time.Now()
 	timedOut := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
-		Code:       fmt.Sprintf(`await httpGet(%q, undefined, 20)`, api.URL+"/slow"),
+		Code:       fmt.Sprintf(`await httpGet(%q, undefined, 20)`, api.URL+"/slow-body"),
 		TimeoutSec: &timeoutSec,
 	})
 	require.Less(t, time.Since(started), 2*time.Second)
@@ -666,6 +703,45 @@ func TestBrowserReplAttachRetriesStaleTarget(t *testing.T) {
 	require.Equal(t, int32(0), fake.failNextAttach.Load(), "the first attach attempt failed as planned")
 }
 
+func TestBrowserReplReusesAndReleasesAttachedSessions(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+	svc := newBrowserReplSvc(t)
+
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `
+		await ensureRealTab();
+		await switchTab("target-page-1");
+		await switchTab("target-page-1");
+		await switchTab("target-frame-1");
+		await switchTab("target-page-1");
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.Equal(t, int32(3), fake.attachCount.Load(), "same-target switches must reuse the owned session")
+	require.Equal(t, int32(2), fake.detachCount.Load(), "switching targets must release the previous session")
+}
+
+func TestBrowserReplDoesNotReplayMutationWithUnknownOutcome(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+	svc := newBrowserReplSvc(t)
+
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await ensureRealTab()`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	fake.dropNextCreateTargetResponse.Store(true)
+
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await newTab()`})
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "Target.createTarget outcome is unknown")
+	fake.mu.Lock()
+	targetCount := len(fake.targets)
+	fake.mu.Unlock()
+	require.Equal(t, 4, targetCount, "the acknowledged-unknown mutation must have been applied exactly once")
+
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `repl.write(JSON.stringify((await listTabs()).length))`})
+	require.True(t, r.Success, "CDP must reconnect after surfacing the unknown outcome: %v", r.Error)
+	require.Equal(t, float64(3), requireJSONWrite(t, r))
+}
+
 func TestBrowserReplRetriesCommandOnFreshConnectionClose(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
@@ -905,6 +981,34 @@ func TestBrowserReplHalfClosedClientReceivesResponse(t *testing.T) {
 	require.NotContains(t, resp, "result")
 }
 
+func TestBrowserReplSocketPreservesSplitUTF8(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
+	require.True(t, r.Success)
+
+	conn, err := net.Dial("unix", browserReplSocketPath())
+	require.NoError(t, err)
+	defer conn.Close()
+	payload := []byte(`{"id":"utf8","code":"repl.write(\"café\")","timeout_ms":5000}` + "\n")
+	split := bytes.Index(payload, []byte("é")) + 1
+	require.Greater(t, split, 1)
+	_, err = conn.Write(payload[:split])
+	require.NoError(t, err)
+	_, err = conn.Write(payload[split:])
+	require.NoError(t, err)
+
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	require.NoError(t, err)
+	var daemonResponse browserReplDaemonResponse
+	require.NoError(t, json.Unmarshal(line, &daemonResponse))
+	require.True(t, daemonResponse.Success, daemonResponse.Error)
+	require.Len(t, daemonResponse.Content, 1)
+	var text oapi.BrowserReplTextContent
+	require.NoError(t, json.Unmarshal(daemonResponse.Content[0], &text))
+	require.Equal(t, "café", text.Text)
+}
+
 func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	fake.mu.Lock()
@@ -929,38 +1033,26 @@ func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 		"newTab must wait for the reused target's renderer-level navigation commit")
 }
 
-func TestBrowserReplScrollFallback(t *testing.T) {
+func TestBrowserReplScrollTimeoutSurfacesUnknownOutcome(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
-
 	svc := newBrowserReplSvc(t)
 
-	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 240, 0); repl.write(JSON.stringify("ok"))`})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 240, 0)`})
 	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "ok", requireJSONWrite(t, r))
-	require.False(t, fake.sawScrollBy.Load(), "no fallback when mouseWheel answers")
 
 	fake.hangMouseWheel.Store(true)
 	timeoutSec := 30
 	start := time.Now()
 	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
-		Code:       `await scroll(100, 100, 240, 0); repl.write(JSON.stringify("scrolled"))`,
+		Code:       `await scroll(100, 100, 240, 0)`,
 		TimeoutSec: &timeoutSec,
 	})
-	require.Less(t, time.Since(start), 15*time.Second,
-		"the fallback must engage well before the default 30s command timeout")
-	require.True(t, r.Success, "error: %v", r.Error)
-	require.Equal(t, "scrolled", requireJSONWrite(t, r))
-	require.True(t, fake.sawScrollBy.Load(), "the in-page scrollBy fallback must run")
-	require.NotNil(t, r.Content)
-	sawNote := false
-	for _, item := range *r.Content {
-		txt, err := item.AsBrowserReplTextContent()
-		if err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "falling back to window.scrollBy") {
-			sawNote = true
-		}
-	}
-	require.True(t, sawNote, "the fallback must be surfaced as a stderr content item, got %v", r.Content)
+	require.Less(t, time.Since(start), 15*time.Second)
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "outcome unknown")
+	require.Contains(t, *r.Error, "was not retried")
+	require.False(t, fake.sawScrollBy.Load(), "an unknown wheel outcome must not trigger a second mechanism")
 
 	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "repl.id"})
 	require.True(t, r2.Success)

@@ -22,6 +22,8 @@ import (
 	"github.com/nrednav/cuid2"
 )
 
+var errBrowserReplShuttingDown = errors.New("browser REPL is shutting down")
+
 const (
 	defaultBrowserReplSocket = "/tmp/browser-repl.sock"
 	defaultBrowserReplScript = "/usr/local/lib/browser-repl/browser-repl.js"
@@ -92,6 +94,68 @@ func browserReplHeapMB() string {
 		return v
 	}
 	return fmt.Sprint(defaultBrowserReplHeapMB)
+}
+
+// acquireBrowserRepl waits for exclusive REPL ownership while observing
+// cancellation. allowStopping is reserved for shutdown cleanup.
+func (s *ApiService) acquireBrowserRepl(ctx context.Context, allowStopping bool) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !allowStopping && s.browserReplStopping.Load() {
+			return errBrowserReplShuttingDown
+		}
+		if s.browserReplMu.TryLock() {
+			if err := ctx.Err(); err != nil {
+				s.browserReplMu.Unlock()
+				return err
+			}
+			if !allowStopping && s.browserReplStopping.Load() {
+				s.browserReplMu.Unlock()
+				return errBrowserReplShuttingDown
+			}
+			return nil
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+// beginBrowserReplOperation installs an independently cancelable operation
+// context. Shutdown can cancel it without first acquiring browserReplMu.
+func (s *ApiService) beginBrowserReplOperation(ctx context.Context) (context.Context, context.CancelCauseFunc) {
+	operationCtx, cancel := context.WithCancelCause(ctx)
+	s.browserReplExecutionMu.Lock()
+	s.browserReplExecutionCancel = cancel
+	stopping := s.browserReplStopping.Load()
+	s.browserReplExecutionMu.Unlock()
+	if stopping {
+		cancel(errBrowserReplShuttingDown)
+	}
+	return operationCtx, cancel
+}
+
+func (s *ApiService) clearBrowserReplOperation() {
+	s.browserReplExecutionMu.Lock()
+	s.browserReplExecutionCancel = nil
+	s.browserReplExecutionMu.Unlock()
+}
+
+func (s *ApiService) cancelBrowserReplExecution(cause error) {
+	s.browserReplExecutionMu.Lock()
+	cancel := s.browserReplExecutionCancel
+	s.browserReplExecutionMu.Unlock()
+	if cancel != nil {
+		cancel(cause)
+	}
 }
 
 // ensureBrowserReplLocked starts the REPL child if none is running. If the
@@ -200,8 +264,12 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 		select {
 		case waitErr := <-child.done:
 			child.done = closedWaitChannel(waitErr)
+			_ = signalBrowserReplGroup(child.cmd, killSignal)
 			s.clearBrowserReplLocked(ctx, child)
 			return fmt.Errorf("browser REPL exited during startup: %w", waitErr)
+		case <-ctx.Done():
+			s.killBrowserReplLocked(context.WithoutCancel(ctx), "startup cancelled")
+			return context.Cause(ctx)
 		default:
 		}
 		if time.Now().After(deadline) {
@@ -232,6 +300,9 @@ func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason stri
 	select {
 	case err := <-child.done:
 		child.done = closedWaitChannel(err)
+		// The group leader exiting does not imply descendants honored SIGTERM.
+		// Kill the process group before relinquishing ownership.
+		_ = signalBrowserReplGroup(child.cmd, killSignal)
 		s.clearBrowserReplLocked(ctx, child)
 		return err
 	case <-time.After(browserReplShutdownGrace):
@@ -248,6 +319,9 @@ func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason stri
 	case <-time.After(browserReplShutdownGrace):
 		log.Error("browser REPL did not exit after SIGKILL", "repl_id", child.id)
 	}
+	// Re-signal after the leader is reaped: descendants remain members of the
+	// original process group even if the leader exited first.
+	_ = signalBrowserReplGroup(child.cmd, killSignal)
 	s.clearBrowserReplLocked(ctx, child)
 	return waitErr
 }
@@ -273,6 +347,7 @@ func (s *ApiService) killBrowserReplLocked(ctx context.Context, reason string) {
 	case <-time.After(browserReplShutdownGrace):
 		log.Error("browser REPL did not exit after SIGKILL", "repl_id", child.id)
 	}
+	_ = signalBrowserReplGroup(child.cmd, killSignal)
 	s.clearBrowserReplLocked(ctx, child)
 }
 
@@ -334,11 +409,21 @@ func prepareBrowserReplRequest(code string, timeout time.Duration) (*browserRepl
 	return &browserReplRequest{id: id, bytes: buf.Bytes()}, nil
 }
 
+type browserReplNotDispatchedError struct {
+	cause error
+}
+
+func (e *browserReplNotDispatchedError) Error() string { return e.cause.Error() }
+func (e *browserReplNotDispatchedError) Unwrap() error { return e.cause }
+
 // executeOnBrowserReplLocked sends one prepared execution to the current
 // child and reads its response. The returned error is a transport/protocol
 // failure; execution failures are reported inside the response. Callers must
 // hold s.browserReplMu.
 func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, request *browserReplRequest, timeout time.Duration) (*browserReplDaemonResponse, error) {
+	if err := context.Cause(ctx); err != nil {
+		return nil, &browserReplNotDispatchedError{cause: err}
+	}
 	child := s.browserRepl
 	if child == nil {
 		return nil, errors.New("no browser REPL child")
@@ -359,6 +444,9 @@ func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, request *br
 		return nil, fmt.Errorf("failed to set deadline: %w", err)
 	}
 
+	if err := context.Cause(ctx); err != nil {
+		return nil, &browserReplNotDispatchedError{cause: err}
+	}
 	if _, err := conn.Write(request.bytes); err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
@@ -466,7 +554,11 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 		if err != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(err, &tooLarge) {
-				http.Error(w, fmt.Sprintf("request body exceeds %d bytes", maxBrowserReplBodyBytes), http.StatusRequestEntityTooLarge)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_ = json.NewEncoder(w).Encode(oapi.BadRequestError{
+					Message: fmt.Sprintf("request body exceeds %d bytes", maxBrowserReplBodyBytes),
+				})
 				return
 			}
 			http.Error(w, "failed to read request body", http.StatusBadRequest)
@@ -493,9 +585,20 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 // the REPL child directly: lazy startup, CUID2 repl_id, destructive timeout,
 // explicit reset, and termination on API shutdown.
 func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {
-	s.browserReplMu.Lock()
+	if err := s.acquireBrowserRepl(ctx, false); err != nil {
+		return nil, err
+	}
 	defer s.browserReplMu.Unlock()
 
+	operationCtx, cancelOperation := s.beginBrowserReplOperation(ctx)
+	defer func() {
+		cancelOperation(nil)
+		s.clearBrowserReplOperation()
+	}()
+	if err := context.Cause(operationCtx); err != nil {
+		return nil, err
+	}
+	ctx = operationCtx
 	log := logger.FromContext(ctx)
 
 	if request.Body == nil {
@@ -541,6 +644,9 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 		}
 	}
 
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
 	if reset {
 		s.terminateBrowserReplLocked(ctx, "explicit reset")
 	}
@@ -567,6 +673,10 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 	execStart := time.Now()
 	resp, err := s.executeOnBrowserReplLocked(ctx, preparedRequest, timeout)
 	if err != nil {
+		var notDispatched *browserReplNotDispatchedError
+		if errors.As(err, &notDispatched) {
+			return nil, notDispatched.cause
+		}
 		// Any transport or protocol failure is fatal to the child: kill the
 		// process group, wait for exit, remove the stale socket, and clear the
 		// handle. The next request lazily starts a fresh REPL with a new ID.

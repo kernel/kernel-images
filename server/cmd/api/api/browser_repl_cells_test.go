@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -118,6 +119,26 @@ func TestBrowserReplStrayItemLimitsPropagateTruncation(t *testing.T) {
 	})
 }
 
+func TestBrowserReplActiveItemLimitTruncatesEmptyWrites(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `for (let i = 0; i < 20000; i++) repl.write("")`,
+	})
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.True(t, *r.ContentTruncated)
+	require.Len(t, *r.Content, 10_000)
+
+	largeError := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `throw new Error("x".repeat(1024 * 1024))`,
+	})
+	require.False(t, largeError.Success)
+	require.LessOrEqual(t, len(*largeError.Error), 64*1024)
+
+	stillAlive := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `repl.write("alive")`})
+	require.True(t, stillAlive.Success, "bounded output must not destroy the REPL: %v", stillAlive.Error)
+	require.Equal(t, r.ReplId, stillAlive.ReplId)
+}
+
 func TestBrowserReplNestedVarBindingsPersist(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	for _, test := range []struct {
@@ -135,6 +156,13 @@ func TestBrowserReplNestedVarBindingsPersist(t *testing.T) {
 		requireExec(t, svc, test.declaration, nil)
 		requireExec(t, svc, `repl.write(JSON.stringify(`+test.name+`))`, test.value)
 	}
+}
+
+func TestBrowserReplCatchParameterShadowsNestedVarInitializer(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	requireExec(t, svc, `var catchShadow = "outer"`, nil)
+	requireExec(t, svc, `try { throw "caught" } catch (catchShadow) { var catchShadow = "inner"; repl.write(JSON.stringify(catchShadow)) }`, "inner")
+	requireExec(t, svc, `repl.write(JSON.stringify(catchShadow))`, "outer")
 }
 
 func TestBrowserReplPartialDeclaratorInitialization(t *testing.T) {
@@ -261,61 +289,31 @@ func TestBrowserReplIgnoresExpressionValues(t *testing.T) {
 	require.Empty(t, *r.Content)
 }
 
-func TestBrowserReplScrollRetriesSwallowedWheel(t *testing.T) {
+func TestBrowserReplScrollDispatchesExactlyOnce(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
-
 	svc := newBrowserReplSvc(t)
 
 	fake.mu.Lock()
-	fake.maxScrollY = 2000
 	fake.swallowNextWheel = true
 	fake.mu.Unlock()
-
-	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done"`})
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0)`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	fake.mu.Lock()
 	count := fake.wheelDispatchCount
 	y := fake.scrollY
 	fake.mu.Unlock()
-	require.Equal(t, 2, count, "the swallowed dispatch must be retried exactly once")
-	require.Equal(t, int64(700), y, "the retry must actually scroll")
-	require.NotNil(t, r.Content)
-	sawNote := false
-	for _, item := range *r.Content {
-		txt, err := item.AsBrowserReplTextContent()
-		if err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once") {
-			sawNote = true
-		}
-	}
-	require.True(t, sawNote, "the retry must be surfaced as a stderr content item, got %v", r.Content)
+	require.Equal(t, 1, count, "an acknowledged wheel must never be replayed")
+	require.Equal(t, int64(0), y, "the helper must not substitute a second scrolling mechanism")
 
-	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done2"`})
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0)`})
 	require.True(t, r.Success, "error: %v", r.Error)
 	fake.mu.Lock()
 	count = fake.wheelDispatchCount
 	y = fake.scrollY
 	fake.mu.Unlock()
-	require.Equal(t, 3, count)
-	require.Equal(t, int64(1400), y)
-	if r.Content != nil {
-		for _, item := range *r.Content {
-			txt, err := item.AsBrowserReplTextContent()
-			require.False(t, err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once"),
-				"no retry expected once the pipeline is awake")
-		}
-	}
-
-	fake.mu.Lock()
-	fake.maxScrollY = 0
-	fake.swallowNextWheel = true
-	fake.mu.Unlock()
-	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done3"`})
-	require.True(t, r.Success, "error: %v", r.Error)
-	fake.mu.Lock()
-	count = fake.wheelDispatchCount
-	fake.mu.Unlock()
-	require.Equal(t, 4, count, "unscrollable pages must not be retried")
+	require.Equal(t, 2, count)
+	require.Equal(t, int64(700), y)
 }
 
 func TestBrowserReplScrollWaitsForAsyncWheelApplication(t *testing.T) {
@@ -324,9 +322,6 @@ func TestBrowserReplScrollWaitsForAsyncWheelApplication(t *testing.T) {
 
 	svc := newBrowserReplSvc(t)
 
-	fake.mu.Lock()
-	fake.maxScrollY = 5000
-	fake.mu.Unlock()
 	fake.delayedWheelMs.Store(100)
 
 	scrollY := func() int64 {
@@ -345,13 +340,6 @@ func TestBrowserReplScrollWaitsForAsyncWheelApplication(t *testing.T) {
 	require.Eventually(t, func() bool { return scrollY() == 700 }, 3*time.Second, 20*time.Millisecond,
 		"the wheel must apply exactly once")
 	require.Equal(t, 1, wheelCount(), "an asynchronously-applied wheel must not be retried")
-	if r.Content != nil {
-		for _, item := range *r.Content {
-			txt, err := item.AsBrowserReplTextContent()
-			require.False(t, err == nil && txt.Channel == "stderr" && strings.Contains(txt.Text, "retrying once"),
-				"no retry expected when the wheel applies within the settle window")
-		}
-	}
 
 	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await scroll(100, 100, 700, 0); "done2"`})
 	require.True(t, r.Success, "error: %v", r.Error)
@@ -521,7 +509,10 @@ func TestStrictBrowserReplBodyMiddleware(t *testing.T) {
 	huge := `{"code":"` + strings.Repeat("x", maxBrowserReplBodyBytes) + `"}`
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repl", strings.NewReader(huge)))
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
-	require.Contains(t, rec.Body.String(), "request body exceeds")
+	require.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+	var tooLarge oapi.BadRequestError
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &tooLarge))
+	require.Contains(t, tooLarge.Message, "request body exceeds")
 
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repl", strings.NewReader(`{nope`)))

@@ -212,11 +212,23 @@ func runBrowserReplAPI(t *testing.T, image string) {
 				const hidden = await waitForElement("#status", {state: "hidden", timeoutSec: 2});
 				await js(() => setTimeout(() => document.querySelector("#remove-me").remove(), 50));
 				const detached = await waitForElement("#remove-me", {state: "detached", timeoutSec: 2});
+				const snapshot = await accessibilitySnapshot();
+				const snapshotButton = snapshot.nodes.find(node => node.role === "button" && node.name === "Search");
+				const snapshotField = snapshot.nodes.find(node => node.role === "textbox");
+				if (!snapshotButton || !snapshotField) throw new Error("accessibility snapshot omitted controls");
+				const backendVisible = await waitForElement(snapshotButton, {state: "visible", timeoutSec: 2});
+				await click(snapshotButton);
+				await fillInput(snapshotField, "world", {timeoutSec: 2});
 				const state = await js(() => ({
 					clickCount: globalThis.__clickCount,
 					value: [...document.querySelectorAll(".field")].find(element => !element.hidden).value,
 				}));
-				repl.write(JSON.stringify({attached, visible, hidden, detached, ...state}));
+				repl.write(JSON.stringify({
+					attached, visible, hidden, detached, backendVisible,
+					snapshotRole: snapshotButton.role,
+					backendNodeId: snapshotButton.backendNodeId,
+					...state,
+				}));
 			`,
 		})
 		require.True(t, r.Success, "error: %s", replError(r))
@@ -226,8 +238,11 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		require.Equal(t, true, state["visible"])
 		require.Equal(t, true, state["hidden"])
 		require.Equal(t, true, state["detached"])
-		require.Equal(t, float64(1), state["clickCount"])
-		require.Equal(t, "hello", state["value"])
+		require.Equal(t, true, state["backendVisible"])
+		require.Equal(t, "button", state["snapshotRole"])
+		require.Greater(t, state["backendNodeId"].(float64), float64(0))
+		require.Equal(t, float64(2), state["clickCount"])
+		require.Equal(t, "world", state["value"])
 	})
 
 	t.Run("cross-origin iframe target evaluation", func(t *testing.T) {

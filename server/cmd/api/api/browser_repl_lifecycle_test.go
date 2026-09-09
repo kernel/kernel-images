@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -218,6 +220,103 @@ func TestBrowserReplSerializesConcurrentRequests(t *testing.T) {
 	}
 }
 
+func TestBrowserReplCancelledWhileQueuedDoesNotExecute(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	initial := requireExec(t, svc, `var cancelledDispatch = 0`, nil)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+			Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await new Promise(resolve => setTimeout(resolve, 500))`},
+		})
+		firstDone <- err
+	}()
+	require.Eventually(t, func() bool {
+		if !svc.browserReplMu.TryLock() {
+			return true
+		}
+		svc.browserReplMu.Unlock()
+		return false
+	}, time.Second, 10*time.Millisecond, "first execution never acquired admission")
+
+	queuedCtx, cancel := context.WithCancel(context.Background())
+	queuedDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteBrowserRepl(queuedCtx, oapi.ExecuteBrowserReplRequestObject{
+			Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: `cancelledDispatch = 1`},
+		})
+		queuedDone <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-queuedDone:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("cancelled queued request did not return promptly")
+	}
+	require.NoError(t, <-firstDone)
+	checked := requireExec(t, svc, `repl.write(JSON.stringify(cancelledDispatch))`, float64(0))
+	require.Equal(t, initial.ReplId, checked.ReplId, "queued cancellation must preserve healthy REPL state")
+}
+
+func TestBrowserReplResetKillsTermIgnoringDescendant(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process-group lifecycle is only enforced on Linux")
+	}
+	svc := newBrowserReplSvc(t)
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: `
+		var childProcess = await import("node:child_process");
+		var stubbornChild = childProcess.spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], {stdio: "ignore"});
+		repl.write(JSON.stringify(stubbornChild.pid));
+	`})
+	require.True(t, r.Success, "error: %v", r.Error)
+	pid := int(requireJSONWrite(t, r).(float64))
+	require.True(t, processAlive(pid))
+
+	reset := true
+	fresh := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Reset: &reset})
+	require.True(t, fresh.Success, "error: %v", fresh.Error)
+	require.Eventually(t, func() bool { return !processAlive(pid) }, 3*time.Second, 20*time.Millisecond,
+		"reset must kill descendants after the Node group leader exits")
+}
+
+func TestBrowserReplShutdownObservesDeadlineDuringExecution(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	executionDone := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+			Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await new Promise(() => {})`},
+		})
+		executionDone <- err
+	}()
+	require.Eventually(t, func() bool {
+		if !svc.browserReplMu.TryLock() {
+			return true
+		}
+		svc.browserReplMu.Unlock()
+		return false
+	}, time.Second, 10*time.Millisecond, "execution never acquired admission")
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	start := time.Now()
+	err := svc.Shutdown(shutdownCtx)
+	require.Less(t, time.Since(start), 2*time.Second, "shutdown must not wait for the cell timeout")
+	require.True(t, err == nil || errors.Is(err, context.DeadlineExceeded), "unexpected shutdown error: %v", err)
+
+	select {
+	case <-executionDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled execution did not unwind")
+	}
+	_, err = svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+		Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: `repl.write("must not run")`},
+	})
+	require.ErrorIs(t, err, errBrowserReplShuttingDown, "shutdown must permanently stop admission")
+}
+
 func TestBrowserReplContentOrdering(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 
@@ -274,6 +373,12 @@ func TestBrowserReplImageValidation(t *testing.T) {
 	})
 	require.False(t, r.Success)
 	require.Contains(t, *r.Error, "unrecognized image data")
+
+	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `await repl.emitImage({bytes: Buffer.from([137,80,78,71,0,0,0,0,0]), mimeType: "image/" + "x".repeat(1000)})`,
+	})
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "MIME type must be")
 
 	r = executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`
@@ -443,7 +548,10 @@ type fakeCDPServer struct {
 	hangSession                     atomic.Bool
 	failNextAttach                  atomic.Int32
 	closeNextConnsAfterFirstCommand atomic.Int32
+	dropNextCreateTargetResponse    atomic.Bool
 	totalConns                      atomic.Int32
+	attachCount                     atomic.Int32
+	detachCount                     atomic.Int32
 
 	rendererHrefs      map[string]string
 	pendingHrefPolls   map[string]int
@@ -549,6 +657,9 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		result, events, dispatchErr := f.dispatch(req.Method, req.Params, req.SessionID)
+		if req.Method == "Target.createTarget" && f.dropNextCreateTargetResponse.CompareAndSwap(true, false) {
+			return
+		}
 		var resp map[string]any
 		if dispatchErr != nil {
 			resp = map[string]any{"id": req.ID, "error": map[string]any{"code": -32601, "message": dispatchErr.Error()}}
@@ -605,6 +716,7 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		}
 		return map[string]any{"targetInfos": infos}, nil, nil
 	case "Target.attachToTarget":
+		f.attachCount.Add(1)
 		var p struct {
 			TargetID string `json:"targetId"`
 		}
@@ -621,6 +733,7 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		}
 		return map[string]any{"sessionId": sid}, []map[string]any{ev}, nil
 	case "Target.detachFromTarget":
+		f.detachCount.Add(1)
 		return map[string]any{}, nil, nil
 	case "Target.activateTarget":
 		var p struct {
@@ -667,6 +780,23 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		return map[string]any{}, nil, nil
 	case "Page.enable", "DOM.enable", "Runtime.enable", "Network.enable":
 		return map[string]any{}, nil, nil
+	case "Accessibility.getFullAXTree":
+		return map[string]any{"nodes": []any{
+			map[string]any{
+				"backendDOMNodeId": 77,
+				"role":             map[string]any{"value": "button"},
+				"name":             map[string]any{"value": "  Search   flights  "},
+				"properties":       []any{map[string]any{"name": "disabled", "value": map[string]any{"value": false}}},
+			},
+			map[string]any{
+				"backendDOMNodeId": 78,
+				"role":             map[string]any{"value": "textbox"},
+				"name":             map[string]any{"value": "Destination"},
+				"value":            map[string]any{"value": "SFO"},
+			},
+			map[string]any{"backendDOMNodeId": 79, "ignored": true},
+			map[string]any{"role": map[string]any{"value": "StaticText"}},
+		}}, nil, nil
 	case "Page.navigate":
 		var p struct {
 			URL string `json:"url"`
@@ -735,10 +865,32 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		return map[string]any{}, nil, nil
 	case "DOM.getDocument":
 		return map[string]any{"root": map[string]any{"nodeId": 1}}, nil, nil
+	case "DOM.resolveNode":
+		var p struct {
+			BackendNodeID int `json:"backendNodeId"`
+		}
+		_ = json.Unmarshal(params, &p)
+		if p.BackendNodeID <= 0 {
+			return nil, nil, fmt.Errorf("No node with given id found")
+		}
+		return map[string]any{"object": map[string]any{"objectId": fmt.Sprintf("backend-node-%d", p.BackendNodeID)}}, nil, nil
 	case "DOM.querySelector":
 		return map[string]any{"nodeId": 42}, nil, nil
-	case "DOM.setFileInputFiles":
+	case "DOM.setFileInputFiles", "Runtime.releaseObject":
 		return map[string]any{}, nil, nil
+	case "Runtime.callFunctionOn":
+		var p struct {
+			FunctionDeclaration string `json:"functionDeclaration"`
+		}
+		_ = json.Unmarshal(params, &p)
+		var value any = true
+		switch {
+		case strings.Contains(p.FunctionDeclaration, "resolveBackendClickTarget"):
+			value = map[string]any{"status": "ready", "x": 30, "y": 40}
+		case strings.Contains(p.FunctionDeclaration, "resolveBackendFillTarget"):
+			value = map[string]any{"status": "ready"}
+		}
+		return map[string]any{"result": map[string]any{"type": "object", "value": value}}, nil, nil
 	case "Runtime.evaluate":
 		if f.frozen.Load() {
 			return nil, nil, fmt.Errorf("renderer is frozen behind a modal dialog")

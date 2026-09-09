@@ -1463,7 +1463,7 @@ paths:
       summary: Execute JavaScript in the Browser REPL
       description: |
         Execute code in the Browser REPL, a persistent Node.js runtime preloaded with browser-control
-        helpers (gotoUrl, pageInfo, click, waitForEvent, captureScreenshot, tab management,
+        helpers (gotoUrl, pageInfo, accessibilitySnapshot, click, waitForEvent, captureScreenshot, tab management,
         and more), the browser-wide `webmcp` client, plus an unrestricted `cdp()` escape hatch. `webmcp`
         and `browser.webmcp` share one frozen client whose requests are scoped to the active execution.
         Pinned `patchright` and `playwright-core` packages can be loaded with dynamic `import()` and
@@ -1505,6 +1505,8 @@ paths:
               schema:
                 $ref: "#/components/schemas/BrowserReplResult"
         "400":
+          $ref: "#/components/responses/BadRequestError"
+        "413":
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
@@ -87,6 +88,13 @@ type ApiService struct {
 	// browserReplMu serializes browser REPL execution and lifecycle operations
 	// (only one execution at a time). It also guards browserRepl.
 	browserReplMu sync.Mutex
+
+	// browserReplStopping prevents new work from being admitted once API
+	// shutdown begins. browserReplExecutionCancel is guarded separately so
+	// shutdown can cancel an active execution without waiting for its mutex.
+	browserReplStopping        atomic.Bool
+	browserReplExecutionMu     sync.Mutex
+	browserReplExecutionCancel context.CancelCauseFunc
 
 	// browserRepl is the owned REPL child process, or nil when no REPL is
 	// running. The API process is the child's direct parent and sole
@@ -440,11 +448,18 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
-	// Explicitly terminate the browser REPL child. Pdeathsig backstops this
-	// on Linux, but graceful shutdown must not rely on it.
-	s.browserReplMu.Lock()
-	s.terminateBrowserReplLocked(ctx, "api shutdown")
-	s.browserReplMu.Unlock()
+	// Stop admission and cancel an active execution before waiting for the
+	// lifecycle mutex. This keeps shutdown bounded by ctx even when a cell is
+	// running with a much longer execution timeout.
+	s.browserReplStopping.Store(true)
+	s.cancelBrowserReplExecution(errBrowserReplShuttingDown)
+	var replErr error
+	if err := s.acquireBrowserRepl(ctx, true); err != nil {
+		replErr = err
+	} else {
+		s.terminateBrowserReplLocked(ctx, "api shutdown")
+		s.browserReplMu.Unlock()
+	}
 
 	_ = s.webmcp.Close()
 	s.monitorMu.Lock()
@@ -454,5 +469,5 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Unlock()
 	// The OTLP export sink is stopped by main after the servers drain, so any
 	// events they emit on the way down are still exported (mirrors s2Writer).
-	return s.recordManager.StopAll(ctx)
+	return errors.Join(replErr, s.recordManager.StopAll(ctx))
 }
