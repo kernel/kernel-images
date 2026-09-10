@@ -107,11 +107,11 @@ helper.
   kills the REPL process group and responds with `repl_terminated: true` and
   the terminated REPL's ID. The next request lazily starts a fresh REPL.
 - Output is an ordered `content` array of typed items: text (`write` =
-  `repl.write`, `stdout` = `console.log/info/debug`, `stderr` =
-  `console.warn/error`) and images (`repl.emitImage`, base64 with MIME
-  sniffing). Limits: 8 MiB per image, 16 MiB aggregate image data, 256 KiB
-  combined text per response; violations set `content_truncated` instead of
-  failing silently; stray
+  `repl.write`, `stdout` = `console.log/info/debug/dir/table`, `stderr` =
+  `console.warn/error/trace`) and images (`repl.emitImage`, base64 with MIME
+  sniffing). Limits: 8 MiB per image, 16 MiB aggregate image data, and 256 KiB
+  combined text per response. An oversized individual image throws; aggregate
+  output truncation sets `content_truncated`. Stray
   output, including images emitted between executions, is capped at 1,000
   items and reports `content_truncated` when older items are discarded.
   Request bodies are limited to 8 MiB before strict decoding, and the API

@@ -2,30 +2,63 @@
 
 `POST /repl` evaluates JavaScript in a persistent Node.js runtime associated with one browser instance. The runtime keeps top-level bindings between calls and includes browser-control helpers as both bare globals and properties of the frozen `browser` object. The same frozen WebMCP client is available as `webmcp` and `browser.webmcp`.
 
-For operational guidance aimed at browser-control agents, see [repl-agent-guidance.md](repl-agent-guidance.md).
+The endpoint is unrestricted code execution inside the browser VM, not a sandbox. Code can access Node built-ins, installed packages, files, environment variables, processes, and the network.
+
+## Request and response
+
+```http
+POST /repl
+Content-Type: application/json
+```
 
 ```json
 {
-  "code": "const title = (await pageInfo()).title; title",
+  "code": "const title = (await pageInfo()).title; repl.write(title)",
   "timeout_sec": 60,
   "reset": false
 }
 ```
 
-The endpoint is unrestricted code execution inside the browser VM, not a sandbox. Code can access Node built-ins, installed packages, files, environment variables, processes, and the network.
+`code` is required, but may be empty when `reset` is `true`. `timeout_sec` is an integer from 1 through 300 and defaults to 60. `reset` defaults to `false`. Unknown request fields are rejected.
+
+Execution success and JavaScript failures both return HTTP 200:
+
+```json
+{
+  "success": true,
+  "repl_id": "tz4a98xxat96iws9zmbrgj3a",
+  "content": [
+    {"type": "text", "channel": "write", "text": "Example Domain"}
+  ],
+  "content_truncated": false,
+  "duration_ms": 12
+}
+```
+
+`success` and `repl_id` are always present in an execution result. `content`, `content_truncated`, `duration_ms`, `error`, `stack`, and `repl_terminated` are included when applicable. Content items are ordered and are either text items like the example or image items shaped as `{type: "image", mime_type: "image/png", data_b64: "..."}`.
+
+Invalid requests return HTTP 400, request bodies over 8 MiB return HTTP 413, and failure to start the REPL returns HTTP 500. These errors use the API's standard `{message}` error body.
 
 ## Evaluation
 
 - JavaScript only; TypeScript is not supported.
-- Top-level `await` and dynamic `import()` are supported.
+- Top-level `await` and dynamic `import()` are supported. Static imports/exports and top-level `return` are rejected; CommonJS `require` is not preloaded.
 - Expression values are not returned automatically. A successful execution may produce zero output.
-- Top-level `var`, `let`, `const`, function, and class bindings persist across calls.
-- Static imports/exports and top-level `return` are rejected.
-- Calls are serialized. Concurrent requests never execute at the same time, but callers that require a particular order should await each call because lock acquisition is not a public FIFO guarantee.
-- Syntax errors and ordinary exceptions return `success: false` with `error` and, when available, `stack`; they do not terminate the REPL. A failed lexical initializer reserves its name until reset.
-- Timeouts, crashes, OOMs, uncaught asynchronous exceptions, and protocol corruption terminate the current REPL. Such responses set `repl_terminated: true`; the next request automatically starts a fresh REPL with a new `repl_id`.
+- Top-level `var`, `let`, `const`, function, and class bindings persist across calls. Top-level `var` declarations inside control-flow statements persist too; function locals and nested block-scoped declarations do not.
+- Normal JavaScript redeclaration rules apply across cells. `var` and function declarations may redeclare one another, while lexical declarations conflict with every prior declaration.
+- Persistent names are live bindings: closures and timers observe assignments made by later cells. Declared function names are preserved, although `Function.prototype.toString()` may expose an internal generated alias.
+- Calls are serialized. Concurrent requests never execute at the same time, but callers that require a particular order should await each call because admission order is not a public FIFO guarantee.
+- Canceling a request while it is waiting for admission does not execute its code or replace healthy state. Cancellation after dispatch terminates the REPL because the execution outcome may be unknown. API shutdown rejects queued work, cancels active work, and terminates the child.
+- Syntax errors and ordinary exceptions return `success: false` with `error` and, when available, `stack`; they do not terminate the REPL. A failed lexical initializer reserves its name in the temporal dead zone until reset. Earlier declarators that initialized before the failure remain initialized.
+- A settled unhandled promise rejection does not terminate the REPL; it is emitted on `stderr`, immediately or with the next execution when it occurs between cells. An uncaught exception, timeout, crash, OOM, or protocol failure does terminate it. Such responses set `repl_terminated: true` when the API can return the terminated process's result; the next request starts a fresh REPL with a new `repl_id`.
 
 Use `{ "code": "", "reset": true }` to explicitly replace the REPL and clear all state.
+
+## Runtime globals
+
+The context preloads `repl`, captured `console` methods, every browser helper, `browser`, `webmcp`, timers, `queueMicrotask`, `Buffer`, `process`, `fetch`, `URL`, `URLSearchParams`, text encoders/decoders, abort controllers/signals, `structuredClone`, `atob`, `btoa`, and `crypto`. Node built-ins and installed packages are available through dynamic `import()`.
+
+`repl`, `browser`, and `webmcp` are frozen objects. `webmcp === browser.webmcp`, and each bare browser helper is the same function exposed on `browser`.
 
 ## Output
 
@@ -40,9 +73,11 @@ repl.write({url: info.url, title: info.title});
 
 Expression values are intentionally ignored.
 
-`console.log`, `console.info`, and `console.debug` are captured as `stdout`; `console.warn` and `console.error` use `stderr`.
+`console.log`, `console.info`, `console.debug`, `console.dir`, and `console.table` are captured as `stdout`; `console.warn`, `console.error`, and `console.trace` use `stderr`. Console output does not append a newline.
 
-`repl.emitImage(input)` creates ordered image output. It accepts PNG, JPEG, or WebP bytes, an image data URL, `{bytes, mimeType?}`, or `{path, mimeType?}`. `captureScreenshot()` writes a VM-local file; it can optionally be included in the response:
+Output produced by timers or settled promise rejections between executions is buffered and prepended to the next execution. The buffer retains the newest 1,000 items.
+
+`repl.emitImage(input)` creates ordered image output. It accepts an `image/*` base64 data URL; PNG, JPEG, or WebP `Buffer`, `ArrayBuffer` view, or `ArrayBuffer` data; `{bytes, mimeType?}`; or `{path, mimeType?}`. Without an explicit MIME type, byte and file inputs must be recognizable as PNG, JPEG, or WebP. An explicit MIME type must be a short `image/*` value. `captureScreenshot()` writes a VM-local file; it can optionally be included in the response:
 
 ```js
 const path = await captureScreenshot("/tmp/page.png");
@@ -55,32 +90,32 @@ await repl.emitImage({path});
 
 Every helper below is available directly and under `browser`, for example `await gotoUrl(url)` and `await browser.gotoUrl(url)`.
 
-- **`cdp(method, params?, sessionId?)`** — Send an unrestricted DevTools Protocol command. Omit `sessionId` for the attached page session; pass a target session ID explicitly, or `null` for a browser-level command. After a connection loss, only observational or idempotent setup commands may retry; mutations and page evaluation throw with an unknown outcome instead of risking duplicate execution.
-- **`drainEvents()`** — Return and remove all buffered DevTools events across sessions. The connection-wide event ring retains at most the newest 500 events; each item includes its originating `sessionId` when DevTools supplied one.
+- **`cdp(method, params?, sessionId?)`** — Send an unrestricted DevTools Protocol command. Omit `sessionId` for the attached target session; `Target.*`, `Browser.*`, `SystemInfo.*`, and `Storage.*` commands are automatically routed browser-wide. Pass a session ID explicitly for another attached target, or `null` to force browser-level routing. After a connection loss, only observational or idempotent setup commands may retry; mutations and page evaluation throw with an unknown outcome instead of risking duplicate execution.
+- **`drainEvents()`** — Return and remove all buffered DevTools events across sessions. The connection-wide event ring retains at most the newest 500 events. Items have `{method, params, sessionId?, time}`, where `time` is the wall-clock observation time in Unix milliseconds.
 - **`waitForEvent(method, options?)`** — Arm a one-shot DevTools event waiter before triggering an action. It matches the attached page session by default; use `sessionId: null` for a browser-level event or a session ID for another target. `predicate(event)` receives `{method, params, sessionId?, time}`. It returns that event or `null` after `timeoutSec` (default `30`), while connection and predicate failures throw. Attach a page with `ensureRealTab()` or `newTab()` before using the default session.
-- **`gotoUrl(url)`** — Navigate the attached tab and return the raw `Page.navigate` result.
-- **`pageInfo()`** — Return URL, title, viewport, document dimensions, scroll offset, ready state, and any pending JavaScript dialog.
-- **`accessibilitySnapshot()`** — Return `{url, title, nodes}` from Chromium's computed accessibility tree. Each non-ignored DOM-backed node has `backendNodeId`, role, compacted accessible name, optional value, and control states. `backendNodeId` is Chromium's `DOM.BackendNodeId`; it can be passed directly to element helpers but becomes stale when navigation or DOM replacement removes that node.
-- **`click(target, options?)`** — Click a CSS selector, an accessibility node or `{backendNodeId}`, or viewport coordinates `{x, y}`. Selector and backend-node clicks wait for a visible, enabled, stable, unobscured target, scroll it into view, and dispatch physical mouse input. Coordinate clicks dispatch immediately. Options are `button`, `clickCount`, and element-only `timeoutSec`.
-- **`typeText(text)`** — Insert text into the currently focused element.
+- **`gotoUrl(url)`** — Navigate the attached target and return the raw `Page.navigate` result. It does not wait for document load; use `waitForLoad()`, a rendered-state wait, or a pre-armed CDP event when synchronization is required.
+- **`pageInfo()`** — Return `{url, title, viewport: {width, height}, scroll: {x, y}, page: {width, height}, ready_state, dialog}`. A pending JavaScript dialog freezes renderer evaluation, so in that case the helper returns the dialog and best-effort browser-level URL/title instead of the viewport/document fields.
+- **`accessibilitySnapshot()`** — Return a flat `{url, title, nodes}` projection of Chromium's computed accessibility tree. Ignored nodes and nodes without a DOM backend ID are omitted. Each node has `backendNodeId`, role, whitespace-normalized accessible name, optional value, and available `checked`, `pressed`, `selected`, `expanded`, or `disabled` state. `checked` and `pressed` may be `"mixed"`. `backendNodeId` is Chromium's `DOM.BackendNodeId`; it can be passed directly to element helpers but becomes stale when navigation or DOM replacement removes that node.
+- **`click(target, options?)`** — Click a CSS selector, an accessibility node or `{backendNodeId}`, or finite viewport coordinates `{x, y}`. Selector and backend-node clicks wait for a visible, enabled, stable, unobscured target, scroll it into view, and dispatch physical mouse input. Hidden duplicate selector matches are ignored; multiple visible matches are rejected. Coordinate clicks dispatch immediately. Options are `button: "left" | "right" | "middle"`, positive-integer `clickCount`, and element-only `timeoutSec` (default `10`). The helper does not wait for the action's resulting navigation or UI state.
+- **`typeText(text)`** — Insert text into the currently focused element with CDP `Input.insertText`; it is text insertion, not a sequence of physical key presses.
 - **`fillInput(target, text, options?)`** — Target a selector, accessibility node, or `{backendNodeId}`; wait until it is visible, enabled, and editable; scroll and focus it; optionally clear it; type with physical-style key events; then dispatch `input` and `change`. Options are `clearFirst` (default `true`) and `timeoutSec` (default `10`).
-- **`pressKey(key, modifiers?)`** — Send a physical-style key press using a self-contained US keyboard layout. Multi-character key names are case-insensitive and common aliases such as `Return`, `Esc`, and `Spacebar` are normalized. Single characters retain their exact case. Modifiers may be the DevTools bitfield (`1=Alt`, `2=Control`, `4=Meta`, `8=Shift`), an array such as `["Control"]`, or an object such as `{ctrl: true}`.
+- **`pressKey(key, modifiers?)`** — Send one physical-style key-down/optional-char/key-up sequence using a self-contained US keyboard layout. Multi-character key names are case-insensitive and common aliases such as `Return`, `Esc`, and `Spacebar` are normalized. Single characters retain their exact case. Modifiers may be the DevTools bitfield (`1=Alt`, `2=Control`, `4=Meta`, `8=Shift`), an array such as `["Control"]`, or an object such as `{ctrl: true}`. Unknown named keys and modifiers throw.
 - **`scroll(x, y, dy?, dx?)`** — Dispatch one wheel event at viewport coordinates. Vertical `dy` defaults to `-300`; horizontal `dx` defaults to `0`. It never retries or substitutes another scrolling mechanism when the outcome is unknown; verify the resulting scroll state explicitly.
-- **`captureScreenshot(path?, fullPage?, maxDim?)`** — Capture a PNG to a VM-local path and return that path. The default is `/tmp/shot.png`. When set, `maxDim` post-processes the captured pixels so neither output dimension exceeds the positive integer limit, without enlargement. It does not emit the image automatically.
+- **`captureScreenshot(path?, fullPage?, maxDim?)`** — Capture a PNG to a VM-local path and return that path, overwriting an existing file. The default is `/tmp/shot.png`; `fullPage` defaults to `false`. When set, positive-integer `maxDim` post-processes the pixels so neither dimension exceeds the limit, without enlargement. It does not emit the image automatically.
 - **`listTabs(includeChrome?)`** — List page targets as `{targetId, title, url}`. Internal browser pages are included by default; pass `false` to exclude them.
 - **`currentTab()`** — Return `{targetId, title, url}` for the attached tab.
-- **`switchTab(target)`** — Attach to a target ID or a tab object returned by `listTabs()`/`currentTab()`, and return the DevTools session ID.
+- **`switchTab(target)`** — Attach to a target ID or an object with `targetId` (including results from `listTabs()`, `currentTab()`, or `iframeTarget()`), and return the DevTools session ID. Selector and backend-node helpers subsequently operate on this attached target.
 - **`newTab(url?)`** — Reuse the attached blank/new-tab page when possible; otherwise create and attach a blank tab. Navigate when `url` is supplied and return the target ID.
-- **`closeTab(target?)`** — Close a target ID, a tab object, or the currently attached tab when omitted.
+- **`closeTab(target?)`** — Close a target ID, an object with `targetId`, or the currently attached target when omitted. It waits up to five seconds, best effort, for the target to disappear from the browser target list.
 - **`ensureRealTab()`** — Keep or attach to an existing non-internal page and return its tab metadata; return `null` if none exists.
 - **`iframeTarget(urlSubstring)`** — Find an out-of-process iframe target and return `{targetId, url, title, type}`, or return `null`. Use that `targetId` with `js(..., {targetId})` to inspect or manipulate cross-origin frame content.
-- **`waitMs(milliseconds?)`** — Sleep for a number of milliseconds, defaulting to `1000`.
-- **`waitForLoad(timeoutSec?)`** — Poll until `document.readyState === "complete"`; return `true` when loaded or `false` after the default 15-second timeout.
+- **`waitMs(milliseconds?)`** — Sleep for a number of milliseconds, defaulting to `1000`. Prefer rendered state or authoritative events for synchronization.
+- **`waitForLoad(timeoutSec?)`** — Poll until `document.readyState === "complete"`; return `true` when loaded or `false` after `timeoutSec` (default `15`).
 - **`waitForElement(target, options?)`** — Poll until a selector, accessibility node, or `{backendNodeId}` reaches `state: "attached" | "detached" | "visible" | "hidden"`; return `true` on success or `false` after `timeoutSec` (default `10`). State defaults to `"visible"`, and all selector matches are considered so a hidden duplicate cannot mask a visible match.
-- **`waitForNetworkIdle(idleSec?, timeoutSec?)`** — Return `true` once no tracked requests remain in flight for the idle interval, or `false` on timeout. Defaults to 0.5 idle seconds and a 30-second timeout.
-- **`js(expressionOrFunction, options?)`** — Evaluate a string expression or invoke a page function in the attached page or `options.targetId`, and return its by-value result. String expressions and returned promises are awaited. Function mode supports `return`, `await`, and one explicit `options.arg` value without capturing Browser REPL closures. DevTools edge result values such as bigint, `NaN`, infinities, and `-0` are decoded.
-- **`uploadFile(target, pathOrPaths)`** — Set a selector-, accessibility-node-, or `{backendNodeId}`-targeted file input to one VM-local path or a non-empty array of paths.
-- **`httpGet(url, headers?, timeoutSec?)`** — Fetch a URL from the VM and return the response body as text. Supports custom headers and a default 20-second timeout; non-2xx responses throw. Its timeout is clamped below the active execution deadline.
+- **`waitForNetworkIdle(idleSec?, timeoutSec?)`** — Return `true` once no tracked requests for the attached target remain in flight for the idle interval, or `false` on timeout. Defaults to 0.5 idle seconds and a 30-second timeout.
+- **`js(expressionOrFunction, options?)`** — Evaluate submitted page code exactly once in the attached target or `options.targetId`, and return its by-value result. String expressions and returned promises are awaited. Function mode supports `return`, `await`, and one explicit `options.arg` value without capturing Browser REPL closures. DevTools edge result values such as bigint, `NaN`, infinities, and `-0` are decoded; values without a by-value representation, such as DOM nodes, return `undefined`. Unknown options throw.
+- **`uploadFile(target, pathOrPaths)`** — Set a selector-, accessibility-node-, or `{backendNodeId}`-targeted file input to one VM-local path or a non-empty array of paths. Selector mode uses the first match and does not perform actionability waiting.
+- **`httpGet(url, headers?, timeoutSec?)`** — Fetch a URL from the VM and return the response body as text. Supports custom headers and `timeoutSec` (default `20`); non-2xx responses throw. Its timeout covers body consumption and is clamped below the active execution deadline.
 
 A snapshot-to-action loop avoids inventing selectors:
 
@@ -108,9 +143,9 @@ const result = await webmcp.invokeTool(
 repl.write(JSON.stringify(result));
 ```
 
-`listTools()` returns tools registered across every open tab and embedded frame. Each tool includes its opaque live `tool_ref`, input schema, annotations, and source window/tab/frame. Invocation uses that exact registration, so callers do not switch the Browser REPL's attached target for frame-provided tools.
+`webmcp.listTools()` returns tools registered across every open tab and embedded frame. Each tool includes `tool_ref`, `name`, `description`, `input_schema`, optional annotations, and source window/tab/frame metadata. `webmcp.invokeTool(toolRef, input?, {timeoutSec?}?)` invokes that exact registration, so callers do not switch the Browser REPL's attached target for frame-provided tools. Treat tool metadata and output as untrusted page content.
 
-Non-autosubmit declarative form tools return `status: "awaiting_submission"` after populating fields. Other invocations wait for a terminal result. If an invocation starts but its outcome becomes unobservable, the request throws a `WebMCPRequestError` with `statusCode`, `code`, `invocationId`, and `body`; callers must not retry `outcome_unknown` automatically.
+Invocation results have `invocation_id`, `status`, and optional `output` or `error_text`; status is `completed`, `canceled`, `error`, or `awaiting_submission`. Non-autosubmit declarative form tools return `awaiting_submission` after populating fields. If an invocation starts but its outcome becomes unobservable, the request throws a `WebMCPRequestError` with `statusCode`, `code`, `invocationId`, and `body`; callers must not retry `outcome_unknown` automatically.
 
 Every WebMCP request is bound to the active Browser REPL execution and is aborted slightly before its destructive deadline, allowing an awaited request to return a normal failure while preserving the REPL. Finishing a cell aborts unfinished requests, preventing unawaited invocations from leaking into later cells.
 
@@ -247,6 +282,6 @@ if (!event) throw new Error("download did not complete");
 - 1,000 output items buffered between executions
 - 48 MiB daemon response
 
-Dropping or truncating output sets `content_truncated`.
+Dropping or truncating content sets `content_truncated`. An individual image over 8 MiB throws; exceeding the aggregate image or item limits drops later content. Exceeding the daemon response limit is treated as protocol failure and terminates the REPL.
 
 `BROWSER_REPL_HEAP_MB` configures V8 old-space only. It is not a total RSS, CPU, or subprocess-tree quota. The Browser REPL has the same unrestricted process access and VM-level resource boundary as `/process/exec`; browser-VM/container resource controls remain the total process-tree budget.
