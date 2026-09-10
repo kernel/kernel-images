@@ -392,8 +392,7 @@ RUN esbuild /tmp/playwright-daemon.ts \
 # Copy and install the browser REPL's pinned runtime dependencies before bundling.
 COPY server/runtime/ /tmp/browser-repl/
 RUN npm ci --ignore-scripts --no-audit --no-fund --omit=dev --prefix /tmp/browser-repl \
-    && mkdir -p /usr/local/lib/browser-repl /usr/local/share/doc/kernel-images/accessibility-snapshot \
-    && cp /tmp/browser-repl/vendor/accessibility-snapshot.LICENSE /usr/local/share/doc/kernel-images/accessibility-snapshot/LICENSE \
+    && mkdir -p /usr/local/lib/browser-repl \
     && cp -a /tmp/browser-repl/node_modules /usr/local/lib/browser-repl/node_modules \
     && esbuild /tmp/browser-repl/browser-repl.ts \
       --bundle \
