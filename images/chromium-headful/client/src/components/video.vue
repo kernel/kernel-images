@@ -27,6 +27,7 @@
           @touchend.stop.prevent="onTouchHandler"
           @paste.stop.prevent="onPaste"
           @focus="onOverlayFocus"
+          @blur="resetKeyboard"
         />
         <!-- KERNEL
         <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute">
@@ -545,6 +546,9 @@
         this.onWheel(e)
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
+      window.addEventListener('blur', this.resetKeyboard)
+      window.addEventListener('pagehide', this.resetKeyboard)
+      document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
 
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
@@ -587,6 +591,9 @@
         document.removeEventListener('wheel', this._wheelHandler, { capture: true })
         this._wheelHandler = null
       }
+      window.removeEventListener('blur', this.resetKeyboard)
+      window.removeEventListener('pagehide', this.resetKeyboard)
+      document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -895,8 +902,25 @@
         })
       }
 
-      this.keyboard.reset()
+      this.resetKeyboard()
       this.focused = false
+    }
+
+    resetKeyboard() {
+      this.keyboard.reset()
+    }
+
+    resetKeyboardWhenHidden() {
+      if (document.hidden) {
+        this.resetKeyboard()
+      }
+    }
+
+    @Watch('connected')
+    onConnectedChanged(connected: boolean) {
+      if (!connected) {
+        this.resetKeyboard()
+      }
     }
 
     async onPaste(event: ClipboardEvent) {
