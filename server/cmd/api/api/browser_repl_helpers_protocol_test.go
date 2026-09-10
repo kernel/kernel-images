@@ -493,9 +493,7 @@ func TestBrowserReplHeapCapConfigurable(t *testing.T) {
 	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1 + 1"})
 	require.True(t, r.Success, "error: %v", r.Error)
 
-	svc.browserReplMu.Lock()
-	args := svc.browserRepl.cmd.Args
-	svc.browserReplMu.Unlock()
+	args := browserReplTestChild(t, svc).cmd.Args
 	require.Contains(t, args, "--max-old-space-size=256")
 }
 
@@ -838,9 +836,7 @@ func TestBrowserReplProtocolCorruptionTerminates(t *testing.T) {
 			svc, err := newSvc(t, recorder.NewFFmpegManager())
 			require.NoError(t, err)
 			t.Cleanup(func() {
-				svc.browserReplMu.Lock()
-				svc.terminateBrowserReplLocked(context.Background(), "test cleanup")
-				svc.browserReplMu.Unlock()
+				_ = svc.browserRepl.Shutdown(context.Background())
 			})
 
 			resp, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
@@ -854,7 +850,7 @@ func TestBrowserReplProtocolCorruptionTerminates(t *testing.T) {
 			require.True(t, *typed.ReplTerminated, "protocol corruption must terminate the REPL")
 			require.NotNil(t, typed.Error)
 			require.Contains(t, *typed.Error, tc.wantErrPart)
-			require.Nil(t, svc.browserRepl, "no replacement starts until the next request")
+			require.Nil(t, svc.browserRepl.child, "no replacement starts until the next request")
 		})
 	}
 }

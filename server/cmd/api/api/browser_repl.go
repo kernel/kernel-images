@@ -71,6 +71,26 @@ type browserReplChild struct {
 	done chan error // receives the (single) cmd.Wait result
 }
 
+// browserReplManager owns execution admission and the persistent Node child.
+// Lifecycle synchronization stays behind its Execute and Shutdown methods.
+type browserReplManager struct {
+	admission chan struct{}
+	lifecycle context.Context
+	stop      context.CancelCauseFunc
+	child     *browserReplChild // guarded by admission
+}
+
+func newBrowserReplManager() *browserReplManager {
+	lifecycle, stop := context.WithCancelCause(context.Background())
+	admission := make(chan struct{}, 1)
+	admission <- struct{}{}
+	return &browserReplManager{
+		admission: admission,
+		lifecycle: lifecycle,
+		stop:      stop,
+	}
+}
+
 // browserReplSocketPath returns the Unix socket path for the REPL daemon.
 // Overridable for tests.
 func browserReplSocketPath() string {
@@ -96,75 +116,65 @@ func browserReplHeapMB() string {
 	return fmt.Sprint(defaultBrowserReplHeapMB)
 }
 
-// acquireBrowserRepl waits for exclusive REPL ownership while observing
-// cancellation. allowStopping is reserved for shutdown cleanup.
-func (s *ApiService) acquireBrowserRepl(ctx context.Context, allowStopping bool) error {
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if !allowStopping && s.browserReplStopping.Load() {
-			return errBrowserReplShuttingDown
-		}
-		if s.browserReplMu.TryLock() {
-			if err := ctx.Err(); err != nil {
-				s.browserReplMu.Unlock()
-				return err
-			}
-			if !allowStopping && s.browserReplStopping.Load() {
-				s.browserReplMu.Unlock()
-				return errBrowserReplShuttingDown
-			}
-			return nil
-		}
-		timer := time.NewTimer(10 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return ctx.Err()
-		case <-timer.C:
-		}
+func (m *browserReplManager) acquire(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.lifecycle.Done():
+		return errBrowserReplShuttingDown
+	case <-m.admission:
+	}
+	if err := ctx.Err(); err != nil {
+		m.release()
+		return err
+	}
+	if m.lifecycle.Err() != nil {
+		m.release()
+		return errBrowserReplShuttingDown
+	}
+	return nil
+}
+
+func (m *browserReplManager) acquireForShutdown(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.admission:
+		return nil
 	}
 }
 
-// beginBrowserReplOperation installs an independently cancelable operation
-// context. Shutdown can cancel it without first acquiring browserReplMu.
-func (s *ApiService) beginBrowserReplOperation(ctx context.Context) (context.Context, context.CancelCauseFunc) {
+func (m *browserReplManager) release() {
+	m.admission <- struct{}{}
+}
+
+func (m *browserReplManager) operationContext(ctx context.Context) (context.Context, context.CancelCauseFunc, func() bool) {
 	operationCtx, cancel := context.WithCancelCause(ctx)
-	s.browserReplExecutionMu.Lock()
-	s.browserReplExecutionCancel = cancel
-	stopping := s.browserReplStopping.Load()
-	s.browserReplExecutionMu.Unlock()
-	if stopping {
-		cancel(errBrowserReplShuttingDown)
-	}
-	return operationCtx, cancel
-}
-
-func (s *ApiService) clearBrowserReplOperation() {
-	s.browserReplExecutionMu.Lock()
-	s.browserReplExecutionCancel = nil
-	s.browserReplExecutionMu.Unlock()
-}
-
-func (s *ApiService) cancelBrowserReplExecution(cause error) {
-	s.browserReplExecutionMu.Lock()
-	cancel := s.browserReplExecutionCancel
-	s.browserReplExecutionMu.Unlock()
-	if cancel != nil {
+	stopPropagation := context.AfterFunc(m.lifecycle, func() {
+		cancel(context.Cause(m.lifecycle))
+	})
+	if cause := context.Cause(m.lifecycle); cause != nil {
 		cancel(cause)
 	}
+	return operationCtx, cancel, stopPropagation
 }
 
-// ensureBrowserReplLocked starts the REPL child if none is running. If the
-// previous child died unexpectedly it is cleared and replaced with a fresh
-// REPL (and fresh CUID2). Callers must hold s.browserReplMu.
-func (s *ApiService) ensureBrowserReplLocked(ctx context.Context) error {
+func (m *browserReplManager) Shutdown(ctx context.Context) error {
+	m.stop(errBrowserReplShuttingDown)
+	if err := m.acquireForShutdown(ctx); err != nil {
+		return err
+	}
+	defer m.release()
+	return m.terminateLocked(ctx, "api shutdown")
+}
+
+// ensureLocked starts the REPL child if none is running. If the previous
+// child died unexpectedly it is cleared and replaced with a fresh REPL and
+// fresh CUID2. The caller must hold admission.
+func (m *browserReplManager) ensureLocked(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 
-	if child := s.browserRepl; child != nil {
+	if child := m.child; child != nil {
 		select {
 		case err := <-child.done:
 			// The wait goroutine already reaped the child; do not consume the
@@ -174,13 +184,13 @@ func (s *ApiService) ensureBrowserReplLocked(ctx context.Context) error {
 			child.done = closedWaitChannel(err)
 			// The group leader exited, but descendants may still be alive.
 			_ = signalBrowserReplGroup(child.cmd, killSignal)
-			s.clearBrowserReplLocked(ctx, child)
+			m.clearLocked(ctx, child)
 		default:
 			return nil
 		}
 	}
 
-	return s.startBrowserReplLocked(ctx)
+	return m.startLocked(ctx)
 }
 
 // closedWaitChannel returns a channel that has already received (and closed
@@ -191,11 +201,11 @@ func closedWaitChannel(err error) chan error {
 	return ch
 }
 
-// clearBrowserReplLocked detaches the child handle and reaps the stale
-// socket. Callers must hold s.browserReplMu.
-func (s *ApiService) clearBrowserReplLocked(ctx context.Context, child *browserReplChild) {
-	if s.browserRepl == child {
-		s.browserRepl = nil
+// clearLocked detaches the child handle and removes its stale socket. The
+// caller must hold admission.
+func (m *browserReplManager) clearLocked(ctx context.Context, child *browserReplChild) {
+	if m.child == child {
+		m.child = nil
 	}
 	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
 }
@@ -206,10 +216,9 @@ func removeBrowserReplSocket(log *slog.Logger, socketPath string) {
 	}
 }
 
-// startBrowserReplLocked spawns a new REPL child with a fresh CUID2 and
-// waits for its socket to accept connections. Callers must hold
-// s.browserReplMu.
-func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
+// startLocked spawns a new REPL child with a fresh CUID2 and waits for its
+// socket to accept connections. The caller must hold admission.
+func (m *browserReplManager) startLocked(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 	socketPath := browserReplSocketPath()
 
@@ -237,7 +246,7 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 	go func() {
 		child.done <- cmd.Wait()
 	}()
-	s.browserRepl = child
+	m.child = child
 
 	deadline := time.Now().Add(browserReplStartupTimeout)
 	for {
@@ -251,29 +260,29 @@ func (s *ApiService) startBrowserReplLocked(ctx context.Context) error {
 		case waitErr := <-child.done:
 			child.done = closedWaitChannel(waitErr)
 			_ = signalBrowserReplGroup(child.cmd, killSignal)
-			s.clearBrowserReplLocked(ctx, child)
+			m.clearLocked(ctx, child)
 			return fmt.Errorf("browser REPL exited during startup: %w", waitErr)
 		case <-ctx.Done():
-			s.killBrowserReplLocked(context.WithoutCancel(ctx), "startup cancelled")
+			m.killLocked(context.WithoutCancel(ctx), "startup cancelled")
 			return context.Cause(ctx)
 		default:
 		}
 		if time.Now().After(deadline) {
-			s.terminateBrowserReplLocked(ctx, "startup timeout")
+			m.terminateLocked(ctx, "startup timeout")
 			return fmt.Errorf("browser REPL failed to start within %v", browserReplStartupTimeout)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
 }
 
-// terminateBrowserReplLocked stops the REPL child's process group (SIGTERM,
+// terminateLocked stops the REPL child's process group (SIGTERM,
 // escalating to SIGKILL), waits for exit, removes the socket, and clears the
 // in-memory handle. The next request lazily starts a fresh REPL with a new
 // CUID2. Returns the child's exit error when observed (nil for a clean exit
-// or when the exit could not be observed within the grace period). Callers
-// must hold s.browserReplMu.
-func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason string) error {
-	child := s.browserRepl
+// or when the exit could not be observed within the grace period). The caller
+// must hold admission.
+func (m *browserReplManager) terminateLocked(ctx context.Context, reason string) error {
+	child := m.child
 	if child == nil {
 		return nil
 	}
@@ -289,7 +298,7 @@ func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason stri
 		// The group leader exiting does not imply descendants honored SIGTERM.
 		// Kill the process group before relinquishing ownership.
 		_ = signalBrowserReplGroup(child.cmd, killSignal)
-		s.clearBrowserReplLocked(ctx, child)
+		m.clearLocked(ctx, child)
 		return err
 	case <-time.After(browserReplShutdownGrace):
 	}
@@ -308,18 +317,18 @@ func (s *ApiService) terminateBrowserReplLocked(ctx context.Context, reason stri
 	// Re-signal after the leader is reaped: descendants remain members of the
 	// original process group even if the leader exited first.
 	_ = signalBrowserReplGroup(child.cmd, killSignal)
-	s.clearBrowserReplLocked(ctx, child)
+	m.clearLocked(ctx, child)
 	return waitErr
 }
 
-// killBrowserReplLocked SIGKILLs the REPL process group without a SIGTERM
+// killLocked SIGKILLs the REPL process group without a SIGTERM
 // grace period. Use when the daemon's event loop is known to be blocked
 // (e.g. an uninterruptible execution that never answered before the socket
 // read deadline): a graceful signal could never be handled and would only
-// add browserReplShutdownGrace of dead time to every such timeout. Callers
-// must hold s.browserReplMu.
-func (s *ApiService) killBrowserReplLocked(ctx context.Context, reason string) {
-	child := s.browserRepl
+// add browserReplShutdownGrace of dead time to every such timeout. The caller
+// must hold admission.
+func (m *browserReplManager) killLocked(ctx context.Context, reason string) {
+	child := m.child
 	if child == nil {
 		return
 	}
@@ -334,7 +343,7 @@ func (s *ApiService) killBrowserReplLocked(ctx context.Context, reason string) {
 		log.Error("browser REPL did not exit after SIGKILL", "repl_id", child.id)
 	}
 	_ = signalBrowserReplGroup(child.cmd, killSignal)
-	s.clearBrowserReplLocked(ctx, child)
+	m.clearLocked(ctx, child)
 }
 
 // browserReplDaemonRequest is the wire format sent to the REPL daemon.
@@ -402,15 +411,14 @@ type browserReplNotDispatchedError struct {
 func (e *browserReplNotDispatchedError) Error() string { return e.cause.Error() }
 func (e *browserReplNotDispatchedError) Unwrap() error { return e.cause }
 
-// executeOnBrowserReplLocked sends one prepared execution to the current
-// child and reads its response. The returned error is a transport/protocol
-// failure; execution failures are reported inside the response. Callers must
-// hold s.browserReplMu.
-func (s *ApiService) executeOnBrowserReplLocked(ctx context.Context, request *browserReplRequest, timeout time.Duration) (*browserReplDaemonResponse, error) {
+// executeLocked sends one prepared execution to the current child and reads
+// its response. The returned error is a transport/protocol failure; execution
+// failures are reported inside the response. The caller must hold admission.
+func (m *browserReplManager) executeLocked(ctx context.Context, request *browserReplRequest, timeout time.Duration) (*browserReplDaemonResponse, error) {
 	if err := context.Cause(ctx); err != nil {
 		return nil, &browserReplNotDispatchedError{cause: err}
 	}
-	child := s.browserRepl
+	child := m.child
 	if child == nil {
 		return nil, errors.New("no browser REPL child")
 	}
@@ -567,19 +575,21 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// ExecuteBrowserRepl implements POST /repl. The API process owns
-// the REPL child directly: lazy startup, CUID2 repl_id, destructive timeout,
-// explicit reset, and termination on API shutdown.
+// ExecuteBrowserRepl implements POST /repl through the REPL subsystem.
 func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {
-	if err := s.acquireBrowserRepl(ctx, false); err != nil {
+	return s.browserRepl.Execute(ctx, request)
+}
+
+func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {
+	if err := m.acquire(ctx); err != nil {
 		return nil, err
 	}
-	defer s.browserReplMu.Unlock()
+	defer m.release()
 
-	operationCtx, cancelOperation := s.beginBrowserReplOperation(ctx)
+	operationCtx, cancelOperation, stopPropagation := m.operationContext(ctx)
 	defer func() {
+		stopPropagation()
 		cancelOperation(nil)
-		s.clearBrowserReplOperation()
 	}()
 	if err := context.Cause(operationCtx); err != nil {
 		return nil, err
@@ -634,10 +644,10 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 		return nil, err
 	}
 	if reset {
-		s.terminateBrowserReplLocked(ctx, "explicit reset")
+		m.terminateLocked(ctx, "explicit reset")
 	}
 
-	if err := s.ensureBrowserReplLocked(ctx); err != nil {
+	if err := m.ensureLocked(ctx); err != nil {
 		log.Error("failed to start browser REPL", "error", err)
 		return oapi.ExecuteBrowserRepl500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
@@ -646,7 +656,7 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 		}, nil
 	}
 
-	replID := s.browserRepl.id
+	replID := m.child.id
 
 	// Reset with no code: just start a fresh REPL.
 	if code == "" {
@@ -657,7 +667,7 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 	}
 
 	execStart := time.Now()
-	resp, err := s.executeOnBrowserReplLocked(ctx, preparedRequest, timeout)
+	resp, err := m.executeLocked(ctx, preparedRequest, timeout)
 	if err != nil {
 		var notDispatched *browserReplNotDispatchedError
 		if errors.As(err, &notDispatched) {
@@ -671,8 +681,8 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 		if errors.As(err, &timeoutErr) {
 			// The daemon never answered, so its event loop is blocked and a
 			// graceful SIGTERM could never be handled; kill immediately.
-			s.killBrowserReplLocked(ctx, "execution timeout")
-		} else if waitErr := s.terminateBrowserReplLocked(ctx, "execution failure"); waitErr != nil {
+			m.killLocked(ctx, "execution timeout")
+		} else if waitErr := m.terminateLocked(ctx, "execution failure"); waitErr != nil {
 			// Surface the child's exit reason (e.g. SIGKILL from the OOM
 			// killer near the heap cap) instead of a bare transport error.
 			err = fmt.Errorf("browser REPL process terminated during execution (%v): %w", waitErr, err)
@@ -685,7 +695,7 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 		// A response that does not decode into the public schema is protocol
 		// corruption; do not risk state from this child.
 		log.Error("browser REPL returned an undecodable response; terminating child", "repl_id", replID, "error", err)
-		s.terminateBrowserReplLocked(ctx, "protocol corruption")
+		m.terminateLocked(ctx, "protocol corruption")
 		return browserReplTerminatedResponse(replID, err, int(time.Since(execStart).Milliseconds())), nil
 	}
 
@@ -697,7 +707,7 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 			// Reap the child and report repl_terminated so the state loss is
 			// explicit; the next request lazily starts a fresh REPL.
 			log.Warn("browser REPL reported an uncaught exception and is exiting; terminating child", "repl_id", replID)
-			s.terminateBrowserReplLocked(ctx, "uncaught exception in REPL process")
+			m.terminateLocked(ctx, "uncaught exception in REPL process")
 		} else {
 			// A timeout is destructive: the daemon only abandoned the
 			// execution, so its code is still running inside the child. Kill
@@ -706,7 +716,7 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 			// response carries the terminated ID, repl_terminated: true, and
 			// the partial content the execution produced before the deadline.
 			log.Warn("browser REPL execution timed out; terminating child", "repl_id", replID)
-			s.terminateBrowserReplLocked(ctx, "execution timeout")
+			m.terminateLocked(ctx, "execution timeout")
 		}
 		terminated := true
 		mapped.ReplTerminated = &terminated

@@ -275,7 +275,7 @@ func TestBrowserReplConstLetSemantics(t *testing.T) {
 	requireExec(t, svc, `const qaInitEscape = globalThis[Object.getOwnPropertyNames(globalThis).find(name => name.startsWith('__browser_repl_init_'))]`, nil)
 	requireExecError(t, svc, `qaInitEscape.qaConst = 2`, "revoked")
 	requireExec(t, svc, `repl.write(JSON.stringify(typeof globalThis["__browser_repl_init_target"]))`, "undefined")
-	requireExec(t, svc, `repl.write(JSON.stringify(repl.id))`, svc.browserRepl.id)
+	requireExec(t, svc, `repl.write(JSON.stringify(repl.id))`, browserReplTestChild(t, svc).id)
 }
 
 func TestBrowserReplIgnoresExpressionValues(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
@@ -85,21 +84,7 @@ type ApiService struct {
 	// playwrightDaemonCmd holds the daemon process for cleanup
 	playwrightDaemonCmd *exec.Cmd
 
-	// browserReplMu serializes browser REPL execution and lifecycle operations
-	// (only one execution at a time). It also guards browserRepl.
-	browserReplMu sync.Mutex
-
-	// browserReplStopping prevents new work from being admitted once API
-	// shutdown begins. browserReplExecutionCancel is guarded separately so
-	// shutdown can cancel an active execution without waiting for its mutex.
-	browserReplStopping        atomic.Bool
-	browserReplExecutionMu     sync.Mutex
-	browserReplExecutionCancel context.CancelCauseFunc
-
-	// browserRepl is the owned REPL child process, or nil when no REPL is
-	// running. The API process is the child's direct parent and sole
-	// supervisor; it never adopts orphaned REPLs from earlier API processes.
-	browserRepl *browserReplChild
+	browserRepl *browserReplManager
 
 	webmcp webMCPClient
 
@@ -186,6 +171,7 @@ func New(
 		cdpMonitor:        mon,
 		otlpExport:        otlpExport,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
+		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}, nil
@@ -448,18 +434,7 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
-	// Stop admission and cancel an active execution before waiting for the
-	// lifecycle mutex. This keeps shutdown bounded by ctx even when a cell is
-	// running with a much longer execution timeout.
-	s.browserReplStopping.Store(true)
-	s.cancelBrowserReplExecution(errBrowserReplShuttingDown)
-	var replErr error
-	if err := s.acquireBrowserRepl(ctx, true); err != nil {
-		replErr = err
-	} else {
-		s.terminateBrowserReplLocked(ctx, "api shutdown")
-		s.browserReplMu.Unlock()
-	}
+	replErr := s.browserRepl.Shutdown(ctx)
 
 	_ = s.webmcp.Close()
 	s.monitorMu.Lock()

@@ -35,7 +35,7 @@ func TestBrowserReplValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, oapi.ExecuteBrowserRepl400JSONResponse{}, resp)
 
-	require.Nil(t, svc.browserRepl)
+	require.Nil(t, svc.browserRepl.child)
 }
 
 func TestBrowserReplPersistenceAndStableID(t *testing.T) {
@@ -55,7 +55,7 @@ func TestBrowserReplReset(t *testing.T) {
 	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "var ephemeral = 1; ephemeral"})
 	require.True(t, r1.Success)
 	oldID := r1.ReplId
-	oldPid := svc.browserRepl.cmd.Process.Pid
+	oldPid := browserReplTestChild(t, svc).cmd.Process.Pid
 
 	reset := true
 	r2 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "", Reset: &reset})
@@ -81,7 +81,7 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 	require.True(t, r1.Success)
 	oldID := r1.ReplId
-	oldPid := svc.browserRepl.cmd.Process.Pid
+	oldPid := browserReplTestChild(t, svc).cmd.Process.Pid
 
 	timeoutSec := 1
 	start := time.Now()
@@ -100,7 +100,7 @@ func TestBrowserReplTimeoutTerminates(t *testing.T) {
 	require.Less(t, elapsed, 10*time.Second, "the parent must kill an uninterruptible loop promptly")
 	require.False(t, processAlive(oldPid), "timeout must kill the REPL process")
 
-	require.Nil(t, svc.browserRepl)
+	require.Nil(t, svc.browserRepl.child)
 
 	r3 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "'fresh'"})
 	require.True(t, r3.Success)
@@ -113,7 +113,7 @@ func TestBrowserReplInterruptibleTimeoutTerminates(t *testing.T) {
 	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 	require.True(t, r1.Success)
 	oldID := r1.ReplId
-	oldPid := svc.browserRepl.cmd.Process.Pid
+	oldPid := browserReplTestChild(t, svc).cmd.Process.Pid
 
 	timeoutSec := 1
 	start := time.Now()
@@ -131,7 +131,7 @@ func TestBrowserReplInterruptibleTimeoutTerminates(t *testing.T) {
 	require.True(t, *r2.ReplTerminated, "an interruptible timeout is still destructive")
 	require.Less(t, elapsed, 15*time.Second, "a daemon-side timeout must answer promptly")
 	require.False(t, processAlive(oldPid), "timeout must kill the REPL process")
-	require.Nil(t, svc.browserRepl, "no replacement starts until the next request")
+	require.Nil(t, svc.browserRepl.child, "no replacement starts until the next request")
 
 	time.Sleep(2500 * time.Millisecond)
 	r3 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "'fresh'"})
@@ -153,9 +153,10 @@ func TestBrowserReplCrashRecovery(t *testing.T) {
 	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "var before = 1"})
 	require.True(t, r1.Success)
 
-	require.NoError(t, svc.browserRepl.cmd.Process.Kill())
+	child := browserReplTestChild(t, svc)
+	require.NoError(t, child.cmd.Process.Kill())
 	deadline := time.Now().Add(5 * time.Second)
-	for processAlive(svc.browserRepl.cmd.Process.Pid) && time.Now().Before(deadline) {
+	for processAlive(child.cmd.Process.Pid) && time.Now().Before(deadline) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
@@ -169,7 +170,7 @@ func TestBrowserReplShutdownKillsChild(t *testing.T) {
 
 	r1 := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"})
 	require.True(t, r1.Success)
-	pid := svc.browserRepl.cmd.Process.Pid
+	pid := browserReplTestChild(t, svc).cmd.Process.Pid
 	require.True(t, processAlive(pid))
 
 	require.NoError(t, svc.Shutdown(context.Background()))
@@ -179,7 +180,7 @@ func TestBrowserReplShutdownKillsChild(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	require.False(t, processAlive(pid), "API shutdown must kill the REPL child")
-	require.Nil(t, svc.browserRepl)
+	require.Nil(t, svc.browserRepl.child)
 }
 
 func TestBrowserReplSerializesConcurrentRequests(t *testing.T) {
@@ -231,13 +232,7 @@ func TestBrowserReplCancelledWhileQueuedDoesNotExecute(t *testing.T) {
 		})
 		firstDone <- err
 	}()
-	require.Eventually(t, func() bool {
-		if !svc.browserReplMu.TryLock() {
-			return true
-		}
-		svc.browserReplMu.Unlock()
-		return false
-	}, time.Second, 10*time.Millisecond, "first execution never acquired admission")
+	require.Eventually(t, func() bool { return browserReplBusy(svc) }, time.Second, 10*time.Millisecond, "first execution never acquired admission")
 
 	queuedCtx, cancel := context.WithCancel(context.Background())
 	queuedDone := make(chan error, 1)
@@ -295,9 +290,7 @@ func TestBrowserReplIdleCrashKillsDescendantsOnReplacement(t *testing.T) {
 	require.True(t, r.Success, "error: %v", r.Error)
 	pid := int(requireJSONWrite(t, r).(float64))
 
-	svc.browserReplMu.Lock()
-	child := svc.browserRepl
-	svc.browserReplMu.Unlock()
+	child := browserReplTestChild(t, svc)
 	require.NotNil(t, child)
 	require.NoError(t, child.cmd.Process.Kill())
 	require.Eventually(t, func() bool { return !processAlive(child.cmd.Process.Pid) }, 3*time.Second, 20*time.Millisecond)
@@ -318,13 +311,7 @@ func TestBrowserReplShutdownObservesDeadlineDuringExecution(t *testing.T) {
 		})
 		executionDone <- err
 	}()
-	require.Eventually(t, func() bool {
-		if !svc.browserReplMu.TryLock() {
-			return true
-		}
-		svc.browserReplMu.Unlock()
-		return false
-	}, time.Second, 10*time.Millisecond, "execution never acquired admission")
+	require.Eventually(t, func() bool { return browserReplBusy(svc) }, time.Second, 10*time.Millisecond, "execution never acquired admission")
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -545,7 +532,7 @@ func TestBrowserReplTimeoutSecValidation(t *testing.T) {
 		require.NoError(t, err)
 		require.IsType(t, oapi.ExecuteBrowserRepl400JSONResponse{}, resp, "timeout_sec=%d must be rejected", v)
 	}
-	require.Nil(t, svc.browserRepl, "invalid requests must not start a REPL")
+	require.Nil(t, svc.browserRepl.child, "invalid requests must not start a REPL")
 
 	for _, v := range []int{1, 300} {
 		r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1", TimeoutSec: &v})

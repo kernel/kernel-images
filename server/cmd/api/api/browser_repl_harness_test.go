@@ -117,11 +117,26 @@ func newBrowserReplSvc(t *testing.T) *ApiService {
 	svc, err := newSvc(t, recorder.NewFFmpegManager())
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		svc.browserReplMu.Lock()
-		svc.terminateBrowserReplLocked(context.Background(), "test cleanup")
-		svc.browserReplMu.Unlock()
+		_ = svc.browserRepl.Shutdown(context.Background())
 	})
 	return svc
+}
+
+func browserReplTestChild(t *testing.T, svc *ApiService) *browserReplChild {
+	t.Helper()
+	require.NoError(t, svc.browserRepl.acquireForShutdown(context.Background()))
+	defer svc.browserRepl.release()
+	return svc.browserRepl.child
+}
+
+func browserReplBusy(svc *ApiService) bool {
+	select {
+	case <-svc.browserRepl.admission:
+		svc.browserRepl.release()
+		return false
+	default:
+		return true
+	}
 }
 
 func executeBrowserRepl(t *testing.T, svc *ApiService, body *oapi.ExecuteBrowserReplJSONRequestBody) oapi.ExecuteBrowserRepl200JSONResponse {
