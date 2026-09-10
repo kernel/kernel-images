@@ -350,6 +350,8 @@ ENV WITHDOCKER=true
 
 COPY images/chromium-headful/xorg.conf /etc/neko/xorg.conf
 COPY images/chromium-headful/neko.yaml /etc/neko/neko.yaml
+COPY images/chromium-headful/99-kernel-keyboard.gschema.override /usr/share/glib-2.0/schemas/
+RUN /usr/lib/*/glib-2.0/glib-compile-schemas --strict /usr/share/glib-2.0/schemas
 COPY images/chromium-headful/setxkbmap /usr/local/bin/setxkbmap
 RUN chmod +x /usr/local/bin/setxkbmap
 COPY --from=neko /usr/bin/neko /usr/bin/neko
