@@ -15,6 +15,13 @@ import type { Browser, CDPSession, Page } from 'playwright-core';
 
 import { PageTargetIdCache } from './page-target-id-cache';
 import { createWebMCPClient } from './webmcp';
+import { fillVaultFields, validVaultFillRequest, vaultFillResult } from './vault-fill';
+import type { VaultFillRequest } from './vault-fill';
+
+// Playwright's debug protocol/API logs include fill values. Disable them before
+// either engine is imported, including when the daemon is launched directly.
+process.env.DEBUG = '';
+process.env.PWDEBUG = '0';
 
 const SOCKET_PATH = process.env.PLAYWRIGHT_DAEMON_SOCKET || '/tmp/playwright-daemon.sock';
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
@@ -42,6 +49,8 @@ interface ExecuteRequest {
   id: string;
   code: string;
   timeout_ms?: number;
+  method?: 'vault_fill' | 'vault_fill_capabilities';
+  request?: VaultFillRequest;
 }
 
 interface ExecuteResponse {
@@ -336,7 +345,10 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
 }
 
 function handleConnection(socket: Socket): void {
+  socket.setEncoding('utf8');
   let buffer = '';
+  const disconnected = new AbortController();
+  socket.on('close', () => disconnected.abort());
 
   socket.on('data', async (data) => {
     buffer += data.toString();
@@ -356,8 +368,33 @@ function handleConnection(socket: Socket): void {
         continue;
       }
 
-      if (!request.id || typeof request.code !== 'string') {
-        socket.write(JSON.stringify({ id: request.id || 'unknown', success: false, error: 'Invalid request: missing id or code' }) + '\n');
+      if (request?.id && request.method === 'vault_fill_capabilities') {
+        socket.write(JSON.stringify({ id: request.id, success: true, result: { version: 1 } }) + '\n');
+        continue;
+      }
+      if (request?.id && request.method === 'vault_fill') {
+        if (!validVaultFillRequest(request.request)) {
+          socket.write(JSON.stringify({ id: request.id, success: false, error: 'invalid_request' }) + '\n');
+          continue;
+        }
+        const fillRequest = request.request;
+        const signal = AbortSignal.any([AbortSignal.timeout(fillRequest.timeout_ms ?? 10000), disconnected.signal]);
+        let result = vaultFillResult(fillRequest);
+        try {
+          const connected = await withTimeout(ensureBrowserConnection(), signal);
+          signal.throwIfAborted();
+          result = await fillVaultFields(connected, fillRequest, signal);
+        } catch {
+          result.fields[0].status = 'failed';
+        } finally {
+          if (signal.aborted || result.status === 'unknown') await disconnectBrowser();
+        }
+        socket.write(JSON.stringify({ id: request.id, success: true, result }) + '\n');
+        continue;
+      }
+
+      if (!request?.id || typeof request.code !== 'string') {
+        socket.write(JSON.stringify({ id: request?.id || 'unknown', success: false, error: 'Invalid request: missing id or code' }) + '\n');
         continue;
       }
 
@@ -380,8 +417,8 @@ function handleConnection(socket: Socket): void {
     }
   });
 
-  socket.on('error', (err) => {
-    console.error('[playwright-daemon] Socket error:', err.message);
+  socket.on('error', () => {
+    console.error('[playwright-daemon] Socket error');
   });
 }
 

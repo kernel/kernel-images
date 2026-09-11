@@ -34,7 +34,7 @@ test('socket readiness does not wait for cold browser-engine imports', { timeout
       if (['playwright-core', 'patchright', 'esbuild'].includes(specifier)) {
         return { url: 'data:text/javascript,' + encodeURIComponent(${JSON.stringify(engine)}), shortCircuit: true };
       }
-      if (['./page-target-id-cache', './webmcp'].includes(specifier)) specifier += '.ts';
+      if (['./page-target-id-cache', './webmcp', './vault-fill'].includes(specifier)) specifier += '.ts';
       return nextResolve(specifier, context);
     }
   `);

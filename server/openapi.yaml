@@ -1422,6 +1422,66 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /vault/fill/capabilities:
+    get:
+      summary: Probe the secret-safe fill executor without sending credentials
+      operationId: getVaultFillCapabilities
+      x-telemetry-category: control
+      responses:
+        "200":
+          description: The image and its internal executor support version 1
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VaultFillCapabilities"
+        "503":
+          description: Executor unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /vault/fill:
+    post:
+      summary: Fill pinned browser fields without exposing credentials in the API
+      description: |
+        Internal session endpoint; the caller must enforce vault and session access and
+        probe /vault/fill/capabilities before sending credentials to an older image.
+        Selects the sole page, or the unique page with exactly page_url. Each selector
+        must match exactly one element across all frames. Accepts an editable input or
+        textarea, or a wrapper with exactly one editable input/textarea descendant.
+        All targets and TOTP seeds are validated before writes; duplicate targets fail.
+        Targets are pinned, never re-resolved. Fills in binding order and stops at the
+        first failure or navigation. Does not submit. TOTP uses RFC 6238 SHA1, six digits,
+        30-second periods, generated immediately before writing; the seed is never filled.
+        A failed preflight marks its field failed and the others not_attempted.
+        Unknown means a write may have occurred; transport failures must also be treated
+        as unknown and must not be retried automatically. Partial means some fields were
+        filled before a later failure. Browser-accessible code can read filled values.
+        Request bodies, values, seeds, selectors, DOM and raw errors are not recorded or
+        returned by this executor. Only enum statuses and positional indices are returned.
+      operationId: fillVault
+      x-telemetry-category: control
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VaultFillRequest"
+      responses:
+        "200":
+          description: Sanitized execution outcome; not a guarantee of form submission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VaultFillResult"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "503":
+          description: Executor unavailable or busy; no write was attempted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
@@ -7082,6 +7142,70 @@ components:
           description: Indicates success.
           default: true
       additionalProperties: false
+    VaultFillCapabilities:
+      type: object
+      required: [version]
+      properties:
+        version:
+          type: integer
+          enum: [1]
+    VaultFillRequest:
+      type: object
+      required: [bindings]
+      properties:
+        page_url:
+          type: string
+          maxLength: 8192
+          description: Exact page URL, never a substring or pattern
+        timeout_ms:
+          type: integer
+          minimum: 1
+          maximum: 30000
+          default: 10000
+          description: Whole execution deadline in milliseconds
+        bindings:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/VaultFillBinding"
+    VaultFillBinding:
+      type: object
+      required: [selector, value, type]
+      properties:
+        selector:
+          type: string
+          minLength: 1
+          maxLength: 4096
+        value:
+          type: string
+          maxLength: 65536
+          writeOnly: true
+          description: Resolved value, or Base32 seed when type is totp
+        type:
+          type: string
+          enum: [text, email, password, totp]
+    VaultFillResult:
+      type: object
+      required: [status, fields]
+      properties:
+        status:
+          type: string
+          enum: [filled, failed, partial, unknown]
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/VaultFillFieldResult"
+    VaultFillFieldResult:
+      type: object
+      required: [index, status]
+      properties:
+        index:
+          type: integer
+          minimum: 0
+        status:
+          type: string
+          enum: [filled, failed, not_attempted, unknown]
     ExecutePlaywrightRequest:
       type: object
       description: Request to execute Playwright code

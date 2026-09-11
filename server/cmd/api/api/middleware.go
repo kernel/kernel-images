@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -133,9 +135,32 @@ func WebMCPRequestSizeMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// VaultFillRequestMiddleware bounds credential bodies before decoding and
+// rejects trailing data without returning any part of the submitted payload.
+func VaultFillRequestMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/vault/fill" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, maxVaultFillRequestBytes)
+		body, err := io.ReadAll(r.Body)
+		if err != nil || !json.Valid(body) {
+			writeStrictError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		next.ServeHTTP(w, r)
+	})
+}
+
 // StrictRequestErrorHandler preserves the existing plaintext contract outside
 // WebMCP, whose documented errors are JSON.
 func StrictRequestErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	if r.URL.Path == "/vault/fill" {
+		writeStrictError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
 	if isWebMCPRequest(r) {
 		writeStrictError(w, http.StatusBadRequest, err.Error())
 		return
@@ -144,6 +169,10 @@ func StrictRequestErrorHandler(w http.ResponseWriter, r *http.Request, err error
 }
 
 func StrictResponseErrorHandler(w http.ResponseWriter, r *http.Request, err error) {
+	if r.URL.Path == "/vault/fill" || r.URL.Path == "/vault/fill/capabilities" {
+		writeStrictError(w, http.StatusInternalServerError, "executor_unknown")
+		return
+	}
 	if isWebMCPRequest(r) {
 		writeStrictError(w, http.StatusInternalServerError, err.Error())
 		return
