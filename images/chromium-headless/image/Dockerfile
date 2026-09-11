@@ -245,8 +245,8 @@ COPY --from=docker \
     /usr/local/bin/runc \
     /usr/local/bin/
 COPY shared/docker/daemon.json /etc/docker/daemon.json
-COPY shared/docker/install-docker.sh /tmp/install-docker.sh
-RUN /tmp/install-docker.sh && rm /tmp/install-docker.sh && \
+COPY shared/docker/install-docker-dependencies.sh /tmp/install-docker-dependencies.sh
+RUN /tmp/install-docker-dependencies.sh && rm /tmp/install-docker-dependencies.sh && \
     dockerd --validate --config-file=/etc/docker/daemon.json
 
 ENV WITHDOCKER=true
