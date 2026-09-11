@@ -124,16 +124,13 @@ func TestTelemetryDisableDrainsSetupWhileCountersContinue(t *testing.T) {
 	srv.sendToMonitor(t, map[string]any{"method": "Network.loadingFailed", "sessionId": "s", "params": map[string]any{"requestId": "r", "errorText": "net::ERR_CONNECTION_RESET"}})
 	require.Eventually(t, func() bool { return m.NetworkSnapshot().Resets == 1 }, time.Second, time.Millisecond)
 	select {
-	case <-done:
-		t.Fatal("disable did not drain optional setup")
-	default:
-	}
-	srv.sendToMonitor(t, map[string]any{"id": command.ID, "result": map[string]any{}})
-	select {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
-		t.Fatal("disable did not finish after optional setup completed")
+		t.Fatal("desired state waited for optional setup")
 	}
+	require.NotEqual(t, m.desiredTelemetry.Load(), m.appliedTelemetry.Load())
+	srv.sendToMonitor(t, map[string]any{"id": command.ID, "result": map[string]any{}})
+	waitForTelemetryReconcile(t, m, false)
 	require.True(t, m.NetworkSnapshot().Up)
 }

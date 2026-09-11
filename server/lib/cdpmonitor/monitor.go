@@ -42,18 +42,22 @@ type Monitor struct {
 	displayNum  int
 	log         *slog.Logger
 
-	controlMu         sync.Mutex // serializes Start, Stop, and telemetry transitions
-	telemetryMu       sync.RWMutex
-	telemetryEnabled  bool
-	telemetryChanging atomic.Bool
-	telemetryCtx      context.Context
-	telemetryCancel   context.CancelFunc
-	telemetryWg       sync.WaitGroup
-	computedPublishMu sync.Mutex
-	optionalSessions  map[string]string           // session -> injected script identifier
-	contexts          map[string]map[int]struct{} // Runtime contexts for interaction cleanup; sessionsMu
-	network           *networkCounters
-	networkReady      map[string]bool // sessionsMu
+	controlMu          sync.Mutex    // serializes Start and Stop
+	desiredMu          sync.RWMutex  // fences publication against desired-state changes; no CDP work
+	desiredTelemetry   atomic.Uint64 // revision in high bits, enabled in low bit
+	appliedTelemetry   atomic.Uint64
+	telemetryChanged   chan struct{}
+	telemetryMu        sync.RWMutex
+	telemetryEnabled   bool
+	telemetryChanging  atomic.Bool
+	telemetryCtx       context.Context
+	telemetryCancel    context.CancelFunc
+	telemetryWg        sync.WaitGroup
+	computedPublishMu  sync.Mutex
+	optionalSessions   map[string]string   // session -> injected script identifier
+	interactionTargets map[string]struct{} // cleanup obligations by target ID; survives reconnect; sessionsMu
+	network            *networkCounters
+	networkReady       map[string]bool // sessionsMu
 
 	lifeMu sync.Mutex
 	conn   *monitorConnection
@@ -93,23 +97,33 @@ type Monitor struct {
 // screenshotEnabled gates screenshot capture; a nil predicate always captures.
 func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log *slog.Logger, screenshotEnabled func() bool) *Monitor {
 	m := &Monitor{
-		telemetryEnabled:  true,
-		telemetryCtx:      context.Background(),
-		optionalSessions:  make(map[string]string),
-		contexts:          make(map[string]map[int]struct{}),
-		network:           newNetworkCounters(),
-		networkReady:      make(map[string]bool),
-		upstreamMgr:       upstreamMgr,
-		publish:           publish,
-		displayNum:        displayNum,
-		log:               log,
-		screenshotEnabled: screenshotEnabled,
-		sessions:          make(map[string]targetInfo),
-		computedStates:    make(map[string]*computedState),
-		pendingRequests:   make(map[networkRequestKey]networkReqState),
-		bindingLastSeen:   make(map[string]time.Time),
-		proxyLastEmit:     make(map[string]time.Time),
-		lifecycleCtx:      context.Background(),
+		telemetryEnabled:   true,
+		telemetryCtx:       context.Background(),
+		optionalSessions:   make(map[string]string),
+		interactionTargets: make(map[string]struct{}),
+		telemetryChanged:   make(chan struct{}, 1),
+		network:            newNetworkCounters(),
+		networkReady:       make(map[string]bool),
+		upstreamMgr:        upstreamMgr,
+		displayNum:         displayNum,
+		log:                log,
+		screenshotEnabled:  screenshotEnabled,
+		sessions:           make(map[string]targetInfo),
+		computedStates:     make(map[string]*computedState),
+		pendingRequests:    make(map[networkRequestKey]networkReqState),
+		bindingLastSeen:    make(map[string]time.Time),
+		proxyLastEmit:      make(map[string]time.Time),
+		lifecycleCtx:       context.Background(),
+	}
+	m.desiredTelemetry.Store(1)
+	m.appliedTelemetry.Store(1)
+	m.publish = func(ev events.Event) (events.Envelope, bool) {
+		m.desiredMu.RLock()
+		defer m.desiredMu.RUnlock()
+		if ev.Category != events.Monitor && !m.captureEnabled() {
+			return events.Envelope{}, false
+		}
+		return publish(ev)
 	}
 	m.mainSessionID.Store(mainSessionUnset)
 	return m
@@ -144,6 +158,7 @@ func (m *Monitor) Start(ctx context.Context) error {
 	m.running.Store(true)
 	m.asyncWg.Go(func() { defer unsubscribe(); m.supervise(ctx, ch) })
 	m.asyncWg.Go(func() { m.sweepPendingRequests(ctx) })
+	m.asyncWg.Go(func() { m.reconcileTelemetry(ctx) })
 	return nil
 }
 
@@ -181,6 +196,10 @@ func (m *Monitor) openConnection(ctx context.Context, devtoolsURL string) error 
 	if err != nil {
 		return fmt.Errorf("cdpmonitor: dial %s: %w", devtoolsURL, err)
 	}
+	if err := m.pruneInteractionTargets(ctx, protocol); err != nil {
+		_ = protocol.Close()
+		return err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	conn := &monitorConnection{
 		protocol: protocol,
@@ -195,6 +214,9 @@ func (m *Monitor) openConnection(ctx context.Context, devtoolsURL string) error 
 	m.conn = conn
 	m.lifeMu.Unlock()
 	m.telemetryMu.Lock()
+	state := m.desiredTelemetry.Load()
+	m.telemetryEnabled = state&1 != 0
+	m.appliedTelemetry.Store(state)
 	m.telemetryCtx, m.telemetryCancel = context.WithCancel(ctx)
 	m.telemetryMu.Unlock()
 	go func() {
@@ -267,6 +289,16 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 	case browsersurface.EventSessionRemoved:
 		m.handleDetachedFromTarget(cdpTargetDetachedFromTargetParams{SessionID: event.SessionID})
 	case browsersurface.EventProtocol:
+		if event.Message.Method == "Target.targetDestroyed" {
+			var p struct {
+				TargetID string `json:"targetId"`
+			}
+			if json.Unmarshal(event.Message.Params, &p) == nil {
+				m.sessionsMu.Lock()
+				delete(m.interactionTargets, p.TargetID)
+				m.sessionsMu.Unlock()
+			}
+		}
 		// Attachment lifecycle is emitted once by the tracker, including targets
 		// discovered through enumeration whose attach response arrived first.
 		if event.Message.Method == "Target.attachedToTarget" || event.Message.Method == "Target.detachedFromTarget" {
@@ -292,15 +324,14 @@ func (m *Monitor) clearState() {
 	prev := m.computedStates
 	m.sessions = make(map[string]targetInfo)
 	m.networkReady = make(map[string]bool)
-	m.contexts = make(map[string]map[int]struct{})
 	m.computedStates = make(map[string]*computedState)
+	clear(m.optionalSessions)
 	m.sessionsMu.Unlock()
 	for _, cs := range prev {
 		cs.stop()
 	}
 	m.computedPublishMu.Lock()
 	m.computedPublishMu.Unlock()
-	clear(m.optionalSessions)
 	m.network.newGeneration()
 	m.mainSessionID.Store(mainSessionUnset)
 	m.pendReqMu.Lock()

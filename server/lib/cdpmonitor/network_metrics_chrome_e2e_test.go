@@ -220,6 +220,7 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 	require.Eventually(t, func() bool { return es.Seq() > 0 }, time.Second, 10*time.Millisecond)
 	ts.Stop()
 	require.NoError(t, m.SetTelemetry(false))
+	waitForTelemetryReconcile(t, m, false)
 	seq := es.Seq()
 	require.False(t, driver.evalBool(ctx, session, `window.__kernelEventInjected === true`))
 	require.False(t, driver.evalBool(ctx, session, `document.querySelector('#same').contentWindow.__kernelEventInjected === true`))

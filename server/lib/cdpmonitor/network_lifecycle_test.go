@@ -60,6 +60,7 @@ func TestMetricsOnlyDomainsAndTelemetryTransitions(t *testing.T) {
 		return slices.Contains(methods, "Runtime.evaluate")
 	}, time.Second, time.Millisecond)
 	require.NoError(t, m.SetTelemetry(false))
+	waitForTelemetryReconcile(t, m, false)
 	mu.Lock()
 	finalMethods := slices.Clone(methods)
 	mu.Unlock()

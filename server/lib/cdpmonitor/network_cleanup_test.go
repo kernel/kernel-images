@@ -48,13 +48,17 @@ func TestTelemetryCleanupAttemptsAllSessionsAfterError(t *testing.T) {
 		defer m.sessionsMu.RUnlock()
 		return m.optionalSessions["one"] == "script" && m.optionalSessions["two"] == "script"
 	}, time.Second, time.Millisecond)
-	require.Error(t, m.SetTelemetry(false))
+	m.lifeMu.Lock()
+	old := m.conn
+	m.lifeMu.Unlock()
+	require.NoError(t, m.SetTelemetry(false))
+	require.Eventually(t, func() bool { return old.ctx.Err() != nil }, time.Second, time.Millisecond)
 	mu.Lock()
 	one, two := removed["one"], removed["two"]
 	mu.Unlock()
 	require.True(t, one)
 	require.True(t, two)
-	require.Eventually(t, func() bool { return m.NetworkSnapshot().Up }, 3*time.Second, 10*time.Millisecond)
+	waitForTelemetryReconcile(t, m, false)
 	m.telemetryMu.RLock()
 	enabled := m.telemetryEnabled
 	m.telemetryMu.RUnlock()

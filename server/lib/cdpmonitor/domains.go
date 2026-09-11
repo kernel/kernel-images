@@ -64,6 +64,11 @@ var injectedJS string
 // live when the session attached is tracked without waiting for a navigation.
 // Idempotent for the current binding; replaces listeners from an old connection.
 func (m *Monitor) injectScript(ctx context.Context, sessionID string) error {
+	m.sessionsMu.Lock()
+	if info, exists := m.sessions[sessionID]; exists {
+		m.interactionTargets[info.targetID] = struct{}{}
+	}
+	m.sessionsMu.Unlock()
 	raw, err := m.send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
 		"source": injectedJS,
 	}, sessionID)
@@ -101,17 +106,7 @@ func (m *Monitor) disableOptionalDomains(ctx context.Context, sessionID, scriptI
 		_, cleanupErr = m.send(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{"identifier": scriptID}, sessionID)
 	}
 	if isPageLikeTarget(info.targetType) {
-		m.sessionsMu.RLock()
-		ids := make([]int, 0, len(m.contexts[sessionID]))
-		for id := range m.contexts[sessionID] {
-			ids = append(ids, id)
-		}
-		m.sessionsMu.RUnlock()
-		// Contexts can disappear during navigation; evaluate failures on those
-		// contexts are harmless. Removing the binding below is session-wide.
-		for _, id := range ids {
-			_, _ = m.send(ctx, "Runtime.evaluate", map[string]any{"expression": "window.__kernelEventCleanup && window.__kernelEventCleanup()", "contextId": id}, sessionID)
-		}
+		cleanupErr = errors.Join(cleanupErr, m.cleanupInteraction(ctx, sessionID))
 		for _, command := range []struct {
 			method string
 			params any
@@ -127,8 +122,12 @@ func (m *Monitor) disableOptionalDomains(ctx context.Context, sessionID, scriptI
 		}
 	}
 	_, err := m.send(ctx, "Runtime.disable", nil, sessionID)
-	m.sessionsMu.Lock()
-	delete(m.contexts, sessionID)
-	m.sessionsMu.Unlock()
-	return errors.Join(cleanupErr, err)
+	cleanupErr = errors.Join(cleanupErr, err)
+	if cleanupErr == nil {
+		m.sessionsMu.Lock()
+		delete(m.interactionTargets, info.targetID)
+		delete(m.optionalSessions, sessionID)
+		m.sessionsMu.Unlock()
+	}
+	return cleanupErr
 }

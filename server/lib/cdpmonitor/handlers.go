@@ -111,10 +111,7 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 			m.network.terminal(msg.SessionID, p.RequestID, p.ErrorText)
 		}
 	}
-	if strings.HasPrefix(msg.Method, "Runtime.executionContext") {
-		m.trackExecutionContext(msg)
-	}
-	if m.telemetryChanging.Load() || !m.telemetryMu.TryRLock() {
+	if !m.captureEnabled() || m.telemetryChanging.Load() || !m.telemetryMu.TryRLock() {
 		return
 	}
 	defer m.telemetryMu.RUnlock()
@@ -122,6 +119,9 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		return
 	}
 	ctx := m.telemetryCtx
+	if ctx.Err() != nil {
+		return
+	}
 
 	switch msg.Method {
 	case "Runtime.consoleAPICalled":
@@ -904,13 +904,21 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 			}
 			return
 		}
+		m.telemetryMu.RLock()
+		defer m.telemetryMu.RUnlock()
+		if err := m.cleanupAttachedTarget(ctx, p.SessionID, info); err != nil {
+			m.lifeMu.Lock()
+			if m.conn != nil {
+				m.conn.cancel()
+			}
+			m.lifeMu.Unlock()
+			return
+		}
 		m.sessionsMu.Lock()
 		if _, exists := m.sessions[p.SessionID]; exists {
 			m.networkReady[p.SessionID] = true
 		}
 		m.sessionsMu.Unlock()
-		m.telemetryMu.RLock()
-		defer m.telemetryMu.RUnlock()
 		m.enableOptionalCapture(m.telemetryCtx, p.SessionID, info)
 	})
 }
@@ -923,7 +931,6 @@ func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) 
 	cs := m.computedStates[p.SessionID]
 	delete(m.sessions, p.SessionID)
 	delete(m.networkReady, p.SessionID)
-	delete(m.contexts, p.SessionID)
 	delete(m.optionalSessions, p.SessionID)
 	delete(m.computedStates, p.SessionID)
 	m.sessionsMu.Unlock()

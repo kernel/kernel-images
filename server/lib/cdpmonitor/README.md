@@ -17,7 +17,7 @@ The separate in-memory collector serves these **label-free** metrics on the exis
 | --- | --- |
 | `kernel_chromium_connection_resets_total` | Observed terminal `Network.loadingFailed` outcomes with exactly `net::ERR_CONNECTION_RESET`. |
 | `kernel_chromium_network_requests_completed_total` | Observed terminal `Network.loadingFinished` or `Network.loadingFailed` outcomes. Includes cancellations, refusals, HTTP 500 responses, and unknown-start outcomes. |
-| `kernel_chromium_network_monitor_up` | Discovery initialized, socket open, and Network plus dedicated-worker discovery initialized for every known attached target. Zero during setup, failures, reconnect, and shutdown. Not browser responsiveness or proof of complete request coverage. |
+| `kernel_chromium_network_monitor_up` | Discovery initialized, socket open, and Network plus dedicated-worker discovery initialized for every known attached target. Reattached targets also finish any retained interaction cleanup before becoming ready. Zero during setup, failures, reconnect, and shutdown. Not browser responsiveness or proof of complete request coverage. |
 
 These count **CDP request-chain observations, not socket resets**. Internal browser
 retries are not separately counted. Redirects reuse a request ID and contribute
@@ -60,8 +60,12 @@ It independently checks Chromium's error text and exact +10/+10 scrape deltas;
 then exercises non-reset outcomes, same-process frames, OOPIFs, dedicated/shared/
 service workers, telemetry off/on/off cleanup, socket replacement, actual Chrome
 restart, and a fresh monitor's zero counters. API lifecycle/race tests cover
-startup, telemetry toggles, and shutdown. Extension background pages are included
-in discovery but are not validated by a real extension fixture here.
+startup, telemetry toggles, and shutdown. Additional regressions delay a cleanup
+command while PUT/PATCH/GET continue, fence old capture across coalesced revisions,
+and recover page/frame listeners after socket loss or failed cleanup. They check
+future navigations and the independent user CDP connection as well. Extension
+background pages are included in discovery but are not validated by a real extension
+fixture here.
 
 The microbenchmark measures Go terminal ingestion, not total Chromium CPU/memory
 or live workload overhead. Full image/API-process restart, suspend/resume, snapshot
@@ -115,6 +119,8 @@ targets, not requests issued before their capture domains finish initializing.
 | CDP transport and command routing | `../cdpclient` |
 | Target discovery and attachment lifecycle | `../browsersurface` |
 | CDP domain setup per session | `domains.go` |
+| Desired telemetry revision and asynchronous reconcile | `telemetry.go` |
+| Interaction cleanup across connection replacement | `interaction_cleanup.go` |
 | Event translation (CDP params to `events.Event`) | `handlers.go` |
 | Synthetic event state machines | `computed.go` |
 | Screenshot capture via ffmpeg | `screenshot.go` |
@@ -152,30 +158,42 @@ retains its legacy `chrome_restarted` reason for connection replacement, includi
 socket loss; use the capture-health gauge rather than that reason to diagnose
 availability. Retries no longer exhaust, so `monitor_reconnect_failed` is not emitted.
 
-`asyncWg` tracks the supervisor and request sweeper. `captureWg` tracks discovery
+`asyncWg` tracks the supervisor, telemetry reconciler, and request sweeper. `captureWg` tracks discovery
 and domain setup; `telemetryWg` drains optional body/screenshot work. `Stop` cancels
 the lifecycle and drains all three. Closing the protocol unblocks pending commands.
 
-`SetTelemetry` changes optional capture without replacing the connection or
-clearing terminal history. Enabling schedules per-target setup asynchronously,
-with a 30-second setup budget. Disabling drains bounded setup and body/screenshot
-work before cancelling optional capture, so cancellation cannot abort a socket
-write or lose a script-registration result. It then stops computed timers,
-removes new-document scripts, cleans existing execution contexts (including
-same-process frames), removes the binding, and disables optional domains. Network
-stays enabled. Failed cleanup closes only the monitor's connection and retries in
-metrics-only mode. Optional events during configuration are not captured; terminal
-counter ingestion continues. A stuck optional command can delay disable through
-setup, capture, and cleanup deadlines (up to roughly 90 seconds); API shutdown
-cancels the lifecycle before waiting for configuration to drain. All customer
-publication remains session-gated.
+`SetTelemetry` commits a desired revision and fences customer publication without
+waiting for CDP work. The telemetry endpoints report this accepted desired state,
+not completion of background cleanup. A lifecycle-owned worker serializes teardown
+and setup outside the API-wide lock. An off/on pair still drains the old revision;
+a newer disable prevents an obsolete enable from running after slow cleanup.
+`TelemetrySession.Publish` continues to enforce the customer's category/session gate.
+
+The worker drains bounded setup/body work without aborting socket writes, stops
+computed timers, removes new-document registrations and live-document listeners,
+and disables optional domains. Cleanup commands share a 3-second budget; failure
+replaces only the monitor connection and retries. Setup remains bounded at 30 seconds.
+Network counters continue during the drain. Request cancellation does not cancel
+cleanup; API shutdown cancels the lifecycle and joins the worker.
+
+Closing CDP does **not** remove document listeners. Cleanup obligations therefore
+use target IDs, survive connection/session replacement, and are cleared only on
+successful cleanup or confirmed target destruction. On reconnect, a target inventory
+prunes vanished targets; reattached targets clean orphan listeners before being
+marked ready, even when telemetry is now disabled. A temporary cleanup registration
+with `runImmediately` reaches existing main worlds, including same-process frames;
+it is then removed. No Runtime/Page domain is enabled solely for this recovery.
+Registration IDs remain connection-local and are never reused on another session.
+These obligations are in memory; full API-process restart remains an unverified check.
 
 ### Synchronization
 
-`controlMu` serializes Start/Stop/configuration, `restartMu` serializes connection
-replacement against configuration, and `telemetryMu` protects optional capture
-setup/dispatch. Computed publication is fenced before old state is discarded.
-`sessionsMu` also guards domain readiness, script IDs, and execution contexts.
+`controlMu` serializes Start/Stop. `desiredMu` fences only in-memory publication
+against desired-revision changes; it never guards CDP work. `restartMu` serializes
+connection replacement against background reconcile, and `telemetryMu` protects
+optional setup/dispatch. Old body/screenshot/computed work is drained before the
+applied revision advances. `sessionsMu` also guards domain readiness, connection-local
+script IDs, and target-scoped interaction cleanup obligations.
 `lifeMu` protects the connection
 pointer and lifecycle context/cancel function; it is released before waiting on
 connection or capture work. `sessionsMu` protects target metadata and computed-state
