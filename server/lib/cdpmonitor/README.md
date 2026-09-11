@@ -65,7 +65,13 @@ command while PUT/PATCH/GET continue, fence old capture across coalesced revisio
 and recover page/frame listeners after socket loss or failed cleanup. They check
 future navigations and the independent user CDP connection as well. Extension
 background pages are included in discovery but are not validated by a real extension
-fixture here.
+fixture here. A delayed-Network-reply regression also verifies that pending
+attachments finish recovery before optional instrumentation starts, and that
+click events arrive without navigation through subsequent telemetry toggles.
+
+Known limitation: re-enabling telemetry can leave already-loaded same-process
+iframes without interaction listeners. This also occurs with the previous
+Stop/Start lifecycle and is not addressed by the attachment-ordering fix.
 
 The microbenchmark measures Go terminal ingestion, not total Chromium CPU/memory
 or live workload overhead. Full image/API-process restart, suspend/resume, snapshot
@@ -167,6 +173,9 @@ waiting for CDP work. The telemetry endpoints report this accepted desired state
 not completion of background cleanup. A lifecycle-owned worker serializes teardown
 and setup outside the API-wide lock. An off/on pair still drains the old revision;
 a newer disable prevents an obsolete enable from running after slow cleanup.
+Reconciliation schedules optional setup only for attachment-ready sessions;
+pending sessions finish Network setup and orphan cleanup in the attachment path
+before starting optional capture.
 `TelemetrySession.Publish` continues to enforce the customer's category/session gate.
 
 The worker drains bounded setup/body work without aborting socket writes, stops

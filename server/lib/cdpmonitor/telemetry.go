@@ -144,7 +144,10 @@ func (m *Monitor) applyTelemetry(state uint64) error {
 	m.sessionsMu.RLock()
 	sessions := make(map[string]targetInfo, len(m.sessions))
 	for id, info := range m.sessions {
-		sessions[id] = info
+		// Pending attachments must finish orphan cleanup before optional setup.
+		if m.networkReady[id] {
+			sessions[id] = info
+		}
 	}
 	m.sessionsMu.RUnlock()
 	for id, info := range sessions {

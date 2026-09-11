@@ -78,6 +78,37 @@ func TestTelemetryRevisionFencesPendingBody(t *testing.T) {
 	require.Equal(t, uint64(2), m.NetworkSnapshot().Completed)
 }
 
+func TestTelemetrySchedulesOnlyReadyAttachments(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+	m, _, cleanup := startMonitor(t, srv, nil)
+	defer cleanup()
+	require.NoError(t, m.SetTelemetry(false))
+	waitForTelemetryReconcile(t, m, false)
+	m.sessionsMu.Lock()
+	m.sessions["pending"] = targetInfo{targetID: "pending-target", targetType: "page"}
+	m.sessions["ready"] = targetInfo{targetID: "ready-target", targetType: "page"}
+	m.networkReady["ready"] = true
+	m.sessionsMu.Unlock()
+
+	// Run reconciliation synchronously so all optional tasks have been scheduled
+	// before joining them. The pending attachment is deliberately not advanced.
+	m.restartMu.Lock()
+	require.NoError(t, m.SetTelemetry(true))
+	err := m.applyTelemetry(m.desiredTelemetry.Load())
+	m.captureWg.Wait()
+	m.restartMu.Unlock()
+	require.NoError(t, err)
+	m.sessionsMu.RLock()
+	_, pending := m.optionalSessions["pending"]
+	_, ready := m.optionalSessions["ready"]
+	_, dirtyPending := m.interactionTargets["pending-target"]
+	m.sessionsMu.RUnlock()
+	require.False(t, pending, "optional setup ran before attachment recovery")
+	require.False(t, dirtyPending)
+	require.True(t, ready, "ready attachments must still enable capture")
+}
+
 func waitForTelemetryReconcile(t *testing.T, m *Monitor, enabled bool) {
 	t.Helper()
 	require.Eventually(t, func() bool {
