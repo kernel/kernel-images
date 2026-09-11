@@ -110,6 +110,7 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
 EOT
 
 FROM node:22-bullseye-slim AS node-22
+FROM docker.io/library/docker:29.1.3-dind AS docker
 FROM docker.io/ubuntu:22.04
 
 # Allow cross-compilation when building with BuildKit platforms
@@ -232,6 +233,21 @@ RUN apt-get update && \
     curl -fsSL "https://github.com/vi/websocat/releases/download/v1.14.1/websocat.${WEBSOCAT_ARCH}-unknown-linux-musl" \
         -o /usr/local/bin/websocat && \
     chmod +x /usr/local/bin/websocat
+
+# Install Docker tooling without starting the daemon.
+COPY --from=docker \
+    /usr/local/bin/containerd \
+    /usr/local/bin/containerd-shim-runc-v2 \
+    /usr/local/bin/docker \
+    /usr/local/bin/docker-init \
+    /usr/local/bin/docker-proxy \
+    /usr/local/bin/dockerd \
+    /usr/local/bin/runc \
+    /usr/local/bin/
+COPY shared/docker/daemon.json /etc/docker/daemon.json
+COPY shared/docker/install-docker-dependencies.sh /tmp/install-docker-dependencies.sh
+RUN /tmp/install-docker-dependencies.sh && rm /tmp/install-docker-dependencies.sh && \
+    dockerd --validate --config-file=/etc/docker/daemon.json
 
 ENV WITHDOCKER=true
 
