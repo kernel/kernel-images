@@ -15,6 +15,8 @@ import (
 
 const maxVaultFillRequestBytes = 1024 * 1024
 
+var errVaultExecutorUnavailable = errors.New("executor_unavailable")
+
 // This protocol is separate from code execution: no generated code, raw errors,
 // stacks or caller-provided strings are returned or attached to telemetry.
 type vaultDaemonRequest struct {
@@ -34,14 +36,14 @@ func callVaultDaemon(ctx context.Context, socket string, request vaultDaemonRequ
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
 	if err != nil {
-		return nil, errors.New("executor_unavailable")
+		return nil, errVaultExecutorUnavailable
 	}
 	defer conn.Close()
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	deadline, _ := ctx.Deadline()
 	if err := conn.SetDeadline(deadline); err != nil {
-		return nil, errors.New("executor_unavailable")
+		return nil, errVaultExecutorUnavailable
 	}
 	request.ID = uuid.NewString()
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
@@ -130,6 +132,9 @@ func (s *ApiService) FillVault(ctx context.Context, request oapi.FillVaultReques
 	result, err := callVaultDaemon(ctx, playwrightDaemonSocket, vaultDaemonRequest{
 		Method: "vault_fill", Request: request.Body,
 	}, time.Duration(timeout)*time.Millisecond+2*time.Second)
+	if errors.Is(err, errVaultExecutorUnavailable) {
+		return oapi.FillVault503JSONResponse{Message: "executor_unavailable"}, nil
+	}
 	if err != nil {
 		return oapi.FillVault200JSONResponse(unknownVaultFillResult(len(request.Body.Bindings))), nil
 	}

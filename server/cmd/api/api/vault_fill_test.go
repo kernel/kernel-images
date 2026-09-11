@@ -143,6 +143,12 @@ func TestVaultFillHTTPProtocol(t *testing.T) {
 	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/vault/fill", strings.NewReader(string(body))))
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.JSONEq(t, `{"status":"filled","fields":[{"index":0,"status":"filled"}]}`, recorder.Body.String())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/vault/fill", strings.NewReader(string(body))).WithContext(ctx))
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.JSONEq(t, `{"message":"executor_unavailable"}`, recorder.Body.String())
 	for _, event := range rp.snapshot() {
 		require.NotContains(t, string(event.Data), "secret-value")
 		require.NotContains(t, string(event.Data), "#password")
@@ -151,6 +157,8 @@ func TestVaultFillHTTPProtocol(t *testing.T) {
 }
 
 func TestVaultDaemonTransport(t *testing.T) {
+	_, err := callVaultDaemon(context.Background(), filepath.Join(t.TempDir(), "missing.sock"), vaultDaemonRequest{Method: "vault_fill", Request: vaultRequest()}, time.Second)
+	require.ErrorIs(t, err, errVaultExecutorUnavailable)
 	for _, mode := range []string{"success", "raw_error", "mismatch", "oversized", "timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			socket := filepath.Join(t.TempDir(), "daemon.sock")
