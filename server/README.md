@@ -134,7 +134,9 @@ scheme. The control plane must authorize vault/session access and gate the image
 capability. It must not log this body or route credentials through
 `/playwright/execute`. The dedicated daemon method never generates user code or
 returns raw errors. The daemon disables Playwright debug logging because it can
-contain fill values; API telemetry contains operation metadata only.
+contain fill values; API telemetry contains operation metadata only. Values travel
+as `Runtime.callFunctionOn` arguments, which are excluded from CDP telemetry, not
+as captured `Input.insertText` commands.
 
 The executor never clicks or submits, but site input handlers can submit or
 otherwise react to a fill. Browser access, site scripts, independently enabled
