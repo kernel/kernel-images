@@ -299,6 +299,6 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:playwright-core \
     --external:patchright \
     --external:esbuild \
-    && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts /tmp/webmcp.ts
+    && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts /tmp/webmcp.ts /tmp/vault-fill.ts
 
 ENTRYPOINT [ "/wrapper" ]

@@ -22,9 +22,9 @@ test('daemon vault protocol never returns or logs secret-bearing errors, even wi
   });
   t.after(() => context.close());
   const [port, path] = (await readFile(join(dir, 'profile', 'DevToolsActivePort'), 'utf8')).trim().split('\n');
-  const script = join(dir, 'daemon.cjs');
+  const script = join(dir, 'daemon.mjs');
   await symlink(dirname(dirname(createRequire(import.meta.url).resolve('playwright-core/package.json'))), join(dir, 'node_modules'), 'dir');
-  await build({ entryPoints: [new URL('./playwright-daemon.ts', import.meta.url).pathname], outfile: script, bundle: true, platform: 'node', format: 'cjs', packages: 'external' });
+  await build({ entryPoints: [new URL('./playwright-daemon.ts', import.meta.url).pathname], outfile: script, bundle: true, platform: 'node', target: 'node22', format: 'esm', packages: 'external' });
   const page = context.pages()[0];
   const secret = 'unique-vault-🔐-value-do-not-log';
   const seed = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';

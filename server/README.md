@@ -87,7 +87,7 @@ that a page or browser connection will remain available.
   "bindings": [
     {"selector": "#username", "type": "email", "value": "resolved-value"},
     {"selector": "#password", "type": "password", "value": "resolved-value"},
-    {"selector": "#otp", "type": "totp", "value": "BASE32SEED"}
+    {"selector": "#otp", "type": "totp", "value": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"}
   ],
   "page_url": "https://example.com/login",
   "timeout_ms": 10000
