@@ -57,6 +57,7 @@ Configure the server using environment variables:
 | `MAX_SIZE_MB`  | `500`     | Default maximum file size (MB)              |
 | `OUTPUT_DIR`   | `.`       | Directory to save recordings                |
 | `FFMPEG_PATH`  | `ffmpeg`  | Path to the ffmpeg binary                   |
+| `AGENT_CONFIG_PATH` | empty | Trusted launch catalog enabling the optional ACP WebSocket proxy |
 
 #### Example Configuration
 
@@ -67,6 +68,14 @@ export MAX_SIZE_MB=1000
 export OUTPUT_DIR=/tmp/recordings
 ./bin/api
 ```
+
+### Optional ACP agents
+
+The [ACP API](lib/agentproxy/README.md) exposes one WebSocket endpoint using
+`acpremote expose` and its per-connection process lifecycle. Browser images bundle
+a pinned Pi runtime and declarative configuration GET/PUT endpoints. Configure a
+provider credential binding before connecting. An empty `AGENT_CONFIG_PATH`
+disables these routes when running the server separately.
 
 ### API Documentation
 

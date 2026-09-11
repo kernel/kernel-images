@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "${KERNEL_PI_NODE:?KERNEL_PI_NODE is required}" "${0%/*}/pi-command.mjs" "$@"

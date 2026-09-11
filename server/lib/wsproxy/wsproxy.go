@@ -38,6 +38,11 @@ type ProxyOptions struct {
 	Logger        *slog.Logger
 	Transform     MessageTransform
 	Observe       Observer
+	// ReadLimit overrides the default 100 MiB limit on both connections.
+	ReadLimit int64
+	// PingInterval enables downstream liveness checks with the same pong timeout.
+	// Zero leaves keepalive behavior unchanged.
+	PingInterval time.Duration
 	// Registry, when set, tracks the accepted client connection so it is
 	// closed with a Going Away frame on server shutdown.
 	Registry *wsdrain.Registry
@@ -140,7 +145,11 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts Prox
 		logger.Error("websocket accept failed", slog.String("err", err.Error()))
 		return
 	}
-	clientConn.SetReadLimit(100 * 1024 * 1024)
+	readLimit := opts.ReadLimit
+	if readLimit <= 0 {
+		readLimit = 100 * 1024 * 1024
+	}
+	clientConn.SetReadLimit(readLimit)
 
 	untrack := opts.Registry.Track(clientConn)
 	defer untrack()
@@ -151,9 +160,15 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts Prox
 		clientConn.Close(websocket.StatusInternalError, "failed to connect to upstream")
 		return
 	}
-	upstreamConn.SetReadLimit(100 * 1024 * 1024)
+	upstreamConn.SetReadLimit(readLimit)
 
 	logger.Debug("proxying websocket", slog.String("url", upstreamURL))
+
+	if opts.PingInterval > 0 {
+		pingCtx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+		go pingClient(pingCtx, clientConn, opts.PingInterval)
+	}
 
 	var once sync.Once
 	cleanup := func(_ PumpExitCause) {
@@ -164,4 +179,23 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts Prox
 	}
 
 	Pump(r.Context(), clientConn, upstreamConn, cleanup, logger, opts.Transform, opts.Observe)
+}
+
+func pingClient(ctx context.Context, client *websocket.Conn, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, interval)
+			err := client.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				client.CloseNow()
+				return
+			}
+		}
+	}
 }

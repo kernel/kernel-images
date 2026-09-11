@@ -1,0 +1,17 @@
+{
+  "acpremote": "/opt/kernel-agent/venv/bin/acpremote",
+  "maxConnections": 8,
+  "harnesses": {},
+  "pi": {
+    "stateDir": "/home/kernel/.agents/pi",
+    "runtimeDir": "/opt/kernel-agent/pi",
+    "node": "/usr/local/bin/node",
+    "bun": "/usr/local/bin/bun",
+    "credentials": {
+      "openrouter": "OPENROUTER_API_KEY",
+      "openai": "OPENAI_API_KEY",
+      "anthropic": "ANTHROPIC_API_KEY",
+      "google": "GEMINI_API_KEY"
+    }
+  }
+}

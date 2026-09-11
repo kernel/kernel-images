@@ -27,6 +27,7 @@ import (
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
+	"github.com/kernel/kernel-images/server/lib/agentproxy"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -284,6 +285,20 @@ func main() {
 		id := chi.URLParam(r, "process_id")
 		apiService.HandleProcessAttachWS(w, r, id, wsRegistry)
 	})
+
+	if config.AgentConfigPath != "" {
+		agentConfig, err := agentproxy.Load(config.AgentConfigPath)
+		if err != nil {
+			slogger.Error("agent endpoints disabled: invalid launch catalog", "err", err)
+		} else {
+			agents, err := agentproxy.New(ctx, agentConfig, slogger, wsRegistry)
+			if err != nil {
+				slogger.Error("agent endpoints disabled", "err", err)
+			} else {
+				r.Handle("/agent/v1/*", agents)
+			}
+		}
+	}
 
 	// Serve extension files for Chrome policy-installed extensions
 	// This allows Chrome to download .crx and update.xml files via HTTP

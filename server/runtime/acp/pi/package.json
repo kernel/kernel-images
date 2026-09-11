@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.83.0",
+    "pi-acp": "0.0.33",
+    "pi-mcp-adapter": "2.32.1"
+  }
+}
