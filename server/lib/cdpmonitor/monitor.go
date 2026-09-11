@@ -441,6 +441,8 @@ func (m *Monitor) supervise(ctx context.Context, updates <-chan string) {
 			if ctx.Err() != nil {
 				return
 			}
+			// Invalidate health and unblock capture before waiting for restartMu.
+			conn.cancel()
 			data, _ := json.Marshal(oapi.BrowserMonitorDisconnectedEventData{Reason: oapi.ChromeRestarted})
 			m.publish(events.Event{
 				Ts: time.Now().UnixMicro(), Type: EventMonitorDisconnected, Category: events.Monitor,

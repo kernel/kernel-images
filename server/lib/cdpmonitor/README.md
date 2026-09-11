@@ -81,8 +81,10 @@ baseline. Applying fork identity does not reset these process-lifetime counters.
 Scrapers must use the new instance identity and treat the first sample as a baseline,
 not a count of post-fork activity. Half-open socket detection uses a 5-second
 probe interval plus a 5-second timeout after execution resumes; health can lag a
-silent failure until that probe. Reattachment then follows the retry/setup limits
-below. No Chromium patch is involved.
+silent failure until that probe. A failed probe cancels the connection before
+publishing disconnection or waiting for serialized teardown, so blocked optional
+setup/body work cannot keep health up or delay recovery through its command timeout.
+Reattachment then follows the retry/setup limits below. No Chromium patch is involved.
 
 ## Real-Chromium network regression tests
 
