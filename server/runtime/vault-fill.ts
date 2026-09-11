@@ -157,9 +157,27 @@ export async function fillVaultFields(browser: Browser, request: VaultFillReques
       const binding = request.bindings[current];
       const value = binding.type === 'totp' ? generateTOTP(binding.value) : binding.value;
       result.fields[current].status = 'unknown';
-      await bounded(() => targets[current].fill(value, { timeout: request.timeout_ms ?? 10000 }));
+      const outcome = await bounded(() => targets[current].evaluate((element, value) => {
+        if (!(element instanceof HTMLInputElement) && !(element instanceof HTMLTextAreaElement)) return 'failed';
+        const rect = element.getBoundingClientRect();
+        const visibility = getComputedStyle(element).visibility;
+        if (!element.isConnected || element.ownerDocument !== document || element.matches(':disabled') || element.readOnly ||
+            rect.width === 0 || rect.height === 0 || visibility === 'hidden' || visibility === 'collapse' ||
+            (element instanceof HTMLInputElement && !['text', 'email', 'password', 'search', 'tel', 'url', 'number'].includes(element.type))) return 'failed';
+        // ElementHandle.fill uses keyboard insertion after focusing, which can be
+        // redirected by a site's focus handler. Write only this pinned node.
+        const prototype = element instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+        if (!setter) return 'failed';
+        setter.call(element, value);
+        if (element.value !== value) return 'unknown';
+        element.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+        element.dispatchEvent(new Event('change', { bubbles: true }));
+        return element.isConnected && element.ownerDocument === document ? 'filled' : 'unknown';
+      }, value));
       guard();
-      result.fields[current].status = 'filled';
+      result.fields[current].status = outcome;
+      if (outcome !== 'filled') throw new Error('write_stopped');
     }
     result.status = 'filled';
   } catch {

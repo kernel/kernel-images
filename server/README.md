@@ -106,6 +106,10 @@ visible editable input/textarea or contain exactly one editable input/textarea.
 Contenteditable elements are not supported. All targets and Base32 seeds are
 preflighted before writing. Duplicate targets fail even when selectors differ.
 Pinned element handles are never re-resolved after replacement or navigation.
+Writes use the native input/textarea prototype setter on the pinned node followed
+by synthetic `input` and `change` events, without focusing or keyboard insertion.
+`filled` means the value write completed, not that the site accepted it. Sites that
+require trusted typing are unsupported; there is no typing fallback.
 TOTP uses RFC 6238 SHA1, six digits and 30-second periods; the seed is decoded
 during preflight and the code is generated immediately before its write.
 
@@ -159,7 +163,7 @@ make test
 
 The vault runtime unit tests run with `make test-runtime` without a browser.
 The local Chromium/daemon integration tests are opt-in. With `playwright-core`,
-`patchright`, and `esbuild` installed where Node can resolve them, run:
+`patchright`, `esbuild`, `react`, and `react-dom` installed where Node can resolve them, run:
 
 ```bash
 VAULT_FILL_BROWSER_TESTS=1 node --test runtime/vault-fill*.test.ts
@@ -168,5 +172,6 @@ VAULT_FILL_BROWSER_TESTS=1 VAULT_FILL_ENGINE=patchright node --test runtime/vaul
 
 These use `/usr/bin/chromium` by default; override with `CHROMIUM_PATH`. They test
 actual pinned handles, cross-frame/page selection, no-write preflight failures,
-TOTP vectors, navigation/detachment, deadline cancellation, and daemon response/log
+TOTP vectors, navigation/detachment, focus redirection, React controlled inputs,
+deadline cancellation, and daemon response/log
 redaction even with Playwright debugging enabled. No image deployment is needed.

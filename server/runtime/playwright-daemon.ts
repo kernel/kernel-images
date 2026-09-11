@@ -387,7 +387,9 @@ function handleConnection(socket: Socket): void {
         } catch {
           result.fields[0].status = 'failed';
         } finally {
-          if (signal.aborted || result.status === 'unknown') await disconnectBrowser();
+          if (signal.aborted || result.status === 'unknown') {
+            await withTimeout(disconnectBrowser(), AbortSignal.timeout(500)).catch(() => {});
+          }
         }
         socket.write(JSON.stringify({ id: request.id, success: true, result }) + '\n');
         continue;

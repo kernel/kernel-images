@@ -1451,7 +1451,10 @@ paths:
         textarea, or a wrapper with exactly one editable input/textarea descendant.
         All targets and TOTP seeds are validated before writes; duplicate targets fail.
         Targets are pinned, never re-resolved. Fills in binding order and stops at the
-        first failure or navigation. Does not submit. TOTP uses RFC 6238 SHA1, six digits,
+        first failure or navigation. Uses native value setters with synthetic input/change
+        events, not focus or keyboard insertion. Filled means the write completed, not site
+        acceptance; sites requiring trusted typing are unsupported. The executor never
+        submits, but site event handlers may submit. TOTP uses RFC 6238 SHA1, six digits,
         30-second periods, generated immediately before writing; the seed is never filled.
         A failed preflight marks its field failed and the others not_attempted.
         Unknown means a write may have occurred; transport failures must also be treated

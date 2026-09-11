@@ -70,6 +70,40 @@ test('pinned credential fill against local Chromium', { skip: !process.env.VAULT
     assert.ok(!JSON.stringify(result).includes('secret'));
   });
 
+  await t.test('does not focus or send keyboard input to a redirected target', async () => {
+    await page.setContent(`<input id="a" onfocus="document.querySelector('#other').focus()"><input id="other">`);
+    assert.equal((await run([binding('#a')])).status, 'filled');
+    assert.equal(await page.locator('#a').inputValue(), 'secret-value');
+    assert.equal(await page.locator('#other').inputValue(), '');
+    assert.equal(await page.locator('#a').evaluate(element => document.activeElement === element), false);
+  });
+
+  await t.test('prototype setter updates a React controlled input and survives rerender', async () => {
+    const { build } = await import('esbuild');
+    const bundle = await build({
+      stdin: { resolveDir: import.meta.dirname, contents: `
+        import React, { useState } from 'react';
+        import { createRoot } from 'react-dom/client';
+        function App() {
+          const [value, setValue] = useState('');
+          const [count, setCount] = useState(0);
+          return React.createElement('div', null,
+            React.createElement('input', { id: 'controlled', value, onChange: e => setValue(e.target.value) }),
+            React.createElement('output', { id: 'observed' }, value),
+            React.createElement('button', { id: 'rerender', onClick: () => setCount(count + 1) }, count));
+        }
+        createRoot(document.getElementById('root')).render(React.createElement(App));
+      ` }, bundle: true, write: false, platform: 'browser', format: 'iife',
+    });
+    await page.setContent('<div id="root"></div>');
+    await page.addScriptTag({ content: bundle.outputFiles[0].text });
+    await page.locator('#controlled').waitFor();
+    assert.equal((await run([binding('#controlled')])).status, 'filled');
+    assert.equal(await page.locator('#observed').innerText(), 'secret-value');
+    await page.locator('#rerender').click();
+    assert.equal(await page.locator('#controlled').inputValue(), 'secret-value');
+  });
+
   await t.test('preflights missing, invalid, ambiguous, duplicate, readonly, hidden and invalid-seed targets without any writes', async () => {
     for (const second of [binding('#missing'), binding('['), binding('.ambiguous'), binding('#wrapper'),
       binding('#readonly'), binding('#hidden'), binding('#multiple'), binding('#otp', 'not base32', 'totp'), binding('#a')]) {
