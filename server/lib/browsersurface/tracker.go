@@ -194,6 +194,36 @@ func (t *Tracker) IsClosed() bool {
 	}
 }
 
+// CaptureSessions returns the attached session IDs and whether known targets
+// and worker discovery are initialized. Consumers also check their own domains.
+func (t *Tracker) CaptureSessions() ([]string, bool) {
+	if t.IsClosed() {
+		return nil, false
+	}
+	t.stateMu.RLock()
+	defer t.stateMu.RUnlock()
+	attached := make(map[string]bool, len(t.sessions))
+	ids := make([]string, 0, len(t.sessions))
+	for id, sess := range t.sessions {
+		ids = append(ids, id)
+		attached[sess.target.TargetID] = true
+		if t.tracksTarget("worker") && sess.target.Type != "service_worker" && !sess.workersAttached {
+			return nil, false
+		}
+	}
+	for target := range t.tabsByTarget {
+		if !attached[target] {
+			return nil, false
+		}
+	}
+	for target := range t.trackingNonPageTarget {
+		if !attached[target] {
+			return nil, false
+		}
+	}
+	return ids, true
+}
+
 func (t *Tracker) HasTabs() bool {
 	t.stateMu.RLock()
 	defer t.stateMu.RUnlock()

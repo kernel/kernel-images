@@ -68,9 +68,18 @@ func (t *Tracker) attachDedicatedWorkers(sessionID string) {
 		"autoAttach": true, "flatten": true, "waitForDebuggerOnStart": false,
 		"filter": []map[string]any{{"type": "worker"}},
 	}, sessionID)
-	if err != nil && ctx.Err() == nil && t.SessionExists(sessionID) {
-		t.logger.Warn("failed to attach dedicated workers", "session_id", sessionID, "err", err)
+	if err != nil {
+		if t.SessionExists(sessionID) && !t.protocol.IsClosed() {
+			t.logger.Warn("failed to attach dedicated workers", "session_id", sessionID, "err", err)
+			t.publish(Event{Kind: EventDiscoveryFailed, SessionID: sessionID})
+		}
+		return
 	}
+	t.stateMu.Lock()
+	if sess := t.sessions[sessionID]; sess != nil {
+		sess.workersAttached = true
+	}
+	t.stateMu.Unlock()
 }
 
 func (t *Tracker) initializeSession(sessionID string) {

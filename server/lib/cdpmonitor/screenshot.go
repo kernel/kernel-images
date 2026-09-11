@@ -42,7 +42,7 @@ func (m *Monitor) tryScreenshot(ctx context.Context, sourceEvent, sessionID stri
 	if cs := m.computedFor(sessionID); cs != nil {
 		_, navMeta = cs.navSnapshot()
 	}
-	m.captureWg.Go(func() {
+	m.telemetryWg.Go(func() {
 		defer m.screenshotInFlight.Store(false)
 		m.captureScreenshot(ctx, sourceEvent, navMeta)
 	})

@@ -1,12 +1,78 @@
 # CDP Monitor
 
-The monitor is the browser-facing layer of the kernel browser logging pipeline. It owns a connection to Chrome's DevTools endpoint, uses `browsersurface` to track page, iframe, and worker sessions, and converts raw CDP notifications into typed `events.Event` values for downstream consumers.
+The API starts the monitor independently of customer telemetry. It owns one persistent connection to Chrome's DevTools endpoint and uses `browsersurface` to track page, iframe, worker, and background-page sessions. Metrics-only mode enables Network and target discovery; customer telemetry optionally adds typed events, computed timers, body retrieval, screenshots, and interaction capture.
 
 ## Overview
 
 `cdpmonitor` manages a Chrome DevTools Protocol (CDP) WebSocket connection to a running Chrome browser. It subscribes to CDP events across all attached tabs, translates them into structured `events.Event` values, and publishes them via a caller-supplied `PublishFunc`. It also derives synthetic events from sequences of CDP events and takes screenshots on significant page activity.
 
-Chrome can restart independently of the monitor. When that happens, `UpstreamProvider` pushes a new DevTools URL and the monitor reconnects automatically, emitting lifecycle events so consumers can track continuity.
+Chrome can restart independently of the monitor. The monitor retries startup failures, upstream notifications, socket loss (including at the same URL), and required discovery/domain initialization failures. Customer events still publish exclusively through `TelemetrySession.Publish`; platform counters do not export event payloads.
+
+## Always-on network metrics
+
+The separate in-memory collector serves these **label-free** metrics on the existing
+`GET /metrics` endpoint, including zeros before capture starts:
+
+| Metric | Meaning |
+| --- | --- |
+| `kernel_chromium_connection_resets_total` | Observed terminal `Network.loadingFailed` outcomes with exactly `net::ERR_CONNECTION_RESET`. |
+| `kernel_chromium_network_requests_completed_total` | Observed terminal `Network.loadingFinished` or `Network.loadingFailed` outcomes. Includes cancellations, refusals, HTTP 500 responses, and unknown-start outcomes. |
+| `kernel_chromium_network_monitor_up` | Discovery initialized, socket open, and Network plus dedicated-worker discovery initialized for every known attached target. Zero during setup, failures, reconnect, and shutdown. Not browser responsiveness or proof of complete request coverage. |
+
+These count **CDP request-chain observations, not socket resets**. Internal browser
+retries are not separately counted. Redirects reuse a request ID and contribute
+one final outcome, not one per hop. HTTP status does not classify transport errors.
+Missing `requestWillBeSent` does not exclude a valid terminal event from either
+counter; metrics-only mode does not retain request-start records or bodies.
+
+Deduplication is first-terminal-wins within the most recent **8,192 distinct
+(session ID, request ID)** terminal keys in one connection generation. A fixed FIFO
+and map bound the history. Retained IDs are limited to 256 bytes each; empty,
+oversized, malformed, sessionless, and untracked-session events are ignored.
+Identities are cleared only after old connection work drains, so a reused session
+and request ID on a fresh connection counts again. Totals survive reconnections,
+Chrome restarts, and telemetry toggles; a new API process starts at zero.
+
+There is no cross-session deduplication: equal IDs on different targets may be
+unrelated, while workers/service workers can expose multiple observations of one
+logical fetch. A duplicate arriving after FIFO eviction can count again. Requests
+before attachment/domain readiness, during disconnection, or after target detach
+can be missed. These metrics are **not lossless** and are not unique HTTP-request
+or socket counts. The reset fraction uses the same observed-terminal denominator.
+
+The existing short-lived `ChromeCollector` and its UMA behavior are unchanged.
+Network metrics remain available when Chrome/UMA collection fails; scrapes do not
+reset or increment the counters. No URLs, domains, identities, or error-string
+labels are emitted. No additional configuration or kill switch is introduced.
+
+### Local verification and remaining checks
+
+```sh
+# From server/; Chromium must be installed for the opt-in suite.
+go test -race ./lib/cdpmonitor ./lib/metrics ./cmd/api/api
+KERNEL_CDPMONITOR_CHROME_E2E=1 go test -race ./lib/cdpmonitor -count=1 -v
+go test ./lib/cdpmonitor -run '^$' -bench '^BenchmarkMetricsOnlyTerminalDispatch$' -benchmem
+```
+
+The metrics fixture uses local HTTP and TCP RST (`SetLinger(0)`), POST requests to
+avoid transparent GET retries, cache-disabled responses, and settled targets.
+It independently checks Chromium's error text and exact +10/+10 scrape deltas;
+then exercises non-reset outcomes, same-process frames, OOPIFs, dedicated/shared/
+service workers, telemetry off/on/off cleanup, socket replacement, actual Chrome
+restart, and a fresh monitor's zero counters. API lifecycle/race tests cover
+startup, telemetry toggles, and shutdown. Extension background pages are included
+in discovery but are not validated by a real extension fixture here.
+
+The microbenchmark measures Go terminal ingestion, not total Chromium CPU/memory
+or live workload overhead. Full image/API-process restart, suspend/resume, snapshot
+fork, and staging checks are not covered by these local tests. A restored process
+retains its counters and dedup history; a fork of its memory may inherit its parent's
+baseline. Applying fork identity does not reset these process-lifetime counters.
+Scrapers must use the new instance identity and treat the first sample as a baseline,
+not a count of post-fork activity. Half-open socket detection uses a 5-second
+probe interval plus a 5-second timeout after execution resumes; health can lag a
+silent failure until that probe. Reattachment then follows the retry/setup limits
+below. No Chromium patch is involved.
 
 ## Real-Chromium network regression tests
 
@@ -74,21 +140,43 @@ locations and does not subscribe to workers.
 
 ### Reconnect and shutdown
 
-`subscribeToUpstream` listens for new DevTools URLs. `handleUpstreamRestart` cancels
-the current connection context, closes its protocol, stops consuming its events,
-and drains capture work before clearing state and constructing a new client/tracker.
-Dial retries use capped-exponential backoff (250 ms, 500 ms, 1 s, then 2 s; at most
-10 attempts). CDP sessions and pending requests never carry into the next connection.
+`Start` subscribes before reading the current URL. The supervisor reacts to socket
+closure, upstream notifications, and required initialization failure; a 5-second
+browser-level probe detects silent socket failure. It cancels and drains the old
+connection before clearing identities and creating the next client/tracker. Retries
+continue for the API lifecycle, with delays doubling from 250 ms to a 5-second cap.
+A healthy probe resets the delay. Dials take at most 5 seconds; initial discovery
+and Network commands have 30-second limits. Health requires domain readiness,
+not just a successful dial or probe. The existing `monitor_disconnected` payload
+retains its legacy `chrome_restarted` reason for connection replacement, including
+socket loss; use the capture-health gauge rather than that reason to diagnose
+availability. Retries no longer exhaust, so `monitor_reconnect_failed` is not emitted.
 
-`asyncWg` tracks the upstream listener and request sweeper. `captureWg` tracks
-tracker startup, domain initialization, body fetches, and screenshots. `Stop` cancels
-the lifecycle, waits for the lifecycle workers, and drains the current connection.
-Closing the protocol unblocks pending commands, including callers without the
-monitor's cancellation context.
+`asyncWg` tracks the supervisor and request sweeper. `captureWg` tracks discovery
+and domain setup; `telemetryWg` drains optional body/screenshot work. `Stop` cancels
+the lifecycle and drains all three. Closing the protocol unblocks pending commands.
+
+`SetTelemetry` changes optional capture without replacing the connection or
+clearing terminal history. Enabling schedules per-target setup asynchronously,
+with a 30-second setup budget. Disabling drains bounded setup and body/screenshot
+work before cancelling optional capture, so cancellation cannot abort a socket
+write or lose a script-registration result. It then stops computed timers,
+removes new-document scripts, cleans existing execution contexts (including
+same-process frames), removes the binding, and disables optional domains. Network
+stays enabled. Failed cleanup closes only the monitor's connection and retries in
+metrics-only mode. Optional events during configuration are not captured; terminal
+counter ingestion continues. A stuck optional command can delay disable through
+setup, capture, and cleanup deadlines (up to roughly 90 seconds); API shutdown
+cancels the lifecycle before waiting for configuration to drain. All customer
+publication remains session-gated.
 
 ### Synchronization
 
-`restartMu` serializes connection replacement. `lifeMu` protects the connection
+`controlMu` serializes Start/Stop/configuration, `restartMu` serializes connection
+replacement against configuration, and `telemetryMu` protects optional capture
+setup/dispatch. Computed publication is fenced before old state is discarded.
+`sessionsMu` also guards domain readiness, script IDs, and execution contexts.
+`lifeMu` protects the connection
 pointer and lifecycle context/cancel function; it is released before waiting on
 connection or capture work. `sessionsMu` protects target metadata and computed-state
 lookup. `pendReqMu` protects requests keyed by **(CDP session ID, request ID)**;

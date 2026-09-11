@@ -75,6 +75,8 @@ const targetTypePage = "page"
 
 // targetInfo holds metadata about an attached CDP target/session.
 type targetInfo struct {
+	title         string
+	openerID      string
 	targetID      string
 	url           string
 	targetType    string
