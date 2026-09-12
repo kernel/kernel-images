@@ -2343,14 +2343,15 @@ components:
               description: CDP request identifier matching the originating request.
             code:
               type: string
-              enum: [destination_blocked, provider_blacklisted, provider_unreachable, proxy_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed]
+              enum: [destination_blocked, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, proxy_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed]
               description: >
                 Proxy-layer error code: the `X-Kernel-Proxy-Error` response
                 header value from a branded 5xx error page served by the metro
                 egress host-proxy. Values mirror what the proxy emits:
                 destination_blocked, provider_blacklisted, provider_unreachable,
-                proxy_unavailable, upstream_timeout, upstream_dns_failure,
-                upstream_connect_failed. Unknown header values are dropped.
+                provider_rejected, origin_tls_timeout, proxy_unavailable,
+                upstream_timeout, upstream_dns_failure, upstream_connect_failed.
+                Unknown header values are dropped.
             status:
               type: integer
               description: HTTP response status of the branded error page (502).
@@ -6679,6 +6680,8 @@ components:
             List of key symbols to press. Each item should be a key symbol supported by xdotool
             (see X11 keysym definitions). Examples include "Return", "Shift", "Ctrl", "Alt", "F5".
             Items in this list could also be combinations, e.g. "Ctrl+t" or "Ctrl+Shift+Tab".
+            Use X11 names for punctuation in combinations, such as "Ctrl+minus" or "Ctrl+plus".
+            A literal hyphen is also accepted as an alias, so "Ctrl+-" is normalized to "Ctrl+minus".
           items:
             type: string
         duration:

@@ -27,6 +27,7 @@
           @touchend.stop.prevent="onTouchHandler"
           @paste.stop.prevent="onPaste"
           @focus="onOverlayFocus"
+          @blur="resetKeyboard"
         />
         <!-- KERNEL
         <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute">
@@ -221,6 +222,7 @@
   import { Component, Ref, Watch, Vue, Prop } from 'vue-property-decorator'
   import ResizeObserver from 'resize-observer-polyfill'
   import { elementRequestFullscreen, onFullscreenChange, isFullscreen, lockKeyboard, unlockKeyboard } from '~/utils'
+  import { isClipboardReadGranted } from '~/utils/clipboard'
 
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
@@ -544,6 +546,9 @@
         this.onWheel(e)
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
+      window.addEventListener('blur', this.resetKeyboard)
+      window.addEventListener('pagehide', this.resetKeyboard)
+      document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
 
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
@@ -586,6 +591,9 @@
         document.removeEventListener('wheel', this._wheelHandler, { capture: true })
         this._wheelHandler = null
       }
+      window.removeEventListener('blur', this.resetKeyboard)
+      window.removeEventListener('pagehide', this.resetKeyboard)
+      document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -731,16 +739,22 @@
     }
 
     async syncClipboard() {
-      if (this.clipboard_read_available && window.document.hasFocus()) {
-        try {
-          const text = await navigator.clipboard.readText()
-          if (this.clipboard !== text) {
-            this.$accessor.remote.setClipboard(text)
-            this.$accessor.remote.sendClipboard(text)
-          }
-        } catch (err: any) {
-          this.$log.error(err)
+      if (!this.clipboard_read_available || !window.document.hasFocus()) {
+        return
+      }
+
+      if (window.self !== window.top && !(await isClipboardReadGranted())) {
+        return
+      }
+
+      try {
+        const text = await navigator.clipboard.readText()
+        if (this.clipboard !== text) {
+          this.$accessor.remote.setClipboard(text)
+          this.$accessor.remote.sendClipboard(text)
         }
+      } catch (err: any) {
+        this.$log.error(err)
       }
     }
 
@@ -808,6 +822,24 @@
       first.target.dispatchEvent(simulatedEvent)
     }
 
+    focusOverlay(e: MouseEvent) {
+      // Touch input is translated into an untrusted mouse event above. Keep the
+      // existing mobile-keyboard behavior while allowing a real mouse to focus
+      // the overlay on touch-capable devices.
+      if (this.is_touch_device && !e.isTrusted) {
+        return
+      }
+
+      const focus = () => {
+        if (this.hosting && !this.locked) {
+          this._overlay.focus()
+        }
+      }
+
+      focus()
+      window.setTimeout(focus, 0)
+    }
+
     onMouseDown(e: MouseEvent) {
       this.unmuteOnInteraction()
 
@@ -823,9 +855,7 @@
         return
       }
 
-      if (!this.is_touch_device) {
-        this._overlay.focus()
-      }
+      this.focusOverlay(e)
 
       this.sendMousePos(e)
       this.$client.sendData('mousedown', { key: e.button + 1 })
@@ -836,6 +866,7 @@
         return
       }
 
+      this.focusOverlay(e)
       this.sendMousePos(e)
       this.$client.sendData('mouseup', { key: e.button + 1 })
     }
@@ -871,8 +902,25 @@
         })
       }
 
-      this.keyboard.reset()
+      this.resetKeyboard()
       this.focused = false
+    }
+
+    resetKeyboard() {
+      this.keyboard.reset()
+    }
+
+    resetKeyboardWhenHidden() {
+      if (document.hidden) {
+        this.resetKeyboard()
+      }
+    }
+
+    @Watch('connected')
+    onConnectedChanged(connected: boolean) {
+      if (!connected) {
+        this.resetKeyboard()
+      }
     }
 
     async onPaste(event: ClipboardEvent) {
