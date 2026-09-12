@@ -1,0 +1,45 @@
+diff --git a/libcontainer/nsenter/nsexec.c b/libcontainer/nsenter/nsexec.c
+index 728e68b..b04a3b2 100644
+--- a/libcontainer/nsenter/nsexec.c
++++ b/libcontainer/nsenter/nsexec.c
+@@ -609,0 +610 @@ void join_namespaces(char *nsspec)
++	int rootfd = -1;
+@@ -617,0 +619,27 @@ void join_namespaces(char *nsspec)
++	/*
++	 * If runc itself runs inside a chroot, joining a container's mount
++	 * namespace does not update the calling process's root directory. Keep an
++	 * fd for the container init's root so the exec process can explicitly
++	 * enter it after setns.
++	 */
++	for (size_t i = 0; i < ns_len; i++) {
++		struct namespace_t *ns = &ns_list[i];
++		const char *suffix = "/ns/mnt";
++		size_t path_len = strlen(ns->path);
++		size_t suffix_len = strlen(suffix);
++
++		if (nstype(ns->type) != CLONE_NEWNS || path_len <= suffix_len ||
++		    strcmp(ns->path + path_len - suffix_len, suffix) != 0)
++			continue;
++
++		char rootpath[PATH_MAX];
++		int n = snprintf(rootpath, sizeof(rootpath), "%.*s/root",
++				 (int)(path_len - suffix_len), ns->path);
++		if (n < 0 || (size_t)n >= sizeof(rootpath))
++			bail("container root path is too long");
++		rootfd = open(rootpath, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
++		if (rootfd < 0)
++			bail("failed to open container root %s", rootpath);
++		break;
++	}
++
+@@ -637,0 +666,10 @@ void join_namespaces(char *nsspec)
++
++	if (rootfd >= 0) {
++		if (fchdir(rootfd) < 0)
++			bail("failed to change directory to container root");
++		if (chroot(".") < 0)
++			bail("failed to chroot to container root");
++		if (chdir("/") < 0)
++			bail("failed to change directory after chroot");
++		close(rootfd);
++	}

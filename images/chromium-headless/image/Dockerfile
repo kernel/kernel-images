@@ -40,6 +40,19 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/kernel-images-supervisord-shim ./cmd/supervisord-shim
 
+FROM docker.io/golang:1.25.0-bookworm AS runc-hypeman-builder
+ARG TARGETARCH
+ARG TARGETOS
+ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-runc-hypeman
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked,id=$CACHEIDPREFIX-apt-lib \
+    apt-get update && \
+    apt-get --no-install-recommends -y install ca-certificates curl libseccomp-dev patch pkg-config
+COPY shared/docker/build-runc-hypeman.sh shared/docker/runc-hypeman.patch /build/
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    /build/build-runc-hypeman.sh /out/runc-hypeman
+
 FROM docker.io/ubuntu:22.04 AS ffmpeg-downloader
 
 # Allow cross-compilation when building with BuildKit platforms
@@ -244,6 +257,7 @@ COPY --from=docker \
     /usr/local/bin/dockerd \
     /usr/local/bin/runc \
     /usr/local/bin/
+COPY --from=runc-hypeman-builder /out/runc-hypeman /usr/local/bin/runc-hypeman
 COPY shared/docker/daemon.json /etc/docker/daemon.json
 COPY shared/docker/install-docker-dependencies.sh /tmp/install-docker-dependencies.sh
 RUN /tmp/install-docker-dependencies.sh && rm /tmp/install-docker-dependencies.sh && \
