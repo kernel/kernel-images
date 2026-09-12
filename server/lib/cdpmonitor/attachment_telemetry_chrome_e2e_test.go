@@ -89,6 +89,11 @@ func TestTelemetryWaitsForAttachmentChrome(t *testing.T) {
 // continue to flow. The separate user CDP connection bypasses this proxy.
 func delayNetworkReplies(t *testing.T, parent context.Context, upstreamURL string) (string, <-chan string, func()) {
 	t.Helper()
+	return delayCommandReplies(t, parent, upstreamURL, func(method string) bool { return method == "Network.enable" })
+}
+
+func delayCommandReplies(t *testing.T, parent context.Context, upstreamURL string, hold func(method string) bool) (string, <-chan string, func()) {
+	t.Helper()
 	blocked := make(chan string, 16)
 	released := make(chan struct{})
 	var once sync.Once
@@ -107,7 +112,7 @@ func delayNetworkReplies(t *testing.T, parent context.Context, upstreamURL strin
 		}
 		defer upstream.CloseNow()
 		var mu sync.Mutex
-		network := make(map[int]string)
+		pending := make(map[int]string)
 		var delayed sync.WaitGroup
 		done := make(chan struct{})
 		go func() {
@@ -125,8 +130,8 @@ func delayNetworkReplies(t *testing.T, parent context.Context, upstreamURL strin
 					return
 				}
 				mu.Lock()
-				sid, hold := network[reply.ID]
-				delete(network, reply.ID)
+				sid, hold := pending[reply.ID]
+				delete(pending, reply.ID)
 				mu.Unlock()
 				if hold {
 					delayed.Go(func() {
@@ -160,9 +165,9 @@ func delayNetworkReplies(t *testing.T, parent context.Context, upstreamURL strin
 			if json.Unmarshal(data, &command) != nil {
 				return
 			}
-			if command.Method == "Network.enable" {
+			if hold(command.Method) {
 				mu.Lock()
-				network[command.ID] = command.SessionID
+				pending[command.ID] = command.SessionID
 				mu.Unlock()
 			}
 			if upstream.Write(ctx, kind, data) != nil {

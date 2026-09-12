@@ -59,6 +59,8 @@ type Monitor struct {
 	network            *networkCounters
 	networkReady       map[string]bool // sessionsMu
 
+	pendingInjections map[*interactionInjection]struct{} // sessionsMu; only in-flight registrations
+
 	lifeMu sync.Mutex
 	conn   *monitorConnection
 
@@ -101,6 +103,7 @@ func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log 
 		telemetryCtx:       context.Background(),
 		optionalSessions:   make(map[string]string),
 		interactionTargets: make(map[string]struct{}),
+		pendingInjections:  make(map[*interactionInjection]struct{}),
 		telemetryChanged:   make(chan struct{}, 1),
 		network:            newNetworkCounters(),
 		networkReady:       make(map[string]bool),
@@ -296,6 +299,12 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 			if json.Unmarshal(event.Message.Params, &p) == nil {
 				m.sessionsMu.Lock()
 				delete(m.interactionTargets, p.TargetID)
+				for injection := range m.pendingInjections {
+					if injection.targetID == p.TargetID {
+						injection.destroyed = true
+						delete(m.pendingInjections, injection)
+					}
+				}
 				m.sessionsMu.Unlock()
 			}
 		}

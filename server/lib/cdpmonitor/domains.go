@@ -61,6 +61,11 @@ func (m *Monitor) enableDomains(ctx context.Context, sessionID string, targetTyp
 //go:embed interaction.js
 var injectedJS string
 
+type interactionInjection struct {
+	targetID  string
+	destroyed bool // sessionsMu
+}
+
 // injectScript installs the interaction tracker for the session on both future
 // document loads and the currently-loaded document, so a page that was already
 // live when the session attached is tracked without waiting for a navigation.
@@ -69,24 +74,30 @@ func (m *Monitor) injectScript(ctx context.Context, sessionID string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	m.sessionsMu.RLock()
+	m.sessionsMu.Lock()
 	info, exists := m.sessions[sessionID]
-	m.sessionsMu.RUnlock()
+	injection := &interactionInjection{targetID: info.targetID}
+	if exists {
+		m.pendingInjections[injection] = struct{}{}
+	}
+	m.sessionsMu.Unlock()
 	raw, err := m.send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
 		"source": injectedJS,
 	}, sessionID)
 	var rejection *cdpclient.Error
-	if errors.As(err, &rejection) {
-		// No new injection occurred. Preserve any earlier obligation, and do not
-		// fall back to installing live listeners on a target rejecting scripts.
-		return err
-	}
-	// Success and uncertain outcomes both require cleanup, even after detach.
+	rejected := errors.As(err, &rejection)
 	m.sessionsMu.Lock()
-	if exists {
+	delete(m.pendingInjections, injection)
+	destroyed := injection.destroyed
+	// Detach alone preserves success/uncertain obligations; confirmed destruction
+	// invalidates even a late result. Rejection never erases an earlier obligation.
+	if exists && !destroyed && !rejected {
 		m.interactionTargets[info.targetID] = struct{}{}
 	}
 	m.sessionsMu.Unlock()
+	if destroyed {
+		return nil
+	}
 	if err != nil {
 		return err
 	}

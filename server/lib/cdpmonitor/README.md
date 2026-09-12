@@ -204,12 +204,19 @@ These obligations are in memory; full API-process restart remains an unverified 
 
 A typed CDP rejection of script registration creates no new cleanup obligation and
 never falls back to live-document injection. Prior obligations remain intact.
-Timeouts, transport failures, and invalid registration responses retain the target
-obligation and replace the connection because registration may have taken effect.
+For a still-live target, timeouts, transport failures, and invalid registration
+responses retain the obligation and replace the connection because registration
+may have taken effect.
 Successful registration still requires cleanup when current-document evaluation
 fails. Clean targets do not issue an unnecessary cleanup registration. A local
 Chromium proxy regression persistently rejects this Page command; it is an injected
 protocol failure, not a discovered website-specific trigger.
+
+Registrations have individual in-flight markers. Confirmed target destruction
+invalidates matching markers, so late acknowledgements or uncertain outcomes
+cannot recreate cleanup obligations or force recovery for a destroyed document.
+Ordinary detach does not invalidate them. Markers are removed on completion or
+destruction; there is no persistent destroyed-target tombstone set.
 
 ### Synchronization
 
