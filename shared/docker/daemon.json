@@ -1,3 +1,9 @@
 {
-  "storage-driver": "fuse-overlayfs"
+  "storage-driver": "fuse-overlayfs",
+  "default-runtime": "hypeman-runc",
+  "runtimes": {
+    "hypeman-runc": {
+      "path": "/usr/local/bin/runc-hypeman"
+    }
+  }
 }
