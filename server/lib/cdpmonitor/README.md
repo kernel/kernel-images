@@ -164,7 +164,12 @@ and Network commands have 30-second limits. Health requires domain readiness,
 not just a successful dial or probe. The existing `monitor_disconnected` payload
 retains its legacy `chrome_restarted` reason for connection replacement, including
 socket loss; use the capture-health gauge rather than that reason to diagnose
-availability. Retries no longer exhaust, so `monitor_reconnect_failed` is not emitted.
+availability. `monitor_reconnected` is emitted only after an established connection
+was lost, with duration measured from that loss across failed retries. Initial
+acquisition (including absent URLs or failed dials) emits no restart event. Each
+`Start` begins a new event lifecycle; queued pre-acquisition URL notifications are
+superseded by the current URL. Retries no longer exhaust, so
+`monitor_reconnect_failed` is not emitted.
 
 `asyncWg` tracks the supervisor, telemetry reconciler, and request sweeper. `captureWg` tracks discovery
 and domain setup; `telemetryWg` drains optional body/screenshot work. `Stop` cancels
@@ -196,6 +201,15 @@ with `runImmediately` reaches existing main worlds, including same-process frame
 it is then removed. No Runtime/Page domain is enabled solely for this recovery.
 Registration IDs remain connection-local and are never reused on another session.
 These obligations are in memory; full API-process restart remains an unverified check.
+
+A typed CDP rejection of script registration creates no new cleanup obligation and
+never falls back to live-document injection. Prior obligations remain intact.
+Timeouts, transport failures, and invalid registration responses retain the target
+obligation and replace the connection because registration may have taken effect.
+Successful registration still requires cleanup when current-document evaluation
+fails. Clean targets do not issue an unnecessary cleanup registration. A local
+Chromium proxy regression persistently rejects this Page command; it is an injected
+protocol failure, not a discovered website-specific trigger.
 
 ### Synchronization
 

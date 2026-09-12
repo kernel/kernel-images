@@ -5,6 +5,8 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 )
 
 // bindingName is the JS function exposed via Runtime.addBinding.
@@ -64,26 +66,44 @@ var injectedJS string
 // live when the session attached is tracked without waiting for a navigation.
 // Idempotent for the current binding; replaces listeners from an old connection.
 func (m *Monitor) injectScript(ctx context.Context, sessionID string) error {
-	m.sessionsMu.Lock()
-	if info, exists := m.sessions[sessionID]; exists {
-		m.interactionTargets[info.targetID] = struct{}{}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	m.sessionsMu.Unlock()
+	m.sessionsMu.RLock()
+	info, exists := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
 	raw, err := m.send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
 		"source": injectedJS,
 	}, sessionID)
-	if err == nil {
-		var result struct {
-			Identifier string `json:"identifier"`
-		}
-		if json.Unmarshal(raw, &result) == nil {
-			m.sessionsMu.Lock()
-			if _, exists := m.optionalSessions[sessionID]; exists {
-				m.optionalSessions[sessionID] = result.Identifier
-			}
-			m.sessionsMu.Unlock()
-		}
+	var rejection *cdpclient.Error
+	if errors.As(err, &rejection) {
+		// No new injection occurred. Preserve any earlier obligation, and do not
+		// fall back to installing live listeners on a target rejecting scripts.
+		return err
 	}
+	// Success and uncertain outcomes both require cleanup, even after detach.
+	m.sessionsMu.Lock()
+	if exists {
+		m.interactionTargets[info.targetID] = struct{}{}
+	}
+	m.sessionsMu.Unlock()
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Identifier string `json:"identifier"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return err
+	}
+	if result.Identifier == "" {
+		return errors.New("script registration returned no identifier")
+	}
+	m.sessionsMu.Lock()
+	if _, exists := m.optionalSessions[sessionID]; exists {
+		m.optionalSessions[sessionID] = result.Identifier
+	}
+	m.sessionsMu.Unlock()
 	// Some documents have no evaluable main-world context (e.g. chrome:// pages);
 	// the registration above still applies to the next load. Surface anything else.
 	if _, evalErr := m.send(ctx, "Runtime.evaluate", map[string]any{
@@ -91,12 +111,13 @@ func (m *Monitor) injectScript(ctx context.Context, sessionID string) error {
 	}, sessionID); evalErr != nil && ctx.Err() == nil {
 		m.log.Warn("cdpmonitor: failed to inject interaction script into current document", "session", sessionID, "err", evalErr)
 	}
-	return err
+	return nil
 }
 
 func (m *Monitor) disableOptionalDomains(ctx context.Context, sessionID, scriptID string) error {
 	m.sessionsMu.RLock()
 	info, exists := m.sessions[sessionID]
+	_, dirty := m.interactionTargets[info.targetID]
 	m.sessionsMu.RUnlock()
 	if !exists {
 		return nil
@@ -106,7 +127,9 @@ func (m *Monitor) disableOptionalDomains(ctx context.Context, sessionID, scriptI
 		_, cleanupErr = m.send(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{"identifier": scriptID}, sessionID)
 	}
 	if isPageLikeTarget(info.targetType) {
-		cleanupErr = errors.Join(cleanupErr, m.cleanupInteraction(ctx, sessionID))
+		if dirty {
+			cleanupErr = errors.Join(cleanupErr, m.cleanupInteraction(ctx, sessionID))
+		}
 		for _, command := range []struct {
 			method string
 			params any

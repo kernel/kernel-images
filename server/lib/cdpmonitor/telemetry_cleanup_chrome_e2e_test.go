@@ -141,6 +141,18 @@ func testTelemetryCleanupRecovery(t *testing.T, mode string) {
 func failCleanupProxy(t *testing.T, parent context.Context, upstreamURL string, failRemoval bool) (string, *atomic.Bool) {
 	t.Helper()
 	failed := &atomic.Bool{}
+	url := rejectPageCommandProxy(t, parent, upstreamURL, func(method, source string) bool {
+		failCommand := method == "Page.addScriptToEvaluateOnNewDocument" && source == cleanupInteractionJS
+		if failRemoval {
+			failCommand = method == "Page.removeScriptToEvaluateOnNewDocument"
+		}
+		return failCommand && failed.CompareAndSwap(false, true)
+	})
+	return url, failed
+}
+
+func rejectPageCommandProxy(t *testing.T, parent context.Context, upstreamURL string, reject func(method, source string) bool) string {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		client, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -184,11 +196,7 @@ func failCleanupProxy(t *testing.T, parent context.Context, upstreamURL string, 
 			if json.Unmarshal(data, &command) != nil {
 				return
 			}
-			failCommand := command.Method == "Page.addScriptToEvaluateOnNewDocument" && command.Params.Source == cleanupInteractionJS
-			if failRemoval {
-				failCommand = command.Method == "Page.removeScriptToEvaluateOnNewDocument"
-			}
-			if failCommand && failed.CompareAndSwap(false, true) {
+			if reject(command.Method, command.Params.Source) {
 				if wsjson.Write(ctx, client, map[string]any{"id": command.ID, "error": map[string]any{"code": -32000, "message": "fixture cleanup failure"}}) != nil {
 					return
 				}
@@ -200,5 +208,5 @@ func failCleanupProxy(t *testing.T, parent context.Context, upstreamURL string, 
 		}
 	}))
 	t.Cleanup(server.Close)
-	return "ws" + strings.TrimPrefix(server.URL, "http"), failed
+	return "ws" + strings.TrimPrefix(server.URL, "http")
 }

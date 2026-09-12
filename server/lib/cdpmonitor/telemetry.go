@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
@@ -177,7 +178,8 @@ func (m *Monitor) enableOptionalCapture(ctx context.Context, sessionID string, i
 	defer cancel()
 	m.enableDomains(ctx, sessionID, info.targetType)
 	if isPageLikeTarget(info.targetType) {
-		if err := m.injectScript(ctx, sessionID); errors.Is(err, context.DeadlineExceeded) {
+		var rejection *cdpclient.Error
+		if err := m.injectScript(ctx, sessionID); err != nil && !errors.As(err, &rejection) {
 			m.lifeMu.Lock()
 			if m.conn != nil {
 				m.conn.cancel()

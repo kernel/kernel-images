@@ -443,14 +443,12 @@ func (m *Monitor) supervise(ctx context.Context, updates <-chan string) {
 			}
 			// Invalidate health and unblock capture before waiting for restartMu.
 			conn.cancel()
+			disconnectedAt = time.Now()
 			data, _ := json.Marshal(oapi.BrowserMonitorDisconnectedEventData{Reason: oapi.ChromeRestarted})
 			m.publish(events.Event{
 				Ts: time.Now().UnixMicro(), Type: EventMonitorDisconnected, Category: events.Monitor,
 				Source: oapi.BrowserEventSource{Kind: oapi.LocalProcess}, Data: data,
 			})
-		}
-		if disconnectedAt.IsZero() {
-			disconnectedAt = time.Now()
 		}
 		m.restartMu.Lock()
 		m.closeConnection()
@@ -462,6 +460,19 @@ func (m *Monitor) supervise(ctx context.Context, updates <-chan string) {
 		case <-time.After(backoff):
 		}
 		backoff = min(2*backoff, 5*time.Second)
+		// Current supersedes updates queued before acquisition. Notifications
+		// arriving during acquisition still trigger replacement afterward.
+	drainUpdates:
+		for {
+			select {
+			case _, ok := <-updates:
+				if !ok {
+					updates = nil
+				}
+			default:
+				break drainUpdates
+			}
+		}
 		// Always reread, including after failed dials and ordinary socket loss.
 		url := m.upstreamMgr.Current()
 		if url == "" {
@@ -474,11 +485,13 @@ func (m *Monitor) supervise(ctx context.Context, updates <-chan string) {
 			m.log.Warn("cdpmonitor: reconnect failed", "err", err)
 			continue
 		}
-		data, _ := json.Marshal(oapi.BrowserMonitorReconnectedEventData{ReconnectDurationMs: time.Since(disconnectedAt).Milliseconds()})
-		m.publish(events.Event{
-			Ts: time.Now().UnixMicro(), Type: EventMonitorReconnected, Category: events.Monitor,
-			Source: oapi.BrowserEventSource{Kind: oapi.LocalProcess}, Data: data,
-		})
-		disconnectedAt = time.Time{}
+		if !disconnectedAt.IsZero() {
+			data, _ := json.Marshal(oapi.BrowserMonitorReconnectedEventData{ReconnectDurationMs: time.Since(disconnectedAt).Milliseconds()})
+			m.publish(events.Event{
+				Ts: time.Now().UnixMicro(), Type: EventMonitorReconnected, Category: events.Monitor,
+				Source: oapi.BrowserEventSource{Kind: oapi.LocalProcess}, Data: data,
+			})
+			disconnectedAt = time.Time{}
+		}
 	}
 }
