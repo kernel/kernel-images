@@ -41,6 +41,35 @@ test('lists browser-wide tools through the image API', async () => {
   assert.equal(requests[0].init?.signal, controller.signal);
 });
 
+test('resolves a fresh execution signal for every request', async () => {
+  const first = new AbortController();
+  const second = new AbortController();
+  let active = first.signal;
+  const signals: Array<AbortSignal | null | undefined> = [];
+  const client = createWebMCPClient({
+    apiBaseUrl: 'http://127.0.0.1:10001',
+    signalProvider: () => active,
+    fetchImpl: async (_url, init) => {
+      signals.push(init?.signal);
+      return jsonResponse({tools: []});
+    },
+  });
+
+  await client.listTools();
+  active = second.signal;
+  await client.listTools();
+
+  assert.deepEqual(signals, [first.signal, second.signal]);
+  assert.throws(
+    () => createWebMCPClient({
+      apiBaseUrl: 'http://127.0.0.1:10001',
+      signal: first.signal,
+      signalProvider: () => second.signal,
+    }),
+    /signal or signalProvider, not both/,
+  );
+});
+
 test('invokes an exact tool reference with input and timeout', async () => {
   let request: {url: string; init?: RequestInit} | undefined;
   const client = createWebMCPClient({

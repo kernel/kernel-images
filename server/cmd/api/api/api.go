@@ -84,6 +84,8 @@ type ApiService struct {
 	// playwrightDaemonCmd holds the daemon process for cleanup
 	playwrightDaemonCmd *exec.Cmd
 
+	browserRepl *browserReplManager
+
 	webmcp webMCPClient
 
 	// policy management
@@ -169,6 +171,7 @@ func New(
 		cdpMonitor:        mon,
 		otlpExport:        otlpExport,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
+		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}, nil
@@ -431,6 +434,8 @@ func (s *ApiService) ListRecorders(ctx context.Context, _ oapi.ListRecordersRequ
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
+	replErr := s.browserRepl.Shutdown(ctx)
+
 	_ = s.webmcp.Close()
 	s.monitorMu.Lock()
 	s.lifecycleCancel()
@@ -439,5 +444,5 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.monitorMu.Unlock()
 	// The OTLP export sink is stopped by main after the servers drain, so any
 	// events they emit on the way down are still exported (mirrors s2Writer).
-	return s.recordManager.StopAll(ctx)
+	return errors.Join(replErr, s.recordManager.StopAll(ctx))
 }
