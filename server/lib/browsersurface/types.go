@@ -26,6 +26,8 @@ const (
 	// EventSessionAttached precedes page/frame initialization. Consumers can
 	// enable domains without waiting for a tab or frame location to resolve.
 	EventSessionAttached
+	// EventDiscoveryFailed reports attachment or worker-discovery setup failure.
+	EventDiscoveryFailed
 )
 
 type SessionTarget struct {
@@ -104,12 +106,13 @@ type frameTree struct {
 }
 
 type session struct {
-	id           string
-	parentID     string
-	target       targetInfo
-	tabID        int
-	initializing bool
-	initialized  bool
+	id              string
+	parentID        string
+	target          targetInfo
+	tabID           int
+	initializing    bool
+	initialized     bool
+	workersAttached bool
 }
 
 type window struct {

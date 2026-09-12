@@ -262,11 +262,11 @@ func (c *eventCollector) assertNone(t *testing.T, eventType string, d time.Durat
 }
 
 // ResponderFunc is called for each CDP command the Monitor sends.
-// Return nil to use the default empty result.
+// Return nil to use the default result.
 type ResponderFunc func(msg cdpMessage) any
 
 // listenAndRespond drains srv.msgCh, calls fn for each command, and sends the
-// response. If fn is nil or returns nil, sends {"id": msg.ID, "result": {}}.
+// response. The default is empty except for script registration's required ID.
 func listenAndRespond(srv *testServer, stopCh <-chan struct{}, fn ResponderFunc) {
 	for {
 		select {
@@ -286,7 +286,11 @@ func listenAndRespond(srv *testServer, stopCh <-chan struct{}, fn ResponderFunc)
 				resp = fn(msg)
 			}
 			if resp == nil {
-				resp = map[string]any{"id": msg.ID, "result": map[string]any{}}
+				result := map[string]any{}
+				if msg.Method == "Page.addScriptToEvaluateOnNewDocument" {
+					result["identifier"] = "test-script"
+				}
+				resp = map[string]any{"id": msg.ID, "result": result}
 			}
 			_ = wsjson.Write(context.Background(), c, resp)
 		case <-stopCh:

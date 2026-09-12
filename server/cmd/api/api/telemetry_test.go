@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
@@ -415,12 +416,27 @@ func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 
 type stubCdpMonitor struct{}
 
+func (s *stubCdpMonitor) SetTelemetry(bool) error { return nil }
+func (s *stubCdpMonitor) NetworkSnapshot() cdpmonitor.NetworkSnapshot {
+	return cdpmonitor.NetworkSnapshot{}
+}
+
 func (s *stubCdpMonitor) Start(_ context.Context) error { return nil }
 func (s *stubCdpMonitor) Stop()                         {}
 func (s *stubCdpMonitor) IsRunning() bool               { return false }
 
-// failingCdpMonitor always fails to start, to exercise the reconcile-before-commit path.
+// failingCdpMonitor rejects optional capture to exercise configuration rollback.
 type failingCdpMonitor struct{ running bool }
+
+func (f *failingCdpMonitor) SetTelemetry(enabled bool) error {
+	if enabled {
+		return errors.New("collector configuration failed")
+	}
+	return nil
+}
+func (f *failingCdpMonitor) NetworkSnapshot() cdpmonitor.NetworkSnapshot {
+	return cdpmonitor.NetworkSnapshot{}
+}
 
 func (f *failingCdpMonitor) Start(_ context.Context) error {
 	return errors.New("collector start failed")

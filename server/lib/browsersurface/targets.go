@@ -70,10 +70,14 @@ func (t *Tracker) attachPage(tabID int, target targetInfo) {
 		t.logger.Warn("failed to attach browser tab", "tab_id", tabID, "err", err)
 	}
 	t.stateMu.Lock()
-	if t.tabsByTarget[target.TargetID] == tabID {
+	stillPresent := t.tabsByTarget[target.TargetID] == tabID
+	if stillPresent {
 		t.trackingTarget[target.TargetID] = false
 	}
 	t.stateMu.Unlock()
+	if stillPresent {
+		t.publish(Event{Kind: EventDiscoveryFailed})
+	}
 	t.signalChanged()
 }
 
@@ -129,8 +133,12 @@ func (t *Tracker) trackNonPageTarget(target targetInfo) {
 			t.logger.Warn("failed to attach browser target", "target_id", target.TargetID, "type", target.Type, "err", err)
 		}
 		t.stateMu.Lock()
+		stillPresent := t.trackingNonPageTarget[target.TargetID]
 		delete(t.trackingNonPageTarget, target.TargetID)
 		t.stateMu.Unlock()
+		if stillPresent {
+			t.publish(Event{Kind: EventDiscoveryFailed})
+		}
 		t.signalChanged()
 	}()
 }

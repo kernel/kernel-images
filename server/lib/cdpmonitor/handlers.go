@@ -99,12 +99,29 @@ func (m *Monitor) decodeParams(method string, params json.RawMessage, dst any) b
 
 // dispatchEvent routes a CDP event to its handler.
 func (m *Monitor) dispatchEvent(msg cdpMessage) {
-	m.lifeMu.Lock()
-	ctx := m.lifecycleCtx
-	if m.conn != nil {
-		ctx = m.conn.ctx
+	if msg.Method == "Network.loadingFinished" || msg.Method == "Network.loadingFailed" {
+		var p struct {
+			RequestID string `json:"requestId"`
+			ErrorText string `json:"errorText"`
+		}
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			if msg.Method == "Network.loadingFinished" {
+				p.ErrorText = ""
+			}
+			m.network.terminal(msg.SessionID, p.RequestID, p.ErrorText)
+		}
 	}
-	m.lifeMu.Unlock()
+	if !m.captureEnabled() || m.telemetryChanging.Load() || !m.telemetryMu.TryRLock() {
+		return
+	}
+	defer m.telemetryMu.RUnlock()
+	if !m.telemetryEnabled {
+		return
+	}
+	ctx := m.telemetryCtx
+	if ctx.Err() != nil {
+		return
+	}
 
 	switch msg.Method {
 	case "Runtime.consoleAPICalled":
@@ -557,7 +574,7 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 		cs.onLoadingFinished()
 	}
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
-	m.captureWg.Go(func() {
+	m.telemetryWg.Go(func() {
 		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
 		var hdrs oapi.BrowserHttpHeaders
 		_ = json.Unmarshal(state.resHeaders, &hdrs)
@@ -857,34 +874,52 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 		return
 	}
 	m.sessions[p.SessionID] = targetInfo{
+		title:         p.TargetInfo.Title,
+		openerID:      p.TargetInfo.OpenerID,
 		targetID:      p.TargetInfo.TargetID,
 		url:           p.TargetInfo.URL,
 		targetType:    p.TargetInfo.Type,
 		parentFrameID: p.TargetInfo.ParentFrameID,
 	}
-	if p.TargetInfo.Type == targetTypePage {
-		m.computedStates[p.SessionID] = newComputedState(m.publish)
-	}
+	info := m.sessions[p.SessionID]
 	m.sessionsMu.Unlock()
-
-	if p.TargetInfo.Type == targetTypePage {
-		data, _ := json.Marshal(oapi.BrowserPageTabOpenedEventData{
-			TargetId:   p.TargetInfo.TargetID,
-			TargetType: oapi.BrowserTargetType(p.TargetInfo.Type),
-			Url:        p.TargetInfo.URL,
-			OpenerId:   ptrOf(p.TargetInfo.OpenerID),
-			Title:      ptrOf(p.TargetInfo.Title),
-		})
-		m.publishEvent(EventTabOpened, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Target.attachedToTarget", data, p.SessionID)
+	if !m.telemetryChanging.Load() && m.telemetryMu.TryRLock() {
+		m.preparePageCapture(p.SessionID, info)
+		m.telemetryMu.RUnlock()
 	}
 
-	targetType := p.TargetInfo.Type
-	// Domain setup must not block delivery of protocol events.
+	// Network setup runs independently of optional capture configuration.
 	m.captureWg.Go(func() {
-		m.enableDomains(ctx, p.SessionID, targetType)
-		if isPageLikeTarget(targetType) {
-			_ = m.injectScript(ctx, p.SessionID)
+		if _, err := m.send(ctx, "Network.enable", nil, p.SessionID); err != nil {
+			m.sessionsMu.RLock()
+			_, exists := m.sessions[p.SessionID]
+			m.sessionsMu.RUnlock()
+			if exists && ctx.Err() == nil {
+				m.log.Warn("cdpmonitor: Network.enable failed", "err", err)
+				m.lifeMu.Lock()
+				if m.conn != nil {
+					m.conn.cancel()
+				}
+				m.lifeMu.Unlock()
+			}
+			return
 		}
+		m.telemetryMu.RLock()
+		defer m.telemetryMu.RUnlock()
+		if err := m.cleanupAttachedTarget(ctx, p.SessionID, info); err != nil {
+			m.lifeMu.Lock()
+			if m.conn != nil {
+				m.conn.cancel()
+			}
+			m.lifeMu.Unlock()
+			return
+		}
+		m.sessionsMu.Lock()
+		if _, exists := m.sessions[p.SessionID]; exists {
+			m.networkReady[p.SessionID] = true
+		}
+		m.sessionsMu.Unlock()
+		m.enableOptionalCapture(m.telemetryCtx, p.SessionID, info)
 	})
 }
 
@@ -895,6 +930,8 @@ func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) 
 	m.sessionsMu.Lock()
 	cs := m.computedStates[p.SessionID]
 	delete(m.sessions, p.SessionID)
+	delete(m.networkReady, p.SessionID)
+	delete(m.optionalSessions, p.SessionID)
 	delete(m.computedStates, p.SessionID)
 	m.sessionsMu.Unlock()
 	if cs != nil {
