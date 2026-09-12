@@ -1,4 +1,3 @@
-
 import { writeFileSync } from 'fs';
 import sharp from 'sharp';
 import { BrowserReplCdpClient, isInternalUrl, type CdpEvent } from './browser-cdp-client';
