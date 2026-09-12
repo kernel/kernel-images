@@ -1462,32 +1462,45 @@ paths:
     post:
       summary: Execute JavaScript in the Browser REPL
       description: |
-        Execute code in the Browser REPL, a persistent Node.js runtime preloaded with browser-control
-        helpers (gotoUrl, pageInfo, accessibilitySnapshot, click, waitForEvent, captureScreenshot, tab management,
-        and more), the browser-wide `webmcp` client, plus an unrestricted `cdp()` escape hatch. `webmcp`
-        and `browser.webmcp` share one frozen client whose requests are scoped to the active execution.
-        Pinned `patchright` and `playwright-core` packages can be loaded with dynamic `import()` and
-        connected to `process.env.CDP_ENDPOINT`; their module and browser objects persist like other
-        bindings. Patchright matches the image's default Playwright execution engine.
-        Top-level bindings persist
-        across calls until the API process exits, the REPL is reset, or the REPL is
-        terminated after a crash or timeout. Persistent names are live context-global
-        accessors, so closures and timers observe later-cell assignments; function declarations
-        use the same accessor path, including same-cell closures and assignments. `var` in
-        top-level nested statements persists, while function and nested-block locals do not.
-        Lexical names are reserved after linking, so retry a failed declaration with a new
-        name or reset the REPL. Expression values are not returned automatically.
-        Output is optional: code may produce no content, call `repl.write(...)` or
-        `repl.emitImage(...)`, use console methods, or combine those mechanisms.
+        Execute JavaScript in a persistent Node.js Browser REPL. Start with live help:
 
-        The runtime starts lazily on the first request and is owned directly by the API
-        process: an API restart kills it, and the next request starts a fresh REPL with a
-        new CUID2 `repl_id`. A timeout is destructive (JavaScript cannot be interrupted
-        safely), so a timed-out execution terminates the REPL and the next request lazily
-        starts a new one.
+        ```js
+        repl.help();                         // List methods
+        repl.help("click");                  // Signature, behavior, defaults, and example
+        repl.help("webmcp.invokeTool");
+        ```
 
-        This endpoint is unrestricted code execution inside the browser VM, equivalent in
-        trust level to the process and Playwright execution APIs. It is not sandboxed.
+        Available methods:
+        <!-- BEGIN GENERATED REPL METHOD LIST -->
+        - REPL: `repl.help`, `repl.write`, `repl.emitImage`
+        - Browser control: `cdp`, `drainEvents`, `waitForEvent`, `gotoUrl`, `pageInfo`, `accessibilitySnapshot`, `click`, `typeText`, `fillInput`, `pressKey`, `scroll`, `captureScreenshot`, `listTabs`, `currentTab`, `switchTab`, `newTab`, `closeTab`, `ensureRealTab`, `iframeTarget`, `waitMs`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`, `js`, `uploadFile`, `httpGet`
+        - WebMCP: `webmcp.listTools`, `webmcp.invokeTool`
+        <!-- END GENERATED REPL METHOD LIST -->
+
+        Browser-control methods are available both directly and on `browser`. The same frozen
+        browser-wide WebMCP client is available as `webmcp` and `browser.webmcp`. Common workflows:
+
+        ```js
+        await gotoUrl("https://example.com");
+        await waitForLoad();
+        const tree = await accessibilitySnapshot();
+        const link = tree.nodes.find(node => node.role === "link" && node.name === "More information...");
+        if (!link) throw new Error("link not found");
+        await click(link);
+
+        const path = await captureScreenshot("/tmp/page.png", true, 1600);
+        await repl.emitImage({path});
+        ```
+
+        Top-level bindings and dynamically imported modules persist until reset or process
+        replacement. Expression values are ignored; emit output with `repl.write(...)`, console
+        methods, or `repl.emitImage(...)`. Pinned `patchright` and `playwright-core` packages are
+        available through dynamic `import()`, and `cdp()` provides unrestricted DevTools access.
+
+        The runtime starts lazily and is owned by the API process. Reset, API restart, timeout,
+        crash, OOM, or protocol failure destroys its state and changes its CUID2 `repl_id`.
+        Executions are serialized. This endpoint is unrestricted code execution inside the browser
+        VM, equivalent in trust level to the process and Playwright execution APIs; it is not sandboxed.
       operationId: executeBrowserRepl
       x-telemetry-category: control
       requestBody:

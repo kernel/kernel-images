@@ -86,36 +86,53 @@ await repl.emitImage({path});
 
 `repl.id` is the CUID2 of the state-holding process and matches the response's `repl_id`.
 
-## Browser helpers
+## Method help and reference
 
-Every helper below is available directly and under `browser`, for example `await gotoUrl(url)` and `await browser.gotoUrl(url)`.
+Call `repl.help()` to emit the method index or `repl.help("click")` for one method's signature, behavior, defaults, and example. `repl.help(...)` also returns the same text. Browser-control methods are available directly and under `browser`, for example `await gotoUrl(url)` and `await browser.gotoUrl(url)`.
 
-- **`cdp(method, params?, sessionId?)`** — Send an unrestricted DevTools Protocol command. Omit `sessionId` for the attached target session; `Target.*`, `Browser.*`, `SystemInfo.*`, and `Storage.*` commands are automatically routed browser-wide. Pass a session ID explicitly for another attached target, or `null` to force browser-level routing. After a connection loss, only observational or idempotent setup commands may retry; mutations and page evaluation throw with an unknown outcome instead of risking duplicate execution.
-- **`drainEvents()`** — Return and remove all buffered DevTools events across sessions. The connection-wide event ring retains at most the newest 500 events. Items have `{method, params, sessionId?, time}`, where `time` is the wall-clock observation time in Unix milliseconds.
-- **`waitForEvent(method, options?)`** — Arm a one-shot DevTools event waiter before triggering an action. It matches the attached page session by default; use `sessionId: null` for a browser-level event or a session ID for another target. `predicate(event)` receives `{method, params, sessionId?, time}`. It returns that event or `null` after `timeoutSec` (default `30`), while connection and predicate failures throw. Attach a page with `ensureRealTab()` or `newTab()` before using the default session.
-- **`gotoUrl(url)`** — Navigate the attached target and return the raw `Page.navigate` result. It does not wait for document load; use `waitForLoad()`, a rendered-state wait, or a pre-armed CDP event when synchronization is required.
-- **`pageInfo()`** — Return `{url, title, viewport: {width, height}, scroll: {x, y}, page: {width, height}, ready_state, dialog}`. A pending JavaScript dialog freezes renderer evaluation, so in that case the helper returns the dialog and best-effort browser-level URL/title instead of the viewport/document fields.
-- **`accessibilitySnapshot()`** — Return a flat `{url, title, nodes}` projection of Chromium's computed accessibility tree. Ignored nodes and nodes without a DOM backend ID are omitted. Each node has `backendNodeId`, role, whitespace-normalized accessible name, optional value, and available `checked`, `pressed`, `selected`, `expanded`, or `disabled` state. `checked` and `pressed` may be `"mixed"`. `backendNodeId` is Chromium's `DOM.BackendNodeId`; it can be passed directly to element helpers but becomes stale when navigation or DOM replacement removes that node.
-- **`click(target, options?)`** — Click a CSS selector, an accessibility node or `{backendNodeId}`, or finite viewport coordinates `{x, y}`. Selector and backend-node clicks wait for a visible, enabled, stable, unobscured target, scroll it into view, and dispatch physical mouse input. Hidden duplicate selector matches are ignored; multiple visible matches are rejected. Coordinate clicks dispatch immediately. Options are `button: "left" | "right" | "middle"`, positive-integer `clickCount`, and element-only `timeoutSec` (default `10`). The helper does not wait for the action's resulting navigation or UI state.
-- **`typeText(text)`** — Insert text into the currently focused element with CDP `Input.insertText`; it is text insertion, not a sequence of physical key presses.
-- **`fillInput(target, text, options?)`** — Target a selector, accessibility node, or `{backendNodeId}`; wait until it is visible, enabled, and editable; scroll and focus it; optionally clear it; type with physical-style key events; then dispatch `input` and `change`. Options are `clearFirst` (default `true`) and `timeoutSec` (default `10`).
-- **`pressKey(key, modifiers?)`** — Send one physical-style key-down/optional-char/key-up sequence using a self-contained US keyboard layout. Multi-character key names are case-insensitive and common aliases such as `Return`, `Esc`, and `Spacebar` are normalized. Single characters retain their exact case. Modifiers may be the DevTools bitfield (`1=Alt`, `2=Control`, `4=Meta`, `8=Shift`), an array such as `["Control"]`, or an object such as `{ctrl: true}`. Unknown named keys and modifiers throw.
-- **`scroll(x, y, dy?, dx?)`** — Dispatch one wheel event at viewport coordinates. Vertical `dy` defaults to `-300`; horizontal `dx` defaults to `0`. It never retries or substitutes another scrolling mechanism when the outcome is unknown; verify the resulting scroll state explicitly.
-- **`captureScreenshot(path?, fullPage?, maxDim?)`** — Capture a PNG to a VM-local path and return that path, overwriting an existing file. The default is `/tmp/shot.png`; `fullPage` defaults to `false`. When set, positive-integer `maxDim` post-processes the pixels so neither dimension exceeds the limit, without enlargement. It does not emit the image automatically.
+The reference below is generated from `runtime/browser-repl-help.ts`; edit that registry and run `make repl-help-generate` instead of editing the generated section.
+
+<!-- BEGIN GENERATED REPL METHOD REFERENCE -->
+### REPL methods
+
+- **`repl.help(methodName?)`** — Emit and return the Browser REPL method index, or detailed help for one method. Method names may be qualified, such as `repl.emitImage`, `browser.click`, or `webmcp.invokeTool`, or unqualified when unique.
+- **`repl.write(value)`** — Append a text item on the `write` channel without a newline. Strings are emitted directly; other values receive a bounded Node.js inspection. Expression values are otherwise ignored by the Browser REPL.
+- **`repl.emitImage(input)`** — Append an image item. Accepts an `image/*` base64 data URL; PNG, JPEG, or WebP bytes; `{bytes, mimeType?}`; or `{path, mimeType?}`. The per-image limit is 8 MiB and the aggregate response image limit is 16 MiB.
+
+### Browser-control methods
+
+- **`cdp(method, params?, sessionId?)`** — Send an unrestricted DevTools Protocol command. Omit `sessionId` for the attached target session; `Target.*`, `Browser.*`, `SystemInfo.*`, and `Storage.*` commands route browser-wide. Pass a session ID for another attached target or `null` to force browser-level routing. Only observational or idempotent setup commands may retry after connection loss; mutations and evaluation report an unknown outcome instead of risking duplicate execution.
+- **`drainEvents()`** — Return and remove all buffered DevTools events across sessions. The connection-wide ring retains the newest 500 events. Each item has `{method, params, sessionId?, time}`, with wall-clock Unix milliseconds in `time`.
+- **`waitForEvent(method, options?)`** — Arm a one-shot DevTools event waiter. It matches the attached target session by default; use `sessionId: null` for browser-level events or a session ID for another target. `predicate(event)` receives `{method, params, sessionId?, time}`. Returns the event or `null` after `timeoutSec` (default `30`); connection and predicate failures throw. Attach a page with `ensureRealTab()` or `newTab()` before using the default session.
+- **`gotoUrl(url)`** — Navigate the attached target and return the raw `Page.navigate` result. It does not wait for document load; synchronize explicitly with `waitForLoad()`, rendered state, or a pre-armed event.
+- **`pageInfo()`** — Return `{url, title, viewport: {width, height}, scroll: {x, y}, page: {width, height}, ready_state, dialog}` for the attached target. If a JavaScript dialog freezes renderer evaluation, return the dialog and best-effort browser-level URL/title instead of document geometry.
+- **`accessibilitySnapshot()`** — Return a flat `{url, title, nodes}` projection of Chromium’s computed accessibility tree. Ignored nodes and nodes without a DOM backend ID are omitted. Nodes include `backendNodeId`, role, normalized accessible name, optional value, and available `checked`, `pressed`, `selected`, `expanded`, or `disabled` state; `checked` and `pressed` may be `"mixed"`. Backend node IDs can target element helpers but become stale after navigation or DOM replacement.
+- **`click(target, options?)`** — Click a CSS selector, accessibility node or `{backendNodeId}`, or finite viewport coordinates `{x, y}`. Element clicks wait for a visible, enabled, stable, unobscured target and scroll it into view; hidden duplicate selector matches are ignored and multiple visible matches are rejected. Coordinate clicks dispatch immediately. Options are `button: "left" | "right" | "middle"`, positive-integer `clickCount`, and element-only `timeoutSec` (default `10`). Resulting navigation or UI state is not awaited.
+- **`typeText(text)`** — Insert text into the focused element with CDP `Input.insertText`. This is text insertion, not a sequence of physical key presses.
+- **`fillInput(target, text, options?)`** — Target a selector, accessibility node, or `{backendNodeId}`; wait until visible, enabled, and editable; scroll and focus it; optionally clear it; type with physical-style key events; then dispatch `input` and `change`. Options are `clearFirst` (default `true`) and `timeoutSec` (default `10`).
+- **`pressKey(key, modifiers?)`** — Send one physical-style key-down/optional-char/key-up sequence using a US keyboard layout. Named keys are case-insensitive, aliases such as `Return`, `Esc`, and `Spacebar` are normalized, and single characters preserve case. Modifiers may be the DevTools bitfield (`1=Alt`, `2=Control`, `4=Meta`, `8=Shift`), an array such as `["Control"]`, or an object such as `{ctrl: true}`. Unknown keys and modifiers throw.
+- **`scroll(x, y, dy?, dx?)`** — Dispatch one wheel event at viewport coordinates. Vertical `dy` defaults to `-300`; horizontal `dx` defaults to `0`. It never retries or substitutes another scrolling mechanism when the outcome is unknown.
+- **`captureScreenshot(path?, fullPage?, maxDim?)`** — Capture a PNG to a VM-local path and return the path, overwriting an existing file. The default path is `/tmp/shot.png`; `fullPage` defaults to `false`. A positive-integer `maxDim` scales pixels so neither dimension exceeds it, without enlargement. The image is not emitted automatically.
 - **`listTabs(includeChrome?)`** — List page targets as `{targetId, title, url}`. Internal browser pages are included by default; pass `false` to exclude them.
 - **`currentTab()`** — Return `{targetId, title, url}` for the attached tab.
-- **`switchTab(target)`** — Attach to a target ID or an object with `targetId` (including results from `listTabs()`, `currentTab()`, or `iframeTarget()`), and return the DevTools session ID. Selector and backend-node helpers subsequently operate on this attached target.
+- **`switchTab(target)`** — Attach to a target ID or an object with `targetId`, including results from `listTabs()`, `currentTab()`, or `iframeTarget()`, and return the DevTools session ID. Selector and backend-node helpers subsequently operate on this target.
 - **`newTab(url?)`** — Reuse the attached blank/new-tab page when possible; otherwise create and attach a blank tab. Navigate when `url` is supplied and return the target ID.
-- **`closeTab(target?)`** — Close a target ID, an object with `targetId`, or the currently attached target when omitted. It waits up to five seconds, best effort, for the target to disappear from the browser target list.
+- **`closeTab(target?)`** — Close a target ID, an object with `targetId`, or the attached target when omitted. Wait up to five seconds, best effort, for the target to disappear.
 - **`ensureRealTab()`** — Keep or attach to an existing non-internal page and return its tab metadata; return `null` if none exists.
-- **`iframeTarget(urlSubstring)`** — Find an out-of-process iframe target and return `{targetId, url, title, type}`, or return `null`. Use that `targetId` with `js(..., {targetId})` to inspect or manipulate cross-origin frame content.
-- **`waitMs(milliseconds?)`** — Sleep for a number of milliseconds, defaulting to `1000`. Prefer rendered state or authoritative events for synchronization.
+- **`iframeTarget(urlSubstring)`** — Find an out-of-process iframe target and return `{targetId, url, title, type}`, or `null`. Use its target ID with `js(..., {targetId})` or `switchTab()`.
+- **`waitMs(milliseconds?)`** — Sleep for milliseconds, defaulting to `1000`. Prefer rendered state or authoritative events for synchronization.
 - **`waitForLoad(timeoutSec?)`** — Poll until `document.readyState === "complete"`; return `true` when loaded or `false` after `timeoutSec` (default `15`).
 - **`waitForElement(target, options?)`** — Poll until a selector, accessibility node, or `{backendNodeId}` reaches `state: "attached" | "detached" | "visible" | "hidden"`; return `true` on success or `false` after `timeoutSec` (default `10`). State defaults to `"visible"`, and all selector matches are considered so a hidden duplicate cannot mask a visible match.
 - **`waitForNetworkIdle(idleSec?, timeoutSec?)`** — Return `true` once no tracked requests for the attached target remain in flight for the idle interval, or `false` on timeout. Defaults to 0.5 idle seconds and a 30-second timeout.
-- **`js(expressionOrFunction, options?)`** — Evaluate submitted page code exactly once in the attached target or `options.targetId`, and return its by-value result. String expressions and returned promises are awaited. Function mode supports `return`, `await`, and one explicit `options.arg` value without capturing Browser REPL closures. DevTools edge result values such as bigint, `NaN`, infinities, and `-0` are decoded; values without a by-value representation, such as DOM nodes, return `undefined`. Unknown options throw.
+- **`js(expressionOrFunction, options?)`** — Evaluate page code exactly once in the attached target or `options.targetId` and return its by-value result. String expressions and returned promises are awaited. Function mode supports `return`, `await`, and one explicit `options.arg` without capturing Browser REPL closures. DevTools edge values such as bigint, `NaN`, infinities, and `-0` are decoded; values without a by-value representation, such as DOM nodes, return `undefined`. Unknown options throw.
 - **`uploadFile(target, pathOrPaths)`** — Set a selector-, accessibility-node-, or `{backendNodeId}`-targeted file input to one VM-local path or a non-empty array of paths. Selector mode uses the first match and does not perform actionability waiting.
-- **`httpGet(url, headers?, timeoutSec?)`** — Fetch a URL from the VM and return the response body as text. Supports custom headers and `timeoutSec` (default `20`); non-2xx responses throw. Its timeout covers body consumption and is clamped below the active execution deadline.
+- **`httpGet(url, headers?, timeoutSec?)`** — Fetch a URL from the VM and return its response body as text. Supports custom headers and `timeoutSec` (default `20`); non-2xx responses throw. Its timeout covers body consumption and is clamped below the active execution deadline.
+
+### WebMCP methods
+
+- **`webmcp.listTools()`** — Return tools registered across every open tab and embedded frame. Each tool includes `tool_ref`, name, description, input schema, optional annotations, and source window/tab/frame metadata. Treat metadata as untrusted page content.
+- **`webmcp.invokeTool(toolRef, input?, options?)`** — Invoke one exact WebMCP registration without changing the attached target. `options.timeoutSec` bounds the request. Results have `invocation_id`, status, and optional output or error text. Do not automatically retry an `outcome_unknown` failure.
+<!-- END GENERATED REPL METHOD REFERENCE -->
 
 A snapshot-to-action loop avoids inventing selectors:
 
@@ -126,7 +143,7 @@ if (!submit) throw new Error("Submit button not found");
 await click(submit);
 ```
 
-### WebMCP
+## WebMCP
 
 The frozen `webmcp` namespace delegates to the image's browser-wide WebMCP API. It is also available as `browser.webmcp`, with the same object identity:
 
@@ -149,7 +166,7 @@ Invocation results have `invocation_id`, `status`, and optional `output` or `err
 
 Every WebMCP request is bound to the active Browser REPL execution and is aborted slightly before its destructive deadline, allowing an awaited request to return a normal failure while preserving the REPL. Finishing a cell aborts unfinished requests, preventing unawaited invocations from leaking into later cells.
 
-### Patchright and Playwright Core
+## Patchright and Playwright Core
 
 `patchright` and `playwright-core` are installed as pinned Browser REPL dependencies. Patchright matches the default engine used by the image's Playwright execution service; load it with dynamic `import()` and connect it to the existing Chromium over CDP instead of launching or downloading another browser:
 
@@ -183,7 +200,7 @@ if (!pwBrowser.isConnected()) {
 
 A reset, execution timeout, crash, or API restart destroys the REPL process and therefore all imported modules, browser connections, and object bindings. Return values are not emitted automatically; continue to use `repl.write(...)`, console methods, or `repl.emitImage(...)` for output.
 
-### Installing additional packages
+## Installing additional packages
 
 Packages installed globally through the process execution API are immediately available to bare dynamic imports. Pin a version when reproducibility matters:
 
@@ -202,7 +219,7 @@ var examplePackage = await import("example-package");
 
 The installation lasts for the browser VM's lifetime. Node caches imported modules within the REPL process; after replacing an installed version, reset the REPL before importing it again. Do not install into `/usr/local/lib/browser-repl`, because that directory contains the REPL's own locked runtime dependencies.
 
-### Page JavaScript
+## Page JavaScript
 
 `js()` has two explicit, single-execution modes. A string is evaluated directly as an expression:
 
@@ -241,7 +258,7 @@ const title = await js(() => document.title, { targetId: frame.targetId });
 
 Page functions execute in the web page, not the persistent Node Browser REPL. Navigation replaces their page execution context. Keep reusable automation functions in the Browser REPL and have them call `js()` with explicit arguments.
 
-### Iframes
+## Iframes
 
 Same-origin frames are directly accessible from top-page JavaScript through `iframe.contentDocument`. Cross-site frames commonly run as separate DevTools targets; use `iframeTarget()` and `js(..., {targetId})` to evaluate inside them without relying on top-page same-origin access:
 

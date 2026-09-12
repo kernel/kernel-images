@@ -1,6 +1,7 @@
 import { writeFileSync } from 'fs';
 import sharp from 'sharp';
 import { BrowserReplCdpClient, isInternalUrl, type CdpEvent } from './browser-cdp-client';
+import { browserReplBrowserMethodNames } from './browser-repl-help';
 import {
   buildFunctionCallExpression,
   normalizeJsOptions,
@@ -1124,34 +1125,9 @@ export class BrowserHelpers {
 }
 
 export function buildBrowserGlobals(helpers: BrowserHelpers): Record<string, unknown> {
-  const namespace = {
-    cdp: helpers.cdp,
-    drainEvents: helpers.drainEvents,
-    waitForEvent: helpers.waitForEvent,
-    gotoUrl: helpers.gotoUrl,
-    pageInfo: helpers.pageInfo,
-    accessibilitySnapshot: helpers.accessibilitySnapshot,
-    click: helpers.click,
-    typeText: helpers.typeText,
-    fillInput: helpers.fillInput,
-    pressKey: helpers.pressKey,
-    scroll: helpers.scroll,
-    captureScreenshot: helpers.captureScreenshot,
-    listTabs: helpers.listTabs,
-    currentTab: helpers.currentTab,
-    switchTab: helpers.switchTab,
-    newTab: helpers.newTab,
-    closeTab: helpers.closeTab,
-    ensureRealTab: helpers.ensureRealTab,
-    iframeTarget: helpers.iframeTarget,
-    waitMs: helpers.waitMs,
-    waitForLoad: helpers.waitForLoad,
-    waitForElement: helpers.waitForElement,
-    waitForNetworkIdle: helpers.waitForNetworkIdle,
-    js: helpers.js,
-    uploadFile: helpers.uploadFile,
-    httpGet: helpers.httpGet,
-  };
+  const namespace = Object.fromEntries(
+    browserReplBrowserMethodNames.map((name) => [name, helpers[name]]),
+  );
   const browser = Object.freeze({ ...namespace });
   return { browser, ...namespace };
 }

@@ -77,9 +77,10 @@ export OUTPUT_DIR=/tmp/recordings
 
 `POST /repl` evaluates JavaScript in the Browser REPL, a persistent Node.js
 runtime preloaded with browser-control helpers and an unrestricted `cdp()`
-escape hatch. See [`docs/repl.md`](docs/repl.md) for the execution model,
-output guidance, examples, failure semantics, limits, and a reference for every
-helper.
+escape hatch. Run `repl.help()` in a cell for the live method index or
+`repl.help("click")` for one method. See [`docs/repl.md`](docs/repl.md) for
+execution, output, failure semantics, limits, examples, and the generated method
+reference.
 
 - The runtime starts lazily on the first request and is owned directly by the
   API process. API restart/shutdown kills it (with Linux parent-death

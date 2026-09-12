@@ -25,6 +25,22 @@ func TestBrowserReplPersistentClosureIdentity(t *testing.T) {
 	requireExec(t, svc, `await new Promise(resolve => setTimeout(resolve, 10)); repl.write(JSON.stringify(closureCount))`, float64(16))
 }
 
+func TestBrowserReplHelpEmitsAndReturnsMethodDocumentation(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	r := execCode(t, svc, `const clickHelp = repl.help("click"); if (!clickHelp.includes("click(target, options?)")) throw new Error("help return omitted signature")`)
+	require.True(t, r.Success, "error: %v", r.Error)
+	require.NotNil(t, r.Content)
+	require.Len(t, *r.Content, 1)
+	text, err := (*r.Content)[0].AsBrowserReplTextContent()
+	require.NoError(t, err)
+	require.Equal(t, oapi.BrowserReplTextContentChannelWrite, text.Channel)
+	require.Contains(t, text.Text, "click(target, options?)")
+	require.Contains(t, text.Text, "browser.click(...)")
+
+	requireExecError(t, svc, `repl.help("noSuchMethod")`, "call repl.help() to list methods")
+	requireExec(t, svc, `repl.write(JSON.stringify(clickHelp.includes("visible, enabled, stable")))`, true)
+}
+
 func TestBrowserReplCanPersistPatchrightAndPlaywrightCoreImports(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	requireExec(t, svc, `var playwright = await import("patchright"); var playwrightReference = playwright; var vanillaPlaywright = await import("playwright-core")`, nil)

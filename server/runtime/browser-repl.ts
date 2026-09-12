@@ -8,6 +8,7 @@ import vm from 'vm';
 import util from 'util';
 import { BrowserReplCdpClient } from './browser-cdp-client';
 import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
+import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
 import { createWebMCPClient } from './webmcp';
 
@@ -253,6 +254,11 @@ async function normalizeImageInput(input: unknown): Promise<{ bytes: Buffer; mim
 
 const repl = Object.freeze({
   id: REPL_ID,
+  help(methodName?: unknown): string {
+    const text = formatBrowserReplHelp(methodName);
+    writeOutput('write', text);
+    return text;
+  },
   write(value: unknown): void {
     writeOutput('write', typeof value === 'string' ? value : boundedInspect(value));
   },
