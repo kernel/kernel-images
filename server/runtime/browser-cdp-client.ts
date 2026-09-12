@@ -122,6 +122,12 @@ export function isInternalUrl(url: string): boolean {
   return INTERNAL_URL_PREFIXES.some((p) => url.startsWith(p));
 }
 
+// The Browser REPL owns this connection so JavaScript cells can issue raw CDP
+// commands and consume events without crossing another RPC boundary. It still
+// connects through the Go DevTools proxy, which enforces policy and observes
+// control commands. Go's telemetry and WebMCP clients intentionally use separate
+// Chromium connections because CDP session IDs, target attachments, enabled
+// domains, and event subscriptions are connection-scoped.
 export class CdpClient {
   private readonly endpoint: string;
   private ws: WebSocket | null = null;
@@ -134,13 +140,19 @@ export class CdpClient {
   sessionId: string | null = null;
   targetId: string | null = null;
 
+  // Modal JavaScript dialogs need explicit state because they can freeze
+  // renderer-routed commands while their Page.javascriptDialogOpening/Closed
+  // events still arrive. pageInfo() uses pendingDialog to report the blocker
+  // without evaluating in the frozen renderer. On a fresh target attachment,
+  // an unresponsive renderer can mean a dialog was left open by an earlier
+  // REPL process; attach() accepts that stale dialog to restore the target,
+  // and onDialogAutoDismissed lets the REPL report that otherwise-surprising
+  // automatic side effect instead of performing it silently.
   pendingDialog: PendingDialog | null = null;
-
-  executionDeadlineMs: number | null = null;
-
+  onDialogAutoDismissed?: (dialog: PendingDialog) => void;
   private rendererResponsive = true;
 
-  onDialogAutoDismissed?: (dialog: PendingDialog) => void;
+  executionDeadlineMs: number | null = null;
 
   private inFlightRequests = new Set<string>();
   private lastNetworkActivity = 0;
