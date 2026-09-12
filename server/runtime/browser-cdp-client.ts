@@ -128,7 +128,7 @@ export function isInternalUrl(url: string): boolean {
 // control commands. Go's telemetry and WebMCP clients intentionally use separate
 // Chromium connections because CDP session IDs, target attachments, enabled
 // domains, and event subscriptions are connection-scoped.
-export class CdpClient {
+export class BrowserReplCdpClient {
   private readonly endpoint: string;
   private ws: WebSocket | null = null;
   private connecting: Promise<void> | null = null;

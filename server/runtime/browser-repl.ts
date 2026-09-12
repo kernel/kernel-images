@@ -6,7 +6,7 @@ import { StringDecoder } from 'string_decoder';
 import { unlinkSync, existsSync, promises as fsp } from 'fs';
 import vm from 'vm';
 import util from 'util';
-import { CdpClient } from './browser-cdp-client';
+import { BrowserReplCdpClient } from './browser-cdp-client';
 import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
 import { CellRuntime } from './cell-runtime';
 import { createWebMCPClient } from './webmcp';
@@ -286,7 +286,7 @@ const consoleCapture = {
 
 // Persistent evaluation context
 
-const cdpClient = new CdpClient(CDP_ENDPOINT);
+const cdpClient = new BrowserReplCdpClient(CDP_ENDPOINT);
 const helpers = new BrowserHelpers(cdpClient);
 const webmcpExecution = new AsyncLocalStorage<AbortSignal>();
 const webmcp = createWebMCPClient({

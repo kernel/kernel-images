@@ -1,7 +1,7 @@
 
 import { writeFileSync } from 'fs';
 import sharp from 'sharp';
-import { CdpClient, isInternalUrl, type CdpEvent } from './browser-cdp-client';
+import { BrowserReplCdpClient, isInternalUrl, type CdpEvent } from './browser-cdp-client';
 import {
   buildFunctionCallExpression,
   normalizeJsOptions,
@@ -170,12 +170,12 @@ function normalizeKeyModifiers(modifiers?: string[] | Record<string, boolean>): 
 }
 
 export class BrowserHelpers {
-  private readonly client: CdpClient;
+  private readonly client: BrowserReplCdpClient;
 
   executionDeadlineMs: number | null = null;
   onLog?: (message: string) => void;
 
-  constructor(client: CdpClient) {
+  constructor(client: BrowserReplCdpClient) {
     this.client = client;
   }
 
