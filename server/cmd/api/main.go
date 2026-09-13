@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/exec"
@@ -30,6 +31,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/fillfence"
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/metrics"
@@ -332,7 +334,14 @@ func main() {
 	// Checked once per forwarded client frame, so it reads the session's
 	// lock-free view rather than taking the telemetry lock.
 	controlEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Control) }
+	fillProxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: fillfence.Address})
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("kernelVaultFill") == "1" {
+			// The launcher owns admission and command completion. This hop must
+			// neither reconnect an upgraded stream nor log its secret payloads.
+			fillProxy.ServeHTTP(w, r)
+			return
+		}
 		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, telemetrySession.ExcludedCdpMethods, wsRegistry).ServeHTTP(w, r)
 	})
 
