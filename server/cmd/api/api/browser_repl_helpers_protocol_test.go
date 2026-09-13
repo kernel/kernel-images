@@ -1010,8 +1010,9 @@ func TestBrowserReplSocketPreservesSplitUTF8(t *testing.T) {
 func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 	fake := newFakeCDPServer(t)
 	fake.mu.Lock()
-	fake.targets[0].URL = "about:blank"
-	fake.rendererHrefs["target-page-1"] = "about:blank"
+	fake.targets[0].URL = "chrome://newtab/"
+	fake.rendererHrefs["target-page-1"] = "chrome://newtab/"
+	fake.rendererLoaderIDs["target-page-1"] = "loader-initial"
 	fake.mu.Unlock()
 	fake.delayCommit.Store(true)
 	t.Setenv("CDP_ENDPOINT", fake.wsURL())
@@ -1029,6 +1030,30 @@ func TestBrowserReplNewTabWaitsForRendererCommit(t *testing.T) {
 	require.Equal(t, "target-page-1", res["id"], "newTab should reuse the attached blank target")
 	require.Equal(t, "https://example.com/2", res["href"],
 		"newTab must wait for the reused target's renderer-level navigation commit")
+}
+
+func TestBrowserReplNewTabDoesNotSwallowUnknownNavigationOutcome(t *testing.T) {
+	fake := newFakeCDPServer(t)
+	fake.mu.Lock()
+	fake.targets[0].URL = "about:blank"
+	fake.rendererHrefs["target-page-1"] = "about:blank"
+	initialTargetCount := len(fake.targets)
+	fake.mu.Unlock()
+	fake.dropNextNavigateResponse.Store(true)
+	t.Setenv("CDP_ENDPOINT", fake.wsURL())
+
+	svc := newBrowserReplSvc(t)
+	r := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `await newTab("https://example.com/navigation-outcome-unknown")`,
+	})
+	require.False(t, r.Success)
+	require.Contains(t, *r.Error, "Page.navigate outcome is unknown")
+
+	fake.mu.Lock()
+	targetCount := len(fake.targets)
+	fake.mu.Unlock()
+	require.Equal(t, initialTargetCount, targetCount,
+		"newTab must not create a fallback target after an unknown navigation outcome")
 }
 
 func TestBrowserReplScrollTimeoutSurfacesUnknownOutcome(t *testing.T) {

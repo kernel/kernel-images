@@ -195,8 +195,13 @@ func runBrowserReplAPI(t *testing.T, image string) {
 						<input class="field">
 						<div id="status" hidden>ready</div>
 						<div id="remove-me"></div>
+						<shadow-controls id="shadow-host"></shadow-controls>
 					` + "`" + `;
+					const shadow = document.querySelector("#shadow-host").attachShadow({mode: "open"});
+					shadow.innerHTML = '<button aria-label="Shadow Search">Shadow Search</button>';
 					globalThis.__clickCount = 0;
+					globalThis.__shadowClickCount = 0;
+					shadow.querySelector("button").addEventListener("click", () => globalThis.__shadowClickCount++);
 					document.querySelectorAll(".action")[1].addEventListener("click", () => {
 						globalThis.__clickCount++;
 						const status = document.querySelector("#status");
@@ -214,13 +219,16 @@ func runBrowserReplAPI(t *testing.T, image string) {
 				const detached = await waitForElement("#remove-me", {state: "detached", timeoutSec: 2});
 				const snapshot = await accessibilitySnapshot();
 				const snapshotButton = snapshot.nodes.find(node => node.role === "button" && node.name === "Search");
+				const shadowButton = snapshot.nodes.find(node => node.role === "button" && node.name === "Shadow Search");
 				const snapshotField = snapshot.nodes.find(node => node.role === "textbox");
-				if (!snapshotButton || !snapshotField) throw new Error("accessibility snapshot omitted controls");
+				if (!snapshotButton || !shadowButton || !snapshotField) throw new Error("accessibility snapshot omitted controls");
 				const backendVisible = await waitForElement(snapshotButton, {state: "visible", timeoutSec: 2});
 				await click(snapshotButton);
-				await fillInput(snapshotField, "world", {timeoutSec: 2});
+				await click(shadowButton);
+				await fillInput(snapshotField, "café 東京 😀", {timeoutSec: 2});
 				const state = await js(() => ({
 					clickCount: globalThis.__clickCount,
+					shadowClickCount: globalThis.__shadowClickCount,
 					value: [...document.querySelectorAll(".field")].find(element => !element.hidden).value,
 				}));
 				repl.write(JSON.stringify({
@@ -242,7 +250,8 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		require.Equal(t, "button", state["snapshotRole"])
 		require.Greater(t, state["backendNodeId"].(float64), float64(0))
 		require.Equal(t, float64(2), state["clickCount"])
-		require.Equal(t, "world", state["value"])
+		require.Equal(t, float64(1), state["shadowClickCount"])
+		require.Equal(t, "café 東京 😀", state["value"])
 	})
 
 	t.Run("cross-origin iframe target evaluation", func(t *testing.T) {

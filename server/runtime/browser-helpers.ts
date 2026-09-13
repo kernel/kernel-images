@@ -18,6 +18,30 @@ const SCROLL_COMMAND_TIMEOUT_MS = 5_000;
 // Leave time for helper errors to beat the destructive execution deadline.
 const EXECUTION_DEADLINE_MARGIN_MS = 500;
 
+const SHADOW_HIT_TEST_SOURCE = `
+  const composedContains = (ancestor, node) => {
+    for (let current = node; current;) {
+      if (current === ancestor) return true;
+      if (current.parentElement) {
+        current = current.parentElement;
+        continue;
+      }
+      const root = current.getRootNode();
+      current = root instanceof ShadowRoot ? root.host : null;
+    }
+    return false;
+  };
+  const deepElementFromPoint = (pointX, pointY) => {
+    let hit = document.elementFromPoint(pointX, pointY);
+    while (hit && hit.shadowRoot) {
+      const nested = hit.shadowRoot.elementFromPoint(pointX, pointY);
+      if (!nested || nested === hit) break;
+      hit = nested;
+    }
+    return hit;
+  };
+`;
+
 type MouseButton = 'left' | 'right' | 'middle';
 type ElementWaitState = 'attached' | 'detached' | 'visible' | 'hidden';
 
@@ -439,6 +463,8 @@ export class BrowserHelpers {
       await this.client.sessionCommand('Input.dispatchKeyEvent', { type: 'keyUp', ...selectAll });
       await this.pressKey('Backspace');
     }
+    // pressKey accepts any single Unicode code point. Characters outside the
+    // US layout use CDP char events with no synthetic physical key code.
     for (const char of text) {
       await this.pressKey(char);
     }
@@ -589,21 +615,17 @@ export class BrowserHelpers {
 
   newTab = async (url = 'about:blank'): Promise<string> => {
     if (url !== 'about:blank') {
-      try {
-        const current = await this.currentTab();
-        const currentUrl = String(current.url ?? '');
-        if (
-          currentUrl === '' ||
-          currentUrl === 'about:blank' ||
-          currentUrl.startsWith('about:blank#') ||
-          /^(chrome:\/\/(newtab|new-tab-page)|edge:\/\/newtab|about:newtab)/.test(currentUrl)
-        ) {
-          await this.gotoUrl(url);
-          await this.client.waitForNavigationCommit(current.targetId as string, 5_000);
-          return current.targetId as string;
-        }
-      } catch {
-        // No attached reusable tab; create one below.
+      const current = await this.currentTab();
+      const currentUrl = String(current.url ?? '');
+      if (
+        currentUrl === '' ||
+        currentUrl === 'about:blank' ||
+        currentUrl.startsWith('about:blank#') ||
+        /^(chrome:\/\/(newtab|new-tab-page)|edge:\/\/newtab|about:newtab)/.test(currentUrl)
+      ) {
+        const navigation = await this.gotoUrl(url) as { frameId?: string; loaderId?: string };
+        await this.client.waitForNavigationCommit(current.targetId as string, navigation, url, 5_000);
+        return current.targetId as string;
       }
     }
     await this.client.ensureConnected();
@@ -612,8 +634,8 @@ export class BrowserHelpers {
     });
     await this.client.attach(created.targetId);
     if (url !== 'about:blank') {
-      await this.gotoUrl(url);
-      await this.client.waitForNavigationCommit(created.targetId, 5_000);
+      const navigation = await this.gotoUrl(url) as { frameId?: string; loaderId?: string };
+      await this.client.waitForNavigationCommit(created.targetId, navigation, url, 5_000);
     }
     return created.targetId;
   };
@@ -899,8 +921,9 @@ export class BrowserHelpers {
             if (right <= left || bottom <= top) return { status: 'outside viewport' };
             const x = left + (right - left) / 2;
             const y = top + (bottom - top) / 2;
-            const hit = document.elementFromPoint(x, y);
-            if (!hit || (hit !== el && !el.contains(hit))) {
+            ${SHADOW_HIT_TEST_SOURCE}
+            const hit = deepElementFromPoint(x, y);
+            if (!hit || !composedContains(el, hit)) {
               return { status: 'intercepted', hit: hit ? hit.tagName.toLowerCase() : null };
             }
             return { status: 'ready', x, y };
@@ -1034,8 +1057,9 @@ export class BrowserHelpers {
           if (right <= left || bottom <= top) return { status: 'outside viewport' };
           const x = left + (right - left) / 2;
           const y = top + (bottom - top) / 2;
-          const hit = document.elementFromPoint(x, y);
-          if (!hit || (hit !== el && !el.contains(hit))) {
+          ${SHADOW_HIT_TEST_SOURCE}
+          const hit = deepElementFromPoint(x, y);
+          if (!hit || !composedContains(el, hit)) {
             return {
               status: 'intercepted',
               hit: hit ? hit.tagName.toLowerCase() : null,

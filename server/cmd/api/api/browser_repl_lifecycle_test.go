@@ -563,12 +563,15 @@ type fakeCDPServer struct {
 	failNextAttach                  atomic.Int32
 	closeNextConnsAfterFirstCommand atomic.Int32
 	dropNextCreateTargetResponse    atomic.Bool
+	dropNextNavigateResponse        atomic.Bool
 	totalConns                      atomic.Int32
 	attachCount                     atomic.Int32
 	detachCount                     atomic.Int32
 
 	rendererHrefs      map[string]string
+	rendererLoaderIDs  map[string]string
 	pendingHrefPolls   map[string]int
+	pendingLoaderIDs   map[string]string
 	delayCommit        atomic.Bool
 	hangMouseWheel     atomic.Bool
 	sawScrollBy        atomic.Bool
@@ -588,11 +591,13 @@ const fakeCDPTinyPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4
 func newFakeCDPServer(t *testing.T) *fakeCDPServer {
 	t.Helper()
 	f := &fakeCDPServer{
-		t:                t,
-		conns:            map[*websocket.Conn]struct{}{},
-		rendererHrefs:    map[string]string{"target-page-1": "https://example.com/"},
-		pendingHrefPolls: map[string]int{},
-		screenshotData:   fakeCDPTinyPNG,
+		t:                 t,
+		conns:             map[*websocket.Conn]struct{}{},
+		rendererHrefs:     map[string]string{"target-page-1": "https://example.com/"},
+		rendererLoaderIDs: map[string]string{"target-page-1": "loader-initial"},
+		pendingHrefPolls:  map[string]int{},
+		pendingLoaderIDs:  map[string]string{},
+		screenshotData:    fakeCDPTinyPNG,
 		targets: []fakeCDPTarget{
 			{ID: "target-page-1", Type: "page", Title: "Example Domain", URL: "https://example.com/"},
 			{ID: "target-internal-1", Type: "page", Title: "New Tab", URL: "chrome://newtab/"},
@@ -672,6 +677,9 @@ func (f *fakeCDPServer) handler(w http.ResponseWriter, r *http.Request) {
 		}
 		result, events, dispatchErr := f.dispatch(req.Method, req.Params, req.SessionID)
 		if req.Method == "Target.createTarget" && f.dropNextCreateTargetResponse.CompareAndSwap(true, false) {
+			return
+		}
+		if req.Method == "Page.navigate" && f.dropNextNavigateResponse.CompareAndSwap(true, false) {
 			return
 		}
 		var resp map[string]any
@@ -772,9 +780,11 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		f.targets = append(f.targets, fakeCDPTarget{ID: id, Type: "page", Title: p.URL, URL: p.URL})
 		if f.delayCommit.Load() {
 			f.rendererHrefs[id] = "about:blank"
+			f.rendererLoaderIDs[id] = "loader-initial"
 			f.pendingHrefPolls[id] = 3
 		} else {
 			f.rendererHrefs[id] = p.URL
+			f.rendererLoaderIDs[id] = "loader-initial"
 		}
 		f.mu.Unlock()
 		return map[string]any{"targetId": id}, nil, nil
@@ -794,6 +804,32 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 		return map[string]any{}, nil, nil
 	case "Page.enable", "DOM.enable", "Runtime.enable", "Network.enable":
 		return map[string]any{}, nil, nil
+	case "Page.getFrameTree":
+		targetID := strings.TrimPrefix(sessionID, "session-")
+		f.mu.Lock()
+		if remaining, ok := f.pendingHrefPolls[targetID]; ok {
+			if remaining > 1 {
+				f.pendingHrefPolls[targetID] = remaining - 1
+			} else {
+				delete(f.pendingHrefPolls, targetID)
+				for _, tgt := range f.targets {
+					if tgt.ID == targetID {
+						f.rendererHrefs[targetID] = tgt.URL
+						break
+					}
+				}
+				if loaderID, exists := f.pendingLoaderIDs[targetID]; exists {
+					f.rendererLoaderIDs[targetID] = loaderID
+					delete(f.pendingLoaderIDs, targetID)
+				}
+			}
+		}
+		href := f.rendererHrefs[targetID]
+		loaderID := f.rendererLoaderIDs[targetID]
+		f.mu.Unlock()
+		return map[string]any{"frameTree": map[string]any{"frame": map[string]any{
+			"id": "frame-1", "loaderId": loaderID, "url": href,
+		}}}, nil, nil
 	case "Accessibility.getFullAXTree":
 		return map[string]any{"nodes": []any{
 			map[string]any{
@@ -821,8 +857,10 @@ func (f *fakeCDPServer) dispatch(method string, params json.RawMessage, sessionI
 			f.mu.Lock()
 			if f.delayCommit.Load() {
 				f.pendingHrefPolls[targetID] = 3
+				f.pendingLoaderIDs[targetID] = "loader-1"
 			} else {
 				f.rendererHrefs[targetID] = p.URL
+				f.rendererLoaderIDs[targetID] = "loader-1"
 			}
 			for i := range f.targets {
 				if f.targets[i].ID == targetID {
@@ -929,7 +967,7 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 		if remaining, ok := f.pendingHrefPolls[targetID]; ok {
 			if remaining > 1 {
 				f.pendingHrefPolls[targetID] = remaining - 1
-				return "about:blank"
+				return f.rendererHrefs[targetID]
 			}
 			delete(f.pendingHrefPolls, targetID)
 			url := ""
@@ -940,6 +978,10 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 				}
 			}
 			f.rendererHrefs[targetID] = url
+			if loaderID, exists := f.pendingLoaderIDs[targetID]; exists {
+				f.rendererLoaderIDs[targetID] = loaderID
+				delete(f.pendingLoaderIDs, targetID)
+			}
 			return url
 		}
 		if href, ok := f.rendererHrefs[targetID]; ok {

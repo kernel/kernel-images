@@ -610,32 +610,32 @@ export class BrowserReplCdpClient {
     await this.attach(created.targetId);
   }
 
-  async waitForNavigationCommit(targetId: string, timeoutMs: number): Promise<void> {
+  async waitForNavigationCommit(
+    targetId: string,
+    navigation: { frameId?: string; loaderId?: string },
+    expectedUrl: string,
+    timeoutMs: number,
+  ): Promise<void> {
+    if (this.targetId !== targetId || !this.sessionId) {
+      throw new Error(`cannot wait for navigation: target ${targetId} is not attached`);
+    }
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       try {
-        if (this.targetId === targetId && this.sessionId) {
-          const res = await this.send<any>(
-            'Runtime.evaluate',
-            { expression: 'location.href', returnByValue: true },
-            this.sessionId,
-            1_000,
-          );
-          const href = res?.result?.value;
-          if (typeof href === 'string' && href !== '' && href !== 'about:blank') {
-            return;
-          }
-        } else {
-          const targets = await this.listTargets();
-          if (!targets.some((t) => t.targetId === targetId)) {
-            return;
-          }
+        const { frameTree } = await this.send<any>('Page.getFrameTree', undefined, this.sessionId, 1_000);
+        const frame = frameTree?.frame;
+        if (
+          frame?.id === navigation.frameId &&
+          (navigation.loaderId ? frame.loaderId === navigation.loaderId : frame.url === expectedUrl)
+        ) {
+          return;
         }
       } catch {
-        // Renderer busy or target gone; keep polling until the deadline.
+        // Renderer busy or target gone; keep polling until the deadline so
+        // newTab reports one consistent commit-timeout error.
       }
-      if (Date.now() > deadline) {
-        return;
+      if (Date.now() >= deadline) {
+        throw new Error(`navigation to ${JSON.stringify(expectedUrl)} did not commit within ${timeoutMs}ms`);
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
