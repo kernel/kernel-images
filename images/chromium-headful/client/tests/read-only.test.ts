@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test'
 import { isReadOnlyMessage } from '../src/utils/read-only'
 
-const accessor = { connected: true }
+const accessor = { connected: true, remote: { setKeyboardModifierState: mock() } }
 mock.module('~/store', () => ({ accessor }))
 const { state, mutations, actions } = await import('../src/store/remote')
 
@@ -90,4 +90,36 @@ describe('read-only input state', () => {
     // Sending would access the absent global $client and fail this test.
     actions.sendClipboard({ state: remote, getters: { hosting: true } } as never, 'secret')
   })
+})
+
+describe('keyboard modifiers after unlocking', () => {
+  test.each(['capsLock', 'numLock', 'scrollLock'] as const)(
+    'resynchronizes %s once and resumes deduplication',
+    (key) => {
+      const remote = state()
+      const modifierState = { capsLock: false, numLock: false, scrollLock: false, [key]: true }
+      mutations.setKeyboardModifierState(remote, modifierState)
+      mutations.setReadOnly(remote, true)
+      actions.syncKeyboardModifierState({ state: remote } as never, modifierState)
+      mutations.setReadOnly(remote, false)
+      expect(remote.keyboardModifierState).toBe(-1)
+
+      const sendMessage = mock()
+      accessor.remote.setKeyboardModifierState.mockImplementation((value) =>
+        mutations.setKeyboardModifierState(remote, value),
+      )
+      Object.defineProperty(globalThis, '$client', { value: { sendMessage }, configurable: true })
+      try {
+        actions.syncKeyboardModifierState({ state: remote } as never, modifierState)
+        expect(sendMessage).toHaveBeenCalledTimes(1)
+        expect(sendMessage.mock.calls[0][1]).toEqual(modifierState)
+        mutations.setReadOnly(remote, false)
+        actions.syncKeyboardModifierState({ state: remote } as never, modifierState)
+        expect(sendMessage).toHaveBeenCalledTimes(1)
+      } finally {
+        Reflect.deleteProperty(globalThis, '$client')
+        accessor.remote.setKeyboardModifierState.mockReset()
+      }
+    },
+  )
 })

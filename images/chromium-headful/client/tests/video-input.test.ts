@@ -125,6 +125,47 @@ describe('video input during read-only transitions', () => {
     expect(data).toEqual([])
   })
 
+  test('mouse leave does not cache unsent modifier changes while locked', () => {
+    const methods = videoMethods(async () => '')
+    let reset = false
+    methods.onMouseLeave.call(
+      {
+        hosting: true,
+        locked: true,
+        resetKeyboard: () => {
+          reset = true
+        },
+      },
+      {},
+    )
+    expect(reset).toBe(true)
+  })
+
+  test('unlocking while hovered keeps modifiers unsynchronized through leave and reentry', () => {
+    const methods = videoMethods(async () => '')
+    const sent: unknown[] = []
+    const localModifiers = { capsLock: true, numLock: true, scrollLock: true }
+    const remote = {
+      keyboardModifierState: 0,
+      setKeyboardModifierState: () => {
+        remote.keyboardModifierState = 7
+      },
+      syncKeyboardModifierState: (value: unknown) => {
+        sent.push(value)
+      },
+    }
+    const ctx = { hosting: true, locked: true, $accessor: { remote }, resetKeyboard: () => {}, syncClipboard: () => {} }
+    const event = { getModifierState: () => true }
+    methods.onMouseLeave.call(ctx, event)
+    expect(remote.keyboardModifierState).toBe(0)
+    ctx.locked = false
+    remote.keyboardModifierState = -1
+    methods.onMouseLeave.call(ctx, event)
+    expect(remote.keyboardModifierState).toBe(-1)
+    methods.onMouseEnter.call(ctx, event)
+    expect(sent).toEqual([localModifiers])
+  })
+
   test('mouse entry does not synchronize keyboard modifiers or clipboard while locked', () => {
     const methods = videoMethods(async () => '')
     // These unprovided callbacks would throw if invoked while locked.

@@ -900,7 +900,8 @@
     }
 
     onMouseLeave(e: MouseEvent) {
-      if (this.hosting) {
+      // Keep an invalidated cache until mouse entry synchronizes with the remote.
+      if (this.hosting && !this.locked && this.$accessor.remote.keyboardModifierState !== -1) {
         this.$accessor.remote.setKeyboardModifierState({
           capsLock: e.getModifierState('CapsLock'),
           numLock: e.getModifierState('NumLock'),

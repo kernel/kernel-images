@@ -67,6 +67,10 @@ export const mutations = mutationTree(state, {
   },
 
   setReadOnly(state, readOnly: boolean) {
+    if (state.readOnly && !readOnly) {
+      // The local lock keys may have changed while remote input was blocked.
+      state.keyboardModifierState = -1
+    }
     state.readOnly = readOnly
     state.locked = readOnly
     state.implicitHosting = state.configuredImplicitHosting && !readOnly
