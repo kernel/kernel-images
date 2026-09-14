@@ -301,4 +301,19 @@ RUN esbuild /tmp/playwright-daemon.ts \
     --external:esbuild \
     && rm /tmp/playwright-daemon.ts /tmp/page-target-id-cache.ts /tmp/webmcp.ts
 
+# Copy and install the browser REPL's pinned runtime dependencies before bundling.
+COPY server/runtime/ /tmp/browser-repl/
+RUN npm ci --ignore-scripts --no-audit --no-fund --omit=dev --prefix /tmp/browser-repl \
+    && mkdir -p /usr/local/lib/browser-repl \
+    && cp -a /tmp/browser-repl/node_modules /usr/local/lib/browser-repl/node_modules \
+    && esbuild /tmp/browser-repl/browser-repl.ts \
+      --bundle \
+      --platform=node \
+      --target=node22 \
+      --format=cjs \
+      --supported:dynamic-import=true \
+      --external:sharp \
+      --outfile=/usr/local/lib/browser-repl/browser-repl.js \
+    && rm -rf /tmp/browser-repl
+
 ENTRYPOINT [ "/wrapper" ]

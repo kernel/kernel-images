@@ -64,7 +64,7 @@ func TestTelemetryConnectionOwnershipAndReconnect(t *testing.T) {
 	require.NoError(t, m.Start(ctx))
 	defer m.Stop()
 	require.Eventually(t, func() bool {
-		return driver.evalBool(ctx, driverSession, `document.readyState === 'complete' && window.__kernelEventInjected === true`)
+		return driver.evalBool(ctx, driverSession, fmt.Sprintf(`location.href === %q && document.readyState === 'complete' && window.__kernelEventInjected === true`, stub.URL+"/"))
 	}, 5*time.Second, 50*time.Millisecond)
 	m.Stop()
 	require.True(t, otherSurface.SessionExists(otherSession))

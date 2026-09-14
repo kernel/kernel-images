@@ -65,7 +65,7 @@ func TestNetworkCaptureFromWorkers(t *testing.T) {
 	targetID := cdp.call(t, ctx, "", "Target.createTarget", map[string]any{"url": stub.URL}).targetID(t)
 	sessionID := cdp.call(t, ctx, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}).sessionID(t)
 	require.Eventually(t, func() bool {
-		return cdp.evalBool(ctx, sessionID, `document.readyState === 'complete' && window.__kernelEventInjected === true`)
+		return cdp.evalBool(ctx, sessionID, fmt.Sprintf(`location.href === %q && document.readyState === 'complete' && window.__kernelEventInjected === true`, stub.URL+"/"))
 	}, 5*time.Second, 50*time.Millisecond)
 
 	for _, worker := range []struct{ targetType, path, create, request string }{
