@@ -12,6 +12,8 @@ export const state = () => ({
   id: '',
   clipboard: '',
   locked: false,
+  readOnly: false,
+  configuredImplicitHosting: true,
   implicitHosting: true,
   fileTransfer: true,
   keyboardModifierState: -1,
@@ -60,7 +62,14 @@ export const mutations = mutationTree(state, {
   },
 
   setImplicitHosting(state, val: boolean) {
-    state.implicitHosting = val
+    state.configuredImplicitHosting = val
+    state.implicitHosting = val && !state.readOnly
+  },
+
+  setReadOnly(state, readOnly: boolean) {
+    state.readOnly = readOnly
+    state.locked = readOnly
+    state.implicitHosting = state.configuredImplicitHosting && !readOnly
   },
 
   setFileTransfer(state, val: boolean) {
@@ -74,7 +83,7 @@ export const mutations = mutationTree(state, {
   reset(state) {
     state.id = ''
     state.clipboard = ''
-    state.locked = false
+    state.locked = state.readOnly
     state.requesting = false
   },
 })
@@ -82,8 +91,8 @@ export const mutations = mutationTree(state, {
 export const actions = actionTree(
   { state, getters, mutations },
   {
-    sendClipboard({ getters }, clipboard: string) {
-      if (!accessor.connected || !getters.hosting) {
+    sendClipboard({ state, getters }, clipboard: string) {
+      if (!accessor.connected || state.readOnly || !getters.hosting) {
         return
       }
 
@@ -176,6 +185,8 @@ export const actions = actionTree(
     },
 
     syncKeyboardModifierState({ state }, { capsLock, numLock, scrollLock }) {
+      if (state.readOnly) return
+
       if (state.keyboardModifierState === keyboardModifierState(capsLock, numLock, scrollLock)) {
         return
       }

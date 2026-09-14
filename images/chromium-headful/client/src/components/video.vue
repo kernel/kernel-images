@@ -263,6 +263,7 @@
     @Prop(Boolean) readonly readOnly!: boolean
 
     private keyboard = GuacamoleKeyboard()
+    private pressedMouseButtons = new Set<number>()
     private observer = new ResizeObserver(this.onResize.bind(this))
     private focused = false
     private pastePending = false
@@ -332,7 +333,7 @@
     }
 
     get locked() {
-      return this.$accessor.remote.locked || (this.controlLocked && (!this.hosting || this.implicitHosting))
+      return this.readOnly || this.$accessor.remote.locked || (this.controlLocked && (!this.hosting || this.implicitHosting))
     }
 
     get scroll() {
@@ -739,7 +740,7 @@
     }
 
     async syncClipboard() {
-      if (!this.clipboard_read_available || !window.document.hasFocus()) {
+      if (!this.hosting || this.locked || !this.clipboard_read_available || !window.document.hasFocus()) {
         return
       }
 
@@ -747,8 +748,11 @@
         return
       }
 
+      if (!this.hosting || this.locked) return
+
       try {
         const text = await navigator.clipboard.readText()
+        if (!this.hosting || this.locked) return
         if (this.clipboard !== text) {
           this.$accessor.remote.setClipboard(text)
           this.$accessor.remote.sendClipboard(text)
@@ -858,6 +862,7 @@
       this.focusOverlay(e)
 
       this.sendMousePos(e)
+      this.pressedMouseButtons.add(e.button + 1)
       this.$client.sendData('mousedown', { key: e.button + 1 })
     }
 
@@ -868,6 +873,7 @@
 
       this.focusOverlay(e)
       this.sendMousePos(e)
+      this.pressedMouseButtons.delete(e.button + 1)
       this.$client.sendData('mouseup', { key: e.button + 1 })
     }
 
@@ -880,7 +886,7 @@
     }
 
     onMouseEnter(e: MouseEvent) {
-      if (this.hosting) {
+      if (this.hosting && !this.locked) {
         this.$accessor.remote.syncKeyboardModifierState({
           capsLock: e.getModifierState('CapsLock'),
           numLock: e.getModifierState('NumLock'),
@@ -904,6 +910,14 @@
 
       this.resetKeyboard()
       this.focused = false
+    }
+
+    releaseInput() {
+      this.resetKeyboard()
+      for (const key of this.pressedMouseButtons) {
+        this.$client.sendData('mouseup', { key })
+      }
+      this.pressedMouseButtons.clear()
     }
 
     resetKeyboard() {
@@ -945,6 +959,8 @@
         // via WebSocket while the keystroke travels the WebRTC data channel;
         // without this delay the remote pastes stale content.
         await new Promise((resolve) => setTimeout(resolve, 80))
+
+        if (!this.hosting || this.locked) return
 
         // Send the full Ctrl+V sequence. We can't rely on Guacamole having
         // captured the original Cmd/Ctrl keydown because Safari may intercept
