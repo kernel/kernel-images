@@ -348,6 +348,31 @@ func TestResponseDrainControlsScaleToZeroFile(t *testing.T) {
 	}, time.Second, time.Millisecond)
 }
 
+func TestGuestTerminationRemainsObservableBeforeShutdown(t *testing.T) {
+	const observationDelay = 50 * time.Millisecond
+	before := ResponseDrainOutcomeCounts()[string(responseDrainGuestTermination)]
+	config := testDrainConfig(time.Second, outboundQueue)
+	config.guestTerminationDelay = observationDelay
+	terminated := make(chan time.Duration, 1)
+	started := time.Now()
+	config.terminateGuest = func() {
+		terminated <- time.Since(started)
+		runtime.Goexit()
+	}
+
+	go terminateAfterResponseFailure(nil, config, assert.AnError)
+
+	require.Eventually(t, func() bool {
+		return ResponseDrainOutcomeCounts()[string(responseDrainGuestTermination)] == before+1
+	}, time.Second, time.Millisecond)
+	select {
+	case <-terminated:
+		t.Fatal("guest terminated before its metric could be collected")
+	case <-time.After(observationDelay / 2):
+	}
+	assert.GreaterOrEqual(t, <-terminated, observationDelay)
+}
+
 func TestPersistentConnectionRecoveryTerminatesGuestWithinBound(t *testing.T) {
 	tracked, client := newTCPPair(t)
 	defer client.Close()

@@ -628,6 +628,7 @@ func testDrainConfig(timeout time.Duration, outbound func(*net.TCPConn) (int, er
 	config.outbound = outbound
 	config.abortRetryInterval = time.Millisecond
 	config.terminalRecoveryTimeout = timeout
+	config.guestTerminationDelay = 0
 	return config
 }
 

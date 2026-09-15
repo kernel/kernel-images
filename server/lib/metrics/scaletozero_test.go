@@ -19,10 +19,12 @@ func TestResponseDrainCollector(t *testing.T) {
 
 	require.NoError(t, collector.Collect(context.Background(), writer))
 
-	assert.Equal(t, `# HELP kernel_scale_to_zero_response_drain_total HTTP response drain events before scale-to-zero is re-enabled.
-# TYPE kernel_scale_to_zero_response_drain_total counter
-kernel_scale_to_zero_response_drain_total{outcome="drained"} 7
-kernel_scale_to_zero_response_drain_total{outcome="timeout"} 2
+	assert.Equal(t, `# HELP kernel_scale_to_zero_response_drain_drained_total HTTP response drain events with the drained outcome.
+# TYPE kernel_scale_to_zero_response_drain_drained_total counter
+kernel_scale_to_zero_response_drain_drained_total 7
+# HELP kernel_scale_to_zero_response_drain_timeout_total HTTP response drain events with the timeout outcome.
+# TYPE kernel_scale_to_zero_response_drain_timeout_total counter
+kernel_scale_to_zero_response_drain_timeout_total 2
 # HELP kernel_scale_to_zero_response_holds HTTP response scale-to-zero holds currently active.
 # TYPE kernel_scale_to_zero_response_holds gauge
 kernel_scale_to_zero_response_holds 3

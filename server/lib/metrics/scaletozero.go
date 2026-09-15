@@ -33,7 +33,6 @@ func NewResponseDrainCollector(
 func (c *ResponseDrainCollector) Name() string { return "scale-to-zero response drain" }
 
 func (c *ResponseDrainCollector) Collect(_ context.Context, w *Writer) error {
-	w.Metric("kernel_scale_to_zero_response_drain_total", "HTTP response drain events before scale-to-zero is re-enabled.", "counter")
 	counts := c.snapshot()
 	outcomes := make([]string, 0, len(counts))
 	for outcome := range counts {
@@ -41,7 +40,9 @@ func (c *ResponseDrainCollector) Collect(_ context.Context, w *Writer) error {
 	}
 	sort.Strings(outcomes)
 	for _, outcome := range outcomes {
-		w.Sample("kernel_scale_to_zero_response_drain_total", []Label{{Name: "outcome", Value: outcome}}, float64(counts[outcome]))
+		name := "kernel_scale_to_zero_response_drain_" + outcome + "_total"
+		w.Metric(name, "HTTP response drain events with the "+outcome+" outcome.", "counter")
+		w.Sample(name, nil, float64(counts[outcome]))
 	}
 
 	w.Metric("kernel_scale_to_zero_response_holds", "HTTP response scale-to-zero holds currently active.", "gauge")

@@ -503,7 +503,7 @@ func (c *drainConn) recoverResponseConnection(drains []*requestDrain, config res
 		failClosedResponseHolds.Add(int64(failedCount))
 	}
 	retryInterval := config.abortRetryInterval
-	deadline := time.Now().Add(config.terminalRecoveryTimeout)
+	deadline := terminalRecoveryDeadline(config)
 	for {
 		c.terminalMu.Lock()
 		abortErr := config.abort(c.TCPConn)
@@ -557,6 +557,14 @@ func (c *drainConn) recoverResponseConnection(drains []*requestDrain, config res
 	}
 }
 
+func guestTerminationObservationDelay(config responseDrainConfig) time.Duration {
+	return min(max(config.guestTerminationDelay, 0), max(config.terminalRecoveryTimeout, 0))
+}
+
+func terminalRecoveryDeadline(config responseDrainConfig) time.Time {
+	return time.Now().Add(max(config.terminalRecoveryTimeout-guestTerminationObservationDelay(config), 0))
+}
+
 func isSafeClosedResponseOutcome(outcome responseDrainOutcome) bool {
 	return outcome == responseDrainCloseAcknowledged || outcome == responseDrainConnectionClosed
 }
@@ -585,7 +593,7 @@ func monitorClosedResponse(fd int, drains []*requestDrain, config responseDrainC
 		failClosedResponseHolds.Add(int64(len(drains)))
 	}
 	retryInterval := config.abortRetryInterval
-	deadline := time.Now().Add(config.terminalRecoveryTimeout)
+	deadline := terminalRecoveryDeadline(config)
 	for {
 		abortErr := config.abortFD(fd)
 		if abortErr == nil || isTerminalConnectionError(abortErr) {
@@ -628,6 +636,9 @@ func terminateAfterResponseFailure(drains []*requestDrain, config responseDrainC
 	recordResponseDrainOutcome(responseDrainGuestTermination)
 	if log := firstDrainLog(drains); log != nil {
 		log.Error("response connection could not be terminated; terminating guest", "outcome", responseDrainGuestTermination, "error", err)
+	}
+	if delay := guestTerminationObservationDelay(config); delay > 0 {
+		time.Sleep(delay)
 	}
 	config.terminateGuest()
 	panic("scale-to-zero guest termination returned")

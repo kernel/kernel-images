@@ -21,7 +21,10 @@ const (
 	responseAbortRetryInterval       = time.Second
 	responseAbortMaxRetryInterval    = 30 * time.Second
 	responseTerminalRecoveryTimeout  = 5 * time.Minute
-	maxResponseCloseMonitors         = 256
+	// Keep the metrics endpoint alive for one 30-second scrape interval plus
+	// its 10-second timeout after publishing an impending guest termination.
+	responseGuestTerminationDelay = 45 * time.Second
+	maxResponseCloseMonitors      = 256
 )
 
 type connectionContextKey struct{}
@@ -44,6 +47,7 @@ type responseDrainConfig struct {
 	terminateGuest          func()
 	abortRetryInterval      time.Duration
 	terminalRecoveryTimeout time.Duration
+	guestTerminationDelay   time.Duration
 	onComplete              func(responseDrainOutcome)
 }
 
@@ -245,6 +249,7 @@ func defaultResponseDrainConfig() responseDrainConfig {
 		terminateGuest:          terminateGuest,
 		abortRetryInterval:      responseAbortRetryInterval,
 		terminalRecoveryTimeout: responseTerminalRecoveryTimeout,
+		guestTerminationDelay:   responseGuestTerminationDelay,
 	}
 }
 
