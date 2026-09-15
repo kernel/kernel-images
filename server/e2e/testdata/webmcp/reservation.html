@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Declarative reservation</title>
+</head>
+<body>
+  <h1>Table reservation</h1>
+  <!-- Mirrors the Chrome Labs french-bistro declarative demo, with autosubmit:
+       https://github.com/GoogleChromeLabs/webmcp-tools/tree/main/demos/french-bistro
+       Native HTML annotations only; no imperative registration or polyfill. -->
+  <form toolname="reserve_table" tooldescription="Reserve a table with guest details and seating preferences." toolautosubmit>
+    <label for="name">Guest name</label>
+    <input id="name" name="name" type="text" required toolparamdescription="Name for the reservation">
+
+    <label for="date">Reservation date</label>
+    <input id="date" name="date" type="date" required toolparamdescription="Date of the reservation">
+
+    <label for="party_size">Party size</label>
+    <input id="party_size" name="party_size" type="number" min="1" max="8" required toolparamdescription="Number of guests">
+
+    <label for="seating">Seating preference</label>
+    <select id="seating" name="seating" required toolparamdescription="Preferred seating area">
+      <option value="dining_room">Dining room</option>
+      <option value="terrace">Outdoor terrace</option>
+      <option value="booth">Private booth</option>
+    </select>
+
+    <button type="submit">Reserve table</button>
+  </form>
+  <p id="confirmation" role="status" aria-live="polite">No reservation submitted.</p>
+  <script>
+    document.querySelector('form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const reservation = Object.fromEntries(new FormData(event.target));
+      const confirmation = document.querySelector('#confirmation');
+      confirmation.textContent = `Reserved for ${reservation.name} on ${reservation.date}: ${reservation.party_size} guests, ${reservation.seating}.`;
+      confirmation.dataset.agentInvoked = String(event.agentInvoked);
+      confirmation.dataset.submissions = String(Number(confirmation.dataset.submissions || 0) + 1);
+      if (event.agentInvoked) {
+        event.respondWith(Promise.resolve(reservation));
+      }
+    });
+  </script>
+</body>
+</html>

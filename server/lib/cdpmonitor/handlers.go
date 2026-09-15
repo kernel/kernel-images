@@ -99,9 +99,29 @@ func (m *Monitor) decodeParams(method string, params json.RawMessage, dst any) b
 
 // dispatchEvent routes a CDP event to its handler.
 func (m *Monitor) dispatchEvent(msg cdpMessage) {
-	m.lifeMu.Lock()
-	ctx := m.lifecycleCtx
-	m.lifeMu.Unlock()
+	if msg.Method == "Network.loadingFinished" || msg.Method == "Network.loadingFailed" {
+		var p struct {
+			RequestID string `json:"requestId"`
+			ErrorText string `json:"errorText"`
+		}
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			if msg.Method == "Network.loadingFinished" {
+				p.ErrorText = ""
+			}
+			m.network.terminal(msg.SessionID, p.RequestID, p.ErrorText)
+		}
+	}
+	if !m.captureEnabled() || m.telemetryChanging.Load() || !m.telemetryMu.TryRLock() {
+		return
+	}
+	defer m.telemetryMu.RUnlock()
+	if !m.telemetryEnabled {
+		return
+	}
+	ctx := m.telemetryCtx
+	if ctx.Err() != nil {
+		return
+	}
 
 	switch msg.Method {
 	case "Runtime.consoleAPICalled":
@@ -158,16 +178,6 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		var p cdpPerformanceTimelineEventAddedParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
 			m.handleTimelineEvent(p, msg.SessionID)
-		}
-	case "Target.attachedToTarget":
-		var p cdpTargetAttachedToTargetParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleAttachedToTarget(ctx, p)
-		}
-	case "Target.detachedFromTarget":
-		var p cdpTargetDetachedFromTargetParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleDetachedFromTarget(p)
 		}
 	case "Inspector.targetCrashed":
 		// No params; the crashed page is identified by the session it fires on.
@@ -437,15 +447,16 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	// events, but only a single loadingFinished fires per chain. Only increment
 	// netPending for genuinely new requests to avoid permanently inflating the
 	// counter and blocking network_idle.
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
-	existing, isRedirect := m.pendingRequests[p.RequestID]
+	existing, isRedirect := m.pendingRequests[key]
 	addedAt := existing.addedAt
 	if !isRedirect {
 		addedAt = time.Now()
 	} else {
 		navSeq = existing.navSeq
 	}
-	m.pendingRequests[p.RequestID] = networkReqState{
+	m.pendingRequests[key] = networkReqState{
 		sessionID:    sessionID,
 		method:       p.Request.Method,
 		url:          p.Request.URL,
@@ -492,17 +503,18 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 }
 
 func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, sessionID string) {
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	var (
 		state networkReqState
 		ok    bool
 	)
-	if st, present := m.pendingRequests[p.RequestID]; present {
+	if st, present := m.pendingRequests[key]; present {
 		st.status = p.Response.Status
 		st.statusText = p.Response.StatusText
 		st.resHeaders = p.Response.Headers
 		st.mimeType = p.Response.MimeType
-		m.pendingRequests[p.RequestID] = st
+		m.pendingRequests[key] = st
 		state, ok = st, true
 	}
 	m.pendReqMu.Unlock()
@@ -545,10 +557,11 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 }
 
 func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoadingFinishedParams, sessionID string) {
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
-	state, ok := m.pendingRequests[p.RequestID]
+	state, ok := m.pendingRequests[key]
 	if ok {
-		delete(m.pendingRequests, p.RequestID)
+		delete(m.pendingRequests, key)
 	}
 	m.pendReqMu.Unlock()
 	if !ok {
@@ -561,7 +574,7 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 		cs.onLoadingFinished()
 	}
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
-	m.asyncWg.Go(func() {
+	m.telemetryWg.Go(func() {
 		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
 		var hdrs oapi.BrowserHttpHeaders
 		_ = json.Unmarshal(state.resHeaders, &hdrs)
@@ -625,10 +638,11 @@ func (m *Monitor) fetchResponseBody(ctx context.Context, requestID, sessionID st
 }
 
 func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID string) {
+	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
-	state, ok := m.pendingRequests[p.RequestID]
+	state, ok := m.pendingRequests[key]
 	if ok {
-		delete(m.pendingRequests, p.RequestID)
+		delete(m.pendingRequests, key)
 	}
 	m.pendReqMu.Unlock()
 
@@ -761,6 +775,9 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	cs := m.computedStates[sessionID]
 	m.sessionsMu.RUnlock()
 
+	if info.targetType == "iframe" && p.Frame.ParentID == "" {
+		p.Frame.ParentID = info.parentFrameID
+	}
 	data, _ := json.Marshal(oapi.BrowserPageNavigationEventData{
 		SessionId:     sessionID,
 		TargetId:      info.targetID,
@@ -772,9 +789,9 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 	})
 	m.publishEvent(EventNavigation, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Page.frameNavigated", data, sessionID)
 
-	// Only reset state for top-level navigations; subframe (iframe) navigations
-	// should not disrupt main-page tracking.
-	if p.Frame.ParentID == "" {
+	// An OOPIF's local root can omit parentId. Only page targets can own
+	// top-level navigation state and screenshot triggers.
+	if p.Frame.ParentID == "" && info.targetType == targetTypePage {
 		m.mainSessionID.Store(sessionID)
 
 		navCtx := navContext{
@@ -852,34 +869,57 @@ func (m *Monitor) handleLoadEventFired(ctx context.Context, p cdpPageLoadEventFi
 // attached to is in p.SessionID.
 func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttachedToTargetParams) {
 	m.sessionsMu.Lock()
+	if _, exists := m.sessions[p.SessionID]; exists {
+		m.sessionsMu.Unlock()
+		return
+	}
 	m.sessions[p.SessionID] = targetInfo{
-		targetID:   p.TargetInfo.TargetID,
-		url:        p.TargetInfo.URL,
-		targetType: p.TargetInfo.Type,
+		title:         p.TargetInfo.Title,
+		openerID:      p.TargetInfo.OpenerID,
+		targetID:      p.TargetInfo.TargetID,
+		url:           p.TargetInfo.URL,
+		targetType:    p.TargetInfo.Type,
+		parentFrameID: p.TargetInfo.ParentFrameID,
 	}
-	if p.TargetInfo.Type == targetTypePage {
-		m.computedStates[p.SessionID] = newComputedState(m.publish)
-	}
+	info := m.sessions[p.SessionID]
 	m.sessionsMu.Unlock()
-
-	if p.TargetInfo.Type == targetTypePage {
-		data, _ := json.Marshal(oapi.BrowserPageTabOpenedEventData{
-			TargetId:   p.TargetInfo.TargetID,
-			TargetType: oapi.BrowserTargetType(p.TargetInfo.Type),
-			Url:        p.TargetInfo.URL,
-			OpenerId:   ptrOf(p.TargetInfo.OpenerID),
-			Title:      ptrOf(p.TargetInfo.Title),
-		})
-		m.publishEvent(EventTabOpened, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Target.attachedToTarget", data, p.SessionID)
+	if !m.telemetryChanging.Load() && m.telemetryMu.TryRLock() {
+		m.preparePageCapture(p.SessionID, info)
+		m.telemetryMu.RUnlock()
 	}
 
-	targetType := p.TargetInfo.Type
-	// Async to avoid blocking the readLoop.
-	m.asyncWg.Go(func() {
-		m.enableDomains(ctx, p.SessionID, targetType)
-		if isPageLikeTarget(targetType) {
-			_ = m.injectScript(ctx, p.SessionID)
+	// Network setup runs independently of optional capture configuration.
+	m.captureWg.Go(func() {
+		if _, err := m.send(ctx, "Network.enable", nil, p.SessionID); err != nil {
+			m.sessionsMu.RLock()
+			_, exists := m.sessions[p.SessionID]
+			m.sessionsMu.RUnlock()
+			if exists && ctx.Err() == nil {
+				m.log.Warn("cdpmonitor: Network.enable failed", "err", err)
+				m.lifeMu.Lock()
+				if m.conn != nil {
+					m.conn.cancel()
+				}
+				m.lifeMu.Unlock()
+			}
+			return
 		}
+		m.telemetryMu.RLock()
+		defer m.telemetryMu.RUnlock()
+		if err := m.cleanupAttachedTarget(ctx, p.SessionID, info); err != nil {
+			m.lifeMu.Lock()
+			if m.conn != nil {
+				m.conn.cancel()
+			}
+			m.lifeMu.Unlock()
+			return
+		}
+		m.sessionsMu.Lock()
+		if _, exists := m.sessions[p.SessionID]; exists {
+			m.networkReady[p.SessionID] = true
+		}
+		m.sessionsMu.Unlock()
+		m.enableOptionalCapture(m.telemetryCtx, p.SessionID, info)
 	})
 }
 
@@ -890,9 +930,18 @@ func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) 
 	m.sessionsMu.Lock()
 	cs := m.computedStates[p.SessionID]
 	delete(m.sessions, p.SessionID)
+	delete(m.networkReady, p.SessionID)
+	delete(m.optionalSessions, p.SessionID)
 	delete(m.computedStates, p.SessionID)
 	m.sessionsMu.Unlock()
 	if cs != nil {
 		cs.stop()
 	}
+	m.pendReqMu.Lock()
+	for key, request := range m.pendingRequests {
+		if request.sessionID == p.SessionID {
+			delete(m.pendingRequests, key)
+		}
+	}
+	m.pendReqMu.Unlock()
 }

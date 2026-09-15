@@ -248,9 +248,16 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := apiService.StartNetworkMonitor(); err != nil {
+		slogger.Error("failed to start network monitor", "err", err)
+		os.Exit(1)
+	}
+
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
 	r.Use(api.WebMCPRequestSizeMiddleware)
+	// Enforce additionalProperties: false on POST /repl.
+	r.Use(api.StrictBrowserReplBodyMiddleware)
 	strictHandler := oapi.NewStrictHandlerWithOptions(apiService, []oapi.StrictMiddlewareFunc{
 		api.TelemetryStrictMiddleware(),
 	}, oapi.StrictHTTPServerOptions{
@@ -374,6 +381,7 @@ func main() {
 	rMetrics := chi.NewRouter()
 	rMetrics.Use(chiMiddleware.Recoverer)
 	metricsCollectors := []metrics.Collector{
+		metrics.NewNetworkCollector(apiService.NetworkMetrics),
 		metrics.NewChromeCollector(upstreamMgr),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),

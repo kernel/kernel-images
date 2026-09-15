@@ -25,7 +25,11 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	defer cancel()
 
 	c := NewTestContainer(t, headlessImage)
-	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	require.NoError(t, c.Start(ctx, ContainerConfig{
+		Env: map[string]string{
+			"CHROMIUM_FLAGS": "--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
+		},
+	}), "failed to start container")
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
@@ -254,6 +258,10 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resultBytes, &crossContextResult))
 	require.Equal(t, "data:text/html,second-context", crossContextResult.URL, "expected active-page resolution to select the foreground page, not the newer fallback page")
 	require.ElementsMatch(t, []string{"data:text/html,second-context", "about:blank"}, crossContextResult.ContextPageURLs, "expected the selected page to belong to the second context")
+
+	t.Run("WebMCPDeclarative", func(t *testing.T) {
+		testWebMCPDeclarative(t, ctx, client)
+	})
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {

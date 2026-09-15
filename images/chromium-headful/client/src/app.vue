@@ -177,6 +177,7 @@
   import { Vue, Component, Ref, Watch } from 'vue-property-decorator'
 
   import Connect from '~/components/connect.vue'
+  import { isReadOnlyMessage } from '~/utils/read-only'
   import Disconnected from '~/components/disconnected.vue'
   import Video from '~/components/video.vue'
   import Menu from '~/components/menu.vue'
@@ -224,9 +225,32 @@
     }
 
     get isReadOnlyMode() {
+      return this.$accessor.remote.readOnly
+    }
+
+    created() {
       const params = new URL(location.href).searchParams
       const value = params.get('readOnly') || params.get('readonly') || params.get('ro')
-      return typeof value === 'string' && ['1', 'true', 'yes'].includes(value.toLowerCase())
+      this.$accessor.remote.setReadOnly(typeof value === 'string' && ['1', 'true', 'yes'].includes(value.toLowerCase()))
+      window.addEventListener('message', this.onParentMessage)
+    }
+
+    beforeDestroy() {
+      window.removeEventListener('message', this.onParentMessage)
+    }
+
+    onParentMessage(event: MessageEvent) {
+      if (window.parent === window || !isReadOnlyMessage(event, window.parent, this.parentOrigin)) return
+
+      if (event.data.readOnly && !this.isReadOnlyMode) {
+        if (this.video) this.video.releaseInput()
+        this.$accessor.remote.release()
+      }
+      this.$accessor.remote.setReadOnly(event.data.readOnly)
+      window.parent.postMessage(
+        { type: 'KERNEL_READ_ONLY_CHANGED', readOnly: this.isReadOnlyMode, requestId: event.data.requestId },
+        this.parentOrigin,
+      )
     }
 
     get hideControls() {
@@ -287,7 +311,10 @@
         this.applyQueryResolution()
         try {
           if (window.parent !== window) {
-            window.parent.postMessage({ type: 'KERNEL_CONNECTED', connected: true }, this.parentOrigin)
+            window.parent.postMessage(
+              { type: 'KERNEL_CONNECTED', connected: true, capabilities: ['setReadOnly'] },
+              this.parentOrigin,
+            )
           }
         } catch (e) {
           console.error('Failed to post message to parent', e)
@@ -323,13 +350,6 @@
         if (this.$accessor.user && this.$accessor.user.admin) {
           this.$accessor.video.screenSet(resolution)
         }
-      }
-
-      if (this.isReadOnlyMode) {
-        // Disable implicit hosting so the user doesn't automatically gain control
-        this.$accessor.remote.setImplicitHosting(false)
-        // Lock the session locally to block any input even if hosting is later requested
-        this.$accessor.remote.setLocked(true)
       }
     }
 

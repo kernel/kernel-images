@@ -23,13 +23,28 @@ const (
 	EventDocumentChanged
 	EventFrameInvalidated
 	EventFrameRemoved
+	// EventSessionAttached precedes page/frame initialization. Consumers can
+	// enable domains without waiting for a tab or frame location to resolve.
+	EventSessionAttached
+	// EventDiscoveryFailed reports attachment or worker-discovery setup failure.
+	EventDiscoveryFailed
 )
+
+type SessionTarget struct {
+	ID            string
+	Type          string
+	URL           string
+	Title         string
+	OpenerID      string
+	ParentFrameID string
+}
 
 type Event struct {
 	Kind      EventKind
 	SessionID string
 	FrameID   string
 	Message   cdpclient.Message
+	Target    SessionTarget // populated on EventSessionAttached
 }
 
 type WindowInfo struct {
@@ -75,6 +90,7 @@ type targetInfo struct {
 	Title         string `json:"title"`
 	URL           string `json:"url"`
 	ParentFrameID string `json:"parentFrameId,omitempty"`
+	OpenerID      string `json:"openerId,omitempty"`
 }
 
 type frameInfo struct {
@@ -90,12 +106,13 @@ type frameTree struct {
 }
 
 type session struct {
-	id           string
-	parentID     string
-	target       targetInfo
-	tabID        int
-	initializing bool
-	initialized  bool
+	id              string
+	parentID        string
+	target          targetInfo
+	tabID           int
+	initializing    bool
+	initialized     bool
+	workersAttached bool
 }
 
 type window struct {

@@ -1,8 +1,18 @@
 (function() {
-  if (window.__kernelEventInjected) return;
   var send = window.__kernelEvent;
   if (!send) return;
+  if (window.__kernelEventOwner === send) return;
+  if (window.__kernelEventCleanup) window.__kernelEventCleanup();
+  window.__kernelEventOwner = send;
   window.__kernelEventInjected = true;
+  var controller = new AbortController();
+  window.__kernelEventCleanup = function() {
+    controller.abort();
+    if (scrollTimer) clearTimeout(scrollTimer);
+    delete window.__kernelEventInjected;
+    delete window.__kernelEventOwner;
+    delete window.__kernelEventCleanup;
+  };
 
   function sel(el) {
     return el.id ? '#' + el.id : (el.className ? '.' + String(el.className).split(' ')[0] : '');
@@ -76,7 +86,7 @@
       selector: sel(t), tag: t.tagName || '',
       text: text
     }));
-  }, true);
+  }, {capture: true, signal: controller.signal});
 
   document.addEventListener('keydown', function(e) {
     var t = e.target || {};
@@ -87,7 +97,7 @@
       key: e.key,
       selector: sel(t), tag: t.tagName || ''
     }));
-  }, true);
+  }, {capture: true, signal: controller.signal});
 
   function scrollPos(target) {
     if (target === document || target === document.documentElement) {
@@ -121,5 +131,5 @@
       }
       scrollTarget = null;
     }, 300);
-  }, true);
+  }, {capture: true, signal: controller.signal});
 })();

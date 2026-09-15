@@ -72,6 +72,7 @@ export OUTPUT_DIR=/tmp/recordings
 
 - **YAML Spec**: `GET /spec.yaml`
 - **JSON Spec**: `GET /spec.json`
+- **Browser REPL guide**: [`docs/repl.md`](docs/repl.md)
 
 ## 🔧 Development
 

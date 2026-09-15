@@ -116,13 +116,9 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 }
 
-// reconcileTelemetryState reconciles the CDP collector and the api_call
-// middleware to the desired category set. The collector runs iff a CDP category
-// is captured; the middleware emits iff control or platform is, since it is the
-// sole producer of both api_call and platform_api_call. Callers commit the
-// session config first so the filter is live before the collector emits; this
-// returns an error only when the collector fails to start, leaving the caller to
-// roll back.
+// reconcileTelemetryState reconciles optional CDP capture and api_call middleware.
+// Network counters stay active independently. Callers commit the session config
+// first so publication is gated before capture changes, and roll back on failure.
 func (s *ApiService) reconcileTelemetryState(cats []oapi.TelemetryEventCategory) error {
 	if containsCategory(cats, events.Control) || containsCategory(cats, events.Platform) {
 		EnableTelemetryMiddleware()
@@ -130,19 +126,14 @@ func (s *ApiService) reconcileTelemetryState(cats []oapi.TelemetryEventCategory)
 		DisableTelemetryMiddleware()
 	}
 
-	switch {
-	case events.HasCDPCategory(cats) && !s.cdpMonitor.IsRunning():
-		return s.cdpMonitor.Start(s.lifecycleCtx)
-	case !events.HasCDPCategory(cats) && s.cdpMonitor.IsRunning():
-		s.cdpMonitor.Stop()
+	if err := s.lifecycleCtx.Err(); err != nil {
+		return err
 	}
-	return nil
+	return s.cdpMonitor.SetTelemetry(events.HasCDPCategory(cats))
 }
 
-// rollbackTelemetry restores telemetry to its prior state after a failed apply.
-// A fresh session is torn down; an updated session is reverted to prev. Reverting
-// never requires a fallible collector start (the failed start left it stopped),
-// so the reconcile here cannot fail.
+// rollbackTelemetry restores the previous desired capture state after a failed
+// apply. A fresh session is torn down; an updated session is reverted to prev.
 func (s *ApiService) rollbackTelemetry(wasActive bool, prev telemetry.TelemetryConfig) {
 	if !wasActive {
 		s.telemetrySession.Stop()
@@ -187,11 +178,11 @@ func (s *ApiService) reconcileExport(ctx context.Context) {
 	}
 }
 
-// stopTelemetryState tears down the collector and middleware after a session is
+// stopTelemetryState tears down optional capture and middleware after a session is
 // cleared. Export is reconciled separately, after monitorMu is released.
 func (s *ApiService) stopTelemetryState() {
-	if s.cdpMonitor.IsRunning() {
-		s.cdpMonitor.Stop()
+	if err := s.cdpMonitor.SetTelemetry(false); err != nil {
+		logger.FromContext(s.lifecycleCtx).Warn("failed to clean up telemetry capture", "err", err)
 	}
 	DisableTelemetryMiddleware()
 }

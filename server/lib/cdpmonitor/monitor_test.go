@@ -123,41 +123,30 @@ func TestScreenshot(t *testing.T) {
 	})
 }
 
-// TestFailPendingCommandsUnblocksSend verifies that clearState (called during
-// reconnect) unblocks any goroutine blocked in send() by delivering an error.
-func TestFailPendingCommandsUnblocksSend(t *testing.T) {
-	ec := newEventCollector()
-	upstream := newTestUpstream("ws://127.0.0.1:0")
-	m := New(upstream, ec.publishFn(), 0, discardLogger, nil)
+func TestStopUnblocksPendingSend(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+	m := New(newTestUpstream(srv.wsURL()), newEventCollector().publishFn(), 0, discardLogger, nil)
+	require.NoError(t, m.Start(context.Background()))
+	defer m.Stop()
+	srv.readFromMonitor(t, 2*time.Second)
 
-	// Pre-register a fake pending command channel as if send() had registered it.
-	id := int64(42)
-	ch := make(chan cdpMessage, 1)
-	m.pendMu.Lock()
-	m.pending[id] = ch
-	m.pendMu.Unlock()
-
-	// failPendingCommands should deliver an error message to ch without blocking.
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		m.failPendingCommands()
-		close(done)
+		_, err := m.send(context.Background(), "Network.enable", nil, "session")
+		done <- err
 	}()
-
+	require.Equal(t, "Network.enable", srv.readFromMonitor(t, 2*time.Second).Method)
+	m.Stop()
 	select {
-	case msg := <-ch:
-		require.NotNil(t, msg.Error, "expected error response from failPendingCommands")
-		assert.Equal(t, -1, msg.Error.Code)
+	case err := <-done:
+		require.Error(t, err)
 	case <-time.After(2 * time.Second):
-		t.Fatal("failPendingCommands did not unblock the pending channel")
+		t.Fatal("Stop did not unblock the pending command")
 	}
-	<-done
 }
 
-// TestInitSessionAutoAttachFailure verifies that a monitor_init_failed event is
-// published (and the monitor logs the failure) when Target.setAutoAttach returns
-// an error.
-func TestInitSessionAutoAttachFailure(t *testing.T) {
+func TestInitSessionDiscoveryFailure(t *testing.T) {
 	srv := newTestServer(t)
 	defer srv.close()
 
@@ -171,7 +160,7 @@ func TestInitSessionAutoAttachFailure(t *testing.T) {
 	defer close(stopResponder)
 
 	go listenAndRespond(srv, stopResponder, func(msg cdpMessage) any {
-		if msg.Method == "Target.setAutoAttach" {
+		if msg.Method == "Target.setDiscoverTargets" {
 			return map[string]any{
 				"id":    msg.ID,
 				"error": map[string]any{"code": -32601, "message": "Method not found"},
@@ -183,7 +172,7 @@ func TestInitSessionAutoAttachFailure(t *testing.T) {
 	ec.waitFor(t, EventMonitorInitFailed, 3*time.Second)
 }
 
-func TestAutoAttach(t *testing.T) {
+func TestSurfaceDiscovery(t *testing.T) {
 	srv := newTestServer(t)
 	defer srv.close()
 
@@ -194,17 +183,21 @@ func TestAutoAttach(t *testing.T) {
 	defer m.Stop()
 
 	msg := srv.readFromMonitor(t, 3*time.Second)
-	assert.Equal(t, "Target.setAutoAttach", msg.Method)
+	assert.Equal(t, "Target.setDiscoverTargets", msg.Method)
 
 	var params struct {
-		AutoAttach             bool `json:"autoAttach"`
-		WaitForDebuggerOnStart bool `json:"waitForDebuggerOnStart"`
-		Flatten                bool `json:"flatten"`
+		Discover bool `json:"discover"`
+		Filter   []struct {
+			Type string `json:"type"`
+		} `json:"filter"`
 	}
 	require.NoError(t, json.Unmarshal(msg.Params, &params))
-	assert.True(t, params.AutoAttach)
-	assert.False(t, params.WaitForDebuggerOnStart)
-	assert.True(t, params.Flatten)
+	assert.True(t, params.Discover)
+	var types []string
+	for _, filter := range params.Filter {
+		types = append(types, filter.Type)
+	}
+	assert.ElementsMatch(t, []string{"page", "iframe", "worker", "shared_worker", "service_worker", "background_page"}, types)
 
 	stopResponder := make(chan struct{})
 	go listenAndRespond(srv, stopResponder, nil)
@@ -230,6 +223,28 @@ func TestAutoAttach(t *testing.T) {
 	m.sessionsMu.RUnlock()
 	assert.Equal(t, "target-xyz", info.targetID)
 	assert.Equal(t, "page", info.targetType)
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId":  "session-abc",
+			"targetInfo": map[string]any{"targetId": "target-xyz", "type": "page"},
+		},
+	})
+	// Navigation is an ordered barrier after both attachment notifications.
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Page.frameNavigated", "sessionId": "session-abc",
+		"params": map[string]any{"frame": map[string]any{"id": "target-xyz", "url": "https://example.com/"}},
+	})
+	ec.waitFor(t, EventNavigation, time.Second)
+	ec.mu.Lock()
+	defer ec.mu.Unlock()
+	opened := 0
+	for _, event := range ec.events {
+		if event.Type == EventTabOpened {
+			opened++
+		}
+	}
+	require.Equal(t, 1, opened)
 }
 
 // TestInjectScriptEvaluatesCurrentDocument verifies that when a page target

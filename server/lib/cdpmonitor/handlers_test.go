@@ -371,6 +371,8 @@ func TestProxyErrorRateLimit(t *testing.T) {
 	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted", "Document"))
 	require.True(t, m.proxyErrorRateLimited("sess", "provider_blacklisted", "Document"), "same session+code+resource within interval must be dropped")
 	require.False(t, m.proxyErrorRateLimited("sess", "provider_unreachable", "Document"), "different code must be allowed")
+	require.False(t, m.proxyErrorRateLimited("sess", "provider_rejected", "Document"), "provider rejection code must be allowed")
+	require.False(t, m.proxyErrorRateLimited("sess", "origin_tls_timeout", "Document"), "origin TLS timeout code must be allowed")
 	require.False(t, m.proxyErrorRateLimited("sess2", "provider_blacklisted", "Document"), "different session must be allowed")
 	require.False(t, m.proxyErrorRateLimited("sess", "provider_blacklisted", "Script"), "different resource type must be allowed")
 

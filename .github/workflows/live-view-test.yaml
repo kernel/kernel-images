@@ -1,0 +1,36 @@
+name: Test Live View client
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  test-live-view:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: images/chromium-headful/client/package-lock.json
+
+      - name: Install client dependencies
+        run: npm ci --no-audit --no-fund
+        working-directory: images/chromium-headful/client
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Run unit tests
+        run: bun test tests
+        working-directory: images/chromium-headful/client

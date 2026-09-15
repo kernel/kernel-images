@@ -98,7 +98,7 @@ Deployed successfully!
 
 ## Connect to the browser via Chrome DevTools Protocol
 
-Port `9222` is exposed via `ncat`, allowing you to connect Chrome DevTools Protocol-based browser frameworks like Playwright and Puppeteer (and CDP-based SDKs like Browser Use). You can use these frameworks to drive the browser in the cloud. You can also disconnect from the browser and reconnect to it.
+Port `9222` is exposed via `ncat`, allowing you to connect Chrome DevTools Protocol-based browser frameworks like Playwright and Puppeteer. You can use these frameworks to drive the browser in the cloud. You can also disconnect from the browser and reconnect to it.
 
 First, fetch the browser's CDP websocket endpoint:
 

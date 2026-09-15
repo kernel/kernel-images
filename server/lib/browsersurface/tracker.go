@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -16,6 +17,21 @@ const (
 	sessionInitRetryDelay = 50 * time.Millisecond
 )
 
+type Option func(*Tracker)
+
+// WithAdditionalTargets includes target types beyond pages and iframes. They
+// emit session and protocol events but do not get page/frame initialization.
+func WithAdditionalTargets(targetTypes ...string) Option {
+	return func(t *Tracker) { t.additionalTargets = slices.Clone(targetTypes) }
+}
+
+// WithoutLocations tracks sessions without window lookup or Page-domain frame
+// initialization. Consumers use SessionAttached, SessionRemoved, and Protocol
+// events and own their domain setup; location snapshots are not populated.
+func WithoutLocations() Option {
+	return func(t *Tracker) { t.trackLocations = false }
+}
+
 type subscriber struct {
 	events chan Event
 	done   chan struct{}
@@ -25,27 +41,29 @@ type subscriber struct {
 // tabs, and embedded frames. IDs are monotonically increasing for the lifetime
 // of the Chromium process and are never reused.
 type Tracker struct {
-	protocol Protocol
-	ctx      context.Context
-	cancel   context.CancelFunc
-	logger   *slog.Logger
+	protocol          Protocol
+	ctx               context.Context
+	cancel            context.CancelFunc
+	logger            *slog.Logger
+	additionalTargets []string
+	trackLocations    bool
 
 	startMu  sync.Mutex
 	started  bool
 	startErr error
 
-	stateMu             sync.RWMutex
-	nextWindowID        int
-	nextTabID           int
-	nextFrameID         int
-	windows             map[int64]window
-	tabs                map[int]*tab
-	tabsByTarget        map[string]int
-	frames              map[string]*frame
-	sessions            map[string]*session
-	trackingTarget      map[string]bool
-	trackingFrameTarget map[string]bool
-	stateChanged        chan struct{}
+	stateMu               sync.RWMutex
+	nextWindowID          int
+	nextTabID             int
+	nextFrameID           int
+	windows               map[int64]window
+	tabs                  map[int]*tab
+	tabsByTarget          map[string]int
+	frames                map[string]*frame
+	sessions              map[string]*session
+	trackingTarget        map[string]bool
+	trackingNonPageTarget map[string]bool
+	stateChanged          chan struct{}
 
 	subMu       sync.Mutex
 	nextSubID   int
@@ -54,23 +72,37 @@ type Tracker struct {
 	closeOnce   sync.Once
 }
 
-func New(protocol Protocol) *Tracker {
+func New(protocol Protocol, options ...Option) *Tracker {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Tracker{
-		protocol:            protocol,
-		ctx:                 ctx,
-		cancel:              cancel,
-		logger:              slog.Default(),
-		windows:             make(map[int64]window),
-		tabs:                make(map[int]*tab),
-		tabsByTarget:        make(map[string]int),
-		frames:              make(map[string]*frame),
-		sessions:            make(map[string]*session),
-		trackingTarget:      make(map[string]bool),
-		trackingFrameTarget: make(map[string]bool),
-		stateChanged:        make(chan struct{}, 1),
-		subscribers:         make(map[int]*subscriber),
-		closed:              make(chan struct{}),
+	t := &Tracker{
+		protocol:              protocol,
+		trackLocations:        true,
+		ctx:                   ctx,
+		cancel:                cancel,
+		logger:                slog.Default(),
+		windows:               make(map[int64]window),
+		tabs:                  make(map[int]*tab),
+		tabsByTarget:          make(map[string]int),
+		frames:                make(map[string]*frame),
+		sessions:              make(map[string]*session),
+		trackingTarget:        make(map[string]bool),
+		trackingNonPageTarget: make(map[string]bool),
+		stateChanged:          make(chan struct{}, 1),
+		subscribers:           make(map[int]*subscriber),
+		closed:                make(chan struct{}),
+	}
+	for _, option := range options {
+		option(t)
+	}
+	return t
+}
+
+func (t *Tracker) tracksTarget(targetType string) bool {
+	switch targetType {
+	case "page", "iframe":
+		return true
+	default:
+		return slices.Contains(t.additionalTargets, targetType)
 	}
 }
 
@@ -87,12 +119,13 @@ func (t *Tracker) Start(ctx context.Context) error {
 	}
 	go t.eventLoop()
 
+	filter := []map[string]any{{"type": "page"}, {"type": "iframe"}}
+	for _, targetType := range t.additionalTargets {
+		filter = append(filter, map[string]any{"type": targetType})
+	}
 	if _, err := t.protocol.Send(ctx, "Target.setDiscoverTargets", map[string]any{
 		"discover": true,
-		"filter": []map[string]any{
-			{"type": "page"},
-			{"type": "iframe"},
-		},
+		"filter":   filter,
 	}, ""); err != nil {
 		t.startErr = fmt.Errorf("start browser surface discovery: %w", err)
 		return t.startErr
@@ -115,8 +148,8 @@ func (t *Tracker) Start(ctx context.Context) error {
 		}
 	}
 	for _, target := range result.TargetInfos {
-		if target.Type == "iframe" {
-			t.trackFrameTarget(target)
+		if target.Type != "page" && t.tracksTarget(target.Type) {
+			t.trackNonPageTarget(target)
 		}
 	}
 	return nil
@@ -161,6 +194,36 @@ func (t *Tracker) IsClosed() bool {
 	}
 }
 
+// CaptureSessions returns the attached session IDs and whether known targets
+// and worker discovery are initialized. Consumers also check their own domains.
+func (t *Tracker) CaptureSessions() ([]string, bool) {
+	if t.IsClosed() {
+		return nil, false
+	}
+	t.stateMu.RLock()
+	defer t.stateMu.RUnlock()
+	attached := make(map[string]bool, len(t.sessions))
+	ids := make([]string, 0, len(t.sessions))
+	for id, sess := range t.sessions {
+		ids = append(ids, id)
+		attached[sess.target.TargetID] = true
+		if t.tracksTarget("worker") && sess.target.Type != "service_worker" && !sess.workersAttached {
+			return nil, false
+		}
+	}
+	for target := range t.tabsByTarget {
+		if !attached[target] {
+			return nil, false
+		}
+	}
+	for target := range t.trackingNonPageTarget {
+		if !attached[target] {
+			return nil, false
+		}
+	}
+	return ids, true
+}
+
 func (t *Tracker) HasTabs() bool {
 	t.stateMu.RLock()
 	defer t.stateMu.RUnlock()
@@ -168,6 +231,9 @@ func (t *Tracker) HasTabs() bool {
 }
 
 func (t *Tracker) RefreshWindows(ctx context.Context) {
+	if !t.trackLocations {
+		return
+	}
 	t.stateMu.RLock()
 	tabs := make([]tab, 0, len(t.tabs))
 	for _, tracked := range t.tabs {
@@ -198,6 +264,9 @@ func (t *Tracker) Snapshot() Snapshot {
 		Windows: make([]WindowInfo, 0, len(t.windows)),
 		Tabs:    make([]TabInfo, 0, len(t.tabs)),
 		Frames:  make([]FrameInfo, 0, len(t.frames)),
+	}
+	if !t.trackLocations {
+		return snapshot
 	}
 	for _, tracked := range t.windows {
 		snapshot.Windows = append(snapshot.Windows, WindowInfo{ID: tracked.id})

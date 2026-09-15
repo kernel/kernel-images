@@ -24,7 +24,7 @@ require (
 	github.com/m1k1o/neko/server v0.0.0-20251008185748-46e2fc7d3866
 	github.com/nrednav/cuid2 v1.1.0
 	github.com/oapi-codegen/runtime v1.2.0
-	github.com/s2-streamstore/s2-sdk-go v0.16.1
+	github.com/s2-streamstore/s2-sdk-go v0.22.1
 	github.com/samber/lo v1.52.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0

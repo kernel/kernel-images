@@ -22,15 +22,22 @@ export interface GuacamoleKeyboardInterface {
   onkeyup?: (keysym: number) => void
 
   /**
-   * Marks a key as pressed, firing the keydown event if registered. Key
-   * repeat for the pressed key will start after a delay if that key is
-   * not a modifier. The return value of this function depends on the
-   * return value of the keydown event handler, if any.
+   * Marks a key as pressed, firing the keydown event if registered. The
+   * return value of this function depends on the return value of the
+   * keydown event handler, if any.
    *
    * @param {Number} keysym The keysym of the key to press.
    * @return {Boolean} true if event should NOT be canceled, false otherwise.
    */
   press: (keysym: number) => boolean
+
+  /**
+   * Repeats a pressed key in response to a native browser repeat event.
+   *
+   * @param {Number} keysym The keysym of the key to repeat.
+   * @return {Boolean} true if event should NOT be canceled, false otherwise.
+   */
+  repeat: (keysym: number) => boolean
 
   /**
    * Marks a key as released, firing the keyup event if registered.
