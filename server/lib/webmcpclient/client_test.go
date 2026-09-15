@@ -496,6 +496,15 @@ func TestInvocationPreservesResponseObservedAfterFrameNavigation(t *testing.T) {
 	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
 }
 
+func requirePaymentToolSource(t *testing.T, result InvocationResult) {
+	t.Helper()
+	require.Equal(t, "payment_tool", result.ToolName)
+	require.Equal(t, &ToolSource{
+		WindowID: 1, TabID: 1, PageTitle: "Store", PageURL: "https://merchant.example/",
+		Frame: &ToolFrame{FrameID: 1, URL: "https://payments.example/element"},
+	}, result.Source)
+}
+
 func TestInvocationPreservesIframeResponseAfterParentNavigation(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	fake.parentNavigateBeforeResult = true
@@ -505,6 +514,7 @@ func TestInvocationPreservesIframeResponseAfterParentNavigation(t *testing.T) {
 	result, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
 	require.NoError(t, err)
 	require.Equal(t, "Completed", result.Status)
+	requirePaymentToolSource(t, result)
 }
 
 func TestNonAutosubmitDeclarativeInvocationAwaitsSubmissionAfterPopulatingForm(t *testing.T) {
@@ -544,6 +554,7 @@ func TestInvocationReturnsUnknownWhenTargetDetachesBeforeResponse(t *testing.T) 
 	result, err := manager.Invoke(context.Background(), paymentToolRef(t, manager), map[string]any{})
 	require.ErrorIs(t, err, ErrOutcomeUnknown)
 	require.Equal(t, "invocation-1", result.InvocationID)
+	requirePaymentToolSource(t, result)
 }
 
 func TestInvocationTimeoutHasUnknownOutcome(t *testing.T) {
@@ -568,8 +579,10 @@ func TestInvokeCancellationBeforeCommandResponseKeepsConnection(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	_, err := manager.Invoke(ctx, toolRef, map[string]any{})
+	result, err := manager.Invoke(ctx, toolRef, map[string]any{})
 	require.ErrorIs(t, err, ErrOutcomeUnknown)
+	require.Empty(t, result.InvocationID)
+	requirePaymentToolSource(t, result)
 
 	_, err = manager.Tools(context.Background())
 	require.NoError(t, err)

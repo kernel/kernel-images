@@ -19,7 +19,7 @@ type telemetryCtxKey struct{}
 
 type telemetryRequestCtx struct {
 	operationID string
-	code        string
+	data        oapi.BrowserApiCallEventData
 }
 
 // RecordTelemetryCode attaches code submitted with the request to its api_call
@@ -30,7 +30,8 @@ func RecordTelemetryCode(ctx context.Context, code string) {
 	if !ok {
 		return
 	}
-	tc.code = events.TruncateCaptured(code, events.CapturedFieldCap)
+	code = events.TruncateCaptured(code, events.CapturedFieldCap)
+	tc.data.Code = nonEmptyString(code)
 }
 
 // Process-wide toggle for the api_call middleware. Flipped by
@@ -98,15 +99,11 @@ func apiCallEventData(category oapi.TelemetryEventCategory, tc *telemetryRequest
 		})
 		return data
 	}
-	eventData := oapi.BrowserApiCallEventData{
-		RequestId:   requestID,
-		OperationId: tc.operationID,
-		Status:      status,
-		DurationMs:  durationMs,
-	}
-	if tc.code != "" {
-		eventData.Code = &tc.code
-	}
+	eventData := tc.data
+	eventData.RequestId = requestID
+	eventData.OperationId = tc.operationID
+	eventData.Status = status
+	eventData.DurationMs = durationMs
 	data, _ := json.Marshal(eventData)
 	return data
 }

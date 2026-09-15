@@ -247,18 +247,9 @@ func (c *connection) toolsSnapshot() []Tool {
 	defer c.stateMu.RUnlock()
 	result := make([]Tool, 0, len(c.tools))
 	for _, tool := range c.tools {
-		location, ok := c.surface.Resolve(tool.sessionID, tool.frameID)
+		source, ok := c.toolSource(tool.sessionID, tool.frameID)
 		if !ok {
 			continue
-		}
-		source := ToolSource{
-			WindowID:  location.WindowID,
-			TabID:     location.TabID,
-			PageTitle: location.PageTitle,
-			PageURL:   location.PageURL,
-		}
-		if location.Frame != nil {
-			source.Frame = &ToolFrame{FrameID: location.Frame.ID, URL: location.Frame.URL}
 		}
 		result = append(result, Tool{
 			Ref:         tool.ref,
@@ -292,6 +283,23 @@ func (c *connection) toolsSnapshot() []Tool {
 	return result
 }
 
+func (c *connection) toolSource(sessionID, frameID string) (ToolSource, bool) {
+	location, ok := c.surface.Resolve(sessionID, frameID)
+	if !ok {
+		return ToolSource{}, false
+	}
+	source := ToolSource{
+		WindowID:  location.WindowID,
+		TabID:     location.TabID,
+		PageTitle: location.PageTitle,
+		PageURL:   location.PageURL,
+	}
+	if location.Frame != nil {
+		source.Frame = &ToolFrame{FrameID: location.Frame.ID, URL: location.Frame.URL}
+	}
+	return source, true
+}
+
 func (c *connection) waitForSettled(ctx context.Context) {
 	limit := time.NewTimer(settleLimit)
 	defer limit.Stop()
@@ -319,7 +327,7 @@ func (c *connection) waitForSettled(ctx context.Context) {
 	}
 }
 
-func (c *connection) invoke(ctx context.Context, toolRef string, input map[string]any) (InvocationResult, error) {
+func (c *connection) invoke(ctx context.Context, toolRef string, input map[string]any) (result InvocationResult, err error) {
 	c.stateMu.RLock()
 	tool, ok := c.tools[toolRef]
 	if !ok {
@@ -332,6 +340,15 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 	if !c.sessionExists(sessionID) {
 		return InvocationResult{}, ErrToolNotFound
 	}
+
+	// Keep the pre-invocation location even if the tool navigates or disconnects.
+	source, located := c.toolSource(sessionID, frameID)
+	defer func() {
+		result.ToolName = name
+		if located {
+			result.Source = &source
+		}
+	}()
 
 	raw, err := c.surface.Send(ctx, "WebMCP.invokeTool", map[string]any{
 		"frameId":  frameID,
