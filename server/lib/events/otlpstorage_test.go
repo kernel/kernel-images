@@ -303,8 +303,6 @@ func TestOTLPStorageWriter_RefreshesAuthToken(t *testing.T) {
 	require.NoError(t, wtr.Stop(stopCtx))
 }
 
-// TestBearerRoundTripper_AuthenticatesOnlyConfiguredHost covers the host bound:
-// net/http's cross-host strip never sees a header set in a RoundTripper.
 func TestBearerRoundTripper_AuthenticatesOnlyConfiguredHost(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -335,8 +333,6 @@ func TestBearerRoundTripper_AuthenticatesOnlyConfiguredHost(t *testing.T) {
 	}
 }
 
-// TestOTLPStorageWriter_DoesNotFollowRedirects confirms a redirect from the
-// endpoint surfaces as a response rather than being chased.
 func TestOTLPStorageWriter_DoesNotFollowRedirects(t *testing.T) {
 	var redirectTargetCalls atomic.Int32
 	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -356,6 +352,7 @@ func TestOTLPStorageWriter_DoesNotFollowRedirects(t *testing.T) {
 	es, err := NewEventStream(EventStreamConfig{RingCapacity: 64})
 	require.NoError(t, err)
 
+	metrics := &OTLPMetrics{}
 	cfg := OTLPConfig{
 		Endpoint:       strings.TrimPrefix(endpoint.URL, "http://"),
 		URLPath:        "/otlp-relay/v1/logs",
@@ -363,16 +360,25 @@ func TestOTLPStorageWriter_DoesNotFollowRedirects(t *testing.T) {
 		AuthTokenFunc:  func() string { return "jwt" },
 		ServiceName:    "kernel-browser",
 		ExportInterval: 20 * time.Millisecond,
+		Metrics:        metrics,
 	}
 	wtr := NewOTLPStorageWriter(es, cfg, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	require.NoError(t, wtr.Start(ctx))
+	t.Cleanup(func() {
+		cancel()
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stopCancel()
+		require.NoError(t, wtr.Stop(stopCtx))
+	})
 
 	es.Publish(Envelope{Event: Event{Ts: 1, Type: "network_response", Category: Network,
 		Data: []byte(`{"method":"GET","url":"https://x","status":200}`)}})
-	require.Eventually(t, func() bool { return endpointCalls.Load() > 0 }, 3*time.Second, 10*time.Millisecond,
-		"the export should reach the configured endpoint")
+	require.Eventually(t, func() bool { return metrics.Failures() > 0 }, 3*time.Second, 10*time.Millisecond,
+		"the redirect response should surface as an export failure")
+	assert.Equal(t, uint64(1), metrics.Failures(), "the redirect response must not be retried")
+	assert.Zero(t, metrics.Exported(), "the redirect response must not count as a successful export")
+	assert.Equal(t, int32(1), endpointCalls.Load(), "the redirect response must not be retried")
 	assert.Zero(t, redirectTargetCalls.Load(), "the exporter must not follow the endpoint's redirect")
 }
 
