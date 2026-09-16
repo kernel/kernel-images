@@ -93,7 +93,7 @@ func TestNetworkMonitorRetriesStartupAndSameURLDisconnect(t *testing.T) {
 	require.False(t, m.NetworkSnapshot().Up)
 	upstream.notifyRestart(srv.wsURL())
 	require.Eventually(t, func() bool { return m.NetworkSnapshot().Up }, 3*time.Second, 10*time.Millisecond)
-	m.network.terminal("s", "r", "net::ERR_CONNECTION_RESET")
+	m.network.terminal("s", "r", networkFailed, "net::ERR_CONNECTION_RESET", false)
 	srv.connMu.Lock()
 	conn := srv.conn
 	srv.connMu.Unlock()
@@ -101,8 +101,9 @@ func TestNetworkMonitorRetriesStartupAndSameURLDisconnect(t *testing.T) {
 	require.Eventually(t, func() bool { return !m.NetworkSnapshot().Up }, time.Second, time.Millisecond)
 	require.Eventually(t, func() bool { return discovers.Load() >= 2 && m.NetworkSnapshot().Up }, 4*time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(1), m.NetworkSnapshot().Resets)
-	m.network.terminal("s", "r", "net::ERR_CONNECTION_RESET")
+	m.network.terminal("s", "r", networkFailed, "net::ERR_CONNECTION_RESET", false)
 	require.Equal(t, uint64(2), m.NetworkSnapshot().Resets)
+	require.Equal(t, [2]uint64{2, 0}, m.NetworkSnapshot().Failures["ERR_CONNECTION_RESET"])
 	m.Stop()
 	require.False(t, m.NetworkSnapshot().Up)
 }
