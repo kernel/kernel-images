@@ -302,3 +302,80 @@ func TestOTLPStorageWriter_RefreshesAuthToken(t *testing.T) {
 	defer stopCancel()
 	require.NoError(t, wtr.Stop(stopCtx))
 }
+
+// TestBearerRoundTripper_AuthenticatesOnlyConfiguredHost covers the host bound:
+// net/http's cross-host strip never sees a header set in a RoundTripper.
+func TestBearerRoundTripper_AuthenticatesOnlyConfiguredHost(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		url      string
+		wantAuth string
+	}{
+		{"configured host", "http://relay.example:4000/otlp-relay/v1/logs", "Bearer jwt"},
+		{"same host uppercased", "http://RELAY.EXAMPLE:4000/otlp-relay/v1/logs", "Bearer jwt"},
+		{"other host", "http://elsewhere.example/v1/logs", ""},
+		{"same host other port", "http://relay.example:9999/v1/logs", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			rt := &bearerRoundTripper{
+				base: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+					got = r.Header.Get("Authorization")
+					return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody}, nil
+				}),
+				token: func() string { return "jwt" },
+				host:  "relay.example:4000",
+			}
+			req, err := http.NewRequest(http.MethodPost, tc.url, nil)
+			require.NoError(t, err)
+			_, err = rt.RoundTrip(req)
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAuth, got)
+		})
+	}
+}
+
+// TestOTLPStorageWriter_DoesNotFollowRedirects confirms a redirect from the
+// endpoint surfaces as a response rather than being chased.
+func TestOTLPStorageWriter_DoesNotFollowRedirects(t *testing.T) {
+	var redirectTargetCalls atomic.Int32
+	redirectTarget := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		redirectTargetCalls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer redirectTarget.Close()
+
+	var endpointCalls atomic.Int32
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		endpointCalls.Add(1)
+		w.Header().Set("Location", redirectTarget.URL+"/v1/logs")
+		w.WriteHeader(http.StatusFound)
+	}))
+	defer endpoint.Close()
+
+	es, err := NewEventStream(EventStreamConfig{RingCapacity: 64})
+	require.NoError(t, err)
+
+	cfg := OTLPConfig{
+		Endpoint:       strings.TrimPrefix(endpoint.URL, "http://"),
+		URLPath:        "/otlp-relay/v1/logs",
+		Insecure:       true,
+		AuthTokenFunc:  func() string { return "jwt" },
+		ServiceName:    "kernel-browser",
+		ExportInterval: 20 * time.Millisecond,
+	}
+	wtr := NewOTLPStorageWriter(es, cfg, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, wtr.Start(ctx))
+
+	es.Publish(Envelope{Event: Event{Ts: 1, Type: "network_response", Category: Network,
+		Data: []byte(`{"method":"GET","url":"https://x","status":200}`)}})
+	require.Eventually(t, func() bool { return endpointCalls.Load() > 0 }, 3*time.Second, 10*time.Millisecond,
+		"the export should reach the configured endpoint")
+	assert.Zero(t, redirectTargetCalls.Load(), "the exporter must not follow the endpoint's redirect")
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

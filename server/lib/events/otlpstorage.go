@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -170,14 +171,19 @@ type otlpStorage struct {
 // bearerRoundTripper sets the Authorization header from token() on each request,
 // so a credential that changes after the exporter is built (the fork-refreshed
 // instance JWT) is picked up per request rather than frozen at construction.
+//
+// A RoundTripper runs on every hop, so net/http's cross-host Authorization strip
+// never sees this header. host bounds it instead: only the configured export
+// endpoint is authenticated, and any other host sends no credential at all.
 type bearerRoundTripper struct {
 	base  http.RoundTripper
 	token func() string
+	host  string
 }
 
 func (t *bearerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	tok := t.token()
-	if tok == "" {
+	if tok == "" || !strings.EqualFold(req.URL.Host, t.host) {
 		return t.base.RoundTrip(req)
 	}
 	// RoundTrip must not mutate the caller's request; clone before setting.
@@ -203,7 +209,12 @@ func newOTLPStorage(ctx context.Context, cfg OTLPConfig, log *slog.Logger) (*otl
 	}
 	if cfg.AuthTokenFunc != nil {
 		opts = append(opts, otlploghttp.WithHTTPClient(&http.Client{
-			Transport: &bearerRoundTripper{base: http.DefaultTransport, token: cfg.AuthTokenFunc},
+			Transport: &bearerRoundTripper{base: http.DefaultTransport, token: cfg.AuthTokenFunc, host: cfg.Endpoint},
+			// The export target is configured, not discovered, so a redirect is
+			// never something to act on.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
 		}))
 	}
 
