@@ -82,6 +82,16 @@ func TestToLogRecord_PromotedAttributes(t *testing.T) {
 		attrs := attrsOf(rec)
 		assert.Equal(t, "provider_unreachable", attrs["kernel.proxy_error_code"].AsString())
 	})
+	t.Run("proxy_error_raw_code", func(t *testing.T) {
+		// A header value the image does not recognize is published as unknown
+		// with the sanitized value in raw_code; both are promoted.
+		env := Envelope{Seq: 3, Event: Event{Type: "proxy_error", Category: Network,
+			Data: json.RawMessage(`{"code":"unknown","raw_code":"some_future_code","status":502}`)}}
+		rec := toLogRecord(env)
+		attrs := attrsOf(rec)
+		assert.Equal(t, "unknown", attrs["kernel.proxy_error_code"].AsString())
+		assert.Equal(t, "some_future_code", attrs["kernel.proxy_error_raw_code"].AsString())
+	})
 	t.Run("console", func(t *testing.T) {
 		env := Envelope{Seq: 2, Event: Event{Type: "console_error", Category: Console,
 			Data: json.RawMessage(`{"level":"error","text":"boom"}`)}}

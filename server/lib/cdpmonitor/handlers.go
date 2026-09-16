@@ -716,17 +716,12 @@ func proxyErrorCode(resHeaders json.RawMessage) (string, bool) {
 const proxyErrorMinInterval = time.Second
 
 // proxyErrorRateLimited reports whether a proxy_error for the given session,
-// code, and resource type should be dropped. Codes are validated against the
-// published enum (kept in lockstep with the metro egressproxy header codes in
-// kernel/kernel packages/metro-api/lib/egressproxy/proxy_error.go), so unknown
-// wire values are dropped and never occupy a rate-limit slot. At most one event
-// per session+code+resource_type per interval is emitted; the interval is a
-// sampling bound, not a per-URL dedup.
+// code, and resource type should be dropped. At most one event per
+// session+code+resource_type per interval is emitted; the interval is a
+// sampling bound, not a per-URL dedup. Callers pass the published code, so
+// header values outside the enum share the single unknown slot and cannot grow
+// the map with arbitrary header text.
 func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bool {
-	if !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
-		m.log.Warn("cdpmonitor: dropping proxy_error with unknown code", "code", code)
-		return true
-	}
 	now := time.Now()
 	key := sessionID + ":" + code + ":" + resourceType
 	m.proxyRateMu.Lock()
@@ -741,9 +736,18 @@ func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bo
 
 // publishProxyError emits a typed proxy_error event for a branded proxy-layer
 // failure observed on the browser's network path (a 5xx response carrying the
-// X-Kernel-Proxy-Error header). The code is the header value, validated against
-// the published enum.
+// X-Kernel-Proxy-Error header). The code is the header value when the published
+// enum lists it. The metro egress proxy gains codes on its own release cadence,
+// so a value this image does not know is reported as unknown with the sanitized
+// header value in raw_code rather than dropped.
 func (m *Monitor) publishProxyError(sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
+	var rawCode *string
+	if !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
+		raw := sanitizeProxyErrorRawCode(code)
+		m.log.Warn("cdpmonitor: proxy_error with unknown code, emitting as unknown", "raw_code", raw)
+		code = proxyErrorUnknownCode
+		rawCode = &raw
+	}
 	if m.proxyErrorRateLimited(sessionID, code, resourceType) {
 		return
 	}
@@ -762,6 +766,7 @@ func (m *Monitor) publishProxyError(sessionID, requestID, code string, status in
 		Method:       optPtr(method),
 		Status:       status,
 		Code:         oapi.BrowserProxyErrorEventDataCode(code),
+		RawCode:      rawCode,
 		ResourceType: optPtr(resourceType),
 	})
 	m.publishEvent(EventProxyError, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.responseReceived", data, sessionID)

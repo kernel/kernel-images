@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -345,7 +346,8 @@ func (c *cdpConn) evalRect(t *testing.T, ctx context.Context, sessionID, selecto
 // 502 with the X-Kernel-Proxy-Error header and asserts the CDP collector emits a
 // proxy_error telemetry event. It exercises the image-side detection
 // (Network.responseReceived header classification) end to end through a real
-// browser, without needing the metro host-proxy.
+// browser, without needing the metro host-proxy. The stub echoes the code query
+// parameter as the header value so each case drives a different code.
 func TestProxyErrorE2E(t *testing.T) {
 	if os.Getenv("KERNEL_CDPMONITOR_CHROME_E2E") == "" {
 		t.Skip("set KERNEL_CDPMONITOR_CHROME_E2E=1 to run the real-Chromium proxy error test")
@@ -355,8 +357,15 @@ func TestProxyErrorE2E(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("X-Kernel-Proxy-Error", "provider_blacklisted")
+	// The stub brands only requests that name a code, so the browser's own
+	// favicon fetch cannot produce a second proxy_error.
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		code := r.URL.Query().Get("code")
+		if code == "" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("X-Kernel-Proxy-Error", code)
 		w.WriteHeader(http.StatusBadGateway)
 		fmt.Fprintln(w, "<html><body>proxy error</body></html>")
 	}))
@@ -371,20 +380,34 @@ func TestProxyErrorE2E(t *testing.T) {
 	require.NoError(t, m.Start(ctx))
 	defer m.Stop()
 
-	// A fresh page target the monitor auto-attaches to and enables Network on.
-	targetID := cdp.call(t, ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}).targetID(t)
-	ec.waitFor(t, EventTabOpened, 5*time.Second)
+	cases := []struct {
+		name, header, code string
+		rawCode            any
+	}{
+		{"published code", "provider_blacklisted", "provider_blacklisted", nil},
+		{"code published after the first release", "restricted_route_unavailable", "restricted_route_unavailable", nil},
+		{"code this image does not know", "Some-Future Code", "unknown", "some_future_code"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cp := ec.checkpoint()
+			// A fresh page target the monitor auto-attaches to and enables Network on.
+			targetID := cdp.call(t, ctx, "", "Target.createTarget", map[string]any{"url": "about:blank"}).targetID(t)
+			ec.waitForNew(t, EventTabOpened, cp, 5*time.Second)
 
-	// Drive navigation from a separate flat session on the same target.
-	sessionID := cdp.call(t, ctx, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}).sessionID(t)
-	cdp.call(t, ctx, sessionID, "Page.enable", nil)
-	cdp.call(t, ctx, sessionID, "Page.navigate", map[string]any{"url": stub.URL})
+			// Drive navigation from a separate flat session on the same target.
+			sessionID := cdp.call(t, ctx, "", "Target.attachToTarget", map[string]any{"targetId": targetID, "flatten": true}).sessionID(t)
+			cdp.call(t, ctx, sessionID, "Page.enable", nil)
+			cdp.call(t, ctx, sessionID, "Page.navigate", map[string]any{"url": stub.URL + "/?code=" + url.QueryEscape(tc.header)})
 
-	ev := ec.waitFor(t, EventProxyError, 10*time.Second)
-	require.Equal(t, events.Network, ev.Category)
-	require.Equal(t, "Network.responseReceived", *ev.Source.Event)
-	var data map[string]any
-	require.NoError(t, json.Unmarshal(ev.Data, &data))
-	require.Equal(t, "provider_blacklisted", data["code"])
-	require.Equal(t, float64(502), data["status"])
+			ev := ec.waitForNew(t, EventProxyError, cp, 10*time.Second)
+			require.Equal(t, events.Network, ev.Category)
+			require.Equal(t, "Network.responseReceived", *ev.Source.Event)
+			var data map[string]any
+			require.NoError(t, json.Unmarshal(ev.Data, &data))
+			require.Equal(t, tc.code, data["code"])
+			require.Equal(t, tc.rawCode, data["raw_code"])
+			require.Equal(t, float64(502), data["status"])
+		})
+	}
 }

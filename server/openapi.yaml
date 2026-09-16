@@ -2343,15 +2343,23 @@ components:
               description: CDP request identifier matching the originating request.
             code:
               type: string
-              enum: [destination_blocked, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, proxy_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed]
+              enum: [destination_blocked, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, proxy_unavailable, restricted_route_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed, unknown]
               description: >
                 Proxy-layer error code: the `X-Kernel-Proxy-Error` response
                 header value from a branded 5xx error page served by the metro
                 egress host-proxy. Values mirror what the proxy emits:
                 destination_blocked, provider_blacklisted, provider_unreachable,
                 provider_rejected, origin_tls_timeout, proxy_unavailable,
-                upstream_timeout, upstream_dns_failure, upstream_connect_failed.
-                Unknown header values are dropped.
+                restricted_route_unavailable, upstream_timeout,
+                upstream_dns_failure, upstream_connect_failed. A header value
+                this image does not recognize is reported as unknown, with the
+                header value in raw_code.
+            raw_code:
+              type: string
+              description: >
+                Sanitized `X-Kernel-Proxy-Error` header value, present only when
+                code is unknown. Lowercased, characters outside [a-z0-9_]
+                replaced with _, at most 64 characters.
             status:
               type: integer
               description: HTTP response status of the branded error page (502).

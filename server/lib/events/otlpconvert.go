@@ -87,11 +87,12 @@ func toLogRecord(env Envelope) log.Record {
 // network/console event-data fields in openapi.yaml; keep them in sync if that
 // schema changes.
 const (
-	dataKeyMethod = "method"
-	dataKeyURL    = "url"
-	dataKeyStatus = "status"
-	dataKeyCode   = "code"
-	dataKeyLevel  = "level"
+	dataKeyMethod  = "method"
+	dataKeyURL     = "url"
+	dataKeyStatus  = "status"
+	dataKeyCode    = "code"
+	dataKeyRawCode = "raw_code"
+	dataKeyLevel   = "level"
 )
 
 // promotedAttributes lifts high-value payload fields into typed, queryable
@@ -115,6 +116,9 @@ func promotedAttributes(cat oapi.TelemetryEventCategory, data map[string]any) []
 		// field, so the promotion is effectively gated to that event type.
 		if v, ok := data[dataKeyCode].(string); ok {
 			out = append(out, log.String("kernel.proxy_error_code", v))
+		}
+		if v, ok := data[dataKeyRawCode].(string); ok {
+			out = append(out, log.String("kernel.proxy_error_raw_code", v))
 		}
 	case Console:
 		if v, ok := data[dataKeyLevel].(string); ok {
