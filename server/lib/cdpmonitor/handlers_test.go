@@ -251,6 +251,7 @@ func TestNetworkEvents(t *testing.T) {
 		var data map[string]any
 		require.NoError(t, json.Unmarshal(ev.Data, &data))
 		assert.Equal(t, "provider_blacklisted", data["code"])
+		assert.NotContains(t, data, "raw_code")
 		assert.Equal(t, float64(502), data["status"])
 		assert.Equal(t, "GET", data["method"])
 		assert.Equal(t, "https://blocked.example.com/", data["url"])
@@ -322,30 +323,62 @@ func TestNetworkEvents(t *testing.T) {
 	})
 
 	t.Run("proxy_error_unknown_code_reported_as_unknown", func(t *testing.T) {
-		cp := ec.checkpoint()
-		// A 502 with a code outside the published enum is published as unknown
-		// with the sanitized header value in raw_code, not dropped.
-		srv.sendToMonitor(t, map[string]any{
-			"method": "Network.responseReceived",
-			"params": map[string]any{
-				"requestId": "req-unknown",
-				"response": map[string]any{
-					"status": 502, "statusText": "Bad Gateway",
-					"headers":  map[string]any{"X-Kernel-Proxy-Error": "Made-Up Code"},
-					"mimeType": "text/html",
-				},
-			},
-		})
-		ev := ec.waitForNew(t, "proxy_error", cp, 2*time.Second)
-		var data map[string]any
-		require.NoError(t, json.Unmarshal(ev.Data, &data))
-		assert.Equal(t, "unknown", data["code"])
-		assert.Equal(t, "made_up_code", data["raw_code"])
+		tests := []struct {
+			name, header, rawCode, resourceType string
+		}{
+			{name: "unrecognized value", header: "Made-Up Code", rawCode: "made_up_code", resourceType: "Script"},
+			{name: "sentinel text", header: "unknown", rawCode: "unknown", resourceType: "Image"},
+			{name: "empty value", header: "", rawCode: "", resourceType: "Font"},
+			{name: "combined duplicate values", header: "future_one\nfuture_two", rawCode: "future_one_future_two", resourceType: "Media"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				cp := ec.checkpoint()
+				srv.sendToMonitor(t, map[string]any{
+					"method": "Network.responseReceived",
+					"params": map[string]any{
+						"requestId": "req-unknown-" + tt.resourceType,
+						"type":      tt.resourceType,
+						"response": map[string]any{
+							"status": 502, "statusText": "Bad Gateway",
+							"headers":  map[string]any{"X-Kernel-Proxy-Error": tt.header},
+							"mimeType": "text/html",
+						},
+					},
+				})
+				ev := ec.waitForNew(t, "proxy_error", cp, 2*time.Second)
+				var data map[string]any
+				require.NoError(t, json.Unmarshal(ev.Data, &data))
+				assert.Equal(t, "unknown", data["code"])
+				assert.Equal(t, tt.rawCode, data["raw_code"])
+			})
+		}
 	})
 }
 
-// TestProxyErrorRateLimit exercises the proxy_error limiter (enum validation +
-// per-session+code min interval) deterministically, without timing sleeps.
+func TestProxyErrorUnknownCodesShareRateLimit(t *testing.T) {
+	collector := newEventCollector()
+	monitor := New(newTestUpstream(""), collector.publishFn(), 0, discardLogger, nil)
+	monitor.publishProxyError("sess", "req-a", "future_a", 502, 0, "GET", "Document", nil, nil, nil)
+	monitor.publishProxyError("sess", "req-b", "future_b", 502, 0, "GET", "Document", nil, nil, nil)
+
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	var proxyErrors []events.Event
+	for _, event := range collector.events {
+		if event.Type == EventProxyError {
+			proxyErrors = append(proxyErrors, event)
+		}
+	}
+	require.Equal(t, 1, len(proxyErrors))
+	var data map[string]any
+	require.NoError(t, json.Unmarshal(proxyErrors[0].Data, &data))
+	assert.Equal(t, "unknown", data["code"])
+	assert.Equal(t, "future_a", data["raw_code"])
+}
+
+// TestProxyErrorRateLimit exercises the per-session+code limiter
+// deterministically, without timing sleeps.
 func TestProxyErrorRateLimit(t *testing.T) {
 	m := &Monitor{proxyLastEmit: make(map[string]time.Time), log: discardLogger}
 	const interval = proxyErrorMinInterval

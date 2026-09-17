@@ -702,7 +702,7 @@ func proxyErrorCode(resHeaders json.RawMessage) (string, bool) {
 	}
 	for k, v := range hdrs {
 		if strings.EqualFold(k, proxyErrorHeader) {
-			if s, ok := v.(string); ok && s != "" {
+			if s, ok := v.(string); ok {
 				return s, true
 			}
 		}
@@ -742,7 +742,7 @@ func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bo
 // header value in raw_code rather than dropped.
 func (m *Monitor) publishProxyError(sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
 	var rawCode *string
-	if !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
+	if code == proxyErrorUnknownCode || !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
 		raw := sanitizeProxyErrorRawCode(code)
 		m.log.Warn("cdpmonitor: proxy_error with unknown code, emitting as unknown", "raw_code", raw)
 		code = proxyErrorUnknownCode

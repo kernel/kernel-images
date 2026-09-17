@@ -407,6 +407,9 @@ func TestProxyErrorE2E(t *testing.T) {
 			require.NoError(t, json.Unmarshal(ev.Data, &data))
 			require.Equal(t, tc.code, data["code"])
 			require.Equal(t, tc.rawCode, data["raw_code"])
+			if tc.rawCode == nil {
+				require.NotContains(t, data, "raw_code")
+			}
 			require.Equal(t, float64(502), data["status"])
 		})
 	}

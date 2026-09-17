@@ -2344,6 +2344,18 @@ components:
             code:
               type: string
               enum: [destination_blocked, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, proxy_unavailable, restricted_route_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed, unknown]
+              x-enum-varnames:
+                - DestinationBlocked
+                - ProviderBlacklisted
+                - ProviderUnreachable
+                - ProviderRejected
+                - OriginTlsTimeout
+                - ProxyUnavailable
+                - RestrictedRouteUnavailable
+                - UpstreamTimeout
+                - UpstreamDnsFailure
+                - UpstreamConnectFailed
+                - ProxyErrorUnknown
               description: >
                 Proxy-layer error code: the `X-Kernel-Proxy-Error` response
                 header value from a branded 5xx error page served by the metro

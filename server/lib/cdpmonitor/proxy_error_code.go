@@ -16,9 +16,9 @@ const proxyErrorRawCodeMaxLen = 64
 var proxyErrorRawCodeInvalid = regexp.MustCompile(`[^a-z0-9_]`)
 
 // sanitizeProxyErrorRawCode reduces a header value to the character set the
-// proxy uses for its own codes: lowercase, [a-z0-9_] only, at most 64 bytes.
+// proxy uses for its own codes: lowercase, [a-z0-9_] only, at most 64 characters.
 func sanitizeProxyErrorRawCode(s string) string {
-	s = proxyErrorRawCodeInvalid.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "_")
+	s = proxyErrorRawCodeInvalid.ReplaceAllString(strings.ToLower(s), "_")
 	if len(s) > proxyErrorRawCodeMaxLen {
 		s = s[:proxyErrorRawCodeMaxLen]
 	}

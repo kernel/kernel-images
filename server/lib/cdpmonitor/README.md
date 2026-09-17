@@ -360,7 +360,7 @@ Unless otherwise noted, events also include the nav context fields described abo
 | `network_request` | `request_id`, `loader_id`, `frame_id`, `document_url`, `method`, `url`, `headers`, `initiator_type`. Optional: `post_data`, `resource_type`, `is_redirect` + `redirect_url`. |
 | `network_response` | `request_id`, `loader_id`, `frame_id`, `method`, `url`, `status`, `headers`. Optional: `status_text`, `mime_type`, `resource_type`, `body` (truncated text body for textual MIME types). |
 | `network_loading_failed` | `request_id`, `error_text`, `canceled`. Optional (absent when the request record was not found): `url`, `loader_id`, `frame_id`, `resource_type`. |
-| `proxy_error` | `request_id`, `code` (typed enum matching the metro header values), `status` (502). Optional: `url`, `loader_id`, `frame_id`, `method`, `resource_type`. Emitted when a 502 response carries the `X-Kernel-Proxy-Error` header; unknown codes are dropped and emission is sampled to at most one per session+code+resource_type per second. WebSocket handshakes are not classified (documented non-goal). |
+| `proxy_error` | `request_id`, `code` (typed enum matching the metro header values), `status` (502). Optional: `raw_code` (sanitized original value when `code` is `unknown`), `url`, `loader_id`, `frame_id`, `method`, `resource_type`. Emitted when a 502 response carries the `X-Kernel-Proxy-Error` header. Unrecognized values are reported as `unknown`; all such values share one rate-limit slot. Emission is sampled to at most one per session+code+resource_type per second. WebSocket handshakes are not classified (documented non-goal). |
 
 #### Page events
 
