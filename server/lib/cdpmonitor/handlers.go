@@ -103,12 +103,14 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		var p struct {
 			RequestID string `json:"requestId"`
 			ErrorText string `json:"errorText"`
+			Canceled  bool   `json:"canceled"`
 		}
 		if m.decodeParams(msg.Method, msg.Params, &p) {
-			if msg.Method == "Network.loadingFinished" {
-				p.ErrorText = ""
+			kind := networkFinished
+			if msg.Method == "Network.loadingFailed" {
+				kind = networkFailed
 			}
-			m.network.terminal(msg.SessionID, p.RequestID, p.ErrorText)
+			m.network.terminal(msg.SessionID, p.RequestID, kind, p.ErrorText, p.Canceled)
 		}
 	}
 	if !m.captureEnabled() || m.telemetryChanging.Load() || !m.telemetryMu.TryRLock() {
