@@ -28,6 +28,7 @@ import (
 	serverpkg "github.com/kernel/kernel-images/server"
 	"github.com/kernel/kernel-images/server/cmd/api/api"
 	"github.com/kernel/kernel-images/server/cmd/config"
+	"github.com/kernel/kernel-images/server/lib/cdprelay"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -270,6 +271,22 @@ func main() {
 	// Fork identity endpoints - not part of OpenAPI spec.
 	r.Post("/internal/fork-identity", forkIdentityHandler(slogger, onForkIdentityApplied))
 	r.Get("/internal/fork-identity/config", forkIdentityConfigHandler(slogger))
+
+	if config.CDPRelayToken != "" {
+		if forkIdentityWait {
+			slogger.Error("CDP relay cannot inherit a token from a fork template")
+			os.Exit(1)
+		}
+		relay, err := cdprelay.New(ctx, cdprelay.Options{
+			Token:       config.CDPRelayToken,
+			UpstreamURL: "ws://" + config.DevToolsProxyAddr,
+		})
+		if err != nil {
+			slogger.Error("failed to initialize CDP relay", "err", err)
+			os.Exit(1)
+		}
+		r.Handle(cdprelay.Prefix+"*", relay)
+	}
 
 	// endpoints to expose the spec
 	r.Get("/spec.yaml", func(w http.ResponseWriter, r *http.Request) {
