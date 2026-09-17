@@ -1,0 +1,8 @@
+{
+  "name": "cdp-standby-experiment",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "playwright-core": "1.58.2"
+  }
+}

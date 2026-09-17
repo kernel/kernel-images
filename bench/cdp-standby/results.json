@@ -1,0 +1,84 @@
+{
+  "date_utc": "2026-09-17",
+  "environment": {
+    "hypervisor": "cloud-hypervisor",
+    "vcpus": 2,
+    "memory_bytes": 2147483648,
+    "chrome": "153.0.8010.36",
+    "playwright_core": "1.58.2",
+    "restore_location": "same host and guest IP",
+    "fixture": "local page; no external website"
+  },
+  "runs": [
+    {
+      "mode": "direct",
+      "idle_ms": 0,
+      "no_upstream_keepalive": false,
+      "result": "PASS",
+      "cycles": [
+        {"sleep_ms": 1000, "command_ms": 1234, "restore_ms": 1229},
+        {"sleep_ms": 10000, "command_ms": 1096, "restore_ms": 1088},
+        {"sleep_ms": 60000, "command_ms": 7954, "restore_ms": 7946}
+      ]
+    },
+    {
+      "mode": "direct",
+      "idle_ms": 500,
+      "no_upstream_keepalive": false,
+      "result": "FAIL",
+      "sleep_ms": 180000,
+      "reason": "Upstream TCP read timed out during standby; host socket showed unanswered TCP keepalive probes."
+    },
+    {
+      "mode": "direct",
+      "idle_ms": 500,
+      "no_upstream_keepalive": true,
+      "result": "PASS",
+      "cycles": [
+        {"sleep_ms": 180000, "command_ms": 1128, "restore_ms": 1122, "standby_ms": 31899}
+      ]
+    },
+    {
+      "mode": "relay",
+      "idle_ms": 500,
+      "result": "PASS",
+      "cycles": [
+        {"sleep_ms": 1000, "command_ms": 12727, "restore_ms": 12707, "standby_ms": 25503},
+        {"sleep_ms": 180000, "command_ms": 7661, "restore_ms": 7652, "standby_ms": 24276}
+      ]
+    },
+    {
+      "mode": "reconnect",
+      "idle_ms": 0,
+      "result": "FAIL_EXPECTED",
+      "sleep_ms": 1000,
+      "restore_ms": 6229,
+      "reason": "The first call using the pre-sleep attached CDP session did not complete within 30 seconds after initiating wake."
+    },
+    {
+      "mode": "direct",
+      "idle_ms": 500,
+      "no_upstream_keepalive": true,
+      "result": "PASS",
+      "note": "Final-code check on the second test instance, including a frozen pre-sleep execution context ID.",
+      "cycles": [
+        {"sleep_ms": 1000, "command_ms": 910, "restore_ms": 903, "standby_ms": 43316}
+      ]
+    },
+    {
+      "mode": "relay",
+      "idle_ms": 500,
+      "result": "PASS",
+      "note": "Final-code check on the second test instance, including a frozen pre-sleep execution context ID.",
+      "cycles": [
+        {"sleep_ms": 1000, "command_ms": 1096, "restore_ms": 1087, "standby_ms": 30756}
+      ]
+    }
+  ],
+  "limitations": [
+    "Small sequential sample, not a performance or reliability benchmark.",
+    "The first reused guest later became unresponsive after passing the relay test. Chrome was blocked in folio_wait_writeback through ext4_evict_inode and overlayfs teardown. New browser connections and guest-agent exec also timed out. Cause not isolated; state-preservation assertions passing does not imply guest lifecycle reliability.",
+    "An initial 30-second snapshot request timeout left the first guest paused and required explicit resume. The experiment now allows 120 seconds for lifecycle HTTP requests.",
+    "Pending commands and WebSocket ping behavior were tested, but semantic browser idleness, migration, arbitrary packet loss, multi-client behavior, and long-run stability were not."
+  ]
+}
