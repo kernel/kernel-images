@@ -3,11 +3,13 @@ package cdpmonitor
 import (
 	"regexp"
 	"strings"
+
+	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 )
 
 // proxyErrorUnknownCode is the published code for an X-Kernel-Proxy-Error
 // header value this image does not recognize.
-const proxyErrorUnknownCode = "unknown"
+const proxyErrorUnknownCode = string(oapi.ProxyErrorUnknown)
 
 // proxyErrorRawCodeMaxLen bounds raw_code so a hostile origin cannot pad the
 // event with arbitrary header text.

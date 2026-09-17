@@ -2368,6 +2368,8 @@ components:
                 header value in raw_code.
             raw_code:
               type: string
+              maxLength: 64
+              pattern: '^[a-z0-9_]*$'
               description: >
                 Sanitized `X-Kernel-Proxy-Error` header value, present only when
                 code is unknown. Lowercased, characters outside [a-z0-9_]
