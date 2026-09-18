@@ -130,6 +130,7 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 			_ = json.Unmarshal(req.Params, &params)
 			f.browserLocale = params["locale"]
 			f.browserLanguages = params["acceptLanguages"]
+			f.browserTimezone = params["timezone"]
 			result = map[string]any{}
 		case "Browser.getKernelBrowserLocation":
 			result = map[string]any{"locale": f.browserLocale, "acceptLanguages": f.browserLanguages, "timezone": f.browserTimezone, "dateTimeLocale": f.browserDateTimeLocale, "numberLocale": f.browserNumberLocale, "collatorLocale": f.browserCollatorLocale, "renderersConverged": true, "networkContextsConverged": true}
@@ -693,7 +694,7 @@ func TestBrowserLocation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, BrowserLocationResolution{DateTimeLocale: "de", NumberLocale: "de", CollatorLocale: "de"}, resolution)
 
-	require.NoError(t, client.SetBrowserLocation(context.Background(), "de-DE", "de-DE,de"))
+	require.NoError(t, client.SetBrowserLocation(context.Background(), "de-DE", "de-DE,de", "Europe/Berlin"))
 	location, err := client.GetBrowserLocation(context.Background())
 	require.NoError(t, err)
 	assert.Equal(t, BrowserLocation{Locale: "de-DE", AcceptLanguages: "de-DE,de", TimeZone: "Europe/Berlin", DateTimeLocale: "de", NumberLocale: "de", CollatorLocale: "de", RenderersConverged: true, NetworkContextsConverged: true}, location)
