@@ -12,9 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// newTestController builds a controller whose streamFn returns stream and
-// records how many times it was called, so a test can assert the name is
-// resolved once, at Start.
 func newTestController(t *testing.T, stream string) (*S2StorageController, *atomic.Int32) {
 	t.Helper()
 	var resolved atomic.Int32
@@ -32,9 +29,6 @@ func stopController(t *testing.T, c *S2StorageController) error {
 	return c.Stop(ctx)
 }
 
-// TestS2StorageController_OpensNothingUntilStart is the guarantee the whole
-// export-only mode rests on: a controller that is never started resolves no
-// stream, so no append session is opened and nothing is persisted.
 func TestS2StorageController_OpensNothingUntilStart(t *testing.T) {
 	c, resolved := newTestController(t, "test-stream")
 
@@ -129,10 +123,6 @@ func TestS2StorageController_StopWithoutStart(t *testing.T) {
 	assert.False(t, c.EverStarted())
 }
 
-// TestS2StorageController_EverStartedSurvivesStop covers the state a caller
-// reads to decide whether anything could have been persisted: Running goes back
-// to false at shutdown, EverStarted does not. Restarting is not allowed either,
-// since the append session binds a stream for its lifetime.
 func TestS2StorageController_EverStartedSurvivesStop(t *testing.T) {
 	c, resolved := newTestController(t, "test-stream")
 

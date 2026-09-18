@@ -227,11 +227,8 @@ func (w *S2StorageWriter) Stop(ctx context.Context) error {
 	return w.storage.Close(ctx)
 }
 
-// S2StorageController owns the lifecycle of the S2 sink so the writer can be
-// opened on demand rather than at boot. The append session binds one stream for
-// its lifetime and the writer under it is single-use, so the controller opens at
-// most one writer: once a writer has opened, Start is a no-op for the rest of
-// the process. Safe for concurrent use.
+// S2StorageController opens at most one writer because StorageWriter is
+// single-use and an append session is bound to one stream.
 type S2StorageController struct {
 	es       *EventStream
 	basin    string
@@ -246,18 +243,12 @@ type S2StorageController struct {
 	everStarted bool
 }
 
-// NewS2StorageController resolves the stream name through streamFn at Start
-// rather than here: an instance holding for a fork identity carries the stream
-// of the instance it was forked from until the handoff lands.
+// NewS2StorageController resolves streamFn at Start because a fork learns its
+// stream after construction.
 func NewS2StorageController(es *EventStream, basin, token string, streamFn func() string, cfg S2Config, log *slog.Logger) *S2StorageController {
 	return &S2StorageController{es: es, basin: basin, token: token, streamFn: streamFn, cfg: cfg, log: log}
 }
 
-// Start opens the sink, or is a no-op when a writer has already opened or the
-// basin, token, or stream is unset. A failed open leaves the controller unstarted
-// so a later identity can still open one. parent governs the read loop; the
-// controller derives a cancelable child so Stop can halt the loop even when
-// parent is still live.
 func (c *S2StorageController) Start(parent context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -282,8 +273,6 @@ func (c *S2StorageController) Start(parent context.Context) error {
 	return nil
 }
 
-// Stop drains and shuts down a running writer, or is a no-op if none is running.
-// ctx bounds shutdown time.
 func (c *S2StorageController) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -296,16 +285,14 @@ func (c *S2StorageController) Stop(ctx context.Context) error {
 	return err
 }
 
-// Running reports whether the sink is currently forwarding events.
 func (c *S2StorageController) Running() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.writer != nil
 }
 
-// EverStarted reports whether a writer ever opened, including one already
-// stopped. A caller that must guarantee nothing was persisted needs this rather
-// than Running, which goes false again at shutdown.
+// EverStarted remains true after Stop so callers can tell whether anything
+// could have been persisted.
 func (c *S2StorageController) EverStarted() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
