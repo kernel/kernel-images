@@ -64,3 +64,28 @@ func TestS2StorageController_EmptyStreamDoesNotStart(t *testing.T) {
 	assert.False(t, c.Running())
 	assert.False(t, c.EverStarted())
 }
+
+func TestS2StorageController_StopWithoutStart(t *testing.T) {
+	c, _ := newTestController(t, "test-stream")
+
+	require.NoError(t, stopController(t, c))
+	assert.False(t, c.EverStarted())
+}
+
+// TestS2StorageController_EverStartedSurvivesStop covers the state a caller
+// reads to decide whether anything could have been persisted: Running goes back
+// to false at shutdown, EverStarted does not. Restarting is not allowed either,
+// since the append session binds a stream for its lifetime.
+func TestS2StorageController_EverStartedSurvivesStop(t *testing.T) {
+	c, resolved := newTestController(t, "test-stream")
+
+	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, stopController(t, c))
+
+	assert.False(t, c.Running())
+	assert.True(t, c.EverStarted())
+
+	require.NoError(t, c.Start(context.Background()))
+	assert.False(t, c.Running(), "a stopped controller must not reopen the sink")
+	assert.Equal(t, int32(1), resolved.Load())
+}
