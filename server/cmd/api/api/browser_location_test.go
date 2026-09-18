@@ -151,6 +151,20 @@ func TestResetBrowserLocationHTTPRequiresInstanceIdentity(t *testing.T) {
 	assert.Equal(t, "lease-a", service.browserLocationSnapshot().ActiveEpoch)
 }
 
+func TestResetBrowserLocationHTTPAcceptsTrustedControlPlane(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	service.browserLocationValidate = func(context.Context, browserLocationBundle) error { return nil }
+	body := `{"previous_epoch":"","bundle":{"epoch":"lease-a","generation":1,"timezone":"UTC","locale":"en-US","languages":["en-US","en"]}}`
+
+	request := httptest.NewRequest(http.MethodPost, "/internal/browser-location/reset", strings.NewReader(body))
+	request.Header.Set(trustedControlPlaneHeader, trustedControlPlaneHeaderValue)
+	response := httptest.NewRecorder()
+	service.ResetBrowserLocationHTTP(response, request)
+
+	assert.Equal(t, http.StatusAccepted, response.Code)
+	assert.Equal(t, "lease-a", service.browserLocationSnapshot().ActiveEpoch)
+}
+
 func TestBrowserLocationPersistenceFailureDoesNotChangeEpoch(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	t.Setenv("KERNEL_BROWSER_LOCATION_STATE_PATH", "/proc/kernel-browser-location-state")
