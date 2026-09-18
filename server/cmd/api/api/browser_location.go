@@ -233,7 +233,7 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browse
 			components.TimeZone = true
 			lastErr = s.withCDPClientTimeout(ctx, time.Second, func(cdpCtx context.Context, client *cdpclient.Client) error {
 				languages := strings.Join(bundle.Languages, ",")
-				if err := client.SetBrowserLocation(cdpCtx, bundle.Locale, languages); err != nil {
+				if err := client.SetBrowserLocation(cdpCtx, bundle.Locale, languages, bundle.TimeZone); err != nil {
 					return err
 				}
 				observed, err := client.GetBrowserLocation(cdpCtx)
@@ -300,14 +300,9 @@ func resolvedLocalesMatch(expected string, observed cdpclient.BrowserLocation) b
 	if err != nil {
 		return false
 	}
-	wantBase, _ := want.Base()
 	for _, value := range []string{observed.DateTimeLocale, observed.NumberLocale, observed.CollatorLocale} {
 		tag, err := language.Parse(value)
-		if err != nil {
-			return false
-		}
-		base, _ := tag.Base()
-		if base != wantBase {
+		if err != nil || tag.String() != want.String() {
 			return false
 		}
 	}
