@@ -240,6 +240,8 @@ type S2StorageController struct {
 	mu          sync.Mutex
 	writer      *S2StorageWriter
 	cancel      context.CancelFunc
+	startDone   chan struct{}
+	stopDone    chan struct{}
 	everStarted bool
 }
 
@@ -251,13 +253,24 @@ func NewS2StorageController(es *EventStream, basin, token string, streamFn func(
 
 func (c *S2StorageController) Start(parent context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.everStarted {
+	if c.everStarted || c.startDone != nil {
+		c.mu.Unlock()
 		return nil
 	}
 	if c.basin == "" || c.token == "" {
+		c.mu.Unlock()
 		return nil
 	}
+	startDone := make(chan struct{})
+	c.startDone = startDone
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.startDone = nil
+		close(startDone)
+		c.mu.Unlock()
+	}()
+
 	stream := c.streamFn()
 	if stream == "" {
 		return nil
@@ -269,20 +282,61 @@ func (c *S2StorageController) Start(parent context.Context) error {
 		cancel()
 		return err
 	}
+	c.mu.Lock()
 	c.writer, c.cancel, c.everStarted = w, cancel, true
+	c.mu.Unlock()
 	return nil
 }
 
 func (c *S2StorageController) Stop(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.writer == nil {
-		return nil
+	for {
+		c.mu.Lock()
+		if c.startDone != nil {
+			startDone := c.startDone
+			c.mu.Unlock()
+			if err := waitForS2ControllerOperation(ctx, startDone); err != nil {
+				return err
+			}
+			continue
+		}
+		if c.stopDone != nil {
+			stopDone := c.stopDone
+			c.mu.Unlock()
+			if err := waitForS2ControllerOperation(ctx, stopDone); err != nil {
+				return err
+			}
+			continue
+		}
+		if c.writer == nil {
+			c.mu.Unlock()
+			return nil
+		}
+		writer, cancel := c.writer, c.cancel
+		stopDone := make(chan struct{})
+		c.stopDone = stopDone
+		c.mu.Unlock()
+
+		cancel()
+		err := writer.Stop(ctx)
+
+		c.mu.Lock()
+		if err == nil {
+			c.writer, c.cancel = nil, nil
+		}
+		c.stopDone = nil
+		close(stopDone)
+		c.mu.Unlock()
+		return err
 	}
-	c.cancel()
-	err := c.writer.Stop(ctx)
-	c.writer, c.cancel = nil, nil
-	return err
+}
+
+func waitForS2ControllerOperation(ctx context.Context, done <-chan struct{}) error {
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (c *S2StorageController) Running() bool {
