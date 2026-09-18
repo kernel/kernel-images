@@ -35,6 +35,12 @@ func main() {
 	runtimeFlagsPath := flag.String("runtime-flags", "/chromium/flags", "Path to runtime flags overlay file")
 	flag.Parse()
 
+	if err := applyStartupTimezone(startupTimezone(os.Getenv)); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize browser timezone: %v\n", err)
+		os.Exit(1)
+	}
+	_ = os.Unsetenv("TZ")
+
 	// Clean up stale lock file from previous SIGKILL termination
 	// Chromium creates this lock and doesn't clean it up when killed
 	_ = os.Remove("/home/kernel/user-data/SingletonLock")
@@ -107,7 +113,7 @@ func main() {
 	// Prepare environment. PULSE_SERVER/PULSE_SINK route chromium's audio into the
 	// recorder's sink; the root path below relies on this inherited env, while the
 	// non-root path re-asserts them in its runuser env allowlist.
-	env := os.Environ()
+	env := withoutEnvironmentVariable(os.Environ(), "TZ")
 	env = append(env,
 		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
@@ -220,4 +226,42 @@ func killExistingChromium() {
 	}
 	// Timeout - processes may still exist but we continue anyway
 	fmt.Fprintf(os.Stderr, "warning: chromium processes may still be running after kill attempt\n")
+}
+
+func applyStartupTimezone(timezone string) error {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		return nil
+	}
+	if filepath.IsAbs(timezone) || strings.Contains(timezone, "..") || strings.ContainsRune(timezone, '\x00') {
+		return fmt.Errorf("invalid timezone")
+	}
+	target := filepath.Join("/usr/share/zoneinfo", filepath.FromSlash(timezone))
+	if _, err := os.Stat(target); err != nil {
+		return fmt.Errorf("unsupported timezone: %w", err)
+	}
+	tmp := fmt.Sprintf("/etc/.localtime-kernel-%d", time.Now().UnixNano())
+	if err := os.Symlink(target, tmp); err != nil {
+		return err
+	}
+	defer os.Remove(tmp)
+	return os.Rename(tmp, "/etc/localtime")
+}
+
+func withoutEnvironmentVariable(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, value := range env {
+		if !strings.HasPrefix(value, prefix) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func startupTimezone(getenv func(string) string) string {
+	if timezone := getenv("KERNEL_BROWSER_TIMEZONE"); timezone != "" {
+		return timezone
+	}
+	return getenv("TZ")
 }

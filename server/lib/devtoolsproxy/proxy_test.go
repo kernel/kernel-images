@@ -866,3 +866,81 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 
 // controlOn is the gate a proxy test needs to see cdp_command events at all.
 func controlOn() bool { return true }
+
+func TestFilterInternalCDPMethod(t *testing.T) {
+	for _, method := range []string{"Browser.validateKernelBrowserLocation", "Browser.setKernelBrowserLocation", "Browser.getKernelBrowserLocation"} {
+		input := []byte(`{"id":7,"method":"` + method + `","params":{"locale":"de-DE"}}`)
+		var got map[string]any
+		if err := json.Unmarshal(filterInternalCDPMethod(input), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got["method"] != "Kernel.internalMethodUnavailable" || got["id"] != float64(7) {
+			t.Fatalf("unexpected filtered command: %#v", got)
+		}
+	}
+
+	emulation := []byte(`{"id":8,"method":"Emulation.setLocaleOverride","params":{"locale":"de-DE"}}`)
+	if got := filterInternalCDPMethod(emulation); string(got) != string(emulation) {
+		t.Fatalf("standard command changed: %s", got)
+	}
+}
+
+func TestWebSocketProxyRejectsInternalLocationMethods(t *testing.T) {
+	methods := make(chan string, 2)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+		if err != nil {
+			return
+		}
+		defer conn.Close(websocket.StatusNormalClosure, "")
+		for {
+			_, message, err := conn.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var command struct {
+				ID     int    `json:"id"`
+				Method string `json:"method"`
+			}
+			if json.Unmarshal(message, &command) != nil {
+				return
+			}
+			methods <- command.Method
+			response, _ := json.Marshal(map[string]any{"id": command.ID, "result": map[string]any{}})
+			if conn.Write(r.Context(), websocket.MessageText, response) != nil {
+				return
+			}
+		}
+	}))
+	defer upstream.Close()
+
+	upstreamURL, _ := url.Parse(upstream.URL)
+	manager := NewUpstreamManager("/dev/null", silentLogger())
+	manager.setCurrent("ws://" + upstreamURL.Host)
+	proxy := httptest.NewServer(WebSocketProxyHandler(manager, silentLogger(), false, scaletozero.NewNoopController(), nil, nil, nil, nil))
+	defer proxy.Close()
+	proxyURL, _ := url.Parse(proxy.URL)
+	proxyURL.Scheme = "ws"
+	conn, _, err := websocket.Dial(context.Background(), proxyURL.String(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	commands := []string{"Browser.setKernelBrowserLocation", "Emulation.setLocaleOverride"}
+	for index, method := range commands {
+		message, _ := json.Marshal(map[string]any{"id": index + 1, "method": method})
+		if err := conn.Write(context.Background(), websocket.MessageText, message); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := conn.Read(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := <-methods; got != "Kernel.internalMethodUnavailable" {
+		t.Fatalf("internal method reached upstream as %q", got)
+	}
+	if got := <-methods; got != "Emulation.setLocaleOverride" {
+		t.Fatalf("standard Emulation method changed to %q", got)
+	}
+}
