@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +36,19 @@ func TestValidateBrowserLocationBundle(t *testing.T) {
 		_, err := validateBrowserLocationBundle(raw)
 		assert.Error(t, err)
 	}
+}
+
+func TestResolvedLocalesMatchRequiresRegionalResolution(t *testing.T) {
+	assert.True(t, resolvedLocalesMatch("de-DE", cdpclient.BrowserLocation{
+		DateTimeLocale: "de-DE",
+		NumberLocale:   "de-DE",
+		CollatorLocale: "de-DE",
+	}))
+	assert.False(t, resolvedLocalesMatch("de-DE", cdpclient.BrowserLocation{
+		DateTimeLocale: "de",
+		NumberLocale:   "de-DE",
+		CollatorLocale: "de-DE",
+	}))
 }
 
 func TestBrowserLocationBundlesEqual(t *testing.T) {
@@ -148,6 +162,20 @@ func TestResetBrowserLocationHTTPRequiresInstanceIdentity(t *testing.T) {
 	accepted := httptest.NewRecorder()
 	service.ResetBrowserLocationHTTP(accepted, request)
 	assert.Equal(t, http.StatusAccepted, accepted.Code)
+	assert.Equal(t, "lease-a", service.browserLocationSnapshot().ActiveEpoch)
+}
+
+func TestResetBrowserLocationHTTPAcceptsTrustedControlPlane(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	service.browserLocationValidate = func(context.Context, browserLocationBundle) error { return nil }
+	body := `{"previous_epoch":"","bundle":{"epoch":"lease-a","generation":1,"timezone":"UTC","locale":"en-US","languages":["en-US","en"]}}`
+
+	request := httptest.NewRequest(http.MethodPost, "/internal/browser-location/reset", strings.NewReader(body))
+	request.Header.Set(trustedControlPlaneHeader, trustedControlPlaneHeaderValue)
+	response := httptest.NewRecorder()
+	service.ResetBrowserLocationHTTP(response, request)
+
+	assert.Equal(t, http.StatusAccepted, response.Code)
 	assert.Equal(t, "lease-a", service.browserLocationSnapshot().ActiveEpoch)
 }
 

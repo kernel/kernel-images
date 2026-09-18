@@ -758,9 +758,9 @@ func (c *Client) ValidateBrowserLocation(ctx context.Context, locale string) (Br
 }
 
 // SetBrowserLocation updates Chromium's session-only locale and language defaults.
-func (c *Client) SetBrowserLocation(ctx context.Context, locale, acceptLanguages string) error {
+func (c *Client) SetBrowserLocation(ctx context.Context, locale, acceptLanguages, timezone string) error {
 	_, err := c.Send(ctx, "Browser.setKernelBrowserLocation", map[string]string{
-		"locale": locale, "acceptLanguages": acceptLanguages,
+		"locale": locale, "acceptLanguages": acceptLanguages, "timezone": timezone,
 	}, "")
 	if err != nil {
 		return fmt.Errorf("Browser.setKernelBrowserLocation: %w", err)
