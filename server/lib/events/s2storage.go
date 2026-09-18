@@ -226,3 +226,85 @@ func (w *S2StorageWriter) Stop(ctx context.Context) error {
 	}
 	return w.storage.Close(ctx)
 }
+
+// S2StorageController owns the lifecycle of the S2 sink so the writer can be
+// opened on demand rather than at boot. The append session binds one stream for
+// its lifetime and the writer under it is single-use, so the controller opens at
+// most one writer: once a writer has opened, Start is a no-op for the rest of
+// the process. Safe for concurrent use.
+type S2StorageController struct {
+	es       *EventStream
+	basin    string
+	token    string
+	streamFn func() string
+	cfg      S2Config
+	log      *slog.Logger
+
+	mu          sync.Mutex
+	writer      *S2StorageWriter
+	cancel      context.CancelFunc
+	everStarted bool
+}
+
+// NewS2StorageController resolves the stream name through streamFn at Start
+// rather than here: an instance holding for a fork identity carries the stream
+// of the instance it was forked from until the handoff lands.
+func NewS2StorageController(es *EventStream, basin, token string, streamFn func() string, cfg S2Config, log *slog.Logger) *S2StorageController {
+	return &S2StorageController{es: es, basin: basin, token: token, streamFn: streamFn, cfg: cfg, log: log}
+}
+
+// Start opens the sink, or is a no-op when a writer has already opened or the
+// basin, token, or stream is unset. A failed open leaves the controller unstarted
+// so a later identity can still open one. parent governs the read loop; the
+// controller derives a cancelable child so Stop can halt the loop even when
+// parent is still live.
+func (c *S2StorageController) Start(parent context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.everStarted {
+		return nil
+	}
+	stream := c.streamFn()
+	if c.basin == "" || c.token == "" || stream == "" {
+		return nil
+	}
+	c.log.Info("S2 storage enabled", "basin", c.basin, "stream", stream)
+	runCtx, cancel := context.WithCancel(parent)
+	w := NewS2StorageWriter(c.es, c.basin, c.token, stream, c.cfg, c.log)
+	if err := w.Start(runCtx); err != nil {
+		cancel()
+		return err
+	}
+	c.writer, c.cancel, c.everStarted = w, cancel, true
+	return nil
+}
+
+// Stop drains and shuts down a running writer, or is a no-op if none is running.
+// ctx bounds shutdown time.
+func (c *S2StorageController) Stop(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.writer == nil {
+		return nil
+	}
+	c.cancel()
+	err := c.writer.Stop(ctx)
+	c.writer, c.cancel = nil, nil
+	return err
+}
+
+// Running reports whether the sink is currently forwarding events.
+func (c *S2StorageController) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writer != nil
+}
+
+// EverStarted reports whether a writer ever opened, including one already
+// stopped. A caller that must guarantee nothing was persisted needs this rather
+// than Running, which goes false again at shutdown.
+func (c *S2StorageController) EverStarted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.everStarted
+}
