@@ -22,6 +22,8 @@ import (
 const (
 	browserLocationApplyTimeout     = 5 * time.Second
 	defaultBrowserLocationStatePath = "/run/kernel/browser-location.json"
+	trustedControlPlaneHeader       = "X-Kernel-Trusted-Control-Plane"
+	trustedControlPlaneHeaderValue  = "1"
 )
 
 type browserLocationBundle struct {
@@ -455,12 +457,15 @@ func (s *ApiService) BrowserLocationMetrics() metrics.BrowserLocationSnapshot {
 }
 
 // ResetBrowserLocationHTTP is the lease-authoritative epoch transition. Ordinary
-// configure requests cannot change epochs. The instance JWT is not exposed on
-// customer CDP or session APIs and binds the reset to this VM lease.
+// configure requests cannot change epochs. Direct callers authenticate with the
+// instance JWT. Metro-api may instead add the trusted control-plane marker after
+// it verifies Kernel's internal token and removes any caller-supplied marker.
 func (s *ApiService) ResetBrowserLocationHTTP(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	expected := os.Getenv("KERNEL_INSTANCE_JWT")
-	if expected == "" || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
+	instanceAuthorized := expected != "" && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
+	controlPlaneAuthorized := subtle.ConstantTimeCompare([]byte(r.Header.Get(trustedControlPlaneHeader)), []byte(trustedControlPlaneHeaderValue)) == 1
+	if !instanceAuthorized && !controlPlaneAuthorized {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
