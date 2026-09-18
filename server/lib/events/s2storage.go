@@ -264,8 +264,11 @@ func (c *S2StorageController) Start(parent context.Context) error {
 	if c.everStarted {
 		return nil
 	}
+	if c.basin == "" || c.token == "" {
+		return nil
+	}
 	stream := c.streamFn()
-	if c.basin == "" || c.token == "" || stream == "" {
+	if stream == "" {
 		return nil
 	}
 	c.log.Info("S2 storage enabled", "basin", c.basin, "stream", stream)

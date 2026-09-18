@@ -3,6 +3,7 @@ package events
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -56,11 +57,67 @@ func TestS2StorageController_StartIsIdempotent(t *testing.T) {
 	require.NoError(t, stopController(t, c))
 }
 
+func TestS2StorageController_ConcurrentStartOpensOneWriter(t *testing.T) {
+	c, resolved := newTestController(t, "test-stream")
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- c.Start(context.Background())
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.True(t, c.Running())
+	assert.True(t, c.EverStarted())
+	assert.Equal(t, int32(1), resolved.Load())
+
+	require.NoError(t, stopController(t, c))
+}
+
+func TestS2StorageController_StartFailureRollsBack(t *testing.T) {
+	c, resolved := newTestController(t, "test-stream")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, c.Start(ctx), context.Canceled)
+	assert.False(t, c.Running())
+	assert.False(t, c.EverStarted())
+	assert.Equal(t, int32(1), resolved.Load())
+
+	require.NoError(t, c.Start(context.Background()))
+	assert.True(t, c.Running())
+	assert.True(t, c.EverStarted())
+	assert.Equal(t, int32(2), resolved.Load())
+
+	require.NoError(t, stopController(t, c))
+}
+
 func TestS2StorageController_EmptyStreamDoesNotStart(t *testing.T) {
 	c, resolved := newTestController(t, "")
 
 	require.NoError(t, c.Start(context.Background()))
 	assert.Equal(t, int32(1), resolved.Load())
+	assert.False(t, c.Running())
+	assert.False(t, c.EverStarted())
+}
+
+func TestS2StorageController_MissingCredentialsDoesNotResolveStream(t *testing.T) {
+	var resolved atomic.Int32
+	c := NewS2StorageController(newTestStream(t, 64), "", "", func() string {
+		resolved.Add(1)
+		return "test-stream"
+	}, S2Config{}, slog.Default())
+
+	require.NoError(t, c.Start(context.Background()))
+	assert.Zero(t, resolved.Load())
 	assert.False(t, c.Running())
 	assert.False(t, c.EverStarted())
 }
