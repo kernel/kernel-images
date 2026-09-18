@@ -32,6 +32,9 @@ type fakeCDP struct {
 	getVersionCalled    bool
 	failGetVersion      bool
 	productResponse     string
+	browserLocale       string
+	browserLanguages    string
+	browserTimezone     string
 	loadUnpackedCalled  bool
 	loadUnpackedPath    string
 	loadUnpackedID      string
@@ -117,6 +120,14 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 					"jsVersion":       "1.2.3",
 				}
 			}
+		case "Browser.setKernelBrowserLocation":
+			var params map[string]string
+			_ = json.Unmarshal(req.Params, &params)
+			f.browserLocale = params["locale"]
+			f.browserLanguages = params["acceptLanguages"]
+			result = map[string]any{}
+		case "Browser.getKernelBrowserLocation":
+			result = map[string]any{"locale": f.browserLocale, "acceptLanguages": f.browserLanguages, "timezone": f.browserTimezone}
 		case "Extensions.loadUnpacked":
 			f.loadUnpackedCalled = true
 			var params map[string]string
@@ -664,4 +675,17 @@ func TestCommandOnlyClientDiscardsEvents(t *testing.T) {
 	defer cancel()
 	_, err = client.Send(ctx, "Browser.getVersion", nil, "")
 	require.NoError(t, err)
+}
+
+func TestBrowserLocation(t *testing.T) {
+	f := &fakeCDP{browserTimezone: "Europe/Berlin"}
+	url := startFakeCDP(t, f)
+	client, err := Dial(context.Background(), url)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.SetBrowserLocation(context.Background(), "de-DE", "de-DE,de"))
+	location, err := client.GetBrowserLocation(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, BrowserLocation{Locale: "de-DE", AcceptLanguages: "de-DE,de", TimeZone: "Europe/Berlin"}, location)
 }

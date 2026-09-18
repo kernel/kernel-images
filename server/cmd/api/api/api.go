@@ -74,6 +74,14 @@ type ApiService struct {
 	// or mutate its runtime flags and policies.
 	chromiumConfigMu sync.Mutex
 
+	browserLocationMu sync.Mutex
+	browserLocation   struct {
+		accepted  *browserLocationBundle
+		applied   *browserLocationBundle
+		lastError string
+		cancel    context.CancelFunc
+	}
+
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
 

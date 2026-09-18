@@ -94,3 +94,10 @@ func TestExecLookPath(t *testing.T) {
 		t.Fatalf("execLookPath PATH search failed: p=%q err=%v", p, err)
 	}
 }
+
+func TestWithoutEnvironmentVariable(t *testing.T) {
+	got := withoutEnvironmentVariable([]string{"A=1", "TZ=", "B=2"}, "TZ")
+	if !reflect.DeepEqual(got, []string{"A=1", "B=2"}) {
+		t.Fatalf("unexpected env: %v", got)
+	}
+}

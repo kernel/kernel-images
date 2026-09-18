@@ -725,3 +725,34 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 
 	return nil
 }
+
+// BrowserLocation is Chromium's current browser-owned geography state.
+type BrowserLocation struct {
+	Locale          string `json:"locale"`
+	AcceptLanguages string `json:"acceptLanguages"`
+	TimeZone        string `json:"timezone"`
+}
+
+// SetBrowserLocation updates Chromium's session-only locale and language defaults.
+func (c *Client) SetBrowserLocation(ctx context.Context, locale, acceptLanguages string) error {
+	_, err := c.Send(ctx, "Browser.setKernelBrowserLocation", map[string]string{
+		"locale": locale, "acceptLanguages": acceptLanguages,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Browser.setKernelBrowserLocation: %w", err)
+	}
+	return nil
+}
+
+// GetBrowserLocation reads Chromium's observed locale, languages and host timezone.
+func (c *Client) GetBrowserLocation(ctx context.Context) (BrowserLocation, error) {
+	raw, err := c.Send(ctx, "Browser.getKernelBrowserLocation", nil, "")
+	if err != nil {
+		return BrowserLocation{}, fmt.Errorf("Browser.getKernelBrowserLocation: %w", err)
+	}
+	var location BrowserLocation
+	if err := json.Unmarshal(raw, &location); err != nil {
+		return BrowserLocation{}, fmt.Errorf("decode browser location: %w", err)
+	}
+	return location, nil
+}
