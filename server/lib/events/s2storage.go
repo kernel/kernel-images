@@ -275,13 +275,13 @@ func (c *S2StorageController) Start(parent context.Context) error {
 	if stream == "" {
 		return nil
 	}
-	c.log.Info("S2 storage enabled", "basin", c.basin, "stream", stream)
 	runCtx, cancel := context.WithCancel(parent)
 	w := NewS2StorageWriter(c.es, c.basin, c.token, stream, c.cfg, c.log)
 	if err := w.Start(runCtx); err != nil {
 		cancel()
 		return err
 	}
+	c.log.Info("S2 storage enabled", "basin", c.basin, "stream", stream)
 	c.mu.Lock()
 	c.writer, c.cancel, c.everStarted = w, cancel, true
 	c.mu.Unlock()

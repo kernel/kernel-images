@@ -1,6 +1,7 @@
 package events
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
 	"sync"
@@ -90,6 +91,30 @@ func TestS2StorageController_StartFailureRollsBack(t *testing.T) {
 	assert.True(t, c.Running())
 	assert.True(t, c.EverStarted())
 	assert.Equal(t, int32(2), resolved.Load())
+
+	require.NoError(t, stopController(t, c))
+}
+
+func TestS2StorageController_FailedStartDoesNotLogEnabled(t *testing.T) {
+	var logs bytes.Buffer
+	c := NewS2StorageController(newTestStream(t, 64), "test-basin", "test-token", func() string {
+		return "test-stream"
+	}, S2Config{}, slog.New(slog.NewTextHandler(&logs, nil)))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.ErrorIs(t, c.Start(ctx), context.Canceled)
+	assert.NotContains(t, logs.String(), "S2 storage enabled")
+}
+
+func TestS2StorageController_SuccessfulStartLogsEnabled(t *testing.T) {
+	var logs bytes.Buffer
+	c := NewS2StorageController(newTestStream(t, 64), "test-basin", "test-token", func() string {
+		return "test-stream"
+	}, S2Config{}, slog.New(slog.NewTextHandler(&logs, nil)))
+
+	require.NoError(t, c.Start(context.Background()))
+	assert.Contains(t, logs.String(), "S2 storage enabled")
 
 	require.NoError(t, stopController(t, c))
 }
