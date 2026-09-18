@@ -35,7 +35,7 @@ func main() {
 	runtimeFlagsPath := flag.String("runtime-flags", "/chromium/flags", "Path to runtime flags overlay file")
 	flag.Parse()
 
-	if err := applyStartupTimezone(os.Getenv("KERNEL_BROWSER_TIMEZONE")); err != nil {
+	if err := applyStartupTimezone(startupTimezone(os.Getenv)); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize browser timezone: %v\n", err)
 		os.Exit(1)
 	}
@@ -257,4 +257,11 @@ func withoutEnvironmentVariable(env []string, key string) []string {
 		}
 	}
 	return out
+}
+
+func startupTimezone(getenv func(string) string) string {
+	if timezone := getenv("KERNEL_BROWSER_TIMEZONE"); timezone != "" {
+		return timezone
+	}
+	return getenv("TZ")
 }

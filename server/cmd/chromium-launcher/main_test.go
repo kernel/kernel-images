@@ -101,3 +101,19 @@ func TestWithoutEnvironmentVariable(t *testing.T) {
 		t.Fatalf("unexpected env: %v", got)
 	}
 }
+
+func TestStartupTimezone(t *testing.T) {
+	values := map[string]string{"TZ": "America/Chicago", "KERNEL_BROWSER_TIMEZONE": "Europe/Berlin"}
+	getenv := func(key string) string { return values[key] }
+	if got := startupTimezone(getenv); got != "Europe/Berlin" {
+		t.Fatalf("unexpected timezone: %s", got)
+	}
+	delete(values, "KERNEL_BROWSER_TIMEZONE")
+	if got := startupTimezone(getenv); got != "America/Chicago" {
+		t.Fatalf("unexpected fallback timezone: %s", got)
+	}
+	delete(values, "TZ")
+	if got := startupTimezone(getenv); got != "" {
+		t.Fatalf("unexpected empty timezone: %s", got)
+	}
+}
