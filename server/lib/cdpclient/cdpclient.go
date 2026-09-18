@@ -728,9 +728,33 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 
 // BrowserLocation is Chromium's current browser-owned geography state.
 type BrowserLocation struct {
-	Locale          string `json:"locale"`
-	AcceptLanguages string `json:"acceptLanguages"`
-	TimeZone        string `json:"timezone"`
+	Locale                   string `json:"locale"`
+	AcceptLanguages          string `json:"acceptLanguages"`
+	TimeZone                 string `json:"timezone"`
+	DateTimeLocale           string `json:"dateTimeLocale"`
+	NumberLocale             string `json:"numberLocale"`
+	CollatorLocale           string `json:"collatorLocale"`
+	RenderersConverged       bool   `json:"renderersConverged"`
+	NetworkContextsConverged bool   `json:"networkContextsConverged"`
+}
+
+type BrowserLocationResolution struct {
+	DateTimeLocale string `json:"dateTimeLocale"`
+	NumberLocale   string `json:"numberLocale"`
+	CollatorLocale string `json:"collatorLocale"`
+}
+
+// ValidateBrowserLocation verifies locale behavior against Chromium's shipped ICU data.
+func (c *Client) ValidateBrowserLocation(ctx context.Context, locale string) (BrowserLocationResolution, error) {
+	raw, err := c.Send(ctx, "Browser.validateKernelBrowserLocation", map[string]string{"locale": locale}, "")
+	if err != nil {
+		return BrowserLocationResolution{}, fmt.Errorf("Browser.validateKernelBrowserLocation: %w", err)
+	}
+	var resolution BrowserLocationResolution
+	if err := json.Unmarshal(raw, &resolution); err != nil {
+		return BrowserLocationResolution{}, fmt.Errorf("decode browser location validation: %w", err)
+	}
+	return resolution, nil
 }
 
 // SetBrowserLocation updates Chromium's session-only locale and language defaults.

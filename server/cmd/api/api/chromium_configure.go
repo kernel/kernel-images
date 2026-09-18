@@ -170,13 +170,8 @@ func (s *ApiService) chromiumConfigureLive(ctx context.Context, st *chromiumConf
 		}
 	}
 
-	if st.browserLocation != nil {
-		if err := s.acceptBrowserLocation(*st.browserLocation); err != nil {
-			if errors.Is(err, errStaleBrowserLocation) || errors.Is(err, errConflictBrowserLocation) {
-				return oapi.ChromiumConfigure409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: err.Error()}}
-			}
-			return cfg500ConfigureStep(chromiumConfigureStepLocation, err.Error())
-		}
+	if response := s.applyBrowserLocationConfig(ctx, st); response != nil {
+		return response
 	}
 	chromiumConfigureNavigate(ctx, s, spec)
 	return nil
@@ -338,10 +333,8 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 			return resp
 		}
 	}
-	if st.browserLocation != nil {
-		if err := s.acceptBrowserLocation(*st.browserLocation); err != nil {
-			return cfg500ConfigureStep(chromiumConfigureStepLocation, err.Error())
-		}
+	if response := s.applyBrowserLocationConfig(ctx, st); response != nil {
+		return response
 	}
 	chromiumConfigureNavigate(ctx, s, spec)
 	if len(stoppedRecordings) > 0 {
@@ -354,6 +347,27 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 type startURLParsed struct {
 	needsNav bool
 	url      string
+}
+
+func (s *ApiService) applyBrowserLocationConfig(ctx context.Context, st *chromiumConfigureState) oapi.ChromiumConfigureResponseObject {
+	if st.browserLocation == nil {
+		return nil
+	}
+	validate := s.browserLocationValidate
+	if validate == nil {
+		validate = s.validateBrowserLocationSupport
+	}
+	if err := validate(ctx, *st.browserLocation); err != nil {
+		return oapi.ChromiumConfigure400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}
+	}
+	err := s.acceptBrowserLocation(*st.browserLocation)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errStaleBrowserLocation) || errors.Is(err, errConflictBrowserLocation) || errors.Is(err, errBrowserLocationEpoch) {
+		return oapi.ChromiumConfigure409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: err.Error()}}
+	}
+	return cfg500ConfigureStep(chromiumConfigureStepLocation, err.Error())
 }
 
 type chromiumConfigureStep string

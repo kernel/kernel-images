@@ -258,6 +258,7 @@ func main() {
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
 	r.Use(api.WebMCPRequestSizeMiddleware)
 	r.Get("/browser/location", apiService.GetBrowserLocationHTTP)
+	r.Post("/internal/browser-location/reset", apiService.ResetBrowserLocationHTTP)
 	// Enforce additionalProperties: false on POST /repl.
 	r.Use(api.StrictBrowserReplBodyMiddleware)
 	strictHandler := oapi.NewStrictHandlerWithOptions(apiService, []oapi.StrictMiddlewareFunc{
@@ -384,6 +385,7 @@ func main() {
 	rMetrics.Use(chiMiddleware.Recoverer)
 	metricsCollectors := []metrics.Collector{
 		metrics.NewNetworkCollector(apiService.NetworkMetrics),
+		metrics.NewBrowserLocationCollector(apiService.BrowserLocationMetrics),
 		metrics.NewChromeCollector(upstreamMgr),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
@@ -74,12 +75,26 @@ type ApiService struct {
 	// or mutate its runtime flags and policies.
 	chromiumConfigMu sync.Mutex
 
-	browserLocationMu sync.Mutex
-	browserLocation   struct {
-		accepted  *browserLocationBundle
-		applied   *browserLocationBundle
-		lastError string
-		cancel    context.CancelFunc
+	browserLocationMu        sync.Mutex
+	browserLocationApplyMu   sync.Mutex
+	browserLocationReconcile func(context.Context, browserLocationBundle)
+	browserLocationValidate  func(context.Context, browserLocationBundle) error
+	browserLocation          struct {
+		activeEpoch   string
+		accepted      *browserLocationBundle
+		applied       *browserLocationBundle
+		components    browserLocationComponents
+		lastError     string
+		cancel        context.CancelFunc
+		acceptedCount atomic.Uint64
+		appliedCount  atomic.Uint64
+		retries       atomic.Uint64
+		stale         atomic.Uint64
+		conflicts     atomic.Uint64
+		epochRejects  atomic.Uint64
+		failures      atomic.Uint64
+		convergenceMs atomic.Uint64
+		lastAttempt   time.Time
 	}
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
@@ -167,7 +182,7 @@ func New(
 	_ = mon.SetTelemetry(false)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &ApiService{
+	service := &ApiService{
 		recordManager:     recordManager,
 		factory:           factory,
 		defaultRecorderID: "default",
@@ -185,7 +200,12 @@ func New(
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
-	}, nil
+	}
+	if err := service.initializeBrowserLocation(); err != nil {
+		cancel()
+		return nil, err
+	}
+	return service, nil
 }
 
 func (s *ApiService) StartRecording(ctx context.Context, req oapi.StartRecordingRequestObject) (oapi.StartRecordingResponseObject, error) {
