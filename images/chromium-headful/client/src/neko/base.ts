@@ -72,10 +72,11 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       return
     }
 
-    if (++this._connectAttempts > MAX_CONNECT_ATTEMPTS) {
+    if (this._connectAttempts >= MAX_CONNECT_ATTEMPTS) {
       this.giveUp(new Error(`live view did not start after ${MAX_CONNECT_ATTEMPTS} attempts`))
       return
     }
+    this._connectAttempts++
 
     this._displayname = displayname
     this[EVENT.CONNECTING]()

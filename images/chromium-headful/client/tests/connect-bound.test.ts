@@ -83,7 +83,7 @@ describe('live view connect attempts', () => {
       {
         type: 'KERNEL_CONNECTION_FAILED',
         reason: 'live view did not start after 3 attempts',
-        attempts: 4,
+        attempts: 3,
         iceConnectionState: 'disconnected',
         connectionState: undefined,
         signalingState: undefined,
