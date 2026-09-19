@@ -11,6 +11,11 @@ import {
   SignalAnswerMessage,
 } from './messages'
 
+// A retry that reproduces the same failure is not recovery. Without a bound, a
+// client that cannot construct a peer reconnects on the 15s watchdog forever,
+// leaving the viewer black with nothing reported to whoever is watching.
+const MAX_CONNECT_ATTEMPTS = 3
+
 export interface BaseEvents {
   info: (...message: any[]) => void
   warn: (...message: any[]) => void
@@ -24,6 +29,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _peer?: RTCPeerConnection
   protected _channel?: RTCDataChannel
   protected _timeout?: number
+  protected _connectAttempts = 0
+  protected _gaveUp = false
   protected _displayname?: string
   protected _state: RTCIceConnectionState = 'disconnected'
   protected _id = ''
@@ -50,15 +57,26 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   }
 
   public connect(url: string, password: string, displayname: string) {
+    if (this._gaveUp) {
+      this.emit('debug', `not reconnecting, already gave up`)
+      return
+    }
+
     if (this.socketOpen) {
       this.emit('warn', `attempting to create websocket while connection open`)
       return
     }
 
     if (!this.supported) {
-      this.onDisconnected(new Error('browser does not support webrtc (RTCPeerConnection missing)'))
+      this.giveUp(new Error('browser does not support webrtc (RTCPeerConnection missing)'))
       return
     }
+
+    if (this._connectAttempts >= MAX_CONNECT_ATTEMPTS) {
+      this.giveUp(new Error(`live view did not start after ${MAX_CONNECT_ATTEMPTS} attempts`))
+      return
+    }
+    this._connectAttempts++
 
     this._displayname = displayname
     this[EVENT.CONNECTING]()
@@ -344,7 +362,19 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     await this._peer.setRemoteDescription({ type: 'answer', sdp })
   }
 
+  // onMessage is assigned straight to ws.onmessage, so a rejection here has
+  // nowhere to go: without this guard a throw from createPeer or
+  // setRemoteOffer is discarded and the client cannot tell "peer construction
+  // failed" from "still connecting".
   private async onMessage(e: MessageEvent) {
+    try {
+      await this.handleMessage(e)
+    } catch (err: unknown) {
+      this.onDisconnected(err instanceof Error ? err : new Error(String(err)))
+    }
+  }
+
+  private async handleMessage(e: MessageEvent) {
     const { event, ...payload } = JSON.parse(e.data) as WebSocketMessages
 
     this.emit('debug', `received websocket event ${event} ${payload ? `with payload: ` : ''}`, payload)
@@ -433,6 +463,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       return
     }
 
+    this._connectAttempts = 0
+
     this.emit('debug', `connected`)
     this[EVENT.CONNECTED]()
   }
@@ -452,6 +484,20 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._timeout = undefined
     }
     this.onDisconnected(new Error('connection timeout'))
+  }
+
+  private giveUp(reason: Error) {
+    this._gaveUp = true
+    this.postParentMessage({
+      type: 'KERNEL_CONNECTION_FAILED',
+      reason: reason.message,
+      attempts: this._connectAttempts,
+      iceConnectionState: this._peer?.iceConnectionState ?? this._state,
+      connectionState: this._peer?.connectionState,
+      signalingState: this._peer?.signalingState,
+      socketOpen: this.socketOpen,
+    })
+    this.onDisconnected(reason)
   }
 
   protected onDisconnected(reason?: Error) {
