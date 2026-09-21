@@ -377,7 +377,11 @@ async function evaluate(code: string): Promise<void> {
   await cellRuntime.evaluate(code);
 }
 
-const customToolRegistry = new CustomWebMCPRegistry(cdpClient, REPL_ID);
+const customToolRegistry = new CustomWebMCPRegistry(
+  cdpClient,
+  REPL_ID,
+  (signal, callback) => webmcpExecution.run(signal, callback),
+);
 customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
 contextGlobal.customTools = Object.freeze({
   register: customToolRegistry.register,

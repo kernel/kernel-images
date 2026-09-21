@@ -1521,6 +1521,7 @@ paths:
         - REPL: `repl.help`, `repl.write`, `repl.emitImage`
         - Browser control: `cdp`, `drainEvents`, `waitForEvent`, `gotoUrl`, `pageInfo`, `accessibilitySnapshot`, `click`, `typeText`, `fillInput`, `pressKey`, `scroll`, `captureScreenshot`, `listTabs`, `currentTab`, `switchTab`, `newTab`, `closeTab`, `ensureRealTab`, `iframeTarget`, `waitMs`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`, `js`, `uploadFile`, `httpGet`
         - WebMCP: `webmcp.listTools`, `webmcp.invokeTool`
+        - Custom WebMCP: `customTools.register`, `customTools.remove`, `customTools.list`, `customTools.get`
         <!-- END GENERATED REPL METHOD LIST -->
 
         Browser-control methods are available both directly and on `browser`. The same frozen
@@ -6511,7 +6512,7 @@ components:
       additionalProperties: false
     CustomWebMCPRegistry:
       type: object
-      required: [repl_id, revision, source, tools, installations]
+      required: [repl_id, revision, source, source_dirty, tools, installations]
       properties:
         repl_id:
           type: string
@@ -6519,6 +6520,9 @@ components:
           type: integer
         source:
           type: string
+        source_dirty:
+          type: boolean
+          description: True when customTools.register() or customTools.remove() changed the live registry after the last PUT.
         tools:
           type: array
           items:

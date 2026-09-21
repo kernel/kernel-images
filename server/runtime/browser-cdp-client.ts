@@ -494,9 +494,9 @@ export class BrowserReplCdpClient {
     return { timeout, clampedByDeadline: false };
   }
 
-  async listTargets(): Promise<CdpTarget[]> {
+  async listTargets(timeoutMs?: number): Promise<CdpTarget[]> {
     await this.ensureConnected();
-    const res = await this.browserCommand<{ targetInfos: any[] }>('Target.getTargets');
+    const res = await this.send<{targetInfos: any[]}>('Target.getTargets', undefined, undefined, timeoutMs);
     return (res.targetInfos ?? []).map((t) => ({
       targetId: t.targetId,
       type: t.type,

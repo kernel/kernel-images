@@ -7,6 +7,8 @@ const BINDING_NAME = '__kernelCustomWebMCPInvoke';
 const PAGE_RUNTIME_KEY = '__kernelCustomWebMCP';
 const MAIN_PAGE_RUNTIME_KEY = '__kernelCustomWebMCPPage';
 const RECONNECT_DELAY_MS = 250;
+const RECONCILE_COMMAND_TIMEOUT_MS = 5_000;
+const MAX_OUTPUT_BYTES = 1 << 20;
 
 type JsonSchema = Record<string, unknown>;
 type Validator = ReturnType<AjvJsonSchemaValidator['getValidator']>;
@@ -46,6 +48,7 @@ interface CustomToolDefinition extends CustomToolDefinitionInput {
 
 export interface CustomToolFrameMatch {
   frame_id: string;
+  session_id: string;
   target_id: string | null;
   top_target_id: string;
   url: string;
@@ -75,8 +78,15 @@ interface RuntimeEvaluateResult {
 
 interface FrameInfo {
   id: string;
+  sessionId: string;
+  targetId: string | null;
   url: string;
   children?: FrameInfo[];
+}
+
+interface IframeSession {
+  targetId: string;
+  sessionId: string;
 }
 
 interface PageState {
@@ -97,6 +107,7 @@ export interface CustomToolsSnapshot {
   repl_id: string;
   revision: number;
   source: string;
+  source_dirty: boolean;
   tools: Array<{
     id: string;
     kind: ToolKind;
@@ -135,19 +146,39 @@ function compileSchema(schema: JsonSchema, field: string): Validator {
   }
 }
 
-function validatePattern(pattern: unknown): asserts pattern is string {
-  if (typeof pattern !== 'string' || !pattern.includes('://')) {
-    throw new Error('match.url_patterns entries must be URL patterns containing ://');
+interface ParsedURLPattern {
+  scheme: 'http' | 'https' | '*';
+  host: string;
+  path: RegExp;
+}
+
+function wildcardRegexp(pattern: string): RegExp {
+  const escaped = pattern.replace(/[|\\{}()[\]^$+?.]/g, '\\$&').replaceAll('*', '.*');
+  return new RegExp(`^${escaped}$`);
+}
+
+function parseURLPattern(pattern: unknown): ParsedURLPattern {
+  if (typeof pattern !== 'string') {
+    throw new Error('match.url_patterns entries must be strings');
   }
-  const scheme = pattern.slice(0, pattern.indexOf('://'));
+  const separator = pattern.indexOf('://');
+  if (separator === -1) {
+    throw new Error('match.url_patterns entries must contain ://');
+  }
+  const scheme = pattern.slice(0, separator);
   if (scheme !== 'http' && scheme !== 'https' && scheme !== '*') {
     throw new Error(`unsupported URL pattern scheme: ${scheme}`);
   }
-}
-
-function patternRegexp(pattern: string): RegExp {
-  const escaped = pattern.replace(/[|\\{}()[\]^$+?.]/g, '\\$&').replaceAll('*', '.*');
-  return new RegExp(`^${escaped}$`);
+  const remainder = pattern.slice(separator + 3);
+  const pathStart = remainder.indexOf('/');
+  if (pathStart === -1) {
+    throw new Error('match.url_patterns entries must include a path');
+  }
+  const host = remainder.slice(0, pathStart).toLowerCase();
+  if (!host || (host.includes('*') && host !== '*' && !host.startsWith('*.')) || host.slice(2).includes('*')) {
+    throw new Error(`unsupported URL pattern host: ${host}`);
+  }
+  return {scheme, host, path: wildcardRegexp(remainder.slice(pathStart))};
 }
 
 function normalizedURL(url: string): string {
@@ -156,7 +187,27 @@ function normalizedURL(url: string): string {
 }
 
 export function matchesURLPattern(url: string, pattern: string): boolean {
-  return patternRegexp(pattern).test(normalizedURL(url));
+  const parsed = parseURLPattern(pattern);
+  let candidate: URL;
+  try {
+    candidate = new URL(normalizedURL(url));
+  } catch {
+    return false;
+  }
+  const scheme = candidate.protocol.slice(0, -1);
+  if (parsed.scheme === '*' ? scheme !== 'http' && scheme !== 'https' : scheme !== parsed.scheme) return false;
+
+  const host = candidate.host.toLowerCase();
+  let hostMatches: boolean;
+  if (parsed.host === '*') {
+    hostMatches = true;
+  } else if (parsed.host.startsWith('*.')) {
+    const suffix = parsed.host.slice(2);
+    hostMatches = host === suffix || host.endsWith(`.${suffix}`);
+  } else {
+    hostMatches = host === parsed.host;
+  }
+  return hostMatches && parsed.path.test(`${candidate.pathname}${candidate.search}`);
 }
 
 function flattenFrames(frame: FrameInfo): FrameInfo[] {
@@ -180,10 +231,13 @@ function definitionPublic(definition: CustomToolDefinition) {
 export class CustomWebMCPRegistry {
   private definitions = new Map<string, CustomToolDefinition>();
   private source = '';
+  private sourceDirty = false;
   private revision = 0;
   private staging: Map<string, CustomToolDefinition> | null = null;
   private pages = new Map<string, PageState>();
   private sessions = new Map<string, string>();
+  private iframeSessions = new Map<string, IframeSession>();
+  private iframeTargetsBySession = new Map<string, string>();
   private activeInvocations = new Map<string, ActiveInvocation>();
   private reconciliation: Promise<void> | null = null;
   private reconcileAgain = false;
@@ -194,13 +248,18 @@ export class CustomWebMCPRegistry {
   private onError?: (message: string) => void;
   private readonly client: BrowserReplCdpClient;
   private readonly replID: string;
+  private readonly runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>;
 
-  constructor(client: BrowserReplCdpClient, replID: string) {
+  constructor(
+    client: BrowserReplCdpClient,
+    replID: string,
+    runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
+  ) {
     this.client = client;
     this.replID = replID;
+    this.runInvocation = runInvocation;
     this.unsubscribeEvent = client.subscribeEvents((event) => this.handleEvent(event));
     this.unsubscribeDisconnect = client.subscribeDisconnect(() => this.handleDisconnect());
-    this.scheduleReconcile();
   }
 
   setErrorHandler(handler: (message: string) => void): void {
@@ -219,7 +278,7 @@ export class CustomWebMCPRegistry {
     destination.set(definition.id, definition);
     if (!this.staging) {
       this.revision++;
-      this.source = '';
+      this.sourceDirty = true;
       this.scheduleReconcile();
     }
     return definitionPublic(definition);
@@ -230,7 +289,7 @@ export class CustomWebMCPRegistry {
     const removed = destination.delete(id);
     if (removed && !this.staging) {
       this.revision++;
-      this.source = '';
+      this.sourceDirty = true;
       this.scheduleReconcile();
     }
     return removed;
@@ -254,6 +313,7 @@ export class CustomWebMCPRegistry {
       await evaluate(`await (async () => {\n${source}\n})()`);
       this.definitions = this.staging;
       this.source = source;
+      this.sourceDirty = false;
       this.revision++;
     } finally {
       this.staging = null;
@@ -282,6 +342,7 @@ export class CustomWebMCPRegistry {
       repl_id: this.replID,
       revision: this.revision,
       source: this.source,
+      source_dirty: this.sourceDirty,
       tools: this.list(),
       installations: [...this.pages.values()]
         .map((page) => ({
@@ -298,7 +359,12 @@ export class CustomWebMCPRegistry {
     this.unsubscribeEvent();
     this.unsubscribeDisconnect();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    if (this.reconciliation) await this.reconciliation.catch(() => undefined);
+    if (this.reconciliation) {
+      await Promise.race([
+        this.reconciliation.catch(() => undefined),
+        new Promise((resolve) => setTimeout(resolve, 500)),
+      ]);
+    }
     for (const invocation of this.activeInvocations.values()) invocation.controller.abort();
     this.activeInvocations.clear();
     await Promise.all([...this.pages.values()].map(async (page) => {
@@ -306,8 +372,11 @@ export class CustomWebMCPRegistry {
       if (page.contextId !== null) await this.disposePageRuntime(page, PAGE_RUNTIME_KEY, page.contextId);
       await this.detachPage(page);
     }));
+    await Promise.all([...this.iframeSessions.values()].map((frame) => this.detachSession(frame.sessionId)));
     this.pages.clear();
     this.sessions.clear();
+    this.iframeSessions.clear();
+    this.iframeTargetsBySession.clear();
   }
 
   private validateDefinition(input: CustomToolDefinitionInput, previousRevision: number): CustomToolDefinition {
@@ -321,7 +390,7 @@ export class CustomWebMCPRegistry {
     if (!input.match || !Array.isArray(input.match.url_patterns) || input.match.url_patterns.length === 0) {
       throw new Error('definition.match.url_patterns must be a non-empty array');
     }
-    for (const pattern of input.match.url_patterns) validatePattern(pattern);
+    for (const pattern of input.match.url_patterns) parseURLPattern(pattern);
     if (typeof input.execute !== 'function') throw new Error('definition.execute must be a function');
 
     const toolResult = ToolSchema.safeParse({ ...input.tool, outputSchema: input.outputSchema });
@@ -363,10 +432,16 @@ export class CustomWebMCPRegistry {
     }
     if (event.method === 'Target.detachedFromTarget') {
       const sessionId = (event.params as {sessionId?: string})?.sessionId;
-      const targetId = sessionId ? this.sessions.get(sessionId) : undefined;
-      if (sessionId && targetId) {
+      if (!sessionId) return;
+      const targetId = this.sessions.get(sessionId);
+      if (targetId) {
         this.sessions.delete(sessionId);
         this.pages.delete(targetId);
+      } else {
+        const iframeTargetId = this.iframeTargetsBySession.get(sessionId);
+        if (!iframeTargetId) return;
+        this.iframeTargetsBySession.delete(sessionId);
+        this.iframeSessions.delete(iframeTargetId);
       }
     }
     if (
@@ -385,6 +460,8 @@ export class CustomWebMCPRegistry {
   private handleDisconnect(): void {
     this.pages.clear();
     this.sessions.clear();
+    this.iframeSessions.clear();
+    this.iframeTargetsBySession.clear();
     if (this.disposed || this.reconnectTimer) return;
     this.retryReconcile();
   }
@@ -426,12 +503,20 @@ export class CustomWebMCPRegistry {
 
   private async reconcileOnce(): Promise<void> {
     await this.client.ensureConnected();
-    await this.client.browserCommand('Target.setDiscoverTargets', { discover: true });
-    const targets = await this.client.listTargets();
+    await this.client.send(
+      'Target.setDiscoverTargets',
+      {discover: true},
+      undefined,
+      RECONCILE_COMMAND_TIMEOUT_MS,
+    );
+    const targets = await this.client.listTargets(RECONCILE_COMMAND_TIMEOUT_MS);
     const pages = targets.filter(
       (target) => target.type === 'page' && (target.url.startsWith('https://') || target.url.startsWith('http://')),
     );
     const liveTargets = new Set(pages.map((target) => target.targetId));
+    const liveIframeTargets = new Set(
+      targets.filter((target) => target.type === 'iframe').map((target) => target.targetId),
+    );
 
     for (const [targetId, page] of this.pages) {
       if (!liveTargets.has(targetId)) {
@@ -440,8 +525,15 @@ export class CustomWebMCPRegistry {
         this.sessions.delete(page.sessionId);
       }
     }
+    for (const [targetId, frame] of this.iframeSessions) {
+      if (!liveIframeTargets.has(targetId)) {
+        await this.detachSession(frame.sessionId);
+        this.iframeSessions.delete(targetId);
+        this.iframeTargetsBySession.delete(frame.sessionId);
+      }
+    }
 
-    for (const target of pages) {
+    await Promise.all(pages.map(async (target) => {
       try {
         await this.reconcilePage(target, targets);
       } catch (error) {
@@ -449,16 +541,18 @@ export class CustomWebMCPRegistry {
         if (page) page.errors = [error instanceof Error ? error.message : String(error)];
         else this.reportError(error);
       }
-    }
+    }));
   }
 
   private async reconcilePage(target: CdpTarget, targets: CdpTarget[]): Promise<void> {
     let page = this.pages.get(target.targetId);
     if (!page) {
-      const attached = await this.client.browserCommand<{ sessionId: string }>('Target.attachToTarget', {
-        targetId: target.targetId,
-        flatten: true,
-      });
+      const attached = await this.client.send<{sessionId: string}>(
+        'Target.attachToTarget',
+        {targetId: target.targetId, flatten: true},
+        undefined,
+        RECONCILE_COMMAND_TIMEOUT_MS,
+      );
       page = {
         targetId: target.targetId,
         sessionId: attached.sessionId,
@@ -470,33 +564,50 @@ export class CustomWebMCPRegistry {
       };
       this.pages.set(target.targetId, page);
       this.sessions.set(page.sessionId, target.targetId);
-      await this.client.send('Page.enable', undefined, page.sessionId);
-      await this.client.send('Runtime.enable', undefined, page.sessionId);
+      await this.client.send('Page.enable', undefined, page.sessionId, RECONCILE_COMMAND_TIMEOUT_MS);
+      await this.client.send('Runtime.enable', undefined, page.sessionId, RECONCILE_COMMAND_TIMEOUT_MS);
     }
 
-    const result = await this.client.send<{frameTree: CdpFrameTree}>('Page.getFrameTree', undefined, page.sessionId);
-    const root = this.decodeFrameTree(result.frameTree);
-    const frames = flattenFrames(root);
-    const knownFrameIDs = new Set(frames.map((frame) => frame.id));
-    const iframeTargetList = targets.filter((candidate) => candidate.type === 'iframe');
-    let added = true;
-    while (added) {
-      added = false;
-      for (const iframe of iframeTargetList) {
-        if (knownFrameIDs.has(iframe.targetId) || !iframe.parentFrameId || !knownFrameIDs.has(iframe.parentFrameId)) continue;
-        frames.push({id: iframe.targetId, url: iframe.url});
-        knownFrameIDs.add(iframe.targetId);
-        added = true;
-      }
+    const result = await this.client.send<{frameTree: CdpFrameTree}>(
+      'Page.getFrameTree',
+      undefined,
+      page.sessionId,
+      RECONCILE_COMMAND_TIMEOUT_MS,
+    );
+    const root = this.decodeFrameTree(result.frameTree, page.sessionId, target.targetId);
+    const framesByID = new Map(flattenFrames(root).map((frame) => [frame.id, frame]));
+    const unresolvedIframes = new Map(
+      targets
+        .filter((candidate) => candidate.type === 'iframe')
+        .map((candidate) => [candidate.targetId, candidate]),
+    );
+    while (unresolvedIframes.size > 0) {
+      const children = [...unresolvedIframes.values()].filter(
+        (iframe) => iframe.parentFrameId && framesByID.has(iframe.parentFrameId),
+      );
+      if (children.length === 0) break;
+      const childTrees = await Promise.all(children.map(async (iframe) => {
+        unresolvedIframes.delete(iframe.targetId);
+        const session = await this.ensureIframeSession(iframe.targetId);
+        const result = await this.client.send<{frameTree: CdpFrameTree}>(
+          'Page.getFrameTree',
+          undefined,
+          session.sessionId,
+          RECONCILE_COMMAND_TIMEOUT_MS,
+        );
+        return flattenFrames(this.decodeFrameTree(result.frameTree, session.sessionId, iframe.targetId));
+      }));
+      for (const frame of childTrees.flat()) framesByID.set(frame.id, frame);
     }
-    const iframeTargets = new Set(iframeTargetList.map((candidate) => candidate.targetId));
+    const frames = [...framesByID.values()];
     const matches = new Map<string, CustomToolFrameMatch[]>();
     for (const definition of this.definitions.values()) {
       const matchingFrames = frames
         .filter((frame) => definition.match.url_patterns.some((pattern) => matchesURLPattern(frame.url, pattern)))
         .map((frame) => ({
           frame_id: frame.id,
-          target_id: iframeTargets.has(frame.id) ? frame.id : frame.id === root.id ? target.targetId : null,
+          session_id: frame.sessionId,
+          target_id: frame.targetId,
           top_target_id: target.targetId,
           url: normalizedURL(frame.url),
         }));
@@ -508,21 +619,26 @@ export class CustomWebMCPRegistry {
     const registrationCurrent = page.documentKey === documentKey && page.signature === signature && page.contextId !== null;
     page.documentKey = documentKey;
     page.matches = matches;
-    if (registrationCurrent) return;
+    if (registrationCurrent || this.disposed) return;
 
-    const world = await this.client.send<{ executionContextId: number }>(
+    await this.disposePageRuntime(page, MAIN_PAGE_RUNTIME_KEY);
+    if (page.contextId !== null) await this.disposePageRuntime(page, PAGE_RUNTIME_KEY, page.contextId);
+    if (this.disposed) return;
+
+    const world = await this.client.send<{executionContextId: number}>(
       'Page.createIsolatedWorld',
-      { frameId: root.id, worldName: WORLD_NAME, grantUniveralAccess: false },
+      {frameId: root.id, worldName: WORLD_NAME, grantUniveralAccess: false},
       page.sessionId,
+      RECONCILE_COMMAND_TIMEOUT_MS,
     );
     await this.client.send(
       'Runtime.addBinding',
-      { name: BINDING_NAME, executionContextName: WORLD_NAME },
+      {name: BINDING_NAME, executionContextName: WORLD_NAME},
       page.sessionId,
+      RECONCILE_COMMAND_TIMEOUT_MS,
     );
     page.contextId = world.executionContextId;
-    await this.disposePageRuntime(page, MAIN_PAGE_RUNTIME_KEY);
-    await this.disposePageRuntime(page, PAGE_RUNTIME_KEY, world.executionContextId);
+    if (this.disposed) return;
 
     const definitions = [...page.matches.keys()].map((id) => this.definitions.get(id)!);
     const pageErrors = await this.installPageDefinitions(
@@ -540,12 +656,30 @@ export class CustomWebMCPRegistry {
     page.signature = signature;
   }
 
-  private decodeFrameTree(tree: CdpFrameTree): FrameInfo {
+  private decodeFrameTree(tree: CdpFrameTree, sessionId: string, targetId: string | null): FrameInfo {
     return {
       id: tree.frame.id,
+      sessionId,
+      targetId,
       url: tree.frame.url ?? '',
-      children: (tree.childFrames ?? []).map((child) => this.decodeFrameTree(child)),
+      children: (tree.childFrames ?? []).map((child) => this.decodeFrameTree(child, sessionId, null)),
     };
+  }
+
+  private async ensureIframeSession(targetId: string): Promise<IframeSession> {
+    const current = this.iframeSessions.get(targetId);
+    if (current) return current;
+    const attached = await this.client.send<{sessionId: string}>(
+      'Target.attachToTarget',
+      {targetId, flatten: true},
+      undefined,
+      RECONCILE_COMMAND_TIMEOUT_MS,
+    );
+    const session = {targetId, sessionId: attached.sessionId};
+    this.iframeSessions.set(targetId, session);
+    this.iframeTargetsBySession.set(session.sessionId, targetId);
+    await this.client.send('Page.enable', undefined, session.sessionId, RECONCILE_COMMAND_TIMEOUT_MS);
+    return session;
   }
 
   private async disposePageRuntime(page: PageState, runtimeKey: string, contextId?: number): Promise<void> {
@@ -567,47 +701,55 @@ export class CustomWebMCPRegistry {
     runtimeKey: string,
     contextId?: number,
   ): Promise<string[]> {
-    const serialized = definitions.map((definition) => ({
-      id: definition.id,
-      kind: definition.kind,
-      tool: definition.tool,
-      revision: definition.revision,
-      pageExecuteSource: definition.pageExecuteSource,
-    }));
+    const definitionsSource = definitions.map((definition) => {
+      const metadata = JSON.stringify({
+        id: definition.id,
+        kind: definition.kind,
+        tool: definition.tool,
+        revision: definition.revision,
+      });
+      if (definition.kind === 'cdp') return metadata;
+      return `${metadata.slice(0, -1)},"execute":(${definition.pageExecuteSource})}`;
+    }).join(',');
     const expression = `
       (async () => {
         const key = ${JSON.stringify(runtimeKey)};
-        globalThis[key]?.dispose?.();
-        const definitions = ${JSON.stringify(serialized)};
-        const controllers = new Map();
-        const pending = new Map();
+        const definitions = [${definitionsSource}];
+        let runtime = globalThis[key];
+        if (!runtime) {
+          const controllers = new Map();
+          const pending = new Map();
+          runtime = {
+            controllers,
+            pending,
+            resolveInvocation(id, value) {
+              const invocation = pending.get(id);
+              if (!invocation) return;
+              pending.delete(id);
+              invocation.resolve(value);
+            },
+            rejectInvocation(id, message) {
+              const invocation = pending.get(id);
+              if (!invocation) return;
+              pending.delete(id);
+              invocation.reject(new Error(message));
+            },
+            dispose() {
+              for (const controller of controllers.values()) controller.abort();
+              controllers.clear();
+            },
+          };
+          globalThis[key] = runtime;
+        }
+        runtime.dispose();
+        const {controllers, pending} = runtime;
         const errors = [];
-        const resolveInvocation = (id, value) => {
-          const invocation = pending.get(id);
-          if (!invocation) return;
-          pending.delete(id);
-          invocation.resolve(value);
-        };
-        const rejectInvocation = (id, message) => {
-          const invocation = pending.get(id);
-          if (!invocation) return;
-          pending.delete(id);
-          invocation.reject(new Error(message));
-        };
-        globalThis[key] = {
-          resolveInvocation,
-          rejectInvocation,
-          dispose() {
-            for (const controller of controllers.values()) controller.abort();
-            controllers.clear();
-          },
-        };
         for (const definition of definitions) {
           const controller = new AbortController();
           controllers.set(definition.id, controller);
           let execute;
           if (definition.kind === 'page') {
-            execute = (0, eval)(\`(\${definition.pageExecuteSource})\`);
+            execute = definition.execute;
           } else {
             execute = (input, {signal} = {}) => {
               const invocationId = crypto.randomUUID();
@@ -645,7 +787,12 @@ export class CustomWebMCPRegistry {
     `;
     const params: Record<string, unknown> = { expression, awaitPromise: true, returnByValue: true };
     if (contextId !== undefined) params.contextId = contextId;
-    const result = await this.client.send<RuntimeEvaluateResult>('Runtime.evaluate', params, page.sessionId);
+    const result = await this.client.send<RuntimeEvaluateResult>(
+      'Runtime.evaluate',
+      params,
+      page.sessionId,
+      RECONCILE_COMMAND_TIMEOUT_MS,
+    );
     if (result.exceptionDetails) {
       throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text ?? 'tool installation failed');
     }
@@ -691,10 +838,13 @@ export class CustomWebMCPRegistry {
     try {
       const inputResult = definition.inputValidator(payload.input);
       if (!inputResult.valid) throw new Error(`input failed JSON Schema validation: ${inputResult.errorMessage}`);
-      const output = await definition.execute(inputResult.data as Record<string, unknown>, {
-        signal: controller.signal,
-        matches: clone(page.matches.get(definition.id) ?? []),
-      });
+      const output = await this.runInvocation(controller.signal, async () => definition.execute(
+        inputResult.data as Record<string, unknown>,
+        {
+          signal: controller.signal,
+          matches: clone(page.matches.get(definition.id) ?? []),
+        },
+      ));
       if (definition.outputValidator) {
         const outputResult = definition.outputValidator(output);
         if (!outputResult.valid) throw new Error(`output failed JSON Schema validation: ${outputResult.errorMessage}`);
@@ -725,6 +875,9 @@ export class CustomWebMCPRegistry {
       expression = `globalThis[${JSON.stringify(PAGE_RUNTIME_KEY)}]?.rejectInvocation(${JSON.stringify(invocationId)}, ${JSON.stringify(error)})`;
     } else {
       const serialized = JSON.stringify(output ?? null);
+      if (Buffer.byteLength(serialized) > MAX_OUTPUT_BYTES) {
+        throw new Error('custom WebMCP output exceeds 1 MiB');
+      }
       expression = `globalThis[${JSON.stringify(PAGE_RUNTIME_KEY)}]?.resolveInvocation(${JSON.stringify(invocationId)}, ${serialized})`;
     }
     try {
@@ -735,8 +888,17 @@ export class CustomWebMCPRegistry {
   }
 
   private async detachPage(page: PageState): Promise<void> {
+    await this.detachSession(page.sessionId);
+  }
+
+  private async detachSession(sessionId: string): Promise<void> {
     try {
-      await this.client.browserCommand('Target.detachFromTarget', { sessionId: page.sessionId });
+      await this.client.send(
+        'Target.detachFromTarget',
+        {sessionId},
+        undefined,
+        1_000,
+      );
     } catch {
       // The target or connection is already gone.
     }

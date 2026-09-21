@@ -23,6 +23,7 @@ type customWebMCPRuntimeSnapshot struct {
 	ReplID        string                          `json:"repl_id"`
 	Revision      int                             `json:"revision"`
 	Source        string                          `json:"source"`
+	SourceDirty   bool                            `json:"source_dirty"`
 	Tools         []customWebMCPRuntimeDefinition `json:"tools"`
 	Installations []oapi.CustomWebMCPInstallation `json:"installations"`
 }
@@ -90,7 +91,7 @@ func (m *browserReplManager) customWebMCPOperation(ctx context.Context, operatio
 
 	request, err := prepareBrowserReplOperation(source, operation, customWebMCPOperationTimeout)
 	if err != nil {
-		return oapi.CustomWebMCPRegistry{}, err
+		return oapi.CustomWebMCPRegistry{}, &customWebMCPExecutionError{message: err.Error()}
 	}
 	if err := m.ensureLocked(ctx); err != nil {
 		return oapi.CustomWebMCPRegistry{}, fmt.Errorf("start Browser REPL: %w", err)
@@ -152,6 +153,7 @@ func (m *browserReplManager) customWebMCPOperation(ctx context.Context, operatio
 		ReplId:        runtime.ReplID,
 		Revision:      runtime.Revision,
 		Source:        runtime.Source,
+		SourceDirty:   runtime.SourceDirty,
 		Tools:         tools,
 		Installations: runtime.Installations,
 	}, nil

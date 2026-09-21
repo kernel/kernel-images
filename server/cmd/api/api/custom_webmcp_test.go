@@ -41,6 +41,7 @@ func TestCustomWebMCPRegistryUsesBrowserReplLifecycle(t *testing.T) {
 	require.NotEmpty(t, body.ReplId)
 	require.Equal(t, 1, body.Revision)
 	require.Equal(t, customWebMCPTestSource, body.Source)
+	require.False(t, body.SourceDirty)
 	require.Len(t, body.Tools, 1)
 	require.Equal(t, "test/read-title", body.Tools[0].Id)
 	require.Equal(t, "cdp", body.Tools[0].Kind)
@@ -61,6 +62,14 @@ func TestCustomWebMCPRegistryUsesBrowserReplLifecycle(t *testing.T) {
 	second := replaced.(oapi.ReplaceCustomWebMCPTools200JSONResponse)
 	require.Equal(t, 2, second.Revision)
 	require.Equal(t, 2, second.Tools[0].Revision)
+
+	requireExec(t, svc, `customTools.remove("test/read-title")`, nil)
+	got, err = svc.GetCustomWebMCPTools(ctx, oapi.GetCustomWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	dirty := got.(oapi.GetCustomWebMCPTools200JSONResponse)
+	require.True(t, dirty.SourceDirty)
+	require.Equal(t, customWebMCPTestSource, dirty.Source)
+	require.Empty(t, dirty.Tools)
 
 	reset := true
 	resetResponse := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "", Reset: &reset})

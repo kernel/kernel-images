@@ -7,7 +7,7 @@ export interface BrowserReplHelpEntry {
   example?: string;
 }
 
-export type BrowserReplHelpGroup = 'repl' | 'browser' | 'webmcp';
+export type BrowserReplHelpGroup = 'repl' | 'browser' | 'webmcp' | 'customTools';
 
 export const browserReplHelpRegistry = {
   repl: {
@@ -173,6 +173,25 @@ export const browserReplHelpRegistry = {
         'Fetch a URL from the VM and return its response body as text. Supports custom headers and `timeoutSec` (default `20`); non-2xx responses throw. Its timeout covers body consumption and is clamped below the active execution deadline.',
     },
   },
+  customTools: {
+    register: {
+      signature: 'customTools.register(definition)',
+      description:
+        'Add or replace one live custom WebMCP definition. The definition requires `id`, `kind: "page" | "cdp"`, `match.url_patterns`, MCP-compatible `tool` metadata, and an `execute` function. A live change marks the last PUT source dirty.',
+    },
+    remove: {
+      signature: 'customTools.remove(id)',
+      description: 'Remove one live custom WebMCP definition by ID and return whether it existed.',
+    },
+    list: {
+      signature: 'customTools.list()',
+      description: 'Return serializable summaries of the current custom WebMCP definitions.',
+    },
+    get: {
+      signature: 'customTools.get(id)',
+      description: 'Return one serializable custom WebMCP definition summary, or `null` when it is absent.',
+    },
+  },
   webmcp: {
     listTools: {
       signature: 'webmcp.listTools()',
@@ -204,11 +223,12 @@ const groupPrefix: Record<BrowserReplHelpGroup, string> = {
   repl: 'repl.',
   browser: '',
   webmcp: 'webmcp.',
+  customTools: 'customTools.',
 };
 
 export function listBrowserReplHelpEntries(): NamedBrowserReplHelpEntry[] {
   const entries: NamedBrowserReplHelpEntry[] = [];
-  for (const group of ['repl', 'browser', 'webmcp'] as const) {
+  for (const group of ['repl', 'browser', 'webmcp', 'customTools'] as const) {
     for (const [method, entry] of Object.entries(browserReplHelpRegistry[group])) {
       entries.push({
         ...entry,
@@ -235,6 +255,7 @@ function helpIndex(): string {
     `REPL: ${names('repl')}`,
     `Browser control: ${names('browser')}`,
     `WebMCP: ${names('webmcp')}`,
+    `Custom WebMCP: ${names('customTools')}`,
   ].join('\n');
 }
 

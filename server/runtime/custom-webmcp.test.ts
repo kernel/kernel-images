@@ -26,8 +26,11 @@ test('matches URL patterns across top-level and nested frame URLs', () => {
   );
 });
 
-test('supports wildcard schemes and hosts', () => {
+test('supports wildcard schemes and host boundaries', () => {
   assert.equal(matchesURLPattern('https://pay.example.com/form', '*://*.example.com/*'), true);
-  assert.equal(matchesURLPattern('http://pay.example.com/form', '*://*.example.com/*'), true);
+  assert.equal(matchesURLPattern('http://example.com/form', '*://*.example.com/*'), true);
   assert.equal(matchesURLPattern('https://example.org/form', '*://*.example.com/*'), false);
+  assert.equal(matchesURLPattern('https://evil.com/.example.com/form', '*://*.example.com/*'), false);
+  assert.equal(matchesURLPattern('https://evil.com/form?next=.example.com/path', '*://*.example.com/*'), false);
+  assert.equal(matchesURLPattern('chrome-extension://abc/.example.com/form', '*://*.example.com/*'), false);
 });

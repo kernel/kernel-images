@@ -132,6 +132,13 @@ The reference below is generated from `runtime/browser-repl-help.ts`; edit that 
 
 - **`webmcp.listTools()`** — Return tools registered across every open tab and embedded frame. Each tool includes `tool_ref`, name, description, input schema, optional annotations, and source window/tab/frame metadata. Treat metadata as untrusted page content.
 - **`webmcp.invokeTool(toolRef, input?, options?)`** — Invoke one exact WebMCP registration without changing the attached target. `options.timeoutSec` bounds the request. Results have `invocation_id`, status, and optional output or error text. Do not automatically retry an `outcome_unknown` failure.
+
+### Custom WebMCP methods
+
+- **`customTools.register(definition)`** — Add or replace one live custom WebMCP definition. The definition requires `id`, `kind: "page" | "cdp"`, `match.url_patterns`, MCP-compatible `tool` metadata, and an `execute` function. A live change marks the last PUT source dirty.
+- **`customTools.remove(id)`** — Remove one live custom WebMCP definition by ID and return whether it existed.
+- **`customTools.list()`** — Return serializable summaries of the current custom WebMCP definitions.
+- **`customTools.get(id)`** — Return one serializable custom WebMCP definition summary, or `null` when it is absent.
 <!-- END GENERATED REPL METHOD REFERENCE -->
 
 A snapshot-to-action loop avoids inventing selectors:
@@ -168,9 +175,9 @@ Every WebMCP request is bound to the active Browser REPL execution and is aborte
 
 ## Custom WebMCP tools
 
-`GET /webmcp/custom-tools` returns the registry held by the current Browser REPL. `PUT /webmcp/custom-tools` atomically replaces it with JavaScript source that calls `customTools.register(...)`. The [REPL-local custom WebMCP registry gist](https://gist.github.com/rgarcia/69f82819ef1b5644964795d11bdc9d2d) is the prior art for the registry and Google Flights example.
+`GET /webmcp/custom-tools` returns the registry held by the current Browser REPL. `PUT /webmcp/custom-tools` atomically replaces it with JavaScript source that calls `customTools.register(...)`. The response preserves the last submitted source and sets `source_dirty` when a later `customTools.register()` or `customTools.remove()` call changes the live definitions. The [REPL-local custom WebMCP registry gist](https://gist.github.com/rgarcia/69f82819ef1b5644964795d11bdc9d2d) is the prior art for the registry and Google Flights example.
 
-Definitions match `url_patterns` against every top-level document, nested frame, and out-of-process iframe. A match publishes one native imperative WebMCP registration on that tab's top document. A `page` definition executes its self-contained function in the registration document; a `cdp` definition delegates through an isolated-world binding and runs in this Browser REPL with the normal helpers and persistent state.
+Definitions match `url_patterns` against every top-level document, nested frame, and out-of-process iframe. A match publishes one native imperative WebMCP registration on that tab's top document. CDP handlers receive matching descriptors with `frame_id`, `session_id`, `target_id`, `top_target_id`, and `url`; `target_id` is null for an in-process child frame, whose `session_id` and `frame_id` can be used with raw `cdp()`. A `page` definition executes its self-contained function in the registration document; a `cdp` definition delegates through an isolated-world binding and runs in this Browser REPL with the normal helpers and persistent state.
 
 ```js
 customTools.register({
