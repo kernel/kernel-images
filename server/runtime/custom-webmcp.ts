@@ -95,6 +95,7 @@ interface PageState {
   targetId: string;
   sessionId: string;
   documentKey: string;
+  contextDocumentKey: string;
   contextId: number | null;
   signature: string;
   matches: Map<string, CustomToolFrameMatch[]>;
@@ -570,6 +571,7 @@ export class CustomWebMCPRegistry {
           page.errors = [message];
           if (message.includes('Cannot find context') || message.includes('Session with given id not found')) {
             page.contextId = null;
+            page.contextDocumentKey = '';
             page.signature = '';
           }
         } else {
@@ -617,6 +619,7 @@ export class CustomWebMCPRegistry {
         targetId: target.targetId,
         sessionId: attached.sessionId,
         documentKey: '',
+        contextDocumentKey: '',
         contextId: null,
         signature: '',
         matches: new Map(),
@@ -683,11 +686,12 @@ export class CustomWebMCPRegistry {
     const documentKey = `${root.id}:${result.frameTree.frame.loaderId ?? ''}`;
     const signature = JSON.stringify([...matches.keys()].sort().map((id) => [id, this.definitions.get(id)!.revision]));
     const documentChanged = page.documentKey !== documentKey;
+    const contextChanged = page.contextDocumentKey !== documentKey;
     const registrationCurrent = !documentChanged && page.signature === signature && page.contextId !== null;
     page.matches = matches;
     if (registrationCurrent || this.disposed) return;
 
-    if (documentChanged || page.contextId === null) {
+    if (contextChanged || page.contextId === null) {
       page.contextId = null;
       const world = await this.client.send<{executionContextId: number}>(
         'Page.createIsolatedWorld',
@@ -702,6 +706,7 @@ export class CustomWebMCPRegistry {
         RECONCILE_COMMAND_TIMEOUT_MS,
       );
       page.contextId = world.executionContextId;
+      page.contextDocumentKey = documentKey;
     }
     if (this.disposed) return;
     const isolatedContextId = page.contextId;
