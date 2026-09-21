@@ -240,9 +240,14 @@ type S2StorageController struct {
 	mu          sync.Mutex
 	writer      *S2StorageWriter
 	cancel      context.CancelFunc
-	startDone   chan struct{}
+	start       *s2ControllerStart
 	stopDone    chan struct{}
 	everStarted bool
+}
+
+type s2ControllerStart struct {
+	done chan struct{}
+	err  error
 }
 
 // NewS2StorageController resolves streamFn at Start because a fork learns its
@@ -251,23 +256,32 @@ func NewS2StorageController(es *EventStream, basin, token string, streamFn func(
 	return &S2StorageController{es: es, basin: basin, token: token, streamFn: streamFn, cfg: cfg, log: log}
 }
 
-func (c *S2StorageController) Start(parent context.Context) error {
+func (c *S2StorageController) Start(parent context.Context) (err error) {
 	c.mu.Lock()
-	if c.everStarted || c.startDone != nil {
+	if c.everStarted {
 		c.mu.Unlock()
 		return nil
+	}
+	if c.start != nil {
+		start := c.start
+		c.mu.Unlock()
+		if err := waitForS2ControllerOperation(parent, start.done); err != nil {
+			return err
+		}
+		return start.err
 	}
 	if c.basin == "" || c.token == "" {
 		c.mu.Unlock()
 		return nil
 	}
-	startDone := make(chan struct{})
-	c.startDone = startDone
+	start := &s2ControllerStart{done: make(chan struct{})}
+	c.start = start
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
-		c.startDone = nil
-		close(startDone)
+		start.err = err
+		c.start = nil
+		close(start.done)
 		c.mu.Unlock()
 	}()
 
@@ -277,7 +291,7 @@ func (c *S2StorageController) Start(parent context.Context) error {
 	}
 	runCtx, cancel := context.WithCancel(parent)
 	w := NewS2StorageWriter(c.es, c.basin, c.token, stream, c.cfg, c.log)
-	if err := w.Start(runCtx); err != nil {
+	if err = w.Start(runCtx); err != nil {
 		cancel()
 		return err
 	}
@@ -291,10 +305,10 @@ func (c *S2StorageController) Start(parent context.Context) error {
 func (c *S2StorageController) Stop(ctx context.Context) error {
 	for {
 		c.mu.Lock()
-		if c.startDone != nil {
-			startDone := c.startDone
+		if c.start != nil {
+			start := c.start
 			c.mu.Unlock()
-			if err := waitForS2ControllerOperation(ctx, startDone); err != nil {
+			if err := waitForS2ControllerOperation(ctx, start.done); err != nil {
 				return err
 			}
 			continue

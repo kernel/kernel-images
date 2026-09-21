@@ -77,6 +77,36 @@ func TestS2StorageController_ConcurrentStartOpensOneWriter(t *testing.T) {
 	require.NoError(t, stopController(t, c))
 }
 
+func TestS2StorageController_ConcurrentStartReturnsFailure(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	c := NewS2StorageController(newTestStream(t, 64), "test-basin", "test-token", func() string {
+		close(entered)
+		<-release
+		return "test-stream"
+	}, S2Config{}, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- c.Start(ctx) }()
+	<-entered
+
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- c.Start(context.Background()) }()
+	select {
+	case err := <-secondDone:
+		t.Fatalf("concurrent Start returned before the in-flight start finished: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	require.ErrorIs(t, <-firstDone, context.Canceled)
+	require.ErrorIs(t, <-secondDone, context.Canceled)
+	assert.False(t, c.Running())
+	assert.False(t, c.EverStarted())
+}
+
 func TestS2StorageController_StartFailureRollsBack(t *testing.T) {
 	c, resolved := newTestController(t, "test-stream")
 	ctx, cancel := context.WithCancel(context.Background())
