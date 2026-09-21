@@ -7,8 +7,10 @@ const BINDING_NAME = '__kernelCustomWebMCPInvoke';
 const PAGE_RUNTIME_KEY = '__kernelCustomWebMCP';
 const MAIN_PAGE_RUNTIME_KEY = '__kernelCustomWebMCPPage';
 const RECONNECT_DELAY_MS = 250;
+const RECONCILE_EVENT_DELAY_MS = 50;
 const RECONCILE_COMMAND_TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 1 << 20;
+const MAX_ERROR_BYTES = 64 << 10;
 
 type JsonSchema = Record<string, unknown>;
 type Validator = ReturnType<AjvJsonSchemaValidator['getValidator']>;
@@ -131,6 +133,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function errorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (Buffer.byteLength(message) <= MAX_ERROR_BYTES) return message;
+  return `${Buffer.from(message).subarray(0, MAX_ERROR_BYTES).toString('utf8')}...[truncated]`;
+}
+
 function formatToolSchemaError(error: { issues: Array<{ path: PropertyKey[]; message: string }> }): string {
   return error.issues
     .map((issue) => `${issue.path.length ? issue.path.join('.') : 'tool'}: ${issue.message}`)
@@ -233,6 +241,7 @@ export class CustomWebMCPRegistry {
   private source = '';
   private sourceDirty = false;
   private revision = 0;
+  private emptyRegistryCleaned = false;
   private staging: Map<string, CustomToolDefinition> | null = null;
   private pages = new Map<string, PageState>();
   private sessions = new Map<string, string>();
@@ -241,6 +250,7 @@ export class CustomWebMCPRegistry {
   private activeInvocations = new Map<string, ActiveInvocation>();
   private reconciliation: Promise<void> | null = null;
   private reconcileAgain = false;
+  private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private readonly unsubscribeEvent: () => void;
@@ -290,6 +300,7 @@ export class CustomWebMCPRegistry {
     if (removed && !this.staging) {
       this.revision++;
       this.sourceDirty = true;
+      if (this.definitions.size === 0) this.emptyRegistryCleaned = false;
       this.scheduleReconcile();
     }
     return removed;
@@ -315,6 +326,7 @@ export class CustomWebMCPRegistry {
       this.source = source;
       this.sourceDirty = false;
       this.revision++;
+      if (this.definitions.size === 0) this.emptyRegistryCleaned = false;
     } finally {
       this.staging = null;
     }
@@ -358,6 +370,7 @@ export class CustomWebMCPRegistry {
     this.disposed = true;
     this.unsubscribeEvent();
     this.unsubscribeDisconnect();
+    if (this.reconcileTimer) clearTimeout(this.reconcileTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     if (this.reconciliation) {
       await Promise.race([
@@ -467,10 +480,15 @@ export class CustomWebMCPRegistry {
   }
 
   private scheduleReconcile(): void {
-    queueMicrotask(() => void this.reconcile().catch((error) => {
-      this.reportError(error);
-      this.retryReconcile();
-    }));
+    if (this.disposed || this.reconcileTimer) return;
+    this.reconcileTimer = setTimeout(() => {
+      this.reconcileTimer = null;
+      void this.reconcile().catch((error) => {
+        this.reportError(error);
+        this.retryReconcile();
+      });
+    }, RECONCILE_EVENT_DELAY_MS);
+    this.reconcileTimer.unref?.();
   }
 
   private retryReconcile(): void {
@@ -484,6 +502,10 @@ export class CustomWebMCPRegistry {
 
   private async reconcile(): Promise<void> {
     if (this.disposed) return;
+    if (this.reconcileTimer) {
+      clearTimeout(this.reconcileTimer);
+      this.reconcileTimer = null;
+    }
     if (this.reconciliation) {
       this.reconcileAgain = true;
       return this.reconciliation;
@@ -502,6 +524,7 @@ export class CustomWebMCPRegistry {
   }
 
   private async reconcileOnce(): Promise<void> {
+    if (this.definitions.size === 0 && this.emptyRegistryCleaned) return;
     await this.client.ensureConnected();
     await this.client.send(
       'Target.setDiscoverTargets',
@@ -542,6 +565,20 @@ export class CustomWebMCPRegistry {
         else this.reportError(error);
       }
     }));
+
+    if (this.definitions.size === 0) {
+      await Promise.all([...this.pages.values()].map(async (page) => {
+        await this.disposePageRuntime(page, MAIN_PAGE_RUNTIME_KEY);
+        if (page.contextId !== null) await this.disposePageRuntime(page, PAGE_RUNTIME_KEY, page.contextId);
+        await this.detachPage(page);
+      }));
+      await Promise.all([...this.iframeSessions.values()].map((frame) => this.detachSession(frame.sessionId)));
+      this.pages.clear();
+      this.sessions.clear();
+      this.iframeSessions.clear();
+      this.iframeTargetsBySession.clear();
+      this.emptyRegistryCleaned = true;
+    }
   }
 
   private async reconcilePage(target: CdpTarget, targets: CdpTarget[]): Promise<void> {
@@ -616,29 +653,30 @@ export class CustomWebMCPRegistry {
 
     const documentKey = `${root.id}:${result.frameTree.frame.loaderId ?? ''}`;
     const signature = JSON.stringify([...matches.keys()].sort().map((id) => [id, this.definitions.get(id)!.revision]));
-    const registrationCurrent = page.documentKey === documentKey && page.signature === signature && page.contextId !== null;
+    const documentChanged = page.documentKey !== documentKey;
+    const registrationCurrent = !documentChanged && page.signature === signature && page.contextId !== null;
     page.documentKey = documentKey;
     page.matches = matches;
     if (registrationCurrent || this.disposed) return;
 
-    await this.disposePageRuntime(page, MAIN_PAGE_RUNTIME_KEY);
-    if (page.contextId !== null) await this.disposePageRuntime(page, PAGE_RUNTIME_KEY, page.contextId);
+    if (documentChanged || page.contextId === null) {
+      const world = await this.client.send<{executionContextId: number}>(
+        'Page.createIsolatedWorld',
+        {frameId: root.id, worldName: WORLD_NAME, grantUniveralAccess: false},
+        page.sessionId,
+        RECONCILE_COMMAND_TIMEOUT_MS,
+      );
+      await this.client.send(
+        'Runtime.addBinding',
+        {name: BINDING_NAME, executionContextName: WORLD_NAME},
+        page.sessionId,
+        RECONCILE_COMMAND_TIMEOUT_MS,
+      );
+      page.contextId = world.executionContextId;
+    }
     if (this.disposed) return;
-
-    const world = await this.client.send<{executionContextId: number}>(
-      'Page.createIsolatedWorld',
-      {frameId: root.id, worldName: WORLD_NAME, grantUniveralAccess: false},
-      page.sessionId,
-      RECONCILE_COMMAND_TIMEOUT_MS,
-    );
-    await this.client.send(
-      'Runtime.addBinding',
-      {name: BINDING_NAME, executionContextName: WORLD_NAME},
-      page.sessionId,
-      RECONCILE_COMMAND_TIMEOUT_MS,
-    );
-    page.contextId = world.executionContextId;
-    if (this.disposed) return;
+    const isolatedContextId = page.contextId;
+    if (isolatedContextId === null) throw new Error('custom WebMCP isolated world is unavailable');
 
     const definitions = [...page.matches.keys()].map((id) => this.definitions.get(id)!);
     const pageErrors = await this.installPageDefinitions(
@@ -650,7 +688,7 @@ export class CustomWebMCPRegistry {
       page,
       definitions.filter((definition) => definition.kind === 'cdp'),
       PAGE_RUNTIME_KEY,
-      world.executionContextId,
+      isolatedContextId,
     );
     page.errors = [...pageErrors, ...cdpErrors];
     page.signature = signature;
@@ -719,9 +757,11 @@ export class CustomWebMCPRegistry {
         if (!runtime) {
           const controllers = new Map();
           const pending = new Map();
+          const revisions = new Map();
           runtime = {
             controllers,
             pending,
+            revisions,
             resolveInvocation(id, value) {
               const invocation = pending.get(id);
               if (!invocation) return;
@@ -737,16 +777,26 @@ export class CustomWebMCPRegistry {
             dispose() {
               for (const controller of controllers.values()) controller.abort();
               controllers.clear();
+              revisions.clear();
             },
           };
           globalThis[key] = runtime;
         }
-        runtime.dispose();
-        const {controllers, pending} = runtime;
+        const {controllers, pending, revisions} = runtime;
+        const desiredRevisions = new Map(definitions.map(definition => [definition.id, definition.revision]));
+        for (const [id, controller] of controllers) {
+          if (desiredRevisions.get(id) !== revisions.get(id)) {
+            controller.abort();
+            controllers.delete(id);
+            revisions.delete(id);
+          }
+        }
         const errors = [];
         for (const definition of definitions) {
+          if (controllers.has(definition.id)) continue;
           const controller = new AbortController();
           controllers.set(definition.id, controller);
+          revisions.set(definition.id, definition.revision);
           let execute;
           if (definition.kind === 'page') {
             execute = definition.execute;
@@ -779,6 +829,7 @@ export class CustomWebMCPRegistry {
           } catch (error) {
             controller.abort();
             controllers.delete(definition.id);
+            revisions.delete(definition.id);
             errors.push(\`\${definition.id}: \${error instanceof Error ? error.message : String(error)}\`);
           }
         }
@@ -856,7 +907,7 @@ export class CustomWebMCPRegistry {
         params.executionContextId,
         payload.invocation_id,
         undefined,
-        error instanceof Error ? error.message : String(error),
+        errorMessage(error),
       );
     } finally {
       this.activeInvocations.delete(payload.invocation_id);

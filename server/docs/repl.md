@@ -209,7 +209,7 @@ var {ToolSchema} = await import("@modelcontextprotocol/core");
 var {AjvJsonSchemaValidator} = await import("@modelcontextprotocol/server/validators/ajv");
 ```
 
-Replacing or removing a definition stops future discovery without canceling active invocations. Registrations are continuously reconciled as frames are created, navigate, and detach. A REPL reset or replacement clears the registry and changes `repl_id`.
+Replacing or removing a definition stops future discovery without canceling active invocations. Registrations are continuously reconciled as frames are created, navigate, and detach. A graceful REPL reset removes registrations, clears the registry, and changes `repl_id`. After an abrupt process death, stale page registrations can remain visible until the next custom-registry GET/PUT starts a fresh REPL and reconciles them, or until their documents navigate; those stale registrations have no live handler.
 
 ## Patchright and Playwright Core
 
