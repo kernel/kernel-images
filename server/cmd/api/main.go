@@ -12,8 +12,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -139,37 +137,22 @@ func main() {
 	}
 	// An instance that already took a fork identity keeps it across a restart of
 	// this process, which the env captured at boot does not reflect.
-	s2Stream, s2StreamApplied := appliedS2Stream(config)
+	_, s2StreamApplied := appliedS2Stream(config)
 
 	// Optional S2 storage sink. The append session is bound to one stream when
 	// it starts, and an instance still holding for a fork identity is carrying
 	// the stream name of the instance it was forked from, so defer the writer
-	// until the identity that owns the events arrives. Opening that session
-	// dials with no deadline while holding the writer's lock, so an in-flight
-	// start is tracked for shutdown rather than blocking Stop behind the dial.
-	var s2Writer atomic.Pointer[events.S2StorageWriter]
-	var s2Starting sync.WaitGroup
-	startS2Writer := func(streamName string) error {
-		if config.S2Basin == "" || config.S2AccessToken == "" || streamName == "" || s2Writer.Load() != nil {
-			return nil
-		}
-		w := events.NewS2StorageWriter(eventStream, config.S2Basin, config.S2AccessToken, streamName, events.S2Config{}, slogger)
-		if !s2Writer.CompareAndSwap(nil, w) {
-			return nil
-		}
-		slogger.Info("S2 storage enabled", "basin", config.S2Basin, "stream", streamName)
-		if err := w.Start(ctx); err != nil {
-			// Leave the slot empty so a later identity can still open a writer.
-			s2Writer.CompareAndSwap(w, nil)
-			return err
-		}
-		return nil
+	// until the identity that owns the events arrives.
+	streamFn := func() string {
+		stream, _ := appliedS2Stream(config)
+		return stream
 	}
+	s2Storage := events.NewS2StorageController(eventStream, config.S2Basin, config.S2AccessToken, streamFn, events.S2Config{}, slogger)
 	if !forkIdentityWait || s2StreamApplied {
 		// An optional sink that cannot open must not take the browser down: the
 		// api runs under supervisord with autorestart, so exiting here would
 		// crashloop the VM over a misconfigured basin or token.
-		if err := startS2Writer(s2Stream); err != nil {
+		if err := s2Storage.Start(ctx); err != nil {
 			slogger.Error("failed to start S2 storage writer, continuing without it", "err", err)
 		}
 	}
@@ -220,14 +203,10 @@ func main() {
 	// export is turned on per session, which the platform does after the
 	// handoff. An export started before then keeps the source's resource
 	// attributes until it is restarted.
-	onForkIdentityApplied := func(payload forkidentity.Payload) {
-		// Opening the S2 append session dials the network with no deadline, so
-		// it runs off the handoff's critical path.
-		stream := forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], config.S2Stream)
-		s2Starting.Add(1)
+	onForkIdentityApplied := func(forkidentity.Payload) {
+		// The handler contract forbids blocking the handoff on an optional sink.
 		go func() {
-			defer s2Starting.Done()
-			if err := startS2Writer(stream); err != nil {
+			if err := s2Storage.Start(ctx); err != nil {
 				slogger.Error("failed to start S2 storage writer for fork identity", "err", err)
 			}
 		}()
@@ -463,27 +442,13 @@ func main() {
 		slogger.Error("server failed to shutdown", "err", err)
 	}
 
-	// s2Writer shuts down after the servers above, since they might produce events we
-	// want to capture into the stream; we must let them finish before closing the writer.
-	// Stop takes the same lock the unbounded append-session dial holds, so only
-	// drain once a start that is still opening has finished. Skipping the drain
-	// loses at most the events of a writer that was never serving.
-	s2StartSettled := make(chan struct{})
-	go func() {
-		s2Starting.Wait()
-		close(s2StartSettled)
-	}()
-	select {
-	case <-s2StartSettled:
-		if w := s2Writer.Load(); w != nil {
-			stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer stopCancel()
-			if err := w.Stop(stopCtx); err != nil {
-				slogger.Error("s2 storage writer stop failed", "err", err)
-			}
-		}
-	case <-time.After(2 * time.Second):
-		slogger.Warn("s2 storage writer still opening at shutdown, skipping drain")
+	// S2 storage shuts down after the servers above, since they might produce
+	// events we want to capture into the stream; we must let them finish before
+	// closing the writer.
+	s2StopCtx, s2StopCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer s2StopCancel()
+	if err := s2Storage.Stop(s2StopCtx); err != nil {
+		slogger.Error("s2 storage writer stop failed", "err", err)
 	}
 
 	// Likewise stop OTLP export after the servers drain (a no-op if the toggle
