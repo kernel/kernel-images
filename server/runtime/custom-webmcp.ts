@@ -252,6 +252,7 @@ export class CustomWebMCPRegistry {
   private reconcileAgain = false;
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private connectionGeneration = 0;
   private disposed = false;
   private readonly unsubscribeEvent: () => void;
   private readonly unsubscribeDisconnect: () => void;
@@ -270,6 +271,7 @@ export class CustomWebMCPRegistry {
     this.runInvocation = runInvocation;
     this.unsubscribeEvent = client.subscribeEvents((event) => this.handleEvent(event));
     this.unsubscribeDisconnect = client.subscribeDisconnect(() => this.handleDisconnect());
+    this.scheduleReconcile();
   }
 
   setErrorHandler(handler: (message: string) => void): void {
@@ -471,6 +473,8 @@ export class CustomWebMCPRegistry {
   }
 
   private handleDisconnect(): void {
+    this.connectionGeneration++;
+    this.emptyRegistryCleaned = false;
     this.pages.clear();
     this.sessions.clear();
     this.iframeSessions.clear();
@@ -561,23 +565,38 @@ export class CustomWebMCPRegistry {
         await this.reconcilePage(target, targets);
       } catch (error) {
         const page = this.pages.get(target.targetId);
-        if (page) page.errors = [error instanceof Error ? error.message : String(error)];
-        else this.reportError(error);
+        if (page) {
+          const message = errorMessage(error);
+          page.errors = [message];
+          if (message.includes('Cannot find context') || message.includes('Session with given id not found')) {
+            page.contextId = null;
+            page.signature = '';
+          }
+        } else {
+          this.reportError(error);
+        }
       }
     }));
 
     if (this.definitions.size === 0) {
-      await Promise.all([...this.pages.values()].map(async (page) => {
-        await this.disposePageRuntime(page, MAIN_PAGE_RUNTIME_KEY);
-        if (page.contextId !== null) await this.disposePageRuntime(page, PAGE_RUNTIME_KEY, page.contextId);
-        await this.detachPage(page);
+      const cleanupGeneration = this.connectionGeneration;
+      const pageCleanup = await Promise.all([...this.pages.values()].map(async (page) => {
+        const mainDisposed = await this.disposePageRuntime(page, MAIN_PAGE_RUNTIME_KEY);
+        const isolatedDisposed = page.contextId === null ||
+          await this.disposePageRuntime(page, PAGE_RUNTIME_KEY, page.contextId);
+        const detached = await this.detachPage(page);
+        return mainDisposed && isolatedDisposed && detached;
       }));
-      await Promise.all([...this.iframeSessions.values()].map((frame) => this.detachSession(frame.sessionId)));
+      const frameCleanup = await Promise.all(
+        [...this.iframeSessions.values()].map((frame) => this.detachSession(frame.sessionId)),
+      );
       this.pages.clear();
       this.sessions.clear();
       this.iframeSessions.clear();
       this.iframeTargetsBySession.clear();
-      this.emptyRegistryCleaned = true;
+      this.emptyRegistryCleaned = cleanupGeneration === this.connectionGeneration &&
+        pageCleanup.every(Boolean) && frameCleanup.every(Boolean);
+      if (!this.emptyRegistryCleaned) this.retryReconcile();
     }
   }
 
@@ -590,6 +609,10 @@ export class CustomWebMCPRegistry {
         undefined,
         RECONCILE_COMMAND_TIMEOUT_MS,
       );
+      if (this.disposed) {
+        await this.detachSession(attached.sessionId);
+        return;
+      }
       page = {
         targetId: target.targetId,
         sessionId: attached.sessionId,
@@ -603,6 +626,12 @@ export class CustomWebMCPRegistry {
       this.sessions.set(page.sessionId, target.targetId);
       await this.client.send('Page.enable', undefined, page.sessionId, RECONCILE_COMMAND_TIMEOUT_MS);
       await this.client.send('Runtime.enable', undefined, page.sessionId, RECONCILE_COMMAND_TIMEOUT_MS);
+      if (this.disposed) {
+        this.pages.delete(target.targetId);
+        this.sessions.delete(page.sessionId);
+        await this.detachPage(page);
+        return;
+      }
     }
 
     const result = await this.client.send<{frameTree: CdpFrameTree}>(
@@ -655,11 +684,11 @@ export class CustomWebMCPRegistry {
     const signature = JSON.stringify([...matches.keys()].sort().map((id) => [id, this.definitions.get(id)!.revision]));
     const documentChanged = page.documentKey !== documentKey;
     const registrationCurrent = !documentChanged && page.signature === signature && page.contextId !== null;
-    page.documentKey = documentKey;
     page.matches = matches;
     if (registrationCurrent || this.disposed) return;
 
     if (documentChanged || page.contextId === null) {
+      page.contextId = null;
       const world = await this.client.send<{executionContextId: number}>(
         'Page.createIsolatedWorld',
         {frameId: root.id, worldName: WORLD_NAME, grantUniveralAccess: false},
@@ -691,6 +720,7 @@ export class CustomWebMCPRegistry {
       isolatedContextId,
     );
     page.errors = [...pageErrors, ...cdpErrors];
+    page.documentKey = documentKey;
     page.signature = signature;
   }
 
@@ -720,7 +750,7 @@ export class CustomWebMCPRegistry {
     return session;
   }
 
-  private async disposePageRuntime(page: PageState, runtimeKey: string, contextId?: number): Promise<void> {
+  private async disposePageRuntime(page: PageState, runtimeKey: string, contextId?: number): Promise<boolean> {
     const params: Record<string, unknown> = {
       expression: `globalThis[${JSON.stringify(runtimeKey)}]?.dispose?.()`,
       awaitPromise: true,
@@ -728,8 +758,12 @@ export class CustomWebMCPRegistry {
     if (contextId !== undefined) params.contextId = contextId;
     try {
       await this.client.send('Runtime.evaluate', params, page.sessionId, 1_000);
-    } catch {
-      // A navigation may already have destroyed this runtime.
+      return true;
+    } catch (error) {
+      const message = errorMessage(error);
+      return message.includes('Cannot find context') ||
+        message.includes('No target with given id') ||
+        message.includes('Session with given id not found');
     }
   }
 
@@ -938,11 +972,11 @@ export class CustomWebMCPRegistry {
     }
   }
 
-  private async detachPage(page: PageState): Promise<void> {
-    await this.detachSession(page.sessionId);
+  private async detachPage(page: PageState): Promise<boolean> {
+    return this.detachSession(page.sessionId);
   }
 
-  private async detachSession(sessionId: string): Promise<void> {
+  private async detachSession(sessionId: string): Promise<boolean> {
     try {
       await this.client.send(
         'Target.detachFromTarget',
@@ -950,8 +984,11 @@ export class CustomWebMCPRegistry {
         undefined,
         1_000,
       );
-    } catch {
-      // The target or connection is already gone.
+      return true;
+    } catch (error) {
+      const message = errorMessage(error);
+      return message.includes('No target with given id') ||
+        message.includes('Session with given id not found');
     }
   }
 
