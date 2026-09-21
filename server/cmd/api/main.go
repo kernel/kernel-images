@@ -222,6 +222,7 @@ func main() {
 		eventStream,
 		config.DisplayNum,
 		otlpExporter,
+		s2Storage,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)
