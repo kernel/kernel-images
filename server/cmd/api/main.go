@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -143,11 +144,8 @@ func main() {
 	// it starts, and an instance still holding for a fork identity is carrying
 	// the stream name of the instance it was forked from, so defer the writer
 	// until the identity that owns the events arrives.
-	streamFn := func() string {
-		stream, _ := appliedS2Stream(config)
-		return stream
-	}
-	s2Storage := events.NewS2StorageController(eventStream, config.S2Basin, config.S2AccessToken, streamFn, events.S2Config{}, slogger)
+	s2Streams := newS2StreamResolver(config)
+	s2Storage := events.NewS2StorageController(eventStream, config.S2Basin, config.S2AccessToken, s2Streams.Resolve, events.S2Config{}, slogger)
 	if !forkIdentityWait || s2StreamApplied {
 		// An optional sink that cannot open must not take the browser down: the
 		// api runs under supervisord with autorestart, so exiting here would
@@ -203,13 +201,8 @@ func main() {
 	// export is turned on per session, which the platform does after the
 	// handoff. An export started before then keeps the source's resource
 	// attributes until it is restarted.
-	onForkIdentityApplied := func(forkidentity.Payload) {
-		// The handler contract forbids blocking the handoff on an optional sink.
-		go func() {
-			if err := s2Storage.Start(ctx); err != nil {
-				slogger.Error("failed to start S2 storage writer for fork identity", "err", err)
-			}
-		}()
+	onForkIdentityApplied := func(payload forkidentity.Payload) {
+		s2Streams.StartForAppliedPayload(ctx, payload, s2Storage.Start, slogger)
 	}
 
 	apiService, err := api.New(
@@ -469,6 +462,41 @@ func mustFFmpeg() {
 	if err := cmd.Run(); err != nil {
 		panic(fmt.Errorf("ffmpeg not found or not executable: %w", err))
 	}
+}
+
+// s2StreamResolver uses the hook payload once applied and the persisted payload
+// after an API process restart.
+type s2StreamResolver struct {
+	cfg        *config.Config
+	hookStream atomic.Pointer[string]
+}
+
+func newS2StreamResolver(cfg *config.Config) *s2StreamResolver {
+	return &s2StreamResolver{cfg: cfg}
+}
+
+func (r *s2StreamResolver) Resolve() string {
+	if stream := r.hookStream.Load(); stream != nil {
+		return *stream
+	}
+	stream, _ := appliedS2Stream(r.cfg)
+	return stream
+}
+
+func (r *s2StreamResolver) StartForAppliedPayload(
+	ctx context.Context,
+	payload forkidentity.Payload,
+	start func(context.Context) error,
+	log *slog.Logger,
+) {
+	stream := forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], r.cfg.S2Stream)
+	r.hookStream.Store(&stream)
+	// The handler contract forbids blocking the handoff on an optional sink.
+	go func() {
+		if err := start(ctx); err != nil {
+			log.Error("failed to start S2 storage writer for fork identity", "err", err)
+		}
+	}()
 }
 
 // appliedS2Stream resolves the stream the S2 writer should bind, preferring a
