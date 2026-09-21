@@ -215,8 +215,20 @@ RUN set -eux; \
     ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
     fi
 
-# Install TypeScript, Playwright, Patchright, esbuild globally
-RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g typescript playwright-core patchright esbuild
+# Install TypeScript, Playwright, Patchright, esbuild globally.
+# The playwright daemon is bundled with the engine marked external, so it
+# resolves patchright/playwright-core from this global install at runtime. Read
+# those two versions from server/runtime/package.json — the same pins the
+# Browser REPL bundles — so both engines in the image agree and neither moves
+# on a rebuild without a lockfile change.
+COPY server/runtime/package.json /tmp/runtime-package.json
+RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm set -eux; \
+    patchright_version="$(node -p "require('/tmp/runtime-package.json').dependencies.patchright")"; \
+    playwright_core_version="$(node -p "require('/tmp/runtime-package.json').dependencies['playwright-core']")"; \
+    npm install -g typescript esbuild \
+        "patchright@${patchright_version}" \
+        "playwright-core@${playwright_core_version}"; \
+    rm -f /tmp/runtime-package.json
 
 # Pre-install openssh-server and websocat for faster SSH setup via kernel CLI.
 # Only installed, NOT configured: no host keys, no custom config, service not enabled.
