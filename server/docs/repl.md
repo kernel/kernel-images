@@ -56,9 +56,9 @@ Use `{ "code": "", "reset": true }` to explicitly replace the REPL and clear all
 
 ## Runtime globals
 
-The context preloads `repl`, captured `console` methods, every browser helper, `browser`, `webmcp`, timers, `queueMicrotask`, `Buffer`, `process`, `fetch`, `URL`, `URLSearchParams`, text encoders/decoders, abort controllers/signals, `structuredClone`, `atob`, `btoa`, and `crypto`. Node built-ins and installed packages are available through dynamic `import()`.
+The context preloads `repl`, captured `console` methods, every browser helper, `browser`, `webmcp`, `customTools`, timers, `queueMicrotask`, `Buffer`, `process`, `fetch`, `URL`, `URLSearchParams`, text encoders/decoders, abort controllers/signals, `structuredClone`, `atob`, `btoa`, and `crypto`. Node built-ins and installed packages are available through dynamic `import()`.
 
-`repl`, `browser`, and `webmcp` are frozen objects. `webmcp === browser.webmcp`, and each bare browser helper is the same function exposed on `browser`.
+`repl`, `browser`, `webmcp`, and `customTools` are frozen objects. `webmcp === browser.webmcp`, and each bare browser helper is the same function exposed on `browser`.
 
 ## Output
 
@@ -165,6 +165,44 @@ repl.write(JSON.stringify(result));
 Invocation results have `invocation_id`, `status`, and optional `output` or `error_text`; status is `completed`, `canceled`, `error`, or `awaiting_submission`. Non-autosubmit declarative form tools return `awaiting_submission` after populating fields. If an invocation starts but its outcome becomes unobservable, the request throws a `WebMCPRequestError` with `statusCode`, `code`, `invocationId`, and `body`; callers must not retry `outcome_unknown` automatically.
 
 Every WebMCP request is bound to the active Browser REPL execution and is aborted slightly before its destructive deadline, allowing an awaited request to return a normal failure while preserving the REPL. Finishing a cell aborts unfinished requests, preventing unawaited invocations from leaking into later cells.
+
+## Custom WebMCP tools
+
+`GET /webmcp/custom-tools` returns the registry held by the current Browser REPL. `PUT /webmcp/custom-tools` atomically replaces it with JavaScript source that calls `customTools.register(...)`. The [REPL-local custom WebMCP registry gist](https://gist.github.com/rgarcia/69f82819ef1b5644964795d11bdc9d2d) is the prior art for the registry and Google Flights example.
+
+Definitions match `url_patterns` against every top-level document, nested frame, and out-of-process iframe. A match publishes one native imperative WebMCP registration on that tab's top document. A `page` definition executes its self-contained function in the registration document; a `cdp` definition delegates through an isolated-world binding and runs in this Browser REPL with the normal helpers and persistent state.
+
+```js
+customTools.register({
+  id: "example/read-title",
+  kind: "cdp",
+  match: {url_patterns: ["https://example.com/*"]},
+  tool: {
+    name: "read_title",
+    description: "Read the current page title.",
+    inputSchema: {type: "object", additionalProperties: false},
+    annotations: {readOnlyHint: true},
+  },
+  outputSchema: {
+    type: "object",
+    properties: {title: {type: "string"}},
+    required: ["title"],
+    additionalProperties: false,
+  },
+  execute: async (_input, {matches}) => ({
+    title: await js(() => document.title, {targetId: matches[0].top_target_id}),
+  }),
+});
+```
+
+The registry validates MCP metadata with `ToolSchema` and compiles input and optional output schemas with `AjvJsonSchemaValidator`. CDP-backed handlers validate output before resolving their page proxy; page-backed handlers follow native imperative WebMCP result handling because Chromium does not currently accept `outputSchema`. Both packages are pinned image dependencies and may also be imported directly:
+
+```js
+var {ToolSchema} = await import("@modelcontextprotocol/core");
+var {AjvJsonSchemaValidator} = await import("@modelcontextprotocol/server/validators/ajv");
+```
+
+Replacing or removing a definition stops future discovery without canceling active invocations. Registrations are continuously reconciled as frames are created, navigate, and detach. A REPL reset or replacement clears the registry and changes `repl_id`.
 
 ## Patchright and Playwright Core
 

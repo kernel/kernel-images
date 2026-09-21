@@ -350,6 +350,7 @@ func (m *browserReplManager) killLocked(ctx context.Context, reason string) {
 type browserReplDaemonRequest struct {
 	ID        string `json:"id"`
 	Code      string `json:"code"`
+	Operation string `json:"operation,omitempty"`
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
 }
 
@@ -371,8 +372,9 @@ type browserReplDaemonResponse struct {
 	// exception details and is exiting non-zero. The API treats it like a
 	// timeout — terminate the handle and report repl_terminated — so the
 	// state loss is explicit to the caller.
-	Exiting    bool `json:"exiting,omitempty"`
-	DurationMs int  `json:"duration_ms"`
+	Exiting    bool            `json:"exiting,omitempty"`
+	Result     json.RawMessage `json:"result,omitempty"`
+	DurationMs int             `json:"duration_ms"`
 }
 
 // browserReplRequest is the already-encoded request sent over the daemon
@@ -387,6 +389,10 @@ type browserReplRequest struct {
 // disabled. The daemon's limit applies to the line without its trailing
 // newline, so the encoded request must fit before it is sent.
 func prepareBrowserReplRequest(code string, timeout time.Duration) (*browserReplRequest, error) {
+	return prepareBrowserReplOperation(code, "", timeout)
+}
+
+func prepareBrowserReplOperation(code, operation string, timeout time.Duration) (*browserReplRequest, error) {
 	id := uuid.New().String()
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
@@ -394,6 +400,7 @@ func prepareBrowserReplRequest(code string, timeout time.Duration) (*browserRepl
 	if err := encoder.Encode(browserReplDaemonRequest{
 		ID:        id,
 		Code:      code,
+		Operation: operation,
 		TimeoutMs: int(timeout.Milliseconds()),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
@@ -531,18 +538,30 @@ func browserReplTerminatedResponse(replID string, err error, durationMs int) oap
 }
 
 // StrictBrowserReplBodyMiddleware enforces additionalProperties: false on
-// POST /repl. The generated strict-server decoder silently drops
-// unknown fields, so without this middleware a request like
-// {"code":"1","bogus":1} would be accepted despite the published schema.
-// Malformed JSON and type errors are left to the strict handler's own 400
-// handling; only unknown fields are policed here.
+// Browser REPL-owned request bodies. The generated strict-server decoder
+// silently drops unknown fields, so malformed extensions need an explicit
+// check before dispatch.
 func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/repl" || r.Body == nil {
+		if r.Body == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
-		limitedBody := http.MaxBytesReader(w, r.Body, maxBrowserReplBodyBytes)
+		var probe any
+		maxBytes := int64(0)
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/repl":
+			probe = &oapi.BrowserReplRequest{}
+			maxBytes = maxBrowserReplBodyBytes
+		case r.Method == http.MethodPut && r.URL.Path == "/webmcp/custom-tools":
+			probe = &oapi.CustomWebMCPRegistryRequest{}
+			maxBytes = maxCustomWebMCPRequestBytes
+		default:
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		limitedBody := http.MaxBytesReader(w, r.Body, maxBytes)
 		body, err := io.ReadAll(limitedBody)
 		_ = r.Body.Close()
 		if err != nil {
@@ -551,7 +570,7 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusRequestEntityTooLarge)
 				_ = json.NewEncoder(w).Encode(oapi.BadRequestError{
-					Message: fmt.Sprintf("request body exceeds %d bytes", maxBrowserReplBodyBytes),
+					Message: fmt.Sprintf("request body exceeds %d bytes", maxBytes),
 				})
 				return
 			}
@@ -562,8 +581,7 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 
 		dec := json.NewDecoder(bytes.NewReader(body))
 		dec.DisallowUnknownFields()
-		var probe oapi.BrowserReplRequest
-		if err := dec.Decode(&probe); err != nil && strings.HasPrefix(err.Error(), "json: unknown field") {
+		if err := dec.Decode(probe); err != nil && strings.HasPrefix(err.Error(), "json: unknown field") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusBadRequest)
 			_ = json.NewEncoder(w).Encode(oapi.BadRequestError{

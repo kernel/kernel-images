@@ -1422,6 +1422,52 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /webmcp/custom-tools:
+    get:
+      summary: Get the Browser REPL custom WebMCP registry
+      description: |
+        Returns custom tool definitions held by the current Browser REPL process, their installation
+        status across open tabs, and the repl_id that owns the state. A reset, timeout, crash, OOM, or
+        API restart replaces the REPL and clears this registry.
+      operationId: getCustomWebMCPTools
+      x-telemetry-category: control
+      responses:
+        "200":
+          description: Current REPL-local custom WebMCP registry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomWebMCPRegistry"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      summary: Replace the Browser REPL custom WebMCP registry
+      description: |
+        Evaluates JavaScript source in the existing persistent Browser REPL. The source registers
+        page-backed or CDP-backed definitions with customTools.register(...). Definitions are staged
+        and replace the live registry only after the source evaluates successfully. Matchers apply to
+        every top-level document, nested frame, and OOPIF, and matching tools are registered on the
+        corresponding topmost document through native imperative WebMCP.
+      operationId: replaceCustomWebMCPTools
+      x-telemetry-category: control
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CustomWebMCPRegistryRequest"
+      responses:
+        "200":
+          description: Replaced REPL-local custom WebMCP registry.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CustomWebMCPRegistry"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /playwright/execute:
     post:
       summary: Execute Playwright/TypeScript code against the browser
@@ -1478,7 +1524,8 @@ paths:
         <!-- END GENERATED REPL METHOD LIST -->
 
         Browser-control methods are available both directly and on `browser`. The same frozen
-        browser-wide WebMCP client is available as `webmcp` and `browser.webmcp`. Common workflows:
+        browser-wide WebMCP client is available as `webmcp` and `browser.webmcp`. The `customTools`
+        registry global is shared with `GET|PUT /webmcp/custom-tools`. Common workflows:
 
         ```js
         await gotoUrl("https://example.com");
@@ -1494,8 +1541,9 @@ paths:
 
         Top-level bindings and dynamically imported modules persist until reset or process
         replacement. Expression values are ignored; emit output with `repl.write(...)`, console
-        methods, or `repl.emitImage(...)`. Pinned `patchright` and `playwright-core` packages are
-        available through dynamic `import()`, and `cdp()` provides unrestricted DevTools access.
+        methods, or `repl.emitImage(...)`. Pinned `patchright`, `playwright-core`,
+        `@modelcontextprotocol/core`, and `@modelcontextprotocol/server` packages are available through
+        dynamic `import()`, and `cdp()` provides unrestricted DevTools access.
 
         The runtime starts lazily and is owned by the API process. Reset, API restart, timeout,
         crash, OOM, or protocol failure destroys its state and changes its CUID2 `repl_id`.
@@ -6406,6 +6454,80 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WebMCPTool"
+    CustomWebMCPRegistryRequest:
+      type: object
+      required: [source]
+      properties:
+        source:
+          type: string
+          maxLength: 8000000
+          description: JavaScript evaluated in the existing Browser REPL with customTools and all Browser REPL globals available.
+      additionalProperties: false
+    CustomWebMCPMatch:
+      type: object
+      required: [url_patterns]
+      properties:
+        url_patterns:
+          type: array
+          minItems: 1
+          items:
+            type: string
+      additionalProperties: false
+    CustomWebMCPDefinition:
+      type: object
+      required: [id, kind, match, tool, revision]
+      properties:
+        id:
+          type: string
+        kind:
+          type: string
+          pattern: "^(page|cdp)$"
+        match:
+          $ref: "#/components/schemas/CustomWebMCPMatch"
+        tool:
+          type: object
+          description: MCP-compatible tool metadata as submitted to customTools.register().
+          additionalProperties: true
+        output_schema:
+          type: object
+          additionalProperties: true
+        revision:
+          type: integer
+      additionalProperties: false
+    CustomWebMCPInstallation:
+      type: object
+      required: [target_id, definition_ids, errors]
+      properties:
+        target_id:
+          type: string
+        definition_ids:
+          type: array
+          items:
+            type: string
+        errors:
+          type: array
+          items:
+            type: string
+      additionalProperties: false
+    CustomWebMCPRegistry:
+      type: object
+      required: [repl_id, revision, source, tools, installations]
+      properties:
+        repl_id:
+          type: string
+        revision:
+          type: integer
+        source:
+          type: string
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomWebMCPDefinition"
+        installations:
+          type: array
+          items:
+            $ref: "#/components/schemas/CustomWebMCPInstallation"
+      additionalProperties: false
     WebMCPInvokeRequest:
       type: object
       additionalProperties: false

@@ -12,6 +12,7 @@ export interface CdpTarget {
   title: string;
   url: string;
   attached: boolean;
+  parentFrameId?: string;
 }
 
 export interface PendingDialog {
@@ -136,6 +137,8 @@ export class BrowserReplCdpClient {
   private pending = new Map<number, PendingCommand>();
   private events: CdpEvent[] = [];
   private eventWaiters = new Set<PendingEventWaiter>();
+  private eventSubscribers = new Set<(event: CdpEvent) => void>();
+  private disconnectSubscribers = new Set<() => void>();
 
   sessionId: string | null = null;
   targetId: string | null = null;
@@ -252,6 +255,7 @@ export class BrowserReplCdpClient {
     }
     this.pending.clear();
     for (const waiter of [...this.eventWaiters]) waiter.reject(err);
+    for (const subscriber of this.disconnectSubscribers) subscriber();
   }
 
   private onMessage(data: unknown): void {
@@ -329,6 +333,17 @@ export class BrowserReplCdpClient {
         waiter.reject(err instanceof Error ? err : new Error(String(err)));
       }
     }
+    for (const subscriber of this.eventSubscribers) subscriber(event);
+  }
+
+  subscribeEvents(subscriber: (event: CdpEvent) => void): () => void {
+    this.eventSubscribers.add(subscriber);
+    return () => this.eventSubscribers.delete(subscriber);
+  }
+
+  subscribeDisconnect(subscriber: () => void): () => void {
+    this.disconnectSubscribers.add(subscriber);
+    return () => this.disconnectSubscribers.delete(subscriber);
   }
 
   waitForEvent(
@@ -488,6 +503,7 @@ export class BrowserReplCdpClient {
       title: t.title ?? '',
       url: t.url ?? '',
       attached: !!t.attached,
+      parentFrameId: t.parentFrameId,
     }));
   }
 

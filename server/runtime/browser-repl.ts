@@ -10,6 +10,7 @@ import { BrowserReplCdpClient } from './browser-cdp-client';
 import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
 import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
+import { CustomWebMCPRegistry } from './custom-webmcp';
 import { createWebMCPClient } from './webmcp';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
@@ -376,11 +377,23 @@ async function evaluate(code: string): Promise<void> {
   await cellRuntime.evaluate(code);
 }
 
+const customToolRegistry = new CustomWebMCPRegistry(cdpClient, REPL_ID);
+customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
+contextGlobal.customTools = Object.freeze({
+  register: customToolRegistry.register,
+  remove: customToolRegistry.remove,
+  list: customToolRegistry.list,
+  get: customToolRegistry.get,
+});
+
 // Request handling
+
+type ExecuteOperation = 'execute' | 'custom_tools_get' | 'custom_tools_replace';
 
 interface ExecuteRequest {
   id: string;
   code: string;
+  operation?: ExecuteOperation;
   timeout_ms?: number;
 }
 
@@ -394,6 +407,7 @@ interface ExecuteResponse {
   content_truncated: boolean;
   timed_out?: boolean;
   exiting?: boolean;
+  result?: unknown;
   duration_ms: number;
 }
 
@@ -438,17 +452,27 @@ async function executeRequest(
       }, timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
     });
-    const evaluation = webmcpExecution.run(
-      executionAbortController.signal,
-      () => evaluate(request.code),
-    );
-    await Promise.race([evaluation, timeoutPromise]);
+    const evaluation = webmcpExecution.run(executionAbortController.signal, async () => {
+      switch (request.operation ?? 'execute') {
+        case 'execute':
+          await evaluate(request.code);
+          return undefined;
+        case 'custom_tools_get':
+          return customToolRegistry.current();
+        case 'custom_tools_replace':
+          return customToolRegistry.replace(request.code, evaluate);
+        default:
+          throw new Error(`unknown Browser REPL operation: ${request.operation}`);
+      }
+    });
+    const result = await Promise.race([evaluation, timeoutPromise]);
     return {
       id: request.id,
       repl_id: REPL_ID,
       success: true,
       content: collector.items,
       content_truncated: collector.truncated,
+      result,
       duration_ms: Date.now() - start,
     };
   } catch (err: any) {
@@ -693,8 +717,17 @@ function onUncaughtException(err: unknown): void {
   setTimeout(() => process.exit(1), 100).unref();
 }
 
-function shutdown(signal: string): void {
+let shuttingDown = false;
+
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   process.stderr.write(`[browser-repl] received ${signal}, shutting down (repl_id=${REPL_ID})\n`);
+  try {
+    await customToolRegistry.dispose();
+  } catch {
+    // The process is exiting; the next REPL also removes stale registrations.
+  }
   try {
     cdpClient.close();
   } catch {
@@ -719,8 +752,8 @@ async function main(): Promise<void> {
     // ignore
   }
 
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
   process.on('unhandledRejection', onUnhandledRejection);
   process.on('uncaughtException', onUncaughtException);
 

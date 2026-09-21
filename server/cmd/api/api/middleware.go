@@ -121,13 +121,15 @@ func apiCallEvent(operationID string) (string, oapi.TelemetryEventCategory) {
 	return "platform_api_call", events.Platform
 }
 
-// WebMCPRequestSizeMiddleware bounds invoke bodies before the generated JSON
-// decoder materializes them. The allowance above the input limit covers the
-// request envelope while keeping memory use bounded.
+// WebMCPRequestSizeMiddleware bounds WebMCP request bodies before the generated
+// JSON decoder materializes them.
 func WebMCPRequestSizeMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/webmcp/invoke" {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/webmcp/invoke":
 			r.Body = http.MaxBytesReader(w, r.Body, maxWebMCPRequestBytes)
+		case r.Method == http.MethodPut && r.URL.Path == "/webmcp/custom-tools":
+			r.Body = http.MaxBytesReader(w, r.Body, maxCustomWebMCPRequestBytes)
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -152,7 +154,7 @@ func StrictResponseErrorHandler(w http.ResponseWriter, r *http.Request, err erro
 }
 
 func isWebMCPRequest(r *http.Request) bool {
-	return r.URL.Path == "/webmcp/tools" || r.URL.Path == "/webmcp/invoke"
+	return r.URL.Path == "/webmcp/tools" || r.URL.Path == "/webmcp/invoke" || r.URL.Path == "/webmcp/custom-tools"
 }
 
 func writeStrictError(w http.ResponseWriter, status int, message string) {

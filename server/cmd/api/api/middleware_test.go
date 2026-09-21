@@ -88,6 +88,21 @@ func TestWebMCPRequestSizeMiddlewareRejectsOversizedInvokeBody(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, recorder.Code)
 }
 
+func TestWebMCPRequestSizeMiddlewareRejectsOversizedCustomToolBody(t *testing.T) {
+	body := strings.NewReader(strings.Repeat("x", maxCustomWebMCPRequestBytes+1))
+	request := httptest.NewRequest(http.MethodPut, "/webmcp/custom-tools", body)
+	recorder := httptest.NewRecorder()
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, err := io.ReadAll(r.Body)
+		var tooLarge *http.MaxBytesError
+		require.ErrorAs(t, err, &tooLarge)
+		w.WriteHeader(http.StatusBadRequest)
+	})
+
+	WebMCPRequestSizeMiddleware(next).ServeHTTP(recorder, request)
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
 func TestWebMCPRequestSizeMiddlewareDoesNotLimitOtherRoutes(t *testing.T) {
 	body := strings.NewReader(strings.Repeat("x", maxWebMCPRequestBytes+1))
 	request := httptest.NewRequest(http.MethodPost, "/playwright/execute", body)

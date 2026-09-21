@@ -5,6 +5,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/core": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
     "meriyah": "7.3.1",
     "patchright": "1.62.3",
     "playwright-core": "1.62.1",

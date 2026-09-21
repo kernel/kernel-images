@@ -41,14 +41,16 @@ func TestBrowserReplHelpEmitsAndReturnsMethodDocumentation(t *testing.T) {
 	requireExec(t, svc, `repl.write(JSON.stringify(clickHelp.includes("visible, enabled, stable")))`, true)
 }
 
-func TestBrowserReplCanPersistPatchrightAndPlaywrightCoreImports(t *testing.T) {
+func TestBrowserReplCanPersistPinnedRuntimeImports(t *testing.T) {
 	svc := newBrowserReplSvc(t)
-	requireExec(t, svc, `var playwright = await import("patchright"); var playwrightReference = playwright; var vanillaPlaywright = await import("playwright-core")`, nil)
-	requireExec(t, svc, `repl.write(JSON.stringify({ same: playwright === playwrightReference, patchrightConnect: typeof playwright.chromium.connectOverCDP, playwrightConnect: typeof vanillaPlaywright.chromium.connectOverCDP, endpoint: process.env.CDP_ENDPOINT }))`, map[string]interface{}{
-		"same":              true,
-		"patchrightConnect": "function",
-		"playwrightConnect": "function",
-		"endpoint":          "ws://127.0.0.1:9222",
+	requireExec(t, svc, `var playwright = await import("patchright"); var playwrightReference = playwright; var vanillaPlaywright = await import("playwright-core"); var mcpCore = await import("@modelcontextprotocol/core"); var mcpServer = await import("@modelcontextprotocol/server/validators/ajv")`, nil)
+	requireExec(t, svc, `repl.write(JSON.stringify({ same: playwright === playwrightReference, patchrightConnect: typeof playwright.chromium.connectOverCDP, playwrightConnect: typeof vanillaPlaywright.chromium.connectOverCDP, toolSchema: typeof mcpCore.ToolSchema.safeParse, jsonSchemaValidator: typeof mcpServer.AjvJsonSchemaValidator, endpoint: process.env.CDP_ENDPOINT }))`, map[string]interface{}{
+		"same":                true,
+		"patchrightConnect":   "function",
+		"playwrightConnect":   "function",
+		"toolSchema":          "function",
+		"jsonSchemaValidator": "function",
+		"endpoint":            "ws://127.0.0.1:9222",
 	})
 }
 
@@ -406,6 +408,16 @@ func TestStrictBrowserReplBodyMiddleware(t *testing.T) {
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/repl", strings.NewReader(`{nope`)))
 	require.Equal(t, http.StatusOK, rec.Code)
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/webmcp/custom-tools", strings.NewReader(`{"source":"","bogus":1}`)))
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), `unknown field \"bogus\"`)
+
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/webmcp/custom-tools", strings.NewReader(`{"source":"customTools.register({})"}`)))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"source":"customTools.register({})"}`, rec.Body.String())
 
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repl", nil))
