@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
@@ -84,6 +86,42 @@ func TestCustomWebMCPToolsUseBrowserReplLifecycle(t *testing.T) {
 	listed, err = svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
 	require.Empty(t, listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools)
+}
+
+func TestCustomWebMCPMetadataIsVisibleBeforeReplCellCompletes(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	code := fmt.Sprintf(`
+		await webmcp.addCustomTools({namespace: "midcell.example", tools: %s});
+		await waitMs(1500);
+	`, customWebMCPTestSource)
+	done := make(chan error, 1)
+	go func() {
+		response, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+			Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: code},
+		})
+		if err == nil {
+			result, ok := response.(oapi.ExecuteBrowserRepl200JSONResponse)
+			if !ok || !result.Success {
+				err = fmt.Errorf("unexpected response: %#v", response)
+			}
+		}
+		done <- err
+	}()
+
+	require.Eventually(t, func() bool {
+		for _, tool := range svc.browserRepl.customToolsSnapshot() {
+			if tool.Namespace == "midcell.example" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 10*time.Millisecond)
+	select {
+	case err := <-done:
+		require.FailNow(t, "REPL cell completed before metadata became visible", "%v", err)
+	default:
+	}
+	require.NoError(t, <-done)
 }
 
 func TestCustomWebMCPAllowsSameNameAcrossNamespaces(t *testing.T) {

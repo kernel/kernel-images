@@ -105,6 +105,12 @@ func (m *browserReplManager) setCustomTools(tools []oapi.CustomWebMCPDefinition)
 }
 
 func (m *browserReplManager) customToolsSnapshot() map[string]oapi.CustomWebMCPDefinition {
+	if data, err := os.ReadFile(browserReplCustomToolsPath()); err == nil {
+		var tools []oapi.CustomWebMCPDefinition
+		if json.Unmarshal(data, &tools) == nil {
+			m.setCustomTools(tools)
+		}
+	}
 	m.customToolsMu.RLock()
 	defer m.customToolsMu.RUnlock()
 	tools := make(map[string]oapi.CustomWebMCPDefinition, len(m.customTools))
@@ -112,6 +118,10 @@ func (m *browserReplManager) customToolsSnapshot() map[string]oapi.CustomWebMCPD
 		tools[id] = tool
 	}
 	return tools
+}
+
+func browserReplCustomToolsPath() string {
+	return browserReplSocketPath() + ".custom-tools.json"
 }
 
 // browserReplSocketPath returns the Unix socket path for the REPL daemon.
@@ -230,6 +240,7 @@ func (m *browserReplManager) clearLocked(ctx context.Context, child *browserRepl
 	if m.child == child {
 		m.child = nil
 		m.setCustomTools(nil)
+		_ = os.Remove(browserReplCustomToolsPath())
 	}
 	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
 }
@@ -399,10 +410,9 @@ type browserReplDaemonResponse struct {
 	// exception details and is exiting non-zero. The API treats it like a
 	// timeout — terminate the handle and report repl_terminated — so the
 	// state loss is explicit to the caller.
-	Exiting     bool                           `json:"exiting,omitempty"`
-	Result      json.RawMessage                `json:"result,omitempty"`
-	CustomTools *[]oapi.CustomWebMCPDefinition `json:"custom_tools,omitempty"`
-	DurationMs  int                            `json:"duration_ms"`
+	Exiting    bool            `json:"exiting,omitempty"`
+	Result     json.RawMessage `json:"result,omitempty"`
+	DurationMs int             `json:"duration_ms"`
 }
 
 // browserReplRequest is the already-encoded request sent over the daemon
@@ -534,10 +544,6 @@ func (m *browserReplManager) executeLocked(ctx context.Context, request *browser
 	if resp.ReplID != child.id {
 		return nil, fmt.Errorf("response repl_id mismatch: expected %s, got %s", child.id, resp.ReplID)
 	}
-	if resp.CustomTools != nil {
-		m.setCustomTools(*resp.CustomTools)
-	}
-
 	return &resp, nil
 }
 

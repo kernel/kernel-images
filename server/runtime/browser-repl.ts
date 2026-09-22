@@ -3,7 +3,7 @@
 import { AsyncLocalStorage } from 'async_hooks';
 import { createServer, Socket } from 'net';
 import { StringDecoder } from 'string_decoder';
-import { unlinkSync, existsSync, promises as fsp } from 'fs';
+import { unlinkSync, existsSync, renameSync, writeFileSync, promises as fsp } from 'fs';
 import vm from 'vm';
 import util from 'util';
 import { BrowserReplCdpClient } from './browser-cdp-client';
@@ -16,6 +16,7 @@ import { createWebMCPClient } from './webmcp';
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
 const REPL_ID = process.env.BROWSER_REPL_ID || 'unknown';
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
+const CUSTOM_TOOLS_STATE_PATH = `${SOCKET_PATH}.custom-tools.json`;
 // Keep the endpoint discoverable by dynamically imported browser clients even
 // when the image relies on the runtime's default rather than an explicit env.
 process.env.CDP_ENDPOINT = CDP_ENDPOINT;
@@ -313,10 +314,17 @@ const webmcpClient = createWebMCPClient({
     return AbortSignal.any([executionSignal, AbortSignal.timeout(remainingMs)]);
   },
 });
+const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>) => {
+  const temporaryPath = `${CUSTOM_TOOLS_STATE_PATH}.${process.pid}.tmp`;
+  writeFileSync(temporaryPath, safeStringify(tools), {mode: 0o600});
+  renameSync(temporaryPath, CUSTOM_TOOLS_STATE_PATH);
+};
 const customToolRegistry = new CustomWebMCPRegistry(
   cdpClient,
   (signal, callback) => webmcpExecution.run(signal, callback),
+  publishCustomTools,
 );
+publishCustomTools([]);
 customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
 const webmcp = Object.freeze({
   ...webmcpClient,
@@ -423,7 +431,6 @@ interface ExecuteResponse {
   timed_out?: boolean;
   exiting?: boolean;
   result?: unknown;
-  custom_tools?: ReturnType<CustomWebMCPRegistry['list']>;
   duration_ms: number;
 }
 
@@ -496,7 +503,6 @@ async function executeRequest(
       content: collector.items,
       content_truncated: collector.truncated,
       result,
-      custom_tools: customToolRegistry.list(),
       duration_ms: Date.now() - start,
     };
   } catch (err: any) {
@@ -514,7 +520,6 @@ async function executeRequest(
       // destructively, per the spec's timeout semantics) before serving
       // another execution.
       timed_out: timedOut || undefined,
-      custom_tools: customToolRegistry.list(),
       duration_ms: Date.now() - start,
     };
   } finally {
@@ -731,7 +736,6 @@ function onUncaughtException(err: unknown): void {
         content: inFlight.collector.items,
         content_truncated: inFlight.collector.truncated,
         exiting: true,
-        custom_tools: customToolRegistry.list(),
         duration_ms: Date.now() - inFlight.start,
       });
     } catch {

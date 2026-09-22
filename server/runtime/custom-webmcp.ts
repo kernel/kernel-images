@@ -273,13 +273,16 @@ export class CustomWebMCPRegistry {
   private onError?: (message: string) => void;
   private readonly client: BrowserReplCdpClient;
   private readonly runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>;
+  private readonly publishDefinitions: (tools: CustomToolSummary[]) => void;
 
   constructor(
     client: BrowserReplCdpClient,
     runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
+    publishDefinitions: (tools: CustomToolSummary[]) => void,
   ) {
     this.client = client;
     this.runInvocation = runInvocation;
+    this.publishDefinitions = publishDefinitions;
     this.unsubscribeEvent = client.subscribeEvents((event) => this.handleEvent(event));
     this.unsubscribeDisconnect = client.subscribeDisconnect(() => this.handleDisconnect());
     this.scheduleReconcile();
@@ -317,6 +320,12 @@ export class CustomWebMCPRegistry {
     }
 
     for (const definition of additions) this.definitions.set(definition.id, definition);
+    try {
+      this.publishDefinitions(this.list());
+    } catch (error) {
+      for (const definition of additions) this.definitions.delete(definition.id);
+      throw error;
+    }
     this.revision++;
     this.scheduleReconcile();
     await this.settleReconciliation();
@@ -324,8 +333,15 @@ export class CustomWebMCPRegistry {
   };
 
   remove = async (id: string): Promise<boolean> => {
-    const removed = this.definitions.delete(id);
-    if (!removed) return false;
+    const definition = this.definitions.get(id);
+    if (!definition) return false;
+    this.definitions.delete(id);
+    try {
+      this.publishDefinitions(this.list());
+    } catch (error) {
+      this.definitions.set(id, definition);
+      throw error;
+    }
     this.revision++;
     if (this.definitions.size === 0) this.emptyRegistryCleaned = false;
     this.scheduleReconcile();
