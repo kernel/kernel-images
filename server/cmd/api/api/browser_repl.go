@@ -75,12 +75,13 @@ type browserReplChild struct {
 // browserReplManager owns execution admission and the persistent Node child.
 // Lifecycle synchronization stays behind its Execute and Shutdown methods.
 type browserReplManager struct {
-	admission     chan struct{}
-	lifecycle     context.Context
-	stop          context.CancelCauseFunc
-	child         *browserReplChild // guarded by admission
-	customToolsMu sync.RWMutex
-	customTools   map[string]oapi.CustomWebMCPDefinition
+	admission         chan struct{}
+	lifecycle         context.Context
+	stop              context.CancelCauseFunc
+	child             *browserReplChild // guarded by admission
+	customToolsMu     sync.RWMutex
+	customToolsReplID string
+	customTools       map[string]oapi.CustomWebMCPDefinition
 }
 
 func newBrowserReplManager() *browserReplManager {
@@ -95,9 +96,10 @@ func newBrowserReplManager() *browserReplManager {
 	}
 }
 
-func (m *browserReplManager) setCustomTools(tools []oapi.CustomWebMCPDefinition) {
+func (m *browserReplManager) setCustomTools(replID string, tools []oapi.CustomWebMCPDefinition) {
 	m.customToolsMu.Lock()
 	defer m.customToolsMu.Unlock()
+	m.customToolsReplID = replID
 	m.customTools = make(map[string]oapi.CustomWebMCPDefinition, len(tools))
 	for _, tool := range tools {
 		m.customTools[tool.Id] = tool
@@ -105,10 +107,18 @@ func (m *browserReplManager) setCustomTools(tools []oapi.CustomWebMCPDefinition)
 }
 
 func (m *browserReplManager) customToolsSnapshot() map[string]oapi.CustomWebMCPDefinition {
-	if data, err := os.ReadFile(browserReplCustomToolsPath()); err == nil {
-		var tools []oapi.CustomWebMCPDefinition
-		if json.Unmarshal(data, &tools) == nil {
-			m.setCustomTools(tools)
+	m.customToolsMu.RLock()
+	replID := m.customToolsReplID
+	m.customToolsMu.RUnlock()
+	if replID != "" {
+		if data, err := os.ReadFile(browserReplCustomToolsPath()); err == nil {
+			var state struct {
+				ReplID string                        `json:"repl_id"`
+				Tools  []oapi.CustomWebMCPDefinition `json:"tools"`
+			}
+			if json.Unmarshal(data, &state) == nil && state.ReplID == replID {
+				m.setCustomTools(replID, state.Tools)
+			}
 		}
 	}
 	m.customToolsMu.RLock()
@@ -239,7 +249,7 @@ func closedWaitChannel(err error) chan error {
 func (m *browserReplManager) clearLocked(ctx context.Context, child *browserReplChild) {
 	if m.child == child {
 		m.child = nil
-		m.setCustomTools(nil)
+		m.setCustomTools("", nil)
 		_ = os.Remove(browserReplCustomToolsPath())
 	}
 	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
@@ -282,6 +292,7 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 		child.done <- cmd.Wait()
 	}()
 	m.child = child
+	m.setCustomTools(replID, nil)
 
 	deadline := time.Now().Add(browserReplStartupTimeout)
 	for {

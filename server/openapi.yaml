@@ -6405,6 +6405,21 @@ components:
             Wall-clock time at which the current configuration was applied.
             Omitted when telemetry is not configured.
       additionalProperties: false
+    WebMCPToolLegacyAnnotations:
+      type: object
+      description: Deprecated compatibility copy of WebMCP annotations.
+      deprecated: true
+      additionalProperties: false
+      required: [read_only, untrusted_content, consequential, autosubmit]
+      properties:
+        read_only:
+          type: boolean
+        untrusted_content:
+          type: boolean
+        consequential:
+          type: boolean
+        autosubmit:
+          type: boolean
     WebMCPToolAnnotations:
       type: object
       description: Tool-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
@@ -6494,7 +6509,7 @@ components:
     WebMCPTool:
       type: object
       additionalProperties: false
-      required: [tool_ref, tool, source]
+      required: [tool_ref, tool, source, name, description, input_schema]
       properties:
         tool_ref:
           type: string
@@ -6503,6 +6518,24 @@ components:
           $ref: "#/components/schemas/WebMCPToolMetadata"
         source:
           $ref: "#/components/schemas/WebMCPToolSource"
+        name:
+          type: string
+          deprecated: true
+          description: Deprecated compatibility copy of tool.name.
+        description:
+          type: string
+          deprecated: true
+          description: Deprecated compatibility copy of tool.description.
+        input_schema:
+          type: object
+          deprecated: true
+          description: Deprecated compatibility copy of tool.inputSchema.
+          additionalProperties: true
+        annotations:
+          allOf:
+            - $ref: "#/components/schemas/WebMCPToolLegacyAnnotations"
+          deprecated: true
+          description: Deprecated compatibility copy of tool annotations.
     WebMCPToolsResponse:
       type: object
       additionalProperties: false

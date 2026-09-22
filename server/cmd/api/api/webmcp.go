@@ -92,6 +92,17 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 				Annotations:  definition.Tool.Annotations,
 			}
 		}
+		responseTool.Name = responseTool.Tool.Name
+		responseTool.Description = responseTool.Tool.Description
+		responseTool.InputSchema = responseTool.Tool.InputSchema
+		if tool.Annotations != nil {
+			responseTool.Annotations = &oapi.WebMCPToolLegacyAnnotations{
+				ReadOnly:         tool.Annotations.ReadOnly,
+				UntrustedContent: tool.Annotations.UntrustedContent,
+				Consequential:    tool.Annotations.Consequential,
+				Autosubmit:       tool.Annotations.Autosubmit,
+			}
+		}
 		responseTools = append(responseTools, responseTool)
 	}
 	return oapi.GetWebMCPTools200JSONResponse{Tools: responseTools}, nil

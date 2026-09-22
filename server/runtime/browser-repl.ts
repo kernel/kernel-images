@@ -316,7 +316,7 @@ const webmcpClient = createWebMCPClient({
 });
 const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>) => {
   const temporaryPath = `${CUSTOM_TOOLS_STATE_PATH}.${process.pid}.tmp`;
-  writeFileSync(temporaryPath, safeStringify(tools), {mode: 0o600});
+  writeFileSync(temporaryPath, safeStringify({repl_id: REPL_ID, tools}), {mode: 0o600});
   renameSync(temporaryPath, CUSTOM_TOOLS_STATE_PATH);
 };
 const customToolRegistry = new CustomWebMCPRegistry(

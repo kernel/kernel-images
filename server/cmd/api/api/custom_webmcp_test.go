@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -86,6 +87,24 @@ func TestCustomWebMCPToolsUseBrowserReplLifecycle(t *testing.T) {
 	listed, err = svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
 	require.Empty(t, listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools)
+}
+
+func TestCustomWebMCPSnapshotRejectsDifferentRepl(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	ctx := context.Background()
+	added, err := svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+		Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{Namespace: "example.com", Source: customWebMCPTestSource},
+	})
+	require.NoError(t, err)
+	tool := added.(oapi.AddCustomWebMCPTools201JSONResponse).Tools[0]
+	require.Contains(t, svc.browserRepl.customToolsSnapshot(), tool.Id)
+
+	require.NoError(t, os.WriteFile(
+		browserReplCustomToolsPath(),
+		[]byte(`{"repl_id":"different-repl","tools":[]}`),
+		0o600,
+	))
+	require.Contains(t, svc.browserRepl.customToolsSnapshot(), tool.Id)
 }
 
 func TestCustomWebMCPMetadataIsVisibleBeforeReplCellCompletes(t *testing.T) {
