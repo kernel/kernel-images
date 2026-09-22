@@ -52,7 +52,7 @@ func testWebMCPDeclarative(t *testing.T, ctx context.Context, client *instanceoa
 
 			var tool instanceoapi.WebMCPTool
 			require.EventuallyWithT(t, func(collect *assert.CollectT) {
-				rsp, err := client.GetWebMCPToolsWithResponse(ctx)
+				rsp, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
 				if !assert.NoError(collect, err) {
 					return
 				}
@@ -60,7 +60,7 @@ func testWebMCPDeclarative(t *testing.T, ctx context.Context, client *instanceoa
 					return
 				}
 				for _, candidate := range rsp.JSON200.Tools {
-					if candidate.Name == "reserve_table" && candidate.Source.PageUrl == pageURL {
+					if candidate.Tool.Name == "reserve_table" && candidate.Source.PageUrl == pageURL {
 						tool = candidate
 						return
 					}
@@ -71,10 +71,10 @@ func testWebMCPDeclarative(t *testing.T, ctx context.Context, client *instanceoa
 			require.NoError(t, err)
 			t.Logf("GET /webmcp/tools: %s", toolJSON)
 			require.NotEmpty(t, tool.ToolRef)
-			require.Equal(t, "Reserve a table with guest details and seating preferences.", tool.Description)
-			require.Equal(t, "object", tool.InputSchema["type"])
-			properties, ok := tool.InputSchema["properties"].(map[string]any)
-			require.True(t, ok, "schema properties: %#v", tool.InputSchema)
+			require.Equal(t, "Reserve a table with guest details and seating preferences.", tool.Tool.Description)
+			require.Equal(t, "object", tool.Tool.InputSchema["type"])
+			properties, ok := tool.Tool.InputSchema["properties"].(map[string]any)
+			require.True(t, ok, "schema properties: %#v", tool.Tool.InputSchema)
 			require.Len(t, properties, 4)
 			for _, field := range []struct {
 				name, kind, description string
@@ -96,7 +96,7 @@ func testWebMCPDeclarative(t *testing.T, ctx context.Context, client *instanceoa
 			partySize := properties["party_size"].(map[string]any)
 			require.EqualValues(t, 1, partySize["minimum"])
 			require.EqualValues(t, 8, partySize["maximum"])
-			require.ElementsMatch(t, []string{"name", "date", "party_size", "seating"}, tool.InputSchema["required"])
+			require.ElementsMatch(t, []string{"name", "date", "party_size", "seating"}, tool.Tool.InputSchema["required"])
 			require.ElementsMatch(t, []string{"dining_room", "terrace", "booth"}, properties["seating"].(map[string]any)["enum"])
 			require.Equal(t, test.title, tool.Source.PageTitle)
 			require.Positive(t, tool.Source.TabId)
@@ -108,8 +108,9 @@ func testWebMCPDeclarative(t *testing.T, ctx context.Context, client *instanceoa
 			} else {
 				require.Nil(t, tool.Source.Frame)
 			}
-			require.NotNil(t, tool.Annotations)
-			require.True(t, tool.Annotations.Autosubmit)
+			require.NotNil(t, tool.Tool.Annotations)
+			require.NotNil(t, tool.Tool.Annotations.Autosubmit)
+			require.True(t, *tool.Tool.Annotations.Autosubmit)
 
 			timeout := 10
 			rsp, err := client.InvokeWebMCPToolWithResponse(ctx, instanceoapi.WebMCPInvokeRequest{

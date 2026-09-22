@@ -8,99 +8,131 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const customWebMCPTestSource = `
-customTools.register({
-  id: "test/read-title",
-  kind: "cdp",
-  match: {url_patterns: ["https://example.com/*"]},
-  tool: {
-    name: "read_title",
-    description: "Read the current page title.",
-    inputSchema: {type: "object", additionalProperties: false},
-    annotations: {readOnlyHint: true},
+const customWebMCPTestSource = `[
+  {
+    kind: "cdp",
+    match: {url_patterns: ["https://example.com/*"]},
+    tool: {
+      name: "read_title",
+      description: "Read the current page title.",
+      inputSchema: {type: "object", additionalProperties: false},
+      outputSchema: {
+        type: "object",
+        properties: {title: {type: "string"}},
+        required: ["title"],
+        additionalProperties: false,
+      },
+      annotations: {readOnlyHint: true},
+    },
+    execute: async () => ({title: await js(() => document.title)}),
   },
-  outputSchema: {
-    type: "object",
-    properties: {title: {type: "string"}},
-    required: ["title"],
-    additionalProperties: false,
-  },
-  execute: async () => ({title: await js(() => document.title)}),
-});
-`
+]`
 
-func TestCustomWebMCPRegistryUsesBrowserReplLifecycle(t *testing.T) {
+func TestCustomWebMCPToolsUseBrowserReplLifecycle(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	ctx := context.Background()
 
-	replaced, err := svc.ReplaceCustomWebMCPTools(ctx, oapi.ReplaceCustomWebMCPToolsRequestObject{
-		Body: &oapi.ReplaceCustomWebMCPToolsJSONRequestBody{Source: customWebMCPTestSource},
+	added, err := svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+		Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{
+			Namespace: "example.com",
+			Source:    customWebMCPTestSource,
+		},
 	})
 	require.NoError(t, err)
-	body := replaced.(oapi.ReplaceCustomWebMCPTools200JSONResponse)
-	require.NotEmpty(t, body.ReplId)
-	require.Equal(t, 1, body.Revision)
-	require.Equal(t, customWebMCPTestSource, body.Source)
-	require.False(t, body.SourceDirty)
+	body := added.(oapi.AddCustomWebMCPTools201JSONResponse)
 	require.Len(t, body.Tools, 1)
-	require.Equal(t, "test/read-title", body.Tools[0].Id)
+	require.Regexp(t, `^ct_[a-f0-9]{16}$`, body.Tools[0].Id)
+	require.Equal(t, "example.com", body.Tools[0].Namespace)
 	require.Equal(t, "cdp", body.Tools[0].Kind)
+	require.Equal(t, "read_title", body.Tools[0].Tool.Name)
 	require.Equal(t, []string{"https://example.com/*"}, body.Tools[0].Match.UrlPatterns)
-	require.Empty(t, body.Installations)
+	require.Equal(t, body.Tools[0], svc.browserRepl.customToolsSnapshot()[body.Tools[0].Id])
 
-	got, err := svc.GetCustomWebMCPTools(ctx, oapi.GetCustomWebMCPToolsRequestObject{})
+	listed, err := svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
-	current := got.(oapi.GetCustomWebMCPTools200JSONResponse)
-	require.Equal(t, body.ReplId, current.ReplId)
-	require.Equal(t, body.Revision, current.Revision)
+	current := listed.(oapi.ListCustomWebMCPTools200JSONResponse)
 	require.Equal(t, body.Tools, current.Tools)
 
-	replaced, err = svc.ReplaceCustomWebMCPTools(ctx, oapi.ReplaceCustomWebMCPToolsRequestObject{
-		Body: &oapi.ReplaceCustomWebMCPToolsJSONRequestBody{Source: customWebMCPTestSource},
+	conflict, err := svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+		Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{
+			Namespace: "example.com",
+			Source:    customWebMCPTestSource,
+		},
 	})
 	require.NoError(t, err)
-	second := replaced.(oapi.ReplaceCustomWebMCPTools200JSONResponse)
-	require.Equal(t, 2, second.Revision)
-	require.Equal(t, 2, second.Tools[0].Revision)
+	_, ok := conflict.(oapi.AddCustomWebMCPTools409JSONResponse)
+	require.True(t, ok, "expected 409 response, got %T", conflict)
 
-	requireExec(t, svc, `customTools.remove("test/read-title")`, nil)
-	got, err = svc.GetCustomWebMCPTools(ctx, oapi.GetCustomWebMCPToolsRequestObject{})
+	removed, err := svc.RemoveCustomWebMCPTool(ctx, oapi.RemoveCustomWebMCPToolRequestObject{Id: body.Tools[0].Id})
 	require.NoError(t, err)
-	dirty := got.(oapi.GetCustomWebMCPTools200JSONResponse)
-	require.True(t, dirty.SourceDirty)
-	require.Equal(t, customWebMCPTestSource, dirty.Source)
-	require.Empty(t, dirty.Tools)
+	_, ok = removed.(oapi.RemoveCustomWebMCPTool204Response)
+	require.True(t, ok, "expected 204 response, got %T", removed)
 
+	listed, err = svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	require.Empty(t, listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools)
+
+	_, err = svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+		Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{
+			Namespace: "example.com",
+			Source:    customWebMCPTestSource,
+		},
+	})
+	require.NoError(t, err)
 	reset := true
-	resetResponse := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "", Reset: &reset})
-	require.NotEqual(t, body.ReplId, resetResponse.ReplId)
-	got, err = svc.GetCustomWebMCPTools(ctx, oapi.GetCustomWebMCPToolsRequestObject{})
+	executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: "", Reset: &reset})
+	listed, err = svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
-	fresh := got.(oapi.GetCustomWebMCPTools200JSONResponse)
-	require.Equal(t, resetResponse.ReplId, fresh.ReplId)
-	require.Zero(t, fresh.Revision)
-	require.Empty(t, fresh.Tools)
+	require.Empty(t, listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools)
 }
 
-func TestCustomWebMCPInvalidReplacementPreservesRegistry(t *testing.T) {
+func TestCustomWebMCPAllowsSameNameAcrossNamespaces(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	ctx := context.Background()
 
-	_, err := svc.ReplaceCustomWebMCPTools(ctx, oapi.ReplaceCustomWebMCPToolsRequestObject{
-		Body: &oapi.ReplaceCustomWebMCPToolsJSONRequestBody{Source: customWebMCPTestSource},
+	for _, namespace := range []string{"one.example", "two.example"} {
+		response, err := svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+			Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{
+				Namespace: namespace,
+				Source:    customWebMCPTestSource,
+			},
+		})
+		require.NoError(t, err)
+		added, ok := response.(oapi.AddCustomWebMCPTools201JSONResponse)
+		require.True(t, ok, "expected 201 response, got %T", response)
+		require.Equal(t, namespace, added.Tools[0].Namespace)
+	}
+
+	listed, err := svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	require.Len(t, listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools, 2)
+}
+
+func TestCustomWebMCPInvalidAdditionPreservesTools(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	ctx := context.Background()
+
+	_, err := svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+		Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{
+			Namespace: "example.com",
+			Source:    customWebMCPTestSource,
+		},
 	})
 	require.NoError(t, err)
 
-	response, err := svc.ReplaceCustomWebMCPTools(ctx, oapi.ReplaceCustomWebMCPToolsRequestObject{
-		Body: &oapi.ReplaceCustomWebMCPToolsJSONRequestBody{Source: `customTools.register({id: "broken"})`},
+	response, err := svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+		Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{
+			Namespace: "broken.example",
+			Source:    `[{kind: "cdp"}]`,
+		},
 	})
 	require.NoError(t, err)
-	_, ok := response.(oapi.ReplaceCustomWebMCPTools400JSONResponse)
+	_, ok := response.(oapi.AddCustomWebMCPTools400JSONResponse)
 	require.True(t, ok, "expected 400 response, got %T", response)
 
-	got, err := svc.GetCustomWebMCPTools(ctx, oapi.GetCustomWebMCPToolsRequestObject{})
+	listed, err := svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
-	current := got.(oapi.GetCustomWebMCPTools200JSONResponse)
+	current := listed.(oapi.ListCustomWebMCPTools200JSONResponse)
 	require.Len(t, current.Tools, 1)
-	require.Equal(t, "test/read-title", current.Tools[0].Id)
+	require.Equal(t, "read_title", current.Tools[0].Tool.Name)
 }

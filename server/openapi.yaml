@@ -1360,19 +1360,28 @@ paths:
     get:
       summary: Discover WebMCP tools across the browser
       description: |
-        Returns a snapshot of native WebMCP tools available across the browser. The snapshot includes
-        tools registered by every open tab and by embedded content within those tabs.
+        Returns a snapshot of WebMCP tools available across the browser, including custom tools unless
+        exclude_custom is true. The snapshot includes tools registered by every open tab and by embedded
+        content within those tabs.
 
         On the first request, Kernel starts monitoring the browser. Tabs and windows that are already
         open are included, and tabs, windows, and embedded content opened later are tracked automatically.
         Tools are removed when the tab or embedded frame that registered them closes or navigates away.
 
-        Each tool includes an opaque tool_ref that identifies its exact live registration, along with
-        information about the window, tab, and optional embedded frame that provided it. Use that tool_ref
-        to invoke the tool. Callers do not need to manage browser debugging connections or subscribe to
-        browser events.
+        Each tool includes an opaque tool_ref that identifies its exact live registration, MCP-compatible
+        tool metadata, and information about the window, tab, and optional embedded frame that provided it.
+        Custom tools also identify their generated ID and namespace under source.custom. Use tool_ref to
+        invoke that exact registration.
       operationId: getWebMCPTools
       x-telemetry-category: control
+      parameters:
+        - name: exclude_custom
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: Exclude custom tools when true.
       responses:
         "200":
           description: Current WebMCP tool snapshot.
@@ -1424,47 +1433,67 @@ paths:
 
   /webmcp/custom-tools:
     get:
-      summary: Get the Browser REPL custom WebMCP registry
-      description: |
-        Returns custom tool definitions held by the current Browser REPL process, their installation
-        status across open tabs, and the repl_id that owns the state. A reset, timeout, crash, OOM, or
-        API restart replaces the REPL and clears this registry.
-      operationId: getCustomWebMCPTools
+      summary: List custom WebMCP tools
+      description: Returns every registered custom tool with its generated ID, namespace, matcher, and MCP tool metadata.
+      operationId: listCustomWebMCPTools
       x-telemetry-category: control
       responses:
         "200":
-          description: Current REPL-local custom WebMCP registry.
+          description: Current custom WebMCP tools.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CustomWebMCPRegistry"
+                $ref: "#/components/schemas/CustomWebMCPToolsResponse"
         "500":
           $ref: "#/components/responses/InternalError"
-    put:
-      summary: Replace the Browser REPL custom WebMCP registry
+    post:
+      summary: Add custom WebMCP tools
       description: |
-        Evaluates JavaScript source in the existing persistent Browser REPL. The source registers
-        page-backed or CDP-backed definitions with customTools.register(...). Definitions are staged
-        and replace the live registry only after the source evaluates successfully. Matchers apply to
-        every top-level document, nested frame, and OOPIF, and matching tools are registered on the
-        corresponding topmost document through native imperative WebMCP.
-      operationId: replaceCustomWebMCPTools
+        Atomically adds a namespaced batch of custom tools. The JavaScript source must evaluate to a
+        non-empty array of definitions. Each definition supplies page-backed or CDP-backed execution,
+        URL matchers, MCP tool metadata including an output schema, and an execute function. Matchers
+        apply to top-level documents, nested frames, and OOPIFs; each matching tool is exposed once on
+        the corresponding topmost document and appears in the normal WebMCP tool list.
+      operationId: addCustomWebMCPTools
       x-telemetry-category: control
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/CustomWebMCPRegistryRequest"
+              $ref: "#/components/schemas/AddCustomWebMCPToolsRequest"
       responses:
-        "200":
-          description: Replaced REPL-local custom WebMCP registry.
+        "201":
+          description: Custom tools added. The response contains only the newly added tools.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/CustomWebMCPRegistry"
+                $ref: "#/components/schemas/CustomWebMCPToolsResponse"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /webmcp/custom-tools/{id}:
+    delete:
+      summary: Remove a custom WebMCP tool
+      description: Removes one custom tool by generated ID. An invocation already in progress is not canceled.
+      operationId: removeCustomWebMCPTool
+      x-telemetry-category: control
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^ct_[a-f0-9]{16}$"
+      responses:
+        "204":
+          description: Custom tool removed.
+        "404":
+          $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1520,13 +1549,12 @@ paths:
         <!-- BEGIN GENERATED REPL METHOD LIST -->
         - REPL: `repl.help`, `repl.write`, `repl.emitImage`
         - Browser control: `cdp`, `drainEvents`, `waitForEvent`, `gotoUrl`, `pageInfo`, `accessibilitySnapshot`, `click`, `typeText`, `fillInput`, `pressKey`, `scroll`, `captureScreenshot`, `listTabs`, `currentTab`, `switchTab`, `newTab`, `closeTab`, `ensureRealTab`, `iframeTarget`, `waitMs`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`, `js`, `uploadFile`, `httpGet`
-        - WebMCP: `webmcp.listTools`, `webmcp.invokeTool`
-        - Custom WebMCP: `customTools.register`, `customTools.remove`, `customTools.list`, `customTools.get`
+        - WebMCP: `webmcp.listTools`, `webmcp.addCustomTools`, `webmcp.listCustomTools`, `webmcp.removeCustomTool`, `webmcp.invokeTool`
         <!-- END GENERATED REPL METHOD LIST -->
 
         Browser-control methods are available both directly and on `browser`. The same frozen
-        browser-wide WebMCP client is available as `webmcp` and `browser.webmcp`. The `customTools`
-        registry global is shared with `GET|PUT /webmcp/custom-tools`. Common workflows:
+        browser-wide WebMCP client is available as `webmcp` and `browser.webmcp`, including custom
+        tool add, list, and remove methods. Common workflows:
 
         ```js
         await gotoUrl("https://example.com");
@@ -6379,15 +6407,20 @@ components:
       additionalProperties: false
     WebMCPToolAnnotations:
       type: object
-      description: Page-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
+      description: Tool-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
       additionalProperties: false
-      required: [read_only, untrusted_content, consequential, autosubmit]
       properties:
-        read_only:
+        readOnlyHint:
           type: boolean
-        untrusted_content:
+        destructiveHint:
           type: boolean
-        consequential:
+        idempotentHint:
+          type: boolean
+        openWorldHint:
+          type: boolean
+        consequentialHint:
+          type: boolean
+        untrustedContentHint:
           type: boolean
         autosubmit:
           type: boolean
@@ -6403,6 +6436,16 @@ components:
         url:
           type: string
           description: Current frame URL with the fragment omitted.
+    WebMCPCustomToolSource:
+      type: object
+      additionalProperties: false
+      required: [id, namespace]
+      properties:
+        id:
+          type: string
+          pattern: "^ct_[a-f0-9]{16}$"
+        namespace:
+          type: string
     WebMCPToolSource:
       type: object
       additionalProperties: false
@@ -6427,23 +6470,37 @@ components:
             - $ref: "#/components/schemas/WebMCPToolFrame"
           nullable: true
           description: Embedded frame that registered the tool, or null when the top-level page registered it.
-    WebMCPTool:
+        custom:
+          $ref: "#/components/schemas/WebMCPCustomToolSource"
+    WebMCPToolMetadata:
       type: object
       additionalProperties: false
-      required: [tool_ref, name, description, input_schema, source]
+      required: [name, description, inputSchema]
       properties:
-        tool_ref:
-          type: string
-          description: Opaque reference for invoking this exact live registration. It becomes invalid when its document or browser process is replaced.
         name:
+          type: string
+        title:
           type: string
         description:
           type: string
-        input_schema:
+        inputSchema:
+          type: object
+          additionalProperties: true
+        outputSchema:
           type: object
           additionalProperties: true
         annotations:
           $ref: "#/components/schemas/WebMCPToolAnnotations"
+    WebMCPTool:
+      type: object
+      additionalProperties: false
+      required: [tool_ref, tool, source]
+      properties:
+        tool_ref:
+          type: string
+          description: Opaque reference for invoking this exact live registration. It becomes invalid when its document or browser process is replaced.
+        tool:
+          $ref: "#/components/schemas/WebMCPToolMetadata"
         source:
           $ref: "#/components/schemas/WebMCPToolSource"
     WebMCPToolsResponse:
@@ -6455,14 +6512,17 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/WebMCPTool"
-    CustomWebMCPRegistryRequest:
+    AddCustomWebMCPToolsRequest:
       type: object
-      required: [source]
+      required: [namespace, source]
       properties:
+        namespace:
+          type: string
+          pattern: "^[A-Za-z0-9_.-]{1,128}$"
         source:
           type: string
           maxLength: 8000000
-          description: JavaScript evaluated in the existing Browser REPL with customTools and all Browser REPL globals available.
+          description: JavaScript expression that evaluates to a non-empty array of custom tool definitions.
       additionalProperties: false
     CustomWebMCPMatch:
       type: object
@@ -6474,11 +6534,19 @@ components:
           items:
             type: string
       additionalProperties: false
+    CustomWebMCPToolMetadata:
+      allOf:
+        - $ref: "#/components/schemas/WebMCPToolMetadata"
+        - type: object
+          required: [outputSchema]
     CustomWebMCPDefinition:
       type: object
-      required: [id, kind, match, tool, revision]
+      required: [id, namespace, kind, match, tool]
       properties:
         id:
+          type: string
+          pattern: "^ct_[a-f0-9]{16}$"
+        namespace:
           type: string
         kind:
           type: string
@@ -6486,51 +6554,16 @@ components:
         match:
           $ref: "#/components/schemas/CustomWebMCPMatch"
         tool:
-          type: object
-          description: MCP-compatible tool metadata as submitted to customTools.register().
-          additionalProperties: true
-        output_schema:
-          type: object
-          additionalProperties: true
-        revision:
-          type: integer
+          $ref: "#/components/schemas/CustomWebMCPToolMetadata"
       additionalProperties: false
-    CustomWebMCPInstallation:
+    CustomWebMCPToolsResponse:
       type: object
-      required: [target_id, definition_ids, errors]
+      required: [tools]
       properties:
-        target_id:
-          type: string
-        definition_ids:
-          type: array
-          items:
-            type: string
-        errors:
-          type: array
-          items:
-            type: string
-      additionalProperties: false
-    CustomWebMCPRegistry:
-      type: object
-      required: [repl_id, revision, source, source_dirty, tools, installations]
-      properties:
-        repl_id:
-          type: string
-        revision:
-          type: integer
-        source:
-          type: string
-        source_dirty:
-          type: boolean
-          description: True when customTools.register() or customTools.remove() changed the live registry after the last PUT.
         tools:
           type: array
           items:
             $ref: "#/components/schemas/CustomWebMCPDefinition"
-        installations:
-          type: array
-          items:
-            $ref: "#/components/schemas/CustomWebMCPInstallation"
       additionalProperties: false
     WebMCPInvokeRequest:
       type: object

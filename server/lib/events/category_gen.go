@@ -51,6 +51,7 @@ func CategoryForType(eventType string) (oapi.TelemetryEventCategory, bool) {
 }
 
 var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
+	"AddCustomWebMCPTools":       oapi.TelemetryEventCategory("control"),
 	"BatchComputerAction":        oapi.TelemetryEventCategory("control"),
 	"ChromiumConfigure":          oapi.TelemetryEventCategory("platform"),
 	"ClickMouse":                 oapi.TelemetryEventCategory("control"),
@@ -67,11 +68,11 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"ExecuteBrowserRepl":         oapi.TelemetryEventCategory("control"),
 	"ExecutePlaywrightCode":      oapi.TelemetryEventCategory("control"),
 	"FileInfo":                   oapi.TelemetryEventCategory("platform"),
-	"GetCustomWebMCPTools":       oapi.TelemetryEventCategory("control"),
 	"GetMousePosition":           oapi.TelemetryEventCategory("control"),
 	"GetTelemetry":               oapi.TelemetryEventCategory("platform"),
 	"GetWebMCPTools":             oapi.TelemetryEventCategory("control"),
 	"InvokeWebMCPTool":           oapi.TelemetryEventCategory("control"),
+	"ListCustomWebMCPTools":      oapi.TelemetryEventCategory("control"),
 	"ListFiles":                  oapi.TelemetryEventCategory("platform"),
 	"ListRecorders":              oapi.TelemetryEventCategory("platform"),
 	"LogsStream":                 oapi.TelemetryEventCategory("platform"),
@@ -94,7 +95,7 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"PutTelemetry":               oapi.TelemetryEventCategory("platform"),
 	"ReadClipboard":              oapi.TelemetryEventCategory("control"),
 	"ReadFile":                   oapi.TelemetryEventCategory("platform"),
-	"ReplaceCustomWebMCPTools":   oapi.TelemetryEventCategory("control"),
+	"RemoveCustomWebMCPTool":     oapi.TelemetryEventCategory("control"),
 	"Scroll":                     oapi.TelemetryEventCategory("control"),
 	"SetCursor":                  oapi.TelemetryEventCategory("control"),
 	"SetFilePermissions":         oapi.TelemetryEventCategory("platform"),

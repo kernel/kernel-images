@@ -410,14 +410,14 @@ func TestStrictBrowserReplBodyMiddleware(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/webmcp/custom-tools", strings.NewReader(`{"source":"","bogus":1}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/webmcp/custom-tools", strings.NewReader(`{"namespace":"example.com","source":"","bogus":1}`)))
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	require.Contains(t, rec.Body.String(), `unknown field \"bogus\"`)
 
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPut, "/webmcp/custom-tools", strings.NewReader(`{"source":"customTools.register({})"}`)))
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/webmcp/custom-tools", strings.NewReader(`{"namespace":"example.com","source":"[]"}`)))
 	require.Equal(t, http.StatusOK, rec.Code)
-	require.JSONEq(t, `{"source":"customTools.register({})"}`, rec.Body.String())
+	require.JSONEq(t, `{"namespace":"example.com","source":"[]"}`, rec.Body.String())
 
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/repl", nil))

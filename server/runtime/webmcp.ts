@@ -3,20 +3,32 @@ export interface WebMCPToolFrame {
   url: string;
 }
 
+export interface WebMCPCustomToolSource {
+  id: string;
+  namespace: string;
+}
+
 export interface WebMCPToolSource {
   window_id: number;
   tab_id: number;
   page_title: string;
   page_url: string;
   frame: WebMCPToolFrame | null;
+  custom?: WebMCPCustomToolSource;
+}
+
+export interface WebMCPToolMetadata {
+  name: string;
+  title?: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: Record<string, boolean>;
 }
 
 export interface WebMCPTool {
   tool_ref: string;
-  name: string;
-  description: string;
-  input_schema: Record<string, unknown>;
-  annotations?: Record<string, boolean>;
+  tool: WebMCPToolMetadata;
   source: WebMCPToolSource;
 }
 
@@ -31,8 +43,12 @@ export interface WebMCPInvokeOptions {
   timeoutSec?: number;
 }
 
+export interface WebMCPListOptions {
+  excludeCustom?: boolean;
+}
+
 export interface WebMCPClient {
-  listTools(): Promise<WebMCPTool[]>;
+  listTools(options?: WebMCPListOptions): Promise<WebMCPTool[]>;
   invokeTool(
     toolRef: string,
     input?: Record<string, unknown>,
@@ -109,8 +125,9 @@ export function createWebMCPClient({
   };
 
   const client: WebMCPClient = {
-    async listTools() {
-      const body = await request('/webmcp/tools');
+    async listTools(options = {}) {
+      const query = options.excludeCustom ? '?exclude_custom=true' : '';
+      const body = await request(`/webmcp/tools${query}`);
       if (!isRecord(body) || !Array.isArray(body.tools)) {
         throw new Error('WebMCP tools response is invalid');
       }

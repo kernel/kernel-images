@@ -11,6 +11,8 @@ const RECONCILE_EVENT_DELAY_MS = 50;
 const RECONCILE_COMMAND_TIMEOUT_MS = 5_000;
 const MAX_OUTPUT_BYTES = 1 << 20;
 const MAX_ERROR_BYTES = 64 << 10;
+const CUSTOM_TOOL_NAME_PREFIX = 'custom.';
+const CUSTOM_TOOL_NAMESPACE_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
 
 type JsonSchema = Record<string, unknown>;
 type Validator = ReturnType<AjvJsonSchemaValidator['getValidator']>;
@@ -26,15 +28,14 @@ interface CustomToolMetadata {
   title?: string;
   description: string;
   inputSchema: JsonSchema;
+  outputSchema: JsonSchema;
   annotations?: Record<string, boolean>;
 }
 
 interface CustomToolDefinitionInput {
-  id: string;
   kind: ToolKind;
   match: CustomToolMatch;
   tool: CustomToolMetadata;
-  outputSchema?: JsonSchema;
   execute: (
     input: Record<string, unknown>,
     context: CustomToolExecutionContext,
@@ -42,9 +43,12 @@ interface CustomToolDefinitionInput {
 }
 
 interface CustomToolDefinition extends CustomToolDefinitionInput {
+  id: string;
+  namespace: string;
+  registeredName: string;
   revision: number;
   inputValidator: Validator;
-  outputValidator?: Validator;
+  outputValidator: Validator;
   pageExecuteSource?: string;
 }
 
@@ -106,24 +110,17 @@ interface ActiveInvocation {
   controller: AbortController;
 }
 
-export interface CustomToolsSnapshot {
-  repl_id: string;
-  revision: number;
-  source: string;
-  source_dirty: boolean;
-  tools: Array<{
-    id: string;
-    kind: ToolKind;
-    match: CustomToolMatch;
-    tool: CustomToolMetadata;
-    outputSchema?: JsonSchema;
-    revision: number;
-  }>;
-  installations: Array<{
-    target_id: string;
-    definition_ids: string[];
-    errors: string[];
-  }>;
+export interface CustomToolSummary {
+  id: string;
+  namespace: string;
+  kind: ToolKind;
+  match: CustomToolMatch;
+  tool: CustomToolMetadata;
+}
+
+export interface AddCustomToolsInput {
+  namespace: string;
+  tools: CustomToolDefinitionInput[];
 }
 
 function clone<T>(value: T): T {
@@ -132,6 +129,27 @@ function clone<T>(value: T): T {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function newCustomToolID(): string {
+  return `ct_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
+}
+
+function registeredToolName(id: string, name: string): string {
+  const registeredName = `${CUSTOM_TOOL_NAME_PREFIX}${id}.${name}`;
+  if (registeredName.length > 128) {
+    throw new Error(`tool.name is too long after custom namespacing: ${name}`);
+  }
+  return registeredName;
+}
+
+class CustomToolConflictError extends Error {
+  readonly code = 'custom_tool_conflict';
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'CustomToolConflictError';
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -225,25 +243,20 @@ function flattenFrames(frame: FrameInfo): FrameInfo[] {
   return frames;
 }
 
-function definitionPublic(definition: CustomToolDefinition) {
-  const result: CustomToolsSnapshot['tools'][number] = {
+function definitionPublic(definition: CustomToolDefinition): CustomToolSummary {
+  return {
     id: definition.id,
+    namespace: definition.namespace,
     kind: definition.kind,
     match: clone(definition.match),
     tool: clone(definition.tool),
-    revision: definition.revision,
   };
-  if (definition.outputSchema) result.outputSchema = clone(definition.outputSchema);
-  return result;
 }
 
 export class CustomWebMCPRegistry {
   private definitions = new Map<string, CustomToolDefinition>();
-  private source = '';
-  private sourceDirty = false;
   private revision = 0;
   private emptyRegistryCleaned = false;
-  private staging: Map<string, CustomToolDefinition> | null = null;
   private pages = new Map<string, PageState>();
   private sessions = new Map<string, string>();
   private iframeSessions = new Map<string, IframeSession>();
@@ -259,16 +272,13 @@ export class CustomWebMCPRegistry {
   private readonly unsubscribeDisconnect: () => void;
   private onError?: (message: string) => void;
   private readonly client: BrowserReplCdpClient;
-  private readonly replID: string;
   private readonly runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>;
 
   constructor(
     client: BrowserReplCdpClient,
-    replID: string,
     runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
   ) {
     this.client = client;
-    this.replID = replID;
     this.runInvocation = runInvocation;
     this.unsubscribeEvent = client.subscribeEvents((event) => this.handleEvent(event));
     this.unsubscribeDisconnect = client.subscribeDisconnect(() => this.handleDisconnect());
@@ -279,94 +289,68 @@ export class CustomWebMCPRegistry {
     this.onError = handler;
   }
 
-  register = (input: CustomToolDefinitionInput): ReturnType<typeof definitionPublic> => {
-    const destination = this.staging ?? this.definitions;
-    const prior = destination.get(input.id) ?? (this.staging ? this.definitions.get(input.id) : undefined);
-    const definition = this.validateDefinition(input, prior?.revision ?? 0);
-    for (const existing of destination.values()) {
-      if (existing.id !== definition.id && existing.tool.name === definition.tool.name) {
-        throw new Error(`tool name already registered: ${definition.tool.name}`);
+  add = async (input: AddCustomToolsInput): Promise<CustomToolSummary[]> => {
+    if (!input || typeof input !== 'object') throw new Error('custom tool batch must be an object');
+    if (typeof input.namespace !== 'string' || !CUSTOM_TOOL_NAMESPACE_PATTERN.test(input.namespace)) {
+      throw new Error('namespace must be 1-128 ASCII letters, numbers, dots, underscores, or hyphens');
+    }
+    if (!Array.isArray(input.tools) || input.tools.length === 0) {
+      throw new Error('tools must be a non-empty array');
+    }
+
+    const occupied = new Set(
+      [...this.definitions.values()].map((definition) => `${definition.namespace}\u0000${definition.tool.name}`),
+    );
+    const additions: CustomToolDefinition[] = [];
+    for (const tool of input.tools) {
+      const name = isRecord(tool) && isRecord(tool.tool) && typeof tool.tool.name === 'string'
+        ? tool.tool.name
+        : '';
+      const key = `${input.namespace}\u0000${name}`;
+      if (occupied.has(key)) {
+        throw new CustomToolConflictError(`custom tool already exists: ${input.namespace}/${name}`);
       }
+      occupied.add(key);
+      let id: string;
+      do id = newCustomToolID(); while (this.definitions.has(id) || additions.some((item) => item.id === id));
+      additions.push(this.validateDefinition(tool, id, input.namespace, this.revision + 1));
     }
-    destination.set(definition.id, definition);
-    if (!this.staging) {
-      this.revision++;
-      this.sourceDirty = true;
-      this.scheduleReconcile();
-    }
-    return definitionPublic(definition);
+
+    for (const definition of additions) this.definitions.set(definition.id, definition);
+    this.revision++;
+    this.scheduleReconcile();
+    await this.settleReconciliation();
+    return additions.map(definitionPublic);
   };
 
-  remove = (id: string): boolean => {
-    const destination = this.staging ?? this.definitions;
-    const removed = destination.delete(id);
-    if (removed && !this.staging) {
-      this.revision++;
-      this.sourceDirty = true;
-      if (this.definitions.size === 0) this.emptyRegistryCleaned = false;
-      this.scheduleReconcile();
-    }
-    return removed;
+  remove = async (id: string): Promise<boolean> => {
+    const removed = this.definitions.delete(id);
+    if (!removed) return false;
+    this.revision++;
+    if (this.definitions.size === 0) this.emptyRegistryCleaned = false;
+    this.scheduleReconcile();
+    await this.settleReconciliation();
+    return true;
   };
 
-  list = (): CustomToolsSnapshot['tools'] => {
+  list = (): CustomToolSummary[] => {
     return [...this.definitions.values()]
       .map(definitionPublic)
       .sort((a, b) => a.id.localeCompare(b.id));
   };
 
-  get = (id: string): CustomToolsSnapshot['tools'][number] | null => {
-    const definition = this.definitions.get(id);
-    return definition ? definitionPublic(definition) : null;
+  current = async (): Promise<CustomToolSummary[]> => {
+    await this.settleReconciliation();
+    return this.list();
   };
 
-  async replace(source: string, evaluate: (source: string) => Promise<void>): Promise<CustomToolsSnapshot> {
-    if (this.staging) throw new Error('custom tool replacement is already in progress');
-    this.staging = new Map();
-    try {
-      await evaluate(`await (async () => {\n${source}\n})()`);
-      this.definitions = this.staging;
-      this.source = source;
-      this.sourceDirty = false;
-      this.revision++;
-      if (this.definitions.size === 0) this.emptyRegistryCleaned = false;
-    } finally {
-      this.staging = null;
-    }
+  private async settleReconciliation(): Promise<void> {
     try {
       await this.reconcile();
     } catch (error) {
       this.reportError(error);
       this.retryReconcile();
     }
-    return this.snapshot();
-  }
-
-  async current(): Promise<CustomToolsSnapshot> {
-    try {
-      await this.reconcile();
-    } catch (error) {
-      this.reportError(error);
-      this.retryReconcile();
-    }
-    return this.snapshot();
-  }
-
-  snapshot(): CustomToolsSnapshot {
-    return {
-      repl_id: this.replID,
-      revision: this.revision,
-      source: this.source,
-      source_dirty: this.sourceDirty,
-      tools: this.list(),
-      installations: [...this.pages.values()]
-        .map((page) => ({
-          target_id: page.targetId,
-          definition_ids: [...page.matches.keys()].sort(),
-          errors: [...page.errors],
-        }))
-        .sort((a, b) => a.target_id.localeCompare(b.target_id)),
-    };
   }
 
   async dispose(): Promise<void> {
@@ -395,11 +379,13 @@ export class CustomWebMCPRegistry {
     this.iframeTargetsBySession.clear();
   }
 
-  private validateDefinition(input: CustomToolDefinitionInput, previousRevision: number): CustomToolDefinition {
+  private validateDefinition(
+    input: CustomToolDefinitionInput,
+    id: string,
+    namespace: string,
+    revision: number,
+  ): CustomToolDefinition {
     if (!input || typeof input !== 'object') throw new Error('definition must be an object');
-    if (typeof input.id !== 'string' || input.id.trim() === '') {
-      throw new Error('definition.id must be a non-empty string');
-    }
     if (input.kind !== 'page' && input.kind !== 'cdp') {
       throw new Error('definition.kind must be page or cdp');
     }
@@ -409,15 +395,16 @@ export class CustomWebMCPRegistry {
     for (const pattern of input.match.url_patterns) parseURLPattern(pattern);
     if (typeof input.execute !== 'function') throw new Error('definition.execute must be a function');
 
-    const toolResult = ToolSchema.safeParse({ ...input.tool, outputSchema: input.outputSchema });
+    const toolResult = ToolSchema.safeParse(input.tool);
     if (!toolResult.success) {
       throw new Error(`invalid MCP tool definition: ${formatToolSchemaError(toolResult.error)}`);
     }
+    if (!isRecord(input.tool.outputSchema)) {
+      throw new Error('tool.outputSchema is required and must be an object');
+    }
 
     const inputValidator = compileSchema(input.tool.inputSchema, 'tool.inputSchema');
-    const outputValidator = input.outputSchema
-      ? compileSchema(input.outputSchema, 'outputSchema')
-      : undefined;
+    const outputValidator = compileSchema(input.tool.outputSchema, 'tool.outputSchema');
     const pageExecuteSource = input.kind === 'page' ? input.execute.toString() : undefined;
     if (pageExecuteSource) {
       try {
@@ -428,13 +415,14 @@ export class CustomWebMCPRegistry {
     }
 
     return {
-      id: input.id,
+      id,
+      namespace,
+      registeredName: registeredToolName(id, input.tool.name),
       kind: input.kind,
       match: clone(input.match),
       tool: clone(input.tool),
-      outputSchema: input.outputSchema ? clone(input.outputSchema) : undefined,
       execute: input.execute,
-      revision: previousRevision + 1,
+      revision,
       inputValidator,
       outputValidator,
       pageExecuteSource,
@@ -782,7 +770,7 @@ export class CustomWebMCPRegistry {
       const metadata = JSON.stringify({
         id: definition.id,
         kind: definition.kind,
-        tool: definition.tool,
+        tool: {...definition.tool, name: definition.registeredName},
         revision: definition.revision,
       });
       if (definition.kind === 'cdp') return metadata;

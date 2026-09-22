@@ -61,8 +61,43 @@ func TestGetWebMCPToolsMapsRegistrationContext(t *testing.T) {
 	require.Equal(t, "Store", tool.Source.PageTitle)
 	require.Equal(t, 7, tool.Source.Frame.FrameId)
 	require.Equal(t, "https://payments.example/element", tool.Source.Frame.Url)
-	require.Empty(t, tool.InputSchema)
-	require.True(t, tool.Annotations.Consequential)
+	require.Empty(t, tool.Tool.InputSchema)
+	require.True(t, *tool.Tool.Annotations.ConsequentialHint)
+}
+
+func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
+	outputSchema := map[string]any{"type": "object"}
+	manager := newBrowserReplManager()
+	manager.setCustomTools([]oapi.CustomWebMCPDefinition{{
+		Id:        "ct_0123456789abcdef",
+		Namespace: "stripe.com",
+		Kind:      "cdp",
+		Match:     oapi.CustomWebMCPMatch{UrlPatterns: []string{"https://checkout.stripe.com/*"}},
+		Tool: oapi.CustomWebMCPToolMetadata{
+			Name: "fill_payment_form", Description: "Fill payment fields",
+			InputSchema: map[string]any{"type": "object"}, OutputSchema: outputSchema,
+		},
+	}})
+	client := &fakeWebMCPClient{tools: []webmcpclient.Tool{{
+		Ref: "wmcp_custom", Name: "fill_payment_form", CustomID: "ct_0123456789abcdef",
+		Source: webmcpclient.ToolSource{WindowID: 1, TabID: 2, PageTitle: "Checkout", PageURL: "https://checkout.stripe.com/"},
+	}}}
+	service := &ApiService{webmcp: client, browserRepl: manager}
+
+	response, err := service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	tools := response.(oapi.GetWebMCPTools200JSONResponse).Tools
+	require.Len(t, tools, 1)
+	require.Equal(t, "stripe.com", tools[0].Source.Custom.Namespace)
+	require.Equal(t, "ct_0123456789abcdef", tools[0].Source.Custom.Id)
+	require.Equal(t, outputSchema, *tools[0].Tool.OutputSchema)
+
+	exclude := true
+	response, err = service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{
+		Params: oapi.GetWebMCPToolsParams{ExcludeCustom: &exclude},
+	})
+	require.NoError(t, err)
+	require.Empty(t, response.(oapi.GetWebMCPTools200JSONResponse).Tools)
 }
 
 func TestGetWebMCPToolsSerializesNullFrameForTopLevelTool(t *testing.T) {
@@ -76,7 +111,7 @@ func TestGetWebMCPToolsSerializesNullFrameForTopLevelTool(t *testing.T) {
 	require.NoError(t, err)
 	payload, err := json.Marshal(response.(oapi.GetWebMCPTools200JSONResponse))
 	require.NoError(t, err)
-	require.JSONEq(t, `{"tools":[{"tool_ref":"wmcp_test","name":"search","description":"","input_schema":{},"source":{"frame":null,"page_title":"Travel","page_url":"https://travel.example/","tab_id":1,"window_id":1}}]}`, string(payload))
+	require.JSONEq(t, `{"tools":[{"tool_ref":"wmcp_test","tool":{"name":"search","description":"","inputSchema":{}},"source":{"frame":null,"page_title":"Travel","page_url":"https://travel.example/","tab_id":1,"window_id":1}}]}`, string(payload))
 }
 
 func TestInvokeWebMCPToolReturnsPageResult(t *testing.T) {

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -74,10 +75,12 @@ type browserReplChild struct {
 // browserReplManager owns execution admission and the persistent Node child.
 // Lifecycle synchronization stays behind its Execute and Shutdown methods.
 type browserReplManager struct {
-	admission chan struct{}
-	lifecycle context.Context
-	stop      context.CancelCauseFunc
-	child     *browserReplChild // guarded by admission
+	admission     chan struct{}
+	lifecycle     context.Context
+	stop          context.CancelCauseFunc
+	child         *browserReplChild // guarded by admission
+	customToolsMu sync.RWMutex
+	customTools   map[string]oapi.CustomWebMCPDefinition
 }
 
 func newBrowserReplManager() *browserReplManager {
@@ -85,10 +88,30 @@ func newBrowserReplManager() *browserReplManager {
 	admission := make(chan struct{}, 1)
 	admission <- struct{}{}
 	return &browserReplManager{
-		admission: admission,
-		lifecycle: lifecycle,
-		stop:      stop,
+		admission:   admission,
+		lifecycle:   lifecycle,
+		stop:        stop,
+		customTools: make(map[string]oapi.CustomWebMCPDefinition),
 	}
+}
+
+func (m *browserReplManager) setCustomTools(tools []oapi.CustomWebMCPDefinition) {
+	m.customToolsMu.Lock()
+	defer m.customToolsMu.Unlock()
+	m.customTools = make(map[string]oapi.CustomWebMCPDefinition, len(tools))
+	for _, tool := range tools {
+		m.customTools[tool.Id] = tool
+	}
+}
+
+func (m *browserReplManager) customToolsSnapshot() map[string]oapi.CustomWebMCPDefinition {
+	m.customToolsMu.RLock()
+	defer m.customToolsMu.RUnlock()
+	tools := make(map[string]oapi.CustomWebMCPDefinition, len(m.customTools))
+	for id, tool := range m.customTools {
+		tools[id] = tool
+	}
+	return tools
 }
 
 // browserReplSocketPath returns the Unix socket path for the REPL daemon.
@@ -206,6 +229,7 @@ func closedWaitChannel(err error) chan error {
 func (m *browserReplManager) clearLocked(ctx context.Context, child *browserReplChild) {
 	if m.child == child {
 		m.child = nil
+		m.setCustomTools(nil)
 	}
 	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
 }
@@ -348,10 +372,12 @@ func (m *browserReplManager) killLocked(ctx context.Context, reason string) {
 
 // browserReplDaemonRequest is the wire format sent to the REPL daemon.
 type browserReplDaemonRequest struct {
-	ID        string `json:"id"`
-	Code      string `json:"code"`
-	Operation string `json:"operation,omitempty"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	ID           string `json:"id"`
+	Code         string `json:"code"`
+	Operation    string `json:"operation,omitempty"`
+	Namespace    string `json:"namespace,omitempty"`
+	CustomToolID string `json:"custom_tool_id,omitempty"`
+	TimeoutMs    int    `json:"timeout_ms,omitempty"`
 }
 
 // browserReplDaemonResponse is the wire format returned by the REPL daemon.
@@ -360,6 +386,7 @@ type browserReplDaemonResponse struct {
 	ReplID           string            `json:"repl_id"`
 	Success          bool              `json:"success"`
 	Error            string            `json:"error,omitempty"`
+	ErrorCode        string            `json:"error_code,omitempty"`
 	Stack            *string           `json:"stack,omitempty"`
 	Content          []json.RawMessage `json:"content,omitempty"`
 	ContentTruncated bool              `json:"content_truncated"`
@@ -372,9 +399,10 @@ type browserReplDaemonResponse struct {
 	// exception details and is exiting non-zero. The API treats it like a
 	// timeout — terminate the handle and report repl_terminated — so the
 	// state loss is explicit to the caller.
-	Exiting    bool            `json:"exiting,omitempty"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	DurationMs int             `json:"duration_ms"`
+	Exiting     bool                           `json:"exiting,omitempty"`
+	Result      json.RawMessage                `json:"result,omitempty"`
+	CustomTools *[]oapi.CustomWebMCPDefinition `json:"custom_tools,omitempty"`
+	DurationMs  int                            `json:"duration_ms"`
 }
 
 // browserReplRequest is the already-encoded request sent over the daemon
@@ -393,15 +421,24 @@ func prepareBrowserReplRequest(code string, timeout time.Duration) (*browserRepl
 }
 
 func prepareBrowserReplOperation(code, operation string, timeout time.Duration) (*browserReplRequest, error) {
+	return prepareBrowserReplOperationWithCustomTools(code, operation, "", "", timeout)
+}
+
+func prepareBrowserReplOperationWithCustomTools(
+	code, operation, namespace, customToolID string,
+	timeout time.Duration,
+) (*browserReplRequest, error) {
 	id := uuid.New().String()
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(browserReplDaemonRequest{
-		ID:        id,
-		Code:      code,
-		Operation: operation,
-		TimeoutMs: int(timeout.Milliseconds()),
+		ID:           id,
+		Code:         code,
+		Operation:    operation,
+		Namespace:    namespace,
+		CustomToolID: customToolID,
+		TimeoutMs:    int(timeout.Milliseconds()),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -497,6 +534,9 @@ func (m *browserReplManager) executeLocked(ctx context.Context, request *browser
 	if resp.ReplID != child.id {
 		return nil, fmt.Errorf("response repl_id mismatch: expected %s, got %s", child.id, resp.ReplID)
 	}
+	if resp.CustomTools != nil {
+		m.setCustomTools(*resp.CustomTools)
+	}
 
 	return &resp, nil
 }
@@ -553,8 +593,8 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 		case r.Method == http.MethodPost && r.URL.Path == "/repl":
 			probe = &oapi.BrowserReplRequest{}
 			maxBytes = maxBrowserReplBodyBytes
-		case r.Method == http.MethodPut && r.URL.Path == "/webmcp/custom-tools":
-			probe = &oapi.CustomWebMCPRegistryRequest{}
+		case r.Method == http.MethodPost && r.URL.Path == "/webmcp/custom-tools":
+			probe = &oapi.AddCustomWebMCPToolsRequest{}
 			maxBytes = maxCustomWebMCPRequestBytes
 		default:
 			next.ServeHTTP(w, r)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -128,7 +129,7 @@ func WebMCPRequestSizeMiddleware(next http.Handler) http.Handler {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/webmcp/invoke":
 			r.Body = http.MaxBytesReader(w, r.Body, maxWebMCPRequestBytes)
-		case r.Method == http.MethodPut && r.URL.Path == "/webmcp/custom-tools":
+		case r.Method == http.MethodPost && r.URL.Path == "/webmcp/custom-tools":
 			r.Body = http.MaxBytesReader(w, r.Body, maxCustomWebMCPRequestBytes)
 		}
 		next.ServeHTTP(w, r)
@@ -154,7 +155,10 @@ func StrictResponseErrorHandler(w http.ResponseWriter, r *http.Request, err erro
 }
 
 func isWebMCPRequest(r *http.Request) bool {
-	return r.URL.Path == "/webmcp/tools" || r.URL.Path == "/webmcp/invoke" || r.URL.Path == "/webmcp/custom-tools"
+	return r.URL.Path == "/webmcp/tools" ||
+		r.URL.Path == "/webmcp/invoke" ||
+		r.URL.Path == "/webmcp/custom-tools" ||
+		strings.HasPrefix(r.URL.Path, "/webmcp/custom-tools/")
 }
 
 func writeStrictError(w http.ResponseWriter, status int, message string) {

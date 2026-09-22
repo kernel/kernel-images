@@ -20,7 +20,7 @@ const (
 	maxWebMCPRequestBytes          = maxWebMCPInputBytes + (4 << 10)
 )
 
-func (s *ApiService) GetWebMCPTools(ctx context.Context, _ oapi.GetWebMCPToolsRequestObject) (oapi.GetWebMCPToolsResponseObject, error) {
+func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPToolsRequestObject) (oapi.GetWebMCPToolsResponseObject, error) {
 	tools, err := s.webmcp.Tools(ctx)
 	if err != nil {
 		if errors.Is(err, webmcpclient.ErrNoPageTarget) {
@@ -30,17 +30,37 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, _ oapi.GetWebMCPToolsRe
 		return oapi.GetWebMCPTools500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to discover WebMCP tools"}}, nil
 	}
 
+	excludeCustom := request.Params.ExcludeCustom != nil && *request.Params.ExcludeCustom
+	customDefinitions := make(map[string]oapi.CustomWebMCPDefinition)
+	if s.browserRepl != nil {
+		customDefinitions = s.browserRepl.customToolsSnapshot()
+	}
+
 	responseTools := make([]oapi.WebMCPTool, 0, len(tools))
 	for _, tool := range tools {
+		if excludeCustom && tool.CustomID != "" {
+			continue
+		}
 		inputSchema := tool.InputSchema
 		if inputSchema == nil {
 			inputSchema = make(map[string]any)
 		}
-		responseTool := oapi.WebMCPTool{
-			ToolRef:     tool.Ref,
+		metadata := oapi.WebMCPToolMetadata{
 			Name:        tool.Name,
 			Description: tool.Description,
 			InputSchema: inputSchema,
+		}
+		if tool.Annotations != nil {
+			metadata.Annotations = &oapi.WebMCPToolAnnotations{
+				ReadOnlyHint:         boolPointer(tool.Annotations.ReadOnly),
+				UntrustedContentHint: boolPointer(tool.Annotations.UntrustedContent),
+				ConsequentialHint:    boolPointer(tool.Annotations.Consequential),
+				Autosubmit:           boolPointer(tool.Annotations.Autosubmit),
+			}
+		}
+		responseTool := oapi.WebMCPTool{
+			ToolRef: tool.Ref,
+			Tool:    metadata,
 			Source: oapi.WebMCPToolSource{
 				WindowId:  tool.Source.WindowID,
 				TabId:     tool.Source.TabID,
@@ -54,18 +74,30 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, _ oapi.GetWebMCPToolsRe
 				Url:     tool.Source.Frame.URL,
 			}
 		}
-		if tool.Annotations != nil {
-			responseTool.Annotations = &oapi.WebMCPToolAnnotations{
-				ReadOnly:         tool.Annotations.ReadOnly,
-				UntrustedContent: tool.Annotations.UntrustedContent,
-				Consequential:    tool.Annotations.Consequential,
-				Autosubmit:       tool.Annotations.Autosubmit,
+		if tool.CustomID != "" {
+			definition, ok := customDefinitions[tool.CustomID]
+			if !ok {
+				continue
+			}
+			responseTool.Source.Custom = &oapi.WebMCPCustomToolSource{
+				Id:        definition.Id,
+				Namespace: definition.Namespace,
+			}
+			responseTool.Tool = oapi.WebMCPToolMetadata{
+				Name:         definition.Tool.Name,
+				Title:        definition.Tool.Title,
+				Description:  definition.Tool.Description,
+				InputSchema:  definition.Tool.InputSchema,
+				OutputSchema: &definition.Tool.OutputSchema,
+				Annotations:  definition.Tool.Annotations,
 			}
 		}
 		responseTools = append(responseTools, responseTool)
 	}
 	return oapi.GetWebMCPTools200JSONResponse{Tools: responseTools}, nil
 }
+
+func boolPointer(value bool) *bool { return &value }
 
 func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWebMCPToolRequestObject) (oapi.InvokeWebMCPToolResponseObject, error) {
 	if request.Body == nil {

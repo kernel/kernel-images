@@ -15,9 +15,11 @@ test('lists browser-wide tools through the image API', async () => {
   const requests: Array<{url: string; init?: RequestInit}> = [];
   const tool = {
     tool_ref: 'wmcp_test',
-    name: 'search',
-    description: 'Search',
-    input_schema: {type: 'object'},
+    tool: {
+      name: 'search',
+      description: 'Search',
+      inputSchema: {type: 'object'},
+    },
     source: {
       window_id: 1,
       tab_id: 2,
@@ -37,7 +39,9 @@ test('lists browser-wide tools through the image API', async () => {
 
   assert.equal(Object.isFrozen(client), true);
   assert.deepEqual(await client.listTools(), [tool]);
+  assert.deepEqual(await client.listTools({excludeCustom: true}), [tool]);
   assert.equal(requests[0].url, 'http://127.0.0.1:10001/webmcp/tools');
+  assert.equal(requests[1].url, 'http://127.0.0.1:10001/webmcp/tools?exclude_custom=true');
   assert.equal(requests[0].init?.signal, controller.signal);
 });
 

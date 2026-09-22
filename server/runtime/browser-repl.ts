@@ -10,7 +10,7 @@ import { BrowserReplCdpClient } from './browser-cdp-client';
 import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
 import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
-import { CustomWebMCPRegistry } from './custom-webmcp';
+import { CustomWebMCPRegistry, type AddCustomToolsInput } from './custom-webmcp';
 import { createWebMCPClient } from './webmcp';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
@@ -296,7 +296,7 @@ const consoleCapture = {
 const cdpClient = new BrowserReplCdpClient(CDP_ENDPOINT);
 const helpers = new BrowserHelpers(cdpClient);
 const webmcpExecution = new AsyncLocalStorage<AbortSignal>();
-const webmcp = createWebMCPClient({
+const webmcpClient = createWebMCPClient({
   apiBaseUrl: KERNEL_API_ENDPOINT,
   signalProvider: () => {
     const executionSignal = webmcpExecution.getStore();
@@ -312,6 +312,17 @@ const webmcp = createWebMCPClient({
     }
     return AbortSignal.any([executionSignal, AbortSignal.timeout(remainingMs)]);
   },
+});
+const customToolRegistry = new CustomWebMCPRegistry(
+  cdpClient,
+  (signal, callback) => webmcpExecution.run(signal, callback),
+);
+customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
+const webmcp = Object.freeze({
+  ...webmcpClient,
+  addCustomTools: customToolRegistry.add,
+  listCustomTools: customToolRegistry.list,
+  removeCustomTool: customToolRegistry.remove,
 });
 const browserGlobals = buildBrowserGlobals(helpers);
 const browserNamespace = Object.freeze({
@@ -377,27 +388,26 @@ async function evaluate(code: string): Promise<void> {
   await cellRuntime.evaluate(code);
 }
 
-const customToolRegistry = new CustomWebMCPRegistry(
-  cdpClient,
-  REPL_ID,
-  (signal, callback) => webmcpExecution.run(signal, callback),
-);
-customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
-contextGlobal.customTools = Object.freeze({
-  register: customToolRegistry.register,
-  remove: customToolRegistry.remove,
-  list: customToolRegistry.list,
-  get: customToolRegistry.get,
-});
+async function evaluateValue(source: string): Promise<unknown> {
+  const key = `__kernelCustomTools_${crypto.randomUUID().replaceAll('-', '')}`;
+  try {
+    await evaluate(`globalThis[${JSON.stringify(key)}] = await (${source})`);
+    return contextGlobal[key];
+  } finally {
+    delete contextGlobal[key];
+  }
+}
 
 // Request handling
 
-type ExecuteOperation = 'execute' | 'custom_tools_get' | 'custom_tools_replace';
+type ExecuteOperation = 'execute' | 'custom_tools_list' | 'custom_tools_add' | 'custom_tool_remove';
 
 interface ExecuteRequest {
   id: string;
   code: string;
   operation?: ExecuteOperation;
+  namespace?: string;
+  custom_tool_id?: string;
   timeout_ms?: number;
 }
 
@@ -406,12 +416,14 @@ interface ExecuteResponse {
   repl_id: string;
   success: boolean;
   error?: string;
+  error_code?: string;
   stack?: string;
   content: ContentItem[];
   content_truncated: boolean;
   timed_out?: boolean;
   exiting?: boolean;
   result?: unknown;
+  custom_tools?: ReturnType<CustomWebMCPRegistry['list']>;
   duration_ms: number;
 }
 
@@ -461,10 +473,17 @@ async function executeRequest(
         case 'execute':
           await evaluate(request.code);
           return undefined;
-        case 'custom_tools_get':
+        case 'custom_tools_list':
           return customToolRegistry.current();
-        case 'custom_tools_replace':
-          return customToolRegistry.replace(request.code, evaluate);
+        case 'custom_tools_add': {
+          const tools = await evaluateValue(request.code);
+          return customToolRegistry.add({
+            namespace: request.namespace ?? '',
+            tools: tools as AddCustomToolsInput['tools'],
+          });
+        }
+        case 'custom_tool_remove':
+          return customToolRegistry.remove(request.custom_tool_id ?? '');
         default:
           throw new Error(`unknown Browser REPL operation: ${request.operation}`);
       }
@@ -477,6 +496,7 @@ async function executeRequest(
       content: collector.items,
       content_truncated: collector.truncated,
       result,
+      custom_tools: customToolRegistry.list(),
       duration_ms: Date.now() - start,
     };
   } catch (err: any) {
@@ -485,6 +505,7 @@ async function executeRequest(
       repl_id: REPL_ID,
       success: false,
       error: boundedProtocolText(err?.message ?? err, MAX_ERROR_BYTES),
+      error_code: typeof err?.code === 'string' ? boundedProtocolText(err.code, 128) : undefined,
       stack: typeof err?.stack === 'string' ? boundedProtocolText(err.stack, MAX_STACK_BYTES) : undefined,
       content: collector.items,
       content_truncated: collector.truncated,
@@ -493,6 +514,7 @@ async function executeRequest(
       // destructively, per the spec's timeout semantics) before serving
       // another execution.
       timed_out: timedOut || undefined,
+      custom_tools: customToolRegistry.list(),
       duration_ms: Date.now() - start,
     };
   } finally {
@@ -709,6 +731,7 @@ function onUncaughtException(err: unknown): void {
         content: inFlight.collector.items,
         content_truncated: inFlight.collector.truncated,
         exiting: true,
+        custom_tools: customToolRegistry.list(),
         duration_ms: Date.now() - inFlight.start,
       });
     } catch {

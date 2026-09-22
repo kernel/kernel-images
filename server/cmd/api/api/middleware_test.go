@@ -90,7 +90,7 @@ func TestWebMCPRequestSizeMiddlewareRejectsOversizedInvokeBody(t *testing.T) {
 
 func TestWebMCPRequestSizeMiddlewareRejectsOversizedCustomToolBody(t *testing.T) {
 	body := strings.NewReader(strings.Repeat("x", maxCustomWebMCPRequestBytes+1))
-	request := httptest.NewRequest(http.MethodPut, "/webmcp/custom-tools", body)
+	request := httptest.NewRequest(http.MethodPost, "/webmcp/custom-tools", body)
 	recorder := httptest.NewRecorder()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, err := io.ReadAll(r.Body)

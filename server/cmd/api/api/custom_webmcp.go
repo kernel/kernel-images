@@ -15,67 +15,107 @@ const (
 	customWebMCPOperationTimeout = 60 * time.Second
 	maxCustomWebMCPSourceBytes   = 8_000_000
 	maxCustomWebMCPRequestBytes  = maxCustomWebMCPSourceBytes + (4 << 10)
-	customWebMCPGetOperation     = "custom_tools_get"
-	customWebMCPReplaceOperation = "custom_tools_replace"
+	customWebMCPListOperation    = "custom_tools_list"
+	customWebMCPAddOperation     = "custom_tools_add"
+	customWebMCPRemoveOperation  = "custom_tool_remove"
 )
 
-type customWebMCPRuntimeSnapshot struct {
-	ReplID        string                          `json:"repl_id"`
-	Revision      int                             `json:"revision"`
-	Source        string                          `json:"source"`
-	SourceDirty   bool                            `json:"source_dirty"`
-	Tools         []customWebMCPRuntimeDefinition `json:"tools"`
-	Installations []oapi.CustomWebMCPInstallation `json:"installations"`
-}
-
-type customWebMCPRuntimeDefinition struct {
-	ID           string                 `json:"id"`
-	Kind         string                 `json:"kind"`
-	Match        oapi.CustomWebMCPMatch `json:"match"`
-	Tool         map[string]any         `json:"tool"`
-	OutputSchema *map[string]any        `json:"outputSchema,omitempty"`
-	Revision     int                    `json:"revision"`
-}
-
-func (s *ApiService) GetCustomWebMCPTools(ctx context.Context, _ oapi.GetCustomWebMCPToolsRequestObject) (oapi.GetCustomWebMCPToolsResponseObject, error) {
-	snapshot, err := s.browserRepl.customWebMCPOperation(ctx, customWebMCPGetOperation, "")
-	if err != nil {
-		logger.FromContext(ctx).Error("failed to get custom WebMCP tools", "err", err)
-		return oapi.GetCustomWebMCPTools500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to get custom WebMCP tools"}}, nil
-	}
-	return oapi.GetCustomWebMCPTools200JSONResponse(snapshot), nil
-}
-
-func (s *ApiService) ReplaceCustomWebMCPTools(ctx context.Context, request oapi.ReplaceCustomWebMCPToolsRequestObject) (oapi.ReplaceCustomWebMCPToolsResponseObject, error) {
-	if request.Body == nil {
-		return oapi.ReplaceCustomWebMCPTools400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body is required"}}, nil
-	}
-	if len(request.Body.Source) > maxCustomWebMCPSourceBytes {
-		return oapi.ReplaceCustomWebMCPTools400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source must not exceed 8000000 bytes"}}, nil
-	}
-	RecordTelemetryCode(ctx, request.Body.Source)
-
-	snapshot, err := s.browserRepl.customWebMCPOperation(ctx, customWebMCPReplaceOperation, request.Body.Source)
-	if err != nil {
-		var executionErr *customWebMCPExecutionError
-		if errors.As(err, &executionErr) {
-			return oapi.ReplaceCustomWebMCPTools400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: executionErr.Error()}}, nil
-		}
-		logger.FromContext(ctx).Error("failed to replace custom WebMCP tools", "err", err)
-		return oapi.ReplaceCustomWebMCPTools500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to replace custom WebMCP tools"}}, nil
-	}
-	return oapi.ReplaceCustomWebMCPTools200JSONResponse(snapshot), nil
-}
-
 type customWebMCPExecutionError struct {
+	code    string
 	message string
 }
 
 func (e *customWebMCPExecutionError) Error() string { return e.message }
 
-func (m *browserReplManager) customWebMCPOperation(ctx context.Context, operation, source string) (oapi.CustomWebMCPRegistry, error) {
+func (s *ApiService) ListCustomWebMCPTools(ctx context.Context, _ oapi.ListCustomWebMCPToolsRequestObject) (oapi.ListCustomWebMCPToolsResponseObject, error) {
+	tools, err := s.browserRepl.customWebMCPOperation(ctx, customWebMCPListOperation, "", "", "")
+	if err != nil {
+		logger.FromContext(ctx).Error("failed to list custom WebMCP tools", "err", err)
+		return oapi.ListCustomWebMCPTools500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to list custom WebMCP tools"}}, nil
+	}
+	return oapi.ListCustomWebMCPTools200JSONResponse{Tools: tools}, nil
+}
+
+func (s *ApiService) AddCustomWebMCPTools(ctx context.Context, request oapi.AddCustomWebMCPToolsRequestObject) (oapi.AddCustomWebMCPToolsResponseObject, error) {
+	if request.Body == nil {
+		return oapi.AddCustomWebMCPTools400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body is required"}}, nil
+	}
+	if len(request.Body.Source) > maxCustomWebMCPSourceBytes {
+		return oapi.AddCustomWebMCPTools400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "source must not exceed 8000000 bytes"}}, nil
+	}
+	RecordTelemetryCode(ctx, request.Body.Source)
+
+	tools, err := s.browserRepl.customWebMCPOperation(
+		ctx,
+		customWebMCPAddOperation,
+		request.Body.Source,
+		request.Body.Namespace,
+		"",
+	)
+	if err != nil {
+		var executionErr *customWebMCPExecutionError
+		if errors.As(err, &executionErr) {
+			if executionErr.code == "custom_tool_conflict" {
+				return oapi.AddCustomWebMCPTools409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: executionErr.Error()}}, nil
+			}
+			return oapi.AddCustomWebMCPTools400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: executionErr.Error()}}, nil
+		}
+		logger.FromContext(ctx).Error("failed to add custom WebMCP tools", "err", err)
+		return oapi.AddCustomWebMCPTools500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to add custom WebMCP tools"}}, nil
+	}
+	return oapi.AddCustomWebMCPTools201JSONResponse{Tools: tools}, nil
+}
+
+func (s *ApiService) RemoveCustomWebMCPTool(ctx context.Context, request oapi.RemoveCustomWebMCPToolRequestObject) (oapi.RemoveCustomWebMCPToolResponseObject, error) {
+	removed, err := s.browserRepl.removeCustomWebMCPTool(ctx, request.Id)
+	if err != nil {
+		logger.FromContext(ctx).Error("failed to remove custom WebMCP tool", "err", err)
+		return oapi.RemoveCustomWebMCPTool500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to remove custom WebMCP tool"}}, nil
+	}
+	if !removed {
+		return oapi.RemoveCustomWebMCPTool404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "custom WebMCP tool not found"}}, nil
+	}
+	return oapi.RemoveCustomWebMCPTool204Response{}, nil
+}
+
+func (m *browserReplManager) removeCustomWebMCPTool(ctx context.Context, id string) (bool, error) {
+	result, err := m.customWebMCPOperationRaw(ctx, customWebMCPRemoveOperation, "", "", id)
+	if err != nil {
+		return false, err
+	}
+	var removed bool
+	if err := json.Unmarshal(result, &removed); err != nil {
+		return false, fmt.Errorf("decode custom WebMCP removal: %w", err)
+	}
+	return removed, nil
+}
+
+func (m *browserReplManager) customWebMCPOperation(
+	ctx context.Context,
+	operation, source, namespace, customToolID string,
+) ([]oapi.CustomWebMCPDefinition, error) {
+	result, err := m.customWebMCPOperationRaw(ctx, operation, source, namespace, customToolID)
+	if err != nil {
+		return nil, err
+	}
+	tools := make([]oapi.CustomWebMCPDefinition, 0)
+	if err := json.Unmarshal(result, &tools); err != nil {
+		return nil, fmt.Errorf("decode custom WebMCP tools: %w", err)
+	}
+	for _, tool := range tools {
+		if tool.Kind != "page" && tool.Kind != "cdp" {
+			return nil, fmt.Errorf("custom WebMCP tool %s has invalid kind %q", tool.Id, tool.Kind)
+		}
+	}
+	return tools, nil
+}
+
+func (m *browserReplManager) customWebMCPOperationRaw(
+	ctx context.Context,
+	operation, source, namespace, customToolID string,
+) (json.RawMessage, error) {
 	if err := m.acquire(ctx); err != nil {
-		return oapi.CustomWebMCPRegistry{}, err
+		return nil, err
 	}
 	defer m.release()
 
@@ -85,23 +125,29 @@ func (m *browserReplManager) customWebMCPOperation(ctx context.Context, operatio
 		cancelOperation(nil)
 	}()
 	if err := context.Cause(operationCtx); err != nil {
-		return oapi.CustomWebMCPRegistry{}, err
+		return nil, err
 	}
 	ctx = operationCtx
 
-	request, err := prepareBrowserReplOperation(source, operation, customWebMCPOperationTimeout)
+	request, err := prepareBrowserReplOperationWithCustomTools(
+		source,
+		operation,
+		namespace,
+		customToolID,
+		customWebMCPOperationTimeout,
+	)
 	if err != nil {
-		return oapi.CustomWebMCPRegistry{}, &customWebMCPExecutionError{message: err.Error()}
+		return nil, &customWebMCPExecutionError{message: err.Error()}
 	}
 	if err := m.ensureLocked(ctx); err != nil {
-		return oapi.CustomWebMCPRegistry{}, fmt.Errorf("start Browser REPL: %w", err)
+		return nil, fmt.Errorf("start Browser REPL: %w", err)
 	}
 	replID := m.child.id
 	response, err := m.executeLocked(ctx, request, customWebMCPOperationTimeout)
 	if err != nil {
 		var notDispatched *browserReplNotDispatchedError
 		if errors.As(err, &notDispatched) {
-			return oapi.CustomWebMCPRegistry{}, notDispatched.cause
+			return nil, notDispatched.cause
 		}
 		var timeoutErr *browserReplTimeoutError
 		if errors.As(err, &timeoutErr) {
@@ -109,52 +155,17 @@ func (m *browserReplManager) customWebMCPOperation(ctx context.Context, operatio
 		} else {
 			m.terminateLocked(ctx, "custom WebMCP operation failure")
 		}
-		return oapi.CustomWebMCPRegistry{}, err
+		return nil, err
 	}
 	if response.TimedOut || response.Exiting {
 		m.terminateLocked(ctx, "custom WebMCP operation terminated Browser REPL")
-		return oapi.CustomWebMCPRegistry{}, fmt.Errorf("Browser REPL %s terminated: %s", replID, response.Error)
+		return nil, fmt.Errorf("Browser REPL %s terminated: %s", replID, response.Error)
 	}
 	if !response.Success {
-		return oapi.CustomWebMCPRegistry{}, &customWebMCPExecutionError{message: response.Error}
+		return nil, &customWebMCPExecutionError{code: response.ErrorCode, message: response.Error}
 	}
 	if len(response.Result) == 0 {
-		return oapi.CustomWebMCPRegistry{}, errors.New("Browser REPL returned no custom WebMCP registry")
+		return nil, errors.New("Browser REPL returned no custom WebMCP result")
 	}
-
-	var runtime customWebMCPRuntimeSnapshot
-	if err := json.Unmarshal(response.Result, &runtime); err != nil {
-		m.terminateLocked(ctx, "invalid custom WebMCP response")
-		return oapi.CustomWebMCPRegistry{}, fmt.Errorf("decode custom WebMCP registry: %w", err)
-	}
-	if runtime.ReplID != replID {
-		m.terminateLocked(ctx, "custom WebMCP repl_id mismatch")
-		return oapi.CustomWebMCPRegistry{}, fmt.Errorf("custom WebMCP repl_id mismatch: expected %s, got %s", replID, runtime.ReplID)
-	}
-
-	tools := make([]oapi.CustomWebMCPDefinition, 0, len(runtime.Tools))
-	for _, tool := range runtime.Tools {
-		if tool.Kind != "page" && tool.Kind != "cdp" {
-			return oapi.CustomWebMCPRegistry{}, fmt.Errorf("custom WebMCP tool %s has invalid kind %q", tool.ID, tool.Kind)
-		}
-		tools = append(tools, oapi.CustomWebMCPDefinition{
-			Id:           tool.ID,
-			Kind:         tool.Kind,
-			Match:        tool.Match,
-			Tool:         tool.Tool,
-			OutputSchema: tool.OutputSchema,
-			Revision:     tool.Revision,
-		})
-	}
-	if runtime.Installations == nil {
-		runtime.Installations = make([]oapi.CustomWebMCPInstallation, 0)
-	}
-	return oapi.CustomWebMCPRegistry{
-		ReplId:        runtime.ReplID,
-		Revision:      runtime.Revision,
-		Source:        runtime.Source,
-		SourceDirty:   runtime.SourceDirty,
-		Tools:         tools,
-		Installations: runtime.Installations,
-	}, nil
+	return response.Result, nil
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 )
 
 const (
+	customToolNamePrefix    = "custom."
+	customToolIDLength      = len("ct_") + 16
 	settleDelay             = 200 * time.Millisecond
 	settleLimit             = 2 * time.Second
 	maxToolsPerSession      = 256
@@ -201,6 +204,26 @@ func (c *connection) handleProtocolEvent(message cdpclient.Message) {
 	}
 }
 
+func customToolIdentity(name string) (string, string) {
+	if !strings.HasPrefix(name, customToolNamePrefix) {
+		return "", name
+	}
+	remainder := strings.TrimPrefix(name, customToolNamePrefix)
+	if len(remainder) <= customToolIDLength || remainder[customToolIDLength] != '.' {
+		return "", name
+	}
+	id := remainder[:customToolIDLength]
+	if !strings.HasPrefix(id, "ct_") {
+		return "", name
+	}
+	for _, char := range id[len("ct_"):] {
+		if !strings.ContainsRune("0123456789abcdef", char) {
+			return "", name
+		}
+	}
+	return id, remainder[customToolIDLength+1:]
+}
+
 func (c *connection) addTools(sessionID string, tools []toolEvent) {
 	if !c.surface.SessionExists(sessionID) {
 		return
@@ -228,15 +251,18 @@ func (c *connection) addTools(sessionID string, tools []toolEvent) {
 			c.toolRefs[key] = ref
 			tracked++
 		}
+		customID, name := customToolIdentity(tool.Name)
 		c.tools[ref] = &registeredTool{
-			ref:         ref,
-			sessionID:   sessionID,
-			name:        tool.Name,
-			description: tool.Description,
-			inputSchema: tool.InputSchema,
-			annotations: tool.Annotations,
-			frameID:     tool.FrameID,
-			declarative: tool.BackendNodeID != nil,
+			ref:            ref,
+			sessionID:      sessionID,
+			name:           name,
+			registeredName: tool.Name,
+			description:    tool.Description,
+			inputSchema:    tool.InputSchema,
+			annotations:    tool.Annotations,
+			customID:       customID,
+			frameID:        tool.FrameID,
+			declarative:    tool.BackendNodeID != nil,
 		}
 	}
 	c.signalStateChanged()
@@ -266,6 +292,7 @@ func (c *connection) toolsSnapshot() []Tool {
 			Description: tool.description,
 			InputSchema: tool.inputSchema,
 			Annotations: tool.annotations,
+			CustomID:    tool.customID,
 			Source:      source,
 		})
 	}
@@ -326,7 +353,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		c.stateMu.RUnlock()
 		return InvocationResult{}, ErrToolNotFound
 	}
-	sessionID, frameID, name := tool.sessionID, tool.frameID, tool.name
+	sessionID, frameID, name := tool.sessionID, tool.frameID, tool.registeredName
 	awaitingSubmission := tool.declarative && (tool.annotations == nil || !tool.annotations.Autosubmit)
 	c.stateMu.RUnlock()
 	if !c.sessionExists(sessionID) {

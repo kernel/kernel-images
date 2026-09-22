@@ -16,6 +16,7 @@ type Tool struct {
 	Description string
 	InputSchema map[string]any
 	Annotations *Annotations
+	CustomID    string
 	Source      ToolSource
 }
 
@@ -47,14 +48,16 @@ type InvocationResult struct {
 }
 
 type registeredTool struct {
-	ref         string
-	sessionID   string
-	name        string
-	description string
-	inputSchema map[string]any
-	annotations *Annotations
-	frameID     string
-	declarative bool
+	ref            string
+	sessionID      string
+	name           string
+	registeredName string
+	description    string
+	inputSchema    map[string]any
+	annotations    *Annotations
+	customID       string
+	frameID        string
+	declarative    bool
 }
 
 type toolEvent struct {
