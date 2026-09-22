@@ -63,7 +63,6 @@ func TestGetWebMCPToolsMapsRegistrationContext(t *testing.T) {
 	require.Equal(t, "https://payments.example/element", tool.Source.Frame.Url)
 	require.Empty(t, tool.Tool.InputSchema)
 	require.True(t, *tool.Tool.Annotations.ConsequentialHint)
-	require.True(t, tool.Annotations.Consequential)
 }
 
 func TestCustomToolCacheRejectsStaleGenerationAndRevision(t *testing.T) {
@@ -126,7 +125,7 @@ func TestGetWebMCPToolsSerializesNullFrameForTopLevelTool(t *testing.T) {
 	require.NoError(t, err)
 	payload, err := json.Marshal(response.(oapi.GetWebMCPTools200JSONResponse))
 	require.NoError(t, err)
-	require.JSONEq(t, `{"tools":[{"tool_ref":"wmcp_test","name":"search","description":"","input_schema":{},"tool":{"name":"search","description":"","inputSchema":{}},"source":{"frame":null,"page_title":"Travel","page_url":"https://travel.example/","tab_id":1,"window_id":1}}]}`, string(payload))
+	require.JSONEq(t, `{"tools":[{"tool_ref":"wmcp_test","tool":{"name":"search","description":"","inputSchema":{}},"source":{"frame":null,"page_title":"Travel","page_url":"https://travel.example/","tab_id":1,"window_id":1}}]}`, string(payload))
 }
 
 func TestInvokeWebMCPToolReturnsPageResult(t *testing.T) {

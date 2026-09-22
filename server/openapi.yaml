@@ -1368,8 +1368,8 @@ paths:
         open are included, and tabs, windows, and embedded content opened later are tracked automatically.
         Tools are removed when the tab or embedded frame that registered them closes or navigates away.
 
-        Each tool includes an opaque tool_ref that identifies its exact live registration, MCP-compatible
-        tool metadata, and information about the window, tab, and optional embedded frame that provided it.
+        Each tool includes an opaque tool_ref that identifies its exact live registration, tool metadata,
+        and information about the window, tab, and optional embedded frame that provided it.
         Custom tools also identify their generated ID and namespace under source.custom. Use tool_ref to
         invoke that exact registration.
       operationId: getWebMCPTools
@@ -1449,11 +1449,13 @@ paths:
     post:
       summary: Add custom WebMCP tools
       description: |
-        Atomically adds a namespaced batch of custom tools. The JavaScript source must evaluate to a
-        non-empty array of definitions. Each definition supplies page-backed or CDP-backed execution,
-        URL matchers, MCP tool metadata including an output schema, and an execute function. Matchers
-        apply to top-level documents, nested frames, and OOPIFs; each matching tool is exposed once on
-        the corresponding topmost document and appears in the normal WebMCP tool list.
+        Add a namespaced batch of custom tools. A custom tool can be page-backed or CDP-backed.
+        Page-backed tools execute in the page via JavaScript. CDP-backed tools execute via CDP and
+        can use all browser REPL tools (see `/repl`). The source must evaluate to a non-empty array
+        of definitions with URL matchers, tool metadata (including an output schema), and execute
+        functions. The batch is added atomically. Matchers apply to top-level documents and nested
+        frames, including out-of-process iframes; each matching tool is exposed once on the tab's
+        top-level document and appears in `GET /webmcp/tools`.
       operationId: addCustomWebMCPTools
       x-telemetry-category: control
       requestBody:
@@ -1462,6 +1464,41 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/AddCustomWebMCPToolsRequest"
+            examples:
+              page_backed:
+                summary: Read a title in the page
+                value:
+                  namespace: example.com
+                  source: |
+                    [{
+                      kind: "page",
+                      match: {url_patterns: ["https://example.com/*"]},
+                      tool: {
+                        name: "read_page_title",
+                        description: "Read the page title.",
+                        inputSchema: {type: "object", additionalProperties: false},
+                        outputSchema: {type: "object", properties: {title: {type: "string"}}, required: ["title"]},
+                      },
+                      execute: async () => ({title: document.title}),
+                    }]
+              cdp_backed:
+                summary: Read a title via CDP
+                value:
+                  namespace: example.com
+                  source: |
+                    [{
+                      kind: "cdp",
+                      match: {url_patterns: ["https://example.com/*"]},
+                      tool: {
+                        name: "read_cdp_title",
+                        description: "Read the tab title via CDP.",
+                        inputSchema: {type: "object", additionalProperties: false},
+                        outputSchema: {type: "object", properties: {title: {type: "string"}}, required: ["title"]},
+                      },
+                      execute: async (_input, {matches}) => ({
+                        title: await js(() => document.title, {targetId: matches[0].top_target_id}),
+                      }),
+                    }]
       responses:
         "201":
           description: Custom tools added. The response contains only the newly added tools.
@@ -1554,7 +1591,9 @@ paths:
 
         Browser-control methods are available both directly and on `browser`. The same frozen
         browser-wide WebMCP client is available as `webmcp` and `browser.webmcp`, including custom
-        tool add, list, and remove methods. Common workflows:
+        tool add, list, and remove methods. `webmcp.listTools()` discovers tools through
+        `GET /webmcp/tools`, and `webmcp.invokeTool()` calls `POST /webmcp/invoke`.
+        Common workflows:
 
         ```js
         await gotoUrl("https://example.com");
@@ -1570,9 +1609,8 @@ paths:
 
         Top-level bindings and dynamically imported modules persist until reset or process
         replacement. Expression values are ignored; emit output with `repl.write(...)`, console
-        methods, or `repl.emitImage(...)`. Pinned `patchright`, `playwright-core`,
-        `@modelcontextprotocol/core`, and `@modelcontextprotocol/server` packages are available through
-        dynamic `import()`, and `cdp()` provides unrestricted DevTools access.
+        methods, or `repl.emitImage(...)`. Pinned `patchright` and `playwright-core` packages are
+        available through dynamic `import()`, and `cdp()` provides unrestricted DevTools access.
 
         The runtime starts lazily and is owned by the API process. Reset, API restart, timeout,
         crash, OOM, or protocol failure destroys its state and changes its CUID2 `repl_id`.
@@ -6405,24 +6443,12 @@ components:
             Wall-clock time at which the current configuration was applied.
             Omitted when telemetry is not configured.
       additionalProperties: false
-    WebMCPToolLegacyAnnotations:
-      type: object
-      description: Deprecated compatibility copy of WebMCP annotations.
-      deprecated: true
-      additionalProperties: false
-      required: [read_only, untrusted_content, consequential, autosubmit]
-      properties:
-        read_only:
-          type: boolean
-        untrusted_content:
-          type: boolean
-        consequential:
-          type: boolean
-        autosubmit:
-          type: boolean
     WebMCPToolAnnotations:
       type: object
-      description: Tool-provided behavioral hints. These values are untrusted and are not enforced by Kernel.
+      description: |
+        Tool-provided behavioral hints from the [MCP tool specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool)
+        and the [WebMCP ToolAnnotations definition](https://webmachinelearning.github.io/webmcp/#dictdef-toolannotations).
+        These hints are untrusted and are not enforced by Kernel.
       additionalProperties: false
       properties:
         readOnlyHint:
@@ -6489,6 +6515,10 @@ components:
           $ref: "#/components/schemas/WebMCPCustomToolSource"
     WebMCPToolMetadata:
       type: object
+      description: |
+        Tool metadata follows the [MCP Tool definition](https://modelcontextprotocol.io/specification/2025-11-25/server/tools#tool)
+        and the [WebMCP RegisteredTool definition](https://webmachinelearning.github.io/webmcp/#dictdef-registeredtool).
+        Native page tools may omit outputSchema; custom tools require it.
       additionalProperties: false
       required: [name, description, inputSchema]
       properties:
@@ -6509,7 +6539,7 @@ components:
     WebMCPTool:
       type: object
       additionalProperties: false
-      required: [tool_ref, tool, source, name, description, input_schema]
+      required: [tool_ref, tool, source]
       properties:
         tool_ref:
           type: string
@@ -6518,24 +6548,6 @@ components:
           $ref: "#/components/schemas/WebMCPToolMetadata"
         source:
           $ref: "#/components/schemas/WebMCPToolSource"
-        name:
-          type: string
-          deprecated: true
-          description: Deprecated compatibility copy of tool.name.
-        description:
-          type: string
-          deprecated: true
-          description: Deprecated compatibility copy of tool.description.
-        input_schema:
-          type: object
-          deprecated: true
-          description: Deprecated compatibility copy of tool.inputSchema.
-          additionalProperties: true
-        annotations:
-          allOf:
-            - $ref: "#/components/schemas/WebMCPToolLegacyAnnotations"
-          deprecated: true
-          description: Deprecated compatibility copy of tool annotations.
     WebMCPToolsResponse:
       type: object
       additionalProperties: false
