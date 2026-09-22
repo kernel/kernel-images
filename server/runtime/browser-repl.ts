@@ -314,9 +314,9 @@ const webmcpClient = createWebMCPClient({
     return AbortSignal.any([executionSignal, AbortSignal.timeout(remainingMs)]);
   },
 });
-const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>) => {
+const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>, revision: number) => {
   const temporaryPath = `${CUSTOM_TOOLS_STATE_PATH}.${process.pid}.tmp`;
-  writeFileSync(temporaryPath, safeStringify({repl_id: REPL_ID, tools}), {mode: 0o600});
+  writeFileSync(temporaryPath, safeStringify({repl_id: REPL_ID, revision, tools}), {mode: 0o600});
   renameSync(temporaryPath, CUSTOM_TOOLS_STATE_PATH);
 };
 const customToolRegistry = new CustomWebMCPRegistry(
@@ -324,7 +324,7 @@ const customToolRegistry = new CustomWebMCPRegistry(
   (signal, callback) => webmcpExecution.run(signal, callback),
   publishCustomTools,
 );
-publishCustomTools([]);
+publishCustomTools([], 0);
 customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
 const webmcp = Object.freeze({
   ...webmcpClient,

@@ -273,12 +273,12 @@ export class CustomWebMCPRegistry {
   private onError?: (message: string) => void;
   private readonly client: BrowserReplCdpClient;
   private readonly runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>;
-  private readonly publishDefinitions: (tools: CustomToolSummary[]) => void;
+  private readonly publishDefinitions: (tools: CustomToolSummary[], revision: number) => void;
 
   constructor(
     client: BrowserReplCdpClient,
     runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
-    publishDefinitions: (tools: CustomToolSummary[]) => void,
+    publishDefinitions: (tools: CustomToolSummary[], revision: number) => void,
   ) {
     this.client = client;
     this.runInvocation = runInvocation;
@@ -321,7 +321,7 @@ export class CustomWebMCPRegistry {
 
     for (const definition of additions) this.definitions.set(definition.id, definition);
     try {
-      this.publishDefinitions(this.list());
+      this.publishDefinitions(this.list(), this.revision + 1);
     } catch (error) {
       for (const definition of additions) this.definitions.delete(definition.id);
       throw error;
@@ -337,7 +337,7 @@ export class CustomWebMCPRegistry {
     if (!definition) return false;
     this.definitions.delete(id);
     try {
-      this.publishDefinitions(this.list());
+      this.publishDefinitions(this.list(), this.revision + 1);
     } catch (error) {
       this.definitions.set(id, definition);
       throw error;

@@ -66,10 +66,24 @@ func TestGetWebMCPToolsMapsRegistrationContext(t *testing.T) {
 	require.True(t, tool.Annotations.Consequential)
 }
 
+func TestCustomToolCacheRejectsStaleGenerationAndRevision(t *testing.T) {
+	manager := newBrowserReplManager()
+	current := oapi.CustomWebMCPDefinition{Id: "ct_0123456789abcdef", Namespace: "current"}
+	stale := oapi.CustomWebMCPDefinition{Id: "ct_fedcba9876543210", Namespace: "stale"}
+	manager.setCustomTools("current-repl", 2, []oapi.CustomWebMCPDefinition{current})
+
+	manager.setCustomToolsIfCurrent("old-repl", 3, []oapi.CustomWebMCPDefinition{stale})
+	manager.setCustomToolsIfCurrent("current-repl", 1, []oapi.CustomWebMCPDefinition{stale})
+
+	tools := manager.customToolsSnapshot()
+	require.Contains(t, tools, current.Id)
+	require.NotContains(t, tools, stale.Id)
+}
+
 func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 	outputSchema := map[string]any{"type": "object"}
 	manager := newBrowserReplManager()
-	manager.setCustomTools("test-repl", []oapi.CustomWebMCPDefinition{{
+	manager.setCustomTools("test-repl", 1, []oapi.CustomWebMCPDefinition{{
 		Id:        "ct_0123456789abcdef",
 		Namespace: "stripe.com",
 		Kind:      "cdp",
