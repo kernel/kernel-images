@@ -10,7 +10,7 @@ import { setTimeout } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 
-test('socket readiness does not wait for cold browser-engine imports', { timeout: 10000 }, async t => {
+test('the socket binds without attaching to the browser, which the first request does', { timeout: 10000 }, async t => {
   const dir = await mkdtemp(join(tmpdir(), 'playwright-startup-'));
   const socketPath = join(dir, 'daemon.sock');
   const started = join(dir, 'import-started');
@@ -51,21 +51,34 @@ test('socket readiness does not wait for cold browser-engine imports', { timeout
     await rm(dir, { recursive: true, force: true });
   });
   const deadline = performance.now() + 4000;
-  while ((!existsSync(started) || !existsSync(socketPath)) && performance.now() < deadline && child.exitCode === null) {
+  while (!existsSync(socketPath) && performance.now() < deadline && child.exitCode === null) {
     await setTimeout(20);
   }
-  assert.ok(existsSync(started), `engine import was not exercised: ${stderr}`);
   assert.ok(existsSync(socketPath), `socket blocked by engine initialization: ${stderr}`);
+
+  // The daemon is started at boot, so attaching here would attach to every
+  // session. A Playwright page with no `dialog` listener dismisses JavaScript
+  // dialogs, which is not a thing to do to a browser nobody has asked to
+  // automate yet.
+  await setTimeout(300);
+  assert.ok(!existsSync(started), `engine was imported before any request: ${stderr}`);
+
   const socket = createConnection(socketPath);
   try {
     await once(socket, 'connect');
+    socket.write(JSON.stringify({ id: 'req-1', code: 'return 1;', timeout_ms: 2000 }) + '\n');
+    const importDeadline = performance.now() + 3000;
+    while (!existsSync(started) && performance.now() < importDeadline) {
+      await setTimeout(20);
+    }
+    assert.ok(existsSync(started), `a request did not trigger the engine import: ${stderr}`);
+    await writeFile(release, '');
+    const connectedDeadline = performance.now() + 3000;
+    while (!stderr.includes('CDP connection established') && performance.now() < connectedDeadline) {
+      await setTimeout(20);
+    }
+    assert.match(stderr, /CDP connection established/);
   } finally {
     socket.destroy();
   }
-  await writeFile(release, '');
-  const connectedDeadline = performance.now() + 2000;
-  while (!stderr.includes('CDP connection established') && performance.now() < connectedDeadline) {
-    await setTimeout(20);
-  }
-  assert.match(stderr, /CDP connection established/);
 });

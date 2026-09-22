@@ -426,11 +426,15 @@ async function main(): Promise<void> {
     process.exit(1);
   });
 
+  // Bind only. Attaching to CDP is what the socket's readers are waiting on
+  // being cheap, but it is not free for the rest of the browser: a Playwright
+  // page with no `dialog` listener dismisses JavaScript dialogs, so connecting
+  // before anyone asked for Playwright would change how alert() behaves for
+  // every other consumer of the session. The connection is made on the first
+  // request instead, which is when it was made before the daemon was started
+  // at boot.
   server.listen(SOCKET_PATH, () => {
     console.error(`[playwright-daemon] Listening on ${SOCKET_PATH}`);
-    ensureBrowserConnection().catch((err) => {
-      console.error('[playwright-daemon] Initial connection failed:', err.message);
-    });
   });
 }
 
