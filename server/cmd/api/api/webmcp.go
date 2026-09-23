@@ -143,7 +143,17 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 			} else if definition, ok := definitions[customID]; !ok {
 				err = webmcpclient.ErrToolNotFound
 			} else if definition.Kind == "cdp" {
-				result, err = s.browserRepl.invokeCustomCDPTool(invokeCtx, customID, targetID, request.Body.Input, timeout)
+				if targetID == "" {
+					err = webmcpclient.ErrToolNotFound
+				} else if err = invokeCtx.Err(); err == nil {
+					deadline, _ := invokeCtx.Deadline()
+					remaining := time.Until(deadline)
+					if remaining < time.Millisecond {
+						err = context.DeadlineExceeded
+					} else {
+						result, err = s.browserRepl.invokeCustomCDPTool(invokeCtx, customID, targetID, request.Body.Input, remaining)
+					}
+				}
 			} else {
 				result, err = s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
 			}

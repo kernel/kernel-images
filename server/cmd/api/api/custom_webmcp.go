@@ -113,15 +113,33 @@ func (m *browserReplManager) invokeCustomCDPTool(ctx context.Context, id, target
 	if err != nil {
 		return invocation, err
 	}
-	code := fmt.Sprintf(`{ const result = JSON.stringify(await webmcp.invokeCustomCDPTool(%s, %s, %s));
-		if (Buffer.byteLength(result) > %d) throw new Error('custom WebMCP output exceeds 240 KiB');
-		repl.write(result); }`, encodedID, encodedTarget, encodedInput, maxCustomWebMCPResultBytes)
-	output, err := m.executeCustomWebMCPCodeWithTimeout(ctx, code, timeout)
+	code := fmt.Sprintf(`{ const controller = new AbortController();
+		let timer;
+		try {
+			const result = JSON.stringify(await Promise.race([
+				webmcp.invokeCustomCDPTool(%s, %s, %s, controller.signal),
+				new Promise((_, reject) => {
+					timer = setTimeout(() => {
+						const error = new Error('custom WebMCP invocation timed out');
+						error.code = 'custom_tool_outcome_unknown';
+						reject(error);
+						controller.abort();
+					}, %d);
+				}),
+			]));
+			if (Buffer.byteLength(result) > %d) throw new Error('custom WebMCP output exceeds 240 KiB');
+			repl.write(result);
+		} finally { clearTimeout(timer); }
+	}`, encodedID, encodedTarget, encodedInput, timeout.Milliseconds(), maxCustomWebMCPResultBytes)
+	output, err := m.executeCustomWebMCPCodeRequest(ctx, code, timeout+browserReplResponseGrace, true)
 	if err != nil {
 		var executionErr *customWebMCPExecutionError
 		if errors.As(err, &executionErr) {
 			if executionErr.code == "custom_tool_not_found" {
 				return invocation, webmcpclient.ErrToolNotFound
+			}
+			if executionErr.code == "custom_tool_outcome_unknown" {
+				return invocation, webmcpclient.ErrOutcomeUnknown
 			}
 			invocation.Status = "error"
 			invocation.ErrorText = executionErr.Error()
@@ -145,6 +163,10 @@ func (m *browserReplManager) executeCustomWebMCPCode(ctx context.Context, code s
 }
 
 func (m *browserReplManager) executeCustomWebMCPCodeWithTimeout(ctx context.Context, code string, timeout time.Duration) (json.RawMessage, error) {
+	return m.executeCustomWebMCPCodeRequest(ctx, code, timeout, false)
+}
+
+func (m *browserReplManager) executeCustomWebMCPCodeRequest(ctx context.Context, code string, timeout time.Duration, preserveOnRequestTimeout bool) (json.RawMessage, error) {
 	if err := m.acquire(ctx); err != nil {
 		return nil, &browserReplNotDispatchedError{cause: err}
 	}
@@ -168,6 +190,11 @@ func (m *browserReplManager) executeCustomWebMCPCodeWithTimeout(ctx context.Cont
 		return nil, &browserReplNotDispatchedError{cause: fmt.Errorf("start Browser REPL: %w", err)}
 	}
 	replID := m.child.id
+	if preserveOnRequestTimeout {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(m.lifecycle, timeout+browserReplResponseGrace)
+		defer cancel()
+	}
 	response, err := m.executeLocked(ctx, request, timeout)
 	if err != nil {
 		var notDispatched *browserReplNotDispatchedError

@@ -225,4 +225,18 @@ func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, 
 	require.NotNil(t, deadline.JSON200)
 	require.True(t, deadline.JSON200.Success, "%s", deadline.Body)
 	require.Nil(t, deadline.JSON200.ReplTerminated)
+
+	oneSecond := 1
+	timed, err := client.InvokeWebMCPToolWithResponse(ctx, instanceoapi.WebMCPInvokeRequest{
+		ToolRef: slowRef, Input: map[string]any{}, TimeoutSec: &oneSecond,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusGatewayTimeout, timed.StatusCode(), "%s", timed.Body)
+	require.NotNil(t, timed.JSON504)
+	require.Equal(t, instanceoapi.OutcomeUnknown, timed.JSON504.Code)
+	listed, err := client.ListCustomWebMCPToolsWithResponse(ctx)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, listed.StatusCode(), "%s", listed.Body)
+	require.NotNil(t, listed.JSON200)
+	require.NotEmpty(t, listed.JSON200.Tools)
 }

@@ -425,6 +425,40 @@ func TestManagerTracksTabsOpenedAfterDiscovery(t *testing.T) {
 	require.Equal(t, 3, popup.Source.TabID)
 }
 
+func TestNativeInvocationDoesNotRequireLocation(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	var ref string
+	for _, tool := range tools {
+		if tool.Name == "merchant_tool" {
+			ref = tool.Ref
+		}
+	}
+	require.NotEmpty(t, ref)
+
+	manager.connection.stateMu.Lock()
+	manager.connection.tools[ref].frameID = "unresolved-frame"
+	manager.connection.stateMu.Unlock()
+	id, targetID, err := manager.CustomTool(context.Background(), ref)
+	require.NoError(t, err)
+	require.Empty(t, id)
+	require.Empty(t, targetID)
+	result, err := manager.Invoke(context.Background(), ref, map[string]any{})
+	require.NoError(t, err)
+	require.Equal(t, "Completed", result.Status)
+
+	manager.connection.stateMu.Lock()
+	manager.connection.tools[ref].customID = "ct_abcdefghijklmnopqrstuvwx"
+	manager.connection.stateMu.Unlock()
+	id, targetID, err = manager.CustomTool(context.Background(), ref)
+	require.NoError(t, err)
+	require.Equal(t, "ct_abcdefghijklmnopqrstuvwx", id)
+	require.Empty(t, targetID)
+}
+
 func TestManagerReusesConnectionAndToolReferences(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	manager := NewManager(staticUpstream{url: fake.url})

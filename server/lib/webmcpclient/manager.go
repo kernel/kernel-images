@@ -65,9 +65,12 @@ func (m *Manager) CustomTool(ctx context.Context, toolRef string) (string, strin
 	if !ok || !conn.enabledSessions[tool.sessionID] {
 		return "", "", ErrToolNotFound
 	}
+	if tool.customID == "" {
+		return "", "", nil
+	}
 	location, ok := conn.surface.Resolve(tool.sessionID, tool.frameID)
 	if !ok {
-		return "", "", ErrToolNotFound
+		return tool.customID, "", nil
 	}
 	return tool.customID, location.TargetID, nil
 }

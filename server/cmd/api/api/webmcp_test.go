@@ -22,6 +22,8 @@ type fakeWebMCPClient struct {
 	invokeErr error
 	toolRef   string
 	input     map[string]any
+	customID  string
+	targetID  string
 }
 
 func (f *fakeWebMCPClient) Tools(_ context.Context) ([]webmcpclient.Tool, error) {
@@ -29,7 +31,7 @@ func (f *fakeWebMCPClient) Tools(_ context.Context) ([]webmcpclient.Tool, error)
 }
 
 func (f *fakeWebMCPClient) CustomTool(_ context.Context, _ string) (string, string, error) {
-	return "", "", nil
+	return f.customID, f.targetID, nil
 }
 
 func (f *fakeWebMCPClient) Invoke(_ context.Context, toolRef string, input map[string]any) (webmcpclient.InvocationResult, error) {
@@ -189,6 +191,35 @@ func TestInvokeWebMCPToolReturnsPageResult(t *testing.T) {
 	require.Equal(t, 2900, client.input["amount"])
 	require.Equal(t, oapi.WebMCPInvocationResultStatusCompleted, body.Status)
 	require.Equal(t, true, body.Output.(map[string]any)["ok"])
+}
+
+func TestInvokePageCustomToolWithoutResolvedLocation(t *testing.T) {
+	manager := newBrowserReplManager()
+	writeCustomToolsSnapshot(t, manager, []oapi.CustomWebMCPDefinition{{Id: "ct_abcdefghijklmnopqrstuvwx", Kind: "page"}})
+	client := &fakeWebMCPClient{customID: "ct_abcdefghijklmnopqrstuvwx", result: webmcpclient.InvocationResult{
+		InvocationID: "invocation-1", Status: "completed", Output: map[string]any{"ok": true},
+	}}
+	service := &ApiService{webmcp: client, browserRepl: manager}
+	response, err := service.InvokeWebMCPTool(context.Background(), oapi.InvokeWebMCPToolRequestObject{
+		Body: &oapi.WebMCPInvokeRequest{ToolRef: "wmcp_page", Input: map[string]any{}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, oapi.WebMCPInvocationResultStatusCompleted, response.(oapi.InvokeWebMCPTool200JSONResponse).Status)
+	require.Equal(t, "wmcp_page", client.toolRef)
+}
+
+func TestInvokeCDPCustomToolRequiresResolvedTarget(t *testing.T) {
+	manager := newBrowserReplManager()
+	writeCustomToolsSnapshot(t, manager, []oapi.CustomWebMCPDefinition{{Id: "ct_abcdefghijklmnopqrstuvwx", Kind: "cdp"}})
+	client := &fakeWebMCPClient{customID: "ct_abcdefghijklmnopqrstuvwx"}
+	service := &ApiService{webmcp: client, browserRepl: manager}
+	response, err := service.InvokeWebMCPTool(context.Background(), oapi.InvokeWebMCPToolRequestObject{
+		Body: &oapi.WebMCPInvokeRequest{ToolRef: "wmcp_cdp", Input: map[string]any{}},
+	})
+	require.NoError(t, err)
+	_, ok := response.(oapi.InvokeWebMCPTool404JSONResponse)
+	require.True(t, ok)
+	require.Empty(t, client.toolRef)
 }
 
 func TestInvokeWebMCPToolReturnsAwaitingSubmission(t *testing.T) {
