@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -108,6 +109,39 @@ func TestCustomWebMCPToolsUseBrowserReplLifecycle(t *testing.T) {
 	listed, err = svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
 	require.Empty(t, listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools)
+}
+
+func TestCustomWebMCPSnapshotBeforeReplReady(t *testing.T) {
+	bundle := ensureBrowserReplBundle(t)
+	svc := newBrowserReplSvc(t)
+	marker := filepath.Join(t.TempDir(), "starting")
+	wrapper := filepath.Join(t.TempDir(), "delayed-repl.js")
+	code := fmt.Sprintf(`require('fs').writeFileSync(%q, '1'); setTimeout(() => require(%q), 700);`, marker, bundle)
+	require.NoError(t, os.WriteFile(wrapper, []byte(code), 0o600))
+	t.Setenv("BROWSER_REPL_SCRIPT", wrapper)
+
+	done := make(chan error, 1)
+	go func() {
+		response, err := svc.ExecuteBrowserRepl(context.Background(), oapi.ExecuteBrowserReplRequestObject{
+			Body: &oapi.ExecuteBrowserReplJSONRequestBody{Code: "1"},
+		})
+		if err == nil {
+			result, ok := response.(oapi.ExecuteBrowserRepl200JSONResponse)
+			if !ok || !result.Success {
+				err = fmt.Errorf("unexpected response: %#v", response)
+			}
+		}
+		done <- err
+	}()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}, 5*time.Second, 10*time.Millisecond)
+	tools, err := svc.browserRepl.customToolsSnapshot()
+	require.NoError(t, err)
+	require.Empty(t, tools)
+	require.NoError(t, <-done)
+	require.Empty(t, requireCustomToolsSnapshot(t, svc.browserRepl))
 }
 
 func TestCustomWebMCPSnapshotRejectsDifferentRepl(t *testing.T) {

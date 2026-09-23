@@ -294,13 +294,13 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 		child.done <- cmd.Wait()
 	}()
 	m.child = child
-	m.setCustomToolsReplID(replID)
 
 	deadline := time.Now().Add(browserReplStartupTimeout)
 	for {
 		conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
 		if err == nil {
 			conn.Close()
+			m.setCustomToolsReplID(replID)
 			log.Info("browser REPL ready", "repl_id", replID)
 			return nil
 		}
