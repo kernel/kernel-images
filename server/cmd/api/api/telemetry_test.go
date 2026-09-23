@@ -13,6 +13,7 @@ import (
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
+	"github.com/kernel/kernel-images/server/lib/telemetry"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -719,4 +720,130 @@ func TestTelemetryStateStaysCompatibleWithOlderImages(t *testing.T) {
 	require.NotNil(t, cfg.Browser.Control)
 	assert.True(t, *cfg.Browser.Control.Enabled)
 	assert.Nil(t, cfg.Browser.Control.Cdp)
+}
+
+func TestTelemetryStorageToggle(t *testing.T) {
+	ctx := context.Background()
+	tr, fa := true, false
+	storageOff := func() *oapi.BrowserTelemetryConfig {
+		return &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{Network: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+			Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &fa},
+		}
+	}
+	storageOmitted := func() *oapi.BrowserTelemetryConfig {
+		return &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{Network: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+		}
+	}
+	storageOf := func(t *testing.T, cfg oapi.BrowserTelemetryConfig) bool {
+		t.Helper()
+		require.NotNil(t, cfg.Storage, "storage must always be echoed")
+		require.NotNil(t, cfg.Storage.Enabled)
+		return *cfg.Storage.Enabled
+	}
+
+	t.Run("omitted storage means on", func(t *testing.T) {
+		cfg, allDisabled, err := telemetryConfigFromOAPI(nil)
+		require.NoError(t, err)
+		assert.False(t, allDisabled)
+		assert.True(t, cfg.StoreS2)
+
+		cfg, _, err = telemetryConfigFromOAPI(storageOmitted())
+		require.NoError(t, err)
+		assert.True(t, cfg.StoreS2)
+
+		cfg, _, err = telemetryConfigFromOAPI(storageOff())
+		require.NoError(t, err)
+		assert.False(t, cfg.StoreS2)
+	})
+
+	t.Run("a clear keeps the storage toggle it carried", func(t *testing.T) {
+		cfg, allDisabled, err := telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{
+			Browser: allCategoriesDisabled(),
+			Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &fa},
+		})
+		require.NoError(t, err)
+		assert.True(t, allDisabled)
+		assert.False(t, cfg.StoreS2)
+
+		// The zero value is off, so the positive case is what proves the
+		// toggle is carried rather than dropped.
+		cfg, allDisabled, err = telemetryConfigFromOAPI(&oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()})
+		require.NoError(t, err)
+		assert.True(t, allDisabled)
+		assert.True(t, cfg.StoreS2)
+
+		for _, current := range []bool{false, true} {
+			merged, allDisabled := mergeTelemetryConfig(telemetry.TelemetryConfig{Categories: events.DefaultCategories, StoreS2: current}, &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()})
+			assert.True(t, allDisabled)
+			assert.Equal(t, current, merged.StoreS2, "an all-disabled patch must keep the current storage toggle")
+		}
+	})
+
+	t.Run("patch leaves an omitted toggle alone", func(t *testing.T) {
+		current := telemetry.TelemetryConfig{Categories: []oapi.TelemetryEventCategory{events.Network}, StoreS2: false}
+		merged, _ := mergeTelemetryConfig(current, &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+		})
+		assert.False(t, merged.StoreS2)
+
+		merged, _ = mergeTelemetryConfig(current, &oapi.BrowserTelemetryConfig{
+			Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &tr},
+		})
+		assert.True(t, merged.StoreS2)
+	})
+
+	t.Run("GET, PUT and PATCH echo storage exactly", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: storageOff()})
+		require.NoError(t, err)
+		r201, ok := resp.(oapi.PutTelemetry201JSONResponse)
+		require.True(t, ok, "expected 201, got %T", resp)
+		assert.False(t, storageOf(t, r201.Config))
+
+		got, err := svc.GetTelemetry(ctx, oapi.GetTelemetryRequestObject{})
+		require.NoError(t, err)
+		assert.False(t, storageOf(t, got.(oapi.GetTelemetry200JSONResponse).Config))
+
+		// A category-only PATCH is not a storage change.
+		presp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+		}})
+		require.NoError(t, err)
+		assert.False(t, storageOf(t, presp.(oapi.PatchTelemetry200JSONResponse).Config))
+
+		// A storage-only PATCH is applied, not treated as an empty body.
+		presp, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &tr},
+		}})
+		require.NoError(t, err)
+		assert.True(t, storageOf(t, presp.(oapi.PatchTelemetry200JSONResponse).Config))
+		assert.True(t, svc.telemetrySession.Config().StoreS2)
+
+		resp, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: storageOmitted()})
+		require.NoError(t, err)
+		assert.True(t, storageOf(t, resp.(oapi.PutTelemetry200JSONResponse).Config))
+	})
+
+	t.Run("a clear echoes the storage toggle it carried", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: storageOff()})
+		require.NoError(t, err)
+
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Browser: allCategoriesDisabled(),
+			Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &fa},
+		}})
+		require.NoError(t, err)
+		assert.False(t, storageOf(t, resp.(oapi.PutTelemetry200JSONResponse).Config))
+		assert.False(t, svc.telemetrySession.Active())
+
+		_, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: storageOff()})
+		require.NoError(t, err)
+		presp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{Browser: allCategoriesDisabled()}})
+		require.NoError(t, err)
+		assert.False(t, storageOf(t, presp.(oapi.PatchTelemetry200JSONResponse).Config), "a clearing PATCH keeps the session's storage toggle")
+	})
 }

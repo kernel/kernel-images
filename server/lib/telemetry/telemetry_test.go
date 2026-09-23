@@ -232,3 +232,18 @@ func TestTelemetrySession(t *testing.T) {
 		assert.True(t, json.Valid(env.Event.Data))
 	})
 }
+
+func TestTelemetrySessionStoreS2(t *testing.T) {
+	ts := newTestTelemetrySession(t)
+	assert.False(t, ts.Config().StoreS2, "nothing is stored before a session")
+
+	ts.Start("session-1", TelemetryConfig{StoreS2: true})
+	assert.True(t, ts.Config().StoreS2)
+
+	ts.UpdateConfig(TelemetryConfig{StoreS2: false})
+	assert.False(t, ts.Config().StoreS2)
+
+	ts.UpdateConfig(TelemetryConfig{StoreS2: true})
+	ts.Stop()
+	assert.False(t, ts.Config().StoreS2, "a clear must leave the desired storage state off")
+}

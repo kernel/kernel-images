@@ -52,7 +52,7 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 			s.telemetrySession.Stop()
 			s.stopTelemetryState()
 		}
-		return oapi.PutTelemetry200JSONResponse(s.stoppedTelemetryResponse()), nil
+		return oapi.PutTelemetry200JSONResponse(s.stoppedTelemetryResponse(cfg.StoreS2)), nil
 	}
 
 	// Commit the config first so the filter is live before the collector emits,
@@ -91,9 +91,9 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not configured"}}, nil
 	}
 
-	// Nothing to merge when neither the category block nor the export toggle is
+	// Nothing to merge when neither the category block nor a sink toggle is
 	// present; skip the reconcile and echo current state, as before.
-	if req.Body == nil || (req.Body.Browser == nil && req.Body.Export == nil) {
+	if req.Body == nil || (req.Body.Browser == nil && req.Body.Export == nil && req.Body.Storage == nil) {
 		return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
 
@@ -102,7 +102,7 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 	if allDisabled {
 		s.telemetrySession.Stop()
 		s.stopTelemetryState()
-		return oapi.PatchTelemetry200JSONResponse(s.stoppedTelemetryResponse()), nil
+		return oapi.PatchTelemetry200JSONResponse(s.stoppedTelemetryResponse(cfg.StoreS2)), nil
 	}
 
 	// Commit first so the filter is live before the collector emits, then
@@ -200,11 +200,12 @@ func (s *ApiService) buildTelemetryResponse() oapi.TelemetryState {
 	return resp
 }
 
-// stoppedTelemetryResponse reports the cleared configuration. Seq and the
-// dropped count are process-scoped, so they survive a session ending.
-func (s *ApiService) stoppedTelemetryResponse() oapi.TelemetryState {
+// stoppedTelemetryResponse reports the cleared configuration, echoing the
+// storage toggle the clearing request carried. Seq and the dropped count are
+// process-scoped, so they survive a session ending.
+func (s *ApiService) stoppedTelemetryResponse(storeS2 bool) oapi.TelemetryState {
 	return oapi.TelemetryState{
-		Config:        disabledConfig(),
+		Config:        disabledConfig(storeS2),
 		Seq:           int64(s.telemetrySession.Seq()),
 		DroppedEvents: lo.ToPtr(int64(s.telemetrySession.DroppedEvents())),
 	}
@@ -276,11 +277,12 @@ func containsCategory(cats []oapi.TelemetryEventCategory, target oapi.TelemetryE
 // config, whether the result is empty (stop signal), and any error.
 func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool, error) {
 	exportOTLP := exportOTLPFromOAPI(cfg)
+	storeS2 := storeS2FromOAPI(cfg)
 	if cfg == nil || cfg.Browser == nil {
 		// No per-category settings: resolve to the explicit default set so the
 		// effective categories are known before the collector is reconciled.
 		cats := append([]oapi.TelemetryEventCategory(nil), events.DefaultCategories...)
-		return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP}, false, nil
+		return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP, StoreS2: storeS2}, false, nil
 	}
 
 	cats := make([]oapi.TelemetryEventCategory, 0, len(events.UserCategories))
@@ -290,11 +292,14 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 		}
 	}
 	if len(cats) == 0 {
-		return telemetry.TelemetryConfig{}, true, nil
+		// The stop signal keeps the storage toggle: a clear is still checked
+		// against storage that has already started, and echoes what it asked for.
+		return telemetry.TelemetryConfig{StoreS2: storeS2}, true, nil
 	}
 	return telemetry.TelemetryConfig{
 		Categories:         cats,
 		ExportOTLP:         exportOTLP,
+		StoreS2:            storeS2,
 		ExcludedCdpMethods: excludedCdpMethodsFromOAPI(cfg),
 	}, false, nil
 }
@@ -306,6 +311,16 @@ func exportOTLPFromOAPI(cfg *oapi.BrowserTelemetryConfig) bool {
 		return *cfg.Export.Otlp.Enabled
 	}
 	return false
+}
+
+// storeS2FromOAPI reads the storage toggle from a config, defaulting to true
+// (on) when the storage block is omitted: the opposite of export, so callers
+// that predate the field keep storing.
+func storeS2FromOAPI(cfg *oapi.BrowserTelemetryConfig) bool {
+	if cfg != nil && cfg.Storage != nil && cfg.Storage.Enabled != nil {
+		return *cfg.Storage.Enabled
+	}
+	return true
 }
 
 // mergeTelemetryConfig applies patch overrides onto current, returning the merged config and
@@ -333,10 +348,15 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		}
 	}
 
-	// Export follows the same patch semantics: an omitted toggle is unchanged.
+	// Export and storage follow the same patch semantics: an omitted toggle is
+	// unchanged.
 	exportOTLP := current.ExportOTLP
 	if patch.Export != nil && patch.Export.Otlp != nil && patch.Export.Otlp.Enabled != nil {
 		exportOTLP = *patch.Export.Otlp.Enabled
+	}
+	storeS2 := current.StoreS2
+	if patch.Storage != nil && patch.Storage.Enabled != nil {
+		storeS2 = *patch.Storage.Enabled
 	}
 
 	// So do the cdp_command exclusions: an omitted list is unchanged, an empty
@@ -347,17 +367,18 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	}
 
 	if len(active) == 0 {
-		return telemetry.TelemetryConfig{}, true
+		return telemetry.TelemetryConfig{StoreS2: storeS2}, true
 	}
 	cats := make([]oapi.TelemetryEventCategory, 0, len(active))
 	for c := range active {
 		cats = append(cats, c)
 	}
-	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP, ExcludedCdpMethods: excluded}, false
+	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP, StoreS2: storeS2, ExcludedCdpMethods: excluded}, false
 }
 
-// disabledConfig returns a BrowserTelemetryConfig with every configurable category explicitly disabled.
-func disabledConfig() oapi.BrowserTelemetryConfig {
+// disabledConfig returns a BrowserTelemetryConfig with every configurable
+// category explicitly disabled and the given storage toggle.
+func disabledConfig(storeS2 bool) oapi.BrowserTelemetryConfig {
 	off := func() *oapi.BrowserTelemetryCategoryConfig {
 		return &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(false)}
 	}
@@ -374,7 +395,8 @@ func disabledConfig() oapi.BrowserTelemetryConfig {
 			Screenshot:  off(),
 			Captcha:     off(),
 		},
-		Export: exportConfigToOAPI(false),
+		Export:  exportConfigToOAPI(false),
+		Storage: storageConfigToOAPI(storeS2),
 	}
 }
 
@@ -383,6 +405,11 @@ func exportConfigToOAPI(enabled bool) *oapi.BrowserTelemetryExportConfig {
 	return &oapi.BrowserTelemetryExportConfig{
 		Otlp: &oapi.BrowserTelemetryOTLPExportConfig{Enabled: lo.ToPtr(enabled)},
 	}
+}
+
+// storageConfigToOAPI renders the storage toggle for API responses.
+func storageConfigToOAPI(enabled bool) *oapi.BrowserTelemetryStorageConfig {
+	return &oapi.BrowserTelemetryStorageConfig{Enabled: lo.ToPtr(enabled)}
 }
 
 // telemetryConfigToOAPI converts a telemetry.TelemetryConfig to an oapi.BrowserTelemetryConfig
@@ -410,6 +437,7 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 			Screenshot:  enabled(events.Screenshot),
 			Captcha:     enabled(events.Captcha),
 		},
-		Export: exportConfigToOAPI(cfg.ExportOTLP),
+		Export:  exportConfigToOAPI(cfg.ExportOTLP),
+		Storage: storageConfigToOAPI(cfg.StoreS2),
 	}
 }
