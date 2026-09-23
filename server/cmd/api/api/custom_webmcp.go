@@ -113,7 +113,17 @@ func (m *browserReplManager) invokeCustomCDPTool(ctx context.Context, id, target
 	if err != nil {
 		return invocation, err
 	}
-	code := fmt.Sprintf(`{ const controller = new AbortController();
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(timeout)
+	}
+	code := fmt.Sprintf(`{ const remaining = %d - Date.now();
+		if (remaining <= 0) {
+			const error = new Error('custom WebMCP invocation deadline elapsed before dispatch');
+			error.code = 'custom_tool_not_dispatched';
+			throw error;
+		}
+		const controller = new AbortController();
 		let timer;
 		try {
 			const result = JSON.stringify(await Promise.race([
@@ -124,17 +134,20 @@ func (m *browserReplManager) invokeCustomCDPTool(ctx context.Context, id, target
 						error.code = 'custom_tool_outcome_unknown';
 						reject(error);
 						controller.abort();
-					}, %d);
+					}, remaining);
 				}),
 			]));
 			if (Buffer.byteLength(result) > %d) throw new Error('custom WebMCP output exceeds 240 KiB');
 			repl.write(result);
 		} finally { clearTimeout(timer); }
-	}`, encodedID, encodedTarget, encodedInput, timeout.Milliseconds(), maxCustomWebMCPResultBytes)
+	}`, deadline.UnixMilli(), encodedID, encodedTarget, encodedInput, maxCustomWebMCPResultBytes)
 	output, err := m.executeCustomWebMCPCodeRequest(ctx, code, timeout+browserReplResponseGrace, true)
 	if err != nil {
 		var executionErr *customWebMCPExecutionError
 		if errors.As(err, &executionErr) {
+			if executionErr.code == "custom_tool_not_dispatched" {
+				return invocation, context.DeadlineExceeded
+			}
 			if executionErr.code == "custom_tool_not_found" {
 				return invocation, webmcpclient.ErrToolNotFound
 			}
@@ -191,6 +204,21 @@ func (m *browserReplManager) executeCustomWebMCPCodeRequest(ctx context.Context,
 	}
 	replID := m.child.id
 	if preserveOnRequestTimeout {
+		if err := context.Cause(ctx); err != nil {
+			return nil, &browserReplNotDispatchedError{cause: err}
+		}
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := time.Until(deadline)
+			if remaining < time.Millisecond {
+				return nil, &browserReplNotDispatchedError{cause: context.DeadlineExceeded}
+			}
+			timeout = remaining + browserReplResponseGrace
+			request, err = prepareBrowserReplRequest(code, timeout)
+			if err != nil {
+				return nil, &customWebMCPExecutionError{message: err.Error()}
+			}
+		}
+		// Once admitted, leave time for the in-cell deadline to report without resetting the REPL.
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(m.lifecycle, timeout+browserReplResponseGrace)
 		defer cancel()
