@@ -129,31 +129,14 @@ func main() {
 		slogger.Error("sysmon: kmsg OOM monitor disabled", "err", err)
 	}
 
-	// Malformed flag: treat as disabled but surface it, matching how the OTLP
-	// identity provider handles the same flag. Exiting would crashloop the VM
-	// over a provisioning typo.
-	forkIdentityWait, err := forkidentity.WaitEnabled()
-	if err != nil {
-		slogger.Warn("fork-identity wait flag invalid; treating as disabled", "err", err)
-	}
-	// An instance that already took a fork identity keeps it across a restart of
-	// this process, which the env captured at boot does not reflect.
-	_, s2StreamApplied := appliedS2Stream(config)
-
-	// Optional S2 storage sink. The append session is bound to one stream when
-	// it starts, and an instance still holding for a fork identity is carrying
-	// the stream name of the instance it was forked from, so defer the writer
-	// until the identity that owns the events arrives.
-	s2Streams := newS2StreamResolver(config)
+	// Optional S2 storage sink. Constructed here but opened by the telemetry
+	// handler, with the first capture session that has storage on, so an
+	// instance whose sessions keep storage off never opens an append session.
+	// The session binds one stream when it opens, and an instance still holding
+	// for a fork identity is carrying the stream of the instance it was forked
+	// from, so the resolver hands out no stream until that identity arrives.
+	s2Streams := newS2StreamResolver(config, slogger)
 	s2Storage := events.NewS2StorageController(eventStream, config.S2Basin, config.S2AccessToken, s2Streams.Resolve, events.S2Config{}, slogger)
-	if !forkIdentityWait || s2StreamApplied {
-		// An optional sink that cannot open must not take the browser down: the
-		// api runs under supervisord with autorestart, so exiting here would
-		// crashloop the VM over a misconfigured basin or token.
-		if err := s2Storage.Start(ctx); err != nil {
-			slogger.Error("failed to start S2 storage writer, continuing without it", "err", err)
-		}
-	}
 
 	// Optional OTLP export sink. Independent of S2; both can run together.
 	// Constructed when an endpoint is provisioned, but left stopped: export is
@@ -194,15 +177,15 @@ func main() {
 		}, slogger)
 	}
 
-	// A fork boots carrying the stream of the instance it came from, and the S2
-	// writer binds a stream when it starts, so it is opened here once the guest
-	// has taken an identity of its own. OTLP needs no hook here: its credential
-	// resolves per request and its resource attributes at exporter build, and
-	// export is turned on per session, which the platform does after the
-	// handoff. An export started before then keeps the source's resource
-	// attributes until it is restarted.
+	// A fork boots carrying the stream of the instance it came from, so the
+	// hook records the stream of the identity the guest has taken for the S2
+	// writer to bind when the telemetry handler opens it, which the platform
+	// does after the handoff. OTLP needs no hook here: its credential resolves
+	// per request and its resource attributes at exporter build, and export is
+	// turned on per session, likewise after the handoff. An export started
+	// before then keeps the source's resource attributes until it is restarted.
 	onForkIdentityApplied := func(payload forkidentity.Payload) {
-		s2Streams.StartForAppliedPayload(ctx, payload, s2Storage.Start, slogger)
+		s2Streams.RecordAppliedPayload(payload)
 	}
 
 	apiService, err := api.New(
@@ -438,7 +421,7 @@ func main() {
 
 	// S2 storage shuts down after the servers above, since they might produce
 	// events we want to capture into the stream; we must let them finish before
-	// closing the writer.
+	// closing the writer. A no-op when no session ever opened it.
 	s2StopCtx, s2StopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer s2StopCancel()
 	if err := s2Storage.Stop(s2StopCtx); err != nil {
@@ -465,68 +448,67 @@ func mustFFmpeg() {
 }
 
 // s2StreamResolver uses the hook payload once applied and the persisted payload
-// after an API process restart.
+// after an API process restart. Resolve is called by the S2 controller when the
+// telemetry handler opens the sink, which on a fork happens after the handoff.
 type s2StreamResolver struct {
 	cfg        *config.Config
+	log        *slog.Logger
 	hookStream atomic.Pointer[string]
 }
 
-func newS2StreamResolver(cfg *config.Config) *s2StreamResolver {
-	return &s2StreamResolver{cfg: cfg}
+func newS2StreamResolver(cfg *config.Config, log *slog.Logger) *s2StreamResolver {
+	return &s2StreamResolver{cfg: cfg, log: log}
 }
 
+// Resolve returns the stream the S2 writer may bind, or "" while the instance
+// is still waiting for a fork identity, which keeps the sink closed rather than
+// bound to the parent's stream.
 func (r *s2StreamResolver) Resolve() string {
 	if stream := r.hookStream.Load(); stream != nil {
 		return *stream
 	}
-	stream, _ := appliedS2Stream(r.cfg)
+	stream, pending := appliedS2Stream(r.cfg)
+	if pending {
+		r.log.Warn("S2 storage not opened: fork identity pending; it opens with the next telemetry config applied after the handoff")
+	}
 	return stream
 }
 
-func (r *s2StreamResolver) StartForAppliedPayload(
-	ctx context.Context,
-	payload forkidentity.Payload,
-	start func(context.Context) error,
-	log *slog.Logger,
-) {
+// RecordAppliedPayload records the applied identity's stream in-process so a
+// resolve that follows the handoff does not depend on re-reading the identity
+// files. It does not block: the handler contract forbids holding up the handoff.
+func (r *s2StreamResolver) RecordAppliedPayload(payload forkidentity.Payload) {
 	stream := forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], r.cfg.S2Stream)
 	r.hookStream.Store(&stream)
-	// The handler contract forbids blocking the handoff on an optional sink.
-	go func() {
-		if err := start(ctx); err != nil {
-			log.Error("failed to start S2 storage writer for fork identity", "err", err)
-		}
-	}()
 }
 
 // appliedS2Stream resolves the stream the S2 writer should bind, preferring a
 // fork identity the guest has already taken over the env this process started
 // with. The env belongs to the instance this one was forked from, and it is what
 // a restarted api would otherwise bind for the rest of the instance's life.
-// Reports whether an applied fork identity supplied it.
+// While the wait is armed and no identity has been applied there is no stream
+// this instance may bind yet, so the result is empty; pending reports that case.
 //
 // OTLP resolves its identity per use instead (otlpIdentityProvider), so a stale
 // read there self-corrects; an S2 append session binds once, so this read has to
 // be right the first time.
-func appliedS2Stream(cfg *config.Config) (string, bool) {
-	stream := cfg.S2Stream
-
+func appliedS2Stream(cfg *config.Config) (stream string, pending bool) {
 	// The wrapper clears stale identity state and writes the ready file before
 	// starting this process. Its presence distinguishes a fork-wait boot; once
 	// the fork is applied, the marker and payload survive API restarts and must
 	// take precedence over the seed identity in the boot environment.
 	if _, err := os.Stat(forkidentity.ReadyFile); err != nil {
-		return stream, false
+		return cfg.S2Stream, false
 	}
 	applied, err := forkidentity.ReadAppliedMarker()
 	if err != nil || applied == "" {
-		return stream, false
+		return "", true
 	}
 	payload, err := forkidentity.ReadPayload()
 	if err != nil || payload.InstanceName() != applied {
-		return stream, false
+		return "", true
 	}
-	return forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], stream), true
+	return forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], cfg.S2Stream), false
 }
 
 // chromeJSONProxyHandler returns a handler that proxies a JSON endpoint from
