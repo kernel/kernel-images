@@ -1,6 +1,7 @@
 // Persistent, unrestricted JavaScript daemon owned by the API process.
 
 import { AsyncLocalStorage } from 'async_hooks';
+import { randomUUID } from 'crypto';
 import { createServer, Socket } from 'net';
 import { StringDecoder } from 'string_decoder';
 import { unlinkSync, existsSync, renameSync, writeFileSync, promises as fsp } from 'fs';
@@ -11,7 +12,7 @@ import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
 import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
 import { CustomWebMCPRegistry } from './custom-webmcp';
-import { createWebMCPClient } from './webmcp';
+import { createWebMCPClient, WebMCPRequestError } from './webmcp';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
 const REPL_ID = process.env.BROWSER_REPL_ID || 'unknown';
@@ -328,9 +329,50 @@ publishCustomTools([], 0);
 customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
 const webmcp = Object.freeze({
   ...webmcpClient,
+  async invokeTool(toolRef: string, input: Record<string, unknown> = {}, options: {timeoutSec?: number} = {}) {
+    const tool = (await webmcpClient.listTools()).find((candidate) => candidate.tool_ref === toolRef);
+    if (!tool) throw new WebMCPRequestError(404, {message: 'WebMCP tool is no longer available; discover tools again'});
+    const id = tool.source.custom?.id;
+    if (!id || !customToolRegistry.isCDP(id)) {
+      return webmcpClient.invokeTool(toolRef, input, options);
+    }
+    const targetId = tool.source.target_id;
+    if (!targetId) throw new WebMCPRequestError(404, {message: 'WebMCP tool is no longer available; discover tools again'});
+    const timeoutSec = options.timeoutSec ?? 60;
+    if (!Number.isInteger(timeoutSec) || timeoutSec < 1 || timeoutSec > 120) {
+      throw new WebMCPRequestError(400, {message: 'timeout_sec must be between 1 and 120'});
+    }
+    const invocationId = randomUUID();
+    const controller = new AbortController();
+    const parentSignal = webmcpExecution.getStore();
+    const signal = parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new WebMCPRequestError(504, {
+            code: 'outcome_unknown', invocation_id: invocationId,
+            message: 'the invocation started, but its final outcome could not be observed; do not retry automatically',
+          }));
+        }, timeoutSec * 1000);
+      });
+      const output = await Promise.race([customToolRegistry.invokeCDP(id, targetId, input, signal), timeout]);
+      return {invocation_id: invocationId, status: 'completed' as const, output};
+    } catch (error) {
+      if (error instanceof WebMCPRequestError) throw error;
+      if (error instanceof Error && 'code' in error && error.code === 'custom_tool_not_found') {
+        throw new WebMCPRequestError(404, {message: 'WebMCP tool is no longer available; discover tools again'});
+      }
+      return {invocation_id: invocationId, status: 'error' as const, error_text: error instanceof Error ? error.message : String(error)};
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  },
   addCustomTools: customToolRegistry.add,
   listCustomTools: customToolRegistry.list,
   removeCustomTool: customToolRegistry.remove,
+  invokeCustomCDPTool: customToolRegistry.invokeCDP,
 });
 const browserGlobals = buildBrowserGlobals(helpers);
 const browserNamespace = Object.freeze({

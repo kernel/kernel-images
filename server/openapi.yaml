@@ -1398,7 +1398,8 @@ paths:
       description: |
         Invokes the exact live registration identified by tool_ref. Non-autosubmit declarative form
         tools return after their fields are populated with an awaiting_submission status. Other tools
-        wait for a terminal result, including across navigation. If the request times out after invocation
+        wait for a terminal result, including across navigation. CDP-backed custom tool outputs above
+        240 KiB return an error rather than a truncated result. If the request times out after invocation
         begins, the server reports outcome_unknown and never retries the tool automatically.
       operationId: invokeWebMCPTool
       x-telemetry-category: control
@@ -6501,6 +6502,9 @@ components:
           type: integer
           minimum: 1
           description: Monotonically increasing identifier for the tab during the current browser process.
+        target_id:
+          type: string
+          description: CDP target ID for a custom tool's registration tab; omitted for page-provided tools.
         page_title:
           type: string
           description: Current title of the top-level page.

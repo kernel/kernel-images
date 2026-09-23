@@ -56,6 +56,7 @@ var _ S2Storage = (*events.S2StorageController)(nil)
 
 type webMCPClient interface {
 	Tools(ctx context.Context) ([]webmcpclient.Tool, error)
+	CustomTool(ctx context.Context, toolRef string) (id, targetID string, err error)
 	Invoke(ctx context.Context, toolRef string, input map[string]any) (webmcpclient.InvocationResult, error)
 	Close() error
 }

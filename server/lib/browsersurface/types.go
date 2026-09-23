@@ -79,6 +79,7 @@ type FrameLocation struct {
 type Location struct {
 	WindowID  int
 	TabID     int
+	TargetID  string
 	PageTitle string
 	PageURL   string
 	Frame     *FrameLocation

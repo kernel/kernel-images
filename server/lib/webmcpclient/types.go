@@ -23,6 +23,7 @@ type Tool struct {
 type ToolSource struct {
 	WindowID  int
 	TabID     int
+	TargetID  string
 	PageTitle string
 	PageURL   string
 	Frame     *ToolFrame

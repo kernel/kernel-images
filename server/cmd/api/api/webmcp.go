@@ -83,6 +83,7 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 				Id:        definition.Id,
 				Namespace: definition.Namespace,
 			}
+			responseTool.Source.TargetId = nonEmptyString(tool.Source.TargetID)
 			responseTool.Tool = oapi.WebMCPToolMetadata{
 				Name:         definition.Tool.Name,
 				Title:        definition.Tool.Title,
@@ -124,7 +125,19 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	invokeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	result, err := s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
+	customID, targetID, err := s.webmcp.CustomTool(invokeCtx, request.Body.ToolRef)
+	var result webmcpclient.InvocationResult
+	if err == nil {
+		if customID == "" {
+			result, err = s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
+		} else if definition, ok := s.browserRepl.customToolsSnapshot()[customID]; !ok {
+			err = webmcpclient.ErrToolNotFound
+		} else if definition.Kind == "cdp" {
+			result, err = s.browserRepl.invokeCustomCDPTool(invokeCtx, customID, targetID, request.Body.Input, timeout)
+		} else {
+			result, err = s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
+		}
+	}
 	if err != nil {
 		switch {
 		case errors.Is(err, webmcpclient.ErrToolNotFound):

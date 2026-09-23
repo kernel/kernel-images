@@ -11,6 +11,7 @@ export interface WebMCPCustomToolSource {
 export interface WebMCPToolSource {
   window_id: number;
   tab_id: number;
+  target_id?: string;
   page_title: string;
   page_url: string;
   frame: WebMCPToolFrame | null;

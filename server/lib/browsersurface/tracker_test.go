@@ -283,6 +283,7 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	require.Equal(t, Location{
 		WindowID:  1,
 		TabID:     1,
+		TargetID:  "page-a",
 		PageTitle: "Store",
 		PageURL:   "https://store.example/",
 		Frame:     &FrameLocation{ID: 2, URL: "https://bank.example/"},

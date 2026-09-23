@@ -317,6 +317,7 @@ func (t *Tracker) Resolve(sessionID, frameID string) (Location, bool) {
 	location := Location{
 		WindowID:  tab.windowID,
 		TabID:     tab.id,
+		TargetID:  tab.targetID,
 		PageTitle: tab.title,
 		PageURL:   stripFragment(tab.url),
 	}

@@ -287,6 +287,7 @@ func (c *connection) toolsSnapshot() []Tool {
 		source := ToolSource{
 			WindowID:  location.WindowID,
 			TabID:     location.TabID,
+			TargetID:  location.TargetID,
 			PageTitle: location.PageTitle,
 			PageURL:   location.PageURL,
 		}

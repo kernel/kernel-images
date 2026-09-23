@@ -26,6 +26,10 @@ func (f *fakeWebMCPClient) Tools(_ context.Context) ([]webmcpclient.Tool, error)
 	return f.tools, f.toolsErr
 }
 
+func (f *fakeWebMCPClient) CustomTool(_ context.Context, _ string) (string, string, error) {
+	return "", "", nil
+}
+
 func (f *fakeWebMCPClient) Invoke(_ context.Context, toolRef string, input map[string]any) (webmcpclient.InvocationResult, error) {
 	f.toolRef = toolRef
 	f.input = input
@@ -94,7 +98,7 @@ func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 	}})
 	client := &fakeWebMCPClient{tools: []webmcpclient.Tool{{
 		Ref: "wmcp_custom", Name: "fill_payment_form", CustomID: "ct_abcdefghijklmnopqrstuvwx",
-		Source: webmcpclient.ToolSource{WindowID: 1, TabID: 2, PageTitle: "Checkout", PageURL: "https://checkout.stripe.com/"},
+		Source: webmcpclient.ToolSource{WindowID: 1, TabID: 2, TargetID: "target-2", PageTitle: "Checkout", PageURL: "https://checkout.stripe.com/"},
 	}}}
 	service := &ApiService{webmcp: client, browserRepl: manager}
 
@@ -104,6 +108,7 @@ func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 	require.Len(t, tools, 1)
 	require.Equal(t, "stripe.com", tools[0].Source.Custom.Namespace)
 	require.Equal(t, "ct_abcdefghijklmnopqrstuvwx", tools[0].Source.Custom.Id)
+	require.Equal(t, "target-2", *tools[0].Source.TargetId)
 	require.Equal(t, outputSchema, *tools[0].Tool.OutputSchema)
 
 	exclude := true

@@ -153,6 +153,10 @@ class CustomToolConflictError extends Error {
   }
 }
 
+class CustomToolNotFoundError extends Error {
+  readonly code = 'custom_tool_not_found';
+}
+
 function errorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   if (Buffer.byteLength(message) <= MAX_ERROR_BYTES) return message;
@@ -366,6 +370,33 @@ export class CustomWebMCPRegistry {
     return [...this.definitions.values()]
       .map(definitionPublic)
       .sort((a, b) => a.id.localeCompare(b.id));
+  };
+
+  isCDP = (id: string): boolean => this.definitions.get(id)?.kind === 'cdp';
+
+  invokeCDP = async (id: string, targetId: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<unknown> => {
+    await this.reconcile();
+    const definition = this.definitions.get(id);
+    const matches = this.pages.get(targetId)?.matches.get(id);
+    if (definition?.kind !== 'cdp' || !matches?.length) {
+      throw new CustomToolNotFoundError('custom tool is no longer available; discover tools again');
+    }
+    const inputResult = definition.inputValidator(input);
+    if (!inputResult.valid) throw new Error(`input failed JSON Schema validation: ${inputResult.errorMessage}`);
+    const executionSignal = signal ?? new AbortController().signal;
+    const output = await this.runInvocation(executionSignal, async () => definition.execute(
+      inputResult.data as Record<string, unknown>,
+      {signal: executionSignal, matches: clone(matches)},
+    ));
+    if (definition.outputValidator) {
+      const outputResult = definition.outputValidator(output);
+      if (!outputResult.valid) throw new Error(`output failed JSON Schema validation: ${outputResult.errorMessage}`);
+    }
+    const result = output ?? null;
+    if (Buffer.byteLength(JSON.stringify(result)) > MAX_OUTPUT_BYTES) {
+      throw new Error('custom WebMCP output exceeds 1 MiB');
+    }
+    return result;
   };
 
   private async settleReconciliation(): Promise<void> {
