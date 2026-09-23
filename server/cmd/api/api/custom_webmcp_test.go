@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/webmcpclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -31,6 +32,18 @@ const customWebMCPTestSource = `[
     execute: async () => ({title: await js(() => document.title)}),
   },
 ]`
+
+func TestCustomCDPInvocationNotDispatchedWhileReplIsBusy(t *testing.T) {
+	manager := newBrowserReplManager()
+	require.NoError(t, manager.acquire(context.Background()))
+	defer manager.release()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := manager.invokeCustomCDPTool(ctx, "ct_test", "target", map[string]any{}, time.Second)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.NotErrorIs(t, err, webmcpclient.ErrOutcomeUnknown)
+}
 
 func TestCustomWebMCPToolsUseBrowserReplLifecycle(t *testing.T) {
 	svc := newBrowserReplSvc(t)

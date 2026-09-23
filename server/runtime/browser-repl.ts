@@ -342,6 +342,10 @@ const webmcp = Object.freeze({
     if (!Number.isInteger(timeoutSec) || timeoutSec < 1 || timeoutSec > 120) {
       throw new WebMCPRequestError(400, {message: 'timeout_sec must be between 1 and 120'});
     }
+    const remainingMs = helpers.executionDeadlineMs === null
+      ? Infinity
+      : helpers.executionDeadlineMs - WEBMCP_DEADLINE_MARGIN_MS - Date.now();
+    if (remainingMs <= 0) throw new Error('WebMCP request exceeded the Browser REPL execution deadline');
     const invocationId = randomUUID();
     const controller = new AbortController();
     const parentSignal = webmcpExecution.getStore();
@@ -355,7 +359,7 @@ const webmcp = Object.freeze({
             code: 'outcome_unknown', invocation_id: invocationId,
             message: 'the invocation started, but its final outcome could not be observed; do not retry automatically',
           }));
-        }, timeoutSec * 1000);
+        }, Math.min(timeoutSec * 1000, remainingMs));
       });
       const output = await Promise.race([customToolRegistry.invokeCDP(id, targetId, input, signal), timeout]);
       return {invocation_id: invocationId, status: 'completed' as const, output};

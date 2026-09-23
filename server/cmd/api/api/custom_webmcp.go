@@ -127,6 +127,10 @@ func (m *browserReplManager) invokeCustomCDPTool(ctx context.Context, id, target
 			invocation.ErrorText = executionErr.Error()
 			return invocation, nil
 		}
+		var notDispatched *browserReplNotDispatchedError
+		if errors.As(err, &notDispatched) {
+			return invocation, notDispatched.cause
+		}
 		return invocation, webmcpclient.ErrOutcomeUnknown
 	}
 	if err := json.Unmarshal(output, &invocation.Output); err != nil {
@@ -142,7 +146,7 @@ func (m *browserReplManager) executeCustomWebMCPCode(ctx context.Context, code s
 
 func (m *browserReplManager) executeCustomWebMCPCodeWithTimeout(ctx context.Context, code string, timeout time.Duration) (json.RawMessage, error) {
 	if err := m.acquire(ctx); err != nil {
-		return nil, err
+		return nil, &browserReplNotDispatchedError{cause: err}
 	}
 	defer m.release()
 
@@ -152,7 +156,7 @@ func (m *browserReplManager) executeCustomWebMCPCodeWithTimeout(ctx context.Cont
 		cancelOperation(nil)
 	}()
 	if err := context.Cause(operationCtx); err != nil {
-		return nil, err
+		return nil, &browserReplNotDispatchedError{cause: err}
 	}
 	ctx = operationCtx
 
@@ -161,14 +165,14 @@ func (m *browserReplManager) executeCustomWebMCPCodeWithTimeout(ctx context.Cont
 		return nil, &customWebMCPExecutionError{message: err.Error()}
 	}
 	if err := m.ensureLocked(ctx); err != nil {
-		return nil, fmt.Errorf("start Browser REPL: %w", err)
+		return nil, &browserReplNotDispatchedError{cause: fmt.Errorf("start Browser REPL: %w", err)}
 	}
 	replID := m.child.id
 	response, err := m.executeLocked(ctx, request, timeout)
 	if err != nil {
 		var notDispatched *browserReplNotDispatchedError
 		if errors.As(err, &notDispatched) {
-			return nil, notDispatched.cause
+			return nil, notDispatched
 		}
 		var timeoutErr *browserReplTimeoutError
 		if errors.As(err, &timeoutErr) {

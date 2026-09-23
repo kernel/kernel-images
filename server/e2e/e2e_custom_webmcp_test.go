@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -13,21 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCustomWebMCPInvokesAcrossNavigation(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	c := NewTestContainer(t, headfulImage)
-	require.NoError(t, c.Start(ctx, ContainerConfig{Env: map[string]string{
-		"CHROMIUM_FLAGS": "--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
-	}}))
-	defer c.Stop(ctx)
-	require.NoError(t, c.WaitReady(ctx))
-	client, err := c.APIClient()
-	require.NoError(t, err)
+func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
+	t.Helper()
 
 	executeWebMCPPlaywright(t, ctx, client, `
 		await page.route('http://127.0.0.1:10001/fixture/**', route =>
@@ -112,15 +98,20 @@ func TestCustomWebMCPInvokesAcrossNavigation(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusCreated, oversized.StatusCode(), "%s", oversized.Body)
-	tools, err = client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
-	require.NoError(t, err)
 	var largeRef string
-	for _, tool := range tools.JSON200.Tools {
-		if tool.Tool.Name == "large_result" {
-			largeRef = tool.ToolRef
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		tools, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
+		if !assert.NoError(collect, err) || !assert.Equal(collect, http.StatusOK, tools.StatusCode()) || tools.JSON200 == nil {
+			return
 		}
-	}
-	require.NotEmpty(t, largeRef)
+		for _, tool := range tools.JSON200.Tools {
+			if tool.Tool.Name == "large_result" {
+				largeRef = tool.ToolRef
+				return
+			}
+		}
+		assert.Fail(collect, "large result tool not discovered")
+	}, 10*time.Second, 200*time.Millisecond)
 	large, err := client.InvokeWebMCPToolWithResponse(ctx, instanceoapi.WebMCPInvokeRequest{
 		ToolRef: largeRef, Input: map[string]any{}, TimeoutSec: &timeout,
 	})
@@ -129,4 +120,44 @@ func TestCustomWebMCPInvokesAcrossNavigation(t *testing.T) {
 	require.NotNil(t, large.JSON200)
 	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusError, large.JSON200.Status)
 	require.Contains(t, *large.JSON200.ErrorText, "output exceeds 240 KiB")
+
+	slow, err := client.AddCustomWebMCPToolsWithResponse(ctx, instanceoapi.AddCustomWebMCPToolsJSONRequestBody{
+		Namespace: "deadline.test",
+		Source: `[{kind:'cdp', match:{url_patterns:['http://127.0.0.1:10001/fixture/*']},
+			tool:{name:'slow_result',description:'Wait before returning.',inputSchema:{type:'object'}},
+			execute:async ()=>{await waitMs(3500);return {done:true}}}]`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, slow.StatusCode(), "%s", slow.Body)
+	var slowRef string
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		tools, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
+		if !assert.NoError(collect, err) || !assert.Equal(collect, http.StatusOK, tools.StatusCode()) || tools.JSON200 == nil {
+			return
+		}
+		for _, tool := range tools.JSON200.Tools {
+			if tool.Tool.Name == "slow_result" {
+				slowRef = tool.ToolRef
+				return
+			}
+		}
+		assert.Fail(collect, "slow result tool not discovered")
+	}, 10*time.Second, 200*time.Millisecond)
+
+	shortTimeout := 3
+	deadline, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: fmt.Sprintf(`try {
+			await webmcp.invokeTool(%q, {}, {timeoutSec:30});
+			throw new Error('expected a deadline error');
+		} catch (error) {
+			if (error.code !== 'outcome_unknown') throw error;
+			repl.write('deadline guarded');
+		}`, slowRef),
+		TimeoutSec: &shortTimeout,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, deadline.StatusCode(), "%s", deadline.Body)
+	require.NotNil(t, deadline.JSON200)
+	require.True(t, deadline.JSON200.Success, "%s", deadline.Body)
+	require.Nil(t, deadline.JSON200.ReplTerminated)
 }
