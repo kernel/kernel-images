@@ -1,8 +1,18 @@
 package cdpmonitor
 
-import "sync"
+import (
+	"maps"
+	"sync"
+)
 
 const terminalHistorySize = 8192
+
+type networkTerminalKind uint8
+
+const (
+	networkFinished networkTerminalKind = iota
+	networkFailed
+)
 
 // NetworkSnapshot contains process-lifetime observed terminal outcomes, not
 // socket counts. Up describes capture readiness, not browser responsiveness.
@@ -10,21 +20,28 @@ type NetworkSnapshot struct {
 	Resets    uint64
 	Completed uint64
 	Up        bool
+	// Failures is a detached snapshot keyed by bounded error code. Index 0 is
+	// canceled=false; index 1 is canceled=true (the CDP flag, not inferred).
+	Failures map[string][2]uint64
 }
 
 type networkCounters struct {
 	mu                sync.Mutex
 	resets, completed uint64
+	failures          map[string][2]uint64
 	seen              map[networkRequestKey]struct{}
 	history           [terminalHistorySize]networkRequestKey
 	next              int
 }
 
 func newNetworkCounters() *networkCounters {
-	return &networkCounters{seen: make(map[networkRequestKey]struct{}, terminalHistorySize)}
+	return &networkCounters{
+		seen:     make(map[networkRequestKey]struct{}, terminalHistorySize),
+		failures: maps.Clone(networkFailureZeros),
+	}
 }
 
-func (c *networkCounters) terminal(sessionID, requestID, errorText string) {
+func (c *networkCounters) terminal(sessionID, requestID string, kind networkTerminalKind, errorText string, canceled bool) {
 	// CDP identities are short opaque strings. Bound retained bytes as well as entries.
 	if sessionID == "" || requestID == "" || len(sessionID) > 256 || len(requestID) > 256 {
 		return
@@ -40,8 +57,18 @@ func (c *networkCounters) terminal(sessionID, requestID, errorText string) {
 	c.next = (c.next + 1) % terminalHistorySize
 	c.seen[key] = struct{}{}
 	c.completed++
-	if errorText == "net::ERR_CONNECTION_RESET" {
-		c.resets++
+	if kind == networkFailed {
+		code := networkErrorCode(errorText)
+		counts := c.failures[code]
+		index := 0
+		if canceled {
+			index = 1
+		}
+		counts[index]++
+		c.failures[code] = counts
+		if errorText == "net::ERR_CONNECTION_RESET" {
+			c.resets++
+		}
 	}
 }
 
@@ -58,7 +85,7 @@ func (c *networkCounters) newGeneration() {
 func (c *networkCounters) snapshot() NetworkSnapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return NetworkSnapshot{Resets: c.resets, Completed: c.completed}
+	return NetworkSnapshot{Resets: c.resets, Completed: c.completed, Failures: maps.Clone(c.failures)}
 }
 
 func (m *Monitor) NetworkSnapshot() NetworkSnapshot {

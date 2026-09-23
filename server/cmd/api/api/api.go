@@ -463,9 +463,9 @@ func (s *ApiService) StartNetworkMonitor() error {
 	return s.cdpMonitor.Start(s.lifecycleCtx)
 }
 
-func (s *ApiService) NetworkMetrics() (resets, completed uint64, up bool) {
+func (s *ApiService) NetworkMetrics() (resets, completed uint64, up bool, failures map[string][2]uint64) {
 	snapshot := s.cdpMonitor.NetworkSnapshot()
-	return snapshot.Resets, snapshot.Completed, snapshot.Up
+	return snapshot.Resets, snapshot.Completed, snapshot.Up, snapshot.Failures
 }
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
