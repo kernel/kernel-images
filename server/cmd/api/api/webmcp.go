@@ -32,8 +32,12 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 
 	excludeCustom := request.Params.ExcludeCustom != nil && *request.Params.ExcludeCustom
 	customDefinitions := make(map[string]oapi.CustomWebMCPDefinition)
-	if s.browserRepl != nil {
-		customDefinitions = s.browserRepl.customToolsSnapshot()
+	if !excludeCustom && s.browserRepl != nil {
+		customDefinitions, err = s.browserRepl.customToolsSnapshot()
+		if err != nil {
+			logger.FromContext(ctx).Error("failed to read custom WebMCP discovery snapshot", "err", err)
+			return oapi.GetWebMCPTools500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to discover WebMCP tools"}}, nil
+		}
 	}
 
 	responseTools := make([]oapi.WebMCPTool, 0, len(tools))
@@ -130,12 +134,19 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	if err == nil {
 		if customID == "" {
 			result, err = s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
-		} else if definition, ok := s.browserRepl.customToolsSnapshot()[customID]; !ok {
+		} else if s.browserRepl == nil {
 			err = webmcpclient.ErrToolNotFound
-		} else if definition.Kind == "cdp" {
-			result, err = s.browserRepl.invokeCustomCDPTool(invokeCtx, customID, targetID, request.Body.Input, timeout)
 		} else {
-			result, err = s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
+			definitions, snapshotErr := s.browserRepl.customToolsSnapshot()
+			if snapshotErr != nil {
+				err = snapshotErr
+			} else if definition, ok := definitions[customID]; !ok {
+				err = webmcpclient.ErrToolNotFound
+			} else if definition.Kind == "cdp" {
+				result, err = s.browserRepl.invokeCustomCDPTool(invokeCtx, customID, targetID, request.Body.Input, timeout)
+			} else {
+				result, err = s.webmcp.Invoke(invokeCtx, request.Body.ToolRef, request.Body.Input)
+			}
 		}
 	}
 	if err != nil {

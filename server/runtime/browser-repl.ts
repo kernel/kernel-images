@@ -315,9 +315,9 @@ const webmcpClient = createWebMCPClient({
     return AbortSignal.any([executionSignal, AbortSignal.timeout(remainingMs)]);
   },
 });
-const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>, revision: number) => {
+const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>) => {
   const temporaryPath = `${CUSTOM_TOOLS_STATE_PATH}.${process.pid}.tmp`;
-  writeFileSync(temporaryPath, safeStringify({repl_id: REPL_ID, revision, tools}), {mode: 0o600});
+  writeFileSync(temporaryPath, safeStringify({repl_id: REPL_ID, tools}), {mode: 0o600});
   renameSync(temporaryPath, CUSTOM_TOOLS_STATE_PATH);
 };
 const customToolRegistry = new CustomWebMCPRegistry(
@@ -325,15 +325,26 @@ const customToolRegistry = new CustomWebMCPRegistry(
   (signal, callback) => webmcpExecution.run(signal, callback),
   publishCustomTools,
 );
-publishCustomTools([], 0);
+publishCustomTools([]);
 customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
+let nativeToolRefs = new Set<string>();
 const webmcp = Object.freeze({
   ...webmcpClient,
+  async listTools(options: {excludeCustom?: boolean} = {}) {
+    const tools = await webmcpClient.listTools(options);
+    nativeToolRefs = new Set(tools.filter((tool) => !tool.source.custom || !customToolRegistry.isCDP(tool.source.custom.id))
+      .map((tool) => tool.tool_ref));
+    return tools;
+  },
   async invokeTool(toolRef: string, input: Record<string, unknown> = {}, options: {timeoutSec?: number} = {}) {
+    if (nativeToolRefs.has(toolRef) || !customToolRegistry.hasCDP()) {
+      return webmcpClient.invokeTool(toolRef, input, options);
+    }
     const tool = (await webmcpClient.listTools()).find((candidate) => candidate.tool_ref === toolRef);
     if (!tool) throw new WebMCPRequestError(404, {message: 'WebMCP tool is no longer available; discover tools again'});
     const id = tool.source.custom?.id;
     if (!id || !customToolRegistry.isCDP(id)) {
+      nativeToolRefs.add(toolRef);
       return webmcpClient.invokeTool(toolRef, input, options);
     }
     const targetId = tool.source.target_id;

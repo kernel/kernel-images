@@ -75,14 +75,12 @@ type browserReplChild struct {
 // browserReplManager owns execution admission and the persistent Node child.
 // Lifecycle synchronization stays behind its Execute and Shutdown methods.
 type browserReplManager struct {
-	admission           chan struct{}
-	lifecycle           context.Context
-	stop                context.CancelCauseFunc
-	child               *browserReplChild // guarded by admission
-	customToolsMu       sync.RWMutex
-	customToolsReplID   string
-	customToolsRevision int
-	customTools         map[string]oapi.CustomWebMCPDefinition
+	admission         chan struct{}
+	lifecycle         context.Context
+	stop              context.CancelCauseFunc
+	child             *browserReplChild // guarded by admission
+	customToolsMu     sync.RWMutex
+	customToolsReplID string
 }
 
 func newBrowserReplManager() *browserReplManager {
@@ -90,63 +88,48 @@ func newBrowserReplManager() *browserReplManager {
 	admission := make(chan struct{}, 1)
 	admission <- struct{}{}
 	return &browserReplManager{
-		admission:   admission,
-		lifecycle:   lifecycle,
-		stop:        stop,
-		customTools: make(map[string]oapi.CustomWebMCPDefinition),
+		admission: admission,
+		lifecycle: lifecycle,
+		stop:      stop,
 	}
 }
 
-// replaceCustomToolsSnapshot refreshes the Go-side discovery cache from the daemon's
-// complete, atomically published snapshot. Adding tools never replaces the registry.
-func (m *browserReplManager) replaceCustomToolsSnapshot(replID string, revision int, tools []oapi.CustomWebMCPDefinition) {
+func (m *browserReplManager) setCustomToolsReplID(replID string) {
 	m.customToolsMu.Lock()
 	defer m.customToolsMu.Unlock()
 	m.customToolsReplID = replID
-	m.customToolsRevision = revision
-	m.replaceCustomToolsLocked(tools)
 }
 
-func (m *browserReplManager) refreshCustomToolsSnapshot(replID string, revision int, tools []oapi.CustomWebMCPDefinition) {
-	m.customToolsMu.Lock()
-	defer m.customToolsMu.Unlock()
-	if m.customToolsReplID != replID || revision < m.customToolsRevision {
-		return
-	}
-	m.customToolsRevision = revision
-	m.replaceCustomToolsLocked(tools)
-}
-
-func (m *browserReplManager) replaceCustomToolsLocked(tools []oapi.CustomWebMCPDefinition) {
-	m.customTools = make(map[string]oapi.CustomWebMCPDefinition, len(tools))
-	for _, tool := range tools {
-		m.customTools[tool.Id] = tool
-	}
-}
-
-func (m *browserReplManager) customToolsSnapshot() map[string]oapi.CustomWebMCPDefinition {
-	m.customToolsMu.RLock()
-	replID := m.customToolsReplID
-	m.customToolsMu.RUnlock()
-	if replID != "" {
-		if data, err := os.ReadFile(browserReplCustomToolsPath()); err == nil {
-			var state struct {
-				ReplID   string                        `json:"repl_id"`
-				Revision int                           `json:"revision"`
-				Tools    []oapi.CustomWebMCPDefinition `json:"tools"`
-			}
-			if json.Unmarshal(data, &state) == nil && state.ReplID == replID {
-				m.refreshCustomToolsSnapshot(replID, state.Revision, state.Tools)
-			}
-		}
-	}
+// The daemon's atomically published file is the sole discovery snapshot. A
+// missing or unreadable snapshot is an error, not permission to serve stale metadata.
+func (m *browserReplManager) customToolsSnapshot() (map[string]oapi.CustomWebMCPDefinition, error) {
 	m.customToolsMu.RLock()
 	defer m.customToolsMu.RUnlock()
-	tools := make(map[string]oapi.CustomWebMCPDefinition, len(m.customTools))
-	for id, tool := range m.customTools {
-		tools[id] = tool
+	if m.customToolsReplID == "" {
+		return make(map[string]oapi.CustomWebMCPDefinition), nil
 	}
-	return tools
+	data, err := os.ReadFile(browserReplCustomToolsPath())
+	if err != nil {
+		return nil, fmt.Errorf("read custom WebMCP discovery snapshot: %w", err)
+	}
+	var state struct {
+		ReplID string                        `json:"repl_id"`
+		Tools  []oapi.CustomWebMCPDefinition `json:"tools"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil, fmt.Errorf("decode custom WebMCP discovery snapshot: %w", err)
+	}
+	if state.ReplID != m.customToolsReplID {
+		return nil, fmt.Errorf("custom WebMCP discovery snapshot belongs to another REPL")
+	}
+	if state.Tools == nil {
+		return nil, fmt.Errorf("custom WebMCP discovery snapshot has no tools list")
+	}
+	tools := make(map[string]oapi.CustomWebMCPDefinition, len(state.Tools))
+	for _, tool := range state.Tools {
+		tools[tool.Id] = tool
+	}
+	return tools, nil
 }
 
 func browserReplCustomToolsPath() string {
@@ -268,7 +251,7 @@ func closedWaitChannel(err error) chan error {
 func (m *browserReplManager) clearLocked(ctx context.Context, child *browserReplChild) {
 	if m.child == child {
 		m.child = nil
-		m.replaceCustomToolsSnapshot("", 0, nil)
+		m.setCustomToolsReplID("")
 		_ = os.Remove(browserReplCustomToolsPath())
 	}
 	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
@@ -311,7 +294,7 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 		child.done <- cmd.Wait()
 	}()
 	m.child = child
-	m.replaceCustomToolsSnapshot(replID, 0, nil)
+	m.setCustomToolsReplID(replID)
 
 	deadline := time.Now().Add(browserReplStartupTimeout)
 	for {

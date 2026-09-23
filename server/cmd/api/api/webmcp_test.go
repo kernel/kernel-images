@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -69,24 +71,40 @@ func TestGetWebMCPToolsMapsRegistrationContext(t *testing.T) {
 	require.True(t, *tool.Tool.Annotations.ConsequentialHint)
 }
 
-func TestCustomToolCacheRejectsStaleGenerationAndRevision(t *testing.T) {
+func writeCustomToolsSnapshot(t *testing.T, manager *browserReplManager, tools []oapi.CustomWebMCPDefinition) {
+	t.Helper()
+	t.Setenv("BROWSER_REPL_SOCKET", filepath.Join(t.TempDir(), "browser-repl.sock"))
+	manager.setCustomToolsReplID("test-repl")
+	data, err := json.Marshal(struct {
+		ReplID string                        `json:"repl_id"`
+		Tools  []oapi.CustomWebMCPDefinition `json:"tools"`
+	}{ReplID: "test-repl", Tools: tools})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(browserReplCustomToolsPath(), data, 0o600))
+}
+
+func TestGetWebMCPToolsRejectsUnreadableSnapshot(t *testing.T) {
 	manager := newBrowserReplManager()
-	current := oapi.CustomWebMCPDefinition{Id: "ct_abcdefghijklmnopqrstuvwx", Namespace: "current"}
-	stale := oapi.CustomWebMCPDefinition{Id: "ct_zyxwvutsrqponmlkjihgfedc", Namespace: "stale"}
-	manager.replaceCustomToolsSnapshot("current-repl", 2, []oapi.CustomWebMCPDefinition{current})
+	writeCustomToolsSnapshot(t, manager, []oapi.CustomWebMCPDefinition{{Id: "ct_abcdefghijklmnopqrstuvwx"}})
+	service := &ApiService{webmcp: &fakeWebMCPClient{tools: []webmcpclient.Tool{{Ref: "native", Name: "search"}}}, browserRepl: manager}
+	require.NoError(t, os.WriteFile(browserReplCustomToolsPath(), []byte(`{invalid`), 0o600))
+	response, err := service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	_, ok := response.(oapi.GetWebMCPTools500JSONResponse)
+	require.True(t, ok, "expected snapshot failure, got %T", response)
 
-	manager.refreshCustomToolsSnapshot("old-repl", 3, []oapi.CustomWebMCPDefinition{stale})
-	manager.refreshCustomToolsSnapshot("current-repl", 1, []oapi.CustomWebMCPDefinition{stale})
-
-	tools := manager.customToolsSnapshot()
-	require.Contains(t, tools, current.Id)
-	require.NotContains(t, tools, stale.Id)
+	exclude := true
+	response, err = service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{
+		Params: oapi.GetWebMCPToolsParams{ExcludeCustom: &exclude},
+	})
+	require.NoError(t, err)
+	require.Len(t, response.(oapi.GetWebMCPTools200JSONResponse).Tools, 1)
 }
 
 func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 	outputSchema := map[string]any{"type": "object"}
 	manager := newBrowserReplManager()
-	manager.replaceCustomToolsSnapshot("test-repl", 1, []oapi.CustomWebMCPDefinition{{
+	writeCustomToolsSnapshot(t, manager, []oapi.CustomWebMCPDefinition{{
 		Id:        "ct_abcdefghijklmnopqrstuvwx",
 		Namespace: "stripe.com",
 		Kind:      "cdp",
@@ -121,7 +139,7 @@ func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 
 func TestGetWebMCPToolsOmitsOptionalCustomOutputSchema(t *testing.T) {
 	manager := newBrowserReplManager()
-	manager.replaceCustomToolsSnapshot("test-repl", 1, []oapi.CustomWebMCPDefinition{{
+	writeCustomToolsSnapshot(t, manager, []oapi.CustomWebMCPDefinition{{
 		Id: "ct_abcdefghijklmnopqrstuvwx", Namespace: "example.com", Kind: "cdp",
 		Tool: oapi.WebMCPToolMetadata{
 			Name: "read_title", Description: "Read a title", InputSchema: map[string]any{"type": "object"},

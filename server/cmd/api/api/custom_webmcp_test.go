@@ -33,6 +33,13 @@ const customWebMCPTestSource = `[
   },
 ]`
 
+func requireCustomToolsSnapshot(t *testing.T, manager *browserReplManager) map[string]oapi.CustomWebMCPDefinition {
+	t.Helper()
+	tools, err := manager.customToolsSnapshot()
+	require.NoError(t, err)
+	return tools
+}
+
 func TestCustomCDPInvocationNotDispatchedWhileReplIsBusy(t *testing.T) {
 	manager := newBrowserReplManager()
 	require.NoError(t, manager.acquire(context.Background()))
@@ -63,7 +70,7 @@ func TestCustomWebMCPToolsUseBrowserReplLifecycle(t *testing.T) {
 	require.Equal(t, "cdp", body.Tools[0].Kind)
 	require.Equal(t, "read_title", body.Tools[0].Tool.Name)
 	require.Equal(t, []string{"https://example.com/*"}, body.Tools[0].Match.UrlPatterns)
-	require.Equal(t, body.Tools[0], svc.browserRepl.customToolsSnapshot()[body.Tools[0].Id])
+	require.Equal(t, body.Tools[0], requireCustomToolsSnapshot(t, svc.browserRepl)[body.Tools[0].Id])
 
 	listed, err := svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
@@ -111,14 +118,27 @@ func TestCustomWebMCPSnapshotRejectsDifferentRepl(t *testing.T) {
 	})
 	require.NoError(t, err)
 	tool := added.(oapi.AddCustomWebMCPTools201JSONResponse).Tools[0]
-	require.Contains(t, svc.browserRepl.customToolsSnapshot(), tool.Id)
+	require.Contains(t, requireCustomToolsSnapshot(t, svc.browserRepl), tool.Id)
 
 	require.NoError(t, os.WriteFile(
 		browserReplCustomToolsPath(),
 		[]byte(`{"repl_id":"different-repl","tools":[]}`),
 		0o600,
 	))
-	require.Contains(t, svc.browserRepl.customToolsSnapshot(), tool.Id)
+	_, err = svc.browserRepl.customToolsSnapshot()
+	require.ErrorContains(t, err, "another REPL")
+
+	require.NoError(t, os.WriteFile(browserReplCustomToolsPath(), []byte(`{invalid`), 0o600))
+	_, err = svc.browserRepl.customToolsSnapshot()
+	require.ErrorContains(t, err, "decode custom WebMCP discovery snapshot")
+
+	require.NoError(t, os.WriteFile(browserReplCustomToolsPath(), []byte(`{"repl_id":"`+svc.browserRepl.customToolsReplID+`"}`), 0o600))
+	_, err = svc.browserRepl.customToolsSnapshot()
+	require.ErrorContains(t, err, "no tools list")
+
+	require.NoError(t, os.Remove(browserReplCustomToolsPath()))
+	_, err = svc.browserRepl.customToolsSnapshot()
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestCustomWebMCPMetadataIsVisibleBeforeReplCellCompletes(t *testing.T) {
@@ -142,7 +162,11 @@ func TestCustomWebMCPMetadataIsVisibleBeforeReplCellCompletes(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		for _, tool := range svc.browserRepl.customToolsSnapshot() {
+		tools, err := svc.browserRepl.customToolsSnapshot()
+		if err != nil {
+			return false
+		}
+		for _, tool := range tools {
 			if tool.Namespace == "midcell.example" {
 				return true
 			}
@@ -198,8 +222,8 @@ func TestCustomWebMCPForceOverwriteNamespace(t *testing.T) {
 	// Invalid replacement must not delete either namespace.
 	_, ok := add("example.com", `[{kind: "cdp"}]`, true).(oapi.AddCustomWebMCPTools400JSONResponse)
 	require.True(t, ok)
-	require.Contains(t, svc.browserRepl.customToolsSnapshot(), original.Id)
-	require.Contains(t, svc.browserRepl.customToolsSnapshot(), second.Id)
+	require.Contains(t, requireCustomToolsSnapshot(t, svc.browserRepl), original.Id)
+	require.Contains(t, requireCustomToolsSnapshot(t, svc.browserRepl), second.Id)
 
 	const noOutputSchema = `[{kind: "cdp", match: {url_patterns: ["https://example.com/*"]},
 		tool: {name: "read_title", description: "Read title", inputSchema: {type: "object"}},
@@ -217,8 +241,8 @@ func TestCustomWebMCPForceOverwriteNamespace(t *testing.T) {
 		listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools[0].Id,
 		listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools[1].Id,
 	})
-	require.NotContains(t, svc.browserRepl.customToolsSnapshot(), original.Id)
-	require.NotContains(t, svc.browserRepl.customToolsSnapshot(), second.Id)
+	require.NotContains(t, requireCustomToolsSnapshot(t, svc.browserRepl), original.Id)
+	require.NotContains(t, requireCustomToolsSnapshot(t, svc.browserRepl), second.Id)
 }
 
 func TestCustomWebMCPInvalidAdditionPreservesTools(t *testing.T) {

@@ -121,6 +121,71 @@ func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, 
 	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusError, large.JSON200.Status)
 	require.Contains(t, *large.JSON200.ErrorText, "output exceeds 240 KiB")
 
+	require.NotNil(t, tools.JSON200.Tools[0].Source.TargetId)
+	targetID := *tools.JSON200.Tools[0].Source.TargetId
+	patched, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: fmt.Sprintf(`await js(() => {
+			const prototype = Object.getPrototypeOf(document.modelContext);
+			const original = prototype.registerTool;
+			window.__allowCustomRegistration = false;
+			Object.defineProperty(prototype, 'registerTool', {configurable: true, value: function(...args) {
+				if (!window.__allowCustomRegistration) throw new Error('registration temporarily unavailable');
+				return original.apply(this, args);
+			}});
+		}, {targetId: %q});`, targetID),
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, patched.StatusCode(), "%s", patched.Body)
+	require.True(t, patched.JSON200.Success, "%s", patched.Body)
+	failed, err := client.AddCustomWebMCPToolsWithResponse(ctx, instanceoapi.AddCustomWebMCPToolsJSONRequestBody{
+		Namespace: "recovery.test",
+		Source: `[{kind:'page', match:{url_patterns:['http://127.0.0.1:10001/fixture/*']},
+			tool:{name:'recover_registration',description:'Return the input.',inputSchema:{type:'object'}},
+			execute:async input=>input}]`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, failed.StatusCode(), "%s", failed.Body)
+	beforeRecovery, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
+	require.NoError(t, err)
+	for _, tool := range beforeRecovery.JSON200.Tools {
+		require.NotEqual(t, "recover_registration", tool.Tool.Name)
+	}
+	restored, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: fmt.Sprintf(`await js(() => { window.__allowCustomRegistration = true; }, {targetId: %q});`, targetID),
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, restored.StatusCode(), "%s", restored.Body)
+	require.True(t, restored.JSON200.Success, "%s", restored.Body)
+	var recoveredRef string
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		tools, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
+		if !assert.NoError(collect, err) || !assert.Equal(collect, http.StatusOK, tools.StatusCode()) || tools.JSON200 == nil {
+			return
+		}
+		for _, tool := range tools.JSON200.Tools {
+			if tool.Tool.Name == "recover_registration" {
+				recoveredRef = tool.ToolRef
+				return
+			}
+		}
+		assert.Fail(collect, "registration did not recover in the same document")
+	}, 10*time.Second, 200*time.Millisecond)
+	recovered, err := client.InvokeWebMCPToolWithResponse(ctx, instanceoapi.WebMCPInvokeRequest{
+		ToolRef: recoveredRef, Input: map[string]any{"origin": "SFO"}, TimeoutSec: &timeout,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, recovered.StatusCode(), "%s", recovered.Body)
+	require.Equal(t, map[string]any{"origin": "SFO"}, recovered.JSON200.Output)
+
+	pageResult, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `const pageTool = (await webmcp.listTools()).find(tool => tool.tool.name === 'recover_registration');
+			const nativeResult = await webmcp.invokeTool(pageTool.tool_ref, {origin: 'SFO'});
+			if (nativeResult.status !== 'completed' || nativeResult.output.origin !== 'SFO') throw new Error(JSON.stringify(nativeResult));`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, pageResult.StatusCode(), "%s", pageResult.Body)
+	require.True(t, pageResult.JSON200.Success, "%s", pageResult.Body)
+
 	slow, err := client.AddCustomWebMCPToolsWithResponse(ctx, instanceoapi.AddCustomWebMCPToolsJSONRequestBody{
 		Namespace: "deadline.test",
 		Source: `[{kind:'cdp', match:{url_patterns:['http://127.0.0.1:10001/fixture/*']},
