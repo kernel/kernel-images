@@ -1209,3 +1209,93 @@ func (s *blockingStartS2Storage) EverStarted() bool {
 	defer s.mu.Unlock()
 	return s.everStarted
 }
+
+// gatedCdpMonitor holds the first optional-capture enable open until released,
+// then fails it, so a test can act while a PUT or PATCH is mid-apply and then
+// drive its rollback.
+type gatedCdpMonitor struct {
+	stubCdpMonitor
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gatedCdpMonitor) SetTelemetry(enabled bool) error {
+	if !enabled {
+		return nil
+	}
+	gated := false
+	g.once.Do(func() { gated = true })
+	if !gated {
+		return nil
+	}
+	close(g.entered)
+	<-g.release
+	return errors.New("collector configuration failed")
+}
+
+func TestTelemetryStorageNeverReadsAnUnsettledConfig(t *testing.T) {
+	ctx := context.Background()
+	tr, fa := true, false
+	for _, method := range []string{"PUT", "PATCH"} {
+		t.Run(method, func(t *testing.T) {
+			svc := newTestService(t, newMockRecordManager())
+			st := &stubS2Storage{}
+			svc.s2Storage = st
+			// A non-CDP session with storage off, so the collector is not needed yet.
+			_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+				Browser: &oapi.BrowserTelemetryCategoriesConfig{System: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+				Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &fa},
+			}})
+			require.NoError(t, err)
+
+			// Turn storage on together with a CDP category whose capture will
+			// fail, so the request commits provisionally and then rolls back.
+			gate := &gatedCdpMonitor{entered: make(chan struct{}), release: make(chan struct{})}
+			svc.cdpMonitor = gate
+			on := &oapi.BrowserTelemetryConfig{
+				Browser: &oapi.BrowserTelemetryCategoriesConfig{Network: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+				Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &tr},
+			}
+			done := make(chan any, 1)
+			go func() {
+				if method == "PATCH" {
+					resp, _ := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: on})
+					done <- resp
+					return
+				}
+				resp, _ := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: on})
+				done <- resp
+			}()
+			select {
+			case <-gate.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("request did not reach the capture apply")
+			}
+
+			// A reconcile deferred from an earlier request runs now. It must wait
+			// for this request to settle rather than read storage-on mid-apply.
+			reconciled := make(chan struct{})
+			go func() {
+				svc.reconcileStorage(ctx)
+				close(reconciled)
+			}()
+			select {
+			case <-reconciled:
+				t.Fatal("reconcileStorage ran while the config was provisional")
+			case <-time.After(100 * time.Millisecond):
+			}
+
+			close(gate.release)
+			resp := <-done
+			if method == "PATCH" {
+				require.IsType(t, oapi.PatchTelemetry500JSONResponse{}, resp)
+			} else {
+				require.IsType(t, oapi.PutTelemetry500JSONResponse{}, resp)
+			}
+			<-reconciled
+			assert.False(t, svc.telemetrySession.Config().StoreS2, "the failed request rolled storage back off")
+			assert.Equal(t, 0, st.startCount(), "the sink must not open for a config that was rolled back")
+		})
+	}
+}

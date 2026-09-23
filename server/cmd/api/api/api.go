@@ -134,9 +134,10 @@ type ApiService struct {
 	// so a toggle-off drain (bounded by otlpStopTimeout) never blocks concurrent
 	// telemetry reads/writes on monitorMu.
 	exportMu sync.Mutex
-	// storageMu serializes S2 storage reconciliation. Unlike exportMu it is also
-	// taken under monitorMu, by the storage-off guard in PUT and PATCH, so that
-	// guard sees a start reconcileStorage has in flight. reconcileStorage never
+	// storageMu serializes S2 storage reconciliation against telemetry commits.
+	// Unlike exportMu it is also taken under monitorMu: PUT and PATCH hold it
+	// from the storage-off check until the config is committed or rolled back,
+	// so reconcileStorage only reads a settled config. reconcileStorage never
 	// takes monitorMu, so the order is always monitorMu then storageMu.
 	storageMu       sync.Mutex
 	lifecycleCtx    context.Context

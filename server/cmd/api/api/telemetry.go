@@ -50,17 +50,19 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 		return oapi.PutTelemetry400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 	}
 
+	// storageMu is held until the config is settled, committed or rolled back,
+	// so reconcileStorage never reads a provisional one: a storage-on update
+	// whose capture fails to apply would otherwise leave the sink open under the
+	// storage-off config it rolls back to. It also keeps a start in flight from
+	// racing the storage-off check below.
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+
 	// Storage cannot be turned off once anything may have been persisted, a
 	// clear included. Checked before anything is committed, so a 409 leaves the
-	// session exactly as it was. storageMu stays held through the commit so a
-	// start reconcileStorage has in flight finishes first; without that a
-	// storage-off config could be committed while the sink was opening.
-	if !cfg.StoreS2 {
-		s.storageMu.Lock()
-		defer s.storageMu.Unlock()
-		if s.storageEverStarted() {
-			return oapi.PutTelemetry409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: storageDisableConflict}}, nil
-		}
+	// session exactly as it was.
+	if !cfg.StoreS2 && s.storageEverStarted() {
+		return oapi.PutTelemetry409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: storageDisableConflict}}, nil
 	}
 
 	wasActive := s.telemetrySession.Active()
@@ -116,15 +118,15 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 		return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
 
+	// See PutTelemetry: storageMu is held until the config is settled, and the
+	// storage-off check runs before anything is committed.
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+
 	prev := s.telemetrySession.Config()
 	cfg, allDisabled := mergeTelemetryConfig(prev, req.Body)
-	// See PutTelemetry: the storage-off guard runs before anything is committed.
-	if !cfg.StoreS2 {
-		s.storageMu.Lock()
-		defer s.storageMu.Unlock()
-		if s.storageEverStarted() {
-			return oapi.PatchTelemetry409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: storageDisableConflict}}, nil
-		}
+	if !cfg.StoreS2 && s.storageEverStarted() {
+		return oapi.PatchTelemetry409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: storageDisableConflict}}, nil
 	}
 	if allDisabled {
 		s.telemetrySession.Stop()
@@ -212,9 +214,11 @@ func (s *ApiService) reconcileExport(ctx context.Context) {
 // is single-use and binds its stream for the life of the instance, so it stops
 // only at shutdown, and the storage-off guard in PUT and PATCH keeps a
 // storage-off config from coexisting with an open sink. Like reconcileExport
-// it reads the desired state from the session, runs after monitorMu is
-// released, and is best-effort: a failed start is logged, never surfaced, and
-// retried by the next request. No-op when the VM has no storage controller.
+// it reads the desired state from the session and runs after monitorMu is
+// released; storageMu makes that state settled, since PUT and PATCH hold it
+// until they commit or roll back. It is best-effort: a failed start is logged,
+// never surfaced, and retried by the next request. No-op when the VM has no
+// storage controller.
 func (s *ApiService) reconcileStorage(ctx context.Context) {
 	if s.s2Storage == nil {
 		return
