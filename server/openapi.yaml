@@ -1911,9 +1911,10 @@ components:
         default, so a caller that omits this block keeps today's behavior: in a
         PUT (full replace) an omitted block means enabled, unlike `export`,
         whose omitted block means off; in a PATCH an omitted field leaves the
-        current setting unchanged. Storage opens with the first capture session
-        that has it enabled and stays open for the life of the instance, so
-        once it has started a request that disables it is rejected with 409.
+        current setting unchanged. Only events captured while storage is enabled
+        are stored. Storage opens with the first capture session that has it
+        enabled and stays open for the life of the instance, so once it has
+        started a request that disables it is rejected with 409.
       properties:
         enabled:
           type: boolean

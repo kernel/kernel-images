@@ -206,16 +206,15 @@ func (s *ApiService) reconcileExport(ctx context.Context) {
 }
 
 // reconcileStorage opens the S2 storage sink once the committed telemetry
-// config calls for it: a capture session is active and storage is on. The sink
-// stores only what that config captured, not what the ring still holds from
-// earlier storage-off capture. It never
-// closes the sink. The writer is single-use and binds its stream for the life
-// of the instance, so it stops only at shutdown, and the storage-off guard in
-// PUT and PATCH is what keeps a storage-off config from ever coexisting with an
-// open sink. Like reconcileExport it reads the desired state from the session,
-// runs after monitorMu is released, holds its own lock, and is best-effort: a
-// failed start is logged, never surfaced, and retried by the next request.
-// No-op when the VM has no storage controller.
+// config calls for it: a capture session is active and storage is on. The
+// sink stores only events captured under that config, not what the ring still
+// holds from earlier storage-off capture. It never closes the sink: the writer
+// is single-use and binds its stream for the life of the instance, so it stops
+// only at shutdown, and the storage-off guard in PUT and PATCH keeps a
+// storage-off config from coexisting with an open sink. Like reconcileExport
+// it reads the desired state from the session, runs after monitorMu is
+// released, and is best-effort: a failed start is logged, never surfaced, and
+// retried by the next request. No-op when the VM has no storage controller.
 func (s *ApiService) reconcileStorage(ctx context.Context) {
 	if s.s2Storage == nil {
 		return
