@@ -16,6 +16,10 @@ import (
 // otlpStopTimeout bounds how long a runtime export toggle-off waits to drain.
 const otlpStopTimeout = 5 * time.Second
 
+// storageDisableConflict is the 409 for turning storage off after the sink has
+// opened on this instance.
+const storageDisableConflict = "storage cannot be disabled on an instance that has already started storage"
+
 // GetTelemetry handles GET /telemetry.
 // Returns the current telemetry configuration. Returns 404 if telemetry is not configured.
 func (s *ApiService) GetTelemetry(_ context.Context, _ oapi.GetTelemetryRequestObject) (oapi.GetTelemetryResponseObject, error) {
@@ -32,10 +36,11 @@ func (s *ApiService) GetTelemetry(_ context.Context, _ oapi.GetTelemetryRequestO
 // Sets the telemetry configuration. Returns 201 if not previously configured, 200 if it was.
 // Setting every configurable category to enabled:false clears the configuration (200).
 func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequestObject) (oapi.PutTelemetryResponseObject, error) {
-	// Reconcile export after monitorMu is released (defers run LIFO), so the
-	// toggle-off drain does not hold the API-wide lock. It reads the committed
-	// desired state from the session, so it is correct regardless of how this
-	// request exits.
+	// Reconcile the sinks after monitorMu is released (defers run LIFO), so the
+	// export toggle-off drain does not hold the API-wide lock. Both read the
+	// committed desired state from the session, so they are correct regardless
+	// of how this request exits.
+	defer s.reconcileStorage(ctx)
 	defer s.reconcileExport(ctx)
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
@@ -43,6 +48,19 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 	cfg, allDisabled, err := telemetryConfigFromOAPI(req.Body)
 	if err != nil {
 		return oapi.PutTelemetry400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+	}
+
+	// Storage cannot be turned off once anything may have been persisted, a
+	// clear included. Checked before anything is committed, so a 409 leaves the
+	// session exactly as it was. storageMu stays held through the commit so a
+	// start reconcileStorage has in flight finishes first; without that a
+	// storage-off config could be committed while the sink was opening.
+	if !cfg.StoreS2 {
+		s.storageMu.Lock()
+		defer s.storageMu.Unlock()
+		if s.storageEverStarted() {
+			return oapi.PutTelemetry409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: storageDisableConflict}}, nil
+		}
 	}
 
 	wasActive := s.telemetrySession.Active()
@@ -82,7 +100,8 @@ func (s *ApiService) PutTelemetry(ctx context.Context, req oapi.PutTelemetryRequ
 // Partially updates the telemetry configuration. Returns 404 if not configured.
 // Setting every configurable category to enabled:false clears the configuration (200).
 func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetryRequestObject) (oapi.PatchTelemetryResponseObject, error) {
-	// See PutTelemetry: reconcile export after monitorMu is released.
+	// See PutTelemetry: reconcile the sinks after monitorMu is released.
+	defer s.reconcileStorage(ctx)
 	defer s.reconcileExport(ctx)
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
@@ -99,6 +118,14 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 
 	prev := s.telemetrySession.Config()
 	cfg, allDisabled := mergeTelemetryConfig(prev, req.Body)
+	// See PutTelemetry: the storage-off guard runs before anything is committed.
+	if !cfg.StoreS2 {
+		s.storageMu.Lock()
+		defer s.storageMu.Unlock()
+		if s.storageEverStarted() {
+			return oapi.PatchTelemetry409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: storageDisableConflict}}, nil
+		}
+	}
 	if allDisabled {
 		s.telemetrySession.Stop()
 		s.stopTelemetryState()
@@ -178,8 +205,40 @@ func (s *ApiService) reconcileExport(ctx context.Context) {
 	}
 }
 
+// reconcileStorage opens the S2 storage sink once the committed telemetry
+// config calls for it: a capture session is active and storage is on. It never
+// closes the sink. The writer is single-use and binds its stream for the life
+// of the instance, so it stops only at shutdown, and the storage-off guard in
+// PUT and PATCH is what keeps a storage-off config from ever coexisting with an
+// open sink. Like reconcileExport it reads the desired state from the session,
+// runs after monitorMu is released, holds its own lock, and is best-effort: a
+// failed start is logged, never surfaced, and retried by the next request.
+// No-op when the VM has no storage controller.
+func (s *ApiService) reconcileStorage(ctx context.Context) {
+	if s.s2Storage == nil {
+		return
+	}
+	s.storageMu.Lock()
+	defer s.storageMu.Unlock()
+
+	if !s.telemetrySession.Active() || !s.telemetrySession.Config().StoreS2 || s.s2Storage.EverStarted() {
+		return
+	}
+	// Root the sink on the app lifecycle, not this request; only its logs
+	// carry the request context.
+	if err := s.s2Storage.Start(s.lifecycleCtx); err != nil {
+		logger.FromContext(ctx).Error("s2 storage failed to start", "err", err)
+	}
+}
+
+// storageEverStarted reports whether the S2 sink has opened on this instance,
+// which is false when the VM has no storage controller.
+func (s *ApiService) storageEverStarted() bool {
+	return s.s2Storage != nil && s.s2Storage.EverStarted()
+}
+
 // stopTelemetryState tears down optional capture and middleware after a session is
-// cleared. Export is reconciled separately, after monitorMu is released.
+// cleared. The sinks are reconciled separately, after monitorMu is released.
 func (s *ApiService) stopTelemetryState() {
 	if err := s.cdpMonitor.SetTelemetry(false); err != nil {
 		logger.FromContext(s.lifecycleCtx).Warn("failed to clean up telemetry capture", "err", err)

@@ -247,3 +247,25 @@ func TestTelemetrySessionStoreS2(t *testing.T) {
 	ts.Stop()
 	assert.False(t, ts.Config().StoreS2, "a clear must leave the desired storage state off")
 }
+
+// The S2 sink opens with the first storing session and reads the ring from
+// its oldest event, so this is what makes deferring it lossless: with no
+// session there is no publisher (TelemetrySession is the ring's only one), so
+// the ring is empty when the first session starts.
+func TestPublishWithoutSessionReachesNothing(t *testing.T) {
+	es := newTestEventStream(t, 16)
+	ts := NewTelemetrySession(es)
+
+	for _, cat := range events.UserCategories {
+		_, ok := ts.Publish(cdpEvent("before.session", cat))
+		assert.False(t, ok)
+	}
+	assert.Zero(t, es.Seq(), "nothing may reach the ring before a session")
+
+	ts.Start("session-1", TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	ts.Publish(cdpEvent("in.session", events.Network))
+	ts.Stop()
+	_, ok := ts.Publish(cdpEvent("after.session", events.Network))
+	assert.False(t, ok)
+	assert.Equal(t, uint64(1), es.Seq(), "nothing may reach the ring after a clear either")
+}
