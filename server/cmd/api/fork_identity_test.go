@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -212,10 +211,11 @@ func TestAppliedS2StreamPrefersForkIdentity(t *testing.T) {
 	markForkIdentityWaitArmed(t)
 	cfg := &config.Config{S2Stream: "seed-stream"}
 
-	// Nothing applied yet: the env this process started with is all there is.
-	stream, applied := appliedS2Stream(cfg)
-	assert.False(t, applied)
-	assert.Equal(t, "seed-stream", stream)
+	// Nothing applied yet: the env this process started with belongs to the
+	// parent, so there is nothing this instance may bind.
+	stream, pending := appliedS2Stream(cfg)
+	assert.True(t, pending)
+	assert.Empty(t, stream)
 
 	// A payload written but not yet applied is not the instance's identity.
 	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
@@ -223,15 +223,31 @@ func TestAppliedS2StreamPrefersForkIdentity(t *testing.T) {
 		"session_intel_url": "https://intel.example.test",
 		"s2_stream":         "fork-stream",
 	})
-	stream, applied = appliedS2Stream(cfg)
-	assert.False(t, applied)
-	assert.Equal(t, "seed-stream", stream)
+	stream, pending = appliedS2Stream(cfg)
+	assert.True(t, pending)
+	assert.Empty(t, stream)
 
 	// Once applied it survives a restart of this process, which is the point.
 	require.NoError(t, forkidentity.WriteAppliedMarker("fork"))
-	stream, applied = appliedS2Stream(cfg)
-	assert.True(t, applied)
+	stream, pending = appliedS2Stream(cfg)
+	assert.False(t, pending)
 	assert.Equal(t, "fork-stream", stream)
+}
+
+func TestAppliedS2StreamNeverFallsBackToSeedOnFork(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	markForkIdentityWaitArmed(t)
+	cfg := &config.Config{S2Stream: "seed-stream"}
+
+	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
+		"instance_name":     "fork",
+		"session_intel_url": "https://intel.example.test",
+	})
+	require.NoError(t, forkidentity.WriteAppliedMarker("fork"))
+
+	stream, pending := appliedS2Stream(cfg)
+	assert.False(t, pending)
+	assert.Empty(t, stream, "an applied fork identity without a stream must not bind the parent's")
 }
 
 func TestAppliedS2StreamIgnoresMarkerForAnotherInstance(t *testing.T) {
@@ -246,9 +262,9 @@ func TestAppliedS2StreamIgnoresMarkerForAnotherInstance(t *testing.T) {
 	})
 	require.NoError(t, forkidentity.WriteAppliedMarker("someone-else"))
 
-	stream, applied := appliedS2Stream(cfg)
-	assert.False(t, applied)
-	assert.Equal(t, "seed-stream", stream)
+	stream, pending := appliedS2Stream(cfg)
+	assert.True(t, pending)
+	assert.Empty(t, stream)
 }
 
 func TestAppliedS2StreamIgnoresMarkerFromBeforeThisBoot(t *testing.T) {
@@ -264,32 +280,34 @@ func TestAppliedS2StreamIgnoresMarkerFromBeforeThisBoot(t *testing.T) {
 	})
 	require.NoError(t, forkidentity.WriteAppliedMarker("stale-fork"))
 
-	stream, applied := appliedS2Stream(cfg)
-	assert.False(t, applied)
+	stream, pending := appliedS2Stream(cfg)
+	assert.False(t, pending)
 	assert.Equal(t, "seed-stream", stream)
 }
 
 func TestS2StreamResolverUsesHookPayloadWithoutReadyFile(t *testing.T) {
 	useTempForkIdentityFiles(t)
-	resolver := newS2StreamResolver(&config.Config{S2Stream: "seed-stream"})
-	started := make(chan string, 1)
+	resolver := newS2StreamResolver(&config.Config{S2Stream: "seed-stream"}, slog.Default())
 
-	resolver.StartForAppliedPayload(
-		context.Background(),
-		forkidentity.Payload{"s2_stream": "fork-stream"},
-		func(context.Context) error {
-			started <- resolver.Resolve()
-			return nil
-		},
-		slog.Default(),
-	)
+	resolver.RecordAppliedPayload(forkidentity.Payload{"s2_stream": "fork-stream"})
 
-	select {
-	case stream := <-started:
-		assert.Equal(t, "fork-stream", stream)
-	case <-time.After(time.Second):
-		t.Fatal("S2 storage did not start")
-	}
+	assert.Equal(t, "fork-stream", resolver.Resolve())
+}
+
+// A telemetry config applied to a fork before its identity must not bind the
+// parent's stream: the sink stays closed until the handoff has happened.
+func TestS2StreamResolverHoldsBackSeedStreamWhilePending(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	markForkIdentityWaitArmed(t)
+	resolver := newS2StreamResolver(&config.Config{S2Stream: "seed-stream"}, slog.Default())
+
+	assert.Empty(t, resolver.Resolve())
+
+	resolver.RecordAppliedPayload(forkidentity.Payload{"instance_name": "fork", "session_intel_url": "https://intel.example.test"})
+	assert.Empty(t, resolver.Resolve(), "a fork payload without a stream must not fall back to the parent's")
+
+	resolver.RecordAppliedPayload(forkidentity.Payload{"s2_stream": "fork-stream"})
+	assert.Equal(t, "fork-stream", resolver.Resolve())
 }
 
 // markForkIdentityWaitArmed stands in for the wrapper having entered the wait,

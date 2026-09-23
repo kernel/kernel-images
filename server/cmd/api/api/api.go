@@ -46,7 +46,7 @@ var _ OTLPExporter = (*events.OTLPExportController)(nil)
 // S2Storage controls the optional S2 storage sink, which no-ops when the VM
 // has no S2 credentials. Implemented by *events.S2StorageController.
 type S2Storage interface {
-	Start(ctx context.Context) error
+	Start(ctx context.Context, afterSeq uint64) error
 	Stop(ctx context.Context) error
 	Running() bool
 	EverStarted() bool
@@ -134,7 +134,13 @@ type ApiService struct {
 	// exportMu serializes OTLP export reconciliation independently of monitorMu,
 	// so a toggle-off drain (bounded by otlpStopTimeout) never blocks concurrent
 	// telemetry reads/writes on monitorMu.
-	exportMu        sync.Mutex
+	exportMu sync.Mutex
+	// storageMu serializes S2 storage reconciliation against telemetry commits.
+	// Unlike exportMu it is also taken under monitorMu: PUT and PATCH hold it
+	// from the storage-off check until the config is committed or rolled back,
+	// so reconcileStorage only reads a settled config. reconcileStorage never
+	// takes monitorMu, so the order is always monitorMu then storageMu.
+	storageMu       sync.Mutex
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
 }

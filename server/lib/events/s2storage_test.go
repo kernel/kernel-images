@@ -41,11 +41,11 @@ func TestS2StorageController_OpensNothingUntilStart(t *testing.T) {
 func TestS2StorageController_StartIsIdempotent(t *testing.T) {
 	c, resolved := newTestController(t, "test-stream")
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	first := c.writer
 	require.NotNil(t, first)
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	assert.Same(t, first, c.writer, "second Start must not replace the writer")
 	assert.Equal(t, int32(1), resolved.Load(), "second Start must not re-resolve the stream")
 
@@ -61,7 +61,7 @@ func TestS2StorageController_ConcurrentStartOpensOneWriter(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- c.Start(context.Background())
+			errs <- c.Start(context.Background(), 0)
 		}()
 	}
 	wg.Wait()
@@ -89,11 +89,11 @@ func TestS2StorageController_ConcurrentStartReturnsFailure(t *testing.T) {
 	cancel()
 
 	firstDone := make(chan error, 1)
-	go func() { firstDone <- c.Start(ctx) }()
+	go func() { firstDone <- c.Start(ctx, 0) }()
 	<-entered
 
 	secondDone := make(chan error, 1)
-	go func() { secondDone <- c.Start(context.Background()) }()
+	go func() { secondDone <- c.Start(context.Background(), 0) }()
 	select {
 	case err := <-secondDone:
 		t.Fatalf("concurrent Start returned before the in-flight start finished: %v", err)
@@ -112,12 +112,12 @@ func TestS2StorageController_StartFailureRollsBack(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.ErrorIs(t, c.Start(ctx), context.Canceled)
+	require.ErrorIs(t, c.Start(ctx, 0), context.Canceled)
 	assert.False(t, c.Running())
 	assert.False(t, c.EverStarted())
 	assert.Equal(t, int32(1), resolved.Load())
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	assert.True(t, c.Running())
 	assert.True(t, c.EverStarted())
 	assert.Equal(t, int32(2), resolved.Load())
@@ -133,7 +133,7 @@ func TestS2StorageController_FailedStartDoesNotLogEnabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.ErrorIs(t, c.Start(ctx), context.Canceled)
+	require.ErrorIs(t, c.Start(ctx, 0), context.Canceled)
 	assert.NotContains(t, logs.String(), "S2 storage enabled")
 }
 
@@ -143,7 +143,7 @@ func TestS2StorageController_SuccessfulStartLogsEnabled(t *testing.T) {
 		return "test-stream"
 	}, S2Config{}, slog.New(slog.NewTextHandler(&logs, nil)))
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	assert.Contains(t, logs.String(), "S2 storage enabled")
 
 	require.NoError(t, stopController(t, c))
@@ -152,7 +152,7 @@ func TestS2StorageController_SuccessfulStartLogsEnabled(t *testing.T) {
 func TestS2StorageController_EmptyStreamDoesNotStart(t *testing.T) {
 	c, resolved := newTestController(t, "")
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	assert.Equal(t, int32(1), resolved.Load())
 	assert.False(t, c.Running())
 	assert.False(t, c.EverStarted())
@@ -165,7 +165,7 @@ func TestS2StorageController_MissingCredentialsDoesNotResolveStream(t *testing.T
 		return "test-stream"
 	}, S2Config{}, slog.Default())
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	assert.Zero(t, resolved.Load())
 	assert.False(t, c.Running())
 	assert.False(t, c.EverStarted())
@@ -208,7 +208,7 @@ func TestS2StorageController_StopHonorsContextDuringStart(t *testing.T) {
 	cancelParent()
 
 	startDone := make(chan error, 1)
-	go func() { startDone <- c.Start(parent) }()
+	go func() { startDone <- c.Start(parent, 0) }()
 	<-entered
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -298,13 +298,58 @@ func TestS2StorageController_StopHonorsContextDuringStop(t *testing.T) {
 func TestS2StorageController_EverStartedSurvivesStop(t *testing.T) {
 	c, resolved := newTestController(t, "test-stream")
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	require.NoError(t, stopController(t, c))
 
 	assert.False(t, c.Running())
 	assert.True(t, c.EverStarted())
 
-	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Start(context.Background(), 0))
 	assert.False(t, c.Running(), "a stopped controller must not reopen the sink")
 	assert.Equal(t, int32(1), resolved.Load())
+}
+
+// The ring can still hold events captured before storage was wanted, and the
+// writer must not replay them. A ring of four holding seqs 7..10 makes a
+// replay observable without submitting anything: a writer after seq 10 has
+// nothing to read, while one reading from seq 0 finds six evicted events.
+func TestS2StorageController_StartSkipsEventsAtOrBeforeAfterSeq(t *testing.T) {
+	es := newTestStream(t, 4)
+	for range 10 {
+		es.Publish(Envelope{Event: makeEvent("captured with storage off")})
+	}
+	c := NewS2StorageController(es, "test-basin", "test-token", func() string { return "test-stream" }, S2Config{}, slog.Default())
+
+	require.NoError(t, c.Start(context.Background(), 10))
+	require.True(t, c.Running())
+	assert.Never(t, func() bool { return es.DroppedEvents() > 0 }, 200*time.Millisecond, time.Millisecond, "the writer read events at or before afterSeq")
+
+	require.NoError(t, stopController(t, c))
+}
+
+// The first event the writer forwards is exactly the one after afterSeq, so
+// nothing at the boundary captured with storage off is persisted.
+func TestS2StorageWriter_ForwardsFromAfterSeq(t *testing.T) {
+	es := newTestStream(t, 64)
+	for range 10 {
+		es.Publish(Envelope{Event: makeEvent("ev")})
+	}
+	backend := &mockBackend{}
+	w := NewS2StorageWriter(es, "", "", "", 7, S2Config{}, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	w.mu.Lock()
+	w.startLocked(ctx, backend)
+	w.mu.Unlock()
+
+	require.Eventually(t, func() bool { return len(backend.envelopes()) == 3 }, time.Second, time.Millisecond)
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	require.NoError(t, w.Stop(stopCtx))
+
+	var seqs []uint64
+	for _, env := range backend.envelopes() {
+		seqs = append(seqs, env.Seq)
+	}
+	assert.Equal(t, []uint64{8, 9, 10}, seqs)
 }

@@ -20,6 +20,11 @@ type TelemetryConfig struct {
 	// ExportOTLP forwards captured events to the configured OTLP endpoint.
 	// Off by default and independent of what is captured.
 	ExportOTLP bool
+	// StoreS2 writes captured events to the S2 storage sink. The API default
+	// is on (an omitted storage block means true), so unlike the other fields
+	// the zero value here is not the default: a config that leaves it unset
+	// does not store, which is the safe way to fail.
+	StoreS2 bool
 	// ExcludedCdpMethods leaves the named browser-control methods out of the
 	// cdp_command stream. Empty reports every supported method. Telemetry only:
 	// an excluded command still reaches the browser.
@@ -41,8 +46,13 @@ type TelemetrySession struct {
 	sessionStartSeq uint64
 	categories      map[oapi.TelemetryEventCategory]struct{}
 	exportOTLP      bool
-	appliedAt       time.Time
-	excludedCdp     map[string]struct{}
+	storeS2         bool
+	// storeS2After is the last seq published before storage was turned on for
+	// the current session. Everything at or below it was captured with storage
+	// off, so the S2 sink must start after it.
+	storeS2After uint64
+	appliedAt    time.Time
+	excludedCdp  map[string]struct{}
 	// active mirrors "a session is running with these categories" for callers
 	// on a hot path, who must decide whether to do any work at all before they
 	// reach Publish and its mutex. nil means no session. Written under mu;
@@ -114,6 +124,8 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.appliedAt = time.Now()
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
+	s.storeS2 = cfg.StoreS2
+	s.storeS2After = s.sessionStartSeq
 	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
 	s.setActiveLocked()
 }
@@ -196,7 +208,7 @@ func (s *TelemetrySession) Config() TelemetryConfig {
 		excluded = append(excluded, oapi.BrowserCdpCommandMethod(m))
 	}
 	sort.Slice(excluded, func(i, j int) bool { return excluded[i] < excluded[j] })
-	return TelemetryConfig{Categories: cats, ExportOTLP: s.exportOTLP, ExcludedCdpMethods: excluded}
+	return TelemetryConfig{Categories: cats, ExportOTLP: s.exportOTLP, StoreS2: s.storeS2, ExcludedCdpMethods: excluded}
 }
 
 // AppliedAt returns when the current configuration was applied, or the zero
@@ -213,8 +225,26 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	defer s.mu.Unlock()
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
+	// Publish holds mu, so the seq read here is exactly the boundary between
+	// events captured with storage off and those captured with it on.
+	if cfg.StoreS2 && !s.storeS2 {
+		s.storeS2After = s.es.Seq()
+	}
+	s.storeS2 = cfg.StoreS2
 	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
 	s.setActiveLocked()
+}
+
+// StoreS2After reports whether the current session stores to S2 and, if it
+// does, the seq the sink must start after. False when no session is active,
+// since Stop clears storeS2.
+func (s *TelemetrySession) StoreS2After() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.storeS2 {
+		return 0, false
+	}
+	return s.storeS2After, true
 }
 
 // CategoryEnabled reports whether events in category c are currently captured.
@@ -252,8 +282,9 @@ func (s *TelemetrySession) Stop() {
 	defer s.mu.Unlock()
 	s.id = ""
 	s.appliedAt = time.Time{}
-	// The session is over, so export is off; keep Config() authoritative for the
-	// desired export state after a clear.
+	// The session is over, so export and storage are off; keep Config()
+	// authoritative for the desired sink state after a clear.
 	s.exportOTLP = false
+	s.storeS2 = false
 	s.setActiveLocked()
 }

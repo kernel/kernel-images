@@ -232,3 +232,71 @@ func TestTelemetrySession(t *testing.T) {
 		assert.True(t, json.Valid(env.Event.Data))
 	})
 }
+
+func TestTelemetrySessionStoreS2(t *testing.T) {
+	ts := newTestTelemetrySession(t)
+	assert.False(t, ts.Config().StoreS2, "nothing is stored before a session")
+
+	ts.Start("session-1", TelemetryConfig{StoreS2: true})
+	assert.True(t, ts.Config().StoreS2)
+
+	ts.UpdateConfig(TelemetryConfig{StoreS2: false})
+	assert.False(t, ts.Config().StoreS2)
+
+	ts.UpdateConfig(TelemetryConfig{StoreS2: true})
+	ts.Stop()
+	assert.False(t, ts.Config().StoreS2, "a clear must leave the desired storage state off")
+}
+
+func TestTelemetrySessionStoreS2After(t *testing.T) {
+	ts := newTestTelemetrySession(t)
+	_, store := ts.StoreS2After()
+	assert.False(t, store, "no session, nothing to store")
+
+	ts.Start("off", TelemetryConfig{Categories: events.UserCategories})
+	ts.Publish(cdpEvent("ev.one", events.Network))
+	ts.Publish(cdpEvent("ev.two", events.Network))
+	_, store = ts.StoreS2After()
+	assert.False(t, store)
+
+	ts.UpdateConfig(TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	after, store := ts.StoreS2After()
+	assert.True(t, store)
+	assert.EqualValues(t, 2, after, "turning storage on mid-session starts after what was captured with it off")
+
+	ts.Publish(cdpEvent("ev.three", events.Network))
+	ts.UpdateConfig(TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	after, _ = ts.StoreS2After()
+	assert.EqualValues(t, 2, after, "a config that keeps storage on keeps its floor")
+
+	ts.Stop()
+	_, store = ts.StoreS2After()
+	assert.False(t, store)
+
+	ts.Start("on", TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	after, store = ts.StoreS2After()
+	assert.True(t, store)
+	assert.EqualValues(t, 3, after, "a storing session starts after what earlier sessions captured")
+}
+
+// The S2 sink opens after a storing session is committed and reads from the
+// seq that session started at. Deferring the open is lossless only because
+// nothing reaches the ring without a session: TelemetrySession is its only
+// publisher.
+func TestPublishWithoutSessionReachesNothing(t *testing.T) {
+	es := newTestEventStream(t, 16)
+	ts := NewTelemetrySession(es)
+
+	for _, cat := range events.UserCategories {
+		_, ok := ts.Publish(cdpEvent("before.session", cat))
+		assert.False(t, ok)
+	}
+	assert.Zero(t, es.Seq(), "nothing may reach the ring before a session")
+
+	ts.Start("session-1", TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	ts.Publish(cdpEvent("in.session", events.Network))
+	ts.Stop()
+	_, ok := ts.Publish(cdpEvent("after.session", events.Network))
+	assert.False(t, ok)
+	assert.Equal(t, uint64(1), es.Seq(), "nothing may reach the ring after a clear either")
+}
