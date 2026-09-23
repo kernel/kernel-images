@@ -476,9 +476,11 @@ func (r *s2StreamResolver) Resolve() string {
 
 // RecordAppliedPayload records the applied identity's stream in-process so a
 // resolve that follows the handoff does not depend on re-reading the identity
-// files. It does not block: the handler contract forbids holding up the handoff.
+// files. The hook only runs on a fork, whose boot S2_STREAM is the parent's,
+// so a payload without a stream leaves storage closed rather than falling back
+// to it. It does not block: the handler contract forbids holding up the handoff.
 func (r *s2StreamResolver) RecordAppliedPayload(payload forkidentity.Payload) {
-	stream := forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], r.cfg.S2Stream)
+	stream := forkidentity.Env(payload)["S2_STREAM"]
 	r.hookStream.Store(&stream)
 }
 
@@ -488,6 +490,7 @@ func (r *s2StreamResolver) RecordAppliedPayload(payload forkidentity.Payload) {
 // a restarted api would otherwise bind for the rest of the instance's life.
 // While the wait is armed and no identity has been applied there is no stream
 // this instance may bind yet, so the result is empty; pending reports that case.
+// Once one is applied only its own stream counts, never the boot env's.
 //
 // OTLP resolves its identity per use instead (otlpIdentityProvider), so a stale
 // read there self-corrects; an S2 append session binds once, so this read has to
@@ -508,7 +511,7 @@ func appliedS2Stream(cfg *config.Config) (stream string, pending bool) {
 	if err != nil || payload.InstanceName() != applied {
 		return "", true
 	}
-	return forkidentity.FirstNonEmpty(forkidentity.Env(payload)["S2_STREAM"], cfg.S2Stream), false
+	return forkidentity.Env(payload)["S2_STREAM"], false
 }
 
 // chromeJSONProxyHandler returns a handler that proxies a JSON endpoint from

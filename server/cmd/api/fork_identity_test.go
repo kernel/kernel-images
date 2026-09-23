@@ -234,6 +234,22 @@ func TestAppliedS2StreamPrefersForkIdentity(t *testing.T) {
 	assert.Equal(t, "fork-stream", stream)
 }
 
+func TestAppliedS2StreamNeverFallsBackToSeedOnFork(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	markForkIdentityWaitArmed(t)
+	cfg := &config.Config{S2Stream: "seed-stream"}
+
+	writeForkIdentityPayloadForTest(t, forkidentity.Payload{
+		"instance_name":     "fork",
+		"session_intel_url": "https://intel.example.test",
+	})
+	require.NoError(t, forkidentity.WriteAppliedMarker("fork"))
+
+	stream, pending := appliedS2Stream(cfg)
+	assert.False(t, pending)
+	assert.Empty(t, stream, "an applied fork identity without a stream must not bind the parent's")
+}
+
 func TestAppliedS2StreamIgnoresMarkerForAnotherInstance(t *testing.T) {
 	useTempForkIdentityFiles(t)
 	markForkIdentityWaitArmed(t)
@@ -288,7 +304,7 @@ func TestS2StreamResolverHoldsBackSeedStreamWhilePending(t *testing.T) {
 	assert.Empty(t, resolver.Resolve())
 
 	resolver.RecordAppliedPayload(forkidentity.Payload{"instance_name": "fork", "session_intel_url": "https://intel.example.test"})
-	assert.Equal(t, "seed-stream", resolver.Resolve(), "a payload without a stream keeps the boot configuration")
+	assert.Empty(t, resolver.Resolve(), "a fork payload without a stream must not fall back to the parent's")
 
 	resolver.RecordAppliedPayload(forkidentity.Payload{"s2_stream": "fork-stream"})
 	assert.Equal(t, "fork-stream", resolver.Resolve())
