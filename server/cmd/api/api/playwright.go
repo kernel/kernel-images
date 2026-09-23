@@ -16,11 +16,47 @@ import (
 	"github.com/kernel/kernel-images/server/lib/oapi"
 )
 
-const (
-	playwrightDaemonSocket  = "/tmp/playwright-daemon.sock"
-	playwrightDaemonScript  = "/usr/local/lib/playwright-daemon.js"
-	playwrightDaemonStartup = 5 * time.Second
+const playwrightDaemonScript = "/usr/local/lib/playwright-daemon.js"
+
+// Long enough that a busy box cannot make a healthy daemon look absent. The old
+// 100ms declared one dead under load, and the spawn that followed unlinked the
+// live socket out from under it.
+const playwrightDaemonDial = 2 * time.Second
+
+// Overridden in tests.
+var (
+	playwrightDaemonSocket = "/tmp/playwright-daemon.sock"
+	// How long to wait for the daemon's socket. In the image supervisord owns
+	// the daemon and restarts it, so this covers a restart rather than a cold
+	// start; the old 5s was a cold-start budget and a loaded host beat it.
+	playwrightDaemonStartup = 30 * time.Second
 )
+
+// Set by the image's supervisord, which starts the daemon after chromium and
+// restarts it if it dies. Outside the image — a local `go run` — nothing
+// supervises it, so the API starts it itself.
+func playwrightDaemonSupervised() bool {
+	return os.Getenv("PLAYWRIGHT_DAEMON_SUPERVISED") == "true"
+}
+
+func playwrightDaemonReachable(timeout time.Duration) bool {
+	conn, err := net.DialTimeout("unix", playwrightDaemonSocket, timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+func waitForPlaywrightDaemon(deadline time.Time) bool {
+	for time.Now().Before(deadline) {
+		if playwrightDaemonReachable(playwrightDaemonDial) {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
+}
 
 type playwrightDaemonRequest struct {
 	ID        string `json:"id"`
@@ -39,19 +75,25 @@ type playwrightDaemonResponse struct {
 func (s *ApiService) ensurePlaywrightDaemon(ctx context.Context) error {
 	log := logger.FromContext(ctx)
 
-	if conn, err := net.DialTimeout("unix", playwrightDaemonSocket, 100*time.Millisecond); err == nil {
-		conn.Close()
+	if playwrightDaemonReachable(playwrightDaemonDial) {
 		return nil
 	}
 
+	deadline := time.Now().Add(playwrightDaemonStartup)
+
+	// Supervisord owns the daemon here. Spawning a second copy would race it,
+	// and the loser unlinks the winner's socket, so wait for the restart.
+	if playwrightDaemonSupervised() {
+		log.Info("waiting for supervised playwright daemon")
+		if waitForPlaywrightDaemon(deadline) {
+			return nil
+		}
+		return fmt.Errorf("supervised playwright daemon did not come back within %v", playwrightDaemonStartup)
+	}
+
 	if !atomic.CompareAndSwapInt32(&s.playwrightDaemonStarting, 0, 1) {
-		deadline := time.Now().Add(playwrightDaemonStartup)
-		for time.Now().Before(deadline) {
-			if conn, err := net.DialTimeout("unix", playwrightDaemonSocket, 100*time.Millisecond); err == nil {
-				conn.Close()
-				return nil
-			}
-			time.Sleep(100 * time.Millisecond)
+		if waitForPlaywrightDaemon(deadline) {
+			return nil
 		}
 		return fmt.Errorf("timeout waiting for daemon to start")
 	}
@@ -69,15 +111,13 @@ func (s *ApiService) ensurePlaywrightDaemon(ctx context.Context) error {
 	}
 
 	s.playwrightDaemonCmd = cmd
+	// Nothing reads the exit status, and without this every daemon that dies
+	// stays a zombie for the life of the API.
+	go func() { _ = cmd.Wait() }()
 
-	deadline := time.Now().Add(playwrightDaemonStartup)
-	for time.Now().Before(deadline) {
-		if conn, err := net.DialTimeout("unix", playwrightDaemonSocket, 100*time.Millisecond); err == nil {
-			conn.Close()
-			log.Info("playwright daemon started successfully")
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
+	if waitForPlaywrightDaemon(deadline) {
+		log.Info("playwright daemon started successfully")
+		return nil
 	}
 
 	cmd.Process.Kill()
