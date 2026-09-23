@@ -226,3 +226,143 @@ func (w *S2StorageWriter) Stop(ctx context.Context) error {
 	}
 	return w.storage.Close(ctx)
 }
+
+// S2StorageController opens at most one writer because StorageWriter is
+// single-use and an append session is bound to one stream.
+type S2StorageController struct {
+	es       *EventStream
+	basin    string
+	token    string
+	streamFn func() string
+	cfg      S2Config
+	log      *slog.Logger
+
+	mu          sync.Mutex
+	writer      *S2StorageWriter
+	cancel      context.CancelFunc
+	start       *s2ControllerStart
+	stopDone    chan struct{}
+	everStarted bool
+}
+
+type s2ControllerStart struct {
+	done chan struct{}
+	err  error
+}
+
+// NewS2StorageController resolves streamFn at Start because a fork learns its
+// stream after construction.
+func NewS2StorageController(es *EventStream, basin, token string, streamFn func() string, cfg S2Config, log *slog.Logger) *S2StorageController {
+	return &S2StorageController{es: es, basin: basin, token: token, streamFn: streamFn, cfg: cfg, log: log}
+}
+
+func (c *S2StorageController) Start(parent context.Context) (err error) {
+	c.mu.Lock()
+	if c.everStarted {
+		c.mu.Unlock()
+		return nil
+	}
+	if c.start != nil {
+		start := c.start
+		c.mu.Unlock()
+		if err := waitForS2ControllerOperation(parent, start.done); err != nil {
+			return err
+		}
+		return start.err
+	}
+	if c.basin == "" || c.token == "" {
+		c.mu.Unlock()
+		return nil
+	}
+	start := &s2ControllerStart{done: make(chan struct{})}
+	c.start = start
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		start.err = err
+		c.start = nil
+		close(start.done)
+		c.mu.Unlock()
+	}()
+
+	stream := c.streamFn()
+	if stream == "" {
+		return nil
+	}
+	runCtx, cancel := context.WithCancel(parent)
+	w := NewS2StorageWriter(c.es, c.basin, c.token, stream, c.cfg, c.log)
+	if err = w.Start(runCtx); err != nil {
+		cancel()
+		return err
+	}
+	c.log.Info("S2 storage enabled", "basin", c.basin, "stream", stream)
+	c.mu.Lock()
+	c.writer, c.cancel, c.everStarted = w, cancel, true
+	c.mu.Unlock()
+	return nil
+}
+
+func (c *S2StorageController) Stop(ctx context.Context) error {
+	for {
+		c.mu.Lock()
+		if c.start != nil {
+			start := c.start
+			c.mu.Unlock()
+			if err := waitForS2ControllerOperation(ctx, start.done); err != nil {
+				return err
+			}
+			continue
+		}
+		if c.stopDone != nil {
+			stopDone := c.stopDone
+			c.mu.Unlock()
+			if err := waitForS2ControllerOperation(ctx, stopDone); err != nil {
+				return err
+			}
+			continue
+		}
+		if c.writer == nil {
+			c.mu.Unlock()
+			return nil
+		}
+		writer, cancel := c.writer, c.cancel
+		stopDone := make(chan struct{})
+		c.stopDone = stopDone
+		c.mu.Unlock()
+
+		cancel()
+		err := writer.Stop(ctx)
+
+		c.mu.Lock()
+		if err == nil {
+			c.writer, c.cancel = nil, nil
+		}
+		c.stopDone = nil
+		close(stopDone)
+		c.mu.Unlock()
+		return err
+	}
+}
+
+func waitForS2ControllerOperation(ctx context.Context, done <-chan struct{}) error {
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *S2StorageController) Running() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.writer != nil
+}
+
+// EverStarted remains true after Stop so callers can tell whether anything
+// could have been persisted.
+func (c *S2StorageController) EverStarted() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.everStarted
+}

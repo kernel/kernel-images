@@ -43,6 +43,17 @@ type OTLPExporter interface {
 
 var _ OTLPExporter = (*events.OTLPExportController)(nil)
 
+// S2Storage controls the optional S2 storage sink, which no-ops when the VM
+// has no S2 credentials. Implemented by *events.S2StorageController.
+type S2Storage interface {
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+	Running() bool
+	EverStarted() bool
+}
+
+var _ S2Storage = (*events.S2StorageController)(nil)
+
 type webMCPClient interface {
 	Tools(ctx context.Context) ([]webmcpclient.Tool, error)
 	Invoke(ctx context.Context, toolRef string, input map[string]any) (webmcpclient.InvocationResult, error)
@@ -117,6 +128,7 @@ type ApiService struct {
 	telemetrySession *telemetry.TelemetrySession
 	cdpMonitor       cdpMonitorController
 	otlpExport       OTLPExporter
+	s2Storage        S2Storage
 	monitorMu        sync.Mutex
 	// exportMu serializes OTLP export reconciliation independently of monitorMu,
 	// so a toggle-off drain (bounded by otlpStopTimeout) never blocks concurrent
@@ -138,6 +150,7 @@ func New(
 	eventStream *events.EventStream,
 	displayNum int,
 	otlpExport OTLPExporter,
+	s2Storage S2Storage,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -173,6 +186,7 @@ func New(
 		telemetrySession:  telemetrySession,
 		cdpMonitor:        mon,
 		otlpExport:        otlpExport,
+		s2Storage:         s2Storage,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,

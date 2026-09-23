@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -266,6 +267,29 @@ func TestAppliedS2StreamIgnoresMarkerFromBeforeThisBoot(t *testing.T) {
 	stream, applied := appliedS2Stream(cfg)
 	assert.False(t, applied)
 	assert.Equal(t, "seed-stream", stream)
+}
+
+func TestS2StreamResolverUsesHookPayloadWithoutReadyFile(t *testing.T) {
+	useTempForkIdentityFiles(t)
+	resolver := newS2StreamResolver(&config.Config{S2Stream: "seed-stream"})
+	started := make(chan string, 1)
+
+	resolver.StartForAppliedPayload(
+		context.Background(),
+		forkidentity.Payload{"s2_stream": "fork-stream"},
+		func(context.Context) error {
+			started <- resolver.Resolve()
+			return nil
+		},
+		slog.Default(),
+	)
+
+	select {
+	case stream := <-started:
+		assert.Equal(t, "fork-stream", stream)
+	case <-time.After(time.Second):
+		t.Fatal("S2 storage did not start")
+	}
 }
 
 // markForkIdentityWaitArmed stands in for the wrapper having entered the wait,
