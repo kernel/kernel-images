@@ -166,7 +166,7 @@ type S2StorageWriter struct {
 
 	mu      sync.Mutex
 	started bool
-	storage *s2Storage
+	storage Storage
 	writer  *StorageWriter
 	done    chan struct{}
 }
@@ -196,6 +196,12 @@ func (w *S2StorageWriter) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	w.startLocked(ctx, storage)
+	return nil
+}
+
+// startLocked begins forwarding to an opened storage. Requires w.mu.
+func (w *S2StorageWriter) startLocked(ctx context.Context, storage Storage) {
 	w.storage = storage
 	w.writer = NewStorageWriterAfter(w.es, storage, w.log, w.afterSeq)
 	w.done = make(chan struct{})
@@ -206,7 +212,6 @@ func (w *S2StorageWriter) Start(ctx context.Context) error {
 			w.log.Error("s2 storage writer failed", "err", err)
 		}
 	}()
-	return nil
 }
 
 // Stop waits for the Run goroutine to exit, drains any remaining ring events,

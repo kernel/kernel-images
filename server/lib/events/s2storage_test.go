@@ -326,3 +326,30 @@ func TestS2StorageController_StartSkipsEventsAtOrBeforeAfterSeq(t *testing.T) {
 
 	require.NoError(t, stopController(t, c))
 }
+
+// The first event the writer forwards is exactly the one after afterSeq, so
+// nothing at the boundary captured with storage off is persisted.
+func TestS2StorageWriter_ForwardsFromAfterSeq(t *testing.T) {
+	es := newTestStream(t, 64)
+	for range 10 {
+		es.Publish(Envelope{Event: makeEvent("ev")})
+	}
+	backend := &mockBackend{}
+	w := NewS2StorageWriter(es, "", "", "", 7, S2Config{}, slog.Default())
+	ctx, cancel := context.WithCancel(context.Background())
+	w.mu.Lock()
+	w.startLocked(ctx, backend)
+	w.mu.Unlock()
+
+	require.Eventually(t, func() bool { return len(backend.envelopes()) == 3 }, time.Second, time.Millisecond)
+	cancel()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stopCancel()
+	require.NoError(t, w.Stop(stopCtx))
+
+	var seqs []uint64
+	for _, env := range backend.envelopes() {
+		seqs = append(seqs, env.Seq)
+	}
+	assert.Equal(t, []uint64{8, 9, 10}, seqs)
+}
