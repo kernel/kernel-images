@@ -1360,7 +1360,8 @@ paths:
     get:
       summary: Discover WebMCP tools across the browser
       description: |
-        Returns a snapshot of WebMCP tools registered by every open tab and by embedded content within those tabs.
+        Returns a snapshot of WebMCP tools registered by every open tab and by embedded
+        content within those tabs.
 
         On the first request, Kernel starts monitoring the browser. Tabs and windows that are already
         open are included, and tabs, windows, and embedded content opened later are tracked automatically.
