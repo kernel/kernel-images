@@ -28,7 +28,7 @@ interface CustomToolMetadata {
   title?: string;
   description: string;
   inputSchema: JsonSchema;
-  outputSchema: JsonSchema;
+  outputSchema?: JsonSchema;
   annotations?: Record<string, boolean>;
 }
 
@@ -48,7 +48,7 @@ interface CustomToolDefinition extends CustomToolDefinitionInput {
   registeredName: string;
   revision: number;
   inputValidator: Validator;
-  outputValidator: Validator;
+  outputValidator?: Validator;
   pageExecuteSource?: string;
 }
 
@@ -121,6 +121,7 @@ export interface CustomToolSummary {
 export interface AddCustomToolsInput {
   namespace: string;
   tools: CustomToolDefinitionInput[];
+  forceOverwriteNamespace?: boolean;
 }
 
 function clone<T>(value: T): T {
@@ -131,8 +132,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function newCustomToolID(): string {
-  return `ct_${crypto.randomUUID().replaceAll('-', '').slice(0, 16)}`;
+function newCustomToolID(createId: () => string): string {
+  return `ct_${createId()}`;
 }
 
 function registeredToolName(id: string, name: string): string {
@@ -300,9 +301,19 @@ export class CustomWebMCPRegistry {
     if (!Array.isArray(input.tools) || input.tools.length === 0) {
       throw new Error('tools must be a non-empty array');
     }
+    if (input.forceOverwriteNamespace !== undefined && typeof input.forceOverwriteNamespace !== 'boolean') {
+      throw new Error('forceOverwriteNamespace must be a boolean');
+    }
 
+    const {createId} = await import('@paralleldrive/cuid2');
+    const nextDefinitions = new Map(this.definitions);
+    if (input.forceOverwriteNamespace) {
+      for (const definition of nextDefinitions.values()) {
+        if (definition.namespace === input.namespace) nextDefinitions.delete(definition.id);
+      }
+    }
     const occupied = new Set(
-      [...this.definitions.values()].map((definition) => `${definition.namespace}\u0000${definition.tool.name}`),
+      [...nextDefinitions.values()].map((definition) => `${definition.namespace}\u0000${definition.tool.name}`),
     );
     const additions: CustomToolDefinition[] = [];
     for (const tool of input.tools) {
@@ -315,15 +326,17 @@ export class CustomWebMCPRegistry {
       }
       occupied.add(key);
       let id: string;
-      do id = newCustomToolID(); while (this.definitions.has(id) || additions.some((item) => item.id === id));
+      do id = newCustomToolID(createId); while (this.definitions.has(id) || additions.some((item) => item.id === id));
       additions.push(this.validateDefinition(tool, id, input.namespace, this.revision + 1));
     }
 
-    for (const definition of additions) this.definitions.set(definition.id, definition);
+    for (const definition of additions) nextDefinitions.set(definition.id, definition);
+    const previousDefinitions = this.definitions;
+    this.definitions = nextDefinitions;
     try {
       this.publishDefinitions(this.list(), this.revision + 1);
     } catch (error) {
-      for (const definition of additions) this.definitions.delete(definition.id);
+      this.definitions = previousDefinitions;
       throw error;
     }
     this.revision++;
@@ -353,11 +366,6 @@ export class CustomWebMCPRegistry {
     return [...this.definitions.values()]
       .map(definitionPublic)
       .sort((a, b) => a.id.localeCompare(b.id));
-  };
-
-  current = async (): Promise<CustomToolSummary[]> => {
-    await this.settleReconciliation();
-    return this.list();
   };
 
   private async settleReconciliation(): Promise<void> {
@@ -415,12 +423,14 @@ export class CustomWebMCPRegistry {
     if (!toolResult.success) {
       throw new Error(`invalid MCP tool definition: ${formatToolSchemaError(toolResult.error)}`);
     }
-    if (!isRecord(input.tool.outputSchema)) {
-      throw new Error('tool.outputSchema is required and must be an object');
+    if (input.tool.outputSchema !== undefined && !isRecord(input.tool.outputSchema)) {
+      throw new Error('tool.outputSchema must be an object');
     }
 
     const inputValidator = compileSchema(input.tool.inputSchema, 'tool.inputSchema');
-    const outputValidator = compileSchema(input.tool.outputSchema, 'tool.outputSchema');
+    const outputValidator = input.tool.outputSchema === undefined
+      ? undefined
+      : compileSchema(input.tool.outputSchema, 'tool.outputSchema');
     const pageExecuteSource = input.kind === 'page' ? input.execute.toString() : undefined;
     if (pageExecuteSource) {
       try {

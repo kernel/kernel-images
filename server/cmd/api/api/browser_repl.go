@@ -97,7 +97,9 @@ func newBrowserReplManager() *browserReplManager {
 	}
 }
 
-func (m *browserReplManager) setCustomTools(replID string, revision int, tools []oapi.CustomWebMCPDefinition) {
+// replaceCustomToolsSnapshot refreshes the Go-side discovery cache from the daemon's
+// complete, atomically published snapshot. Adding tools never replaces the registry.
+func (m *browserReplManager) replaceCustomToolsSnapshot(replID string, revision int, tools []oapi.CustomWebMCPDefinition) {
 	m.customToolsMu.Lock()
 	defer m.customToolsMu.Unlock()
 	m.customToolsReplID = replID
@@ -105,7 +107,7 @@ func (m *browserReplManager) setCustomTools(replID string, revision int, tools [
 	m.replaceCustomToolsLocked(tools)
 }
 
-func (m *browserReplManager) setCustomToolsIfCurrent(replID string, revision int, tools []oapi.CustomWebMCPDefinition) {
+func (m *browserReplManager) refreshCustomToolsSnapshot(replID string, revision int, tools []oapi.CustomWebMCPDefinition) {
 	m.customToolsMu.Lock()
 	defer m.customToolsMu.Unlock()
 	if m.customToolsReplID != replID || revision < m.customToolsRevision {
@@ -134,7 +136,7 @@ func (m *browserReplManager) customToolsSnapshot() map[string]oapi.CustomWebMCPD
 				Tools    []oapi.CustomWebMCPDefinition `json:"tools"`
 			}
 			if json.Unmarshal(data, &state) == nil && state.ReplID == replID {
-				m.setCustomToolsIfCurrent(replID, state.Revision, state.Tools)
+				m.refreshCustomToolsSnapshot(replID, state.Revision, state.Tools)
 			}
 		}
 	}
@@ -266,7 +268,7 @@ func closedWaitChannel(err error) chan error {
 func (m *browserReplManager) clearLocked(ctx context.Context, child *browserReplChild) {
 	if m.child == child {
 		m.child = nil
-		m.setCustomTools("", 0, nil)
+		m.replaceCustomToolsSnapshot("", 0, nil)
 		_ = os.Remove(browserReplCustomToolsPath())
 	}
 	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
@@ -309,7 +311,7 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 		child.done <- cmd.Wait()
 	}()
 	m.child = child
-	m.setCustomTools(replID, 0, nil)
+	m.replaceCustomToolsSnapshot(replID, 0, nil)
 
 	deadline := time.Now().Add(browserReplStartupTimeout)
 	for {
@@ -411,12 +413,9 @@ func (m *browserReplManager) killLocked(ctx context.Context, reason string) {
 
 // browserReplDaemonRequest is the wire format sent to the REPL daemon.
 type browserReplDaemonRequest struct {
-	ID           string `json:"id"`
-	Code         string `json:"code"`
-	Operation    string `json:"operation,omitempty"`
-	Namespace    string `json:"namespace,omitempty"`
-	CustomToolID string `json:"custom_tool_id,omitempty"`
-	TimeoutMs    int    `json:"timeout_ms,omitempty"`
+	ID        string `json:"id"`
+	Code      string `json:"code"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
 }
 
 // browserReplDaemonResponse is the wire format returned by the REPL daemon.
@@ -438,9 +437,8 @@ type browserReplDaemonResponse struct {
 	// exception details and is exiting non-zero. The API treats it like a
 	// timeout — terminate the handle and report repl_terminated — so the
 	// state loss is explicit to the caller.
-	Exiting    bool            `json:"exiting,omitempty"`
-	Result     json.RawMessage `json:"result,omitempty"`
-	DurationMs int             `json:"duration_ms"`
+	Exiting    bool `json:"exiting,omitempty"`
+	DurationMs int  `json:"duration_ms"`
 }
 
 // browserReplRequest is the already-encoded request sent over the daemon
@@ -455,28 +453,14 @@ type browserReplRequest struct {
 // disabled. The daemon's limit applies to the line without its trailing
 // newline, so the encoded request must fit before it is sent.
 func prepareBrowserReplRequest(code string, timeout time.Duration) (*browserReplRequest, error) {
-	return prepareBrowserReplOperation(code, "", timeout)
-}
-
-func prepareBrowserReplOperation(code, operation string, timeout time.Duration) (*browserReplRequest, error) {
-	return prepareBrowserReplOperationWithCustomTools(code, operation, "", "", timeout)
-}
-
-func prepareBrowserReplOperationWithCustomTools(
-	code, operation, namespace, customToolID string,
-	timeout time.Duration,
-) (*browserReplRequest, error) {
 	id := uuid.New().String()
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(browserReplDaemonRequest{
-		ID:           id,
-		Code:         code,
-		Operation:    operation,
-		Namespace:    namespace,
-		CustomToolID: customToolID,
-		TimeoutMs:    int(timeout.Milliseconds()),
+		ID:        id,
+		Code:      code,
+		TimeoutMs: int(timeout.Milliseconds()),
 	}); err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}

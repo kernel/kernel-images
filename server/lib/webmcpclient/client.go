@@ -18,7 +18,7 @@ import (
 
 const (
 	customToolNamePrefix    = "custom."
-	customToolIDLength      = len("ct_") + 16
+	customToolIDLength      = len("ct_") + 24
 	settleDelay             = 200 * time.Millisecond
 	settleLimit             = 2 * time.Second
 	maxToolsPerSession      = 256
@@ -204,6 +204,10 @@ func (c *connection) handleProtocolEvent(message cdpclient.Message) {
 	}
 }
 
+// customToolIdentity decodes the hidden name used for a custom registration.
+// The browser registers custom.<ct_CUID2>.<name> to avoid collisions with page
+// tools, while discovery exposes the original name and the generated ID separately.
+// Names that do not match this reserved format are left intact.
 func customToolIdentity(name string) (string, string) {
 	if !strings.HasPrefix(name, customToolNamePrefix) {
 		return "", name
@@ -216,8 +220,11 @@ func customToolIdentity(name string) (string, string) {
 	if !strings.HasPrefix(id, "ct_") {
 		return "", name
 	}
-	for _, char := range id[len("ct_"):] {
-		if !strings.ContainsRune("0123456789abcdef", char) {
+	if id[len("ct_")] < 'a' || id[len("ct_")] > 'z' {
+		return "", name
+	}
+	for _, char := range id[len("ct_")+1:] {
+		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyz0123456789", char) {
 			return "", name
 		}
 	}

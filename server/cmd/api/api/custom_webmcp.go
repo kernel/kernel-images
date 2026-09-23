@@ -15,9 +15,6 @@ const (
 	customWebMCPOperationTimeout = 60 * time.Second
 	maxCustomWebMCPSourceBytes   = 8_000_000
 	maxCustomWebMCPRequestBytes  = maxCustomWebMCPSourceBytes + (4 << 10)
-	customWebMCPListOperation    = "custom_tools_list"
-	customWebMCPAddOperation     = "custom_tools_add"
-	customWebMCPRemoveOperation  = "custom_tool_remove"
 )
 
 type customWebMCPExecutionError struct {
@@ -28,7 +25,7 @@ type customWebMCPExecutionError struct {
 func (e *customWebMCPExecutionError) Error() string { return e.message }
 
 func (s *ApiService) ListCustomWebMCPTools(ctx context.Context, _ oapi.ListCustomWebMCPToolsRequestObject) (oapi.ListCustomWebMCPToolsResponseObject, error) {
-	tools, err := s.browserRepl.customWebMCPOperation(ctx, customWebMCPListOperation, "", "", "")
+	tools, err := s.browserRepl.customWebMCPTools(ctx, `repl.write(JSON.stringify(webmcp.listCustomTools()))`)
 	if err != nil {
 		logger.FromContext(ctx).Error("failed to list custom WebMCP tools", "err", err)
 		return oapi.ListCustomWebMCPTools500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to list custom WebMCP tools"}}, nil
@@ -45,13 +42,10 @@ func (s *ApiService) AddCustomWebMCPTools(ctx context.Context, request oapi.AddC
 	}
 	RecordTelemetryCode(ctx, request.Body.Source)
 
-	tools, err := s.browserRepl.customWebMCPOperation(
-		ctx,
-		customWebMCPAddOperation,
-		request.Body.Source,
-		request.Body.Namespace,
-		"",
-	)
+	namespace, _ := json.Marshal(request.Body.Namespace)
+	forceOverwrite := request.Body.ForceOverwriteNamespace != nil && *request.Body.ForceOverwriteNamespace
+	code := fmt.Sprintf(`repl.write(JSON.stringify(await webmcp.addCustomTools({namespace: %s, tools: await (%s), forceOverwriteNamespace: %t})))`, namespace, request.Body.Source, forceOverwrite)
+	tools, err := s.browserRepl.customWebMCPTools(ctx, code)
 	if err != nil {
 		var executionErr *customWebMCPExecutionError
 		if errors.As(err, &executionErr) {
@@ -79,7 +73,8 @@ func (s *ApiService) RemoveCustomWebMCPTool(ctx context.Context, request oapi.Re
 }
 
 func (m *browserReplManager) removeCustomWebMCPTool(ctx context.Context, id string) (bool, error) {
-	result, err := m.customWebMCPOperationRaw(ctx, customWebMCPRemoveOperation, "", "", id)
+	encodedID, _ := json.Marshal(id)
+	result, err := m.executeCustomWebMCPCode(ctx, fmt.Sprintf(`repl.write(JSON.stringify(await webmcp.removeCustomTool(%s)))`, encodedID))
 	if err != nil {
 		return false, err
 	}
@@ -90,11 +85,8 @@ func (m *browserReplManager) removeCustomWebMCPTool(ctx context.Context, id stri
 	return removed, nil
 }
 
-func (m *browserReplManager) customWebMCPOperation(
-	ctx context.Context,
-	operation, source, namespace, customToolID string,
-) ([]oapi.CustomWebMCPDefinition, error) {
-	result, err := m.customWebMCPOperationRaw(ctx, operation, source, namespace, customToolID)
+func (m *browserReplManager) customWebMCPTools(ctx context.Context, code string) ([]oapi.CustomWebMCPDefinition, error) {
+	result, err := m.executeCustomWebMCPCode(ctx, code)
 	if err != nil {
 		return nil, err
 	}
@@ -110,10 +102,7 @@ func (m *browserReplManager) customWebMCPOperation(
 	return tools, nil
 }
 
-func (m *browserReplManager) customWebMCPOperationRaw(
-	ctx context.Context,
-	operation, source, namespace, customToolID string,
-) (json.RawMessage, error) {
+func (m *browserReplManager) executeCustomWebMCPCode(ctx context.Context, code string) (json.RawMessage, error) {
 	if err := m.acquire(ctx); err != nil {
 		return nil, err
 	}
@@ -129,13 +118,7 @@ func (m *browserReplManager) customWebMCPOperationRaw(
 	}
 	ctx = operationCtx
 
-	request, err := prepareBrowserReplOperationWithCustomTools(
-		source,
-		operation,
-		namespace,
-		customToolID,
-		customWebMCPOperationTimeout,
-	)
+	request, err := prepareBrowserReplRequest(code, customWebMCPOperationTimeout)
 	if err != nil {
 		return nil, &customWebMCPExecutionError{message: err.Error()}
 	}
@@ -164,8 +147,22 @@ func (m *browserReplManager) customWebMCPOperationRaw(
 	if !response.Success {
 		return nil, &customWebMCPExecutionError{code: response.ErrorCode, message: response.Error}
 	}
-	if len(response.Result) == 0 {
-		return nil, errors.New("Browser REPL returned no custom WebMCP result")
+	if response.ContentTruncated {
+		return nil, errors.New("Browser REPL truncated the custom WebMCP result")
 	}
-	return response.Result, nil
+	for i := len(response.Content) - 1; i >= 0; i-- {
+		var item struct {
+			Channel string          `json:"channel"`
+			Text    json.RawMessage `json:"text"`
+		}
+		if json.Unmarshal(response.Content[i], &item) != nil || item.Channel != "write" {
+			continue
+		}
+		var result string
+		if err := json.Unmarshal(item.Text, &result); err != nil || !json.Valid([]byte(result)) {
+			return nil, errors.New("Browser REPL returned an invalid custom WebMCP result")
+		}
+		return json.RawMessage(result), nil
+	}
+	return nil, errors.New("Browser REPL returned no custom WebMCP result")
 }

@@ -67,12 +67,12 @@ func TestGetWebMCPToolsMapsRegistrationContext(t *testing.T) {
 
 func TestCustomToolCacheRejectsStaleGenerationAndRevision(t *testing.T) {
 	manager := newBrowserReplManager()
-	current := oapi.CustomWebMCPDefinition{Id: "ct_0123456789abcdef", Namespace: "current"}
-	stale := oapi.CustomWebMCPDefinition{Id: "ct_fedcba9876543210", Namespace: "stale"}
-	manager.setCustomTools("current-repl", 2, []oapi.CustomWebMCPDefinition{current})
+	current := oapi.CustomWebMCPDefinition{Id: "ct_abcdefghijklmnopqrstuvwx", Namespace: "current"}
+	stale := oapi.CustomWebMCPDefinition{Id: "ct_zyxwvutsrqponmlkjihgfedc", Namespace: "stale"}
+	manager.replaceCustomToolsSnapshot("current-repl", 2, []oapi.CustomWebMCPDefinition{current})
 
-	manager.setCustomToolsIfCurrent("old-repl", 3, []oapi.CustomWebMCPDefinition{stale})
-	manager.setCustomToolsIfCurrent("current-repl", 1, []oapi.CustomWebMCPDefinition{stale})
+	manager.refreshCustomToolsSnapshot("old-repl", 3, []oapi.CustomWebMCPDefinition{stale})
+	manager.refreshCustomToolsSnapshot("current-repl", 1, []oapi.CustomWebMCPDefinition{stale})
 
 	tools := manager.customToolsSnapshot()
 	require.Contains(t, tools, current.Id)
@@ -82,18 +82,18 @@ func TestCustomToolCacheRejectsStaleGenerationAndRevision(t *testing.T) {
 func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 	outputSchema := map[string]any{"type": "object"}
 	manager := newBrowserReplManager()
-	manager.setCustomTools("test-repl", 1, []oapi.CustomWebMCPDefinition{{
-		Id:        "ct_0123456789abcdef",
+	manager.replaceCustomToolsSnapshot("test-repl", 1, []oapi.CustomWebMCPDefinition{{
+		Id:        "ct_abcdefghijklmnopqrstuvwx",
 		Namespace: "stripe.com",
 		Kind:      "cdp",
 		Match:     oapi.CustomWebMCPMatch{UrlPatterns: []string{"https://checkout.stripe.com/*"}},
-		Tool: oapi.CustomWebMCPToolMetadata{
+		Tool: oapi.WebMCPToolMetadata{
 			Name: "fill_payment_form", Description: "Fill payment fields",
-			InputSchema: map[string]any{"type": "object"}, OutputSchema: outputSchema,
+			InputSchema: map[string]any{"type": "object"}, OutputSchema: &outputSchema,
 		},
 	}})
 	client := &fakeWebMCPClient{tools: []webmcpclient.Tool{{
-		Ref: "wmcp_custom", Name: "fill_payment_form", CustomID: "ct_0123456789abcdef",
+		Ref: "wmcp_custom", Name: "fill_payment_form", CustomID: "ct_abcdefghijklmnopqrstuvwx",
 		Source: webmcpclient.ToolSource{WindowID: 1, TabID: 2, PageTitle: "Checkout", PageURL: "https://checkout.stripe.com/"},
 	}}}
 	service := &ApiService{webmcp: client, browserRepl: manager}
@@ -103,7 +103,7 @@ func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 	tools := response.(oapi.GetWebMCPTools200JSONResponse).Tools
 	require.Len(t, tools, 1)
 	require.Equal(t, "stripe.com", tools[0].Source.Custom.Namespace)
-	require.Equal(t, "ct_0123456789abcdef", tools[0].Source.Custom.Id)
+	require.Equal(t, "ct_abcdefghijklmnopqrstuvwx", tools[0].Source.Custom.Id)
 	require.Equal(t, outputSchema, *tools[0].Tool.OutputSchema)
 
 	exclude := true
@@ -112,6 +112,27 @@ func TestGetWebMCPToolsAddsCustomMetadataAndFiltersCustomTools(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, response.(oapi.GetWebMCPTools200JSONResponse).Tools)
+}
+
+func TestGetWebMCPToolsOmitsOptionalCustomOutputSchema(t *testing.T) {
+	manager := newBrowserReplManager()
+	manager.replaceCustomToolsSnapshot("test-repl", 1, []oapi.CustomWebMCPDefinition{{
+		Id: "ct_abcdefghijklmnopqrstuvwx", Namespace: "example.com", Kind: "cdp",
+		Tool: oapi.WebMCPToolMetadata{
+			Name: "read_title", Description: "Read a title", InputSchema: map[string]any{"type": "object"},
+		},
+	}})
+	service := &ApiService{browserRepl: manager, webmcp: &fakeWebMCPClient{tools: []webmcpclient.Tool{{
+		Ref: "wmcp_custom", CustomID: "ct_abcdefghijklmnopqrstuvwx",
+		Source: webmcpclient.ToolSource{WindowID: 1, TabID: 1},
+	}}}}
+	response, err := service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	tool := response.(oapi.GetWebMCPTools200JSONResponse).Tools[0]
+	require.Nil(t, tool.Tool.OutputSchema)
+	payload, err := json.Marshal(tool)
+	require.NoError(t, err)
+	require.NotContains(t, string(payload), "outputSchema")
 }
 
 func TestGetWebMCPToolsSerializesNullFrameForTopLevelTool(t *testing.T) {

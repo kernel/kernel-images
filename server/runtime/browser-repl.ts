@@ -10,7 +10,7 @@ import { BrowserReplCdpClient } from './browser-cdp-client';
 import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
 import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
-import { CustomWebMCPRegistry, type AddCustomToolsInput } from './custom-webmcp';
+import { CustomWebMCPRegistry } from './custom-webmcp';
 import { createWebMCPClient } from './webmcp';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
@@ -396,26 +396,11 @@ async function evaluate(code: string): Promise<void> {
   await cellRuntime.evaluate(code);
 }
 
-async function evaluateValue(source: string): Promise<unknown> {
-  const key = `__kernelCustomTools_${crypto.randomUUID().replaceAll('-', '')}`;
-  try {
-    await evaluate(`globalThis[${JSON.stringify(key)}] = await (${source})`);
-    return contextGlobal[key];
-  } finally {
-    delete contextGlobal[key];
-  }
-}
-
 // Request handling
-
-type ExecuteOperation = 'execute' | 'custom_tools_list' | 'custom_tools_add' | 'custom_tool_remove';
 
 interface ExecuteRequest {
   id: string;
   code: string;
-  operation?: ExecuteOperation;
-  namespace?: string;
-  custom_tool_id?: string;
   timeout_ms?: number;
 }
 
@@ -430,7 +415,6 @@ interface ExecuteResponse {
   content_truncated: boolean;
   timed_out?: boolean;
   exiting?: boolean;
-  result?: unknown;
   duration_ms: number;
 }
 
@@ -475,34 +459,14 @@ async function executeRequest(
       }, timeoutMs);
       if (typeof timer.unref === 'function') timer.unref();
     });
-    const evaluation = webmcpExecution.run(executionAbortController.signal, async () => {
-      switch (request.operation ?? 'execute') {
-        case 'execute':
-          await evaluate(request.code);
-          return undefined;
-        case 'custom_tools_list':
-          return customToolRegistry.current();
-        case 'custom_tools_add': {
-          const tools = await evaluateValue(request.code);
-          return customToolRegistry.add({
-            namespace: request.namespace ?? '',
-            tools: tools as AddCustomToolsInput['tools'],
-          });
-        }
-        case 'custom_tool_remove':
-          return customToolRegistry.remove(request.custom_tool_id ?? '');
-        default:
-          throw new Error(`unknown Browser REPL operation: ${request.operation}`);
-      }
-    });
-    const result = await Promise.race([evaluation, timeoutPromise]);
+    const evaluation = webmcpExecution.run(executionAbortController.signal, () => evaluate(request.code));
+    await Promise.race([evaluation, timeoutPromise]);
     return {
       id: request.id,
       repl_id: REPL_ID,
       success: true,
       content: collector.items,
       content_truncated: collector.truncated,
-      result,
       duration_ms: Date.now() - start,
     };
   } catch (err: any) {

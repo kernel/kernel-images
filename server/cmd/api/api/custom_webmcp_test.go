@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func TestCustomWebMCPToolsUseBrowserReplLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	body := added.(oapi.AddCustomWebMCPTools201JSONResponse)
 	require.Len(t, body.Tools, 1)
-	require.Regexp(t, `^ct_[a-f0-9]{16}$`, body.Tools[0].Id)
+	require.Regexp(t, `^ct_[a-z][a-z0-9]{23}$`, body.Tools[0].Id)
 	require.Equal(t, "example.com", body.Tools[0].Namespace)
 	require.Equal(t, "cdp", body.Tools[0].Kind)
 	require.Equal(t, "read_title", body.Tools[0].Tool.Name)
@@ -163,6 +164,48 @@ func TestCustomWebMCPAllowsSameNameAcrossNamespaces(t *testing.T) {
 	listed, err := svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
 	require.NoError(t, err)
 	require.Len(t, listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools, 2)
+}
+
+func TestCustomWebMCPForceOverwriteNamespace(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	ctx := context.Background()
+	add := func(namespace, source string, force bool) oapi.AddCustomWebMCPToolsResponseObject {
+		response, err := svc.AddCustomWebMCPTools(ctx, oapi.AddCustomWebMCPToolsRequestObject{
+			Body: &oapi.AddCustomWebMCPToolsJSONRequestBody{
+				Namespace: namespace, Source: source, ForceOverwriteNamespace: &force,
+			},
+		})
+		require.NoError(t, err)
+		return response
+	}
+	original := add("example.com", customWebMCPTestSource, false).(oapi.AddCustomWebMCPTools201JSONResponse).Tools[0]
+	second := add("example.com", strings.Replace(customWebMCPTestSource, "read_title", "read_other", 1), false).(oapi.AddCustomWebMCPTools201JSONResponse).Tools[0]
+	other := add("other.example", customWebMCPTestSource, false).(oapi.AddCustomWebMCPTools201JSONResponse).Tools[0]
+
+	// Invalid replacement must not delete either namespace.
+	_, ok := add("example.com", `[{kind: "cdp"}]`, true).(oapi.AddCustomWebMCPTools400JSONResponse)
+	require.True(t, ok)
+	require.Contains(t, svc.browserRepl.customToolsSnapshot(), original.Id)
+	require.Contains(t, svc.browserRepl.customToolsSnapshot(), second.Id)
+
+	const noOutputSchema = `[{kind: "cdp", match: {url_patterns: ["https://example.com/*"]},
+		tool: {name: "read_title", description: "Read title", inputSchema: {type: "object"}},
+		execute: async () => ({title: "example"})}]`
+	_, ok = add("example.com", noOutputSchema, false).(oapi.AddCustomWebMCPTools409JSONResponse)
+	require.True(t, ok)
+	replacement := add("example.com", noOutputSchema, true).(oapi.AddCustomWebMCPTools201JSONResponse).Tools[0]
+	require.Regexp(t, `^ct_[a-z][a-z0-9]{23}$`, replacement.Id)
+	require.NotEqual(t, original.Id, replacement.Id)
+	require.Nil(t, replacement.Tool.OutputSchema)
+
+	listed, err := svc.ListCustomWebMCPTools(ctx, oapi.ListCustomWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	require.ElementsMatch(t, []string{replacement.Id, other.Id}, []string{
+		listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools[0].Id,
+		listed.(oapi.ListCustomWebMCPTools200JSONResponse).Tools[1].Id,
+	})
+	require.NotContains(t, svc.browserRepl.customToolsSnapshot(), original.Id)
+	require.NotContains(t, svc.browserRepl.customToolsSnapshot(), second.Id)
 }
 
 func TestCustomWebMCPInvalidAdditionPreservesTools(t *testing.T) {

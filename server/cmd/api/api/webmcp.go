@@ -88,7 +88,7 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 				Title:        definition.Tool.Title,
 				Description:  definition.Tool.Description,
 				InputSchema:  definition.Tool.InputSchema,
-				OutputSchema: &definition.Tool.OutputSchema,
+				OutputSchema: definition.Tool.OutputSchema,
 				Annotations:  definition.Tool.Annotations,
 			}
 		}
