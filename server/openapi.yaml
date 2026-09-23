@@ -1547,7 +1547,9 @@ paths:
         previously configured; returns 200 if it was. Selection is opt-in: a
         request that enables no categories (a browser config with nothing set to
         true, or every category disabled) clears the configuration; this is
-        idempotent when telemetry is not configured.
+        idempotent when telemetry is not configured. Returns 409 when
+        `storage.enabled` is false on an instance that has already started
+        storage; the configuration is left unchanged.
       operationId: putTelemetry
       x-telemetry-category: platform
       requestBody:
@@ -1571,6 +1573,8 @@ paths:
                 $ref: "#/components/schemas/TelemetryState"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
     patch:
@@ -1580,6 +1584,8 @@ paths:
         set in the request body are changed; omitted categories retain their
         current settings. Returns 404 if telemetry is not configured. Setting
         every configurable category to enabled: false clears the configuration.
+        Returns 409 when `storage.enabled` is false on an instance that has
+        already started storage; the configuration is left unchanged.
       operationId: patchTelemetry
       x-telemetry-category: platform
       requestBody:
@@ -1599,6 +1605,8 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "404":
           $ref: "#/components/responses/NotFoundError"
+        "409":
+          $ref: "#/components/responses/ConflictError"
         "500":
           $ref: "#/components/responses/InternalError"
   /telemetry/events:
@@ -1870,6 +1878,8 @@ components:
           $ref: "#/components/schemas/BrowserTelemetryCategoriesConfig"
         export:
           $ref: "#/components/schemas/BrowserTelemetryExportConfig"
+        storage:
+          $ref: "#/components/schemas/BrowserTelemetryStorageConfig"
       additionalProperties: false
     BrowserTelemetryExportConfig:
       type: object
@@ -1893,6 +1903,25 @@ components:
             Whether captured telemetry is forwarded to the configured OTLP
             destination. Off by default. Has no effect (export stays inactive)
             when no export destination is configured.
+      additionalProperties: false
+    BrowserTelemetryStorageConfig:
+      type: object
+      description: >
+        Durable storage of captured telemetry in Kernel's event store. On by
+        default, so a caller that omits this block keeps today's behavior: in a
+        PUT (full replace) an omitted block means enabled, unlike `export`,
+        whose omitted block means off; in a PATCH an omitted field leaves the
+        current setting unchanged. Storage opens with the first capture session
+        that has it enabled and stays open for the life of the instance, so
+        once it has started a request that disables it is rejected with 409.
+      properties:
+        enabled:
+          type: boolean
+          description: >
+            Whether captured telemetry is written to Kernel's event store.
+            Defaults to true. Set false to keep events on the live stream and
+            any enabled export destination only. Cannot be set false on an
+            instance that has already started storage (409).
       additionalProperties: false
     BrowserTelemetryCategoriesConfig:
       type: object
