@@ -206,7 +206,9 @@ func (s *ApiService) reconcileExport(ctx context.Context) {
 }
 
 // reconcileStorage opens the S2 storage sink once the committed telemetry
-// config calls for it: a capture session is active and storage is on. It never
+// config calls for it: a capture session is active and storage is on. The sink
+// stores only what that config captured, not what the ring still holds from
+// earlier storage-off capture. It never
 // closes the sink. The writer is single-use and binds its stream for the life
 // of the instance, so it stops only at shutdown, and the storage-off guard in
 // PUT and PATCH is what keeps a storage-off config from ever coexisting with an
@@ -221,12 +223,13 @@ func (s *ApiService) reconcileStorage(ctx context.Context) {
 	s.storageMu.Lock()
 	defer s.storageMu.Unlock()
 
-	if !s.telemetrySession.Active() || !s.telemetrySession.Config().StoreS2 || s.s2Storage.EverStarted() {
+	afterSeq, store := s.telemetrySession.StoreS2After()
+	if !store || s.s2Storage.EverStarted() {
 		return
 	}
 	// Root the sink on the app lifecycle, not this request; only its logs
 	// carry the request context.
-	if err := s.s2Storage.Start(s.lifecycleCtx); err != nil {
+	if err := s.s2Storage.Start(s.lifecycleCtx, afterSeq); err != nil {
 		logger.FromContext(ctx).Error("s2 storage failed to start", "err", err)
 	}
 }

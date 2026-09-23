@@ -856,15 +856,17 @@ type stubS2Storage struct {
 	running     bool
 	everStarted bool
 	startErr    error
+	afterSeq    uint64
 }
 
-func (s *stubS2Storage) Start(context.Context) error {
+func (s *stubS2Storage) Start(_ context.Context, afterSeq uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.startErr != nil {
 		return s.startErr
 	}
 	s.starts++
+	s.afterSeq = afterSeq
 	s.running, s.everStarted = true, true
 	return nil
 }
@@ -1049,10 +1051,18 @@ func TestTelemetryStorageStart(t *testing.T) {
 		assert.False(t, st.EverStarted())
 	})
 
-	t.Run("a session that never stored can start storing", func(t *testing.T) {
+	t.Run("the first storing session stores from its start", func(t *testing.T) {
+		svc, st := newStorageService(t)
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(nil)})
+		require.NoError(t, err)
+		assert.Zero(t, st.afterSeq, "nothing precedes the first session, so nothing is skipped")
+	})
+
+	t.Run("a session that never stored can start storing, without what it captured", func(t *testing.T) {
 		svc, st := newStorageService(t)
 		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(&fa)})
 		require.NoError(t, err)
+		publishNetwork(t, svc)
 		publishNetwork(t, svc)
 		require.Equal(t, 0, st.startCount())
 
@@ -1060,6 +1070,52 @@ func TestTelemetryStorageStart(t *testing.T) {
 		require.NoError(t, err)
 		require.IsType(t, oapi.PutTelemetry200JSONResponse{}, resp)
 		assert.Equal(t, 1, st.startCount())
+		assert.EqualValues(t, 2, st.afterSeq, "events captured with storage off must not be stored")
+	})
+
+	t.Run("a patch that turns storage on skips what was captured before it", func(t *testing.T) {
+		svc, st := newStorageService(t)
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(&fa)})
+		require.NoError(t, err)
+		publishNetwork(t, svc)
+
+		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &tr},
+		}})
+		require.NoError(t, err)
+		assert.Equal(t, 1, st.startCount())
+		assert.EqualValues(t, 1, st.afterSeq)
+	})
+
+	t.Run("a storing session after a cleared storage-off one skips it", func(t *testing.T) {
+		svc, st := newStorageService(t)
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(&fa)})
+		require.NoError(t, err)
+		publishNetwork(t, svc)
+		publishNetwork(t, svc)
+		publishNetwork(t, svc)
+		_, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: cleared(&fa)})
+		require.NoError(t, err)
+
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(nil)})
+		require.NoError(t, err)
+		require.IsType(t, oapi.PutTelemetry201JSONResponse{}, resp)
+		assert.EqualValues(t, 3, st.afterSeq)
+	})
+
+	t.Run("a retried start keeps the session's floor", func(t *testing.T) {
+		svc, st := newStorageService(t)
+		st.startErr = errors.New("basin unreachable")
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(nil)})
+		require.NoError(t, err)
+		publishNetwork(t, svc)
+
+		st.mu.Lock()
+		st.startErr = nil
+		st.mu.Unlock()
+		_, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(nil)})
+		require.NoError(t, err)
+		assert.Zero(t, st.afterSeq, "events captured while storage was on but failing to open are still stored")
 	})
 
 	t.Run("a failed start is retried by the next request", func(t *testing.T) {
@@ -1137,7 +1193,7 @@ type blockingStartS2Storage struct {
 	everStarted bool
 }
 
-func (s *blockingStartS2Storage) Start(context.Context) error {
+func (s *blockingStartS2Storage) Start(context.Context, uint64) error {
 	close(s.entered)
 	<-s.release
 	s.mu.Lock()

@@ -248,6 +248,37 @@ func TestTelemetrySessionStoreS2(t *testing.T) {
 	assert.False(t, ts.Config().StoreS2, "a clear must leave the desired storage state off")
 }
 
+func TestTelemetrySessionStoreS2After(t *testing.T) {
+	ts := newTestTelemetrySession(t)
+	_, store := ts.StoreS2After()
+	assert.False(t, store, "no session, nothing to store")
+
+	ts.Start("off", TelemetryConfig{Categories: events.UserCategories})
+	ts.Publish(cdpEvent("ev.one", events.Network))
+	ts.Publish(cdpEvent("ev.two", events.Network))
+	_, store = ts.StoreS2After()
+	assert.False(t, store)
+
+	ts.UpdateConfig(TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	after, store := ts.StoreS2After()
+	assert.True(t, store)
+	assert.EqualValues(t, 2, after, "turning storage on mid-session starts after what was captured with it off")
+
+	ts.Publish(cdpEvent("ev.three", events.Network))
+	ts.UpdateConfig(TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	after, _ = ts.StoreS2After()
+	assert.EqualValues(t, 2, after, "a config that keeps storage on keeps its floor")
+
+	ts.Stop()
+	_, store = ts.StoreS2After()
+	assert.False(t, store)
+
+	ts.Start("on", TelemetryConfig{Categories: events.UserCategories, StoreS2: true})
+	after, store = ts.StoreS2After()
+	assert.True(t, store)
+	assert.EqualValues(t, 3, after, "a storing session starts after what earlier sessions captured")
+}
+
 // The S2 sink opens with the first storing session and reads the ring from
 // its oldest event, so this is what makes deferring it lossless: with no
 // session there is no publisher (TelemetrySession is the ring's only one), so

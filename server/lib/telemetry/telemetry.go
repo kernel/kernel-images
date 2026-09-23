@@ -47,8 +47,12 @@ type TelemetrySession struct {
 	categories      map[oapi.TelemetryEventCategory]struct{}
 	exportOTLP      bool
 	storeS2         bool
-	appliedAt       time.Time
-	excludedCdp     map[string]struct{}
+	// storeS2After is the last seq published before storage was turned on for
+	// the current session. Everything at or below it was captured with storage
+	// off, so the S2 sink must start after it.
+	storeS2After uint64
+	appliedAt    time.Time
+	excludedCdp  map[string]struct{}
 	// active mirrors "a session is running with these categories" for callers
 	// on a hot path, who must decide whether to do any work at all before they
 	// reach Publish and its mutex. nil means no session. Written under mu;
@@ -121,6 +125,7 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
 	s.storeS2 = cfg.StoreS2
+	s.storeS2After = s.sessionStartSeq
 	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
 	s.setActiveLocked()
 }
@@ -220,9 +225,26 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	defer s.mu.Unlock()
 	s.categories = categorySet(cfg.Categories)
 	s.exportOTLP = cfg.ExportOTLP
+	// Publish holds mu, so the seq read here is exactly the boundary between
+	// events captured with storage off and those captured with it on.
+	if cfg.StoreS2 && !s.storeS2 {
+		s.storeS2After = s.es.Seq()
+	}
 	s.storeS2 = cfg.StoreS2
 	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
 	s.setActiveLocked()
+}
+
+// StoreS2After reports whether the current session stores to S2 and, if it
+// does, the seq the sink must start after. False when no session is active,
+// since Stop clears storeS2.
+func (s *TelemetrySession) StoreS2After() (uint64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.storeS2 {
+		return 0, false
+	}
+	return s.storeS2After, true
 }
 
 // CategoryEnabled reports whether events in category c are currently captured.

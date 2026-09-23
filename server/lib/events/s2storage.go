@@ -152,13 +152,15 @@ func (s *s2Storage) Close(ctx context.Context) error {
 	return err
 }
 
-// S2StorageWriter reads from an EventStream and forwards each event to S2.
-// Construct with NewS2StorageWriter, call Start to begin, Stop to drain and shut down.
+// S2StorageWriter reads from an EventStream and forwards each event after
+// afterSeq to S2. Construct with NewS2StorageWriter, call Start to begin, Stop
+// to drain and shut down.
 type S2StorageWriter struct {
 	es          *EventStream
 	basin       string
 	accessToken string
 	streamName  string
+	afterSeq    uint64
 	cfg         S2Config
 	log         *slog.Logger
 
@@ -169,12 +171,13 @@ type S2StorageWriter struct {
 	done    chan struct{}
 }
 
-func NewS2StorageWriter(es *EventStream, basin, accessToken, streamName string, cfg S2Config, log *slog.Logger) *S2StorageWriter {
+func NewS2StorageWriter(es *EventStream, basin, accessToken, streamName string, afterSeq uint64, cfg S2Config, log *slog.Logger) *S2StorageWriter {
 	return &S2StorageWriter{
 		es:          es,
 		basin:       basin,
 		accessToken: accessToken,
 		streamName:  streamName,
+		afterSeq:    afterSeq,
 		cfg:         cfg,
 		log:         log,
 	}
@@ -194,7 +197,7 @@ func (w *S2StorageWriter) Start(ctx context.Context) error {
 		return err
 	}
 	w.storage = storage
-	w.writer = NewStorageWriter(w.es, storage, w.log)
+	w.writer = NewStorageWriterAfter(w.es, storage, w.log, w.afterSeq)
 	w.done = make(chan struct{})
 	w.started = true
 	go func() {
@@ -256,7 +259,11 @@ func NewS2StorageController(es *EventStream, basin, token string, streamFn func(
 	return &S2StorageController{es: es, basin: basin, token: token, streamFn: streamFn, cfg: cfg, log: log}
 }
 
-func (c *S2StorageController) Start(parent context.Context) (err error) {
+// Start opens the writer, which stores only events published after afterSeq:
+// the ring still holds whatever was captured before storage was wanted, and
+// that must not be persisted. afterSeq applies to the call that opens the
+// writer; once one has, later calls are no-ops.
+func (c *S2StorageController) Start(parent context.Context, afterSeq uint64) (err error) {
 	c.mu.Lock()
 	if c.everStarted {
 		c.mu.Unlock()
@@ -290,7 +297,7 @@ func (c *S2StorageController) Start(parent context.Context) (err error) {
 		return nil
 	}
 	runCtx, cancel := context.WithCancel(parent)
-	w := NewS2StorageWriter(c.es, c.basin, c.token, stream, c.cfg, c.log)
+	w := NewS2StorageWriter(c.es, c.basin, c.token, stream, afterSeq, c.cfg, c.log)
 	if err = w.Start(runCtx); err != nil {
 		cancel()
 		return err

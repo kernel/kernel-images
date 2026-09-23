@@ -46,7 +46,7 @@ var _ OTLPExporter = (*events.OTLPExportController)(nil)
 // S2Storage controls the optional S2 storage sink, which no-ops when the VM
 // has no S2 credentials. Implemented by *events.S2StorageController.
 type S2Storage interface {
-	Start(ctx context.Context) error
+	Start(ctx context.Context, afterSeq uint64) error
 	Stop(ctx context.Context) error
 	Running() bool
 	EverStarted() bool
