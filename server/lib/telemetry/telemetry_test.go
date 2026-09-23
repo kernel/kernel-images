@@ -279,10 +279,10 @@ func TestTelemetrySessionStoreS2After(t *testing.T) {
 	assert.EqualValues(t, 3, after, "a storing session starts after what earlier sessions captured")
 }
 
-// The S2 sink opens with the first storing session and reads the ring from
-// its oldest event, so this is what makes deferring it lossless: with no
-// session there is no publisher (TelemetrySession is the ring's only one), so
-// the ring is empty when the first session starts.
+// The S2 sink opens after a storing session is committed and reads from the
+// seq that session started at. Deferring the open is lossless only because
+// nothing reaches the ring without a session: TelemetrySession is its only
+// publisher.
 func TestPublishWithoutSessionReachesNothing(t *testing.T) {
 	es := newTestEventStream(t, 16)
 	ts := NewTelemetrySession(es)
