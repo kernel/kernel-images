@@ -18,32 +18,38 @@ import (
 // fakeCDP is a minimal CDP server that responds to the commands used by
 // SetDeviceMetricsOverride and GetBrowserVersion.
 type fakeCDP struct {
-	getTargetsCalled    bool
-	attachCalled        bool
-	setMetricsCalled    bool
-	setMetricsWidth     int
-	setMetricsHeight    int
-	detachCalled        bool
-	pageTargetID        string
-	sessionID           string
-	failGetTargets      bool
-	failSetMetrics      bool
-	returnNoPageTargets bool
-	getVersionCalled    bool
-	failGetVersion      bool
-	productResponse     string
-	loadUnpackedCalled  bool
-	loadUnpackedPath    string
-	loadUnpackedID      string
-	failLoadUnpacked    bool
-	getExtensionsCalled bool
-	extensions          []ExtensionInfo
-	failGetExtensions   bool
-	navigateCalled      bool
-	navigateCalls       int
-	navigateURL         string
-	pageStates          []string
-	pageStateIndex      int
+	getTargetsCalled      bool
+	attachCalled          bool
+	setMetricsCalled      bool
+	setMetricsWidth       int
+	setMetricsHeight      int
+	detachCalled          bool
+	pageTargetID          string
+	sessionID             string
+	failGetTargets        bool
+	failSetMetrics        bool
+	returnNoPageTargets   bool
+	getVersionCalled      bool
+	failGetVersion        bool
+	productResponse       string
+	browserLocale         string
+	browserLanguages      string
+	browserTimezone       string
+	browserDateTimeLocale string
+	browserNumberLocale   string
+	browserCollatorLocale string
+	loadUnpackedCalled    bool
+	loadUnpackedPath      string
+	loadUnpackedID        string
+	failLoadUnpacked      bool
+	getExtensionsCalled   bool
+	extensions            []ExtensionInfo
+	failGetExtensions     bool
+	navigateCalled        bool
+	navigateCalls         int
+	navigateURL           string
+	pageStates            []string
+	pageStateIndex        int
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +123,16 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 					"jsVersion":       "1.2.3",
 				}
 			}
+		case "Browser.validateKernelBrowserLocation":
+			result = map[string]any{"dateTimeLocale": f.browserDateTimeLocale, "numberLocale": f.browserNumberLocale, "collatorLocale": f.browserCollatorLocale}
+		case "Browser.setKernelBrowserLocation":
+			var params map[string]string
+			_ = json.Unmarshal(req.Params, &params)
+			f.browserLocale = params["locale"]
+			f.browserLanguages = params["acceptLanguages"]
+			result = map[string]any{}
+		case "Browser.getKernelBrowserLocation":
+			result = map[string]any{"locale": f.browserLocale, "acceptLanguages": f.browserLanguages, "timezone": f.browserTimezone, "dateTimeLocale": f.browserDateTimeLocale, "numberLocale": f.browserNumberLocale, "collatorLocale": f.browserCollatorLocale, "renderersConverged": true, "networkContextsConverged": true}
 		case "Extensions.loadUnpacked":
 			f.loadUnpackedCalled = true
 			var params map[string]string
@@ -664,4 +680,21 @@ func TestCommandOnlyClientDiscardsEvents(t *testing.T) {
 	defer cancel()
 	_, err = client.Send(ctx, "Browser.getVersion", nil, "")
 	require.NoError(t, err)
+}
+
+func TestBrowserLocation(t *testing.T) {
+	f := &fakeCDP{browserTimezone: "Europe/Berlin", browserDateTimeLocale: "de", browserNumberLocale: "de", browserCollatorLocale: "de"}
+	url := startFakeCDP(t, f)
+	client, err := Dial(context.Background(), url)
+	require.NoError(t, err)
+	defer client.Close()
+
+	resolution, err := client.ValidateBrowserLocation(context.Background(), "de-DE")
+	require.NoError(t, err)
+	assert.Equal(t, BrowserLocationResolution{DateTimeLocale: "de", NumberLocale: "de", CollatorLocale: "de"}, resolution)
+
+	require.NoError(t, client.SetBrowserLocation(context.Background(), "de-DE", "de-DE,de"))
+	location, err := client.GetBrowserLocation(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, BrowserLocation{Locale: "de-DE", AcceptLanguages: "de-DE,de", TimeZone: "Europe/Berlin", DateTimeLocale: "de", NumberLocale: "de", CollatorLocale: "de", RenderersConverged: true, NetworkContextsConverged: true}, location)
 }
