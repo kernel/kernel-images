@@ -42,6 +42,13 @@ type Config struct {
 	// How long to wait after the last active request before re-enabling scale-to-zero.
 	ScaleToZeroCooldown time.Duration `envconfig:"SCALE_TO_ZERO_COOLDOWN" default:"1s"`
 
+	// Navigation retry: replay a top-level document that the site refused, so
+	// the caller driving the browser does not have to. Off by default; the
+	// budget bounds how much latency one navigation may spend retrying.
+	PageRecoveryEnabled     bool          `envconfig:"PAGE_RECOVERY_ENABLED"      default:"false"`
+	PageRecoveryMaxAttempts int           `envconfig:"PAGE_RECOVERY_MAX_ATTEMPTS" default:"2"`
+	PageRecoveryBudget      time.Duration `envconfig:"PAGE_RECOVERY_BUDGET"       default:"8s"`
+
 	// ChromeDriver proxy: external port where the proxy listens.
 	ChromeDriverProxyPort int `envconfig:"CHROMEDRIVER_PROXY_PORT" default:"9224"`
 	// Internal ChromeDriver upstream used by the ChromeDriver proxy.

@@ -35,6 +35,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/metrics"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/pagerecovery"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/sysmon"
@@ -210,6 +211,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Navigation retry runs on its own CDP connection so it is unaffected by
+	// whether customer telemetry is capturing. It stays nil when off, and the
+	// metrics below then report zeros and a down gauge rather than disappearing.
+	var recoverer *pagerecovery.Recoverer
+	if config.PageRecoveryEnabled {
+		recoverer = pagerecovery.New(upstreamMgr, pagerecovery.Config{
+			MaxAttempts: config.PageRecoveryMaxAttempts,
+			Budget:      config.PageRecoveryBudget,
+		}, slogger)
+		if err := recoverer.Start(context.Background()); err != nil {
+			slogger.Error("failed to start page recovery", "err", err)
+			os.Exit(1)
+		}
+	}
+
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
 	r.Use(api.WebMCPRequestSizeMiddleware)
@@ -339,6 +355,13 @@ func main() {
 	rMetrics.Use(chiMiddleware.Recoverer)
 	metricsCollectors := []metrics.Collector{
 		metrics.NewNetworkCollector(apiService.NetworkMetrics),
+		metrics.NewPageRecoveryCollector(func() (retries, recovered, exhausted uint64, up bool) {
+			if recoverer == nil {
+				return 0, 0, 0, false
+			}
+			snapshot := recoverer.SnapshotMetrics()
+			return snapshot.Retries, snapshot.Recovered, snapshot.Exhausted, snapshot.Up
+		}),
 		metrics.NewChromeCollector(upstreamMgr),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),
@@ -397,6 +420,12 @@ func main() {
 	})
 	g.Go(func() error {
 		return apiService.Shutdown(shutdownCtx)
+	})
+	g.Go(func() error {
+		if recoverer != nil {
+			recoverer.Stop()
+		}
+		return nil
 	})
 	g.Go(func() error {
 		if n := wsRegistry.CloseAll(websocket.StatusGoingAway, "browser shutting down"); n > 0 {
