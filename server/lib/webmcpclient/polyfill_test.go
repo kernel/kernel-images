@@ -203,13 +203,19 @@ func TestPolyfillBridgeIsRecreatedForANewDocument(t *testing.T) {
 		"params": map[string]any{"frame": map[string]any{"id": "page-frame", "loaderId": "next-loader", "url": "https://merchant.example/next"}},
 	})
 	require.Eventually(t, func() bool {
-		tools, err := manager.Tools(context.Background())
-		if err != nil {
-			return false
+		for _, tab := range manager.connection.surface.Snapshot().Tabs {
+			if tab.PageURL == "https://merchant.example/next" {
+				return true
+			}
 		}
-		tool, ok := toolsByName(tools)["poly_search"]
-		return ok && tool.Ref != oldRef
-	}, 3*time.Second, 20*time.Millisecond)
+		return false
+	}, 3*time.Second, 10*time.Millisecond)
+
+	// The stale handle is replaced within the same listing.
+	tools, err = manager.Tools(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, toolsByName(tools), "poly_search")
+	require.NotEqual(t, oldRef, toolsByName(tools)["poly_search"].Ref)
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 6, fake.bridgesCreated)

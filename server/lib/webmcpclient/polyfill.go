@@ -98,6 +98,20 @@ func (c *connection) syncPolyfillTools(ctx context.Context) bool {
 }
 
 func (c *connection) syncPolyfillFrame(ctx context.Context, frame browsersurface.SessionFrame) bool {
+	// A handle from a replaced document fails once; the retry bridges the
+	// frame's current document in the same listing.
+	for attempt := 0; attempt < 2; attempt++ {
+		changed, stale := c.syncPolyfillBridge(ctx, frame)
+		if !stale {
+			return changed
+		}
+	}
+	return false
+}
+
+// syncPolyfillBridge syncs the frame's bridge, creating it when needed, and
+// reports whether the bridge's handle was stale.
+func (c *connection) syncPolyfillBridge(ctx context.Context, frame browsersurface.SessionFrame) (changed, stale bool) {
 	key := polyfillBridgeKey(frame.SessionID, frame.FrameID)
 	c.stateMu.RLock()
 	bridge := c.polyfillBridges[key]
@@ -105,7 +119,7 @@ func (c *connection) syncPolyfillFrame(ctx context.Context, frame browsersurface
 	if bridge == nil {
 		var err error
 		if bridge, err = c.createPolyfillBridge(ctx, frame); err != nil {
-			return false
+			return false, false
 		}
 		c.stateMu.Lock()
 		c.polyfillBridges[key] = bridge
@@ -124,22 +138,22 @@ func (c *connection) syncPolyfillFrame(ctx context.Context, frame browsersurface
 			err = errors.New("WebMCP: polyfill bridge threw")
 		}
 		if err == nil {
-			return string(result.Result.Value) == "true"
+			return string(result.Result.Value) == "true", false
 		}
 	}
-	// A protocol error means the handle's document is gone; a later sync
-	// bridges the frame's new document. Timeouts keep the handle, which may
-	// still own registrations.
+	// A protocol error means the handle's document is gone. Timeouts keep the
+	// handle, which may still own registrations.
 	var protocolErr *cdpclient.Error
-	if errors.As(err, &protocolErr) {
-		c.stateMu.Lock()
-		if c.polyfillBridges[key] == bridge {
-			delete(c.polyfillBridges, key)
-		}
-		c.stateMu.Unlock()
-		go c.releaseObjectGroup(frame.SessionID, bridge.group)
+	if !errors.As(err, &protocolErr) {
+		return false, false
 	}
-	return false
+	c.stateMu.Lock()
+	if c.polyfillBridges[key] == bridge {
+		delete(c.polyfillBridges, key)
+	}
+	c.stateMu.Unlock()
+	go c.releaseObjectGroup(frame.SessionID, bridge.group)
+	return false, true
 }
 
 type evaluationResult struct {
