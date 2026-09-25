@@ -26,9 +26,17 @@ export const RETRY_DELAY_MS = 1000
 export type ConnectStage = 'transport' | 'signaling' | 'media'
 
 export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
+  // Network-bound (socket open + TLS), so it tracks last-mile RTT rather than
+  // anything we control. 5s is ~7x the worst measured across regions, and there
+  // is no mobile/satcom data to lower it against.
   transport: 5000,
-  signaling: 5000,
-  media: 5000,
+  // One server round trip on an already-open socket, plus the offer. Measured
+  // p99 under 200ms, including a cold session.
+  signaling: 3000,
+  // Local: ICE reaches `checking` as soon as the local description is set, since
+  // the remote candidates arrive in the offer. Measured 1-16ms direct, ~90ms
+  // relay-only, so this bound is ~20x the worst case rather than a guess.
+  media: 2000,
 }
 
 export interface BaseEvents {
