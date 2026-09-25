@@ -6,6 +6,7 @@
   const MAX_TOOLS = 256;
   const MAX_TEXT = 64 * 1024;
   const MAX_TOOL_BYTES = 256 * 1024;
+  const MAX_LIST_BYTES = 1024 * 1024;
   const MAX_OUTPUT_BYTES = 1024 * 1024;
   const HINTS = [
     'readOnlyHint',
@@ -80,7 +81,7 @@
     try {
       candidates.push(window.__webmcp && window.__webmcp.tools);
     } catch {
-      // Same as above.
+      // Not a registry either.
     }
     for (const registry of candidates) {
       try {
@@ -104,8 +105,9 @@
       }
       if (!isFunction(fn)) continue;
       try {
-        const tools = await fn.call(context);
-        if (Array.isArray(tools)) return tools;
+        const result = await fn.call(context);
+        if (Array.isArray(result)) return result;
+        if (isObject(result) && Array.isArray(result.tools)) return result.tools;
       } catch {
         // Fall through to the next source.
       }
@@ -144,13 +146,15 @@
         if (Object.keys(annotations).length) entry.annotations = annotations;
       }
       const serialized = JSON.stringify(entry);
-      if (serialized.length > MAX_TOOL_BYTES) return null;
-      return JSON.parse(serialized);
+      if (typeof serialized !== 'string' || serialized.length > MAX_TOOL_BYTES) return null;
+      return {entry: JSON.parse(serialized), bytes: serialized.length};
     } catch {
       return null;
     }
   }
 
+  // The listing travels back over the CDP connection, so the total stays well
+  // under the connection's read limit.
   async function list(window) {
     const context = polyfill(window);
     if (!context) return null;
@@ -158,12 +162,15 @@
     if (!Array.isArray(tools)) return null;
     const seen = new Set();
     const result = [];
+    let bytes = 0;
     for (const tool of tools) {
       if (result.length >= MAX_TOOLS) break;
-      const entry = metadata(tool);
-      if (!entry || seen.has(entry.name)) continue;
-      seen.add(entry.name);
-      result.push(entry);
+      const item = metadata(tool);
+      if (!item || seen.has(item.entry.name)) continue;
+      if (bytes + item.bytes > MAX_LIST_BYTES) break;
+      bytes += item.bytes;
+      seen.add(item.entry.name);
+      result.push(item.entry);
     }
     return {tools: result};
   }
@@ -182,6 +189,9 @@
   }
 
   async function execute(context, window, name, input) {
+    // The registry entry's own execute is unambiguous; callTool's shape is not.
+    const entry = registryEntry(context, window, name);
+    if (entry) return entry.execute(input);
     let callTool;
     try {
       callTool = context.callTool;
@@ -193,8 +203,6 @@
       if (callTool.length >= 2) return callTool.call(context, name, input);
       return callTool.call(context, {name, arguments: input});
     }
-    const entry = registryEntry(context, window, name);
-    if (entry) return entry.execute(input);
     let executeTool;
     try {
       executeTool = context.executeTool;
@@ -222,6 +230,7 @@
       throw new Error(`tool output is not JSON-serializable: ${message(error)}`);
     }
     if (serialized === undefined) return null;
+    if (typeof serialized !== 'string') throw new Error('tool output is not JSON-serializable');
     if (serialized.length > MAX_OUTPUT_BYTES) throw new Error('tool output exceeds 1 MiB');
     return serialized;
   }

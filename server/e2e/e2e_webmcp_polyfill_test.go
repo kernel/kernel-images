@@ -125,12 +125,19 @@ func testWebMCPPolyfill(t *testing.T, ctx context.Context, client *instanceoapi.
 
 	// A tool that navigates its document completes like a native one and the
 	// old registrations disappear with the document.
+	tabID := search.Source.TabId
 	navigated := invoke(tools["navigate_away"].ToolRef, map[string]any{})
 	require.Equal(t, http.StatusOK, navigated.StatusCode(), "%s", navigated.Body)
 	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusCompleted, navigated.JSON200.Status)
 	require.Equal(t, []any{}, navigated.JSON200.Output)
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		assert.Empty(collect, toolsByName(collect))
+		rsp, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
+		if !assert.NoError(collect, err) || !assert.Equal(collect, http.StatusOK, rsp.StatusCode(), "%s", rsp.Body) || rsp.JSON200 == nil {
+			return
+		}
+		for _, tool := range rsp.JSON200.Tools {
+			assert.NotEqual(collect, tabID, tool.Source.TabId, "%s survived navigation", tool.Tool.Name)
+		}
 	}, 10*time.Second, 250*time.Millisecond)
 	stale := invoke(search.ToolRef, map[string]any{"query": "x"})
 	require.Equal(t, http.StatusNotFound, stale.StatusCode(), "%s", stale.Body)

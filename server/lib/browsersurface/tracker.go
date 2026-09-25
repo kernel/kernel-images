@@ -302,17 +302,34 @@ func (t *Tracker) Snapshot() Snapshot {
 func (t *Tracker) SessionFrames() []SessionFrame {
 	t.stateMu.RLock()
 	defer t.stateMu.RUnlock()
+	// An out-of-process iframe session owns its own frame regardless of which
+	// session reported the frame last.
+	iframeSessions := make(map[string]*session)
+	for _, sess := range t.sessions {
+		if sess.target.Type == "iframe" {
+			iframeSessions[sess.target.TargetID] = sess
+		}
+	}
+	owner := func(tracked *frame) *session {
+		if sess := iframeSessions[tracked.rawID]; sess != nil {
+			return sess
+		}
+		return t.sessions[tracked.sessionID]
+	}
 	frames := make([]SessionFrame, 0, len(t.frames))
 	for _, tracked := range t.frames {
-		sess := t.sessions[tracked.sessionID]
+		sess := owner(tracked)
 		if sess == nil || !sess.initialized || sess.tabID == 0 || sess.tabID != tracked.tabID {
 			continue
 		}
-		parent := t.frames[tracked.parentID]
+		root := true
+		if parent := t.frames[tracked.parentID]; parent != nil {
+			root = owner(parent) != sess
+		}
 		frames = append(frames, SessionFrame{
 			SessionID: sess.id,
 			FrameID:   tracked.rawID,
-			Root:      parent == nil || parent.sessionID != tracked.sessionID,
+			Root:      root,
 			URL:       tracked.url,
 		})
 	}

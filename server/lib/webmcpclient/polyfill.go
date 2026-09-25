@@ -28,6 +28,7 @@ const (
 	polyfillSyncTimeout     = 2 * time.Second
 	polyfillSyncConcurrency = 8
 	polyfillReleaseTimeout  = time.Second
+	polyfillNavigationGrace = 500 * time.Millisecond
 )
 
 type polyfillToolMetadata struct {
@@ -46,9 +47,10 @@ type polyfillInvokeResult struct {
 }
 
 type polyfillFrameTools struct {
-	frame browsersurface.SessionFrame
-	tools []polyfillToolMetadata
-	read  bool
+	frame      browsersurface.SessionFrame
+	generation uint64
+	tools      []polyfillToolMetadata
+	read       bool
 }
 
 func polyfillToolKey(sessionID, frameID, name string) string {
@@ -60,6 +62,14 @@ func polyfillToolKey(sessionID, frameID, name string) string {
 // can carry a polyfill.
 func polyfillFrameURL(url string) bool {
 	return !strings.HasPrefix(url, "chrome") && !strings.HasPrefix(url, "devtools://")
+}
+
+// documentGoneLocked records that a frame's document was replaced or removed
+// so that in-flight reads of the old document are discarded and invocations
+// running in it are released.
+func (c *connection) documentGoneLocked(frameID string) {
+	c.documentGeneration[frameID]++
+	c.releasePolyfillWatchesLocked(func(watch *polyfillWatch) bool { return watch.frameID == frameID })
 }
 
 // syncPolyfillTools reads polyfill-registered tools from every tracked frame
@@ -74,6 +84,12 @@ func (c *connection) syncPolyfillTools(ctx context.Context) {
 	defer cancel()
 
 	results := make([]polyfillFrameTools, len(frames))
+	c.stateMu.RLock()
+	for i, frame := range frames {
+		results[i].generation = c.documentGeneration[frame.FrameID]
+	}
+	c.stateMu.RUnlock()
+
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, polyfillSyncConcurrency)
 	for i, frame := range frames {
@@ -89,7 +105,9 @@ func (c *connection) syncPolyfillTools(ctx context.Context) {
 			if err != nil {
 				return
 			}
-			results[i] = polyfillFrameTools{frame: frame, tools: tools, read: true}
+			results[i].frame = frame
+			results[i].tools = tools
+			results[i].read = true
 		}(i, frame)
 	}
 	wg.Wait()
@@ -97,14 +115,15 @@ func (c *connection) syncPolyfillTools(ctx context.Context) {
 	c.stateMu.Lock()
 	defer c.stateMu.Unlock()
 	for _, result := range results {
-		if result.read {
+		// A document replaced while it was being read is stale.
+		if result.read && c.documentGeneration[result.frame.FrameID] == result.generation {
 			c.applyPolyfillToolsLocked(result.frame, result.tools)
 		}
 	}
 }
 
 func (c *connection) readPolyfillTools(ctx context.Context, frame browsersurface.SessionFrame) ([]polyfillToolMetadata, error) {
-	raw, err := c.callPolyfill(ctx, frame, "list", nil, false)
+	raw, err := c.callPolyfill(ctx, frame, "list", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -120,33 +139,28 @@ func (c *connection) readPolyfillTools(ctx context.Context, frame browsersurface
 	return result.Tools, nil
 }
 
+// applyPolyfillToolsLocked replaces the frame's polyfill registrations with
+// the tools just read. Native tools of the same name take precedence when the
+// snapshot is built, so a shadowed polyfill tool keeps its reference.
 func (c *connection) applyPolyfillToolsLocked(frame browsersurface.SessionFrame, tools []polyfillToolMetadata) {
 	if !c.surface.SessionExists(frame.SessionID) {
 		return
 	}
-	native := make(map[string]bool)
 	tracked := 0
 	for _, existing := range c.tools {
-		if existing.sessionID != frame.SessionID {
-			continue
-		}
-		tracked++
-		if !existing.polyfill && existing.customID == "" && existing.frameID == frame.FrameID {
-			native[existing.name] = true
+		if existing.sessionID == frame.SessionID {
+			tracked++
 		}
 	}
-	desired := make(map[string]polyfillToolMetadata, len(tools))
+	desired := make(map[string]bool, len(tools))
 	for _, tool := range tools {
-		if !native[tool.Name] {
-			desired[tool.Name] = tool
-		}
+		desired[tool.Name] = true
 	}
-
 	for ref, existing := range c.tools {
 		if !existing.polyfill || existing.sessionID != frame.SessionID || existing.frameID != frame.FrameID {
 			continue
 		}
-		if _, keep := desired[existing.name]; keep {
+		if desired[existing.name] {
 			continue
 		}
 		delete(c.toolRefs, existing.key())
@@ -154,9 +168,6 @@ func (c *connection) applyPolyfillToolsLocked(frame browsersurface.SessionFrame,
 		tracked--
 	}
 	for _, tool := range tools {
-		if _, keep := desired[tool.Name]; !keep {
-			continue
-		}
 		key := polyfillToolKey(frame.SessionID, frame.FrameID, tool.Name)
 		ref := c.toolRefs[key]
 		if ref == "" {
@@ -221,10 +232,10 @@ func (c *connection) invokePolyfill(ctx context.Context, tool *registeredTool, i
 	frame := browsersurface.SessionFrame{SessionID: tool.sessionID, FrameID: tool.frameID, Root: tool.rootFrame}
 	invocation := InvocationResult{InvocationID: cuid2.Generate()}
 
-	// Chromium never answers a call whose document navigates before the
-	// returned promise settles. The native WebMCP domain reports such an
-	// invocation as completed with empty output, so watch the document and do
-	// the same.
+	// A document that navigates before the returned promise settles either
+	// never answers the call or fails it as the context goes away. The native
+	// WebMCP domain reports such an invocation as completed with empty output,
+	// so watch the document and do the same.
 	watch, stopWatching := c.watchPolyfillDocument(tool.sessionID, tool.frameID)
 	defer stopWatching()
 	callCtx, cancelCall := context.WithCancel(ctx)
@@ -235,33 +246,47 @@ func (c *connection) invokePolyfill(ctx context.Context, tool *registeredTool, i
 	}
 	results := make(chan callResult, 1)
 	go func() {
-		raw, err := c.callPolyfill(callCtx, frame, "invoke", []any{tool.name, input}, true)
+		raw, err := c.callPolyfill(callCtx, frame, "invoke", []any{tool.name, input})
 		results <- callResult{raw: raw, err: err}
 	}()
+	navigated := func() (InvocationResult, error) {
+		invocation.Status = "completed"
+		invocation.Output = []any{}
+		return invocation, nil
+	}
 	var raw json.RawMessage
 	select {
-	case result := <-results:
+	case <-watch.released:
+		cancelCall()
+		result := <-results
+		if result.err != nil {
+			return navigated()
+		}
 		raw = result.raw
+	case result := <-results:
 		if result.err != nil {
 			var notDispatched *polyfillNotDispatchedError
 			if errors.As(result.err, &notDispatched) && ctx.Err() == nil {
 				return InvocationResult{}, ErrToolNotFound
 			}
+			// The navigation that failed the call may still be settling.
+			grace := time.NewTimer(polyfillNavigationGrace)
+			defer grace.Stop()
+			select {
+			case <-watch.released:
+				return navigated()
+			case <-grace.C:
+			case <-ctx.Done():
+			}
 			return invocation, ErrOutcomeUnknown
-		}
-	case <-watch.released:
-		cancelCall()
-		result := <-results
-		if result.err != nil {
-			invocation.Status = "completed"
-			invocation.Output = []any{}
-			return invocation, nil
 		}
 		raw = result.raw
 	}
 	var result polyfillInvokeResult
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return invocation, fmt.Errorf("WebMCP: decode polyfill invocation: %w", err)
+		invocation.Status = "error"
+		invocation.ErrorText = "the page returned an unreadable result"
+		return invocation, nil
 	}
 	if !result.OK {
 		invocation.Status = "error"
@@ -270,7 +295,9 @@ func (c *connection) invokePolyfill(ctx context.Context, tool *registeredTool, i
 	}
 	if result.Output != nil {
 		if err := json.Unmarshal([]byte(*result.Output), &invocation.Output); err != nil {
-			return invocation, fmt.Errorf("WebMCP: decode polyfill output: %w", err)
+			invocation.Status = "error"
+			invocation.ErrorText = "the page returned an unreadable result"
+			return invocation, nil
 		}
 	}
 	invocation.Status = "completed"
@@ -288,13 +315,9 @@ func (e *polyfillNotDispatchedError) Unwrap() error { return e.cause }
 
 // callPolyfill runs one entry point of polyfill_page.js in the frame's main
 // world and returns the JSON value it produced, or nil for null.
-func (c *connection) callPolyfill(ctx context.Context, frame browsersurface.SessionFrame, method string, args []any, userGesture bool) (json.RawMessage, error) {
+func (c *connection) callPolyfill(ctx context.Context, frame browsersurface.SessionFrame, method string, args []any) (json.RawMessage, error) {
 	group := "kernel-webmcp-polyfill-" + cuid2.Generate()
-	defer func() {
-		releaseCtx, cancel := context.WithTimeout(context.Background(), polyfillReleaseTimeout)
-		defer cancel()
-		_, _ = c.surface.Send(releaseCtx, "Runtime.releaseObjectGroup", map[string]any{"objectGroup": group}, frame.SessionID)
-	}()
+	defer func() { go c.releaseObjectGroup(frame.SessionID, group) }()
 
 	windowID, err := c.frameWindow(ctx, frame, group)
 	if err != nil {
@@ -310,7 +333,6 @@ func (c *connection) callPolyfill(ctx context.Context, frame browsersurface.Sess
 		"arguments":           arguments,
 		"awaitPromise":        true,
 		"returnByValue":       true,
-		"userGesture":         userGesture,
 		"objectGroup":         group,
 	}, frame.SessionID)
 	if err != nil {
@@ -341,6 +363,12 @@ func (c *connection) callPolyfill(ctx context.Context, frame browsersurface.Sess
 		return nil, nil
 	}
 	return result.Result.Value, nil
+}
+
+func (c *connection) releaseObjectGroup(sessionID, group string) {
+	ctx, cancel := context.WithTimeout(context.Background(), polyfillReleaseTimeout)
+	defer cancel()
+	_, _ = c.surface.Send(ctx, "Runtime.releaseObjectGroup", map[string]any{"objectGroup": group}, sessionID)
 }
 
 // frameWindow returns a remote object handle for the frame's Window. Root

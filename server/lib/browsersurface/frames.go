@@ -349,6 +349,11 @@ func (t *Tracker) removeSessionLocked(sessionID string) []string {
 			removed = append(removed, id)
 		}
 	}
+	for _, tracked := range t.frames {
+		if toRemove[tracked.sessionID] {
+			tracked.sessionID = ""
+		}
+	}
 	sort.Strings(removed)
 	return removed
 }

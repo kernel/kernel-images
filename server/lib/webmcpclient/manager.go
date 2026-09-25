@@ -63,7 +63,13 @@ func (m *Manager) CustomTool(ctx context.Context, toolRef string) (string, strin
 	conn.stateMu.RLock()
 	defer conn.stateMu.RUnlock()
 	tool, ok := conn.tools[toolRef]
-	if !ok || !conn.enabledSessions[tool.sessionID] {
+	if !ok {
+		return "", "", ErrToolNotFound
+	}
+	if tool.polyfill {
+		return "", "", nil
+	}
+	if !conn.enabledSessions[tool.sessionID] {
 		return "", "", ErrToolNotFound
 	}
 	if tool.customID == "" {

@@ -3,6 +3,7 @@ package webmcpclient
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +38,9 @@ func (f *fakeCDP) servePolyfill(request wireRequest, respond func(any), write fu
 	tools := f.polyfillTools[params.ObjectID]
 	invoke := f.polyfillInvoke
 	invokeError := f.polyfillInvokeError
-	invokeDelay := f.polyfillInvokeDelay
+	invokeHang := f.polyfillInvokeHang
+	navigateDuringList := f.polyfillNavigateDuringList && params.ObjectID == "window:page-session"
+	f.polyfillNavigateDuringList = f.polyfillNavigateDuringList && !navigateDuringList
 	f.mu.Unlock()
 
 	switch request.Method {
@@ -62,14 +65,23 @@ func (f *fakeCDP) servePolyfill(request wireRequest, respond func(any), write fu
 		case strings.Contains(params.FunctionDeclaration, "contentWindow"):
 			respond(map[string]any{"result": map[string]any{"type": "object", "className": "Window", "objectId": "window:" + request.SessionID + ":page-child"}})
 		case strings.Contains(params.FunctionDeclaration, ").list("):
+			if navigateDuringList {
+				// The document is replaced while its tools are being read.
+				write(map[string]any{
+					"method": "Page.frameNavigated", "sessionId": request.SessionID,
+					"params": map[string]any{"frame": map[string]any{"id": "page-frame", "loaderId": "next-loader", "url": "https://merchant.example/next"}},
+				})
+				time.Sleep(200 * time.Millisecond)
+			}
 			if tools == nil {
 				respond(map[string]any{"result": map[string]any{"type": "object", "subtype": "null", "value": nil}})
 				return
 			}
 			respond(map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{"tools": tools}}})
 		case strings.Contains(params.FunctionDeclaration, ").invoke("):
-			if invokeDelay > 0 {
-				time.Sleep(invokeDelay)
+			if invokeHang {
+				// Chromium never answers once the document navigates away.
+				return
 			}
 			if invokeError != "" {
 				fail(invokeError)
@@ -77,9 +89,12 @@ func (f *fakeCDP) servePolyfill(request wireRequest, respond func(any), write fu
 			}
 			var name string
 			var input map[string]any
-			require.Len(f.t, params.Arguments, 2)
-			require.NoError(f.t, json.Unmarshal(params.Arguments[0].Value, &name))
-			require.NoError(f.t, json.Unmarshal(params.Arguments[1].Value, &input))
+			if len(params.Arguments) != 2 ||
+				json.Unmarshal(params.Arguments[0].Value, &name) != nil ||
+				json.Unmarshal(params.Arguments[1].Value, &input) != nil {
+				fail("unexpected invoke arguments")
+				return
+			}
 			f.mu.Lock()
 			f.polyfillInvocations = append(f.polyfillInvocations, polyfillInvocation{windowID: params.ObjectID, name: name, input: input})
 			f.mu.Unlock()
@@ -107,6 +122,9 @@ func newPolyfillFakeCDP(t *testing.T) *fakeCDP {
 		"window:page-session:page-child": {
 			{"name": "child_poly", "description": "child", "inputSchema": map[string]any{"type": "object"}},
 		},
+		"window:iframe-session": {
+			{"name": "payment_poly", "description": "payment", "inputSchema": map[string]any{"type": "object"}},
+		},
 	}
 	fake.polyfillInvoke = func(_ string, name string, input map[string]any) map[string]any {
 		if name != "poly_search" {
@@ -133,7 +151,7 @@ func TestPolyfillToolsAreDiscoveredNextToNativeTools(t *testing.T) {
 
 	tools, err := manager.Tools(context.Background())
 	require.NoError(t, err)
-	require.Len(t, tools, 6)
+	require.Len(t, tools, 7)
 	byName := toolsByName(tools)
 
 	// The native registration wins over the polyfill copy of the same name.
@@ -156,6 +174,19 @@ func TestPolyfillToolsAreDiscoveredNextToNativeTools(t *testing.T) {
 	require.Equal(t, 1, child.Source.TabID)
 	require.NotNil(t, child.Source.Frame)
 	require.Equal(t, "https://merchant.example/child", child.Source.Frame.URL)
+
+	// An out-of-process iframe is read through its own session.
+	payment := byName["payment_poly"]
+	require.True(t, payment.Polyfill)
+	require.NotNil(t, payment.Source.Frame)
+	require.Equal(t, "https://payments.example/element", payment.Source.Frame.URL)
+
+	// Discovery never enables the Runtime or DOM domains, which pages can detect.
+	fake.mu.Lock()
+	require.Zero(t, fake.methods["Runtime.enable"])
+	require.Zero(t, fake.methods["DOM.enable"])
+	require.Positive(t, fake.methods["Runtime.callFunctionOn"])
+	fake.mu.Unlock()
 
 	customID, targetID, err := manager.CustomTool(context.Background(), search.Ref)
 	require.NoError(t, err)
@@ -237,9 +268,8 @@ func TestPolyfillInvocationThatNavigatesCompletesLikeNativeTools(t *testing.T) {
 	require.NoError(t, err)
 	ref := toolsByName(tools)["poly_search"].Ref
 
-	// Chromium never answers the call once the document navigates away.
 	fake.mu.Lock()
-	fake.polyfillInvokeDelay = 5 * time.Second
+	fake.polyfillInvokeHang = true
 	fake.mu.Unlock()
 	go func() {
 		time.Sleep(100 * time.Millisecond)
@@ -275,7 +305,7 @@ func TestPolyfillInvocationProtocolFailureHasUnknownOutcome(t *testing.T) {
 
 func TestPolyfillInvocationTimeoutHasUnknownOutcome(t *testing.T) {
 	fake := newPolyfillFakeCDP(t)
-	fake.polyfillInvokeDelay = 300 * time.Millisecond
+	fake.polyfillInvokeHang = true
 	manager := NewManager(staticUpstream{url: fake.url})
 	t.Cleanup(func() { _ = manager.Close() })
 	tools, err := manager.Tools(context.Background())
@@ -308,4 +338,43 @@ func TestPolyfillInvocationReportsMissingDocument(t *testing.T) {
 	again, err := manager.Tools(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, ref, toolsByName(again)["poly_search"].Ref)
+}
+
+func TestPolyfillToolsShareTheSessionLimit(t *testing.T) {
+	fake := newPolyfillFakeCDP(t)
+	oversized := make([]map[string]any, 0, maxToolsPerSession+10)
+	for i := range cap(oversized) {
+		oversized = append(oversized, map[string]any{
+			"name": fmt.Sprintf("poly_%d", i), "description": "polyfill", "inputSchema": map[string]any{"type": "object"},
+		})
+	}
+	fake.polyfillTools["window:page-session"] = oversized
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	pageTools := 0
+	for _, tool := range tools {
+		if tool.Source.TabID == 1 && tool.Source.Frame == nil {
+			pageTools++
+		}
+	}
+	require.Equal(t, maxToolsPerSession, pageTools)
+}
+
+func TestPolyfillReadOfReplacedDocumentIsDiscarded(t *testing.T) {
+	fake := newPolyfillFakeCDP(t)
+	fake.polyfillNavigateDuringList = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	require.NotContains(t, toolsByName(tools), "poly_search")
+
+	// The next listing reads the new document.
+	tools, err = manager.Tools(context.Background())
+	require.NoError(t, err)
+	require.Contains(t, toolsByName(tools), "poly_search")
 }

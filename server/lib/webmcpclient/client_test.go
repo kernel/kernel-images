@@ -73,14 +73,16 @@ type fakeCDP struct {
 	polyfillTools              map[string][]map[string]any
 	polyfillInvoke             func(windowID, name string, input map[string]any) map[string]any
 	polyfillInvokeError        string
-	polyfillInvokeDelay        time.Duration
+	polyfillInvokeHang         bool
+	polyfillNavigateDuringList bool
 	polyfillInvocations        []polyfillInvocation
+	methods                    map[string]int
 	write                      func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
 	t.Helper()
-	fake := &fakeCDP{t: t, enabledSessions: make(map[string]int), omitResponse: omitResponse, toolCount: 1}
+	fake := &fakeCDP{t: t, enabledSessions: make(map[string]int), methods: make(map[string]int), omitResponse: omitResponse, toolCount: 1}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
 	fake.url = "ws" + strings.TrimPrefix(fake.server.URL, "http")
 	t.Cleanup(fake.server.Close)
@@ -143,6 +145,9 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 		respond := func(result any) {
 			write(map[string]any{"id": request.ID, "result": result})
 		}
+		f.mu.Lock()
+		f.methods[request.Method]++
+		f.mu.Unlock()
 		switch request.Method {
 		case "Target.setDiscoverTargets":
 			respond(map[string]any{})
