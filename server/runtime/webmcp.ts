@@ -16,6 +16,7 @@ export interface WebMCPToolSource {
   page_url: string;
   frame: WebMCPToolFrame | null;
   custom?: WebMCPCustomToolSource;
+  polyfill?: boolean;
 }
 
 export interface WebMCPToolMetadata {

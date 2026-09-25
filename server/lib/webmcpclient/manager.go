@@ -51,6 +51,7 @@ func (m *Manager) Tools(ctx context.Context) ([]Tool, error) {
 	if !conn.surface.HasTabs() {
 		return nil, ErrNoPageTarget
 	}
+	conn.syncPolyfillTools(ctx)
 	return conn.toolsSnapshot(), nil
 }
 

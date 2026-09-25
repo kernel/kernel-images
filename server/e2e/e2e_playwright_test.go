@@ -265,6 +265,9 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Run("WebMCPCustomNavigation", func(t *testing.T) {
 		testCustomWebMCPInvokesAcrossNavigation(t, ctx, client)
 	})
+	t.Run("WebMCPPolyfill", func(t *testing.T) {
+		testWebMCPPolyfill(t, ctx, client)
+	})
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {

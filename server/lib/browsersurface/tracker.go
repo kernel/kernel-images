@@ -296,6 +296,38 @@ func (t *Tracker) Snapshot() Snapshot {
 	return snapshot
 }
 
+// SessionFrames lists every frame of an initialized page or iframe session,
+// roots first, so callers can evaluate in each document through the session
+// that owns it.
+func (t *Tracker) SessionFrames() []SessionFrame {
+	t.stateMu.RLock()
+	defer t.stateMu.RUnlock()
+	frames := make([]SessionFrame, 0, len(t.frames))
+	for _, tracked := range t.frames {
+		sess := t.sessions[tracked.sessionID]
+		if sess == nil || !sess.initialized || sess.tabID == 0 || sess.tabID != tracked.tabID {
+			continue
+		}
+		parent := t.frames[tracked.parentID]
+		frames = append(frames, SessionFrame{
+			SessionID: sess.id,
+			FrameID:   tracked.rawID,
+			Root:      parent == nil || parent.sessionID != tracked.sessionID,
+			URL:       tracked.url,
+		})
+	}
+	sort.Slice(frames, func(i, j int) bool {
+		if frames[i].SessionID != frames[j].SessionID {
+			return frames[i].SessionID < frames[j].SessionID
+		}
+		if frames[i].Root != frames[j].Root {
+			return frames[i].Root
+		}
+		return frames[i].FrameID < frames[j].FrameID
+	})
+	return frames
+}
+
 func (t *Tracker) SessionExists(sessionID string) bool {
 	t.stateMu.RLock()
 	defer t.stateMu.RUnlock()

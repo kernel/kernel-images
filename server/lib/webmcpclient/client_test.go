@@ -47,6 +47,7 @@ type wireRequest struct {
 }
 
 type fakeCDP struct {
+	t      *testing.T
 	server *httptest.Server
 	url    string
 
@@ -67,12 +68,19 @@ type fakeCDP struct {
 	popupOpen                  bool
 	iframeOpen                 bool
 	nestedFrameOpen            bool
+	childFrameOpen             bool
+	windowUnavailable          bool
+	polyfillTools              map[string][]map[string]any
+	polyfillInvoke             func(windowID, name string, input map[string]any) map[string]any
+	polyfillInvokeError        string
+	polyfillInvokeDelay        time.Duration
+	polyfillInvocations        []polyfillInvocation
 	write                      func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
 	t.Helper()
-	fake := &fakeCDP{enabledSessions: make(map[string]int), omitResponse: omitResponse, toolCount: 1}
+	fake := &fakeCDP{t: t, enabledSessions: make(map[string]int), omitResponse: omitResponse, toolCount: 1}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
 	fake.url = "ws" + strings.TrimPrefix(fake.server.URL, "http")
 	t.Cleanup(fake.server.Close)
@@ -211,7 +219,18 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 		case "Page.enable":
 			respond(map[string]any{})
 		case "Page.getFrameTree":
-			respond(map[string]any{"frameTree": frameTreeForSession(request.SessionID)})
+			tree := frameTreeForSession(request.SessionID)
+			f.mu.Lock()
+			childFrameOpen := f.childFrameOpen
+			f.mu.Unlock()
+			if childFrameOpen && request.SessionID == "page-session" {
+				tree["childFrames"] = []map[string]any{{"frame": map[string]any{
+					"id": "page-child", "parentId": "page-frame", "loaderId": "child-loader", "url": "https://merchant.example/child",
+				}}}
+			}
+			respond(map[string]any{"frameTree": tree})
+		case "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObjectGroup", "DOM.getFrameOwner", "DOM.resolveNode":
+			f.servePolyfill(request, respond, write)
 		case "WebMCP.enable":
 			f.mu.Lock()
 			f.enabledSessions[request.SessionID]++

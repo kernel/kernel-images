@@ -76,6 +76,17 @@ type FrameLocation struct {
 	URL string
 }
 
+// SessionFrame is a frame whose document is reachable through the session
+// that reported it. Root frames are the main frame of a page target or the
+// frame of an out-of-process iframe target; other frames are same-process
+// children of the session's root.
+type SessionFrame struct {
+	SessionID string
+	FrameID   string
+	Root      bool
+	URL       string
+}
+
 type Location struct {
 	WindowID  int
 	TabID     int
@@ -132,9 +143,10 @@ type tab struct {
 }
 
 type frame struct {
-	id       int
-	rawID    string
-	parentID string
-	tabID    int
-	url      string
+	id        int
+	rawID     string
+	parentID  string
+	tabID     int
+	sessionID string
+	url       string
 }

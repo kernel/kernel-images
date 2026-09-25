@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Polyfill catalog</title>
+</head>
+<body>
+  <h1>Catalog</h1>
+  <p id="log" role="status"></p>
+  <button id="unregister" type="button">Remove failing tool</button>
+  <!-- A same-origin child document with its own registry-style polyfill. -->
+  <iframe title="Embedded catalog" width="600" height="300" srcdoc="
+    <title>Embedded polyfill catalog</title>
+    <script>
+      const registry = new Map();
+      navigator.modelContext = {
+        _registeredTools: registry,
+        registerTool(tool) { registry.set(tool.name, tool); },
+        unregisterTool(name) { registry.delete(name); },
+        listTools: () => [...registry.values()].map(({execute, ...metadata}) => metadata),
+        async callTool(name, input) { return registry.get(name).execute(input); },
+      };
+      navigator.modelContext.registerTool({
+        name: 'frame_tool',
+        description: 'Registered by the embedded document.',
+        inputSchema: {type: 'object'},
+        execute: async (input) => ({frame: document.title, input}),
+      });
+    </script>
+  "></iframe>
+  <!-- Mirrors sites that ship WebMCP tools through their own navigator.modelContext
+       polyfill: a registry object plus registerTool/unregisterTool/listTools/callTool.
+       The polyfill installs after a delay, like a lazily loaded site bundle. -->
+  <script>
+    function installPolyfill() {
+      if ('modelContext' in navigator) return;
+      const registry = {};
+      navigator.modelContext = {
+        _registeredTools: registry,
+        registerTool(tool, options) {
+          registry[tool.name] = {
+            name: tool.name,
+            title: tool.title,
+            description: tool.description,
+            inputSchema: tool.inputSchema ?? tool.parameters,
+            execute: tool.execute,
+          };
+          const signal = options?.signal ?? tool.signal;
+          signal?.addEventListener('abort', () => delete registry[tool.name], {once: true});
+        },
+        unregisterTool(name) {
+          delete registry[name];
+        },
+        async callTool(name, input) {
+          const tool = registry[name];
+          if (!tool) throw new Error(`Tool not found: ${name}`);
+          return tool.execute(input, undefined);
+        },
+        listTools: () => Object.values(registry).map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        })),
+      };
+    }
+
+    function registerTools() {
+      navigator.modelContext.registerTool({
+        name: 'search_items',
+        description: 'Search the catalog.',
+        inputSchema: {type: 'object', properties: {query: {type: 'string'}}, required: ['query']},
+        execute: async (input) => {
+          document.querySelector('#log').textContent = `searched ${input.query}`;
+          return {results: [`match for ${input.query}`], page: location.pathname};
+        },
+      });
+      navigator.modelContext.registerTool({
+        name: 'shared_name',
+        description: 'Polyfill copy.',
+        inputSchema: {type: 'object'},
+        execute: async () => ({source: 'polyfill'}),
+      });
+      navigator.modelContext.registerTool({
+        name: 'failing_tool',
+        description: 'Always throws.',
+        inputSchema: {type: 'object'},
+        execute: async () => {
+          throw new Error('nothing to do');
+        },
+      });
+      navigator.modelContext.registerTool({
+        name: 'navigate_away',
+        description: 'Navigates the page and never resolves.',
+        inputSchema: {type: 'object'},
+        execute: async () => {
+          location.href = 'about:blank';
+          return new Promise(() => {});
+        },
+      });
+    }
+
+    // The same name registered natively must win over the polyfill copy.
+    document.modelContext.registerTool({
+      name: 'shared_name',
+      description: 'Native copy.',
+      inputSchema: {type: 'object'},
+      execute: async () => ({source: 'native'}),
+    });
+
+    document.querySelector('#unregister').addEventListener('click', () => {
+      navigator.modelContext.unregisterTool('failing_tool');
+    });
+
+    setTimeout(() => {
+      installPolyfill();
+      registerTools();
+    }, 1500);
+  </script>
+</body>
+</html>

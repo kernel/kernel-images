@@ -62,6 +62,14 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 				Autosubmit:           boolPointer(tool.Annotations.Autosubmit),
 			}
 		}
+		if tool.Polyfill {
+			metadata.Title = nonEmptyString(tool.Title)
+			if tool.OutputSchema != nil {
+				outputSchema := tool.OutputSchema
+				metadata.OutputSchema = &outputSchema
+			}
+			metadata.Annotations = polyfillAnnotations(tool.Hints)
+		}
 		responseTool := oapi.WebMCPTool{
 			ToolRef: tool.Ref,
 			Tool:    metadata,
@@ -77,6 +85,9 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 				FrameId: tool.Source.Frame.FrameID,
 				Url:     tool.Source.Frame.URL,
 			}
+		}
+		if tool.Polyfill {
+			responseTool.Source.Polyfill = boolPointer(true)
 		}
 		if tool.CustomID != "" {
 			definition, ok := customDefinitions[tool.CustomID]
@@ -103,6 +114,32 @@ func (s *ApiService) GetWebMCPTools(ctx context.Context, request oapi.GetWebMCPT
 }
 
 func boolPointer(value bool) *bool { return &value }
+
+func polyfillAnnotations(hints map[string]bool) *oapi.WebMCPToolAnnotations {
+	if len(hints) == 0 {
+		return nil
+	}
+	annotations := &oapi.WebMCPToolAnnotations{}
+	for hint, value := range hints {
+		switch hint {
+		case "readOnlyHint":
+			annotations.ReadOnlyHint = boolPointer(value)
+		case "destructiveHint":
+			annotations.DestructiveHint = boolPointer(value)
+		case "idempotentHint":
+			annotations.IdempotentHint = boolPointer(value)
+		case "openWorldHint":
+			annotations.OpenWorldHint = boolPointer(value)
+		case "consequentialHint":
+			annotations.ConsequentialHint = boolPointer(value)
+		case "untrustedContentHint":
+			annotations.UntrustedContentHint = boolPointer(value)
+		case "autosubmit":
+			annotations.Autosubmit = boolPointer(value)
+		}
+	}
+	return annotations
+}
 
 func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWebMCPToolRequestObject) (oapi.InvokeWebMCPToolResponseObject, error) {
 	if request.Body == nil {

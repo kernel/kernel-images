@@ -85,6 +85,45 @@ func writeCustomToolsSnapshot(t *testing.T, manager *browserReplManager, tools [
 	require.NoError(t, os.WriteFile(browserReplCustomToolsPath(), data, 0o600))
 }
 
+func TestGetWebMCPToolsMarksPolyfillTools(t *testing.T) {
+	client := &fakeWebMCPClient{tools: []webmcpclient.Tool{{
+		Ref:          "wmcp_poly",
+		Name:         "search_items",
+		Title:        "Search",
+		Description:  "Search the catalog.",
+		InputSchema:  map[string]any{"type": "object"},
+		OutputSchema: map[string]any{"type": "object"},
+		Hints:        map[string]bool{"readOnlyHint": true, "destructiveHint": false},
+		Polyfill:     true,
+		Source: webmcpclient.ToolSource{
+			WindowID:  1,
+			TabID:     1,
+			PageTitle: "Catalog",
+			PageURL:   "https://shop.example/",
+		},
+	}}}
+	service := &ApiService{webmcp: client}
+
+	response, err := service.GetWebMCPTools(context.Background(), oapi.GetWebMCPToolsRequestObject{})
+	require.NoError(t, err)
+	body := response.(oapi.GetWebMCPTools200JSONResponse)
+	require.Len(t, body.Tools, 1)
+	tool := body.Tools[0]
+	require.NotNil(t, tool.Source.Polyfill)
+	require.True(t, *tool.Source.Polyfill)
+	require.Nil(t, tool.Source.Custom)
+	require.Nil(t, tool.Source.TargetId)
+	require.Equal(t, "Search", *tool.Tool.Title)
+	require.Equal(t, map[string]any{"type": "object"}, *tool.Tool.OutputSchema)
+	require.True(t, *tool.Tool.Annotations.ReadOnlyHint)
+	require.False(t, *tool.Tool.Annotations.DestructiveHint)
+	require.Nil(t, tool.Tool.Annotations.ConsequentialHint)
+
+	encoded, err := json.Marshal(tool)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"polyfill":true`)
+}
+
 func TestGetWebMCPToolsRejectsUnreadableSnapshot(t *testing.T) {
 	manager := newBrowserReplManager()
 	writeCustomToolsSnapshot(t, manager, []oapi.CustomWebMCPDefinition{{Id: "ct_abcdefghijklmnopqrstuvwx"}})
