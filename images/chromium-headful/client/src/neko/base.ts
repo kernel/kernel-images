@@ -30,6 +30,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _channel?: RTCDataChannel
   protected _timeout?: number
   protected _connectAttempts = 0
+  protected _everConnected = false
   protected _gaveUp = false
   protected _displayname?: string
   protected _state: RTCIceConnectionState = 'disconnected'
@@ -463,6 +464,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       return
     }
 
+    this._everConnected = true
     this._connectAttempts = 0
 
     this.emit('debug', `connected`)
@@ -501,6 +503,15 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   }
 
   protected onDisconnected(reason?: Error) {
+    // A disconnect before any peer was established is a failed connect, not a
+    // dropped session. disconnect() clears the watchdog below, so without this
+    // the parent frame would get neither KERNEL_CONNECTION_FAILED nor the
+    // legacy KERNEL_CONNECTION_TIMEOUT.
+    if (!this._gaveUp && !this._everConnected) {
+      this.giveUp(reason ?? new Error('connection failed'))
+      return
+    }
+
     this.disconnect()
     this.emit('debug', `disconnected:`, reason)
     this[EVENT.DISCONNECTED](reason)

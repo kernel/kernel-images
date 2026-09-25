@@ -72,6 +72,54 @@ describe('live view connect attempts', () => {
     await client.provide()
 
     expect(client.reasons.map((r) => r?.message)).toEqual(['RTCPeerConnection blocked'])
+    expect(posted).toEqual([
+      {
+        type: 'KERNEL_CONNECTION_FAILED',
+        reason: 'RTCPeerConnection blocked',
+        attempts: 1,
+        iceConnectionState: 'disconnected',
+        connectionState: undefined,
+        signalingState: undefined,
+        socketOpen: true,
+      },
+    ])
+  })
+
+  test('a socket that closes before any peer is established gives up terminally', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['onDisconnected'](new Error('websocket closed'))
+
+    expect(posted).toHaveLength(1)
+    expect(posted[0]).toMatchObject({
+      type: 'KERNEL_CONNECTION_FAILED',
+      reason: 'websocket closed',
+      attempts: 1,
+    })
+  })
+
+  test('a disconnect after media started is reported as a disconnect, not a connect failure', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['_peer'] = {} as RTCPeerConnection
+    client['_state'] = 'connected'
+    client['onConnected']()
+
+    client['onDisconnected'](new Error('network blip'))
+
+    expect(posted).toEqual([])
+    expect(client.reasons.map((r) => r?.message)).toEqual(['network blip'])
+  })
+
+  test('a connect timeout reports the legacy timeout and the terminal failure', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['onTimeout']()
+
+    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_TIMEOUT', 'KERNEL_CONNECTION_FAILED'])
   })
 
   test('gives up after the attempt bound and reports the reason to the parent frame', () => {
