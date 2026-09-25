@@ -26,10 +26,11 @@ export const RETRY_DELAY_MS = 1000
 export type ConnectStage = 'transport' | 'signaling' | 'media'
 
 export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
-  // Network-bound (socket open + TLS), so it tracks last-mile RTT rather than
-  // anything we control. 5s is ~7x the worst measured across regions, and there
-  // is no mobile/satcom data to lower it against.
-  transport: 5000,
+  // Network-bound (socket open + TLS), and the stage the live-view proxy's own
+  // wake path shows up in — it can spend ~12s waking a browser before the socket
+  // opens. Left at the watchdog it replaced rather than the measured p99, so a
+  // slow wake is not mistaken for a dead one.
+  transport: 15000,
   // One server round trip on an already-open socket, plus the offer. Measured
   // p99 under 200ms, including a cold session.
   signaling: 3000,
