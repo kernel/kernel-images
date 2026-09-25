@@ -11,6 +11,32 @@ import {
   SignalAnswerMessage,
 } from './messages'
 
+// A connect walks transport -> signaling -> media. A single 15s clock over all
+// three meant a socket that never opened burned the whole budget and reported
+// only "timeout", so each stage fails on its own bound with its own reason. A
+// bound expiring is terminal rather than retried: a second attempt against the
+// same peer costs the viewer time an embedder can spend on a new session.
+export type ConnectStage = 'transport' | 'signaling' | 'media'
+
+export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
+  // Network-bound (socket open + TLS), and the stage the live-view proxy's own
+  // wake path shows up in — it can spend ~12s waking a browser before the socket
+  // opens. Left at the watchdog it replaced rather than the measured p99, so a
+  // slow wake is not mistaken for a dead one.
+  transport: 15000,
+  // One server round trip on an already-open socket, plus the offer. Measured
+  // p99 under 200ms, including a cold session.
+  signaling: 3000,
+  // Local: ICE reaches `checking` as soon as the local description is set, since
+  // the remote candidates arrive in the offer. Measured 1-16ms direct, ~90ms
+  // relay-only, so this bound is ~20x the worst case rather than a guess.
+  media: 2000,
+}
+
+// Sent to the parent frame so an embedder can pick a recovery without parsing
+// prose. The three stages mean a bound expired; the rest never reached one.
+export type ConnectFailure = ConnectStage | 'unsupported' | 'peer' | 'server'
+
 export interface BaseEvents {
   info: (...message: any[]) => void
   warn: (...message: any[]) => void
@@ -24,6 +50,12 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _peer?: RTCPeerConnection
   protected _channel?: RTCDataChannel
   protected _timeout?: number
+  protected _stage?: ConnectStage
+  protected _everConnected = false
+  protected _gaveUp = false
+  // Tagged where the failure happens, so a pre-connect disconnect is reported
+  // with a reason an embedder can act on. Unset falls back to 'peer'.
+  protected _failure?: ConnectFailure
   protected _displayname?: string
   protected _state: RTCIceConnectionState = 'disconnected'
   protected _id = ''
@@ -50,16 +82,22 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   }
 
   public connect(url: string, password: string, displayname: string) {
+    if (this._gaveUp) {
+      this.emit('debug', `not reconnecting, already gave up`)
+      return
+    }
+
     if (this.socketOpen) {
       this.emit('warn', `attempting to create websocket while connection open`)
       return
     }
 
     if (!this.supported) {
-      this.onDisconnected(new Error('browser does not support webrtc (RTCPeerConnection missing)'))
+      this.giveUp('unsupported', new Error('browser does not support webrtc (RTCPeerConnection missing)'))
       return
     }
 
+    this._failure = undefined
     this._displayname = displayname
     this[EVENT.CONNECTING]()
 
@@ -70,12 +108,15 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this.emit('debug', `connecting to ${this._ws.url}`)
       this._ws.onmessage = this.onMessage.bind(this)
       this._ws.onerror = this.onError.bind(this)
+      this._ws.onopen = () => this.armStage('signaling')
       this._ws.onclose = (event) => {
         this.emit('debug', `websocket closed: code=${event.code}, reason=${event.reason}`)
+        this._failure = 'transport'
         this.onDisconnected(new Error('websocket closed'))
       }
-      this._timeout = window.setTimeout(this.onTimeout.bind(this), 15000)
+      this.armStage('transport')
     } catch (err: any) {
+      this._failure = 'transport'
       this.onDisconnected(err)
     }
   }
@@ -85,6 +126,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       clearTimeout(this._timeout)
       this._timeout = undefined
     }
+    this._stage = undefined
 
     if (this._ws_heartbeat) {
       clearInterval(this._ws_heartbeat)
@@ -344,7 +386,19 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     await this._peer.setRemoteDescription({ type: 'answer', sdp })
   }
 
+  // onMessage is assigned straight to ws.onmessage, so a rejection here has
+  // nowhere to go: without this guard a throw from createPeer or
+  // setRemoteOffer is discarded and the client cannot tell "peer construction
+  // failed" from "still connecting".
   private async onMessage(e: MessageEvent) {
+    try {
+      await this.handleMessage(e)
+    } catch (err: unknown) {
+      this.onDisconnected(err instanceof Error ? err : new Error(String(err)))
+    }
+  }
+
+  private async handleMessage(e: MessageEvent) {
     const { event, ...payload } = JSON.parse(e.data) as WebSocketMessages
 
     this.emit('debug', `received websocket event ${event} ${payload ? `with payload: ` : ''}`, payload)
@@ -354,12 +408,14 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._id = id
       await this.createPeer(lite, ice)
       await this.setRemoteOffer(sdp)
+      this.armStage('media')
       return
     }
 
     if (event === EVENT.SIGNAL.OFFER) {
       const { sdp } = payload as SignalOfferPayload
       await this.setRemoteOffer(sdp)
+      this.armStage('media')
       return
     }
 
@@ -433,28 +489,63 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       return
     }
 
+    this._everConnected = true
+
     this.emit('debug', `connected`)
     this[EVENT.CONNECTED]()
   }
 
+  private armStage(stage: ConnectStage) {
+    if (this._timeout) {
+      clearTimeout(this._timeout)
+    }
+
+    this._stage = stage
+    this._timeout = window.setTimeout(this.onTimeout.bind(this), CONNECT_STAGE_TIMEOUT_MS[stage])
+  }
+
   private onTimeout() {
-    this.emit('debug', `connection timeout`)
+    const stage = this._stage ?? 'transport'
+    this.emit('debug', `connection timeout at ${stage} stage`)
+
+    if (this._timeout) {
+      clearTimeout(this._timeout)
+      this._timeout = undefined
+    }
+
+    // The bound expiring is this connect's terminal event, so report it here and
+    // let onDisconnected take the ordinary disconnect path rather than reporting
+    // a second event for the same failure.
+    this.reportFailure('KERNEL_CONNECTION_TIMEOUT', stage)
+    this.onDisconnected(new Error(`${stage} timeout`))
+  }
+
+  private giveUp(failure: ConnectFailure, reason: Error) {
+    this.reportFailure('KERNEL_CONNECTION_FAILED', failure)
+    this.onDisconnected(reason)
+  }
+
+  private reportFailure(type: 'KERNEL_CONNECTION_TIMEOUT' | 'KERNEL_CONNECTION_FAILED', reason: ConnectFailure) {
+    this._gaveUp = true
     this.postParentMessage({
-      type: 'KERNEL_CONNECTION_TIMEOUT',
-      reason: 'connection timeout',
+      type,
+      reason,
       iceConnectionState: this._peer?.iceConnectionState ?? this._state,
       connectionState: this._peer?.connectionState,
       signalingState: this._peer?.signalingState,
       socketOpen: this.socketOpen,
     })
-    if (this._timeout) {
-      clearTimeout(this._timeout)
-      this._timeout = undefined
-    }
-    this.onDisconnected(new Error('connection timeout'))
   }
 
   protected onDisconnected(reason?: Error) {
+    // A disconnect before any peer was established is a failed connect, not a
+    // dropped session. disconnect() clears the bound below, so without this the
+    // parent frame would hear nothing at all.
+    if (!this._gaveUp && !this._everConnected) {
+      this.giveUp(this._failure ?? 'peer', reason ?? new Error('connection failed'))
+      return
+    }
+
     this.disconnect()
     this.emit('debug', `disconnected:`, reason)
     this[EVENT.DISCONNECTED](reason)
