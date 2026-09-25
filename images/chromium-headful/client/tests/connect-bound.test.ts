@@ -1,7 +1,25 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { BaseClient } from '../src/neko/base'
+import { BaseClient, RETRY_DELAY_MS } from '../src/neko/base'
 
 const posted: Record<string, any>[] = []
+const timers: { id: number; delay: number; run: () => void }[] = []
+const realClearTimeout = globalThis.clearTimeout
+let nextTimerId = 1
+
+// The client mixes `window.setTimeout` with a bare `clearTimeout`, so the global
+// has to be stubbed too for a cancelled retry to actually be cancelled.
+function clearTimer(id: number) {
+  const index = timers.findIndex((timer) => timer.id === id)
+  if (index !== -1) timers.splice(index, 1)
+}
+
+// The connect watchdog is armed on the same fake clock, so only the retry
+// timers are run here.
+function runRetries() {
+  for (const timer of timers.splice(0)) {
+    if (timer.delay === RETRY_DELAY_MS) timer.run()
+  }
+}
 
 class FakeSocket {
   static OPEN = 1
@@ -44,17 +62,29 @@ function setPeerConstructor(impl: () => unknown) {
 
 beforeEach(() => {
   posted.length = 0
+  timers.length = 0
+  nextTimerId = 1
   const parent = { postMessage: (m: Record<string, any>) => posted.push(m) }
   Object.defineProperty(globalThis, 'window', {
-    value: { parent, setTimeout: () => 1, clearTimeout: () => {} },
+    value: {
+      parent,
+      setTimeout: (run: () => void, delay: number) => {
+        const id = nextTimerId++
+        timers.push({ id, delay, run })
+        return id
+      },
+      clearTimeout: clearTimer,
+    },
     configurable: true,
   })
+  globalThis.clearTimeout = clearTimer
   Object.defineProperty(globalThis, 'document', { value: { referrer: '' }, configurable: true })
   Object.defineProperty(globalThis, 'WebSocket', { value: FakeSocket, configurable: true })
   setPeerConstructor(() => ({}))
 })
 
 afterEach(() => {
+  globalThis.clearTimeout = realClearTimeout
   for (const key of ['window', 'document', 'WebSocket', 'RTCPeerConnection']) {
     Reflect.deleteProperty(globalThis, key)
   }
@@ -85,18 +115,65 @@ describe('live view connect attempts', () => {
     ])
   })
 
-  test('a socket that closes before any peer is established gives up terminally', () => {
+  test('a socket that closes before any peer is established is retried', () => {
     const client = new TestClient()
     client.connect('ws://host/ws', 'pw', 'kernel')
     client['_ws']!.readyState = FakeSocket.OPEN
-    client['onDisconnected'](new Error('websocket closed'))
 
-    expect(posted).toHaveLength(1)
-    expect(posted[0]).toMatchObject({
-      type: 'KERNEL_CONNECTION_FAILED',
-      reason: 'websocket closed',
-      attempts: 1,
-    })
+    client['_ws']!.onclose({ code: 1005, reason: '' } as CloseEvent)
+
+    expect(posted).toEqual([])
+    expect(client['_connectAttempts']).toBe(1)
+
+    runRetries()
+
+    expect(client['_connectAttempts']).toBe(2)
+    expect(posted).toEqual([])
+  })
+
+  test('a transport failure gives up once the attempt bound is reached', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+
+    for (let i = 0; i < 3; i++) {
+      client['_ws']!.readyState = FakeSocket.OPEN
+      client['_ws']!.onclose({ code: 1005, reason: '' } as CloseEvent)
+      runRetries()
+    }
+
+    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_FAILED'])
+    expect(posted[0].attempts).toBe(3)
+  })
+
+  test('a timeout retries silently and reports both events only once it gives up', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+
+    for (let i = 0; i < 2; i++) {
+      client['_ws']!.readyState = FakeSocket.OPEN
+      client['onTimeout']()
+      expect(posted).toEqual([])
+      runRetries()
+    }
+
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['onTimeout']()
+
+    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_TIMEOUT', 'KERNEL_CONNECTION_FAILED'])
+  })
+
+  test('disconnecting cancels a scheduled retry', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['_ws']!.onclose({ code: 1005, reason: '' } as CloseEvent)
+
+    expect(client['_retry']).toBeDefined()
+    client['disconnect']()
+    runRetries()
+
+    expect(client['_connectAttempts']).toBe(1)
+    expect(posted).toEqual([])
   })
 
   test('a disconnect after media started is reported as a disconnect, not a connect failure', () => {
@@ -111,15 +188,6 @@ describe('live view connect attempts', () => {
 
     expect(posted).toEqual([])
     expect(client.reasons.map((r) => r?.message)).toEqual(['network blip'])
-  })
-
-  test('a connect timeout reports the legacy timeout and the terminal failure', () => {
-    const client = new TestClient()
-    client.connect('ws://host/ws', 'pw', 'kernel')
-    client['_ws']!.readyState = FakeSocket.OPEN
-    client['onTimeout']()
-
-    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_TIMEOUT', 'KERNEL_CONNECTION_FAILED'])
   })
 
   test('gives up after the attempt bound and reports the reason to the parent frame', () => {

@@ -16,6 +16,10 @@ import {
 // leaving the viewer black with nothing reported to whoever is watching.
 const MAX_CONNECT_ATTEMPTS = 3
 
+// Spacing between attempts, so a transient socket or relay problem has a moment
+// to clear before the next one. Exported for tests that drive the timer.
+export const RETRY_DELAY_MS = 1000
+
 export interface BaseEvents {
   info: (...message: any[]) => void
   warn: (...message: any[]) => void
@@ -29,9 +33,14 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _peer?: RTCPeerConnection
   protected _channel?: RTCDataChannel
   protected _timeout?: number
+  protected _retry?: number
   protected _connectAttempts = 0
   protected _everConnected = false
   protected _gaveUp = false
+  // Tagged at the source of the failure. Undefined means terminal: only a
+  // transport close or a connect timeout is transient enough to retry.
+  protected _failure?: 'transport' | 'timeout'
+  protected _lastAttempt?: { url: string; password: string; displayname: string }
   protected _displayname?: string
   protected _state: RTCIceConnectionState = 'disconnected'
   protected _id = ''
@@ -78,6 +87,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       return
     }
     this._connectAttempts++
+    this._failure = undefined
+    this._lastAttempt = { url, password, displayname }
 
     this._displayname = displayname
     this[EVENT.CONNECTING]()
@@ -91,6 +102,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._ws.onerror = this.onError.bind(this)
       this._ws.onclose = (event) => {
         this.emit('debug', `websocket closed: code=${event.code}, reason=${event.reason}`)
+        this._failure = 'transport'
         this.onDisconnected(new Error('websocket closed'))
       }
       this._timeout = window.setTimeout(this.onTimeout.bind(this), 15000)
@@ -103,6 +115,11 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     if (this._timeout) {
       clearTimeout(this._timeout)
       this._timeout = undefined
+    }
+
+    if (this._retry) {
+      clearTimeout(this._retry)
+      this._retry = undefined
     }
 
     if (this._ws_heartbeat) {
@@ -473,6 +490,20 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
   private onTimeout() {
     this.emit('debug', `connection timeout`)
+    this._failure = 'timeout'
+
+    if (this._timeout) {
+      clearTimeout(this._timeout)
+      this._timeout = undefined
+    }
+
+    // A retried attempt is internal, so the parent only hears about the last
+    // one. Reporting every attempt would also make an embedder that remounts on
+    // the timeout event retry on top of us, and a remount resets the bound.
+    if (this.scheduleRetry()) {
+      return
+    }
+
     this.postParentMessage({
       type: 'KERNEL_CONNECTION_TIMEOUT',
       reason: 'connection timeout',
@@ -481,10 +512,6 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       signalingState: this._peer?.signalingState,
       socketOpen: this.socketOpen,
     })
-    if (this._timeout) {
-      clearTimeout(this._timeout)
-      this._timeout = undefined
-    }
     this.onDisconnected(new Error('connection timeout'))
   }
 
@@ -508,6 +535,9 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     // the parent frame would get neither KERNEL_CONNECTION_FAILED nor the
     // legacy KERNEL_CONNECTION_TIMEOUT.
     if (!this._gaveUp && !this._everConnected) {
+      if (this.scheduleRetry()) {
+        return
+      }
       this.giveUp(reason ?? new Error('connection failed'))
       return
     }
@@ -515,6 +545,29 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this.disconnect()
     this.emit('debug', `disconnected:`, reason)
     this[EVENT.DISCONNECTED](reason)
+  }
+
+  // Only failures tagged at the source are transient. Anything unclassified — a
+  // peer-construction throw, an ICE failure, a server-side disconnect — is
+  // deterministic enough that a retry repeats it, and reports to the parent
+  // instead of looping.
+  private scheduleRetry() {
+    if (this._failure === undefined || this._connectAttempts >= MAX_CONNECT_ATTEMPTS) {
+      return false
+    }
+
+    this.disconnect()
+    this._retry = window.setTimeout(() => {
+      this._retry = undefined
+
+      if (!this._lastAttempt) {
+        return
+      }
+      const { url, password, displayname } = this._lastAttempt
+      this.connect(url, password, displayname)
+    }, RETRY_DELAY_MS)
+
+    return true
   }
 
   protected [EVENT.MESSAGE](event: string, payload: any) {
