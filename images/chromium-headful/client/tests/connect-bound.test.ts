@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { BaseClient, RETRY_DELAY_MS } from '../src/neko/base'
+import { BaseClient, CONNECT_STAGE_TIMEOUT_MS, RETRY_DELAY_MS } from '../src/neko/base'
 
 const posted: Record<string, any>[] = []
 const timers: { id: number; delay: number; run: () => void }[] = []
@@ -13,17 +13,49 @@ function clearTimer(id: number) {
   if (index !== -1) timers.splice(index, 1)
 }
 
-// The connect watchdog is armed on the same fake clock, so only the retry
-// timers are run here.
-function runRetries() {
-  for (const timer of timers.splice(0)) {
-    if (timer.delay === RETRY_DELAY_MS) timer.run()
+function runTimers(delay: number) {
+  for (const timer of [...timers]) {
+    if (timer.delay !== delay) continue
+    clearTimer(timer.id)
+    timer.run()
   }
+}
+
+function runRetries() {
+  runTimers(RETRY_DELAY_MS)
+}
+
+let lastPeer: FakePeer | undefined
+
+class FakePeer {
+  iceConnectionState = 'new'
+  connectionState = 'new'
+  signalingState = 'stable'
+  onconnectionstatechange: () => void = () => {}
+  onsignalingstatechange: () => void = () => {}
+  oniceconnectionstatechange: () => void = () => {}
+  onicecandidate: (event: RTCPeerConnectionIceEvent) => void = () => {}
+  onnegotiationneeded: () => void = () => {}
+  ontrack: (event: RTCTrackEvent) => void = () => {}
+  async setRemoteDescription() {}
+  async setLocalDescription() {}
+  async createAnswer() {
+    return { sdp: 'v=0' }
+  }
+  async createOffer() {
+    return { sdp: 'v=0' }
+  }
+  async addIceCandidate() {}
+  createDataChannel() {
+    return { onerror: () => {}, onmessage: () => {}, onclose: () => {}, close: () => {} }
+  }
+  close() {}
 }
 
 class FakeSocket {
   static OPEN = 1
   readyState = 0
+  onopen: () => void = () => {}
   onmessage: (e: MessageEvent) => void = () => {}
   onerror: (e: Event) => void = () => {}
   onclose: (e: CloseEvent) => void = () => {}
@@ -54,7 +86,8 @@ class TestClient extends BaseClient {
 
 function setPeerConstructor(impl: () => unknown) {
   const ctor = function () {
-    return impl()
+    lastPeer = (impl() ?? {}) as FakePeer
+    return lastPeer
   } as unknown as typeof RTCPeerConnection
   ctor.prototype = { addTransceiver() {} }
   Object.defineProperty(globalThis, 'RTCPeerConnection', { value: ctor, configurable: true })
@@ -63,6 +96,7 @@ function setPeerConstructor(impl: () => unknown) {
 beforeEach(() => {
   posted.length = 0
   timers.length = 0
+  lastPeer = undefined
   nextTimerId = 1
   const parent = { postMessage: (m: Record<string, any>) => posted.push(m) }
   Object.defineProperty(globalThis, 'window', {
@@ -80,7 +114,7 @@ beforeEach(() => {
   globalThis.clearTimeout = clearTimer
   Object.defineProperty(globalThis, 'document', { value: { referrer: '' }, configurable: true })
   Object.defineProperty(globalThis, 'WebSocket', { value: FakeSocket, configurable: true })
-  setPeerConstructor(() => ({}))
+  setPeerConstructor(() => new FakePeer())
 })
 
 afterEach(() => {
@@ -145,21 +179,76 @@ describe('live view connect attempts', () => {
     expect(posted[0].attempts).toBe(3)
   })
 
-  test('a timeout retries silently and reports both events only once it gives up', () => {
+  test('a transport stage timeout retries silently until the attempt bound is reached', () => {
     const client = new TestClient()
     client.connect('ws://host/ws', 'pw', 'kernel')
 
+    expect(client['_stage']).toBe('transport')
+
     for (let i = 0; i < 2; i++) {
-      client['_ws']!.readyState = FakeSocket.OPEN
-      client['onTimeout']()
+      runTimers(CONNECT_STAGE_TIMEOUT_MS.transport)
       expect(posted).toEqual([])
       runRetries()
     }
 
-    client['_ws']!.readyState = FakeSocket.OPEN
-    client['onTimeout']()
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.transport)
 
     expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_TIMEOUT', 'KERNEL_CONNECTION_FAILED'])
+    expect(posted.map((m) => m.reason)).toEqual(['transport timeout', 'transport timeout'])
+  })
+
+  test('the signaling stage starts when the socket opens and is reported as its own reason', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['_ws']!.onopen()
+
+    expect(client['_stage']).toBe('signaling')
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.signaling)
+
+    expect(client['_connectAttempts']).toBe(1)
+    expect(posted).toEqual([])
+
+    runRetries()
+
+    expect(client['_connectAttempts']).toBe(2)
+    expect(posted).toEqual([])
+  })
+
+  test('after signal/provide the media stage starts and its timeout is terminal', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['_ws']!.onopen()
+    await client.provide()
+
+    expect(client['_stage']).toBe('media')
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.media)
+
+    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_TIMEOUT', 'KERNEL_CONNECTION_FAILED'])
+    expect(posted[0].reason).toBe('media timeout')
+    expect(posted[1].attempts).toBe(1)
+    expect(client['_connectAttempts']).toBe(1)
+  })
+
+  test('ICE reaching checking clears the media stage before its bound', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.readyState = FakeSocket.OPEN
+    client['_ws']!.onopen()
+    await client.provide()
+
+    lastPeer!.iceConnectionState = 'checking'
+    client['_peer']!.oniceconnectionstatechange()
+
+    expect(client['_timeout']).toBeUndefined()
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.media)
+
+    expect(posted).toEqual([])
   })
 
   test('disconnecting cancels a scheduled retry', () => {

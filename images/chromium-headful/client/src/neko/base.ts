@@ -20,6 +20,17 @@ const MAX_CONNECT_ATTEMPTS = 3
 // to clear before the next one. Exported for tests that drive the timer.
 export const RETRY_DELAY_MS = 1000
 
+// A connect walks transport -> signaling -> media. A single 15s clock over all
+// three meant a socket that never opened burned the whole budget and reported
+// only "timeout", so each stage now fails on its own bound with its own reason.
+export type ConnectStage = 'transport' | 'signaling' | 'media'
+
+export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
+  transport: 5000,
+  signaling: 5000,
+  media: 5000,
+}
+
 export interface BaseEvents {
   info: (...message: any[]) => void
   warn: (...message: any[]) => void
@@ -33,13 +44,14 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _peer?: RTCPeerConnection
   protected _channel?: RTCDataChannel
   protected _timeout?: number
+  protected _stage?: ConnectStage
   protected _retry?: number
   protected _connectAttempts = 0
   protected _everConnected = false
   protected _gaveUp = false
-  // Tagged at the source of the failure. Undefined means terminal: only a
-  // transport close or a connect timeout is transient enough to retry.
-  protected _failure?: 'transport' | 'timeout'
+  // Tagged at the source of the failure. Undefined means terminal: only the
+  // transport and signaling stages are transient enough to retry.
+  protected _failure?: ConnectStage
   protected _lastAttempt?: { url: string; password: string; displayname: string }
   protected _displayname?: string
   protected _state: RTCIceConnectionState = 'disconnected'
@@ -100,12 +112,13 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this.emit('debug', `connecting to ${this._ws.url}`)
       this._ws.onmessage = this.onMessage.bind(this)
       this._ws.onerror = this.onError.bind(this)
+      this._ws.onopen = () => this.armStage('signaling')
       this._ws.onclose = (event) => {
         this.emit('debug', `websocket closed: code=${event.code}, reason=${event.reason}`)
         this._failure = 'transport'
         this.onDisconnected(new Error('websocket closed'))
       }
-      this._timeout = window.setTimeout(this.onTimeout.bind(this), 15000)
+      this.armStage('transport')
     } catch (err: any) {
       this.onDisconnected(err)
     }
@@ -116,6 +129,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       clearTimeout(this._timeout)
       this._timeout = undefined
     }
+    this._stage = undefined
 
     if (this._retry) {
       clearTimeout(this._retry)
@@ -402,12 +416,14 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._id = id
       await this.createPeer(lite, ice)
       await this.setRemoteOffer(sdp)
+      this.armStage('media')
       return
     }
 
     if (event === EVENT.SIGNAL.OFFER) {
       const { sdp } = payload as SignalOfferPayload
       await this.setRemoteOffer(sdp)
+      this.armStage('media')
       return
     }
 
@@ -488,9 +504,19 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this[EVENT.CONNECTED]()
   }
 
+  private armStage(stage: ConnectStage) {
+    if (this._timeout) {
+      clearTimeout(this._timeout)
+    }
+
+    this._stage = stage
+    this._timeout = window.setTimeout(this.onTimeout.bind(this), CONNECT_STAGE_TIMEOUT_MS[stage])
+  }
+
   private onTimeout() {
-    this.emit('debug', `connection timeout`)
-    this._failure = 'timeout'
+    const stage = this._stage ?? 'transport'
+    this.emit('debug', `connection timeout at ${stage} stage`)
+    this._failure = stage
 
     if (this._timeout) {
       clearTimeout(this._timeout)
@@ -506,13 +532,13 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
     this.postParentMessage({
       type: 'KERNEL_CONNECTION_TIMEOUT',
-      reason: 'connection timeout',
+      reason: `${stage} timeout`,
       iceConnectionState: this._peer?.iceConnectionState ?? this._state,
       connectionState: this._peer?.connectionState,
       signalingState: this._peer?.signalingState,
       socketOpen: this.socketOpen,
     })
-    this.onDisconnected(new Error('connection timeout'))
+    this.onDisconnected(new Error(`${stage} timeout`))
   }
 
   private giveUp(reason: Error) {
@@ -552,7 +578,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   // deterministic enough that a retry repeats it, and reports to the parent
   // instead of looping.
   private scheduleRetry() {
-    if (this._failure === undefined || this._connectAttempts >= MAX_CONNECT_ATTEMPTS) {
+    const retryable = this._failure === 'transport' || this._failure === 'signaling'
+    if (!retryable || this._connectAttempts >= MAX_CONNECT_ATTEMPTS) {
       return false
     }
 
