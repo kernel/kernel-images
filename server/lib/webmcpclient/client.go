@@ -41,8 +41,8 @@ type connection struct {
 	invocations          map[invocationKey]invocationResponse
 	waitingInvocations   map[invocationKey]string
 	abandonedInvocations map[invocationKey]time.Time
-	polyfillWatches      map[*polyfillWatch]struct{}
-	documentGeneration   map[string]uint64
+	polyfillBridges      map[string]*polyfillBridge
+	polyfillSyncMu       sync.Mutex
 	stateChangedCh       chan struct{}
 	logger               *slog.Logger
 
@@ -65,8 +65,7 @@ func newConnection(protocol *cdpclient.Client) *connection {
 		invocations:          make(map[invocationKey]invocationResponse),
 		waitingInvocations:   make(map[invocationKey]string),
 		abandonedInvocations: make(map[invocationKey]time.Time),
-		polyfillWatches:      make(map[*polyfillWatch]struct{}),
-		documentGeneration:   make(map[string]uint64),
+		polyfillBridges:      make(map[string]*polyfillBridge),
 		stateChangedCh:       make(chan struct{}, 1),
 		logger:               slog.Default(),
 		eventsCancel:         cancel,
@@ -119,20 +118,17 @@ func (c *connection) eventLoop(events <-chan browsersurface.Event) {
 		case browsersurface.EventDocumentChanged:
 			c.stateMu.Lock()
 			c.removeFrameToolsLocked(event.SessionID, event.FrameID)
-			c.documentGoneLocked(event.FrameID)
 			c.stateMu.Unlock()
 			c.signalStateChanged()
 		case browsersurface.EventFrameInvalidated:
 			c.stateMu.Lock()
 			c.removeFrameToolsAcrossSessionsLocked(event.FrameID)
-			c.documentGoneLocked(event.FrameID)
 			c.stateMu.Unlock()
 			c.signalStateChanged()
 		case browsersurface.EventFrameRemoved:
 			c.stateMu.Lock()
 			c.abandonFrameInvocationsAcrossSessionsLocked(event.FrameID)
 			c.removeFrameToolsAcrossSessionsLocked(event.FrameID)
-			c.documentGoneLocked(event.FrameID)
 			c.stateMu.Unlock()
 			c.signalStateChanged()
 		case browsersurface.EventProtocol:
@@ -285,19 +281,8 @@ func (c *connection) addTools(sessionID string, tools []toolEvent) {
 func (c *connection) toolsSnapshot() []Tool {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
-	// A name registered both natively and through a polyfill lists once, as
-	// the native tool.
-	native := make(map[string]bool)
-	for _, tool := range c.tools {
-		if !tool.polyfill && tool.customID == "" {
-			native[tool.key()] = true
-		}
-	}
 	result := make([]Tool, 0, len(c.tools))
 	for _, tool := range c.tools {
-		if tool.polyfill && native[toolKey(tool.sessionID, tool.frameID, tool.name)] {
-			continue
-		}
 		location, ok := c.surface.Resolve(tool.sessionID, tool.frameID)
 		if !ok {
 			continue
@@ -313,17 +298,13 @@ func (c *connection) toolsSnapshot() []Tool {
 			source.Frame = &ToolFrame{FrameID: location.Frame.ID, URL: location.Frame.URL}
 		}
 		result = append(result, Tool{
-			Ref:          tool.ref,
-			Name:         tool.name,
-			Description:  tool.description,
-			InputSchema:  tool.inputSchema,
-			Annotations:  tool.annotations,
-			CustomID:     tool.customID,
-			Polyfill:     tool.polyfill,
-			Title:        tool.title,
-			OutputSchema: tool.outputSchema,
-			Hints:        tool.hints,
-			Source:       source,
+			Ref:         tool.ref,
+			Name:        tool.name,
+			Description: tool.description,
+			InputSchema: tool.inputSchema,
+			Annotations: tool.annotations,
+			CustomID:    tool.customID,
+			Source:      source,
 		})
 	}
 	sort.Slice(result, func(i, j int) bool {
@@ -382,14 +363,6 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 	if !ok {
 		c.stateMu.RUnlock()
 		return InvocationResult{}, ErrToolNotFound
-	}
-	if tool.polyfill {
-		polyfillTool := *tool
-		c.stateMu.RUnlock()
-		if !c.surface.SessionExists(polyfillTool.sessionID) {
-			return InvocationResult{}, ErrToolNotFound
-		}
-		return c.invokePolyfill(ctx, &polyfillTool, input)
 	}
 	sessionID, frameID, name := tool.sessionID, tool.frameID, tool.registeredName
 	awaitingSubmission := tool.declarative && (tool.annotations == nil || !tool.annotations.Autosubmit)
@@ -521,12 +494,6 @@ func (c *connection) removeSession(sessionID string) {
 	defer c.stateMu.Unlock()
 	delete(c.enabledSessions, sessionID)
 	delete(c.toolLimitWarned, sessionID)
-	c.releasePolyfillWatchesLocked(func(watch *polyfillWatch) bool { return watch.sessionID == sessionID })
-	for _, tool := range c.tools {
-		if tool.sessionID == sessionID {
-			c.documentGeneration[tool.frameID]++
-		}
-	}
 	for key := range c.waitingInvocations {
 		if key.sessionID == sessionID {
 			c.abandonInvocationLocked(key)
@@ -534,7 +501,7 @@ func (c *connection) removeSession(sessionID string) {
 	}
 	for ref, tool := range c.tools {
 		if tool.sessionID == sessionID {
-			delete(c.toolRefs, tool.key())
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
 			delete(c.tools, ref)
 		}
 	}
@@ -552,7 +519,7 @@ func (c *connection) abandonFrameInvocationsAcrossSessionsLocked(frameID string)
 func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
 	for ref, tool := range c.tools {
 		if tool.sessionID == sessionID && tool.frameID == frameID {
-			delete(c.toolRefs, tool.key())
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
 			delete(c.tools, ref)
 		}
 	}
@@ -561,7 +528,7 @@ func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
 func (c *connection) removeFrameToolsAcrossSessionsLocked(frameID string) {
 	for ref, tool := range c.tools {
 		if tool.frameID == frameID {
-			delete(c.toolRefs, tool.key())
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
 			delete(c.tools, ref)
 		}
 	}

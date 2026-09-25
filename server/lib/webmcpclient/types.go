@@ -17,14 +17,7 @@ type Tool struct {
 	InputSchema map[string]any
 	Annotations *Annotations
 	CustomID    string
-	// Polyfill tools were read from a page-JavaScript navigator.modelContext
-	// polyfill rather than the native registry. Title, OutputSchema, and
-	// Hints are only populated for them.
-	Polyfill     bool
-	Title        string
-	OutputSchema map[string]any
-	Hints        map[string]bool
-	Source       ToolSource
+	Source      ToolSource
 }
 
 type ToolSource struct {
@@ -66,18 +59,6 @@ type registeredTool struct {
 	customID       string
 	frameID        string
 	declarative    bool
-	polyfill       bool
-	rootFrame      bool
-	title          string
-	outputSchema   map[string]any
-	hints          map[string]bool
-}
-
-func (t *registeredTool) key() string {
-	if t.polyfill {
-		return polyfillToolKey(t.sessionID, t.frameID, t.name)
-	}
-	return toolKey(t.sessionID, t.frameID, t.name)
 }
 
 type toolEvent struct {

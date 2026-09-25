@@ -47,7 +47,6 @@ type wireRequest struct {
 }
 
 type fakeCDP struct {
-	t      *testing.T
 	server *httptest.Server
 	url    string
 
@@ -69,20 +68,20 @@ type fakeCDP struct {
 	iframeOpen                 bool
 	nestedFrameOpen            bool
 	childFrameOpen             bool
-	windowUnavailable          bool
-	polyfillTools              map[string][]map[string]any
-	polyfillInvoke             func(windowID, name string, input map[string]any) map[string]any
-	polyfillInvokeError        string
-	polyfillInvokeHang         bool
-	polyfillNavigateDuringList bool
-	polyfillInvocations        []polyfillInvocation
+	polyfillTools              map[string][]string
+	bridgedTools               map[string]map[string]bool
+	staleBridges               map[string]bool
+	bridgesCreated             int
 	methods                    map[string]int
 	write                      func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
 	t.Helper()
-	fake := &fakeCDP{t: t, enabledSessions: make(map[string]int), methods: make(map[string]int), omitResponse: omitResponse, toolCount: 1}
+	fake := &fakeCDP{
+		enabledSessions: make(map[string]int), methods: make(map[string]int), omitResponse: omitResponse, toolCount: 1,
+		bridgedTools: make(map[string]map[string]bool), staleBridges: make(map[string]bool),
+	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
 	fake.url = "ws" + strings.TrimPrefix(fake.server.URL, "http")
 	t.Cleanup(fake.server.Close)

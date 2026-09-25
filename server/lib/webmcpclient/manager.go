@@ -51,7 +51,9 @@ func (m *Manager) Tools(ctx context.Context) ([]Tool, error) {
 	if !conn.surface.HasTabs() {
 		return nil, ErrNoPageTarget
 	}
-	conn.syncPolyfillTools(ctx)
+	if conn.syncPolyfillTools(ctx) {
+		conn.waitForSettled(ctx)
+	}
 	return conn.toolsSnapshot(), nil
 }
 
@@ -63,13 +65,7 @@ func (m *Manager) CustomTool(ctx context.Context, toolRef string) (string, strin
 	conn.stateMu.RLock()
 	defer conn.stateMu.RUnlock()
 	tool, ok := conn.tools[toolRef]
-	if !ok {
-		return "", "", ErrToolNotFound
-	}
-	if tool.polyfill {
-		return "", "", nil
-	}
-	if !conn.enabledSessions[tool.sessionID] {
+	if !ok || !conn.enabledSessions[tool.sessionID] {
 		return "", "", ErrToolNotFound
 	}
 	if tool.customID == "" {

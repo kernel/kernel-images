@@ -11,50 +11,35 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/browsersurface"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/nrednav/cuid2"
 )
 
 // Sites that ship their own WebMCP tools before the browser exposes the
 // native registry install a polyfill on navigator.modelContext. Chromium
 // dropped that alias in favor of document.modelContext, so nothing such a
-// polyfill registers reaches the CDP WebMCP domain. polyfill_page.js reads and
-// invokes those tools from the page's main world without leaving anything
-// behind on the page.
+// polyfill registers reaches the CDP WebMCP domain. polyfill_bridge.js copies
+// those tools into the frame's native registry, after which they are listed,
+// invoked, and removed like any other page tool.
 //
-//go:embed polyfill_page.js
-var polyfillPageSource string
+//go:embed polyfill_bridge.js
+var polyfillBridgeSource string
 
 const (
 	polyfillSyncTimeout     = 2 * time.Second
 	polyfillSyncConcurrency = 8
 	polyfillReleaseTimeout  = time.Second
-	polyfillNavigationGrace = 500 * time.Millisecond
 )
 
-type polyfillToolMetadata struct {
-	Name         string          `json:"name"`
-	Title        string          `json:"title"`
-	Description  string          `json:"description"`
-	InputSchema  map[string]any  `json:"inputSchema"`
-	OutputSchema map[string]any  `json:"outputSchema"`
-	Annotations  map[string]bool `json:"annotations"`
+// polyfillBridge is a remote object handle for one frame's bridge. The handle
+// lives in the frame's execution context and becomes invalid when it goes away.
+type polyfillBridge struct {
+	objectID string
+	group    string
 }
 
-type polyfillInvokeResult struct {
-	OK     bool    `json:"ok"`
-	Output *string `json:"output"`
-	Error  string  `json:"error"`
-}
-
-type polyfillFrameTools struct {
-	frame      browsersurface.SessionFrame
-	generation uint64
-	tools      []polyfillToolMetadata
-	read       bool
-}
-
-func polyfillToolKey(sessionID, frameID, name string) string {
-	return toolKey(sessionID, frameID, name) + "\x00polyfill"
+func polyfillBridgeKey(sessionID, frameID string) string {
+	return sessionID + "\x00" + frameID
 }
 
 // polyfillFrameURL excludes browser-internal documents; every web document,
@@ -64,305 +49,130 @@ func polyfillFrameURL(url string) bool {
 	return !strings.HasPrefix(url, "chrome") && !strings.HasPrefix(url, "devtools://")
 }
 
-// documentGoneLocked records that a frame's document was replaced or removed
-// so that in-flight reads of the old document are discarded and invocations
-// running in it are released.
-func (c *connection) documentGoneLocked(frameID string) {
-	c.documentGeneration[frameID]++
-	c.releasePolyfillWatchesLocked(func(watch *polyfillWatch) bool { return watch.frameID == frameID })
-}
-
-// syncPolyfillTools reads polyfill-registered tools from every tracked frame
-// and reconciles them with the registry. A frame that cannot be read keeps its
-// previous entries; surface events remove them when the document goes away.
-func (c *connection) syncPolyfillTools(ctx context.Context) {
+// syncPolyfillTools brings every tracked frame's bridged registrations up to
+// date with its polyfill and reports whether any native registry changed.
+func (c *connection) syncPolyfillTools(ctx context.Context) bool {
+	// One bridge per document: concurrent listings would otherwise create two
+	// and leave the first one's registrations unmanaged.
+	c.polyfillSyncMu.Lock()
+	defer c.polyfillSyncMu.Unlock()
 	frames := c.surface.SessionFrames()
-	if len(frames) == 0 {
-		return
+	live := make(map[string]bool, len(frames))
+	for _, frame := range frames {
+		live[polyfillBridgeKey(frame.SessionID, frame.FrameID)] = true
 	}
+	c.stateMu.Lock()
+	for key := range c.polyfillBridges {
+		if !live[key] {
+			delete(c.polyfillBridges, key)
+		}
+	}
+	c.stateMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(ctx, polyfillSyncTimeout)
 	defer cancel()
-
-	results := make([]polyfillFrameTools, len(frames))
-	c.stateMu.RLock()
-	for i, frame := range frames {
-		results[i].generation = c.documentGeneration[frame.FrameID]
-	}
-	c.stateMu.RUnlock()
-
-	var wg sync.WaitGroup
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		changed bool
+	)
 	semaphore := make(chan struct{}, polyfillSyncConcurrency)
-	for i, frame := range frames {
+	for _, frame := range frames {
 		if !polyfillFrameURL(frame.URL) {
 			continue
 		}
 		wg.Add(1)
-		go func(i int, frame browsersurface.SessionFrame) {
+		go func(frame browsersurface.SessionFrame) {
 			defer wg.Done()
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
-			tools, err := c.readPolyfillTools(ctx, frame)
-			if err != nil {
-				return
+			if c.syncPolyfillFrame(ctx, frame) {
+				mu.Lock()
+				changed = true
+				mu.Unlock()
 			}
-			results[i].frame = frame
-			results[i].tools = tools
-			results[i].read = true
-		}(i, frame)
+		}(frame)
 	}
 	wg.Wait()
-
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-	for _, result := range results {
-		// A document replaced while it was being read is stale.
-		if result.read && c.documentGeneration[result.frame.FrameID] == result.generation {
-			c.applyPolyfillToolsLocked(result.frame, result.tools)
-		}
-	}
+	return changed
 }
 
-func (c *connection) readPolyfillTools(ctx context.Context, frame browsersurface.SessionFrame) ([]polyfillToolMetadata, error) {
-	raw, err := c.callPolyfill(ctx, frame, "list", nil)
-	if err != nil {
-		return nil, err
-	}
-	if raw == nil {
-		return nil, nil
-	}
-	var result struct {
-		Tools []polyfillToolMetadata `json:"tools"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("WebMCP: decode polyfill tools: %w", err)
-	}
-	return result.Tools, nil
-}
-
-// applyPolyfillToolsLocked replaces the frame's polyfill registrations with
-// the tools just read. Native tools of the same name take precedence when the
-// snapshot is built, so a shadowed polyfill tool keeps its reference.
-func (c *connection) applyPolyfillToolsLocked(frame browsersurface.SessionFrame, tools []polyfillToolMetadata) {
-	if !c.surface.SessionExists(frame.SessionID) {
-		return
-	}
-	tracked := 0
-	for _, existing := range c.tools {
-		if existing.sessionID == frame.SessionID {
-			tracked++
+func (c *connection) syncPolyfillFrame(ctx context.Context, frame browsersurface.SessionFrame) bool {
+	key := polyfillBridgeKey(frame.SessionID, frame.FrameID)
+	c.stateMu.RLock()
+	bridge := c.polyfillBridges[key]
+	c.stateMu.RUnlock()
+	if bridge == nil {
+		var err error
+		if bridge, err = c.createPolyfillBridge(ctx, frame); err != nil {
+			return false
 		}
-	}
-	desired := make(map[string]bool, len(tools))
-	for _, tool := range tools {
-		desired[tool.Name] = true
-	}
-	for ref, existing := range c.tools {
-		if !existing.polyfill || existing.sessionID != frame.SessionID || existing.frameID != frame.FrameID {
-			continue
-		}
-		if desired[existing.name] {
-			continue
-		}
-		delete(c.toolRefs, existing.key())
-		delete(c.tools, ref)
-		tracked--
-	}
-	for _, tool := range tools {
-		key := polyfillToolKey(frame.SessionID, frame.FrameID, tool.Name)
-		ref := c.toolRefs[key]
-		if ref == "" {
-			if tracked >= maxToolsPerSession {
-				if !c.toolLimitWarned[frame.SessionID] {
-					c.toolLimitWarned[frame.SessionID] = true
-					c.logger.Warn("WebMCP tool limit reached", "session_id", frame.SessionID, "limit", maxToolsPerSession)
-				}
-				continue
-			}
-			ref = "wmcp_" + cuid2.Generate()
-			c.toolRefs[key] = ref
-			tracked++
-		}
-		c.tools[ref] = &registeredTool{
-			ref:            ref,
-			sessionID:      frame.SessionID,
-			name:           tool.Name,
-			registeredName: tool.Name,
-			description:    tool.Description,
-			inputSchema:    tool.InputSchema,
-			frameID:        frame.FrameID,
-			polyfill:       true,
-			rootFrame:      frame.Root,
-			title:          tool.Title,
-			outputSchema:   tool.OutputSchema,
-			hints:          tool.Annotations,
-		}
-	}
-}
-
-// polyfillWatch is released when the document that is running a polyfill
-// invocation goes away.
-type polyfillWatch struct {
-	sessionID string
-	frameID   string
-	released  chan struct{}
-}
-
-func (c *connection) watchPolyfillDocument(sessionID, frameID string) (*polyfillWatch, func()) {
-	watch := &polyfillWatch{sessionID: sessionID, frameID: frameID, released: make(chan struct{})}
-	c.stateMu.Lock()
-	c.polyfillWatches[watch] = struct{}{}
-	c.stateMu.Unlock()
-	return watch, func() {
 		c.stateMu.Lock()
-		delete(c.polyfillWatches, watch)
+		c.polyfillBridges[key] = bridge
 		c.stateMu.Unlock()
 	}
-}
 
-func (c *connection) releasePolyfillWatchesLocked(matches func(*polyfillWatch) bool) {
-	for watch := range c.polyfillWatches {
-		if matches(watch) {
-			close(watch.released)
-			delete(c.polyfillWatches, watch)
-		}
-	}
-}
-
-func (c *connection) invokePolyfill(ctx context.Context, tool *registeredTool, input map[string]any) (InvocationResult, error) {
-	frame := browsersurface.SessionFrame{SessionID: tool.sessionID, FrameID: tool.frameID, Root: tool.rootFrame}
-	invocation := InvocationResult{InvocationID: cuid2.Generate()}
-
-	// A document that navigates before the returned promise settles either
-	// never answers the call or fails it as the context goes away. The native
-	// WebMCP domain reports such an invocation as completed with empty output,
-	// so watch the document and do the same.
-	watch, stopWatching := c.watchPolyfillDocument(tool.sessionID, tool.frameID)
-	defer stopWatching()
-	callCtx, cancelCall := context.WithCancel(ctx)
-	defer cancelCall()
-	type callResult struct {
-		raw json.RawMessage
-		err error
-	}
-	results := make(chan callResult, 1)
-	go func() {
-		raw, err := c.callPolyfill(callCtx, frame, "invoke", []any{tool.name, input})
-		results <- callResult{raw: raw, err: err}
-	}()
-	navigated := func() (InvocationResult, error) {
-		invocation.Status = "completed"
-		invocation.Output = []any{}
-		return invocation, nil
-	}
-	var raw json.RawMessage
-	select {
-	case <-watch.released:
-		cancelCall()
-		result := <-results
-		if result.err != nil {
-			return navigated()
-		}
-		raw = result.raw
-	case result := <-results:
-		if result.err != nil {
-			var notDispatched *polyfillNotDispatchedError
-			if errors.As(result.err, &notDispatched) && ctx.Err() == nil {
-				return InvocationResult{}, ErrToolNotFound
-			}
-			// The navigation that failed the call may still be settling.
-			grace := time.NewTimer(polyfillNavigationGrace)
-			defer grace.Stop()
-			select {
-			case <-watch.released:
-				return navigated()
-			case <-grace.C:
-			case <-ctx.Done():
-			}
-			return invocation, ErrOutcomeUnknown
-		}
-		raw = result.raw
-	}
-	var result polyfillInvokeResult
-	if err := json.Unmarshal(raw, &result); err != nil {
-		invocation.Status = "error"
-		invocation.ErrorText = "the page returned an unreadable result"
-		return invocation, nil
-	}
-	if !result.OK {
-		invocation.Status = "error"
-		invocation.ErrorText = result.Error
-		return invocation, nil
-	}
-	if result.Output != nil {
-		if err := json.Unmarshal([]byte(*result.Output), &invocation.Output); err != nil {
-			invocation.Status = "error"
-			invocation.ErrorText = "the page returned an unreadable result"
-			return invocation, nil
-		}
-	}
-	invocation.Status = "completed"
-	return invocation, nil
-}
-
-// polyfillNotDispatchedError reports a failure before the page function ran,
-// so the caller knows the tool did not execute.
-type polyfillNotDispatchedError struct {
-	cause error
-}
-
-func (e *polyfillNotDispatchedError) Error() string { return e.cause.Error() }
-func (e *polyfillNotDispatchedError) Unwrap() error { return e.cause }
-
-// callPolyfill runs one entry point of polyfill_page.js in the frame's main
-// world and returns the JSON value it produced, or nil for null.
-func (c *connection) callPolyfill(ctx context.Context, frame browsersurface.SessionFrame, method string, args []any) (json.RawMessage, error) {
-	group := "kernel-webmcp-polyfill-" + cuid2.Generate()
-	defer func() { go c.releaseObjectGroup(frame.SessionID, group) }()
-
-	windowID, err := c.frameWindow(ctx, frame, group)
-	if err != nil {
-		return nil, &polyfillNotDispatchedError{cause: err}
-	}
-	arguments := make([]map[string]any, 0, len(args))
-	for _, arg := range args {
-		arguments = append(arguments, map[string]any{"value": arg})
-	}
 	raw, err := c.surface.Send(ctx, "Runtime.callFunctionOn", map[string]any{
-		"objectId":            windowID,
-		"functionDeclaration": fmt.Sprintf("function(...args) { return (%s).%s(this, ...args); }", polyfillPageSource, method),
-		"arguments":           arguments,
+		"objectId":            bridge.objectID,
+		"functionDeclaration": "function() { return this.sync(); }",
 		"awaitPromise":        true,
 		"returnByValue":       true,
-		"objectGroup":         group,
 	}, frame.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	var result struct {
-		Result struct {
-			Value json.RawMessage `json:"value"`
-		} `json:"result"`
-		ExceptionDetails *struct {
-			Text      string `json:"text"`
-			Exception *struct {
-				Description string `json:"description"`
-			} `json:"exception"`
-		} `json:"exceptionDetails"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return nil, fmt.Errorf("WebMCP: decode polyfill %s response: %w", method, err)
-	}
-	if details := result.ExceptionDetails; details != nil {
-		description := details.Text
-		if details.Exception != nil && details.Exception.Description != "" {
-			description = details.Exception.Description
+	if err == nil {
+		var result evaluationResult
+		if err = json.Unmarshal(raw, &result); err == nil && result.ExceptionDetails != nil {
+			err = errors.New("WebMCP: polyfill bridge threw")
 		}
-		return nil, fmt.Errorf("WebMCP: polyfill %s threw: %s", method, description)
+		if err == nil {
+			return string(result.Result.Value) == "true"
+		}
 	}
-	if len(result.Result.Value) == 0 || string(result.Result.Value) == "null" {
-		return nil, nil
+	// A protocol error means the handle's document is gone; a later sync
+	// bridges the frame's new document. Timeouts keep the handle, which may
+	// still own registrations.
+	var protocolErr *cdpclient.Error
+	if errors.As(err, &protocolErr) {
+		c.stateMu.Lock()
+		if c.polyfillBridges[key] == bridge {
+			delete(c.polyfillBridges, key)
+		}
+		c.stateMu.Unlock()
+		go c.releaseObjectGroup(frame.SessionID, bridge.group)
 	}
-	return result.Result.Value, nil
+	return false
+}
+
+type evaluationResult struct {
+	Result struct {
+		ObjectID string          `json:"objectId"`
+		Value    json.RawMessage `json:"value"`
+	} `json:"result"`
+	ExceptionDetails *json.RawMessage `json:"exceptionDetails"`
+}
+
+func (c *connection) createPolyfillBridge(ctx context.Context, frame browsersurface.SessionFrame) (*polyfillBridge, error) {
+	group := "kernel-webmcp-polyfill-" + cuid2.Generate()
+	windowID, err := c.frameWindow(ctx, frame, group)
+	if err == nil {
+		var raw json.RawMessage
+		raw, err = c.surface.Send(ctx, "Runtime.callFunctionOn", map[string]any{
+			"objectId":            windowID,
+			"functionDeclaration": polyfillBridgeSource,
+			"objectGroup":         group,
+		}, frame.SessionID)
+		if err == nil {
+			var result evaluationResult
+			if err = json.Unmarshal(raw, &result); err == nil {
+				if result.ExceptionDetails != nil || result.Result.ObjectID == "" {
+					err = errors.New("WebMCP: polyfill bridge is unavailable")
+				} else {
+					return &polyfillBridge{objectID: result.Result.ObjectID, group: group}, nil
+				}
+			}
+		}
+	}
+	go c.releaseObjectGroup(frame.SessionID, group)
+	return nil, err
 }
 
 func (c *connection) releaseObjectGroup(sessionID, group string) {
@@ -384,11 +194,7 @@ func (c *connection) frameWindow(ctx context.Context, frame browsersurface.Sessi
 		if err != nil {
 			return "", err
 		}
-		var result struct {
-			Result struct {
-				ObjectID string `json:"objectId"`
-			} `json:"result"`
-		}
+		var result evaluationResult
 		if err := json.Unmarshal(raw, &result); err != nil || result.Result.ObjectID == "" {
 			return "", fmt.Errorf("WebMCP: frame window is unavailable")
 		}
@@ -428,11 +234,7 @@ func (c *connection) frameWindow(ctx context.Context, frame browsersurface.Sessi
 	if err != nil {
 		return "", err
 	}
-	var window struct {
-		Result struct {
-			ObjectID string `json:"objectId"`
-		} `json:"result"`
-	}
+	var window evaluationResult
 	if err := json.Unmarshal(raw, &window); err != nil || window.Result.ObjectID == "" {
 		return "", fmt.Errorf("WebMCP: frame window is unavailable")
 	}

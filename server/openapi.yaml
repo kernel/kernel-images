@@ -1361,10 +1361,7 @@ paths:
       summary: Discover WebMCP tools across the browser
       description: |
         Returns a snapshot of WebMCP tools registered by every open tab and by embedded
-        content within those tabs. Tools that a page registers through a JavaScript
-        `navigator.modelContext` polyfill instead of the native `document.modelContext`
-        registry are included and marked with `source.polyfill`; when a page registers the
-        same name both ways, the native registration is listed.
+        content within those tabs.
 
         On the first request, Kernel starts monitoring the browser. Tabs and windows that are already
         open are included, and tabs, windows, and embedded content opened later are tracked automatically.
@@ -6551,11 +6548,6 @@ components:
           description: Embedded frame that registered the tool, or null when the top-level page registered it.
         custom:
           $ref: "#/components/schemas/WebMCPCustomToolSource"
-        polyfill:
-          type: boolean
-          description: |
-            True when the page registered this tool through a JavaScript `navigator.modelContext`
-            polyfill rather than the native `document.modelContext` registry; omitted otherwise.
     WebMCPToolMetadata:
       type: object
       description: |

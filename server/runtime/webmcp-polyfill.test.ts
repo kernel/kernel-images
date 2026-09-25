@@ -3,36 +3,52 @@ import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
-// The page-side reader that lib/webmcpclient evaluates in a frame's main world.
-const source = readFileSync(new URL('../lib/webmcpclient/polyfill_page.js', import.meta.url), 'utf8');
+// The page-side bridge that lib/webmcpclient calls on a frame's Window.
+const source = readFileSync(new URL('../lib/webmcpclient/polyfill_bridge.js', import.meta.url), 'utf8');
 
-interface PageScript {
-  list(window: unknown): Promise<{tools: unknown[]} | null>;
-  invoke(window: unknown, name: string, input: Record<string, unknown>): Promise<{ok: boolean; output?: string | null; error?: string}>;
+interface Bridge {
+  sync(): Promise<boolean>;
 }
 
-// Results come from the vm realm; strip prototypes before comparing.
-function plain<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
+function bridge(window: unknown): Bridge {
+  const create = vm.runInNewContext(`(${source})`, {AbortController}) as (this: unknown) => Bridge;
+  return create.call(window);
 }
 
-function pageScript(): PageScript {
-  const script = vm.runInNewContext(source, {}) as PageScript;
-  return {
-    list: async (window) => plain(await script.list(window)),
-    invoke: async (window, name, input) => plain(await script.invoke(window, name, input)),
-  };
-}
+type Tool = {name: string; execute?: (input: unknown) => unknown} & Record<string, unknown>;
 
-type Tool = {name: string; description?: string; inputSchema?: unknown; execute?: (input: unknown) => unknown} & Record<string, unknown>;
+// Stands in for Chromium's document.modelContext: duplicate names reject and
+// aborting the registration signal removes the tool.
+class ModelContext {
+  readonly tools = new Map<string, Tool>();
+
+  get [Symbol.toStringTag]() {
+    return 'ModelContext';
+  }
+
+  async registerTool(tool: Tool, options: {signal?: AbortSignal} = {}) {
+    if (this.tools.has(tool.name)) throw new Error(`Duplicate tool name: ${tool.name}`);
+    this.tools.set(tool.name, tool);
+    options.signal?.addEventListener('abort', () => this.tools.delete(tool.name), {once: true});
+  }
+
+  metadata(name: string) {
+    const {execute: _execute, ...metadata} = this.tools.get(name)!;
+    return JSON.parse(JSON.stringify(metadata));
+  }
+
+  async invoke(name: string, input: unknown) {
+    return JSON.parse(JSON.stringify(await this.tools.get(name)!.execute!(input) ?? null));
+  }
+}
 
 // Mirrors the polyfill shape that sites ship before Chromium exposed
 // document.modelContext: a registry object plus listTools/callTool helpers.
-function sitePolyfill(): Record<string, unknown> {
+function sitePolyfill() {
   const registry: Record<string, Tool> = {};
   return {
     _registeredTools: registry,
-    registerTool(tool: Tool, options?: {signal?: AbortSignal}) {
+    registerTool(tool: Tool) {
       registry[tool.name] = {
         name: tool.name,
         title: tool.title,
@@ -40,7 +56,6 @@ function sitePolyfill(): Record<string, unknown> {
         inputSchema: tool.inputSchema ?? tool.parameters,
         execute: tool.execute,
       };
-      options?.signal?.addEventListener('abort', () => delete registry[tool.name], {once: true});
     },
     unregisterTool(name: string) {
       delete registry[name];
@@ -54,12 +69,12 @@ function sitePolyfill(): Record<string, unknown> {
   };
 }
 
-function fakeWindow(modelContext: unknown, documentModelContext?: unknown): Record<string, unknown> {
-  return {navigator: {modelContext}, document: {modelContext: documentModelContext}};
+function fakeWindow(modelContext: unknown, native = new ModelContext()) {
+  return {navigator: {modelContext}, document: {modelContext: native}, native};
 }
 
-test('lists and invokes tools from a site polyfill on navigator.modelContext', async () => {
-  const polyfill = sitePolyfill() as ReturnType<typeof sitePolyfill> & {registerTool: (tool: Tool) => void};
+test('bridges a site polyfill into the native registry and follows its changes', async () => {
+  const polyfill = sitePolyfill();
   polyfill.registerTool({
     name: 'search_items',
     description: 'Search the catalog.',
@@ -76,25 +91,29 @@ test('lists and invokes tools from a site polyfill on navigator.modelContext', a
     throw new Error('page rejected the call');
   }});
   const window = fakeWindow(polyfill);
-  const script = pageScript();
+  const {native} = window;
+  const b = bridge(window);
 
-  const listed = await script.list(window);
-  assert.deepEqual(listed, {
-    tools: [
-      {name: 'search_items', description: 'Search the catalog.', inputSchema: {type: 'object', properties: {query: {type: 'string'}}, required: ['query']}},
-      {name: 'legacy_params', description: 'Uses the pre-standard parameters alias.', inputSchema: {type: 'object', properties: {}}},
-      {name: 'broken', description: 'Throws.', inputSchema: {type: 'object'}},
-    ],
+  assert.equal(await b.sync(), true);
+  assert.deepEqual([...native.tools.keys()], ['search_items', 'legacy_params', 'broken']);
+  assert.deepEqual(native.metadata('search_items'), {
+    name: 'search_items',
+    description: 'Search the catalog.',
+    inputSchema: {type: 'object', properties: {query: {type: 'string'}}, required: ['query']},
   });
+  assert.deepEqual(native.metadata('legacy_params').inputSchema, {type: 'object', properties: {}});
+  assert.deepEqual(await native.invoke('search_items', {query: 'lamp'}), {results: ['match for lamp']});
+  assert.equal(await native.invoke('legacy_params', {}), null);
+  await assert.rejects(native.invoke('broken', {}), /page rejected the call/);
 
-  const invoked = await script.invoke(window, 'search_items', {query: 'lamp'});
-  assert.deepEqual(invoked, {ok: true, output: JSON.stringify({results: ['match for lamp']})});
-  assert.deepEqual(await script.invoke(window, 'legacy_params', {}), {ok: true, output: null});
-  assert.deepEqual(await script.invoke(window, 'broken', {}), {ok: false, error: 'page rejected the call'});
-  assert.deepEqual(await script.invoke(window, 'missing', {}), {ok: false, error: 'Tool not found: missing'});
+  assert.equal(await b.sync(), false);
 
-  (polyfill.unregisterTool as (name: string) => void)('search_items');
-  assert.equal((await script.list(window))?.tools.length, 2);
+  polyfill.unregisterTool('search_items');
+  polyfill.registerTool({name: 'broken', description: 'Fixed.', inputSchema: {type: 'object'}, execute: async () => 'ok'});
+  assert.equal(await b.sync(), true);
+  assert.deepEqual([...native.tools.keys()].sort(), ['broken', 'legacy_params']);
+  assert.equal(native.metadata('broken').description, 'Fixed.');
+  assert.equal(await native.invoke('broken', {}), 'ok');
 });
 
 test('supports MCP-style polyfills that take callTool({name, arguments})', async () => {
@@ -105,78 +124,61 @@ test('supports MCP-style polyfills that take callTool({name, arguments})', async
     description: 'Add an item.',
     inputSchema: {type: 'object', properties: {sku: {type: 'string'}}},
     outputSchema: {type: 'object'},
-    annotations: {readOnlyHint: false, destructiveHint: true, ignored: 'x'},
+    annotations: {readOnlyHint: false},
     execute: async () => ({content: [{type: 'text', text: 'added'}]}),
   });
   const polyfill = {
-    _tools: tools,
-    listTools: () => [...tools.values()].map(({execute: _execute, ...metadata}) => metadata),
+    listTools: () => ({tools: [...tools.values()].map(({execute: _execute, ...metadata}) => metadata)}),
     async callTool(params: {name: string; arguments: unknown}) {
-      const tool = tools.get(params.name);
-      if (!tool) throw new Error(`unknown tool ${params.name}`);
-      return tool.execute?.(params.arguments);
+      return tools.get(params.name)?.execute?.(params.arguments);
     },
   };
-  const script = pageScript();
   const window = fakeWindow(polyfill);
+  await bridge(window).sync();
 
-  const listed = await script.list(window);
-  assert.deepEqual(listed?.tools, [{
+  assert.deepEqual(window.native.metadata('add_to_cart'), {
     name: 'add_to_cart',
     title: 'Add to cart',
     description: 'Add an item.',
     inputSchema: {type: 'object', properties: {sku: {type: 'string'}}},
     outputSchema: {type: 'object'},
-    annotations: {readOnlyHint: false, destructiveHint: true},
-  }]);
-  assert.deepEqual(await script.invoke(window, 'add_to_cart', {sku: '1'}), {
-    ok: true,
-    output: JSON.stringify({content: [{type: 'text', text: 'added'}]}),
+    annotations: {readOnlyHint: false},
   });
+  assert.deepEqual(await window.native.invoke('add_to_cart', {sku: '1'}), {content: [{type: 'text', text: 'added'}]});
 });
 
 test('falls back to the registry when the polyfill has no list or call helpers', async () => {
   const registry = new Map<string, Tool>();
   registry.set('get_context', {name: 'get_context', description: 'Context.', inputSchema: {type: 'object'}, execute: async () => 'ctx'});
-  const polyfill = {registerTool() {}, unregisterTool() {}, provideContext() {}, clearContext() {}};
-  const script = pageScript();
+  const polyfill = {registerTool() {}, provideContext() {}};
   const window = {...fakeWindow(polyfill), __webmcp: {tools: registry}};
+  await bridge(window).sync();
 
-  assert.deepEqual(await script.list(window), {tools: [{name: 'get_context', description: 'Context.', inputSchema: {type: 'object'}}]});
-  assert.deepEqual(await script.invoke(window, 'get_context', {}), {ok: true, output: '"ctx"'});
-  assert.deepEqual(await script.invoke(fakeWindow(polyfill), 'get_context', {}), {
-    ok: false,
-    error: 'the modelContext polyfill does not expose a way to execute tools',
-  });
+  assert.deepEqual([...window.native.tools.keys()], ['get_context']);
+  assert.equal(await window.native.invoke('get_context', {}), 'ctx');
 });
 
-test('ignores the native registry and pages without a polyfill', async () => {
-  const script = pageScript();
-  class ModelContext {
-    get [Symbol.toStringTag]() {
-      return 'ModelContext';
-    }
-    async getTools() {
-      return [{name: 'native_tool', description: 'Native.', inputSchema: {type: 'object'}}];
-    }
-  }
+test('keeps native tools and ignores pages without a polyfill', async () => {
   const native = new ModelContext();
+  await native.registerTool({name: 'shared', description: 'Native copy.', execute: async () => 'native'});
+  const polyfill = sitePolyfill();
+  polyfill.registerTool({name: 'shared', description: 'Polyfill copy.', inputSchema: {type: 'object'}, execute: async () => 'polyfill'});
+  const window = fakeWindow(polyfill, native);
+  assert.equal(await bridge(window).sync(), false);
+  assert.equal(await native.invoke('shared', {}), 'native');
 
-  assert.equal(await script.list(fakeWindow(undefined)), null);
-  assert.equal(await script.list(fakeWindow(native, native)), null);
-  assert.equal(await script.list(fakeWindow(native)), null);
-  assert.equal(await script.list(fakeWindow('not an object')), null);
-  assert.equal(await script.list({navigator: {get modelContext() {
+  // navigator.modelContext that is the native registry, or no polyfill at all.
+  const self = new ModelContext();
+  assert.equal(await bridge(fakeWindow(self, self)).sync(), false);
+  assert.equal(await bridge(fakeWindow(undefined)).sync(), false);
+  assert.equal(await bridge({navigator: {get modelContext() {
     throw new Error('blocked');
-  }}, document: {}}), null);
-  assert.deepEqual(await script.invoke(fakeWindow(undefined), 'x', {}), {
-    ok: false,
-    error: 'the page no longer exposes a modelContext polyfill',
-  });
+  }}, document: {modelContext: new ModelContext()}}).sync(), false);
+  // A document whose modelContext is not the native registry.
+  assert.equal(await bridge({navigator: {modelContext: sitePolyfill()}, document: {modelContext: {}}}).sync(), false);
 });
 
-test('drops malformed entries and bounds output size', async () => {
-  const script = pageScript();
+test('drops malformed entries, bounds output, and resets for a new document', async () => {
   const polyfill = {
     listTools: () => [
       null,
@@ -185,29 +187,27 @@ test('drops malformed entries and bounds output size', async () => {
       {name: 'dup', description: 'first', inputSchema: '{"type":"object"}'},
       {name: 'dup', description: 'second'},
       {name: 'bad_schema', inputSchema: 'not json', description: 7},
-      {name: 'huge', description: 'x'.repeat(300 * 1024)},
+      {name: 'huge', description: 'x', inputSchema: {type: 'object', enum: ['x'.repeat(300 * 1024)]}},
     ],
     async callTool(name: string, _input: unknown) {
-      if (name === 'large') return {payload: 'x'.repeat(1024 * 1024)};
-      if (name === 'cyclic') {
-        const value: Record<string, unknown> = {};
-        value.self = value;
-        return value;
-      }
-      return {name};
+      if (name === 'dup') return {payload: 'x'.repeat(1024 * 1024)};
+      const value: Record<string, unknown> = {};
+      value.self = value;
+      return value;
     },
   };
   const window = fakeWindow(polyfill);
+  const b = bridge(window);
+  await b.sync();
 
-  const listed = await script.list(window);
-  assert.deepEqual(listed?.tools.slice(0, 2), [
-    {name: 'dup', description: 'first', inputSchema: {type: 'object'}},
-    {name: 'bad_schema', description: '', inputSchema: {}},
-  ]);
-  assert.equal(listed?.tools.length, 3);
-  assert.equal((listed?.tools[2] as {description: string}).description.length, 64 * 1024);
-  assert.deepEqual(await script.invoke(window, 'large', {}), {ok: false, error: 'tool output exceeds 1 MiB'});
-  const cyclic = await script.invoke(window, 'cyclic', {});
-  assert.equal(cyclic.ok, false);
-  assert.match(cyclic.error ?? '', /not JSON-serializable/);
+  assert.deepEqual([...window.native.tools.keys()], ['dup', 'bad_schema']);
+  assert.deepEqual(window.native.metadata('dup'), {name: 'dup', description: 'first', inputSchema: {type: 'object'}});
+  assert.deepEqual(window.native.metadata('bad_schema'), {name: 'bad_schema', description: '', inputSchema: {type: 'object'}});
+  await assert.rejects(window.native.invoke('dup', {}), /exceeds 1 MiB/);
+  await assert.rejects(window.native.invoke('bad_schema', {}), /not JSON-serializable/);
+
+  // A same-origin child frame navigated: its registry is new and empty.
+  window.document = {modelContext: new ModelContext()};
+  assert.equal(await b.sync(), true);
+  assert.deepEqual([...(window.document.modelContext as ModelContext).tools.keys()], ['dup', 'bad_schema']);
 });

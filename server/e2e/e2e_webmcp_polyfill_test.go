@@ -60,8 +60,6 @@ func testWebMCPPolyfill(t *testing.T, ctx context.Context, client *instanceoapi.
 	t.Logf("GET /webmcp/tools: %d tools on %s", len(tools), pageURL)
 
 	search := tools["search_items"]
-	require.NotNil(t, search.Source.Polyfill)
-	require.True(t, *search.Source.Polyfill)
 	require.Nil(t, search.Source.Frame)
 	require.Nil(t, search.Source.Custom)
 	require.Equal(t, "Search the catalog.", search.Tool.Description)
@@ -69,11 +67,9 @@ func testWebMCPPolyfill(t *testing.T, ctx context.Context, client *instanceoapi.
 
 	// The same name registered natively lists once, as the native tool.
 	shared := tools["shared_name"]
-	require.Nil(t, shared.Source.Polyfill)
 	require.Equal(t, "Native copy.", shared.Tool.Description)
 
 	frameTool := tools["frame_tool"]
-	require.NotNil(t, frameTool.Source.Polyfill)
 	require.NotNil(t, frameTool.Source.Frame)
 	require.Equal(t, "about:srcdoc", frameTool.Source.Frame.Url)
 
@@ -109,8 +105,6 @@ func testWebMCPPolyfill(t *testing.T, ctx context.Context, client *instanceoapi.
 	failed := invoke(tools["failing_tool"].ToolRef, map[string]any{})
 	require.Equal(t, http.StatusOK, failed.StatusCode(), "%s", failed.Body)
 	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusError, failed.JSON200.Status)
-	require.NotNil(t, failed.JSON200.ErrorText)
-	require.Equal(t, "nothing to do", *failed.JSON200.ErrorText)
 
 	// Unregistration through the polyfill drops the tool on the next listing,
 	// and the surviving tool keeps its reference.
