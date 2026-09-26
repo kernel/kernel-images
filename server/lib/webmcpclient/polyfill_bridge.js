@@ -4,7 +4,12 @@
 // page tool. Called with a frame's Window as `this`; the returned bridge is
 // reachable only through the caller's remote object handle, so nothing is
 // stored on the page.
+//
+// Bridged tools register under BRIDGED_PREFIX, never under the page's own
+// names, so the page can still register any name natively later. Once it
+// does, the bridge withdraws its copy.
 function () {
+  const BRIDGED_PREFIX = 'polyfill.';
   const MAX_TOOLS = 256;
   const MAX_TEXT = 64 * 1024;
   const MAX_TOOL_BYTES = 256 * 1024;
@@ -126,14 +131,15 @@ function () {
 
   // A JSON copy of the tool's metadata, so nothing page-owned reaches the
   // native registry except the data itself.
-  function metadata(tool) {
+  function metadata(tool, registered) {
     try {
       if (!isObject(tool)) return null;
       const name = tool.name;
-      if (typeof name !== 'string' || name === '' || name.length > 256) return null;
+      if (typeof name !== 'string' || name === '' || name.length > 256 - BRIDGED_PREFIX.length) return null;
       const entry = {
         name,
-        title: text(tool.title),
+        // listTools() often drops the title that the registry entry keeps.
+        title: text(tool.title) ?? text(registered?.title),
         description: text(tool.description) ?? '',
         // Some polyfills accept the pre-standard `parameters` alias for inputSchema.
         inputSchema: schema(tool.inputSchema) ?? schema(tool.parameters) ?? {type: 'object'},
@@ -148,14 +154,33 @@ function () {
     }
   }
 
+  function registeredByName(context) {
+    const byName = new Map();
+    for (const entry of registryEntries(context) ?? []) {
+      try {
+        if (isObject(entry) && typeof entry.name === 'string') byName.set(entry.name, entry);
+      } catch {
+        continue;
+      }
+    }
+    return byName;
+  }
+
   async function desiredTools(context) {
     const tools = await listedTools(context);
     const desired = new Map();
     if (!Array.isArray(tools)) return desired;
+    const registered = registeredByName(context);
     let bytes = 0;
     for (const tool of tools) {
       if (desired.size >= MAX_TOOLS) break;
-      const item = metadata(tool);
+      let name;
+      try {
+        name = tool.name;
+      } catch {
+        continue;
+      }
+      const item = metadata(tool, registered.get(name));
       if (!item || desired.has(item.entry.name)) continue;
       if (bytes + item.serialized.length > MAX_LIST_BYTES) break;
       bytes += item.serialized.length;
@@ -189,6 +214,8 @@ function () {
     }
     if (isFunction(callTool)) {
       // Site polyfills take (name, input); MCP-style polyfills take ({name, arguments}).
+      // Arity cannot tell defaulted or rest parameters apart, which is why the
+      // registry entry is tried first.
       if (callTool.length >= 2) return callTool.call(context, name, input);
       return callTool.call(context, {name, arguments: input});
     }
@@ -232,6 +259,19 @@ function () {
     };
   }
 
+  // Names the page registered in the native registry itself.
+  async function nativeNames(native) {
+    const names = new Set();
+    try {
+      for (const tool of await native.getTools()) {
+        if (typeof tool.name === 'string' && !tool.name.startsWith(BRIDGED_PREFIX)) names.add(tool.name);
+      }
+    } catch {
+      // Without a readable registry, discovery still hides shadowed tools.
+    }
+    return names;
+  }
+
   // name -> {controller, serialized} for tools registered in `bridgedDocument`.
   const bridged = new Map();
   let bridgedDocument = null;
@@ -254,6 +294,9 @@ function () {
       const native = nativeContext();
       const context = polyfill();
       const desired = native && context ? await desiredTools(context) : new Map();
+      if (desired.size > 0) {
+        for (const name of await nativeNames(native)) desired.delete(name);
+      }
       let changed = false;
       for (const [name, registration] of bridged) {
         if (desired.get(name)?.serialized !== registration.serialized) {
@@ -265,10 +308,13 @@ function () {
         if (bridged.has(name)) continue;
         const controller = new AbortController();
         try {
-          // Rejects when the page already registered the name natively, which
-          // keeps the native tool.
-          await native.registerTool({...item.entry, execute: execute(name)}, {signal: controller.signal});
+          await native.registerTool(
+            {...item.entry, name: BRIDGED_PREFIX + name, execute: execute(name)},
+            {signal: controller.signal},
+          );
         } catch {
+          // The registry rejected the tool (for example its schema); the next
+          // sync tries again.
           controller.abort();
           continue;
         }

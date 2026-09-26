@@ -32,15 +32,26 @@ class ModelContext {
     options.signal?.addEventListener('abort', () => this.tools.delete(tool.name), {once: true});
   }
 
+  async getTools() {
+    return [...this.tools.values()].map(({execute: _execute, ...metadata}) => metadata);
+  }
+
+  // Bridged tools register under the reserved prefix; helpers take the page's name.
+  bridged() {
+    return [...this.tools.keys()].filter((name) => name.startsWith(PREFIX)).map((name) => name.slice(PREFIX.length));
+  }
+
   metadata(name: string) {
-    const {execute: _execute, ...metadata} = this.tools.get(name)!;
+    const {execute: _execute, ...metadata} = this.tools.get(PREFIX + name)!;
     return JSON.parse(JSON.stringify(metadata));
   }
 
   async invoke(name: string, input: unknown) {
-    return JSON.parse(JSON.stringify(await this.tools.get(name)!.execute!(input) ?? null));
+    return JSON.parse(JSON.stringify(await this.tools.get(PREFIX + name)!.execute!(input) ?? null));
   }
 }
+
+const PREFIX = 'polyfill.';
 
 // Mirrors the polyfill shape that sites ship before Chromium exposed
 // document.modelContext: a registry object plus listTools/callTool helpers.
@@ -77,6 +88,7 @@ test('bridges a site polyfill into the native registry and follows its changes',
   const polyfill = sitePolyfill();
   polyfill.registerTool({
     name: 'search_items',
+    title: 'Search',
     description: 'Search the catalog.',
     inputSchema: {type: 'object', properties: {query: {type: 'string'}}, required: ['query']},
     execute: async (input) => ({results: [`match for ${(input as {query: string}).query}`]}),
@@ -95,9 +107,10 @@ test('bridges a site polyfill into the native registry and follows its changes',
   const b = bridge(window);
 
   assert.equal(await b.sync(), true);
-  assert.deepEqual([...native.tools.keys()], ['search_items', 'legacy_params', 'broken']);
+  assert.deepEqual(native.bridged(), ['search_items', 'legacy_params', 'broken']);
   assert.deepEqual(native.metadata('search_items'), {
-    name: 'search_items',
+    name: 'polyfill.search_items',
+    title: 'Search',
     description: 'Search the catalog.',
     inputSchema: {type: 'object', properties: {query: {type: 'string'}}, required: ['query']},
   });
@@ -111,7 +124,7 @@ test('bridges a site polyfill into the native registry and follows its changes',
   polyfill.unregisterTool('search_items');
   polyfill.registerTool({name: 'broken', description: 'Fixed.', inputSchema: {type: 'object'}, execute: async () => 'ok'});
   assert.equal(await b.sync(), true);
-  assert.deepEqual([...native.tools.keys()].sort(), ['broken', 'legacy_params']);
+  assert.deepEqual(native.bridged().sort(), ['broken', 'legacy_params']);
   assert.equal(native.metadata('broken').description, 'Fixed.');
   assert.equal(await native.invoke('broken', {}), 'ok');
 });
@@ -137,7 +150,7 @@ test('supports MCP-style polyfills that take callTool({name, arguments})', async
   await bridge(window).sync();
 
   assert.deepEqual(window.native.metadata('add_to_cart'), {
-    name: 'add_to_cart',
+    name: 'polyfill.add_to_cart',
     title: 'Add to cart',
     description: 'Add an item.',
     inputSchema: {type: 'object', properties: {sku: {type: 'string'}}},
@@ -154,18 +167,28 @@ test('falls back to the registry when the polyfill has no list or call helpers',
   const window = {...fakeWindow(polyfill), __webmcp: {tools: registry}};
   await bridge(window).sync();
 
-  assert.deepEqual([...window.native.tools.keys()], ['get_context']);
+  assert.deepEqual(window.native.bridged(), ['get_context']);
   assert.equal(await window.native.invoke('get_context', {}), 'ctx');
 });
 
-test('keeps native tools and ignores pages without a polyfill', async () => {
+test('never takes a name the page registers natively, before or after bridging', async () => {
   const native = new ModelContext();
   await native.registerTool({name: 'shared', description: 'Native copy.', execute: async () => 'native'});
   const polyfill = sitePolyfill();
   polyfill.registerTool({name: 'shared', description: 'Polyfill copy.', inputSchema: {type: 'object'}, execute: async () => 'polyfill'});
+  polyfill.registerTool({name: 'later', description: 'Polyfill copy.', inputSchema: {type: 'object'}, execute: async () => 'polyfill'});
   const window = fakeWindow(polyfill, native);
-  assert.equal(await bridge(window).sync(), false);
-  assert.equal(await native.invoke('shared', {}), 'native');
+  const b = bridge(window);
+  assert.equal(await b.sync(), true);
+  assert.deepEqual(native.bridged(), ['later']);
+  assert.equal(await native.tools.get('shared')!.execute!({}), 'native');
+
+  // The page registers a bridged name natively afterwards: it succeeds, and
+  // the next sync withdraws the bridged copy.
+  await native.registerTool({name: 'later', description: 'Native copy.', execute: async () => 'native'});
+  assert.equal(await b.sync(), true);
+  assert.deepEqual(native.bridged(), []);
+  assert.deepEqual([...native.tools.keys()].sort(), ['later', 'shared']);
 
   // navigator.modelContext that is the native registry, or no polyfill at all.
   const self = new ModelContext();
@@ -200,14 +223,14 @@ test('drops malformed entries, bounds output, and resets for a new document', as
   const b = bridge(window);
   await b.sync();
 
-  assert.deepEqual([...window.native.tools.keys()], ['dup', 'bad_schema']);
-  assert.deepEqual(window.native.metadata('dup'), {name: 'dup', description: 'first', inputSchema: {type: 'object'}});
-  assert.deepEqual(window.native.metadata('bad_schema'), {name: 'bad_schema', description: '', inputSchema: {type: 'object'}});
+  assert.deepEqual(window.native.bridged(), ['dup', 'bad_schema']);
+  assert.deepEqual(window.native.metadata('dup'), {name: 'polyfill.dup', description: 'first', inputSchema: {type: 'object'}});
+  assert.deepEqual(window.native.metadata('bad_schema'), {name: 'polyfill.bad_schema', description: '', inputSchema: {type: 'object'}});
   await assert.rejects(window.native.invoke('dup', {}), /exceeds 1 MiB/);
   await assert.rejects(window.native.invoke('bad_schema', {}), /not JSON-serializable/);
 
   // A same-origin child frame navigated: its registry is new and empty.
   window.document = {modelContext: new ModelContext()};
   assert.equal(await b.sync(), true);
-  assert.deepEqual([...(window.document.modelContext as ModelContext).tools.keys()], ['dup', 'bad_schema']);
+  assert.deepEqual((window.document.modelContext as ModelContext).bridged(), ['dup', 'bad_schema']);
 });

@@ -72,6 +72,7 @@ type fakeCDP struct {
 	bridgedTools               map[string]map[string]bool
 	staleBridges               map[string]bool
 	bridgesCreated             int
+	lastInvokedName            string
 	methods                    map[string]int
 	write                      func(any)
 }
@@ -271,7 +272,12 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 				"params": map[string]any{"tools": tools},
 			})
 		case "WebMCP.invokeTool":
+			var invokeParams struct {
+				ToolName string `json:"toolName"`
+			}
+			_ = json.Unmarshal(request.Params, &invokeParams)
 			f.mu.Lock()
+			f.lastInvokedName = invokeParams.ToolName
 			f.invocationCount++
 			invocationID := fmt.Sprintf("invocation-%d", f.invocationCount)
 			closeOnInvoke := f.closeOnInvoke

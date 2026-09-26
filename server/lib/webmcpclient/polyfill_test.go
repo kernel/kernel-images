@@ -74,13 +74,13 @@ func (f *fakeCDP) servePolyfill(request wireRequest, respond func(any), write fu
 			var added, removed []map[string]any
 			for name := range bridged {
 				if !desired[name] {
-					removed = append(removed, map[string]any{"name": name, "frameId": polyfillWindowFrames[windowID]})
+					removed = append(removed, map[string]any{"name": polyfillToolNamePrefix + name, "frameId": polyfillWindowFrames[windowID]})
 				}
 			}
 			for name := range desired {
 				if !bridged[name] {
 					added = append(added, map[string]any{
-						"name": name, "description": name + " description", "frameId": polyfillWindowFrames[windowID],
+						"name": polyfillToolNamePrefix + name, "description": name + " description", "frameId": polyfillWindowFrames[windowID],
 						"inputSchema": map[string]any{"type": "object"},
 					})
 				}
@@ -105,7 +105,8 @@ func newPolyfillFakeCDP(t *testing.T) *fakeCDP {
 	fake := newFakeCDP(t, false)
 	fake.childFrameOpen = true
 	fake.polyfillTools = map[string][]string{
-		"window:page-session":            {"poly_search"},
+		// merchant_tool is also registered natively in the same frame.
+		"window:page-session":            {"poly_search", "merchant_tool"},
 		"window:page-session:page-child": {"child_poly"},
 		"window:iframe-session":          {"payment_poly"},
 	}
@@ -141,6 +142,8 @@ func TestPolyfillToolsAreBridgedIntoTheNativeRegistry(t *testing.T) {
 	}, toolNames(tools))
 	byName := toolsByName(tools)
 	require.Nil(t, byName["poly_search"].Source.Frame)
+	// The page's native registration is listed, not the bridged copy.
+	require.Equal(t, "merchant_tool description", byName["merchant_tool"].Description)
 	require.Equal(t, "https://merchant.example/child", byName["child_poly"].Source.Frame.URL)
 	// An out-of-process iframe is bridged through its own session.
 	require.Equal(t, "https://payments.example/element", byName["payment_poly"].Source.Frame.URL)
@@ -161,10 +164,14 @@ func TestPolyfillToolsAreBridgedIntoTheNativeRegistry(t *testing.T) {
 	require.Equal(t, 5, fake.bridgesCreated)
 	fake.mu.Unlock()
 
-	// Bridged tools invoke through the native WebMCP domain.
+	// Bridged tools invoke through the native WebMCP domain under their
+	// registered name.
 	result, err := manager.Invoke(context.Background(), byName["poly_search"].Ref, map[string]any{"query": "lamp"})
 	require.NoError(t, err)
 	require.Equal(t, "Completed", result.Status)
+	fake.mu.Lock()
+	require.Equal(t, "polyfill.poly_search", fake.lastInvokedName)
+	fake.mu.Unlock()
 }
 
 func TestPolyfillUnregistrationRemovesBridgedTools(t *testing.T) {
@@ -219,4 +226,34 @@ func TestPolyfillBridgeIsRecreatedForANewDocument(t *testing.T) {
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	require.Equal(t, 6, fake.bridgesCreated)
+}
+
+func TestBridgedToolIsListedWhenTheNativeToolGoesAway(t *testing.T) {
+	fake := newPolyfillFakeCDP(t)
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	nativeRef := toolsByName(tools)["merchant_tool"].Ref
+
+	fake.emit(map[string]any{
+		"method": "WebMCP.toolsRemoved", "sessionId": "page-session",
+		"params": map[string]any{"tools": []map[string]any{{"name": "merchant_tool", "frameId": "page-frame"}}},
+	})
+	require.Eventually(t, func() bool {
+		tools, err := manager.Tools(context.Background())
+		require.NoError(t, err)
+		tool, ok := toolsByName(tools)["merchant_tool"]
+		return ok && tool.Ref != nativeRef && tool.Description == "merchant_tool description"
+	}, 3*time.Second, 20*time.Millisecond)
+}
+
+func TestExceptionTextKeepsTheThrownMessage(t *testing.T) {
+	require.Equal(t, "Error: page says no", exceptionText(&exceptionDetails{
+		Type: "object", Description: "Error: page says no\n    at execute (<anonymous>:1:147)",
+	}))
+	require.Equal(t, "plain string", exceptionText(&exceptionDetails{Type: "string", Value: "plain string"}))
+	require.Equal(t, `{"code":7}`, exceptionText(&exceptionDetails{Type: "object", Value: map[string]any{"code": 7}}))
+	require.Empty(t, exceptionText(&exceptionDetails{Type: "undefined"}))
+	require.Len(t, exceptionText(&exceptionDetails{Type: "string", Value: strings.Repeat("x", 100<<10)}), maxExceptionTextBytes)
 }

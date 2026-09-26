@@ -24,6 +24,7 @@ const (
 	maxToolsPerSession      = 256
 	maxCompletedInvocations = 256
 	maxAbandonedInvocations = 256
+	maxExceptionTextBytes   = 64 << 10
 )
 
 type connection struct {
@@ -187,6 +188,9 @@ func (c *connection) handleProtocolEvent(message cdpclient.Message) {
 	case "WebMCP.toolResponded":
 		var response invocationResponse
 		if json.Unmarshal(message.Params, &response) == nil {
+			if response.ErrorText == "" && response.Exception != nil {
+				response.ErrorText = exceptionText(response.Exception)
+			}
 			key := invocationKey{sessionID: message.SessionID, invocationID: response.InvocationID}
 			c.stateMu.Lock()
 			c.pruneAbandonedInvocationsLocked()
@@ -205,6 +209,26 @@ func (c *connection) handleProtocolEvent(message cdpclient.Message) {
 			c.signalStateChanged()
 		}
 	}
+}
+
+// exceptionText reports what a page tool threw, bounded to
+// maxExceptionTextBytes. Chromium leaves errorText empty and describes Error
+// objects with their stack, so only the message line is kept.
+func exceptionText(exception *exceptionDetails) string {
+	var text string
+	if exception.Description != "" {
+		text, _, _ = strings.Cut(exception.Description, "\n    at ")
+	} else if value, ok := exception.Value.(string); ok {
+		text = value
+	} else if exception.Value != nil {
+		if encoded, err := json.Marshal(exception.Value); err == nil {
+			text = string(encoded)
+		}
+	}
+	if len(text) > maxExceptionTextBytes {
+		text = strings.ToValidUTF8(text[:maxExceptionTextBytes], "")
+	}
+	return text
 }
 
 // customToolIdentity decodes the hidden name used for a custom registration.
@@ -261,7 +285,11 @@ func (c *connection) addTools(sessionID string, tools []toolEvent) {
 			c.toolRefs[key] = ref
 			tracked++
 		}
-		customID, name := customToolIdentity(tool.Name)
+		var customID string
+		name, bridged := strings.CutPrefix(tool.Name, polyfillToolNamePrefix)
+		if !bridged {
+			customID, name = customToolIdentity(tool.Name)
+		}
 		c.tools[ref] = &registeredTool{
 			ref:            ref,
 			sessionID:      sessionID,
@@ -273,6 +301,7 @@ func (c *connection) addTools(sessionID string, tools []toolEvent) {
 			customID:       customID,
 			frameID:        tool.FrameID,
 			declarative:    tool.BackendNodeID != nil,
+			bridged:        bridged,
 		}
 	}
 	c.signalStateChanged()
@@ -281,8 +310,19 @@ func (c *connection) addTools(sessionID string, tools []toolEvent) {
 func (c *connection) toolsSnapshot() []Tool {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
+	// A page that registers a name natively while its polyfill still lists it
+	// keeps the native tool.
+	native := make(map[string]bool)
+	for _, tool := range c.tools {
+		if !tool.bridged && tool.customID == "" {
+			native[toolKey(tool.sessionID, tool.frameID, tool.name)] = true
+		}
+	}
 	result := make([]Tool, 0, len(c.tools))
 	for _, tool := range c.tools {
+		if tool.bridged && native[toolKey(tool.sessionID, tool.frameID, tool.name)] {
+			continue
+		}
 		location, ok := c.surface.Resolve(tool.sessionID, tool.frameID)
 		if !ok {
 			continue
@@ -501,7 +541,7 @@ func (c *connection) removeSession(sessionID string) {
 	}
 	for ref, tool := range c.tools {
 		if tool.sessionID == sessionID {
-			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.registeredName))
 			delete(c.tools, ref)
 		}
 	}
@@ -519,7 +559,7 @@ func (c *connection) abandonFrameInvocationsAcrossSessionsLocked(frameID string)
 func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
 	for ref, tool := range c.tools {
 		if tool.sessionID == sessionID && tool.frameID == frameID {
-			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.registeredName))
 			delete(c.tools, ref)
 		}
 	}
@@ -528,7 +568,7 @@ func (c *connection) removeFrameToolsLocked(sessionID, frameID string) {
 func (c *connection) removeFrameToolsAcrossSessionsLocked(frameID string) {
 	for ref, tool := range c.tools {
 		if tool.frameID == frameID {
-			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.name))
+			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.registeredName))
 			delete(c.tools, ref)
 		}
 	}

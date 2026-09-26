@@ -8,6 +8,8 @@
   <h1>Catalog</h1>
   <p id="log" role="status"></p>
   <button id="unregister" type="button">Remove failing tool</button>
+  <button id="register-native" type="button">Register search natively</button>
+  <p id="native-result"></p>
   <!-- A same-origin child document with its own registry-style polyfill. -->
   <iframe title="Embedded catalog" width="600" height="300" srcdoc="
     <title>Embedded polyfill catalog</title>
@@ -109,6 +111,19 @@
 
     document.querySelector('#unregister').addEventListener('click', () => {
       navigator.modelContext.unregisterTool('failing_tool');
+    });
+
+    // A page may register natively a name its polyfill already exposes.
+    document.querySelector('#register-native').addEventListener('click', () => {
+      document.modelContext.registerTool({
+        name: 'search_items',
+        description: 'Native search.',
+        inputSchema: {type: 'object'},
+        execute: async () => ({source: 'native'}),
+      }).then(
+        () => { document.querySelector('#native-result').textContent = 'registered'; },
+        (error) => { document.querySelector('#native-result').textContent = error.message; },
+      );
     });
 
     setTimeout(() => {

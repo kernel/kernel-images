@@ -105,6 +105,8 @@ func testWebMCPPolyfill(t *testing.T, ctx context.Context, client *instanceoapi.
 	failed := invoke(tools["failing_tool"].ToolRef, map[string]any{})
 	require.Equal(t, http.StatusOK, failed.StatusCode(), "%s", failed.Body)
 	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusError, failed.JSON200.Status)
+	require.NotNil(t, failed.JSON200.ErrorText)
+	require.Equal(t, "Error: nothing to do", *failed.JSON200.ErrorText)
 
 	// Unregistration through the polyfill drops the tool on the next listing,
 	// and the surviving tool keeps its reference.
@@ -116,6 +118,23 @@ func testWebMCPPolyfill(t *testing.T, ctx context.Context, client *instanceoapi.
 		assert.NotContains(collect, tools, "failing_tool")
 		assert.Equal(collect, search.ToolRef, tools["search_items"].ToolRef)
 	}, 10*time.Second, 250*time.Millisecond)
+
+	// The page can still register a bridged name natively; the native tool is
+	// then listed and invoked in place of the bridged copy.
+	var nativeResult string
+	executeWebMCPPlaywright(t, ctx, client, `
+		await page.click('#register-native');
+		await page.locator('#native-result').filter({hasText: /./}).waitFor();
+		return page.locator('#native-result').textContent();
+	`, &nativeResult)
+	require.Equal(t, "registered", nativeResult)
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		tools = toolsByName(collect)
+		assert.Equal(collect, "Native search.", tools["search_items"].Tool.Description)
+	}, 10*time.Second, 250*time.Millisecond)
+	nativeSearch := invoke(tools["search_items"].ToolRef, map[string]any{})
+	require.Equal(t, http.StatusOK, nativeSearch.StatusCode(), "%s", nativeSearch.Body)
+	require.Equal(t, map[string]any{"source": "native"}, nativeSearch.JSON200.Output)
 
 	// A tool that navigates its document completes like a native one and the
 	// old registrations disappear with the document.
@@ -133,6 +152,6 @@ func testWebMCPPolyfill(t *testing.T, ctx context.Context, client *instanceoapi.
 			assert.NotEqual(collect, tabID, tool.Source.TabId, "%s survived navigation", tool.Tool.Name)
 		}
 	}, 10*time.Second, 250*time.Millisecond)
-	stale := invoke(search.ToolRef, map[string]any{"query": "x"})
+	stale := invoke(tools["search_items"].ToolRef, map[string]any{"query": "x"})
 	require.Equal(t, http.StatusNotFound, stale.StatusCode(), "%s", stale.Body)
 }

@@ -25,6 +25,11 @@ import (
 //go:embed polyfill_bridge.js
 var polyfillBridgeSource string
 
+// polyfillToolNamePrefix must match BRIDGED_PREFIX in polyfill_bridge.js.
+// Bridged tools register under this prefix so the page can still register
+// the original name natively; discovery strips it.
+const polyfillToolNamePrefix = "polyfill."
+
 const (
 	polyfillSyncTimeout     = 2 * time.Second
 	polyfillSyncConcurrency = 8
