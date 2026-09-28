@@ -341,6 +341,31 @@ func TestTrackerMapsBrowserSurfaceAndPublishesLifecycleEvents(t *testing.T) {
 	require.Equal(t, 2, moved.WindowID)
 }
 
+func TestSessionFramesReportOwnersAndRoots(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+	protocol.emitTarget("Target.targetCreated", map[string]any{
+		"targetInfo": map[string]any{
+			"targetId": "oopif", "type": "iframe", "url": "https://cross-origin.example/",
+			"parentFrameId": "root-a",
+		},
+	})
+
+	var frames []SessionFrame
+	require.Eventually(t, func() bool {
+		frames = tracker.SessionFrames()
+		return len(frames) == 5
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, []SessionFrame{
+		{SessionID: "oopif-session", FrameID: "oopif", Root: true, URL: "https://cross-origin.example/"},
+		{SessionID: "session-a", FrameID: "root-a", Root: true, URL: "https://store.example/"},
+		{SessionID: "session-a", FrameID: "inner", URL: "https://bank.example/"},
+		{SessionID: "session-a", FrameID: "outer", URL: "https://payments.example/"},
+		{SessionID: "session-b", FrameID: "root-b", Root: true, URL: "https://travel.example/"},
+	}, frames)
+}
+
 func TestTrackerPreservesFramesDuringProcessSwap(t *testing.T) {
 	protocol := newFakeProtocol()
 	tracker := New(protocol)

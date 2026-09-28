@@ -14,3 +14,15 @@ E2E_CHROMIUM_HEADLESS_IMAGE=kernel-headless-test \
 ```
 
 Chromium 152.0.7977.42 with the image's default WebMCP flags exposes `reserve_table` with string name/date fields, a numeric party size with bounds, and a seating enum. It adds a date format hint to the field description. Both top-level and embedded invocations return `completed` and the submitted values; the tests also read the DOM through `/playwright/execute` to verify native agent submission occurred exactly once. Discovery and invocation responses are logged by the test. Missing declarative tools fail the test rather than silently skipping supported behavior.
+
+# Polyfill WebMCP fixture
+
+`polyfill.html` mirrors sites that ship their own tools through a `navigator.modelContext`
+polyfill (a registry object plus `registerTool`, `unregisterTool`, `listTools`, and
+`callTool`). The polyfill installs 1.5s after load, the page also registers `shared_name`
+natively so native precedence is covered, and a `srcdoc` child frame carries a Map-based
+registry of its own. Run with:
+
+```bash
+GOFLAGS='-run=TestPlaywrightExecuteAPI/WebMCPPolyfill -count=1' make test-e2e
+```

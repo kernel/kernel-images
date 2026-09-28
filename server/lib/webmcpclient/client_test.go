@@ -67,12 +67,22 @@ type fakeCDP struct {
 	popupOpen                  bool
 	iframeOpen                 bool
 	nestedFrameOpen            bool
+	childFrameOpen             bool
+	polyfillTools              map[string][]string
+	bridgedTools               map[string]map[string]bool
+	staleBridges               map[string]bool
+	bridgesCreated             int
+	lastInvokedName            string
+	methods                    map[string]int
 	write                      func(any)
 }
 
 func newFakeCDP(t *testing.T, omitResponse bool) *fakeCDP {
 	t.Helper()
-	fake := &fakeCDP{enabledSessions: make(map[string]int), omitResponse: omitResponse, toolCount: 1}
+	fake := &fakeCDP{
+		enabledSessions: make(map[string]int), methods: make(map[string]int), omitResponse: omitResponse, toolCount: 1,
+		bridgedTools: make(map[string]map[string]bool), staleBridges: make(map[string]bool),
+	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.serve))
 	fake.url = "ws" + strings.TrimPrefix(fake.server.URL, "http")
 	t.Cleanup(fake.server.Close)
@@ -135,6 +145,9 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 		respond := func(result any) {
 			write(map[string]any{"id": request.ID, "result": result})
 		}
+		f.mu.Lock()
+		f.methods[request.Method]++
+		f.mu.Unlock()
 		switch request.Method {
 		case "Target.setDiscoverTargets":
 			respond(map[string]any{})
@@ -211,7 +224,18 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 		case "Page.enable":
 			respond(map[string]any{})
 		case "Page.getFrameTree":
-			respond(map[string]any{"frameTree": frameTreeForSession(request.SessionID)})
+			tree := frameTreeForSession(request.SessionID)
+			f.mu.Lock()
+			childFrameOpen := f.childFrameOpen
+			f.mu.Unlock()
+			if childFrameOpen && request.SessionID == "page-session" {
+				tree["childFrames"] = []map[string]any{{"frame": map[string]any{
+					"id": "page-child", "parentId": "page-frame", "loaderId": "child-loader", "url": "https://merchant.example/child",
+				}}}
+			}
+			respond(map[string]any{"frameTree": tree})
+		case "Runtime.evaluate", "Runtime.callFunctionOn", "Runtime.releaseObjectGroup", "DOM.getFrameOwner", "DOM.resolveNode":
+			f.servePolyfill(request, respond, write)
 		case "WebMCP.enable":
 			f.mu.Lock()
 			f.enabledSessions[request.SessionID]++
@@ -248,7 +272,12 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 				"params": map[string]any{"tools": tools},
 			})
 		case "WebMCP.invokeTool":
+			var invokeParams struct {
+				ToolName string `json:"toolName"`
+			}
+			_ = json.Unmarshal(request.Params, &invokeParams)
 			f.mu.Lock()
+			f.lastInvokedName = invokeParams.ToolName
 			f.invocationCount++
 			invocationID := fmt.Sprintf("invocation-%d", f.invocationCount)
 			closeOnInvoke := f.closeOnInvoke

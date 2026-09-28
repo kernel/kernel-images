@@ -59,6 +59,7 @@ type registeredTool struct {
 	customID       string
 	frameID        string
 	declarative    bool
+	bridged        bool
 }
 
 type toolEvent struct {
@@ -71,10 +72,19 @@ type toolEvent struct {
 }
 
 type invocationResponse struct {
-	InvocationID string `json:"invocationId"`
-	Status       string `json:"status"`
-	Output       any    `json:"output,omitempty"`
-	ErrorText    string `json:"errorText,omitempty"`
+	InvocationID string            `json:"invocationId"`
+	Status       string            `json:"status"`
+	Output       any               `json:"output,omitempty"`
+	ErrorText    string            `json:"errorText,omitempty"`
+	Exception    *exceptionDetails `json:"exception,omitempty"`
+}
+
+// exceptionDetails is the Runtime.RemoteObject Chromium reports when a page
+// tool's execute throws or rejects.
+type exceptionDetails struct {
+	Type        string `json:"type"`
+	Value       any    `json:"value"`
+	Description string `json:"description"`
 }
 
 type invocationKey struct {

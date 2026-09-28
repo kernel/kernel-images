@@ -165,7 +165,7 @@ func (t *Tracker) initializeSession(sessionID string) {
 			result.FrameTree.Frame.ParentID = existing.parentID
 		}
 	}
-	t.addFrameTreeLocked(sess.tabID, result.FrameTree)
+	t.addFrameTreeLocked(sess.tabID, sessionID, result.FrameTree)
 	if sess.target.Type == "page" {
 		if trackedTab := t.tabs[sess.tabID]; trackedTab != nil {
 			trackedTab.rootFrameID = result.FrameTree.Frame.ID
@@ -189,14 +189,14 @@ func (t *Tracker) failSessionInitialization(sessionID string, err error) {
 	}
 }
 
-func (t *Tracker) addFrameTreeLocked(tabID int, tree frameTree) {
-	t.upsertFrameLocked(tabID, tree.Frame)
+func (t *Tracker) addFrameTreeLocked(tabID int, sessionID string, tree frameTree) {
+	t.upsertFrameLocked(tabID, sessionID, tree.Frame)
 	for _, child := range tree.ChildFrames {
-		t.addFrameTreeLocked(tabID, child)
+		t.addFrameTreeLocked(tabID, sessionID, child)
 	}
 }
 
-func (t *Tracker) upsertFrameLocked(tabID int, info frameInfo) {
+func (t *Tracker) upsertFrameLocked(tabID int, sessionID string, info frameInfo) {
 	tracked := t.frames[info.ID]
 	if tracked == nil {
 		publicID := 0
@@ -212,6 +212,7 @@ func (t *Tracker) upsertFrameLocked(tabID int, info frameInfo) {
 	}
 	tracked.parentID = info.ParentID
 	tracked.tabID = tabID
+	tracked.sessionID = sessionID
 	tracked.url = info.URL
 }
 
@@ -255,7 +256,7 @@ func (t *Tracker) bindSessionsLocked() {
 func (t *Tracker) attachFrame(sessionID, frameID, parentFrameID string) {
 	t.stateMu.Lock()
 	if sess := t.sessions[sessionID]; sess != nil && sess.tabID != 0 {
-		t.upsertFrameLocked(sess.tabID, frameInfo{ID: frameID, ParentID: parentFrameID})
+		t.upsertFrameLocked(sess.tabID, sessionID, frameInfo{ID: frameID, ParentID: parentFrameID})
 		t.bindSessionsLocked()
 	}
 	t.stateMu.Unlock()
@@ -272,7 +273,7 @@ func (t *Tracker) navigateFrame(sessionID string, info frameInfo) {
 				info.ParentID = existing.parentID
 			}
 		}
-		t.upsertFrameLocked(sess.tabID, info)
+		t.upsertFrameLocked(sess.tabID, sessionID, info)
 		if trackedTab := t.tabs[sess.tabID]; trackedTab != nil && trackedTab.rootFrameID == info.ID {
 			trackedTab.url = info.URL
 		}
@@ -346,6 +347,11 @@ func (t *Tracker) removeSessionLocked(sessionID string) []string {
 			}
 			delete(t.sessions, id)
 			removed = append(removed, id)
+		}
+	}
+	for _, tracked := range t.frames {
+		if toRemove[tracked.sessionID] {
+			tracked.sessionID = ""
 		}
 	}
 	sort.Strings(removed)
