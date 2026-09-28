@@ -74,7 +74,7 @@ export class CustomWebMCPRegistry {
 
   constructor(
     client: BrowserReplCdpClient,
-    runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
+    runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>, fromPage: boolean) => Promise<T>,
     publishDefinitions: (tools: CustomToolSummary[]) => void,
   ) {
     this.client = client;

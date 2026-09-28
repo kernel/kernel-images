@@ -322,7 +322,13 @@ const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>) => 
 };
 const customToolRegistry = new CustomWebMCPRegistry(
   cdpClient,
-  (signal, callback) => webmcpExecution.run(signal, callback),
+  (signal, callback, fromPage) => {
+    if (!fromPage) return webmcpExecution.run(signal, callback);
+    if (activeExecution) return Promise.reject(new Error('page-originated custom CDP invocation cannot run during a REPL execution'));
+    const pending = executionChain.then(() => webmcpExecution.run(signal, callback));
+    executionChain = pending.then(() => undefined, () => undefined);
+    return pending;
+  },
   publishCustomTools,
 );
 publishCustomTools([]);

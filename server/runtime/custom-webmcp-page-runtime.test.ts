@@ -38,22 +38,21 @@ test('API invocation attaches the registering tab before executing the body', as
   assert.deepEqual(attached, ['registered-tab']);
 });
 
-test('concurrent custom invocations do not switch the attached tab mid-body', async () => {
+test('concurrent and nested custom invocations fail without switching the active tab', async () => {
   const {attached, client, definition, runtime} = fixture();
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   definition.execute = async () => {
+    await assert.rejects(runtime.invokeCDP(definition, [], 'nested-tab', {}), /another custom CDP invocation is running/);
     await held;
     return {targetId: client.targetId};
   };
   const first = runtime.invokeCDP(definition, [], 'first-tab', {});
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const second = runtime.invokeCDP({...definition, execute: () => ({targetId: client.targetId})}, [], 'second-tab', {});
-  assert.deepEqual(attached, ['first-tab']);
+  await assert.rejects(runtime.invokeCDP(definition, [], 'second-tab', {}), /another custom CDP invocation is running/);
   release();
   assert.deepEqual(await first, {targetId: 'first-tab'});
-  assert.deepEqual(await second, {targetId: 'second-tab'});
-  assert.deepEqual(attached, ['first-tab', 'second-tab']);
+  assert.deepEqual(attached, ['first-tab']);
 });
 
 test('page invocation attaches its own tab and returns the result to its registering document', async () => {
