@@ -325,9 +325,13 @@ const customToolRegistry = new CustomWebMCPRegistry(
   (signal, callback, fromPage) => {
     if (!fromPage) return webmcpExecution.run(signal, callback);
     if (activeExecution) return Promise.reject(new Error('page-originated custom CDP invocation cannot run during a REPL execution'));
+    const timeout = setTimeout(() => {
+      process.stderr.write('[custom-webmcp] page invocation exceeded 120s; terminating the REPL to prevent further commands on an in-flight target\n');
+      process.exit(1);
+    }, 120_000);
     const pending = executionChain.then(() => webmcpExecution.run(signal, callback));
     executionChain = pending.then(() => undefined, () => undefined);
-    return pending;
+    return pending.finally(() => clearTimeout(timeout));
   },
   publishCustomTools,
 );

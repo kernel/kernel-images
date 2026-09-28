@@ -257,12 +257,23 @@ export class CustomWebMCPPageRuntime {
 
     const controller = new AbortController();
     this.activeInvocations.set(message.invocation_id, controller);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const output = await this.invokeCDP(invocation.definition, invocation.matches, invocation.targetId, message.input, controller.signal, true);
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('outcome_unknown: page invocation exceeded 119s; do not retry automatically'));
+        }, 119_000);
+      });
+      const output = await Promise.race([
+        this.invokeCDP(invocation.definition, invocation.matches, invocation.targetId, message.input, controller.signal, true),
+        deadline,
+      ]);
       await this.respond(event.sessionId, params.executionContextId, message.invocation_id, output);
     } catch (error) {
       await this.respond(event.sessionId, params.executionContextId, message.invocation_id, undefined, errorMessage(error));
     } finally {
+      if (timer) clearTimeout(timer);
       this.activeInvocations.delete(message.invocation_id);
     }
   }
