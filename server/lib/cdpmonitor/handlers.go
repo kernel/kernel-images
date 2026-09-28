@@ -895,19 +895,27 @@ func (m *Monitor) handleAttachedToTarget(ctx context.Context, p cdpTargetAttache
 
 	// Network setup runs independently of optional capture configuration.
 	m.captureWg.Go(func() {
-		if _, err := m.send(ctx, "Network.enable", nil, p.SessionID); err != nil {
-			m.sessionsMu.RLock()
-			_, exists := m.sessions[p.SessionID]
-			m.sessionsMu.RUnlock()
-			if exists && ctx.Err() == nil {
-				m.log.Warn("cdpmonitor: Network.enable failed", "err", err)
-				m.lifeMu.Lock()
-				if m.conn != nil {
-					m.conn.cancel()
+		methods := []string{"Network.enable"}
+		if info.targetType == targetTypeSharedWorker {
+			// Inspector.targetCrashed is the only signal that a shared worker
+			// ended; see detachEndedSharedWorker.
+			methods = append(methods, "Inspector.enable")
+		}
+		for _, method := range methods {
+			if _, err := m.send(ctx, method, nil, p.SessionID); err != nil {
+				m.sessionsMu.RLock()
+				_, exists := m.sessions[p.SessionID]
+				m.sessionsMu.RUnlock()
+				if exists && ctx.Err() == nil {
+					m.log.Warn("cdpmonitor: required domain enable failed", "method", method, "err", err)
+					m.lifeMu.Lock()
+					if m.conn != nil {
+						m.conn.cancel()
+					}
+					m.lifeMu.Unlock()
 				}
-				m.lifeMu.Unlock()
+				return
 			}
-			return
 		}
 		m.telemetryMu.RLock()
 		defer m.telemetryMu.RUnlock()

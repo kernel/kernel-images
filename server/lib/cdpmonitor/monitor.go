@@ -313,6 +313,9 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 		if event.Message.Method == "Target.attachedToTarget" || event.Message.Method == "Target.detachedFromTarget" {
 			return
 		}
+		if event.Message.Method == "Inspector.targetCrashed" && m.detachEndedSharedWorker(conn, event.Message.SessionID) {
+			return
+		}
 		// Preserve crash reporting even if Chrome has already detached the session.
 		if event.Message.SessionID != "" && event.Message.Method != "Inspector.targetCrashed" {
 			m.sessionsMu.RLock()
@@ -326,6 +329,27 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 			Method: event.Message.Method, Params: event.Message.Params, SessionID: event.Message.SessionID,
 		})
 	}
+}
+
+// detachEndedSharedWorker releases the session on a shared worker that ended.
+// Chrome reports the end only as Inspector.targetCrashed and keeps the worker's
+// DevTools host alive until every attachToTarget session detaches. While it is
+// alive, another client's browser-level Target.setAutoAttach attaches to the
+// ended worker and crashes the browser process. The event also fires when a
+// worker closes normally, so it is not reported as page_crashed.
+func (m *Monitor) detachEndedSharedWorker(conn *monitorConnection, sessionID string) bool {
+	m.sessionsMu.RLock()
+	info, tracked := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
+	if !tracked || info.targetType != targetTypeSharedWorker {
+		return false
+	}
+	m.captureWg.Go(func() {
+		if _, err := m.send(conn.ctx, "Target.detachFromTarget", map[string]any{"sessionId": sessionID}, ""); err != nil && conn.ctx.Err() == nil {
+			m.log.Warn("cdpmonitor: failed to detach ended shared worker", "session", sessionID, "err", err)
+		}
+	})
+	return true
 }
 
 func (m *Monitor) clearState() {

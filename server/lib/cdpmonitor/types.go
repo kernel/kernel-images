@@ -70,8 +70,11 @@ const (
 	timelineEventLCP         = "largest-contentful-paint"
 )
 
-// CDP target type for browser pages (as opposed to workers, iframes, etc.).
-const targetTypePage = "page"
+// CDP target types the monitor treats specially.
+const (
+	targetTypePage         = "page"
+	targetTypeSharedWorker = "shared_worker"
+)
 
 // targetInfo holds metadata about an attached CDP target/session.
 type targetInfo struct {

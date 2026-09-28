@@ -590,6 +590,62 @@ func TestTargetCrashedUntracked(t *testing.T) {
 	assert.Equal(t, "", data["url"])
 }
 
+// Chrome keeps an ended shared worker's DevTools host alive for sessions that
+// remain attached, so the monitor must detach when the worker ends.
+func TestEndedSharedWorkerIsDetached(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+
+	inspectorEnabled := make(chan struct{}, 1)
+	detached := make(chan string, 1)
+	_, ec, cleanup := startMonitor(t, srv, func(msg cdpMessage) any {
+		switch msg.Method {
+		case "Inspector.enable":
+			if msg.SessionID == "sess-shared" {
+				inspectorEnabled <- struct{}{}
+			}
+		case "Target.detachFromTarget":
+			var p struct {
+				SessionID string `json:"sessionId"`
+			}
+			_ = json.Unmarshal(msg.Params, &p)
+			detached <- p.SessionID
+		}
+		return nil
+	})
+	defer cleanup()
+
+	srv.sendToMonitor(t, map[string]any{
+		"method": "Target.attachedToTarget",
+		"params": map[string]any{
+			"sessionId": "sess-shared",
+			"targetInfo": map[string]any{
+				"targetId": "target-shared", "type": "shared_worker",
+				"url": "https://example.com/shared.js", "attached": true,
+			},
+			"waitingForDebugger": false,
+		},
+	})
+	select {
+	case <-inspectorEnabled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Inspector was not enabled on the shared worker session")
+	}
+
+	srv.sendToMonitor(t, map[string]any{
+		"method":    "Inspector.targetCrashed",
+		"sessionId": "sess-shared",
+		"params":    map[string]any{},
+	})
+	select {
+	case sessionID := <-detached:
+		assert.Equal(t, "sess-shared", sessionID)
+	case <-time.After(2 * time.Second):
+		t.Fatal("monitor did not detach from the ended shared worker")
+	}
+	ec.assertNone(t, "page_crashed", 200*time.Millisecond)
+}
+
 func TestBindingAndTimeline(t *testing.T) {
 	withMonitor := func(t *testing.T) (*testServer, *eventCollector) {
 		t.Helper()
