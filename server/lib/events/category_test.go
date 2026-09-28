@@ -22,7 +22,7 @@ func TestCategoryMapsAgreeOnAPICallSplit(t *testing.T) {
 }
 
 func TestCaptchaCategories(t *testing.T) {
-	for _, eventType := range []string{"captcha_solve_started", "captcha_challenge_result"} {
+	for _, eventType := range []string{"captcha_solve_started", "captcha_challenge_opened", "captcha_challenge_result"} {
 		t.Run(eventType, func(t *testing.T) {
 			cat, ok := CategoryForType(eventType)
 			require.True(t, ok)

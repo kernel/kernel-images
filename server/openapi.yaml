@@ -6119,6 +6119,52 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
+    BrowserCaptchaChallengeOpenedEventData:
+      type: object
+      description: Per-challenge payload for `captcha_challenge_opened` events.
+      additionalProperties: false
+      required: [captcha_type, challenge_id]
+      properties:
+        captcha_type:
+          $ref: "#/components/schemas/BrowserCaptchaType"
+        challenge_id:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeID"
+        website_host:
+          type: string
+          description: Host of the page the challenge appeared on.
+        website_path:
+          type: string
+          description: Path of the page the challenge appeared on. Query string excluded.
+    BrowserCaptchaChallengeOpenedEvent:
+      type: object
+      description: >
+        A captcha challenge became visible on the page. Emitted once per
+        challenge, and the challenge's `captcha_challenge_result` carries the
+        same `challenge_id`. A challenge hidden and re-shown within a few
+        seconds stays the same challenge; one re-shown after its result was
+        reported is a new challenge with a new `challenge_id`. Delivery is not
+        ordered against the result, so a consumer that has already seen the
+        result for a `challenge_id` should ignore a late opened event for it.
+      required: [ts, type, category, source, data]
+      properties:
+        ts:
+          type: integer
+          format: int64
+          description: Event timestamp in Unix microseconds.
+        type:
+          type: string
+          const: captcha_challenge_opened
+        category:
+          type: string
+          const: captcha
+          x-enum-varnames: [BrowserCaptchaChallengeOpenedEventCategoryCaptcha]
+        source:
+          $ref: "#/components/schemas/BrowserEventSource"
+        data:
+          $ref: "#/components/schemas/BrowserCaptchaChallengeOpenedEventData"
+        truncated:
+          type: boolean
+          description: True if the data field was truncated due to size limits.
     BrowserCaptchaChallengeResultEventData:
       type: object
       description: Per-challenge payload for `captcha_challenge_result` events.
@@ -6133,7 +6179,9 @@ components:
             Terminal outcome of the visible challenge. `solved`: the page
             observed the challenge clear after a solver attempt. For token
             captchas this means a response token was present; for
-            press-and-hold it means the challenge page navigated away. `failure`:
+            press-and-hold it means the challenge page navigated away. A
+            reCAPTCHA checkbox that passes without showing a challenge is
+            also reported as `solved`, with `challenge_shown` false. `failure`:
             the producer stopped after an explicit terminal solver failure or
             exhausted its attempts while the challenge remained. `timeout`:
             the producer's challenge-level wait budget expired while the
@@ -6160,7 +6208,16 @@ components:
           type: number
           description: >
             Wall-clock duration from the challenge appearing to its terminal
-            outcome, covering every solver attempt in between.
+            outcome, covering every solver attempt in between. When
+            `challenge_shown` is false, measured from when the widget's
+            response field was last seen empty to when its token appeared.
+        challenge_shown:
+          type: boolean
+          description: >
+            False when the widget produced a response token without ever
+            showing a challenge, such as a reCAPTCHA checkbox that passed on
+            click. No `captcha_challenge_opened` event precedes such a result.
+            Absent when a challenge was shown.
         website_host:
           type: string
           description: Host of the page the challenge appeared on.
@@ -6399,6 +6456,7 @@ components:
         - $ref: "#/components/schemas/BrowserLiveViewDisconnectEvent"
         - $ref: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
         - $ref: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+        - $ref: "#/components/schemas/BrowserCaptchaChallengeOpenedEvent"
         - $ref: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
         - $ref: "#/components/schemas/BrowserSystemOomKillEvent"
         - $ref: "#/components/schemas/BrowserServiceCrashedEvent"
@@ -6438,6 +6496,7 @@ components:
           live_view_disconnect: "#/components/schemas/BrowserLiveViewDisconnectEvent"
           captcha_solve_started: "#/components/schemas/BrowserCaptchaSolveStartedEvent"
           captcha_solve_result: "#/components/schemas/BrowserCaptchaSolveResultEvent"
+          captcha_challenge_opened: "#/components/schemas/BrowserCaptchaChallengeOpenedEvent"
           captcha_challenge_result: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
           system_oom_kill: "#/components/schemas/BrowserSystemOomKillEvent"
           service_crashed: "#/components/schemas/BrowserServiceCrashedEvent"
