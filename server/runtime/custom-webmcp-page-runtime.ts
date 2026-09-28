@@ -27,13 +27,14 @@ export class CustomWebMCPPageRuntime {
   private readonly client: BrowserReplCdpClient;
   private readonly runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>;
   private readonly resolve: (sessionId: string, id: string, revision: number) =>
-    {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]} | undefined;
+    {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]; targetId: string} | undefined;
+  private invocationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     client: BrowserReplCdpClient,
     runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
     resolve: (sessionId: string, id: string, revision: number) =>
-      {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]} | undefined,
+      {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]; targetId: string} | undefined,
   ) {
     this.client = client;
     this.runInvocation = runInvocation;
@@ -48,16 +49,25 @@ export class CustomWebMCPPageRuntime {
   async invokeCDP(
     definition: CustomToolDefinition,
     matches: CustomToolFrameMatch[],
+    targetId: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
   ): Promise<unknown> {
     const inputResult = definition.inputValidator(input);
     if (!inputResult.valid) throw new Error(`input failed JSON Schema validation: ${inputResult.errorMessage}`);
     const executionSignal = signal ?? new AbortController().signal;
-    const output = await this.runInvocation(executionSignal, async () => definition.execute(
-      inputResult.data as Record<string, unknown>,
-      {signal: executionSignal, matches: clone(matches)},
-    ));
+    const run = async () => {
+      if (executionSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+      await this.client.attach(targetId);
+      if (executionSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+      return this.runInvocation(executionSignal, async () => definition.execute(
+        inputResult.data as Record<string, unknown>,
+        {signal: executionSignal, matches: clone(matches)},
+      ));
+    };
+    const pending = this.invocationQueue.then(run, run);
+    this.invocationQueue = pending.catch(() => undefined);
+    const output = await pending;
     if (definition.outputValidator) {
       const outputResult = definition.outputValidator(output);
       if (!outputResult.valid) throw new Error(`output failed JSON Schema validation: ${outputResult.errorMessage}`);
@@ -238,7 +248,7 @@ export class CustomWebMCPPageRuntime {
     const controller = new AbortController();
     this.activeInvocations.set(message.invocation_id, controller);
     try {
-      const output = await this.invokeCDP(invocation.definition, invocation.matches, message.input, controller.signal);
+      const output = await this.invokeCDP(invocation.definition, invocation.matches, invocation.targetId, message.input, controller.signal);
       await this.respond(event.sessionId, params.executionContextId, message.invocation_id, output);
     } catch (error) {
       await this.respond(event.sessionId, params.executionContextId, message.invocation_id, undefined, errorMessage(error));
