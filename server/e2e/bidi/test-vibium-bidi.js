@@ -24,7 +24,8 @@ function main() {
   const bro = browser.start(endpoint);
   const page = bro.page();
 
-  page.go('https://example.com');
+  const html = '<!doctype html><title>Example Domain</title><h1>Example Domain</h1>';
+  page.go('data:text/html,' + encodeURIComponent(html));
   const title = page.title();
   if (!title.includes('Example Domain')) {
     throw new Error(`expected title to contain "Example Domain", got "${title}"`);
