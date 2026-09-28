@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"testing"
 	"time"
 
@@ -13,41 +12,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCustomWebMCPTargetBinding(t *testing.T) {
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	container := NewTestContainer(t, headlessImage)
-	require.NoError(t, container.Start(ctx, ContainerConfig{Env: map[string]string{
-		"CHROMIUM_FLAGS": "--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
-	}}))
-	defer container.Stop(ctx)
-	require.NoError(t, container.WaitReady(ctx))
-	client, err := container.APIClient()
-	require.NoError(t, err)
+func testCustomWebMCPTargetBinding(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
+	t.Helper()
 
 	var urls []string
 	executeWebMCPPlaywright(t, ctx, client, `
-		await context.route('http://127.0.0.1:10001/fixture/target-*', route => {
-			const marker = route.request().url().endsWith('target-owner') ? 'owner' : 'other';
+		await context.route('http://127.0.0.1:10001/target-binding/*', route => {
+			const marker = route.request().url().endsWith('/target-binding/owner') ? 'owner' : 'other';
 			return route.fulfill({contentType: 'text/html', body: '<body data-marker="' + marker + '">' + marker + '</body>'});
 		});
-		await page.goto('http://127.0.0.1:10001/fixture/target-owner');
+		await page.goto('http://127.0.0.1:10001/target-binding/owner');
 		const other = await context.newPage();
-		await other.goto('http://127.0.0.1:10001/fixture/target-other');
+		await other.goto('http://127.0.0.1:10001/target-binding/other');
 		return [page.url(), other.url()];
 	`, &urls)
 	require.Equal(t, []string{
-		"http://127.0.0.1:10001/fixture/target-owner",
-		"http://127.0.0.1:10001/fixture/target-other",
+		"http://127.0.0.1:10001/target-binding/owner",
+		"http://127.0.0.1:10001/target-binding/other",
 	}, urls)
 
 	added, err := client.AddCustomWebMCPToolsWithResponse(ctx, instanceoapi.AddCustomWebMCPToolsJSONRequestBody{
 		Namespace: "target-binding.test",
-		Source: `[{kind:'cdp', match:{url_patterns:['http://127.0.0.1:10001/fixture/target-owner']},
+		Source: `[{kind:'cdp', match:{url_patterns:['http://127.0.0.1:10001/target-binding/owner']},
 			tool:{name:'mark_registered_page',description:'Mark the registering page.',inputSchema:{type:'object'}},
 			execute:async ()=>await js(()=>{
 				document.body.dataset.probe='touched';
@@ -74,7 +60,7 @@ func TestCustomWebMCPTargetBinding(t *testing.T) {
 	}, 10*time.Second, 200*time.Millisecond)
 
 	selected, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
-		Code: `const unrelated = (await listTabs()).find(tab => tab.url.endsWith('/fixture/target-other'));
+		Code: `const unrelated = (await listTabs()).find(tab => tab.url.endsWith('/target-binding/other'));
 			if (!unrelated) throw new Error('unrelated tab not found');
 			await switchTab(unrelated.targetId);
 			if ((await currentTab()).url !== unrelated.url) throw new Error('unrelated tab not attached');`,
@@ -101,8 +87,8 @@ func TestCustomWebMCPTargetBinding(t *testing.T) {
 	executeWebMCPPlaywright(t, ctx, client, `
 		const pages = context.pages();
 		return {
-			owner: await pages.find(candidate => candidate.url().endsWith('/fixture/target-owner')).evaluate(() => document.body.dataset.probe || ''),
-			other: await pages.find(candidate => candidate.url().endsWith('/fixture/target-other')).evaluate(() => document.body.dataset.probe || ''),
+			owner: await pages.find(candidate => candidate.url().endsWith('/target-binding/owner')).evaluate(() => document.body.dataset.probe || ''),
+			other: await pages.find(candidate => candidate.url().endsWith('/target-binding/other')).evaluate(() => document.body.dataset.probe || ''),
 		};
 	`, &state)
 	require.Equal(t, "touched", state.Owner)
