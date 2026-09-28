@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os/exec"
 	"testing"
 	"time"
 
@@ -11,6 +12,102 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCustomWebMCPTargetBinding(t *testing.T) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skipf("docker not available: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	container := NewTestContainer(t, headlessImage)
+	require.NoError(t, container.Start(ctx, ContainerConfig{Env: map[string]string{
+		"CHROMIUM_FLAGS": "--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
+	}}))
+	defer container.Stop(ctx)
+	require.NoError(t, container.WaitReady(ctx))
+	client, err := container.APIClient()
+	require.NoError(t, err)
+
+	var urls []string
+	executeWebMCPPlaywright(t, ctx, client, `
+		await context.route('http://127.0.0.1:10001/fixture/target-*', route => {
+			const marker = route.request().url().endsWith('target-owner') ? 'owner' : 'other';
+			return route.fulfill({contentType: 'text/html', body: '<body data-marker="' + marker + '">' + marker + '</body>'});
+		});
+		await page.goto('http://127.0.0.1:10001/fixture/target-owner');
+		const other = await context.newPage();
+		await other.goto('http://127.0.0.1:10001/fixture/target-other');
+		return [page.url(), other.url()];
+	`, &urls)
+	require.Equal(t, []string{
+		"http://127.0.0.1:10001/fixture/target-owner",
+		"http://127.0.0.1:10001/fixture/target-other",
+	}, urls)
+
+	added, err := client.AddCustomWebMCPToolsWithResponse(ctx, instanceoapi.AddCustomWebMCPToolsJSONRequestBody{
+		Namespace: "target-binding.test",
+		Source: `[{kind:'cdp', match:{url_patterns:['http://127.0.0.1:10001/fixture/target-owner']},
+			tool:{name:'mark_registered_page',description:'Mark the registering page.',inputSchema:{type:'object'}},
+			execute:async ()=>await js(()=>{
+				document.body.dataset.probe='touched';
+				return {marker:document.body.dataset.marker,url:location.href};
+			})}]`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, added.StatusCode(), "%s", added.Body)
+
+	var ref string
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		tools, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
+		if !assert.NoError(collect, err) || !assert.Equal(collect, http.StatusOK, tools.StatusCode()) || tools.JSON200 == nil {
+			return
+		}
+		for _, tool := range tools.JSON200.Tools {
+			if tool.Tool.Name == "mark_registered_page" {
+				ref = tool.ToolRef
+				assert.Equal(collect, urls[0], tool.Source.PageUrl)
+				return
+			}
+		}
+		assert.Fail(collect, "tool not registered on owner tab")
+	}, 10*time.Second, 200*time.Millisecond)
+
+	selected, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `const unrelated = (await listTabs()).find(tab => tab.url.endsWith('/fixture/target-other'));
+			if (!unrelated) throw new Error('unrelated tab not found');
+			await switchTab(unrelated.targetId);
+			if ((await currentTab()).url !== unrelated.url) throw new Error('unrelated tab not attached');`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, selected.StatusCode(), "%s", selected.Body)
+	require.NotNil(t, selected.JSON200)
+	require.True(t, selected.JSON200.Success, "%s", selected.Body)
+
+	timeout := 15
+	result, err := client.InvokeWebMCPToolWithResponse(ctx, instanceoapi.WebMCPInvokeRequest{
+		ToolRef: ref, Input: map[string]any{}, TimeoutSec: &timeout,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, result.StatusCode(), "%s", result.Body)
+	require.NotNil(t, result.JSON200)
+	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusCompleted, result.JSON200.Status)
+	require.Equal(t, map[string]any{"marker": "owner", "url": urls[0]}, result.JSON200.Output)
+
+	var state struct {
+		Owner string `json:"owner"`
+		Other string `json:"other"`
+	}
+	executeWebMCPPlaywright(t, ctx, client, `
+		const pages = context.pages();
+		return {
+			owner: await pages.find(candidate => candidate.url().endsWith('/fixture/target-owner')).evaluate(() => document.body.dataset.probe || ''),
+			other: await pages.find(candidate => candidate.url().endsWith('/fixture/target-other')).evaluate(() => document.body.dataset.probe || ''),
+		};
+	`, &state)
+	require.Equal(t, "touched", state.Owner)
+	require.Empty(t, state.Other)
+}
 
 func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
 	t.Helper()
