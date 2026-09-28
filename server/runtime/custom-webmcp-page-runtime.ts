@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { BrowserReplCdpClient, CdpEvent } from './browser-cdp-client';
 import { clone, isRecord, MAX_OUTPUT_BYTES } from './custom-webmcp-definitions.ts';
 import type { CustomToolDefinition, CustomToolFrameMatch } from './custom-webmcp-definitions.ts';
@@ -29,6 +30,8 @@ export class CustomWebMCPPageRuntime {
   private readonly resolve: (sessionId: string, id: string, revision: number) =>
     {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]; targetId: string} | undefined;
   private executing = false;
+  private invocationQueue: Promise<unknown> = Promise.resolve();
+  private readonly invocationContext = new AsyncLocalStorage<boolean>();
 
   constructor(
     client: BrowserReplCdpClient,
@@ -56,10 +59,11 @@ export class CustomWebMCPPageRuntime {
   ): Promise<unknown> {
     const inputResult = definition.inputValidator(input);
     if (!inputResult.valid) throw new Error(`input failed JSON Schema validation: ${inputResult.errorMessage}`);
-    if (this.executing) throw new Error('another custom CDP invocation is running');
+    if (this.invocationContext.getStore() || (fromPage && this.executing)) {
+      throw new Error('nested page or custom CDP invocation is not supported');
+    }
     const executionSignal = signal ?? new AbortController().signal;
-    const output = await this.runInvocation(executionSignal, async () => {
-      if (this.executing) throw new Error('another custom CDP invocation is running');
+    const run = () => this.runInvocation(executionSignal, () => this.invocationContext.run(true, async () => {
       this.executing = true;
       try {
         if (executionSignal.aborted) throw new DOMException('Aborted', 'AbortError');
@@ -70,7 +74,10 @@ export class CustomWebMCPPageRuntime {
       } finally {
         this.executing = false;
       }
-    }, fromPage);
+    }), fromPage);
+    const pending = this.invocationQueue.then(run, run);
+    this.invocationQueue = pending.catch(() => undefined);
+    const output = await pending;
     if (definition.outputValidator) {
       const outputResult = definition.outputValidator(output);
       if (!outputResult.valid) throw new Error(`output failed JSON Schema validation: ${outputResult.errorMessage}`);
