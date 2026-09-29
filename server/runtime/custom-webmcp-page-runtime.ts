@@ -65,9 +65,6 @@ export class CustomWebMCPPageRuntime {
     if (this.invocationContext.getStore()) {
       throw new Error('nested page or custom CDP invocation is not supported');
     }
-    if (fromPage && this.executing) {
-      throw new Error('custom CDP tool is busy; retry the page invocation');
-    }
     const executionSignal = signal ?? new AbortController().signal;
     const run = () => this.runInvocation(executionSignal, () => this.invocationContext.run(true, async () => {
       this.executing = true;
