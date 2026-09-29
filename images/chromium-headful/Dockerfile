@@ -316,6 +316,8 @@ COPY shared/chromium-policies/managed/policy.json /etc/chromium/policies/managed
 # install Node.js 22.x by copying from the node:22-bullseye-slim stage
 COPY --from=node-22 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-22 /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Add system CAs without replacing Node's bundled trust roots.
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
 # Recreate symlinks for npm/npx/corepack to point into node_modules
 RUN set -eux; \
     ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
