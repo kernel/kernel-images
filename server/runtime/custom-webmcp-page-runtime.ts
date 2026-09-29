@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { BrowserReplCdpClient, CdpEvent } from './browser-cdp-client';
 import { clone, isRecord, MAX_OUTPUT_BYTES } from './custom-webmcp-definitions.ts';
 import type { CustomToolDefinition, CustomToolFrameMatch } from './custom-webmcp-definitions.ts';
@@ -25,19 +26,25 @@ export function errorMessage(error: unknown): string {
 export class CustomWebMCPPageRuntime {
   private activeInvocations = new Map<string, AbortController>();
   private readonly client: BrowserReplCdpClient;
-  private readonly runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>;
+  private readonly runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>, fromPage: boolean) => Promise<T>;
   private readonly resolve: (sessionId: string, id: string, revision: number) =>
-    {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]} | undefined;
+    {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]; targetId: string} | undefined;
+  private executing = false;
+  private invocationQueue: Promise<unknown> = Promise.resolve();
+  private readonly invocationContext = new AsyncLocalStorage<boolean>();
+  private readonly reportError: (error: unknown) => void;
 
   constructor(
     client: BrowserReplCdpClient,
-    runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
+    runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>, fromPage: boolean) => Promise<T>,
     resolve: (sessionId: string, id: string, revision: number) =>
-      {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]} | undefined,
+      {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]; targetId: string} | undefined,
+    reportError: (error: unknown) => void = () => {},
   ) {
     this.client = client;
     this.runInvocation = runInvocation;
     this.resolve = resolve;
+    this.reportError = reportError;
   }
 
   abortAll(): void {
@@ -48,16 +55,52 @@ export class CustomWebMCPPageRuntime {
   async invokeCDP(
     definition: CustomToolDefinition,
     matches: CustomToolFrameMatch[],
+    targetId: string,
     input: Record<string, unknown>,
     signal?: AbortSignal,
+    fromPage = false,
   ): Promise<unknown> {
     const inputResult = definition.inputValidator(input);
     if (!inputResult.valid) throw new Error(`input failed JSON Schema validation: ${inputResult.errorMessage}`);
+    if (this.invocationContext.getStore()) {
+      throw new Error('nested page or custom CDP invocation is not supported');
+    }
+    if (fromPage && this.executing) {
+      throw new Error('custom CDP tool is busy; retry the page invocation');
+    }
     const executionSignal = signal ?? new AbortController().signal;
-    const output = await this.runInvocation(executionSignal, async () => definition.execute(
-      inputResult.data as Record<string, unknown>,
-      {signal: executionSignal, matches: clone(matches)},
-    ));
+    const run = () => this.runInvocation(executionSignal, () => this.invocationContext.run(true, async () => {
+      this.executing = true;
+      const previousTarget = this.client.targetId;
+      try {
+        if (executionSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+        await this.client.attach(targetId, {activate: false});
+        if (executionSignal.aborted) throw new DOMException('Aborted', 'AbortError');
+        return await definition.execute(inputResult.data as Record<string, unknown>,
+          {signal: executionSignal, matches: clone(matches)});
+      } finally {
+        try {
+          if (previousTarget && this.client.targetId !== previousTarget) {
+            await this.client.attach(previousTarget, {activate: false});
+          } else if (!previousTarget && this.client.targetId === targetId) {
+            await this.client.detach();
+          }
+        } catch (error) {
+          this.reportError(error);
+          try {
+            await this.client.detach();
+          } catch (detachError) {
+            this.reportError(detachError);
+            this.client.close();
+          }
+        } finally {
+          this.executing = false;
+        }
+      }
+    }), fromPage);
+    const pending = this.invocationQueue.then(run, run);
+    this.invocationQueue = pending.catch(() => undefined);
+    const output = await pending;
     if (definition.outputValidator) {
       const outputResult = definition.outputValidator(output);
       if (!outputResult.valid) throw new Error(`output failed JSON Schema validation: ${outputResult.errorMessage}`);
@@ -237,12 +280,23 @@ export class CustomWebMCPPageRuntime {
 
     const controller = new AbortController();
     this.activeInvocations.set(message.invocation_id, controller);
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const output = await this.invokeCDP(invocation.definition, invocation.matches, message.input, controller.signal);
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error('outcome_unknown: page invocation exceeded 119s; do not retry automatically'));
+        }, 119_000);
+      });
+      const output = await Promise.race([
+        this.invokeCDP(invocation.definition, invocation.matches, invocation.targetId, message.input, controller.signal, true),
+        deadline,
+      ]);
       await this.respond(event.sessionId, params.executionContextId, message.invocation_id, output);
     } catch (error) {
       await this.respond(event.sessionId, params.executionContextId, message.invocation_id, undefined, errorMessage(error));
     } finally {
+      if (timer) clearTimeout(timer);
       this.activeInvocations.delete(message.invocation_id);
     }
   }

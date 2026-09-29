@@ -74,7 +74,7 @@ export class CustomWebMCPRegistry {
 
   constructor(
     client: BrowserReplCdpClient,
-    runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>) => Promise<T>,
+    runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>, fromPage: boolean) => Promise<T>,
     publishDefinitions: (tools: CustomToolSummary[]) => void,
   ) {
     this.client = client;
@@ -83,9 +83,9 @@ export class CustomWebMCPRegistry {
       const targetId = this.sessions.get(sessionId);
       const page = targetId ? this.pages.get(targetId) : undefined;
       const definition = this.definitions.get(id);
-      if (!page || !definition || definition.revision !== revision) return undefined;
-      return {definition, matches: page.matches.get(id) ?? []};
-    });
+      if (!targetId || !page || !definition || definition.revision !== revision) return undefined;
+      return {definition, matches: page.matches.get(id) ?? [], targetId};
+    }, (error) => this.reportError(error));
     this.unsubscribeEvent = client.subscribeEvents((event) => this.handleEvent(event));
     this.unsubscribeDisconnect = client.subscribeDisconnect(() => this.handleDisconnect());
     this.scheduleReconcile();
@@ -121,7 +121,7 @@ export class CustomWebMCPRegistry {
     if (definition?.kind !== 'cdp' || !matches?.length) {
       throw new CustomToolNotFoundError('custom tool is no longer available; discover tools again');
     }
-    return this.pageRuntime.invokeCDP(definition, matches, input, signal);
+    return this.pageRuntime.invokeCDP(definition, matches, targetId, input, signal);
   };
 
   private async settleReconciliation(): Promise<void> {

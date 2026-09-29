@@ -507,7 +507,7 @@ export class BrowserReplCdpClient {
     }));
   }
 
-  async attach(targetId: string): Promise<string> {
+  async attach(targetId: string, {activate = true}: {activate?: boolean} = {}): Promise<string> {
     await this.ensureConnected();
     if (this.targetId === targetId && this.sessionId) {
       return this.sessionId;
@@ -522,16 +522,18 @@ export class BrowserReplCdpClient {
     this.pendingDialog = null;
     this.inFlightRequests.clear();
     this.lastNetworkActivity = Date.now();
-    // Make the attached target the foreground tab. In headless Chromium a
+    // Ordinary attachments make the target foreground. In headless Chromium a
     // hidden tab's JavaScript dialogs are auto-cancelled
     // (Page.javascriptDialogClosed with result:false fires immediately
     // after opening), which breaks the documented dialog semantics — and
     // which tab is active after a Chromium restart is not deterministic.
     // Best-effort: activation can be rejected for some target types.
-    try {
-      await this.browserCommand('Target.activateTarget', { targetId });
-    } catch {
-      // Ignore: dialog semantics degrade to Chromium's default for the tab.
+    if (activate) {
+      try {
+        await this.browserCommand('Target.activateTarget', { targetId });
+      } catch {
+        // Ignore: dialog semantics degrade to Chromium's default for the tab.
+      }
     }
     this.rendererResponsive = await this.enableDomains(this.sessionId);
     await this.dismissStaleDialog();
@@ -544,6 +546,16 @@ export class BrowserReplCdpClient {
       }
     }
     return this.sessionId;
+  }
+
+  async detach(): Promise<void> {
+    const sessionId = this.sessionId;
+    if (!sessionId) return;
+    await this.browserCommand('Target.detachFromTarget', { sessionId });
+    this.sessionId = null;
+    this.targetId = null;
+    this.pendingDialog = null;
+    this.inFlightRequests.clear();
   }
 
   private async enableDomains(sessionId: string): Promise<boolean> {

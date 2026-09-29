@@ -320,9 +320,24 @@ const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>) => 
   writeFileSync(temporaryPath, safeStringify({repl_id: REPL_ID, tools}), {mode: 0o600});
   renameSync(temporaryPath, CUSTOM_TOOLS_STATE_PATH);
 };
+let pageInvocationActive = false;
 const customToolRegistry = new CustomWebMCPRegistry(
   cdpClient,
-  (signal, callback) => webmcpExecution.run(signal, callback),
+  (signal, callback, fromPage) => {
+    if (!fromPage) return webmcpExecution.run(signal, callback);
+    if (activeExecution || queuedExecutions || pageInvocationActive) {
+      return Promise.reject(new Error('Browser REPL is busy; retry the page invocation'));
+    }
+    pageInvocationActive = true;
+    const timeout = setTimeout(() => {
+      process.stderr.write('[custom-webmcp] page invocation exceeded 120s; terminating the REPL to prevent further commands on an in-flight target\n');
+      void shutdown('page invocation timeout');
+    }, 120_000);
+    return webmcpExecution.run(signal, callback).finally(() => {
+      clearTimeout(timeout);
+      pageInvocationActive = false;
+    });
+  },
   publishCustomTools,
 );
 publishCustomTools([]);
@@ -558,6 +573,7 @@ async function executeRequest(
 // Serialize executions as defense in depth; the Go handler already holds a
 // mutex, but the daemon must never interleave two executions.
 let executionChain: Promise<void> = Promise.resolve();
+let queuedExecutions = 0;
 
 // The execution currently running, so the uncaughtException handler can
 // deliver a deterministic failure response (with partial content) before
@@ -574,6 +590,20 @@ let activeExecution: {
 let processExiting = false;
 
 function enqueueExecution(request: ExecuteRequest, respond: (response: ExecuteResponse) => void): void {
+  if (pageInvocationActive) {
+    respond({
+      id: request.id,
+      repl_id: REPL_ID,
+      success: false,
+      error: 'page-originated custom CDP invocation is in progress; retry this request',
+      error_code: 'custom_tool_busy',
+      content: [],
+      content_truncated: false,
+      duration_ms: 0,
+    });
+    return;
+  }
+  queuedExecutions++;
   executionChain = executionChain.then(async () => {
     let response: ExecuteResponse;
     try {
@@ -588,6 +618,8 @@ function enqueueExecution(request: ExecuteRequest, respond: (response: ExecuteRe
         content_truncated: false,
         duration_ms: 0,
       };
+    } finally {
+      queuedExecutions--;
     }
     if (!processExiting) {
       respond(response);

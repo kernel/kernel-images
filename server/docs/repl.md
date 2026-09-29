@@ -137,6 +137,8 @@ The reference below is generated from `runtime/browser-repl-help.ts`; edit that 
 - **`webmcp.removeCustomTool(id)`** — Remove one custom tool by generated ID and return whether it existed. Active invocations continue.
 <!-- END GENERATED REPL METHOD REFERENCE -->
 
+While a page-originated custom CDP tool runs, new REPL cells and custom CDP invocations return a busy error without starting or resetting the REPL. Retry the rejected request after the page tool finishes.
+
 A snapshot-to-action loop avoids inventing selectors:
 
 ```js
