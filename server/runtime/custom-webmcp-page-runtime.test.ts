@@ -81,19 +81,17 @@ test('concurrent calls wait but nested calls fail without switching the active t
   assert.deepEqual(attached, ['first-tab', 'unrelated-tab', 'second-tab', 'unrelated-tab']);
 });
 
-test('concurrent page invocations run in sequence on their own targets', async () => {
-  const {attached, client, definition, runtime} = fixture();
+test('concurrent page invocations fail before switching the active tab', async () => {
+  const {attached, definition, runtime} = fixture();
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
-  definition.execute = async () => { await held; return {targetId: client.targetId}; };
+  definition.execute = async () => { await held; return {}; };
   const first = runtime.invokeCDP(definition, [], 'registered-tab', {}, undefined, true);
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const second = runtime.invokeCDP({...definition, execute: () => ({targetId: client.targetId})}, [], 'second-tab', {}, undefined, true);
+  await assert.rejects(runtime.invokeCDP(definition, [], 'second-tab', {}, undefined, true), /busy; retry/);
   assert.deepEqual(attached, ['registered-tab']);
   release();
-  assert.deepEqual(await first, {targetId: 'registered-tab'});
-  assert.deepEqual(await second, {targetId: 'second-tab'});
-  assert.deepEqual(attached, ['registered-tab', 'unrelated-tab', 'second-tab', 'unrelated-tab']);
+  await first;
 });
 
 test('page invocation attaches its own tab and returns the result to its registering document', async () => {
