@@ -25,6 +25,12 @@ func TestInferCaptchaChallengeResult(t *testing.T) {
 		assert.JSONEq(t, `{"captcha_type":"turnstile","status":"solved","duration_ms":1234.5,"inferred":true,"task_id":"t1","website_host":"example.com","website_path":"/login"}`, string(got.Data))
 	})
 
+	t.Run("recaptcha_v3 without a challenge_id is inferred", func(t *testing.T) {
+		got, ok := InferCaptchaChallengeResult(solveResult(`{"captcha_type":"recaptcha_v3","status":"success","duration_ms":1,"task_id":"t8"}`))
+		require.True(t, ok)
+		assert.JSONEq(t, `{"captcha_type":"recaptcha_v3","status":"solved","duration_ms":1,"inferred":true,"task_id":"t8"}`, string(got.Data))
+	})
+
 	for _, tc := range []struct{ task, challenge string }{
 		{"failure", "failure"},
 		{"timeout", "timeout"},
@@ -48,6 +54,8 @@ func TestInferCaptchaChallengeResult(t *testing.T) {
 		{"image-grid round", solveResult(`{"captcha_type":"other","status":"success","duration_ms":1,"task_id":"t4"}`)},
 		{"task that already belongs to a challenge", solveResult(`{"captcha_type":"recaptcha_v3","status":"success","duration_ms":1,"task_id":"t5","challenge_id":"c1"}`)},
 		{"unknown status", solveResult(`{"captcha_type":"turnstile","status":"processing","duration_ms":1,"task_id":"t6"}`)},
+		{"task without a task_id", solveResult(`{"captcha_type":"turnstile","status":"success","duration_ms":1}`)},
+		{"task with an empty task_id", solveResult(`{"captcha_type":"turnstile","status":"success","duration_ms":1,"task_id":""}`)},
 		{"malformed data", solveResult(`not json`)},
 		{"solve started", Event{Type: "captcha_solve_started", Category: Captcha, Data: json.RawMessage(`{"captcha_type":"turnstile","task_id":"t7"}`)}},
 	} {

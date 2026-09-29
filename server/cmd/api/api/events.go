@@ -64,12 +64,13 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 		ev.Data = json.RawMessage(data)
 	}
 
-	env, ok := s.telemetrySession.Publish(ev)
+	var derived []events.Event
+	if inferred, ok := events.InferCaptchaChallengeResult(ev); ok {
+		derived = append(derived, inferred)
+	}
+	env, ok := s.telemetrySession.PublishWithDerived(ev, derived...)
 	if !ok {
 		return oapi.PublishTelemetryEvent204Response{}, nil
-	}
-	if inferred, ok := events.InferCaptchaChallengeResult(ev); ok {
-		s.telemetrySession.Publish(inferred)
 	}
 	return publishTelemetryEventOKResponse{env}, nil
 }

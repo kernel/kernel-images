@@ -28,7 +28,8 @@ var inferredChallengeStatus = map[oapi.BrowserCaptchaSolveResultEventDataStatus]
 // InferCaptchaChallengeResult derives a captcha_challenge_result from a
 // terminal solver task whose captcha type has no observed widget. ok is false
 // for every other event, including a task result that carries a challenge_id,
-// because the producer that assigned it reports that challenge itself.
+// because the producer that assigned it reports that challenge itself, and one
+// without a task_id, because the inferred result could not be joined to it.
 func InferCaptchaChallengeResult(ev Event) (Event, bool) {
 	if ev.Type != string(oapi.CaptchaSolveResult) {
 		return Event{}, false
@@ -37,7 +38,7 @@ func InferCaptchaChallengeResult(ev Event) (Event, bool) {
 	if err := json.Unmarshal(ev.Data, &task); err != nil {
 		return Event{}, false
 	}
-	if _, ok := inferredChallengeTypes[task.CaptchaType]; !ok || lo.FromPtr(task.ChallengeId) != "" {
+	if _, ok := inferredChallengeTypes[task.CaptchaType]; !ok || lo.FromPtr(task.ChallengeId) != "" || lo.FromPtr(task.TaskId) == "" {
 		return Event{}, false
 	}
 	status, ok := inferredChallengeStatus[task.Status]

@@ -151,13 +151,39 @@ func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 func (s *TelemetrySession) Publish(ev events.Event) (events.Envelope, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.id == "" {
-		return events.Envelope{}, false
-	}
-	if _, ok := s.categories[ev.Category]; !ok {
+	if !s.admitsLocked(ev) {
 		return events.Envelope{}, false
 	}
 	return s.publishLocked(ev), true
+}
+
+// PublishWithDerived publishes ev like Publish and, only when ev is admitted,
+// publishes each derived event under the same lock, so a config change or a
+// session restart cannot separate ev from the events derived from it. Derived
+// events are category-filtered like any other; the returned envelope is ev's.
+func (s *TelemetrySession) PublishWithDerived(ev events.Event, derived ...events.Event) (events.Envelope, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.admitsLocked(ev) {
+		return events.Envelope{}, false
+	}
+	env := s.publishLocked(ev)
+	for _, d := range derived {
+		if s.admitsLocked(d) {
+			s.publishLocked(d)
+		}
+	}
+	return env, true
+}
+
+// admitsLocked reports whether the active session captures ev's category.
+// Requires s.mu to be held.
+func (s *TelemetrySession) admitsLocked(ev events.Event) bool {
+	if s.id == "" {
+		return false
+	}
+	_, ok := s.categories[ev.Category]
+	return ok
 }
 
 // NewReader returns a Reader from the EventStream positioned after afterSeq.

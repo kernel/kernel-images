@@ -197,6 +197,33 @@ func TestPublishInfersChallengeResultForUnobservedCaptcha(t *testing.T) {
 	assert.JSONEq(t, `{"captcha_type":"turnstile","status":"solved","duration_ms":900,"inferred":true,"task_id":"task-turnstile"}`, string(got[2].Data))
 }
 
+func TestPublishInfersNothingWhenCaptchaDisabled(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	f := false
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{
+		Body: &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{
+				Captcha: &oapi.BrowserTelemetryCategoryConfig{Enabled: &f},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	before := svc.eventStream.Seq()
+	resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+		Body: &oapi.PublishEventRequest{
+			Type:   "captcha_solve_result",
+			Source: &oapi.BrowserEventSource{Kind: oapi.Extension},
+			Data:   map[string]any{"captcha_type": "turnstile", "status": "success", "duration_ms": 900, "task_id": "task-turnstile"},
+		},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp)
+	assert.Equal(t, before, svc.eventStream.Seq(), "a dropped task result must not publish an inferred challenge result")
+}
+
 // publishTestEvents publishes n system events through an already-started
 // telemetry session. Seqs run 1..n on a fresh stream.
 func publishTestEvents(ctx context.Context, t *testing.T, svc *ApiService, n int) {

@@ -6144,6 +6144,10 @@ components:
             `solved` describes the challenge, not the flow around it. A site
             can still reject a valid token, and tokens expire, so this is not
             proof that whatever the challenge was guarding succeeded.
+
+            When `inferred` is true, no page observation took place: `status`
+            is the task's outcome, `solved` meaning only that the solver
+            returned a solution.
           enum:
             - solved
             - failure
@@ -6160,7 +6164,8 @@ components:
           type: number
           description: >
             Wall-clock duration from the challenge appearing to its terminal
-            outcome, covering every solver attempt in between.
+            outcome, covering every solver attempt in between. When `inferred`
+            is true, the duration of the one solver task instead.
         website_host:
           type: string
           description: Host of the page the challenge appeared on.
@@ -6182,18 +6187,21 @@ components:
           description: >
             The `task_id` of the solver task an inferred result was derived
             from; join on it to pair the result with its
-            `captcha_solve_started` and `captcha_solve_result`. Present only
-            when `inferred` is true.
+            `captcha_solve_started` and `captcha_solve_result`. Present
+            exactly when `inferred` is true.
     BrowserCaptchaChallengeResultEvent:
       type: object
       description: >
-        A visible captcha challenge reached a terminal outcome. Emitted once
-        per challenge. Wait for this event, rather than a task result, to
-        determine the overall challenge outcome. `captcha_solve_started` and
-        `captcha_solve_result` describe individual solver tasks and may occur
-        multiple times within one challenge. For captcha types whose widget
-        Kernel does not observe, the result is inferred from each terminal
-        solver task instead and `inferred` is true. `other` tasks, which
+        A visible captcha challenge reached a terminal outcome. An observed
+        result is emitted once per challenge; wait for it, rather than a task
+        result, to determine the overall challenge outcome.
+        `captcha_solve_started` and `captcha_solve_result` describe individual
+        solver tasks and may occur multiple times within one challenge. For
+        captcha types whose widget Kernel does not observe, a result is
+        inferred from each terminal solver task instead and `inferred` is
+        true. An inferred result is per task, not per challenge, and is not
+        final: when the solver is retried, an inferred `failure` can be
+        followed by a `solved` for the same challenge. `other` tasks, which
         include individual image-grid rounds, produce no challenge result.
       required: [ts, type, category, source, data]
       properties:

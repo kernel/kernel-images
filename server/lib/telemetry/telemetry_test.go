@@ -300,3 +300,32 @@ func TestPublishWithoutSessionReachesNothing(t *testing.T) {
 	assert.False(t, ok)
 	assert.Equal(t, uint64(1), es.Seq(), "nothing may reach the ring after a clear either")
 }
+
+func TestPublishWithDerived(t *testing.T) {
+	t.Run("derived events follow an admitted event", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 16))
+		ts.Start("session-1", TelemetryConfig{Categories: []oapi.TelemetryEventCategory{events.Captcha, events.System}})
+		reader := ts.NewReader(0)
+
+		env, ok := ts.PublishWithDerived(cdpEvent("primary", events.Captcha), cdpEvent("derived.kept", events.System), cdpEvent("derived.filtered", events.Network))
+		require.True(t, ok)
+		assert.Equal(t, "primary", env.Event.Type, "the returned envelope is the primary event's")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		readEnvelope(t, reader, ctx)
+		derived := readEnvelope(t, reader, ctx)
+		assert.Equal(t, "derived.kept", derived.Event.Type)
+		assert.Equal(t, "session-1", telemetrySessionIDFromMetadata(t, derived.Event.Source))
+		assert.Equal(t, uint64(2), ts.Seq(), "a derived event in a disabled category is dropped")
+	})
+
+	t.Run("nothing is published when the primary is dropped", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 16))
+		ts.Start("session-1", TelemetryConfig{Categories: []oapi.TelemetryEventCategory{events.System}})
+
+		_, ok := ts.PublishWithDerived(cdpEvent("primary", events.Captcha), cdpEvent("derived", events.System))
+		assert.False(t, ok)
+		assert.Zero(t, ts.Seq())
+	})
+}
