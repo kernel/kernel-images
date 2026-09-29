@@ -79,6 +79,17 @@ class TestClient extends BaseClient {
     } as MessageEvent)
   }
 
+  offer() {
+    return this['onMessage']({
+      data: JSON.stringify({ event: 'signal/offer', sdp: 'v=0' }),
+    } as MessageEvent)
+  }
+
+  connectPeer() {
+    this['_peer']!.iceConnectionState = 'connected'
+    this['_peer']!.oniceconnectionstatechange()
+  }
+
   openSocket() {
     this['_ws']!.readyState = FakeSocket.OPEN
     this['_ws']!.onopen()
@@ -304,6 +315,57 @@ describe('live view connect failures', () => {
 
     expect(client['_ws']).toBeUndefined()
     expect(socket).toBeUndefined()
+    expect(posted).toHaveLength(1)
+  })
+
+  test('a later signal/offer after connecting does not re-arm the media bound', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client.provide()
+
+    lastPeer!.iceConnectionState = 'checking'
+    client['_peer']!.oniceconnectionstatechange()
+    client.connectPeer()
+
+    await client.offer()
+
+    expect(client['_timeout']).toBeUndefined()
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.media)
+
+    expect(posted).toEqual([])
+  })
+
+  test('a renegotiation offer while connecting is still bounded', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client.provide()
+
+    await client.offer()
+
+    expect(client['_stage']).toBe('media')
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.media)
+
+    expect(posted.map((m) => m.reason)).toEqual(['media'])
+  })
+
+  test('a socket that opens after a transport timeout opens no new bound', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    const socket = client['_ws']!
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.transport)
+
+    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_TIMEOUT'])
+
+    socket.readyState = FakeSocket.OPEN
+    socket.onopen()
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.signaling)
+
     expect(posted).toHaveLength(1)
   })
 })

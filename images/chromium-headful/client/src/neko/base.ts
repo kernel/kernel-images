@@ -98,6 +98,9 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     this._failure = undefined
+    // Per connect attempt: a prior session's success must not suppress this
+    // attempt's bound or make onDisconnected treat it as a dropped session.
+    this._everConnected = false
     this._displayname = displayname
     this[EVENT.CONNECTING]()
 
@@ -135,6 +138,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
     if (this._ws) {
       // reset all events
+      this._ws.onopen = () => {}
       this._ws.onmessage = () => {}
       this._ws.onerror = () => {}
       this._ws.onclose = () => {}
@@ -408,14 +412,14 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._id = id
       await this.createPeer(lite, ice)
       await this.setRemoteOffer(sdp)
-      this.armStage('media')
+      this.armMediaStage()
       return
     }
 
     if (event === EVENT.SIGNAL.OFFER) {
       const { sdp } = payload as SignalOfferPayload
       await this.setRemoteOffer(sdp)
-      this.armStage('media')
+      this.armMediaStage()
       return
     }
 
@@ -502,6 +506,18 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
     this._stage = stage
     this._timeout = window.setTimeout(this.onTimeout.bind(this), CONNECT_STAGE_TIMEOUT_MS[stage])
+  }
+
+  // The media bound exists to catch a connect whose peer never reaches ICE
+  // `checking`, and it is cleared when ICE does. Once the peer is connecting or
+  // already connected there is no first connect left to bound, and a later
+  // signal/offer would otherwise start a timer no future state change can clear,
+  // tearing down a live session.
+  private armMediaStage() {
+    if (this._gaveUp || this._everConnected || this.peerConnected) {
+      return
+    }
+    this.armStage('media')
   }
 
   private onTimeout() {
