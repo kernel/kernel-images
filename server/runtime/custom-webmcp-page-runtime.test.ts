@@ -6,13 +6,16 @@ import type { CustomToolDefinition } from './custom-webmcp-definitions.ts';
 
 function fixture() {
   const attached: string[] = [];
+  const activated: boolean[] = [];
   const responses: string[] = [];
   const client = {
     targetId: 'unrelated-tab',
-    async attach(targetId: string) {
+    async attach(targetId: string, options?: {activate?: boolean}) {
       attached.push(targetId);
+      activated.push(options?.activate ?? true);
       this.targetId = targetId;
     },
+    async detach() { this.targetId = null; },
     async send(_method: string, params: {expression: string}) {
       responses.push(params.expression);
       return {};
@@ -29,13 +32,23 @@ function fixture() {
       ? {definition, matches: [], targetId: 'registered-tab'}
       : undefined,
   );
-  return {attached, responses, client, definition, runtime};
+  return {attached, activated, responses, client, definition, runtime};
 }
 
 test('API invocation attaches the registering tab before executing the body', async () => {
-  const {attached, definition, runtime} = fixture();
+  const {attached, activated, client, definition, runtime} = fixture();
+  assert.deepEqual(await runtime.invokeCDP(definition, [], 'registered-tab', {}), {targetId: 'registered-tab'});
+  assert.deepEqual(attached, ['registered-tab', 'unrelated-tab']);
+  assert.deepEqual(activated, [false, false]);
+  assert.equal(client.targetId, 'unrelated-tab');
+});
+
+test('invocation without a previous attachment leaves the client detached', async () => {
+  const {attached, client, definition, runtime} = fixture();
+  client.targetId = null;
   assert.deepEqual(await runtime.invokeCDP(definition, [], 'registered-tab', {}), {targetId: 'registered-tab'});
   assert.deepEqual(attached, ['registered-tab']);
+  assert.equal(client.targetId, null);
 });
 
 test('concurrent calls wait but nested calls fail without switching the active tab', async () => {
@@ -54,7 +67,19 @@ test('concurrent calls wait but nested calls fail without switching the active t
   release();
   assert.deepEqual(await first, {targetId: 'first-tab'});
   assert.deepEqual(await second, {targetId: 'second-tab'});
-  assert.deepEqual(attached, ['first-tab', 'second-tab']);
+  assert.deepEqual(attached, ['first-tab', 'unrelated-tab', 'second-tab', 'unrelated-tab']);
+});
+
+test('concurrent page invocations return a retryable busy error', async () => {
+  const {definition, runtime} = fixture();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  definition.execute = async () => { await held; return {}; };
+  const first = runtime.invokeCDP(definition, [], 'registered-tab', {}, undefined, true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await assert.rejects(runtime.invokeCDP(definition, [], 'registered-tab', {}, undefined, true), /busy; retry/);
+  release();
+  await first;
 });
 
 test('page invocation attaches its own tab and returns the result to its registering document', async () => {
@@ -69,6 +94,6 @@ test('page invocation attaches its own tab and returns the result to its registe
     },
   } as CdpEvent;
   await runtime.handleBinding(event);
-  assert.deepEqual(attached, ['registered-tab']);
+  assert.deepEqual(attached, ['registered-tab', 'unrelated-tab']);
   assert.match(responses[0], /"targetId":"registered-tab"/);
 });

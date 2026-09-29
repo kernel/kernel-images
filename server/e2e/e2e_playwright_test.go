@@ -271,6 +271,9 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Run("WebMCPTargetBinding", func(t *testing.T) {
 		testCustomWebMCPTargetBinding(t, ctx, client)
 	})
+	t.Run("WebMCPSlowPage", func(t *testing.T) {
+		testCustomWebMCPSlowPage(t, ctx, client)
+	})
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {

@@ -80,6 +80,16 @@ func testCustomWebMCPTargetBinding(t *testing.T, ctx context.Context, client *in
 	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusCompleted, result.JSON200.Status)
 	require.Equal(t, map[string]any{"marker": "owner", "url": urls[0]}, result.JSON200.Output)
 
+	attached, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `const current = await currentTab();
+			if (!current.url.endsWith('/target-binding/other'))
+				throw new Error('custom tool changed attached tab to ' + current.url);`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, attached.StatusCode(), "%s", attached.Body)
+	require.NotNil(t, attached.JSON200)
+	require.True(t, attached.JSON200.Success, "%s", attached.Body)
+
 	var state struct {
 		Owner string `json:"owner"`
 		Other string `json:"other"`
@@ -93,6 +103,141 @@ func testCustomWebMCPTargetBinding(t *testing.T, ctx context.Context, client *in
 	`, &state)
 	require.Equal(t, "touched", state.Owner)
 	require.Empty(t, state.Other)
+}
+
+func testCustomWebMCPSlowPage(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
+	t.Helper()
+	patched, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `const owner = (await listTabs()).find(tab => tab.url.endsWith('/target-binding/owner'));
+			await switchTab(owner.targetId);
+			const tree = await cdp('Page.getFrameTree');
+			await cdp('Runtime.enable');
+			const candidates = [...new Set((await drainEvents()).filter(event =>
+				event.method === 'Runtime.executionContextCreated' &&
+				event.params.context.name === 'kernel-custom-webmcp' &&
+				event.params.context.auxData?.frameId === tree.frameTree.frame.id
+			).map(event => event.params.context.id))];
+			let worldContextId;
+			for (const id of candidates) {
+				try {
+					const state = await cdp('Runtime.evaluate', {contextId:id,
+						expression:'Boolean(globalThis.__kernelCustomWebMCP)',returnByValue:true});
+					if (state.result?.value) worldContextId=id;
+				} catch (error) {
+					if (!String(error).includes('Cannot find context')) throw error;
+				}
+			}
+			if (!worldContextId) throw new Error('custom tool isolated world not found');
+			const patched = await cdp('Runtime.evaluate', {contextId: worldContextId, expression: ` + "`" + `
+				const prototype = Object.getPrototypeOf(document.modelContext);
+				const register = prototype.registerTool;
+				Object.defineProperty(prototype, 'registerTool', {configurable: true, value: function(tool, ...args) {
+					if (tool.name.endsWith('.slow_page')) globalThis.__slowPageTool = tool.execute;
+					return register.call(this, tool, ...args);
+				}});
+				document.addEventListener('kernel-run-slow', () => {
+					document.body.dataset.slowStarted = 'true';
+					Promise.resolve(globalThis.__slowPageTool({})).then(
+						() => document.body.dataset.slowDone = 'true',
+						error => document.body.dataset.slowDone = String(error)
+					);
+				});
+			` + "`" + `});
+			if (patched.exceptionDetails) throw new Error(JSON.stringify(patched.exceptionDetails));`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, patched.StatusCode(), "%s", patched.Body)
+	require.True(t, patched.JSON200.Success, "%s", patched.Body)
+
+	added, err := client.AddCustomWebMCPToolsWithResponse(ctx, instanceoapi.AddCustomWebMCPToolsJSONRequestBody{
+		Namespace: "slow-page.test",
+		Source: `[{kind:'cdp', match:{url_patterns:['http://127.0.0.1:10001/target-binding/owner']},
+			tool:{name:'slow_page',description:'Wait in a page invocation.',inputSchema:{type:'object'}},
+			execute:async ()=>{await waitMs(6000);return {done:true}}}]`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusCreated, added.StatusCode(), "%s", added.Body)
+	defer func() {
+		listed, err := client.ListCustomWebMCPToolsWithResponse(ctx)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, listed.StatusCode(), "%s", listed.Body)
+		for _, tool := range listed.JSON200.Tools {
+			if tool.Namespace != "target-binding.test" && tool.Namespace != "slow-page.test" {
+				continue
+			}
+			removed, err := client.RemoveCustomWebMCPToolWithResponse(ctx, tool.Id)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusNoContent, removed.StatusCode(), "%s", removed.Body)
+		}
+		executeWebMCPPlaywright(t, ctx, client, `
+			for (const candidate of context.pages()) {
+				if (candidate.url().includes('/target-binding/')) await candidate.close();
+			}
+			return true;
+		`, new(bool))
+	}()
+
+	before, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `repl.write('before page invocation');`,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, before.StatusCode(), "%s", before.Body)
+	require.True(t, before.JSON200.Success, "%s", before.Body)
+
+	tools, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, tools.StatusCode(), "%s", tools.Body)
+	var markRef string
+	for _, tool := range tools.JSON200.Tools {
+		if tool.Tool.Name == "mark_registered_page" {
+			markRef = tool.ToolRef
+			break
+		}
+	}
+	require.NotEmpty(t, markRef)
+
+	executeWebMCPPlaywright(t, ctx, client, `
+		const owner = context.pages().find(candidate => candidate.url().endsWith('/target-binding/owner'));
+		await owner.evaluate(() => document.dispatchEvent(new Event('kernel-run-slow')));
+		await owner.waitForFunction(() => document.body.dataset.slowStarted === 'true');
+		return owner.url();
+	`, new(string))
+
+	short := 1
+	cell, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+		Code: `repl.write('should not run on the wrong tab');`, TimeoutSec: &short,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, cell.StatusCode(), "%s", cell.Body)
+	require.NotNil(t, cell.JSON200)
+	require.False(t, cell.JSON200.Success, "%s", cell.Body)
+	require.Contains(t, *cell.JSON200.Error, "in progress")
+	if cell.JSON200.ReplTerminated != nil {
+		require.False(t, *cell.JSON200.ReplTerminated, "%s", cell.Body)
+	}
+	require.Equal(t, before.JSON200.ReplId, cell.JSON200.ReplId)
+
+	invoked, err := client.InvokeWebMCPToolWithResponse(ctx, instanceoapi.WebMCPInvokeRequest{
+		ToolRef: markRef, Input: map[string]any{}, TimeoutSec: &short,
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, invoked.StatusCode(), "%s", invoked.Body)
+	require.NotNil(t, invoked.JSON200)
+	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusError, invoked.JSON200.Status)
+	require.Contains(t, *invoked.JSON200.ErrorText, "in progress")
+
+	var done string
+	executeWebMCPPlaywright(t, ctx, client, `
+		const owner = context.pages().find(candidate => candidate.url().endsWith('/target-binding/owner'));
+		await owner.waitForFunction(() => document.body.dataset.slowDone !== undefined);
+		return owner.evaluate(() => document.body.dataset.slowDone);
+	`, &done)
+	require.Equal(t, "true", done)
+	after, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: `repl.write('still alive');`})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, after.StatusCode(), "%s", after.Body)
+	require.Equal(t, before.JSON200.ReplId, after.JSON200.ReplId)
+	require.True(t, after.JSON200.Success, "%s", after.Body)
 }
 
 func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {

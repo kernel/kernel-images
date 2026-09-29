@@ -59,20 +59,32 @@ export class CustomWebMCPPageRuntime {
   ): Promise<unknown> {
     const inputResult = definition.inputValidator(input);
     if (!inputResult.valid) throw new Error(`input failed JSON Schema validation: ${inputResult.errorMessage}`);
-    if (this.invocationContext.getStore() || (fromPage && this.executing)) {
+    if (this.invocationContext.getStore()) {
       throw new Error('nested page or custom CDP invocation is not supported');
+    }
+    if (fromPage && this.executing) {
+      throw new Error('custom CDP tool is busy; retry the page invocation');
     }
     const executionSignal = signal ?? new AbortController().signal;
     const run = () => this.runInvocation(executionSignal, () => this.invocationContext.run(true, async () => {
       this.executing = true;
+      const previousTarget = this.client.targetId;
       try {
         if (executionSignal.aborted) throw new DOMException('Aborted', 'AbortError');
-        await this.client.attach(targetId);
+        await this.client.attach(targetId, {activate: false});
         if (executionSignal.aborted) throw new DOMException('Aborted', 'AbortError');
         return await definition.execute(inputResult.data as Record<string, unknown>,
           {signal: executionSignal, matches: clone(matches)});
       } finally {
-        this.executing = false;
+        try {
+          if (previousTarget && this.client.targetId !== previousTarget) {
+            await this.client.attach(previousTarget, {activate: false});
+          } else if (!previousTarget && this.client.targetId === targetId) {
+            await this.client.detach();
+          }
+        } finally {
+          this.executing = false;
+        }
       }
     }), fromPage);
     const pending = this.invocationQueue.then(run, run);
