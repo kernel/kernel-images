@@ -26,6 +26,9 @@ type cdpRequest struct {
 // flight, so the caller cannot know whether Chromium applied it.
 var ErrOutcomeUnknown = errors.New("CDP command outcome is unknown")
 
+// writeTimeout bounds how long Send waits to write one command frame.
+const writeTimeout = 10 * time.Second
+
 // Message is a response or event received from Chromium.
 type Message struct {
 	ID        int64           `json:"id,omitempty"`
@@ -175,8 +178,15 @@ func (c *Client) Send(ctx context.Context, method string, params any, sessionID 
 	c.pending[id] = responseCh
 	c.pendingMu.Unlock()
 
+	// The connection is shared, and websocket closes it when a write's context
+	// ends mid-frame. Write under the client's own context so that one caller
+	// cancelling its command cannot drop every other command on the connection.
 	c.writeMu.Lock()
-	err = c.conn.Write(ctx, websocket.MessageText, reqBytes)
+	if err = ctx.Err(); err == nil {
+		writeCtx, cancel := context.WithTimeout(c.ctx, writeTimeout)
+		err = c.conn.Write(writeCtx, websocket.MessageText, reqBytes)
+		cancel()
+	}
 	c.writeMu.Unlock()
 	if err != nil {
 		c.pendingMu.Lock()
