@@ -116,7 +116,7 @@ func TestNavigationSettled(t *testing.T) {
 		cs.onPageLoad()
 
 		ec.waitFor(t, "page_navigation_settled", 3*time.Second)
-		ec.assertNone(t, "network_idle", 100*time.Millisecond)
+		ec.assertNone(t, "network_idle", 0, 100*time.Millisecond)
 	})
 
 	t.Run("interrupted_by_new_navigation", func(t *testing.T) {
@@ -128,7 +128,7 @@ func TestNavigationSettled(t *testing.T) {
 
 		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 
-		ec.assertNone(t, "page_navigation_settled", 1500*time.Millisecond)
+		ec.assertNone(t, "page_navigation_settled", 0, 1500*time.Millisecond)
 	})
 }
 
@@ -184,7 +184,7 @@ func TestStopSuppressesTimers(t *testing.T) {
 		cs.onRequest()
 		cs.onLoadingFinished() // arms 500ms network_idle timer
 		cs.stop()
-		ec.assertNone(t, "network_idle", 1200*time.Millisecond)
+		ec.assertNone(t, "network_idle", 0, 1200*time.Millisecond)
 	})
 
 	t.Run("stop_suppresses_layout_settled", func(t *testing.T) {
@@ -192,6 +192,6 @@ func TestStopSuppressesTimers(t *testing.T) {
 		require.NoError(t, cs.resetOnNavigation(0, navContext{}))
 		cs.onPageLoad() // arms 1s layout_settled timer
 		cs.stop()
-		ec.assertNone(t, "page_layout_settled", 1500*time.Millisecond)
+		ec.assertNone(t, "page_layout_settled", 0, 1500*time.Millisecond)
 	})
 }

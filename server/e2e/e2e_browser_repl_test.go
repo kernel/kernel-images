@@ -96,6 +96,7 @@ func runBrowserReplAPI(t *testing.T, image string) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
 
 	client, err := c.APIClient()
 	require.NoError(t, err)

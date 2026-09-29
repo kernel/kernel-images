@@ -33,6 +33,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
 
 	client, err := c.APIClient()
 	require.NoError(t, err)
@@ -285,16 +286,10 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
 
 	client, err := c.APIClient()
 	require.NoError(t, err)
-
-	// The API is ready before Chromium, and the daemon's first CDP connect
-	// fails until the browser is up.
-	require.Eventually(t, func() bool {
-		_, err := fetchBrowserWebSocketURL(ctx, c)
-		return err == nil
-	}, time.Minute, 200*time.Millisecond, "browser not ready")
 
 	setupReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return await page.evaluate(() => document.body.dataset.timeoutMutation = "initial");`,
@@ -380,6 +375,7 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
 
 	client, err := c.APIClient()
 	require.NoError(t, err)

@@ -128,6 +128,21 @@ func (c *TestContainer) WaitReady(ctx context.Context) error {
 	return err
 }
 
+// WaitBrowser waits until Chromium answers /json/version through the DevTools
+// proxy. WaitReady covers only the API server and WaitDevTools only the proxy's
+// listening port, and both are ready before Chromium is.
+func (c *TestContainer) WaitBrowser(ctx context.Context) error {
+	c.tb.Helper()
+	start := time.Now()
+	scheme := "http"
+	if strings.HasPrefix(c.CDPURL(), "wss://") {
+		scheme = "https"
+	}
+	err := pollHTTP200(ctx, scheme+"://"+c.CDPAddr()+"/json/version", 200*time.Millisecond)
+	c.logTiming("wait_browser", start, err)
+	return err
+}
+
 // WaitDevTools waits for the CDP WebSocket endpoint to be ready.
 func (c *TestContainer) WaitDevTools(ctx context.Context) error {
 	c.tb.Helper()
