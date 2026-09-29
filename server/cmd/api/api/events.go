@@ -20,7 +20,9 @@ import (
 // picks up category filtering and the telemetry_session_id metadata stamp.
 // Returns 200 with the assigned envelope when the event is admitted, 204
 // when filtered (no active session or the category is disabled), or 400 on
-// validation failure.
+// validation failure. An admitted captcha_solve_result for a captcha type
+// without an observed widget also publishes the challenge result inferred from
+// it; the response still carries only the caller's envelope.
 func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTelemetryEventRequestObject) (oapi.PublishTelemetryEventResponseObject, error) {
 	body := req.Body
 	if body == nil || body.Type == "" {
@@ -65,6 +67,9 @@ func (s *ApiService) PublishTelemetryEvent(_ context.Context, req oapi.PublishTe
 	env, ok := s.telemetrySession.Publish(ev)
 	if !ok {
 		return oapi.PublishTelemetryEvent204Response{}, nil
+	}
+	if inferred, ok := events.InferCaptchaChallengeResult(ev); ok {
+		s.telemetrySession.Publish(inferred)
 	}
 	return publishTelemetryEventOKResponse{env}, nil
 }

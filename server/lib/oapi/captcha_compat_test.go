@@ -34,10 +34,11 @@ func TestCaptchaGeneratedNamesRemainCompatible(t *testing.T) {
 	started := BrowserCaptchaSolveStartedEvent{
 		Data: BrowserCaptchaSolveStartedEventData{CaptchaType: captchaType},
 	}
+	challengeID := BrowserCaptchaChallengeID("challenge-id")
 	challenge := BrowserCaptchaChallengeResultEvent{
 		Data: BrowserCaptchaChallengeResultEventData{
 			CaptchaType: captchaType,
-			ChallengeId: "challenge-id",
+			ChallengeId: &challengeID,
 			DurationMs:  1,
 			Status:      ChallengeFailure,
 		},

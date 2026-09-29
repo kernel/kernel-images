@@ -157,6 +157,46 @@ func TestPublishDroppedWhenCategoryDisabled(t *testing.T) {
 	assert.IsType(t, oapi.PublishTelemetryEvent204Response{}, resp, "events in disabled categories should return 204")
 }
 
+func TestPublishInfersChallengeResultForUnobservedCaptcha(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := newTestService(t, newMockRecordManager())
+	_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{})
+	require.NoError(t, err)
+
+	publish := func(captchaType string) {
+		t.Helper()
+		resp, err := svc.PublishTelemetryEvent(ctx, oapi.PublishTelemetryEventRequestObject{
+			Body: &oapi.PublishEventRequest{
+				Type:   "captcha_solve_result",
+				Source: &oapi.BrowserEventSource{Kind: oapi.Extension},
+				Data:   map[string]any{"captcha_type": captchaType, "status": "success", "duration_ms": 900, "task_id": "task-" + captchaType},
+			},
+		})
+		require.NoError(t, err)
+		okResp, ok := resp.(publishTelemetryEventOKResponse)
+		require.True(t, ok, "expected 200, got %T", resp)
+		assert.Equal(t, "captcha_solve_result", okResp.env.Event.Type, "the response carries the caller's event")
+	}
+	publish("recaptcha_v2")
+	publish("turnstile")
+
+	readCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	reader := svc.eventStream.NewReader(0)
+	var got []events.Event
+	for len(got) < 3 {
+		result, err := reader.Read(readCtx)
+		require.NoError(t, err)
+		got = append(got, result.Envelope.Event)
+	}
+	assert.Equal(t, []string{"captcha_solve_result", "captcha_solve_result", "captcha_challenge_result"},
+		[]string{got[0].Type, got[1].Type, got[2].Type}, "only the unobserved turnstile task gets an inferred challenge result")
+	assert.Equal(t, oapi.KernelApi, got[2].Source.Kind)
+	assert.Equal(t, svc.telemetrySession.ID(), (*got[2].Source.Metadata)["telemetry_session_id"])
+	assert.JSONEq(t, `{"captcha_type":"turnstile","status":"solved","duration_ms":900,"inferred":true,"task_id":"task-turnstile"}`, string(got[2].Data))
+}
+
 // publishTestEvents publishes n system events through an already-started
 // telemetry session. Seqs run 1..n on a fresh stream.
 func publishTestEvents(ctx context.Context, t *testing.T, svc *ApiService, n int) {

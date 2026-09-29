@@ -6123,7 +6123,7 @@ components:
       type: object
       description: Per-challenge payload for `captcha_challenge_result` events.
       additionalProperties: false
-      required: [captcha_type, status, challenge_id, duration_ms]
+      required: [captcha_type, status, duration_ms]
       properties:
         captcha_type:
           $ref: "#/components/schemas/BrowserCaptchaType"
@@ -6167,6 +6167,23 @@ components:
         website_path:
           type: string
           description: Path of the page the challenge appeared on. Query string excluded.
+        inferred:
+          type: boolean
+          description: >
+            True when this result was derived from a single solver task's
+            `captcha_solve_result` for a captcha type whose widget Kernel does
+            not observe (`turnstile`, `geetest`, `recaptcha_v3`). `status`
+            then mirrors the task outcome, with `success` reported as
+            `solved`, and says nothing the task result did not. No widget was
+            observed, so `challenge_id` is absent. Absent on results observed
+            from the page.
+        task_id:
+          type: string
+          description: >
+            The `task_id` of the solver task an inferred result was derived
+            from; join on it to pair the result with its
+            `captcha_solve_started` and `captcha_solve_result`. Present only
+            when `inferred` is true.
     BrowserCaptchaChallengeResultEvent:
       type: object
       description: >
@@ -6174,7 +6191,10 @@ components:
         per challenge. Wait for this event, rather than a task result, to
         determine the overall challenge outcome. `captcha_solve_started` and
         `captcha_solve_result` describe individual solver tasks and may occur
-        multiple times within one challenge.
+        multiple times within one challenge. For captcha types whose widget
+        Kernel does not observe, the result is inferred from each terminal
+        solver task instead and `inferred` is true. `other` tasks, which
+        include individual image-grid rounds, produce no challenge result.
       required: [ts, type, category, source, data]
       properties:
         ts:
