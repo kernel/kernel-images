@@ -486,13 +486,14 @@ func TestPageEvents(t *testing.T) {
 }
 
 func TestTabOpened(t *testing.T) {
-	srv := newTestServer(t)
-	defer srv.close()
-
-	_, ec, cleanup := startMonitor(t, srv, nil)
-	defer cleanup()
-
+	// Each subtest gets its own monitor: assertNone scans every published
+	// event, so a page_tab_opened left over from a shared collector fails it.
 	t.Run("page_target_emits_tab_opened", func(t *testing.T) {
+		srv := newTestServer(t)
+		defer srv.close()
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		defer cleanup()
+
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Target.attachedToTarget",
 			"params": map[string]any{
@@ -517,6 +518,11 @@ func TestTabOpened(t *testing.T) {
 	})
 
 	t.Run("iframe_target_no_tab_opened", func(t *testing.T) {
+		srv := newTestServer(t)
+		defer srv.close()
+		_, ec, cleanup := startMonitor(t, srv, nil)
+		defer cleanup()
+
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Target.attachedToTarget",
 			"params": map[string]any{

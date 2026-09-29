@@ -289,6 +289,13 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
+	// The API is ready before Chromium, and the daemon's first CDP connect
+	// fails until the browser is up.
+	require.Eventually(t, func() bool {
+		_, err := fetchBrowserWebSocketURL(ctx, c)
+		return err == nil
+	}, time.Minute, 200*time.Millisecond, "browser not ready")
+
 	setupReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return await page.evaluate(() => document.body.dataset.timeoutMutation = "initial");`,
 	}
@@ -296,7 +303,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, setupRsp.StatusCode())
 	require.NotNil(t, setupRsp.JSON200)
-	require.True(t, setupRsp.JSON200.Success)
+	require.True(t, setupRsp.JSON200.Success, "setup execution failed: %s", setupRsp.Body)
 
 	timeoutSec := 1
 	timeoutReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{

@@ -47,6 +47,8 @@ func executeBrowserRepl(t *testing.T, ctx context.Context, client *instanceoapi.
 
 func restartChromium(t *testing.T, ctx context.Context, c *TestContainer, client *instanceoapi.ClientWithResponses) {
 	t.Helper()
+	before, err := fetchBrowserWebSocketURL(ctx, c)
+	require.NoError(t, err, "get browser WebSocket URL before chromium restart")
 	args := []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"}
 	rsp, err := client.ProcessExecWithResponse(ctx, instanceoapi.ProcessExecJSONRequestBody{
 		Command: "supervisorctl",
@@ -58,7 +60,10 @@ func restartChromium(t *testing.T, ctx context.Context, c *TestContainer, client
 	if rsp.JSON200.ExitCode != nil {
 		require.Equal(t, 0, *rsp.JSON200.ExitCode, "supervisorctl restart chromium failed: stderr=%v", rsp.JSON200.StderrB64)
 	}
-	require.NoError(t, c.WaitDevTools(ctx), "DevTools not ready after chromium restart")
+	// The DevTools port belongs to the API's proxy and accepts connections while
+	// Chromium is still restarting; wait until the new browser answers.
+	_, err = waitForChangedBrowserWebSocketURL(ctx, c, before, 30*time.Second)
+	require.NoError(t, err, "new browser not ready after chromium restart")
 }
 
 func TestBrowserReplAPI(t *testing.T) {
