@@ -4,13 +4,15 @@ import { BINDING_NAME, CustomWebMCPPageRuntime } from './custom-webmcp-page-runt
 import type { BrowserReplCdpClient, CdpEvent } from './browser-cdp-client.ts';
 import type { CustomToolDefinition } from './custom-webmcp-definitions.ts';
 
-function fixture() {
+function fixture({closedPrevious = false} = {}) {
   const attached: string[] = [];
+  const errors: string[] = [];
   const activated: boolean[] = [];
   const responses: string[] = [];
   const client = {
     targetId: 'unrelated-tab',
     async attach(targetId: string, options?: {activate?: boolean}) {
+      if (closedPrevious && targetId === 'unrelated-tab') throw new Error('previous tab closed');
       attached.push(targetId);
       activated.push(options?.activate ?? true);
       this.targetId = targetId;
@@ -20,6 +22,7 @@ function fixture() {
       responses.push(params.expression);
       return {};
     },
+    close() {},
   } as unknown as BrowserReplCdpClient;
   const definition = {
     inputValidator: () => ({valid: true, data: {}}),
@@ -31,8 +34,9 @@ function fixture() {
     (sessionId) => sessionId === 'registered-session'
       ? {definition, matches: [], targetId: 'registered-tab'}
       : undefined,
+    (error) => errors.push(error instanceof Error ? error.message : String(error)),
   );
-  return {attached, activated, responses, client, definition, runtime};
+  return {attached, activated, errors, responses, client, definition, runtime};
 }
 
 test('API invocation attaches the registering tab before executing the body', async () => {
@@ -41,6 +45,13 @@ test('API invocation attaches the registering tab before executing the body', as
   assert.deepEqual(attached, ['registered-tab', 'unrelated-tab']);
   assert.deepEqual(activated, [false, false]);
   assert.equal(client.targetId, 'unrelated-tab');
+});
+
+test('a closed previous tab does not hide a successful tool result', async () => {
+  const {client, definition, errors, runtime} = fixture({closedPrevious: true});
+  assert.deepEqual(await runtime.invokeCDP(definition, [], 'registered-tab', {}), {targetId: 'registered-tab'});
+  assert.equal(client.targetId, null);
+  assert.deepEqual(errors, ['previous tab closed']);
 });
 
 test('invocation without a previous attachment leaves the client detached', async () => {

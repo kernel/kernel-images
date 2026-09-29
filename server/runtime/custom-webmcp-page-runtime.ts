@@ -32,16 +32,19 @@ export class CustomWebMCPPageRuntime {
   private executing = false;
   private invocationQueue: Promise<unknown> = Promise.resolve();
   private readonly invocationContext = new AsyncLocalStorage<boolean>();
+  private readonly reportError: (error: unknown) => void;
 
   constructor(
     client: BrowserReplCdpClient,
     runInvocation: <T>(signal: AbortSignal, callback: () => Promise<T>, fromPage: boolean) => Promise<T>,
     resolve: (sessionId: string, id: string, revision: number) =>
       {definition: CustomToolDefinition; matches: CustomToolFrameMatch[]; targetId: string} | undefined,
+    reportError: (error: unknown) => void = () => {},
   ) {
     this.client = client;
     this.runInvocation = runInvocation;
     this.resolve = resolve;
+    this.reportError = reportError;
   }
 
   abortAll(): void {
@@ -81,6 +84,14 @@ export class CustomWebMCPPageRuntime {
             await this.client.attach(previousTarget, {activate: false});
           } else if (!previousTarget && this.client.targetId === targetId) {
             await this.client.detach();
+          }
+        } catch (error) {
+          this.reportError(error);
+          try {
+            await this.client.detach();
+          } catch (detachError) {
+            this.reportError(detachError);
+            this.client.close();
           }
         } finally {
           this.executing = false;

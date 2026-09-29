@@ -85,7 +85,7 @@ export class CustomWebMCPRegistry {
       const definition = this.definitions.get(id);
       if (!targetId || !page || !definition || definition.revision !== revision) return undefined;
       return {definition, matches: page.matches.get(id) ?? [], targetId};
-    });
+    }, (error) => this.reportError(error));
     this.unsubscribeEvent = client.subscribeEvents((event) => this.handleEvent(event));
     this.unsubscribeDisconnect = client.subscribeDisconnect(() => this.handleDisconnect());
     this.scheduleReconcile();
