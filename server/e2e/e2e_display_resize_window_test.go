@@ -394,6 +394,9 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			defer c.Stop(ctx)
 			require.NoError(t, c.WaitReady(ctx), "api not ready")
 			require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+			if env["ENABLE_WEBRTC"] == "true" {
+				waitForNeko(t, ctx, c)
+			}
 
 			// Navigate to about:blank so playwright has a page to evaluate
 			// against — otherwise the daemon may not have a target wired up.
@@ -503,6 +506,17 @@ func patchDisplayExpectingOK(t *testing.T, ctx context.Context, c *TestContainer
 	require.Equal(t, height, *rsp.JSON200.Height)
 }
 
+// waitForNeko waits until neko's API accepts connections. With ENABLE_WEBRTC,
+// PATCH /display resizes through neko, which starts after the API server and
+// Chromium; until then the resize fails with "failed to call login API".
+func waitForNeko(t *testing.T, ctx context.Context, c *TestContainer) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		code, _, err := c.Exec(ctx, []string{"curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8080/"})
+		return err == nil && code == 0
+	}, time.Minute, 500*time.Millisecond, "neko not ready")
+}
+
 // TestDisplayResizeOddWidthHonoursLibxcvtRounding covers the path where a
 // caller requests dimensions libxcvt cannot honour exactly. libxcvt rounds
 // widths to the CVT 8-pixel grid and then applies a hard-coded FWXGA bump
@@ -543,6 +557,7 @@ func TestDisplayResizeOddWidthHonoursLibxcvtRounding(t *testing.T) {
 	defer c.Stop(ctx)
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
 	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+	waitForNeko(t, ctx, c)
 
 	navigateBlank(t, ctx, c)
 

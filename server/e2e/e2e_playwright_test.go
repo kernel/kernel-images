@@ -33,6 +33,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
 
 	client, err := c.APIClient()
 	require.NoError(t, err)
@@ -291,6 +292,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
 
 	client, err := c.APIClient()
 	require.NoError(t, err)
@@ -302,7 +304,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, setupRsp.StatusCode())
 	require.NotNil(t, setupRsp.JSON200)
-	require.True(t, setupRsp.JSON200.Success)
+	require.True(t, setupRsp.JSON200.Success, "setup execution failed: %s", setupRsp.Body)
 
 	timeoutSec := 1
 	timeoutReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
@@ -379,6 +381,7 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 	defer c.Stop(ctx)
 
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
 
 	client, err := c.APIClient()
 	require.NoError(t, err)

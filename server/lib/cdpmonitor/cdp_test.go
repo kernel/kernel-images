@@ -239,24 +239,30 @@ func (c *eventCollector) waitForNew(t *testing.T, eventType string, since int, t
 	}
 }
 
-// assertNone verifies that no event of the given type arrives within d.
-func (c *eventCollector) assertNone(t *testing.T, eventType string, d time.Duration) {
+// assertNone verifies that no event of the given type is published at or after
+// the given checkpoint index within d. Take the checkpoint before sending the
+// messages that could trigger the event, as with waitForNew: an event published
+// before assertNone runs must still count, and one from an earlier step must not.
+func (c *eventCollector) assertNone(t *testing.T, eventType string, since int, d time.Duration) {
 	t.Helper()
 	deadline := time.After(d)
-	for {
+	for done := false; ; {
+		c.mu.Lock()
+		for i := since; i < len(c.events); i++ {
+			if c.events[i].Type == eventType {
+				c.mu.Unlock()
+				t.Fatalf("unexpected event %q published", eventType)
+				return
+			}
+		}
+		c.mu.Unlock()
+		if done {
+			return
+		}
 		select {
 		case <-c.notify:
-			c.mu.Lock()
-			for _, ev := range c.events {
-				if ev.Type == eventType {
-					c.mu.Unlock()
-					t.Fatalf("unexpected event %q published", eventType)
-					return
-				}
-			}
-			c.mu.Unlock()
 		case <-deadline:
-			return
+			done = true
 		}
 	}
 }

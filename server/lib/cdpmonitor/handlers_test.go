@@ -517,6 +517,7 @@ func TestTabOpened(t *testing.T) {
 	})
 
 	t.Run("iframe_target_no_tab_opened", func(t *testing.T) {
+		cp := ec.checkpoint()
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Target.attachedToTarget",
 			"params": map[string]any{
@@ -528,7 +529,7 @@ func TestTabOpened(t *testing.T) {
 				"waitingForDebugger": false,
 			},
 		})
-		ec.assertNone(t, "page_tab_opened", 200*time.Millisecond)
+		ec.assertNone(t, "page_tab_opened", cp, 200*time.Millisecond)
 	})
 }
 
@@ -670,7 +671,7 @@ func TestBindingAndTimeline(t *testing.T) {
 				"payload": `{"type":"interaction_click"}`,
 			},
 		})
-		ec.assertNone(t, "interaction_click", 100*time.Millisecond)
+		ec.assertNone(t, "interaction_click", 0, 100*time.Millisecond)
 	})
 
 	t.Run("rate_limited_per_session", func(t *testing.T) {
@@ -887,7 +888,7 @@ func TestPerTargetStateMachines(t *testing.T) {
 			"params": map[string]any{"sessionId": "sess-c"},
 		})
 
-		ec.assertNone(t, "network_idle", 1200*time.Millisecond)
+		ec.assertNone(t, "network_idle", 0, 1200*time.Millisecond)
 	})
 }
 

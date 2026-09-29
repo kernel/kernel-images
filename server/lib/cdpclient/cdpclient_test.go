@@ -665,3 +665,43 @@ func TestCommandOnlyClientDiscardsEvents(t *testing.T) {
 	_, err = client.Send(ctx, "Browser.getVersion", nil, "")
 	require.NoError(t, err)
 }
+
+func TestClientCancelledCommandKeepsConnectionOpen(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			_, payload, err := conn.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var request cdpRequest
+			if json.Unmarshal(payload, &request) != nil {
+				return
+			}
+			response, _ := json.Marshal(map[string]any{"id": request.ID, "result": map[string]any{}})
+			if conn.Write(r.Context(), websocket.MessageText, response) != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	client, err := Dial(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, err)
+	defer client.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.Send(ctx, "Test.cancelled", nil, "")
+	require.ErrorIs(t, err, context.Canceled)
+
+	// A connection closed by the cancelled write would fail this command.
+	time.Sleep(50 * time.Millisecond)
+	require.False(t, client.IsClosed(), "cancelling one command closed the shared connection")
+	_, err = client.Send(context.Background(), "Test.next", nil, "")
+	require.NoError(t, err)
+}
