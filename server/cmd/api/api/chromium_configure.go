@@ -36,7 +36,8 @@ type chromiumConfigureState struct {
 	profileTemp string // temp archive path
 	hasProfile  bool
 
-	startURLRaw *string
+	startURLRaw     *string
+	browserLocation *browserLocationBundle
 
 	extItems []extensionZipItem // zipTemp paths; merged with chromiumCfgParseExtensions
 
@@ -169,6 +170,9 @@ func (s *ApiService) chromiumConfigureLive(ctx context.Context, st *chromiumConf
 		}
 	}
 
+	if response := s.applyBrowserLocationConfig(ctx, st); response != nil {
+		return response
+	}
 	chromiumConfigureNavigate(ctx, s, spec)
 	return nil
 }
@@ -329,6 +333,9 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 			return resp
 		}
 	}
+	if response := s.applyBrowserLocationConfig(ctx, st); response != nil {
+		return response
+	}
 	chromiumConfigureNavigate(ctx, s, spec)
 	if len(stoppedRecordings) > 0 {
 		go s.startNewRecordingSegments(context.WithoutCancel(ctx), stoppedRecordings)
@@ -342,6 +349,27 @@ type startURLParsed struct {
 	url      string
 }
 
+func (s *ApiService) applyBrowserLocationConfig(ctx context.Context, st *chromiumConfigureState) oapi.ChromiumConfigureResponseObject {
+	if st.browserLocation == nil {
+		return nil
+	}
+	validate := s.browserLocationValidate
+	if validate == nil {
+		validate = s.validateBrowserLocationSupport
+	}
+	if err := validate(ctx, *st.browserLocation); err != nil {
+		return oapi.ChromiumConfigure400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}
+	}
+	err := s.acceptBrowserLocation(*st.browserLocation)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, errStaleBrowserLocation) || errors.Is(err, errConflictBrowserLocation) || errors.Is(err, errBrowserLocationEpoch) {
+		return oapi.ChromiumConfigure409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: err.Error()}}
+	}
+	return cfg500ConfigureStep(chromiumConfigureStepLocation, err.Error())
+}
+
 type chromiumConfigureStep string
 
 const (
@@ -352,6 +380,7 @@ const (
 	chromiumConfigureStepDisplay    chromiumConfigureStep = "display"
 	chromiumConfigureStepFlags      chromiumConfigureStep = "chromium_flags"
 	chromiumConfigureStepProfile    chromiumConfigureStep = "profile"
+	chromiumConfigureStepLocation   chromiumConfigureStep = "browser_location"
 )
 
 func chromiumStartURLSpec(raw *string) (startURLParsed, string) {
@@ -510,6 +539,9 @@ func cfgActionables(st *chromiumConfigureState) int {
 	if st.displayJSON != nil && strings.TrimSpace(*st.displayJSON) != "" {
 		n++
 	}
+	if st.browserLocation != nil {
+		n++
+	}
 	return n
 }
 
@@ -534,7 +566,7 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 		gotZip bool
 	}
 	var cur *pend
-	var gotDisplay, gotChromiumFlags, gotChromePolicies, gotStripComponents, gotProfileArchive, gotStartURL bool
+	var gotDisplay, gotChromiumFlags, gotChromePolicies, gotStripComponents, gotProfileArchive, gotStartURL, gotBrowserLocation bool
 
 	for {
 		part, err := mr.NextPart()
@@ -611,6 +643,20 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 			}
 			st.profileTemp = tmp.Name()
 			st.hasProfile = true
+		case "browser_location":
+			if gotBrowserLocation {
+				return cfgParseBadRequest("duplicate browser_location field")
+			}
+			gotBrowserLocation = true
+			b, err := io.ReadAll(part)
+			if err != nil {
+				return cfgParseInternal("read browser_location field")
+			}
+			bundle, err := validateBrowserLocationBundle(string(b))
+			if err != nil {
+				return cfgParseBadRequest(err.Error())
+			}
+			st.browserLocation = &bundle
 		case "start_url":
 			if gotStartURL {
 				return cfgParseBadRequest("duplicate start_url field")

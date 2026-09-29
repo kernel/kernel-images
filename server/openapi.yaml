@@ -1325,6 +1325,11 @@ paths:
                     URL text to navigate after configure. Bare hosts are normalized to https://,
                     length is capped at 2048 bytes, and Chrome decides which schemes are navigable.
                   type: string
+                browser_location:
+                  description: >-
+                    UTF-8 JSON browser location bundle with epoch, generation, timezone, locale,
+                    and languages. Accepted asynchronously without restarting Chromium.
+                  type: string
                 extensions:
                   type: array
                   description: Extension zips paired with consecutive extensions.name fields (same as upload-extensions-and-restart).

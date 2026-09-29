@@ -27,6 +27,34 @@ import (
 	"github.com/nrednav/cuid2"
 )
 
+var internalCDPMethods = map[string]struct{}{
+	"Browser.validateKernelBrowserLocation": {},
+	"Browser.setKernelBrowserLocation":      {},
+	"Browser.getKernelBrowserLocation":      {},
+}
+
+func filterInternalCDPMethod(message []byte) []byte {
+	var command struct {
+		Method string `json:"method"`
+	}
+	if json.Unmarshal(message, &command) != nil {
+		return message
+	}
+	if _, blocked := internalCDPMethods[command.Method]; !blocked {
+		return message
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(message, &fields) != nil {
+		return message
+	}
+	fields["method"] = json.RawMessage(`"Kernel.internalMethodUnavailable"`)
+	filtered, err := json.Marshal(fields)
+	if err != nil {
+		return message
+	}
+	return filtered
+}
+
 var devtoolsListeningRegexp = regexp.MustCompile(`DevTools listening on (ws://\S+)`)
 
 // UpstreamManager tails the Chromium supervisord log and extracts the current DevTools
@@ -325,6 +353,9 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 				logCDPMessage(logger, direction, mt, msg)
 			}
 			msgCount.Add(1)
+			if direction == "->" && mt == websocket.MessageText {
+				return filterInternalCDPMethod(msg)
+			}
 			return msg
 		}
 
