@@ -207,6 +207,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
 # install Node.js 22.x by copying from the node:22-bullseye-slim stage
 COPY --from=node-22 /usr/local/bin/node /usr/local/bin/node
 COPY --from=node-22 /usr/local/lib/node_modules /usr/local/lib/node_modules
+# Use the system CA store so Node trusts the same certificates as curl.
+ENV NODE_OPTIONS=--use-openssl-ca
 # Recreate symlinks for npm/npx/corepack to point into node_modules
 RUN set -eux; \
     ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm; \
