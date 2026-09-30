@@ -230,6 +230,7 @@ RUN apt-get update && \
     fonts-hosny-amiri \
     fonts-indic \
     fonts-kacst \
+    fonts-kacst-one \
     fonts-khmeros-core \
     fonts-lao \
     fonts-lklug-sinhala \
@@ -237,6 +238,9 @@ RUN apt-get update && \
     fonts-sil-padauk \
     fonts-thai-tlwg \
     fonts-tibetan-machine \
+    fonts-sarai \
+    fonts-urw-base35 \
+    fonts-wqy-zenhei \
     fonts-droid-fallback && \
     fc-cache -f && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
