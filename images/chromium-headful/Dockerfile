@@ -224,6 +224,8 @@ RUN apt-get update && \
     fonts-freefont-ttf \
     fonts-ubuntu \
     fonts-opensymbol \
+    fonts-roboto \
+    fonts-croscore \
     fonts-smc-chilanka \
     fonts-hosny-amiri \
     fonts-indic \
