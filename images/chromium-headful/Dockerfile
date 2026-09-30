@@ -224,8 +224,6 @@ RUN apt-get update && \
     fonts-freefont-ttf \
     fonts-ubuntu \
     fonts-opensymbol \
-    fonts-roboto \
-    fonts-croscore \
     fonts-smc-chilanka \
     fonts-hosny-amiri \
     fonts-indic \
@@ -240,7 +238,10 @@ RUN apt-get update && \
     fonts-tibetan-machine \
     fonts-sarai \
     fonts-urw-base35 \
-    fonts-wqy-zenhei \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
+    fonts-lato \
+    fonts-font-awesome \
     fonts-droid-fallback && \
     fc-cache -f && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
