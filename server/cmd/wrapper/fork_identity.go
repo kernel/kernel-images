@@ -93,5 +93,5 @@ func applyForkIdentityPayload(payload forkidentity.Payload) error {
 			return err
 		}
 	}
-	return nil
+	return runStream("chromium-restart", "supervisorctl", "-c", supervisorConf, "restart", "chromium")
 }
