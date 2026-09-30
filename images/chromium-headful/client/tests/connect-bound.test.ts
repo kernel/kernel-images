@@ -224,7 +224,7 @@ describe('live view connect failures', () => {
     expect(posted[0].reason).toBe('media')
   })
 
-  test('ICE reaching checking clears the stage bound', async () => {
+  test('ICE reaching checking leaves the media bound armed and reports it if it stalls', async () => {
     const client = new TestClient()
     client.connect('ws://host/ws', 'pw', 'kernel')
     client.openSocket()
@@ -232,6 +232,22 @@ describe('live view connect failures', () => {
 
     lastPeer!.iceConnectionState = 'checking'
     client['_peer']!.oniceconnectionstatechange()
+
+    expect(client['_timeout']).toBeDefined()
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.media)
+
+    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_TIMEOUT'])
+    expect(posted[0].reason).toBe('media')
+  })
+
+  test('ICE reaching connected clears the media bound', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client.provide()
+
+    client.connectPeer()
 
     expect(client['_timeout']).toBeUndefined()
 

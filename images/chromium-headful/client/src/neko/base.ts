@@ -28,8 +28,10 @@ export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
   // p99 under 200ms, including a cold session.
   signaling: 3000,
   // Local: ICE reaches `checking` as soon as the local description is set, since
-  // the remote candidates arrive in the offer. Measured 1-16ms direct, ~90ms
-  // relay-only, so this bound is ~20x the worst case rather than a guess.
+  // the remote candidates arrive in the offer — measured 1-16ms direct, ~90ms
+  // relay-only. The bound covers through `connected` rather than stopping at
+  // `checking`, so it also catches a peer that reaches `checking` and then
+  // stalls; that stretch is tens of milliseconds, inside the same budget.
   media: 2000,
 }
 
@@ -284,12 +286,10 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this.emit('debug', `peer ice connection state changed: ${this._peer!.iceConnectionState}`)
 
       switch (this._state) {
-        case 'checking':
-          if (this._timeout) {
-            clearTimeout(this._timeout)
-            this._timeout = undefined
-          }
-          break
+        // `checking` deliberately leaves the media bound armed. It only means the
+        // peer started connecting, and onConnected — and KERNEL_CONNECTED — wait
+        // for `connected`, so clearing here left a connect that stalled in
+        // between with no timer watching and nothing reported.
         case 'connected':
           this.onConnected()
           break
@@ -508,11 +508,11 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this._timeout = window.setTimeout(this.onTimeout.bind(this), CONNECT_STAGE_TIMEOUT_MS[stage])
   }
 
-  // The media bound exists to catch a connect whose peer never reaches ICE
-  // `checking`, and it is cleared when ICE does. Once the peer is connecting or
-  // already connected there is no first connect left to bound, and a later
-  // signal/offer would otherwise start a timer no future state change can clear,
-  // tearing down a live session.
+  // The media bound covers the connect up to ICE `connected`, and onConnected
+  // clears it. A later signal/offer must not start a fresh bound: once the peer
+  // is connected there is no first connect left to bound, and a timer armed then
+  // is one no future state change can clear, which would tear down a live
+  // session.
   private armMediaStage() {
     if (this._gaveUp || this._everConnected || this.peerConnected) {
       return
