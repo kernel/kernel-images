@@ -47,10 +47,12 @@ func TestNewClientAutoAttachAfterMonitoredSharedWorkerEnds(t *testing.T) {
 		return cdp.evalBool(ctx, sessionID, fmt.Sprintf(`location.href === %q && document.readyState === 'complete' && window.__kernelEventInjected === true`, stub.URL+"/"))
 	}, 5*time.Second, 50*time.Millisecond)
 
-	sharedWorker := func() (found, attached bool) {
+	// listed is false when the target list could not be read, so callers never
+	// mistake a failed listing for an absent worker.
+	sharedWorker := func() (listed, found, attached bool) {
 		raw, err := cdp.roundtrip(ctx, "", "Target.getTargets", nil)
 		if err != nil {
-			return false, false
+			return false, false, false
 		}
 		var result struct {
 			Result struct {
@@ -60,27 +62,27 @@ func TestNewClientAutoAttachAfterMonitoredSharedWorkerEnds(t *testing.T) {
 				} `json:"targetInfos"`
 			} `json:"result"`
 		}
-		if json.Unmarshal(raw, &result) != nil {
-			return false, false
+		if json.Unmarshal(raw, &result) != nil || result.Result.Targets == nil {
+			return false, false, false
 		}
 		for _, target := range result.Result.Targets {
 			if target.Type == "shared_worker" {
-				return true, target.Attached
+				return true, true, target.Attached
 			}
 		}
-		return false, false
+		return true, false, false
 	}
 	evaluateNetworkScript(t, ctx, cdp, sessionID, `(() => { window.sharedWorker = new SharedWorker('/shared.js'); sharedWorker.port.start(); return true; })()`)
 	// The test client never attaches to the worker, so only the monitor can.
 	require.Eventually(t, func() bool {
-		_, attached := sharedWorker()
+		_, _, attached := sharedWorker()
 		return attached
 	}, 5*time.Second, 50*time.Millisecond, "monitor did not attach to the shared worker")
 
 	evaluateNetworkScript(t, ctx, cdp, sessionID, `(() => { sharedWorker.port.postMessage('close'); return true; })()`)
 	require.Eventually(t, func() bool {
-		found, _ := sharedWorker()
-		return !found
+		listed, found, _ := sharedWorker()
+		return listed && !found
 	}, 5*time.Second, 50*time.Millisecond, "shared worker did not end")
 
 	// Playwright's connectOverCDP sends this first.

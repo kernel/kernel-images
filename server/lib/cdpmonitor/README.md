@@ -145,8 +145,10 @@ CDP session, or tracker state is shared with WebMCP. Telemetry adds worker and
 background-page targets with `WithAdditionalTargets` and uses `WithoutLocations`: it receives attachment events without waiting for window
 lookup or frame-tree initialization, and enables its own capture domains.
 
-The tracker explicitly discovers and attaches pages, OOPIFs, shared workers, and
-service workers (and extension background pages). Dedicated workers require parent-session `Target.setAutoAttach`;
+The tracker explicitly discovers and attaches pages, OOPIFs, service workers, and
+extension background pages. Shared workers attach through a browser-level
+`Target.setAutoAttach` filtered to `shared_worker`, so Chrome detaches their sessions
+when the worker ends. Dedicated workers require parent-session `Target.setAutoAttach`;
 that subscription is also installed on worker sessions to discover nested workers.
 Only `worker` targets match this auto-attach filter, avoiding duplicate attachment
 of explicitly discovered OOPIFs. WebMCP's default tracker still tracks page/frame
