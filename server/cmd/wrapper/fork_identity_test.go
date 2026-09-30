@@ -89,6 +89,12 @@ func TestForkIdentityAppliedMarkerWrittenAfterReadiness(t *testing.T) {
 }
 
 func TestApplyForkIdentityPayloadSetsAndClearsEnv(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "supervisor-args")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("SUPERVISOR_ARGS_FILE", argsFile)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "supervisorctl"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SUPERVISOR_ARGS_FILE\"\n"), 0o755))
+
 	t.Setenv("METRO_NAME", "old-metro")
 	t.Setenv("S2_STREAM", "old-stream")
 	t.Setenv("FUTURE_IDENTITY_FIELD_NAME", "old-future")
@@ -115,6 +121,19 @@ func TestApplyForkIdentityPayloadSetsAndClearsEnv(t *testing.T) {
 	assert.Equal(t, "future-value", os.Getenv("FUTURE_IDENTITY_FIELD_NAME"))
 	assert.Empty(t, os.Getenv("EMPTY_FUTURE_IDENTITY_FIELD"))
 	assert.Empty(t, os.Getenv("S2_STREAM"))
+
+	args, err := os.ReadFile(argsFile)
+	require.NoError(t, err)
+	assert.Equal(t, "-c\n"+supervisorConf+"\nrestart\nchromium\n", string(args))
+}
+
+func TestApplyForkIdentityPayloadReturnsRestartError(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "supervisorctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755))
+
+	err := applyForkIdentityPayload(forkidentity.Payload{"instance_name": "browser-1"})
+	require.EqualError(t, err, "exit status 1")
 }
 
 func TestForkIdentityURLPrecedence(t *testing.T) {
