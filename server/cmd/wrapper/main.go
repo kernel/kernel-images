@@ -225,7 +225,7 @@ func main() {
 
 	// Identity phase: render envoy bootstrap with INST_NAME/JWT/etc. In fork
 	// identity wait mode, kernel-images-api was started early and is not
-	// restarted here, so public CDP stays connected after identity apply.
+	// restarted here.
 	identityStart := time.Now()
 	if isExecutable("/usr/local/bin/init-envoy.sh") {
 		runStreamFatal("envoy-init", "/usr/local/bin/init-envoy.sh")
