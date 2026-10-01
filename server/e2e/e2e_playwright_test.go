@@ -275,6 +275,9 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Run("WebMCPSlowPage", func(t *testing.T) {
 		testCustomWebMCPSlowPage(t, ctx, client)
 	})
+	t.Run("WebMCPScratchDocument", func(t *testing.T) {
+		testWebMCPScratchDocument(t, ctx, c, client)
+	})
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {

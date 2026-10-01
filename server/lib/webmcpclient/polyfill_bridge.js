@@ -52,7 +52,7 @@ function () {
       return null;
     }
     if (!isObject(context) && !isFunction(context)) return null;
-    if (isNative(context) || context === nativeContext()) return null;
+    if (isNative(context)) return null;
     return context;
   }
 
@@ -291,8 +291,12 @@ function () {
         bridged.clear();
         bridgedDocument = document;
       }
-      const native = nativeContext();
+      // Reading document.modelContext binds the frame's WebMCP host, and
+      // Chromium kills a renderer whose frame already bound it from another
+      // document (for example, a scratch document). Only read it
+      // when there is a polyfill to bridge.
       const context = polyfill();
+      const native = context ? nativeContext() : null;
       const desired = native && context ? await desiredTools(context) : new Map();
       if (desired.size > 0) {
         for (const name of await nativeNames(native)) desired.delete(name);

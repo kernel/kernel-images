@@ -26,3 +26,18 @@ registry of its own. Run with:
 ```bash
 GOFLAGS='-run=TestPlaywrightExecuteAPI/WebMCPPolyfill -count=1' make test-e2e
 ```
+
+# Scratch-document fixtures
+
+`scratch-document.html` reads `modelContext` on a `document.implementation.createHTMLDocument()`
+document at load, the way some sandboxing libraries copy a scratch document's properties.
+`scratch-document-frame.html` does the same read inside a `srcdoc` child frame. Chromium allows
+one WebMCP host bind per frame, so a later `document.modelContext` read on the frame's real
+document terminates the renderer (`bad IPC message, reason 346`). The test lists tools once on
+each page and asserts the Chromium log has no new kill and the page kept its state. It runs as
+the last `TestPlaywrightExecuteAPI` subtest because a killed foreground tab also stalls
+`/playwright/execute`.
+
+```bash
+GOFLAGS='-run=TestPlaywrightExecuteAPI/WebMCPScratchDocument -count=1' make test-e2e
+```
