@@ -430,6 +430,7 @@ RUN npm ci --ignore-scripts --no-audit --no-fund --omit=dev --prefix /tmp/browse
       --format=cjs \
       --supported:dynamic-import=true \
       --external:sharp \
+      --external:@earendil-works/pi-ai \
       --outfile=/usr/local/lib/browser-repl/browser-repl.js \
     && rm -rf /tmp/browser-repl
 

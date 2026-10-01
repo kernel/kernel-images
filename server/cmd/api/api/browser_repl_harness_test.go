@@ -78,6 +78,7 @@ func ensureBrowserReplBundle(t *testing.T) string {
 			"--format=cjs",
 			"--supported:dynamic-import=true",
 			"--external:sharp",
+			"--external:@earendil-works/pi-ai",
 			"--outfile="+browserReplBundlePath,
 		)
 		cmd.Dir = stagingDir

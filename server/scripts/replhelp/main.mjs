@@ -24,6 +24,7 @@ function markdownReference() {
     repl: 'REPL methods',
     browser: 'Browser-control methods',
     webmcp: 'WebMCP methods',
+    models: 'Model methods',
   };
   return Object.keys(titles)
     .map((group) => {
@@ -45,6 +46,7 @@ function openApiMethodList() {
     `        - REPL: ${names('repl', 'repl.')}`,
     `        - Browser control: ${names('browser', '')}`,
     `        - WebMCP: ${names('webmcp', 'webmcp.')}`,
+    `        - Models: ${names('models', 'models.')}`,
   ].join('\n');
 }
 

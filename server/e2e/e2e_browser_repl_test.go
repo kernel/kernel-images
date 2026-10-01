@@ -118,6 +118,34 @@ func runBrowserReplAPI(t *testing.T, image string) {
 		require.Equal(t, float64(42), resultBytes)
 	})
 
+	t.Run("env reaches models", func(t *testing.T) {
+		set, err := client.SetBrowserReplEnvWithResponse(ctx, instanceoapi.SetBrowserReplEnvJSONRequestBody{
+			Env: map[string]string{"OPENROUTER_API_KEY": "sk-or-e2e"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, set.StatusCode(), "body=%s", string(set.Body))
+		require.Equal(t, []string{"OPENROUTER_API_KEY"}, set.JSON200.Names)
+		require.Nil(t, set.JSON200.ReplTerminated)
+
+		r := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+			Code: `
+				const envModelsAvailable = await models.getAvailableOfType("classifier", "openrouter");
+				repl.write(JSON.stringify({
+					counter,
+					key: process.env.OPENROUTER_API_KEY,
+					jev: envModelsAvailable.some((model) => model.id === "typesafe/jev-1.13"),
+				}));
+			`,
+		})
+		require.True(t, r.Success, "error: %s", replError(r))
+		require.Equal(t, map[string]any{"counter": float64(40), "key": "sk-or-e2e", "jev": true}, replJSONWrite(t, r))
+
+		deleted, err := client.DeleteBrowserReplEnvWithResponse(ctx)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, deleted.StatusCode(), "body=%s", string(deleted.Body))
+		require.Empty(t, deleted.JSON200.Names)
+	})
+
 	t.Run("patchright and playwright core imports persist", func(t *testing.T) {
 		r1 := executeBrowserRepl(t, ctx, client, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 			Code: `

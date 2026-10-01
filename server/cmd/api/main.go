@@ -177,17 +177,6 @@ func main() {
 		}, slogger)
 	}
 
-	// A fork boots carrying the stream of the instance it came from, so the
-	// hook records the stream of the identity the guest has taken for the S2
-	// writer to bind when the telemetry handler opens it, which the platform
-	// does after the handoff. OTLP needs no hook here: its credential resolves
-	// per request and its resource attributes at exporter build, and export is
-	// turned on per session, likewise after the handoff. An export started
-	// before then keeps the source's resource attributes until it is restarted.
-	onForkIdentityApplied := func(payload forkidentity.Payload) {
-		s2Streams.RecordAppliedPayload(payload)
-	}
-
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
@@ -210,10 +199,24 @@ func main() {
 		os.Exit(1)
 	}
 
+	// A fork boots carrying the stream of the instance it came from, so the
+	// hook records the stream of the identity the guest has taken for the S2
+	// writer to bind when the telemetry handler opens it, which the platform
+	// does after the handoff. OTLP needs no hook here: its credential resolves
+	// per request and its resource attributes at exporter build, and export is
+	// turned on per session, likewise after the handoff. An export started
+	// before then keeps the source's resource attributes until it is restarted.
+	// Browser REPL variables set with PUT /repl/env belong to the source
+	// instance, so a fork drops them.
+	onForkIdentityApplied := func(payload forkidentity.Payload) {
+		s2Streams.RecordAppliedPayload(payload)
+		apiService.ClearBrowserReplEnv()
+	}
+
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
 	r.Use(api.WebMCPRequestSizeMiddleware)
-	// Enforce additionalProperties: false on POST /repl.
+	// Enforce additionalProperties: false on POST /repl and PUT /repl/env.
 	r.Use(api.StrictBrowserReplBodyMiddleware)
 	strictHandler := oapi.NewStrictHandlerWithOptions(apiService, []oapi.StrictMiddlewareFunc{
 		api.TelemetryStrictMiddleware(),

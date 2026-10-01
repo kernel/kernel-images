@@ -81,6 +81,9 @@ type browserReplManager struct {
 	child             *browserReplChild // guarded by admission
 	customToolsMu     sync.RWMutex
 	customToolsReplID string
+	envMu             sync.Mutex
+	env               map[string]string // set by PUT /repl/env; added to every child
+	clearedEnv        map[string]string // dropped by ClearEnv; still in the running child
 }
 
 func newBrowserReplManager() *browserReplManager {
@@ -218,6 +221,8 @@ func (m *browserReplManager) Shutdown(ctx context.Context) error {
 // fresh CUID2. The caller must hold admission.
 func (m *browserReplManager) ensureLocked(ctx context.Context) error {
 	log := logger.FromContext(ctx)
+	// Drop variables ClearEnv removed before any code runs.
+	m.flushClearedEnvLocked(context.WithoutCancel(ctx))
 
 	if child := m.child; child != nil {
 		select {
@@ -278,7 +283,8 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 	cmd := exec.Command("node", "--experimental-vm-modules", "--max-old-space-size="+browserReplHeapMB(), browserReplScriptPath())
 	cmd.Stdout = os.Stderr // protocol lives on the socket; child diagnostics only
 	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(os.Environ(), m.envList()...)
+	cmd.Env = append(cmd.Env,
 		"BROWSER_REPL_SOCKET="+socketPath,
 		"BROWSER_REPL_ID="+replID,
 	)
@@ -594,6 +600,9 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 		case r.Method == http.MethodPost && r.URL.Path == "/repl":
 			probe = &oapi.BrowserReplRequest{}
 			maxBytes = maxBrowserReplBodyBytes
+		case r.Method == http.MethodPut && r.URL.Path == "/repl/env":
+			probe = &oapi.BrowserReplEnvRequest{}
+			maxBytes = maxBrowserReplEnvBodyBytes
 		case r.Method == http.MethodPost && r.URL.Path == "/webmcp/custom-tools":
 			probe = &oapi.AddCustomWebMCPToolsRequest{}
 			maxBytes = maxCustomWebMCPRequestBytes

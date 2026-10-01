@@ -56,9 +56,9 @@ Use `{ "code": "", "reset": true }` to explicitly replace the REPL and clear all
 
 ## Runtime globals
 
-The context preloads `repl`, captured `console` methods, every browser helper, `browser`, `webmcp`, timers, `queueMicrotask`, `Buffer`, `process`, `fetch`, `URL`, `URLSearchParams`, text encoders/decoders, abort controllers/signals, `structuredClone`, `atob`, `btoa`, and `crypto`. Node built-ins and installed packages are available through dynamic `import()`.
+The context preloads `repl`, captured `console` methods, every browser helper, `browser`, `webmcp`, `models`, timers, `queueMicrotask`, `Buffer`, `process`, `fetch`, `URL`, `URLSearchParams`, text encoders/decoders, abort controllers/signals, `structuredClone`, `atob`, `btoa`, and `crypto`. Node built-ins and installed packages are available through dynamic `import()`.
 
-`repl`, `browser`, and `webmcp` are frozen objects. `webmcp === browser.webmcp`, and each bare browser helper is the same function exposed on `browser`.
+`repl`, `browser`, `webmcp`, and `models` are frozen objects. `webmcp === browser.webmcp`, and each bare browser helper is the same function exposed on `browser`.
 
 ## Output
 
@@ -135,6 +135,13 @@ The reference below is generated from `runtime/browser-repl-help.ts`; edit that 
 - **`webmcp.addCustomTools({ namespace, tools, forceOverwriteNamespace? })`** — Atomically add a non-empty batch of custom tools. Every definition requires `kind`, `match.url_patterns`, tool metadata, and an `execute` function; `outputSchema` is optional. Set `forceOverwriteNamespace` to replace every existing tool in that namespace. Returns the added tools with generated IDs.
 - **`webmcp.listCustomTools()`** — Return serializable summaries of every custom tool, including its generated ID and namespace.
 - **`webmcp.removeCustomTool(id)`** — Remove one custom tool by generated ID and return whether it existed. Active invocations continue.
+
+### Model methods
+
+- **`models.getModelsOfType(type, provider?)`** — Every known model of a type (`"chat"`, `"image"`, or `"classifier"`), optionally for one provider. Resolves to catalog entries with `type`, `provider`, `id`, `name`, `api`, `input`, and type-specific fields.
+- **`models.getAvailableOfType(type, provider?)`** — Models of a type whose provider has working credentials. Credentials resolve from the REPL environment, such as `TYPESAFE_API_KEY` or `OPENROUTER_API_KEY` set through `PUT /repl/env`.
+- **`models.getModelOfType(type, provider, id)`** — One catalog entry, or `undefined`.
+- **`models.classify(model, { state, questions })`** — Run a classifier model on one state. Only `provider` and `id` of `model` are used. Each question is `{type: "choice", instructions, criteria: {option: description}}`, `{type: "score", instructions, criteria: [levels]}`, or `{type: "bool", instructions, criteria: {true, false}}`. Resolves to `{answers, usage?, stopReason, errorMessage?}` with an answer per question ID. Provider errors do not throw: check `stopReason` and `errorMessage`. At most four calls run at once; later calls queue.
 <!-- END GENERATED REPL METHOD REFERENCE -->
 
 While a page-originated custom CDP tool runs, new REPL cells and custom CDP invocations return a busy error without starting or resetting the REPL. Retry the rejected request after the page tool finishes.
@@ -210,6 +217,59 @@ var {AjvJsonSchemaValidator} = await import("@modelcontextprotocol/server/valida
 ```
 
 Removing a definition stops future discovery without canceling active invocations. Updating a tool requires removal followed by addition, which assigns a new ID and new live tool references. Registrations are continuously reconciled as frames are created, navigate, and detach. A graceful REPL reset removes registrations, clears the registry, and changes `repl_id`. After an abrupt process death, stale page registrations can remain visible until the next Browser REPL starts and performs its one-time empty-registry cleanup, or until their documents navigate; those stale registrations have no live handler and invocations time out.
+
+## Models
+
+The frozen `models` namespace reads the model catalog and runs classifier models such as TypeSafe's Jev. It is adapted from the `models` object in [pi](https://github.com/earendil-works/pi)'s codemode and backed by [`@earendil-works/pi-ai`](https://www.npmjs.com/package/@earendil-works/pi-ai), which loads on the first `models.*` call. Classifier models answer typed questions about JSON state with probabilities instead of generating text.
+
+Credentials resolve from the REPL's environment at call time, so set provider keys with `PUT /repl/env` before calling a provider. Jev is available from these providers:
+
+| Provider | Model IDs | Environment |
+| --- | --- | --- |
+| `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` |
+| `openrouter` | `typesafe/jev-1.13`, `~typesafe/jev-latest` | `OPENROUTER_API_KEY` |
+| `cloudflare-workers-ai` | `typesafe/jev` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
+| `vercel-ai-gateway` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` |
+| `opencode` | `jev-1.13`, `jev-1.13-free` | `OPENCODE_API_KEY` |
+
+```js
+const jev = await models.getModelOfType("classifier", "typesafe", "jev-latest");
+const result = await models.classify(jev, {
+  state: { message: "The change works, thanks." },
+  questions: {
+    approved: {
+      type: "bool",
+      instructions: "Does the user approve of the result?",
+      criteria: { true: "Approval", false: "No approval" },
+    },
+  },
+});
+repl.write(result.answers);
+```
+
+`models.classify` uses only the `provider` and `id` of the model it receives, so a script-supplied `baseUrl` or `headers` never receives credentials. Provider and authentication errors resolve to a result with `stopReason: "error"` and `errorMessage` instead of throwing. At most four classifications run at once; later calls queue. A classification in flight when its execution finishes or times out is aborted.
+
+## Environment variables
+
+`PUT /repl/env` replaces the variables the API adds to the REPL process, for example model provider keys:
+
+```http
+PUT /repl/env
+Content-Type: application/json
+
+{"env": {"TYPESAFE_API_KEY": "...", "OPENROUTER_API_KEY": "..."}}
+```
+
+The response lists the variable names, as does `GET /repl/env`; values are never returned. `DELETE /repl/env` removes every variable.
+
+- Names omitted from `env` are removed. Removing a variable restores the value the API process was started with, if any.
+- A running REPL receives the change in `process.env` and keeps its state. If it cannot, it is terminated and the response sets `repl_terminated: true`.
+- Every later REPL process, including one started after a reset, timeout, or crash, starts with the same variables.
+- The request waits for a running execution to finish.
+- Values are held in memory, are not included in telemetry, and are cleared when a forked instance takes its own identity.
+- Code running in the REPL can read every value through `process.env`.
+
+Names match `^[A-Za-z_][A-Za-z0-9_]*$` and are at most 256 characters. Names starting with `BROWSER_REPL_`, and `CDP_ENDPOINT`, `KERNEL_API_ENDPOINT`, `PORT`, and `NODE_OPTIONS`, are reserved. At most 100 variables are allowed, each value is at most 32 KiB without NUL bytes, and the request body is limited to 1 MiB.
 
 ## Patchright and Playwright Core
 

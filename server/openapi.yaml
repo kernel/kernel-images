@@ -1589,6 +1589,7 @@ paths:
         - REPL: `repl.help`, `repl.write`, `repl.emitImage`
         - Browser control: `cdp`, `drainEvents`, `waitForEvent`, `gotoUrl`, `pageInfo`, `accessibilitySnapshot`, `click`, `typeText`, `fillInput`, `pressKey`, `scroll`, `captureScreenshot`, `listTabs`, `currentTab`, `switchTab`, `newTab`, `closeTab`, `ensureRealTab`, `iframeTarget`, `waitMs`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`, `js`, `uploadFile`, `httpGet`
         - WebMCP: `webmcp.listTools`, `webmcp.invokeTool`, `webmcp.addCustomTools`, `webmcp.listCustomTools`, `webmcp.removeCustomTool`
+        - Models: `models.getModelsOfType`, `models.getAvailableOfType`, `models.getModelOfType`, `models.classify`
         <!-- END GENERATED REPL METHOD LIST -->
 
         Browser-control methods are available both directly and on `browser`. The same frozen
@@ -1638,6 +1639,71 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "413":
           $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /repl/env:
+    get:
+      summary: List Browser REPL environment variable names
+      description: Returns the names of the variables set with `PUT /repl/env`. Values are never returned.
+      operationId: getBrowserReplEnv
+      x-telemetry-category: platform
+      responses:
+        "200":
+          description: Names of the variables set for the Browser REPL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserReplEnv"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    put:
+      summary: Replace Browser REPL environment variables
+      description: |
+        Replaces the environment variables the API adds to the Browser REPL process, such as the
+        model provider API keys `models.*` reads (`TYPESAFE_API_KEY`, `OPENROUTER_API_KEY`, ...).
+        Names omitted from `env` are removed. The request waits for a running execution to finish.
+
+        A running REPL receives the change in `process.env` and keeps its state. Every later REPL
+        process, including one started after a reset, timeout, or crash, starts with the same
+        variables. Removing a variable restores the value the API process was started with, if any.
+
+        Values are held in memory only, are never returned, and are not included in telemetry. They
+        are cleared when a forked instance takes its own identity. Code running in the REPL can read
+        them through `process.env`.
+      operationId: setBrowserReplEnv
+      x-telemetry-category: platform
+      requestBody:
+        description: JSON request bodies are limited to 1 MiB.
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserReplEnvRequest"
+      responses:
+        "200":
+          description: Variables replaced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserReplEnv"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "413":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    delete:
+      summary: Remove all Browser REPL environment variables
+      description: Equivalent to `PUT /repl/env` with an empty `env`.
+      operationId: deleteBrowserReplEnv
+      x-telemetry-category: platform
+      responses:
+        "200":
+          description: Variables removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserReplEnv"
         "500":
           $ref: "#/components/responses/InternalError"
   /telemetry:
@@ -7519,6 +7585,37 @@ components:
         duration_ms:
           type: integer
           description: Wall-clock execution time in milliseconds
+      additionalProperties: false
+    BrowserReplEnvRequest:
+      type: object
+      required: [env]
+      properties:
+        env:
+          type: object
+          description: |
+            Variable names mapped to values. Names match `^[A-Za-z_][A-Za-z0-9_]*$` and are at most
+            256 characters. Names starting with `BROWSER_REPL_`, and `CDP_ENDPOINT`,
+            `KERNEL_API_ENDPOINT`, `PORT`, and `NODE_OPTIONS`, are reserved. Values are at most
+            32 KiB and cannot contain NUL bytes.
+          maxProperties: 100
+          additionalProperties:
+            type: string
+            maxLength: 32768
+      additionalProperties: false
+    BrowserReplEnv:
+      type: object
+      required: [names]
+      properties:
+        names:
+          type: array
+          description: Sorted names of the variables set for the Browser REPL.
+          items:
+            type: string
+        repl_terminated:
+          type: boolean
+          description: |
+            True if the running REPL could not receive the change and was terminated. The next
+            request starts a fresh REPL with the new variables.
       additionalProperties: false
     BrowserReplContent:
       description: Ordered discriminated union of execution output items.
