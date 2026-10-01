@@ -44,6 +44,8 @@ type fakeCDP struct {
 	navigateURL         string
 	pageStates          []string
 	pageStateIndex      int
+	holdNavigateReply   bool
+	failNavigate        bool
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +142,14 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 			var params map[string]any
 			_ = json.Unmarshal(req.Params, &params)
 			f.navigateURL, _ = params["url"].(string)
-			result = map[string]any{"frameId": "frame-1"}
+			if f.holdNavigateReply {
+				continue
+			}
+			if f.failNavigate {
+				cdpErr = &Error{Code: -6, Message: "navigate error"}
+			} else {
+				result = map[string]any{"frameId": "frame-1"}
+			}
 		case "Runtime.evaluate":
 			state := `{"url":"about:blank","readyState":"loading"}`
 			if len(f.pageStates) > 0 {
@@ -257,6 +266,30 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 
 		_, err := Dial(ctx, url)
 		require.Error(t, err)
+	})
+}
+
+func TestDispatchStartURL(t *testing.T) {
+	t.Run("returns without waiting for the navigate reply", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", sessionID: "session-abc", holdNavigateReply: true}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, DispatchStartURL(ctx, url, "https://example.com/"))
+		assert.Equal(t, "https://example.com/", f.navigateURL)
+		assert.True(t, f.detachCalled)
+	})
+
+	t.Run("returns a navigate error", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", sessionID: "session-abc", failNavigate: true}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := DispatchStartURL(ctx, url, "https://example.com/")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "navigate error")
 	})
 }
 
