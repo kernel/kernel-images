@@ -2490,9 +2490,10 @@ components:
               description: CDP request identifier matching the originating request.
             code:
               type: string
-              enum: [destination_blocked, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, proxy_unavailable, restricted_route_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed, unknown]
+              enum: [destination_blocked, network_policy_denied, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, proxy_unavailable, restricted_route_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed, unknown]
               x-enum-varnames:
                 - DestinationBlocked
+                - NetworkPolicyDenied
                 - ProviderBlacklisted
                 - ProviderUnreachable
                 - ProviderRejected
@@ -2505,10 +2506,11 @@ components:
                 - ProxyErrorUnknown
               description: >
                 Proxy-layer error code: the `X-Kernel-Proxy-Error` response
-                header value from a branded 5xx error page served by the metro
+                header value from a branded error page served by the metro
                 egress host-proxy. Values mirror what the proxy emits:
-                destination_blocked, provider_blacklisted, provider_unreachable,
-                provider_rejected, origin_tls_timeout, proxy_unavailable,
+                destination_blocked, network_policy_denied,
+                provider_blacklisted, provider_unreachable, provider_rejected,
+                origin_tls_timeout, proxy_unavailable,
                 restricted_route_unavailable, upstream_timeout,
                 upstream_dns_failure, upstream_connect_failed. A header value
                 this image does not recognize is reported as unknown, with the
@@ -2523,7 +2525,7 @@ components:
                 replaced with _, at most 64 characters.
             status:
               type: integer
-              description: HTTP response status of the branded error page (502).
+              description: HTTP response status of the branded error page (502, or 403 for network_policy_denied).
             method:
               type: string
               description: HTTP method of the failed request, when known.
@@ -2534,8 +2536,10 @@ components:
       type: object
       description: >
         A branded proxy-layer failure observed by the browser. Emitted when the
-        metro egress host-proxy serves a branded 5xx error page whose response
-        carries the `X-Kernel-Proxy-Error` header. Low-volume and carries a
+        metro egress host-proxy serves a branded error page whose response
+        carries the `X-Kernel-Proxy-Error` header: a 502 for proxy-layer
+        failures, or a 403 when the session's network policy blocks the
+        destination. Low-volume and carries a
         typed code. Its value is per-session and per-URL attribution for
         sessions that already capture the network stream: proxy failures are
         only observable while the CDP network collector is running, so this is

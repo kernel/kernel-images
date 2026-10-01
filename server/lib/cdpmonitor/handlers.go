@@ -519,11 +519,12 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 	}
 	m.pendReqMu.Unlock()
 
-	// Branded proxy error pages are always served as 502 (the producer
-	// hardcodes that status), so gate detection on it exactly and leave every
-	// other response paying nothing extra beyond the status compare.
+	// Branded proxy error pages are served as 502, or as 403 when the
+	// session's network policy blocks the destination, so gate detection on
+	// those statuses exactly and leave every other response paying nothing
+	// extra beyond the status compare.
 	code, isProxyErr := "", false
-	if p.Response.Status == 502 {
+	if p.Response.Status == 502 || p.Response.Status == 403 {
 		code, isProxyErr = proxyErrorCode(p.Response.Headers)
 	}
 	if !isProxyErr {
@@ -686,12 +687,13 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 }
 
 // proxyErrorHeader is the response header the metro egress host-proxy sets on
-// branded 502 error pages to signal a proxy-layer failure to automation clients.
+// branded error pages to signal a proxy-layer failure or refusal to automation
+// clients.
 const proxyErrorHeader = "x-kernel-proxy-error"
 
 // proxyErrorCode returns the X-Kernel-Proxy-Error header value from a CDP
-// response header map, if present. Callers gate on 5xx status before reaching
-// here, so the full header map decode is already off the common path.
+// response header map, if present. Callers gate on the branded statuses before
+// reaching here, so the full header map decode is already off the common path.
 func proxyErrorCode(resHeaders json.RawMessage) (string, bool) {
 	if len(resHeaders) == 0 {
 		return "", false
@@ -735,11 +737,11 @@ func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bo
 }
 
 // publishProxyError emits a typed proxy_error event for a branded proxy-layer
-// failure observed on the browser's network path (a 5xx response carrying the
-// X-Kernel-Proxy-Error header). The code is the header value when the published
-// enum lists it. The metro egress proxy gains codes on its own release cadence,
-// so a value this image does not know is reported as unknown with the sanitized
-// header value in raw_code rather than dropped.
+// failure observed on the browser's network path (a 502 or 403 response
+// carrying the X-Kernel-Proxy-Error header). The code is the header value when
+// the published enum lists it. The metro egress proxy gains codes on its own
+// release cadence, so a value this image does not know is reported as unknown
+// with the sanitized header value in raw_code rather than dropped.
 func (m *Monitor) publishProxyError(sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
 	var rawCode *string
 	if code == proxyErrorUnknownCode || !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
