@@ -130,19 +130,6 @@ func (t *Tracker) Start(ctx context.Context) error {
 		t.startErr = fmt.Errorf("start browser surface discovery: %w", err)
 		return t.startErr
 	}
-	// Chrome detaches auto-attached shared worker sessions when the worker
-	// ends. An attachToTarget session would instead keep the ended worker's
-	// DevTools host alive, and another client's browser-level auto-attach
-	// crashes stock Chromium on that host.
-	if t.tracksTarget("shared_worker") {
-		if _, err := t.protocol.Send(ctx, "Target.setAutoAttach", map[string]any{
-			"autoAttach": true, "flatten": true, "waitForDebuggerOnStart": false,
-			"filter": []map[string]any{{"type": "shared_worker"}},
-		}, ""); err != nil {
-			t.startErr = fmt.Errorf("start shared worker auto-attach: %w", err)
-			return t.startErr
-		}
-	}
 	raw, err := t.protocol.Send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
 		t.startErr = fmt.Errorf("list browser tabs: %w", err)

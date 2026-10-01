@@ -36,9 +36,6 @@ func TestWorkerDiscoveryIsOptIn(t *testing.T) {
 				protocol.emitTarget("Target.attachedToTarget", map[string]any{
 					"sessionId": "worker-session", "targetInfo": targets[0],
 				})
-				protocol.emitTarget("Target.attachedToTarget", map[string]any{
-					"sessionId": "shared-worker-session", "targetInfo": targets[1],
-				})
 				for _, target := range targets {
 					// Repeated discovery must not create another session.
 					protocol.emitTarget("Target.targetCreated", map[string]any{"targetInfo": target})
@@ -70,14 +67,6 @@ func TestWorkerDiscoveryIsOptIn(t *testing.T) {
 					}, time.Second, time.Millisecond, "nested dedicated-worker discovery must be enabled")
 				}
 				protocol.mu.Lock()
-				browserAutoAttach := protocol.autoAttachCalls[""]
-				protocol.mu.Unlock()
-				if enabled {
-					require.Equal(t, 1, browserAutoAttach, "shared workers attach through browser-level auto-attach")
-				} else {
-					require.Zero(t, browserAutoAttach)
-				}
-				protocol.mu.Lock()
 				calls := maps.Clone(protocol.attachCalls)
 				types := slices.Clone(protocol.discoveredTypes)
 				pageCalls := maps.Clone(protocol.pageEnableCalls)
@@ -86,8 +75,6 @@ func TestWorkerDiscoveryIsOptIn(t *testing.T) {
 					if enabled {
 						if target.Type == "worker" {
 							require.Zero(t, calls[target.TargetID], "dedicated workers attach only through their parent")
-						} else if target.Type == "shared_worker" {
-							require.Zero(t, calls[target.TargetID], "shared workers attach only through auto-attach")
 						} else {
 							require.Equal(t, 1, calls[target.TargetID])
 						}
