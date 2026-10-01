@@ -365,8 +365,12 @@ func TestProxyErrorE2E(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		status := http.StatusBadGateway
+		if code == "network_policy_denied" {
+			status = http.StatusForbidden
+		}
 		w.Header().Set("X-Kernel-Proxy-Error", code)
-		w.WriteHeader(http.StatusBadGateway)
+		w.WriteHeader(status)
 		fmt.Fprintln(w, "<html><body>proxy error</body></html>")
 	}))
 	defer stub.Close()
@@ -383,10 +387,12 @@ func TestProxyErrorE2E(t *testing.T) {
 	cases := []struct {
 		name, header, code string
 		rawCode            any
+		status             int
 	}{
-		{"published code", "provider_blacklisted", "provider_blacklisted", nil},
-		{"code published after the first release", "restricted_route_unavailable", "restricted_route_unavailable", nil},
-		{"code this image does not know", "Some-Future Code", "unknown", "some_future_code"},
+		{"published code", "provider_blacklisted", "provider_blacklisted", nil, http.StatusBadGateway},
+		{"code published after the first release", "restricted_route_unavailable", "restricted_route_unavailable", nil, http.StatusBadGateway},
+		{"code this image does not know", "Some-Future Code", "unknown", "some_future_code", http.StatusBadGateway},
+		{"network policy denial", "network_policy_denied", "network_policy_denied", nil, http.StatusForbidden},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -410,7 +416,7 @@ func TestProxyErrorE2E(t *testing.T) {
 			if tc.rawCode == nil {
 				require.NotContains(t, data, "raw_code")
 			}
-			require.Equal(t, float64(502), data["status"])
+			require.Equal(t, float64(tc.status), data["status"])
 		})
 	}
 }
