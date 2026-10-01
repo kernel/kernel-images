@@ -163,6 +163,7 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
       message = this.$vue.$t('connection.kicked') as string
     }
 
+    this._failure = 'server'
     this.onDisconnected(new Error(message))
 
     this.$vue.$swal({
