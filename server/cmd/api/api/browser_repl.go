@@ -83,6 +83,7 @@ type browserReplManager struct {
 	customToolsReplID string
 	envMu             sync.Mutex
 	env               map[string]string // set by PUT /repl/env; added to every child
+	clearedEnv        map[string]string // dropped by ClearEnv; still in the running child
 }
 
 func newBrowserReplManager() *browserReplManager {
@@ -220,6 +221,8 @@ func (m *browserReplManager) Shutdown(ctx context.Context) error {
 // fresh CUID2. The caller must hold admission.
 func (m *browserReplManager) ensureLocked(ctx context.Context) error {
 	log := logger.FromContext(ctx)
+	// Drop variables ClearEnv removed before any code runs.
+	m.flushClearedEnvLocked(context.WithoutCancel(ctx))
 
 	if child := m.child; child != nil {
 		select {

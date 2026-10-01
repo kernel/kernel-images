@@ -7,7 +7,6 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
@@ -105,16 +104,13 @@ func TestBrowserReplClearEnvDropsVariables(t *testing.T) {
 	setBrowserReplEnv(t, svc, map[string]string{"FORKED_KEY": "secret"})
 	requireExec(t, svc, `var kept = 1; repl.write(JSON.stringify(process.env.FORKED_KEY))`, "secret")
 
+	// Hold admission so the background cleanup cannot run first: the next
+	// execution must drop the variables itself.
+	require.NoError(t, svc.browserRepl.acquire(context.Background()))
 	svc.ClearBrowserReplEnv()
 	require.Empty(t, svc.browserRepl.envNames(), "stored variables are cleared immediately")
-	require.Eventually(t, func() bool {
-		resp := execCode(t, svc, `repl.write(JSON.stringify([process.env.FORKED_KEY ?? null, kept]))`)
-		if !resp.Success || resp.Content == nil {
-			return false
-		}
-		text, err := (*resp.Content)[len(*resp.Content)-1].AsBrowserReplTextContent()
-		return err == nil && text.Text == `[null,1]`
-	}, 5*time.Second, 50*time.Millisecond)
+	svc.browserRepl.release()
+	requireExec(t, svc, `repl.write(JSON.stringify([process.env.FORKED_KEY ?? null, kept]))`, []any{nil, float64(1)})
 }
 
 func TestBrowserReplModelsNamespace(t *testing.T) {

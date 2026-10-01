@@ -104,36 +104,55 @@ func (m *browserReplManager) SetEnv(ctx context.Context, env map[string]string) 
 	}
 	defer m.release()
 
+	// The stored variables change below, so finish delivering them even if
+	// the caller goes away; each update is bounded by its own timeout.
+	ctx = context.WithoutCancel(ctx)
+	terminated := m.flushClearedEnvLocked(ctx)
 	m.envMu.Lock()
 	previous := m.env
 	m.env = maps.Clone(env)
 	m.envMu.Unlock()
-	// The stored variables already changed, so finish delivering them even if
-	// the caller goes away; the update is bounded by its own timeout.
-	return m.applyEnvLocked(context.WithoutCancel(ctx), browserReplEnvChanges(previous, env)), nil
+	return m.applyEnvLocked(ctx, browserReplEnvChanges(previous, env)) || terminated, nil
 }
 
 // ClearEnv drops the variables, for example when a fork takes its own
-// identity. Later REPL children start without them right away; the running
-// REPL loses them once no execution holds admission. It does not block.
+// identity. Later REPL children start without them right away. The running
+// REPL loses them before the next request that takes admission runs, or as
+// soon as admission is free. It does not block.
 func (m *browserReplManager) ClearEnv() {
 	m.envMu.Lock()
-	previous := m.env
-	m.env = nil
-	m.envMu.Unlock()
-	if len(previous) == 0 {
+	if len(m.env) == 0 {
+		m.envMu.Unlock()
 		return
 	}
+	if m.clearedEnv == nil {
+		m.clearedEnv = make(map[string]string)
+	}
+	maps.Copy(m.clearedEnv, m.env)
+	m.env = nil
+	m.envMu.Unlock()
 	go func() {
 		if err := m.acquire(m.lifecycle); err != nil {
 			return
 		}
 		defer m.release()
-		m.envMu.Lock()
-		current := maps.Clone(m.env)
-		m.envMu.Unlock()
-		m.applyEnvLocked(m.lifecycle, browserReplEnvChanges(previous, current))
+		m.flushClearedEnvLocked(m.lifecycle)
 	}()
+}
+
+// flushClearedEnvLocked removes variables dropped by ClearEnv from the running
+// REPL. It reports whether the REPL had to be terminated. The caller must hold
+// admission.
+func (m *browserReplManager) flushClearedEnvLocked(ctx context.Context) bool {
+	m.envMu.Lock()
+	cleared := m.clearedEnv
+	m.clearedEnv = nil
+	current := maps.Clone(m.env)
+	m.envMu.Unlock()
+	if len(cleared) == 0 {
+		return false
+	}
+	return m.applyEnvLocked(ctx, browserReplEnvChanges(cleared, current))
 }
 
 // applyEnvLocked sends changes to the running REPL. A REPL that cannot apply
