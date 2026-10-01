@@ -88,6 +88,18 @@ func TestBrowserReplEnvAppliesLiveAndToNewREPLs(t *testing.T) {
 	requireExec(t, svc, `repl.write(JSON.stringify([process.env.SECOND ?? null, process.env.`+inherited+`]))`, []any{nil, "from-api"})
 }
 
+func TestBrowserReplEnvTerminatesUnreachableREPL(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	first := requireExec(t, svc, `const { unlinkSync } = await import("fs"); unlinkSync(process.env.BROWSER_REPL_SOCKET); repl.write(JSON.stringify(true))`, true)
+
+	set := setBrowserReplEnv(t, svc, map[string]string{"AFTER_RESTART": "yes"})
+	require.NotNil(t, set.ReplTerminated)
+	require.True(t, *set.ReplTerminated)
+
+	next := requireExec(t, svc, `repl.write(JSON.stringify(process.env.AFTER_RESTART))`, "yes")
+	require.NotEqual(t, first.ReplId, next.ReplId)
+}
+
 func TestBrowserReplClearEnvDropsVariables(t *testing.T) {
 	svc := newBrowserReplSvc(t)
 	setBrowserReplEnv(t, svc, map[string]string{"FORKED_KEY": "secret"})

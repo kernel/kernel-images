@@ -152,21 +152,27 @@ func (m *browserReplManager) applyEnvLocked(ctx context.Context, changes map[str
 	default:
 	}
 
-	log := logger.FromContext(ctx)
+	if err := m.sendEnvLocked(ctx, changes); err != nil {
+		logger.FromContext(ctx).Error("browser REPL env update failed; terminating child", "repl_id", child.id, "error", err)
+		m.terminateLocked(ctx, "env update failure")
+		return true
+	}
+	return false
+}
+
+func (m *browserReplManager) sendEnvLocked(ctx context.Context, changes map[string]*string) error {
 	request, err := prepareBrowserReplEnvRequest(changes)
-	if err == nil {
-		var resp *browserReplDaemonResponse
-		resp, err = m.executeLocked(ctx, request, browserReplEnvApplyTimeout)
-		if err == nil && !resp.Success {
-			err = fmt.Errorf("browser REPL rejected env update: %s", resp.Error)
-		}
+	if err != nil {
+		return err
 	}
-	if err == nil {
-		return false
+	resp, err := m.executeLocked(ctx, request, browserReplEnvApplyTimeout)
+	if err != nil {
+		return err
 	}
-	log.Error("browser REPL env update failed; terminating child", "repl_id", child.id, "error", err)
-	m.terminateLocked(ctx, "env update failure")
-	return true
+	if !resp.Success {
+		return fmt.Errorf("browser REPL rejected env update: %s", resp.Error)
+	}
+	return nil
 }
 
 // browserReplDaemonEnvRequest is the wire format of an environment update. A
