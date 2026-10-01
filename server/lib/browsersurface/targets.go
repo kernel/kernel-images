@@ -115,8 +115,7 @@ func (t *Tracker) attachTarget(target targetInfo) error {
 func (t *Tracker) trackNonPageTarget(target targetInfo) {
 	// Dedicated workers are attached through their parent's Target domain;
 	// browser-wide enumeration/discovery does not reliably expose them.
-	// Shared workers are attached by browser-level auto-attach; see Start.
-	if target.Type == "worker" || target.Type == "shared_worker" {
+	if target.Type == "worker" {
 		return
 	}
 	t.stateMu.Lock()
