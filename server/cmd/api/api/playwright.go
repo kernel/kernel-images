@@ -20,6 +20,12 @@ const (
 	playwrightDaemonSocket  = "/tmp/playwright-daemon.sock"
 	playwrightDaemonScript  = "/usr/local/lib/playwright-daemon.js"
 	playwrightDaemonStartup = 5 * time.Second
+	// The first execute against a session can arrive before the VM has finished
+	// coming up, and a single 5s window is not enough to cover that: the daemon
+	// binds its socket in ~100ms once the VM is ready, so a miss means the VM was
+	// not ready yet rather than that the daemon is slow. Re-spawn a few times
+	// instead of failing the caller's request outright.
+	playwrightDaemonAttempts = 4
 )
 
 type playwrightDaemonRequest struct {
@@ -44,44 +50,63 @@ func (s *ApiService) ensurePlaywrightDaemon(ctx context.Context) error {
 		return nil
 	}
 
+	// A concurrent caller owns the spawn; wait out its whole budget, not one
+	// attempt of it, or this returns while that caller is still trying.
 	if !atomic.CompareAndSwapInt32(&s.playwrightDaemonStarting, 0, 1) {
-		deadline := time.Now().Add(playwrightDaemonStartup)
-		for time.Now().Before(deadline) {
-			if conn, err := net.DialTimeout("unix", playwrightDaemonSocket, 100*time.Millisecond); err == nil {
-				conn.Close()
-				return nil
-			}
-			time.Sleep(100 * time.Millisecond)
+		if waitForPlaywrightDaemon(ctx, playwrightDaemonStartup*playwrightDaemonAttempts) {
+			return nil
 		}
 		return fmt.Errorf("timeout waiting for daemon to start")
 	}
 	defer atomic.StoreInt32(&s.playwrightDaemonStarting, 0)
 
-	log.Info("starting playwright daemon")
+	var lastErr error
+	for attempt := 1; attempt <= playwrightDaemonAttempts; attempt++ {
+		log.Info("starting playwright daemon", "attempt", attempt)
 
-	cmd := exec.Command("node", playwrightDaemonScript)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
+		cmd := exec.Command("node", playwrightDaemonScript)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Env = os.Environ()
 
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("failed to start playwright daemon: %w", err)
+		if err := cmd.Start(); err != nil {
+			lastErr = fmt.Errorf("failed to start playwright daemon: %w", err)
+			continue
+		}
+
+		s.playwrightDaemonCmd = cmd
+
+		if waitForPlaywrightDaemon(ctx, playwrightDaemonStartup) {
+			log.Info("playwright daemon started successfully", "attempt", attempt)
+			return nil
+		}
+
+		cmd.Process.Kill()
+		lastErr = fmt.Errorf("playwright daemon failed to start within %v", playwrightDaemonStartup)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 	}
 
-	s.playwrightDaemonCmd = cmd
+	return fmt.Errorf("playwright daemon failed to start after %d attempts: %w", playwrightDaemonAttempts, lastErr)
+}
 
-	deadline := time.Now().Add(playwrightDaemonStartup)
+// waitForPlaywrightDaemon reports whether the daemon socket accepts a
+// connection before the budget expires.
+func waitForPlaywrightDaemon(ctx context.Context, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
 		if conn, err := net.DialTimeout("unix", playwrightDaemonSocket, 100*time.Millisecond); err == nil {
 			conn.Close()
-			log.Info("playwright daemon started successfully")
-			return nil
+			return true
 		}
-		time.Sleep(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-
-	cmd.Process.Kill()
-	return fmt.Errorf("playwright daemon failed to start within %v", playwrightDaemonStartup)
+	return false
 }
 
 func (s *ApiService) executeViaUnixSocket(ctx context.Context, code string, timeout time.Duration) (*playwrightDaemonResponse, error) {
