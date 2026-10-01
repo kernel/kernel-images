@@ -34,9 +34,10 @@ document at load, the way some sandboxing libraries copy a scratch document's pr
 `scratch-document-frame.html` does the same read inside a `srcdoc` child frame. Chromium allows
 one WebMCP host bind per frame, so a later `document.modelContext` read on the frame's real
 document terminates the renderer (`bad IPC message, reason 346`). The test lists tools once on
-each page and asserts the Chromium log has no such kill and the page kept its state. Each case
-runs in its own container because a killed foreground tab also stalls `/playwright/execute`.
+each page and asserts the Chromium log has no new kill and the page kept its state. It runs as
+the last `TestPlaywrightExecuteAPI` subtest because a killed foreground tab also stalls
+`/playwright/execute`.
 
 ```bash
-GOFLAGS='-run=TestWebMCPDiscoveryKeepsScratchDocumentPagesAlive -count=1' make test-e2e
+GOFLAGS='-run=TestPlaywrightExecuteAPI/WebMCPScratchDocument -count=1' make test-e2e
 ```

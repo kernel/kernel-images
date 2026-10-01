@@ -6,10 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
-	"time"
 
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
@@ -21,12 +19,12 @@ import (
 // the first bind, so tool discovery must not make a second one.
 const webMCPDuplicateBind = "Terminating renderer for bad IPC message, reason 346"
 
-func TestWebMCPDiscoveryKeepsScratchDocumentPagesAlive(t *testing.T) {
-	t.Parallel()
-
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
+// testWebMCPScratchDocument lists tools once on pages that already read
+// modelContext on a scratch document and asserts the renderer survives. It
+// runs last on the shared container: a killed foreground tab stalls
+// /playwright/execute, so a regression must not take later subtests with it.
+func testWebMCPScratchDocument(t *testing.T, ctx context.Context, c *TestContainer, client *instanceoapi.ClientWithResponses) {
+	t.Helper()
 
 	for _, test := range []struct {
 		name string
@@ -36,27 +34,6 @@ func TestWebMCPDiscoveryKeepsScratchDocumentPagesAlive(t *testing.T) {
 		{name: "sandbox_frame", file: "scratch-document-frame.html"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
-
-			// A killed foreground tab also stalls /playwright/execute, so each
-			// case gets its own browser.
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer cancel()
-
-			c := NewTestContainer(t, headlessImage)
-			require.NoError(t, c.Start(ctx, ContainerConfig{
-				Env: map[string]string{
-					"CHROMIUM_FLAGS": "--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
-				},
-			}), "failed to start container")
-			defer c.Stop(ctx)
-
-			require.NoError(t, c.WaitReady(ctx), "api not ready")
-			require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
-
-			client, err := c.APIClient()
-			require.NoError(t, err)
-
 			fixture, err := os.ReadFile("testdata/webmcp/" + test.file)
 			require.NoError(t, err)
 			written, err := client.WriteFileWithBodyWithResponse(ctx,
@@ -73,6 +50,8 @@ func TestWebMCPDiscoveryKeepsScratchDocumentPagesAlive(t *testing.T) {
 			`, pageURL), &frames)
 			t.Logf("%s loaded with %d frames", pageURL, frames)
 
+			kills := strings.Count(chromiumLog(t, ctx, c), webMCPDuplicateBind)
+
 			rsp, err := client.GetWebMCPToolsWithResponse(ctx, &instanceoapi.GetWebMCPToolsParams{})
 			require.NoError(t, err)
 			require.Equal(t, http.StatusOK, rsp.StatusCode(), "%s", rsp.Body)
@@ -80,7 +59,7 @@ func TestWebMCPDiscoveryKeepsScratchDocumentPagesAlive(t *testing.T) {
 
 			// Chromium logs the kill before the listing returns.
 			log := chromiumLog(t, ctx, c)
-			require.False(t, strings.Contains(log, webMCPDuplicateBind),
+			require.Equal(t, kills, strings.Count(log, webMCPDuplicateBind),
 				"GET /webmcp/tools killed the renderer:\n%s", tailLines(log, 20))
 
 			var alive bool
