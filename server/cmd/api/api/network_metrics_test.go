@@ -16,10 +16,14 @@ func TestNetworkMonitorOutlivesCustomerTelemetry(t *testing.T) {
 	require.NoError(t, svc.StartNetworkMonitor())
 	defer svc.Shutdown(context.Background())
 	require.True(t, svc.cdpMonitor.IsRunning())
-	resets, completed, up := svc.NetworkMetrics()
+	resets, completed, up, failures := svc.NetworkMetrics()
 	require.Zero(t, resets)
 	require.Zero(t, completed)
 	require.False(t, up)
+	require.Len(t, failures, 85)
+	for _, counts := range failures {
+		require.Equal(t, [2]uint64{}, counts)
+	}
 	_, err = svc.PutTelemetry(context.Background(), oapi.PutTelemetryRequestObject{})
 	require.NoError(t, err)
 	require.True(t, svc.cdpMonitor.IsRunning())
