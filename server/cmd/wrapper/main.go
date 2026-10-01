@@ -191,6 +191,10 @@ func main() {
 	}
 	waitForSocket(pulseSocket, 10*time.Second)
 	startAll("chromium")
+	// The daemon's socket is what /playwright/execute waits on, and it binds
+	// that before connecting to CDP, so starting it here costs nothing and
+	// keeps the first execute off the cold-start path.
+	startAll("playwright-daemon")
 	if forkIdentityWait {
 		waitForHTTPProbe("chromium devtools", "http://127.0.0.1:"+os.Getenv("INTERNAL_PORT")+"/json/version", 30*time.Second)
 		if err := prepareSnapshotStartPage(startupCtx, os.Getenv("INTERNAL_PORT")); err != nil {
