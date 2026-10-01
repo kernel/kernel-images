@@ -12,6 +12,7 @@ import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
 import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
 import { CustomWebMCPRegistry } from './custom-webmcp';
+import { createModelsNamespace, loadBuiltinModels } from './models';
 import { createWebMCPClient, WebMCPRequestError } from './webmcp';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
@@ -404,6 +405,10 @@ const webmcp = Object.freeze({
   removeCustomTool: customToolRegistry.remove,
   invokeCustomCDPTool: customToolRegistry.invokeCDP,
 });
+const models = createModelsNamespace({
+  load: loadBuiltinModels,
+  signal: () => webmcpExecution.getStore(),
+});
 const browserGlobals = buildBrowserGlobals(helpers);
 const browserNamespace = Object.freeze({
   ...(browserGlobals.browser as Record<string, unknown>),
@@ -436,6 +441,7 @@ const context: vm.Context = vm.createContext(
     ...browserGlobals,
     browser: browserNamespace,
     webmcp,
+    models,
     // Node conveniences. This endpoint is unrestricted code execution; the
     // context is a state container, not a sandbox.
     setTimeout,
@@ -474,6 +480,12 @@ interface ExecuteRequest {
   id: string;
   code: string;
   timeout_ms?: number;
+}
+
+// Environment update from PUT /repl/env. A null value unsets the variable.
+interface EnvRequest {
+  id: string;
+  env: Record<string, string | null>;
 }
 
 interface ExecuteResponse {
@@ -568,6 +580,31 @@ async function executeRequest(
     activeCollector = null;
     activeExecution = null;
   }
+}
+
+function applyEnv(request: EnvRequest): ExecuteResponse {
+  const response = {
+    id: request.id || 'unknown',
+    repl_id: REPL_ID,
+    content: [],
+    content_truncated: false,
+    duration_ms: 0,
+  };
+  const { env } = request;
+  if (
+    !request.id ||
+    typeof env !== 'object' ||
+    env === null ||
+    Array.isArray(env) ||
+    Object.values(env).some((value) => value !== null && typeof value !== 'string')
+  ) {
+    return { ...response, success: false, error: 'invalid request: env must map names to strings or null' };
+  }
+  for (const [name, value] of Object.entries(env)) {
+    if (value === null) delete process.env[name];
+    else process.env[name] = value;
+  }
+  return { ...response, success: true };
 }
 
 // Serialize executions as defense in depth; the Go handler already holds a
@@ -695,7 +732,7 @@ function handleConnection(socket: Socket): void {
       }
       if (!line.trim()) continue;
 
-      let request: ExecuteRequest;
+      let request: ExecuteRequest | EnvRequest;
       try {
         request = JSON.parse(line);
       } catch {
@@ -708,6 +745,11 @@ function handleConnection(socket: Socket): void {
           content_truncated: false,
           duration_ms: 0,
         });
+        continue;
+      }
+
+      if (request !== null && typeof request === 'object' && 'env' in request) {
+        respond(applyEnv(request));
         continue;
       }
 

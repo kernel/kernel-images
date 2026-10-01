@@ -5,6 +5,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "0.99.2",
     "@modelcontextprotocol/core": "2.0.0",
     "@modelcontextprotocol/server": "2.0.0",
     "@paralleldrive/cuid2": "3.3.0",

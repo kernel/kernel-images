@@ -7,7 +7,7 @@ export interface BrowserReplHelpEntry {
   example?: string;
 }
 
-export type BrowserReplHelpGroup = 'repl' | 'browser' | 'webmcp';
+export type BrowserReplHelpGroup = 'repl' | 'browser' | 'webmcp' | 'models';
 
 export const browserReplHelpRegistry = {
   repl: {
@@ -199,6 +199,34 @@ export const browserReplHelpRegistry = {
       description: 'Remove one custom tool by generated ID and return whether it existed. Active invocations continue.',
     },
   },
+  // Descriptions follow pi's codemode `models` declarations
+  // (https://github.com/earendil-works/pi, MIT License, Copyright (c) 2025 Mario Zechner).
+  models: {
+    getModelsOfType: {
+      signature: 'models.getModelsOfType(type, provider?)',
+      description:
+        'Every known model of a type (`"chat"`, `"image"`, or `"classifier"`), optionally for one provider. Resolves to catalog entries with `type`, `provider`, `id`, `name`, `api`, `input`, and type-specific fields.',
+      example: 'const classifiers = await models.getModelsOfType("classifier");',
+    },
+    getAvailableOfType: {
+      signature: 'models.getAvailableOfType(type, provider?)',
+      description:
+        'Models of a type whose provider has working credentials. Credentials resolve from the REPL environment, such as `TYPESAFE_API_KEY` or `OPENROUTER_API_KEY` set through `PUT /repl/env`.',
+      example: 'const [classifier] = await models.getAvailableOfType("classifier");',
+    },
+    getModelOfType: {
+      signature: 'models.getModelOfType(type, provider, id)',
+      description: 'One catalog entry, or `undefined`.',
+      example: 'const jev = await models.getModelOfType("classifier", "typesafe", "jev-latest");',
+    },
+    classify: {
+      signature: 'models.classify(model, { state, questions })',
+      description:
+        'Run a classifier model on one state. Only `provider` and `id` of `model` are used. Each question is `{type: "choice", instructions, criteria: {option: description}}`, `{type: "score", instructions, criteria: [levels]}`, or `{type: "bool", instructions, criteria: {true, false}}`. Resolves to `{answers, usage?, stopReason, errorMessage?}` with an answer per question ID. Provider errors do not throw: check `stopReason` and `errorMessage`. At most four calls run at once; later calls queue.',
+      example:
+        'const result = await models.classify(jev, {\n  state: { message: "The change works, thanks." },\n  questions: {\n    approved: {\n      type: "bool",\n      instructions: "Does the user approve of the result?",\n      criteria: { true: "Approval", false: "No approval" },\n    },\n  },\n});\nrepl.write(result.answers);',
+    },
+  },
 } as const satisfies Record<BrowserReplHelpGroup, Record<string, BrowserReplHelpEntry>>;
 
 export type BrowserReplBrowserMethodName = keyof typeof browserReplHelpRegistry.browser;
@@ -217,11 +245,12 @@ const groupPrefix: Record<BrowserReplHelpGroup, string> = {
   repl: 'repl.',
   browser: '',
   webmcp: 'webmcp.',
+  models: 'models.',
 };
 
 export function listBrowserReplHelpEntries(): NamedBrowserReplHelpEntry[] {
   const entries: NamedBrowserReplHelpEntry[] = [];
-  for (const group of ['repl', 'browser', 'webmcp'] as const) {
+  for (const group of ['repl', 'browser', 'webmcp', 'models'] as const) {
     for (const [method, entry] of Object.entries(browserReplHelpRegistry[group])) {
       entries.push({
         ...entry,
@@ -248,6 +277,7 @@ function helpIndex(): string {
     `REPL: ${names('repl')}`,
     `Browser control: ${names('browser')}`,
     `WebMCP: ${names('webmcp')}`,
+    `Models: ${names('models')}`,
   ].join('\n');
 }
 
