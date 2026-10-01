@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Scratch document modelContext</title>
+  <script>
+    // Reads modelContext on a document other than the frame's own, as
+    // sandboxing libraries do when they copy a scratch document's properties.
+    document.implementation.createHTMLDocument('').modelContext;
+  </script>
+</head>
+<body>
+  <p>Scratch document read in the top-level frame.</p>
+</body>
+</html>
