@@ -162,6 +162,49 @@ func TestStripProfileSessionRestore(t *testing.T) {
 	require.NoError(t, stripProfileSessionRestore(prepared))
 }
 
+func TestRemoveGoogleDriveIndexedDB(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		includeDrive bool
+	}{
+		{name: "older archive", includeDrive: true},
+		{name: "missing directories"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared := t.TempDir()
+			files := map[string]string{
+				"Default/Network/Cookies": "cookie-data",
+				"Default/IndexedDB/https_example.com_0.indexeddb.leveldb/000003.log": "other-records",
+			}
+			if tc.includeDrive {
+				files["Default/IndexedDB/https_drive.google.com_0.indexeddb.blob/1/0"] = "blob-data"
+				files["Default/IndexedDB/https_drive.google.com_0.indexeddb.leveldb/000003.log"] = "record-data"
+			}
+			for rel, content := range files {
+				path := filepath.Join(prepared, rel)
+				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+			}
+
+			require.NoError(t, removeGoogleDriveIndexedDB(prepared))
+			for _, name := range []string{
+				"https_drive.google.com_0.indexeddb.blob",
+				"https_drive.google.com_0.indexeddb.leveldb",
+			} {
+				require.NoDirExists(t, filepath.Join(prepared, "Default", "IndexedDB", name))
+			}
+			for rel, want := range map[string]string{
+				"Default/Network/Cookies": "cookie-data",
+				"Default/IndexedDB/https_example.com_0.indexeddb.leveldb/000003.log": "other-records",
+			} {
+				got, err := os.ReadFile(filepath.Join(prepared, rel))
+				require.NoError(t, err)
+				require.Equal(t, want, string(got))
+			}
+		})
+	}
+}
+
 func TestChromiumValidateFlags(t *testing.T) {
 	valid := `{"flags":["--kiosk"]}`
 	plan, err := chromiumValidateFlags(&valid)
