@@ -153,46 +153,9 @@ func (c *Client) shutdown() {
 
 // Send sends a CDP command and waits for its matching response.
 func (c *Client) Send(ctx context.Context, method string, params any, sessionID string) (json.RawMessage, error) {
-	id := c.nextID.Add(1)
-
-	var rawParams json.RawMessage
-	if params != nil {
-		b, err := json.Marshal(params)
-		if err != nil {
-			return nil, fmt.Errorf("marshal params: %w", err)
-		}
-		rawParams = b
-	}
-
-	reqBytes, err := json.Marshal(cdpRequest{ID: id, Method: method, Params: rawParams, SessionID: sessionID})
+	id, responseCh, err := c.write(ctx, method, params, sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-
-	responseCh := make(chan commandResult, 1)
-	c.pendingMu.Lock()
-	if c.IsClosed() {
-		c.pendingMu.Unlock()
-		return nil, fmt.Errorf("read: %w", ErrOutcomeUnknown)
-	}
-	c.pending[id] = responseCh
-	c.pendingMu.Unlock()
-
-	// The connection is shared, and websocket closes it when a write's context
-	// ends mid-frame. Write under the client's own context so that one caller
-	// cancelling its command cannot drop every other command on the connection.
-	c.writeMu.Lock()
-	if err = ctx.Err(); err == nil {
-		writeCtx, cancel := context.WithTimeout(c.ctx, writeTimeout)
-		err = c.conn.Write(writeCtx, websocket.MessageText, reqBytes)
-		cancel()
-	}
-	c.writeMu.Unlock()
-	if err != nil {
-		c.pendingMu.Lock()
-		delete(c.pending, id)
-		c.pendingMu.Unlock()
-		return nil, fmt.Errorf("write: %w", err)
+		return nil, err
 	}
 
 	select {
@@ -216,6 +179,53 @@ func (c *Client) Send(ctx context.Context, method string, params any, sessionID 
 			return nil, fmt.Errorf("read: %w", ErrOutcomeUnknown)
 		}
 	}
+}
+
+// write sends a CDP command and returns the channel its response arrives on.
+// The command is on the wire when write returns.
+func (c *Client) write(ctx context.Context, method string, params any, sessionID string) (int64, <-chan commandResult, error) {
+	id := c.nextID.Add(1)
+
+	var rawParams json.RawMessage
+	if params != nil {
+		b, err := json.Marshal(params)
+		if err != nil {
+			return 0, nil, fmt.Errorf("marshal params: %w", err)
+		}
+		rawParams = b
+	}
+
+	reqBytes, err := json.Marshal(cdpRequest{ID: id, Method: method, Params: rawParams, SessionID: sessionID})
+	if err != nil {
+		return 0, nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	responseCh := make(chan commandResult, 1)
+	c.pendingMu.Lock()
+	if c.IsClosed() {
+		c.pendingMu.Unlock()
+		return 0, nil, fmt.Errorf("read: %w", ErrOutcomeUnknown)
+	}
+	c.pending[id] = responseCh
+	c.pendingMu.Unlock()
+
+	// The connection is shared, and websocket closes it when a write's context
+	// ends mid-frame. Write under the client's own context so that one caller
+	// cancelling its command cannot drop every other command on the connection.
+	c.writeMu.Lock()
+	if err = ctx.Err(); err == nil {
+		writeCtx, cancel := context.WithTimeout(c.ctx, writeTimeout)
+		err = c.conn.Write(writeCtx, websocket.MessageText, reqBytes)
+		cancel()
+	}
+	c.writeMu.Unlock()
+	if err != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, id)
+		c.pendingMu.Unlock()
+		return 0, nil, fmt.Errorf("write: %w", err)
+	}
+	return id, responseCh, nil
 }
 
 // Events returns the event stream for clients created by DialWithEvents. It
@@ -424,10 +434,10 @@ func (c *Client) CountPageTargets(ctx context.Context) (int, error) {
 }
 
 // DispatchStartURL closes extra page targets and dispatches a navigation on the
-// first page target. It does not wait for lifecycle events; Chrome owns the
-// eventual navigation result.
+// first page target. It returns once the navigation starts loading, without
+// waiting for it to commit; Chrome owns the eventual navigation result.
 func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
-	c, err := Dial(ctx, devtoolsURL)
+	c, err := DialWithEvents(ctx, devtoolsURL)
 	if err != nil {
 		return fmt.Errorf("dial devtools: %w", err)
 	}
@@ -499,10 +509,43 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 		}, "")
 	}()
 
-	if _, err := c.Send(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID); err != nil {
+	if _, err := c.Send(ctx, "Page.enable", nil, attach.SessionID); err != nil {
+		return fmt.Errorf("Page.enable: %w", err)
+	}
+
+	// Page.navigate replies only after the navigation commits, which waits on
+	// the origin's response. Return as soon as the main frame starts loading;
+	// the navigation continues after this connection detaches. Navigations
+	// that never start loading (same-document, downloads) still end on the reply.
+	_, navigated, err := c.write(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID)
+	if err != nil {
 		return fmt.Errorf("Page.navigate: %w", err)
 	}
-	return nil
+	for {
+		select {
+		case response := <-navigated:
+			if response.err != nil {
+				return fmt.Errorf("Page.navigate: %w", response.err)
+			}
+			return nil
+		case event, ok := <-c.Events():
+			if !ok {
+				return fmt.Errorf("Page.navigate: read: %w", ErrOutcomeUnknown)
+			}
+			if event.SessionID != attach.SessionID || event.Method != "Page.frameStartedLoading" {
+				continue
+			}
+			var started struct {
+				FrameID string `json:"frameId"`
+			}
+			// A page target's main frame shares its target ID.
+			if json.Unmarshal(event.Params, &started) == nil && started.FrameID == pageTargetID {
+				return nil
+			}
+		case <-ctx.Done():
+			return fmt.Errorf("Page.navigate: read: %w", ctx.Err())
+		}
+	}
 }
 
 // DispatchStartURLAndWait navigates through navigationURL and waits for

@@ -44,6 +44,11 @@ type fakeCDP struct {
 	navigateURL         string
 	pageStates          []string
 	pageStateIndex      int
+	pageEnableCalled    bool
+	// navigateEvents are sent before the Page.navigate reply.
+	navigateEvents    []map[string]any
+	holdNavigateReply bool
+	failNavigate      bool
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -140,7 +145,21 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 			var params map[string]any
 			_ = json.Unmarshal(req.Params, &params)
 			f.navigateURL, _ = params["url"].(string)
-			result = map[string]any{"frameId": "frame-1"}
+			for _, event := range f.navigateEvents {
+				b, _ := json.Marshal(event)
+				_ = conn.Write(ctx, websocket.MessageText, b)
+			}
+			if f.holdNavigateReply {
+				continue
+			}
+			if f.failNavigate {
+				cdpErr = &Error{Code: -6, Message: "navigate error"}
+			} else {
+				result = map[string]any{"frameId": "frame-1"}
+			}
+		case "Page.enable":
+			f.pageEnableCalled = true
+			result = map[string]any{}
 		case "Runtime.evaluate":
 			state := `{"url":"about:blank","readyState":"loading"}`
 			if len(f.pageStates) > 0 {
@@ -257,6 +276,72 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 
 		_, err := Dial(ctx, url)
 		require.Error(t, err)
+	})
+}
+
+func TestDispatchStartURL(t *testing.T) {
+	startedLoading := func(sessionID, frameID string) map[string]any {
+		return map[string]any{
+			"method":    "Page.frameStartedLoading",
+			"sessionId": sessionID,
+			"params":    map[string]any{"frameId": frameID},
+		}
+	}
+
+	t.Run("returns when the main frame starts loading", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID:      "target-123",
+			sessionID:         "session-abc",
+			navigateEvents:    []map[string]any{startedLoading("session-abc", "target-123")},
+			holdNavigateReply: true,
+		}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := DispatchStartURL(ctx, url, "https://example.com/")
+		require.NoError(t, err)
+		assert.True(t, f.pageEnableCalled)
+		assert.Equal(t, "https://example.com/", f.navigateURL)
+		assert.True(t, f.detachCalled)
+	})
+
+	t.Run("ignores loading in other frames and sessions", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID: "target-123",
+			sessionID:    "session-abc",
+			navigateEvents: []map[string]any{
+				startedLoading("session-abc", "iframe-1"),
+				startedLoading("session-other", "target-123"),
+			},
+			holdNavigateReply: true,
+		}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := DispatchStartURL(ctx, url, "https://example.com/")
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("returns on the navigate reply without a loading event", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", sessionID: "session-abc"}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		require.NoError(t, DispatchStartURL(ctx, url, "https://example.com/#section"))
+	})
+
+	t.Run("returns a navigate error", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", sessionID: "session-abc", failNavigate: true}
+		url := startFakeCDP(t, f)
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := DispatchStartURL(ctx, url, "https://example.com/")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "navigate error")
 	})
 }
 
