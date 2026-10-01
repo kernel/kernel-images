@@ -434,10 +434,10 @@ func (c *Client) CountPageTargets(ctx context.Context) (int, error) {
 }
 
 // DispatchStartURL closes extra page targets and dispatches a navigation on the
-// first page target. It returns once the navigation starts loading, without
+// first page target. It returns once Chrome has started the navigation, without
 // waiting for it to commit; Chrome owns the eventual navigation result.
 func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
-	c, err := DialWithEvents(ctx, devtoolsURL)
+	c, err := Dial(ctx, devtoolsURL)
 	if err != nil {
 		return fmt.Errorf("dial devtools: %w", err)
 	}
@@ -501,51 +501,27 @@ func DispatchStartURL(ctx context.Context, devtoolsURL, url string) error {
 	if err := json.Unmarshal(attachResult, &attach); err != nil {
 		return fmt.Errorf("unmarshal attach: %w", err)
 	}
-	defer func() {
-		detachCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = c.Send(detachCtx, "Target.detachFromTarget", map[string]any{
-			"sessionId": attach.SessionID,
-		}, "")
-	}()
-
-	if _, err := c.Send(ctx, "Page.enable", nil, attach.SessionID); err != nil {
-		return fmt.Errorf("Page.enable: %w", err)
-	}
-
 	// Page.navigate replies only after the navigation commits, which waits on
-	// the origin's response. Return as soon as the main frame starts loading;
-	// the navigation continues after this connection detaches. Navigations
-	// that never start loading (same-document, downloads) still end on the reply.
+	// the origin's response. Chrome starts the navigation when it handles the
+	// command and handles commands in order, so the detach reply confirms the
+	// navigation is underway. It continues after the session detaches.
 	_, navigated, err := c.write(ctx, "Page.navigate", map[string]any{"url": url}, attach.SessionID)
 	if err != nil {
 		return fmt.Errorf("Page.navigate: %w", err)
 	}
-	for {
-		select {
-		case response := <-navigated:
-			if response.err != nil {
-				return fmt.Errorf("Page.navigate: %w", response.err)
-			}
-			return nil
-		case event, ok := <-c.Events():
-			if !ok {
-				return fmt.Errorf("Page.navigate: read: %w", ErrOutcomeUnknown)
-			}
-			if event.SessionID != attach.SessionID || event.Method != "Page.frameStartedLoading" {
-				continue
-			}
-			var started struct {
-				FrameID string `json:"frameId"`
-			}
-			// A page target's main frame shares its target ID.
-			if json.Unmarshal(event.Params, &started) == nil && started.FrameID == pageTargetID {
-				return nil
-			}
-		case <-ctx.Done():
-			return fmt.Errorf("Page.navigate: read: %w", ctx.Err())
-		}
+	if _, err := c.Send(ctx, "Target.detachFromTarget", map[string]any{
+		"sessionId": attach.SessionID,
+	}, ""); err != nil {
+		return fmt.Errorf("Target.detachFromTarget: %w", err)
 	}
+	select {
+	case response := <-navigated:
+		if response.err != nil {
+			return fmt.Errorf("Page.navigate: %w", response.err)
+		}
+	default:
+	}
+	return nil
 }
 
 // DispatchStartURLAndWait navigates through navigationURL and waits for
