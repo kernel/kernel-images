@@ -505,8 +505,18 @@ func testPlaywrightExecutors(t *testing.T, ctx context.Context, client *instance
 		return rsp.JSON200
 	}
 
-	activeBefore := execute("", `await page.goto('data:text/html,active-tab'); return page.url();`)
-	require.True(t, activeBefore.Success)
+	// Executor tabs open in the default context. Start from a single window
+	// whose active tab is in that context, since earlier subtests leave other
+	// contexts and windows behind.
+	activeBefore := execute("", `
+		await Promise.all(browser.contexts().slice(1).map(context => context.close()));
+		const active = await browser.contexts()[0].newPage();
+		await active.goto('data:text/html,active-tab');
+		await Promise.all(browser.contexts()[0].pages().filter(p => p !== active).map(p => p.close()));
+		await active.bringToFront();
+		return active.url();
+	`)
+	require.True(t, activeBefore.Success, "error=%v", activeBefore.Error)
 
 	t.Log("verifying the first call opens the executor's tab and later calls reuse it")
 	first := execute("a", `await page.goto('data:text/html,executor-a'); return page.url();`)

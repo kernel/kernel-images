@@ -1561,8 +1561,10 @@ paths:
         executor does not affect other executors or calls without 'executor'; the next call on
         that executor starts a fresh process.
 
-        Each executor owns a tab. Its first call opens a new background tab, and 'page' is bound to
-        that tab on every later call while it stays open. Opening it does not change the active tab. If the tab is closed, the next call opens a new
+        Each executor owns a tab. Its first call opens a new background tab in the default browser
+        context, and 'page' is bound to that tab on every later call while it stays open. Opening it
+        does not change the active tab of an existing window; if the default context has no window,
+        Chrome opens one. If the tab is closed, the next call opens a new
         one and reports 'tab_created: true'. Executor code can still reach other tabs through
         'context' and 'browser'; ownership only decides what 'page' is bound to.
 
