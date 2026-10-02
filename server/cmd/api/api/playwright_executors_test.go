@@ -19,13 +19,15 @@ import (
 
 // fakePlaywrightDaemon speaks the daemon's socket protocol. Code is a command:
 // "sleep:<ms>" resolves after ms (reporting timed_out when it exceeds
-// timeout_ms, like the real daemon) and "hang" blocks the event loop. A call
-// without a target ID opens a tab and reports it before running. Every result
+// timeout_ms, like the real daemon), "hang" blocks the event loop and "exit"
+// kills the process. A tab exists while its file exists in FAKE_TABS_DIR (see
+// fakeExecutorTabs); a missing tab is answered with tab_missing. Every result
 // carries the process ID so tests can tell when a process is replaced.
 const fakePlaywrightDaemon = `
+const fs = require('fs');
 const net = require('net');
+const path = require('path');
 const socketPath = process.env.PLAYWRIGHT_DAEMON_SOCKET;
-let tabs = 0;
 net.createServer(socket => {
   let buffer = '';
   socket.on('data', data => {
@@ -34,14 +36,15 @@ net.createServer(socket => {
     while ((i = buffer.indexOf('\n')) !== -1) {
       const req = JSON.parse(buffer.slice(0, i));
       buffer = buffer.slice(i + 1);
-      const targetId = req.target_id || ('tab-' + process.pid + '-' + (++tabs));
-      if (!req.target_id) {
-        socket.write(JSON.stringify({ id: req.id, tab: { target_id: targetId, tab_created: true } }) + '\n');
+      if (!fs.existsSync(path.join(process.env.FAKE_TABS_DIR, req.target_id))) {
+        socket.write(JSON.stringify({ id: req.id, success: false, error: 'tab closed', tab_missing: true }) + '\n');
+        continue;
       }
       const respond = extra => socket.write(JSON.stringify({
-        id: req.id, target_id: targetId, tab_created: !req.target_id, ...extra,
+        id: req.id, target_id: req.target_id, tab_created: !!req.tab_created, ...extra,
       }) + '\n');
       if (req.code === 'hang') { for (;;) {} }
+      if (req.code === 'exit') { process.exit(1); }
       const ms = Number(req.code.split(':')[1] || 0);
       if (ms > req.timeout_ms) {
         setTimeout(() => respond({ success: false, error: 'timed out', timed_out: true }), req.timeout_ms);
@@ -53,7 +56,34 @@ net.createServer(socket => {
 }).listen(socketPath);
 `
 
-func newTestPlaywrightExecutorManager(t *testing.T) *playwrightExecutorManager {
+// fakeExecutorTabs records each open tab as a file the fake daemon can see.
+type fakeExecutorTabs struct {
+	dir string
+	mu  sync.Mutex
+	n   int
+}
+
+func (f *fakeExecutorTabs) Open(context.Context) (string, error) {
+	f.mu.Lock()
+	f.n++
+	targetID := fmt.Sprintf("tab-%d", f.n)
+	f.mu.Unlock()
+	return targetID, os.WriteFile(filepath.Join(f.dir, targetID), nil, 0o644)
+}
+
+func (f *fakeExecutorTabs) Close(_ context.Context, targetID string) error {
+	if err := os.Remove(filepath.Join(f.dir, targetID)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func (f *fakeExecutorTabs) isOpen(targetID string) bool {
+	_, err := os.Stat(filepath.Join(f.dir, targetID))
+	return err == nil
+}
+
+func newTestPlaywrightExecutorManager(t *testing.T) (*playwrightExecutorManager, *fakeExecutorTabs) {
 	t.Helper()
 	if _, err := exec.LookPath("node"); err != nil {
 		t.Skipf("node not available: %v", err)
@@ -64,13 +94,15 @@ func newTestPlaywrightExecutorManager(t *testing.T) *playwrightExecutorManager {
 	t.Cleanup(func() { os.RemoveAll(dir) })
 	script := filepath.Join(dir, "daemon.js")
 	require.NoError(t, os.WriteFile(script, []byte(fakePlaywrightDaemon), 0o644))
+	tabs := &fakeExecutorTabs{dir: t.TempDir()}
+	t.Setenv("FAKE_TABS_DIR", tabs.dir)
 
-	m := newPlaywrightExecutorManager()
+	m := newPlaywrightExecutorManager(tabs)
 	m.script = script
 	m.socketDir = dir
 	m.responseGrace = 500 * time.Millisecond
-	t.Cleanup(m.Shutdown)
-	return m
+	t.Cleanup(func() { m.Shutdown(context.Background()) })
+	return m, tabs
 }
 
 func executorPID(t *testing.T, resp *playwrightDaemonResponse) int {
@@ -86,7 +118,7 @@ func executorPID(t *testing.T, resp *playwrightDaemonResponse) int {
 }
 
 func TestPlaywrightExecutorsRunConcurrently(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
 	// Warm both processes so the measurement covers only execution.
@@ -111,7 +143,7 @@ func TestPlaywrightExecutorsRunConcurrently(t *testing.T) {
 }
 
 func TestPlaywrightExecutorSerializesCallsOnOneName(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 	_, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
 	require.NoError(t, err)
@@ -131,7 +163,7 @@ func TestPlaywrightExecutorSerializesCallsOnOneName(t *testing.T) {
 }
 
 func TestPlaywrightExecutorKeepsItsTab(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
 	first, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
@@ -146,7 +178,7 @@ func TestPlaywrightExecutorKeepsItsTab(t *testing.T) {
 }
 
 func TestPlaywrightExecutorTimeoutReplacesOnlyThatProcess(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
 	first, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
@@ -175,15 +207,17 @@ func TestPlaywrightExecutorTimeoutReplacesOnlyThatProcess(t *testing.T) {
 }
 
 func TestPlaywrightExecutorUnresponsiveProcessIsKilled(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
 	first, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
 	require.NoError(t, err)
 	firstPID := executorPID(t, first)
 
-	_, err = m.Execute(ctx, "a", "hang", time.Second)
-	require.Error(t, err)
+	hung, err := m.Execute(ctx, "a", "hang", time.Second)
+	require.NoError(t, err)
+	assert.False(t, hung.Success)
+	assert.Equal(t, first.TargetID, hung.TargetID, "a call whose process stops answering still reports its tab")
 
 	next, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
 	require.NoError(t, err)
@@ -191,8 +225,58 @@ func TestPlaywrightExecutorUnresponsiveProcessIsKilled(t *testing.T) {
 	assert.Equal(t, first.TargetID, next.TargetID)
 }
 
+func TestPlaywrightExecutorProcessExitReportsTab(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+
+	first, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+
+	exited, err := m.Execute(ctx, "a", "exit", 10*time.Second)
+	require.NoError(t, err)
+	assert.False(t, exited.Success)
+	assert.Equal(t, first.TargetID, exited.TargetID)
+	assert.False(t, exited.TabCreated)
+
+	next, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	assert.True(t, next.Success)
+	assert.Equal(t, first.TargetID, next.TargetID)
+}
+
+func TestPlaywrightExecutorReopensClosedTab(t *testing.T) {
+	m, tabs := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+
+	first, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	require.NoError(t, tabs.Close(ctx, first.TargetID))
+
+	next, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	assert.True(t, next.Success)
+	assert.True(t, next.TabCreated)
+	assert.NotEqual(t, first.TargetID, next.TargetID)
+	assert.True(t, tabs.isOpen(next.TargetID))
+}
+
+func TestPlaywrightExecutorShutdownClosesTabs(t *testing.T) {
+	m, tabs := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+
+	a, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	b, err := m.Execute(ctx, "b", "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+
+	m.Shutdown(ctx)
+	assert.False(t, tabs.isOpen(a.TargetID))
+	assert.False(t, tabs.isOpen(b.TargetID))
+	assert.Empty(t, m.List())
+}
+
 func TestPlaywrightExecutorLimit(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
 	for i := range maxPlaywrightExecutors {
@@ -216,7 +300,7 @@ func TestPlaywrightExecutorLimit(t *testing.T) {
 }
 
 func TestPlaywrightExecutorDelete(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
 	first, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
@@ -255,7 +339,7 @@ func TestPlaywrightExecutorDelete(t *testing.T) {
 }
 
 func TestPlaywrightExecutorDeleteReportsTabOpenedByInFlightCall(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
 	done := make(chan *playwrightDaemonResponse, 1)
@@ -276,7 +360,7 @@ func TestPlaywrightExecutorDeleteReportsTabOpenedByInFlightCall(t *testing.T) {
 }
 
 func TestPlaywrightExecutorStartFailure(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, _ := newTestPlaywrightExecutorManager(t)
 	m.script = filepath.Join(m.socketDir, "missing.js")
 	svc, err := newSvc(t, recorder.NewFFmpegManager())
 	require.NoError(t, err)
@@ -288,10 +372,11 @@ func TestPlaywrightExecutorStartFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.ExecutePlaywrightCode500JSONResponse{}, resp)
+	assert.Empty(t, m.List(), "an executor that never started should not take a slot")
 }
 
 func TestPlaywrightExecutorHandlers(t *testing.T) {
-	m := newTestPlaywrightExecutorManager(t)
+	m, tabs := newTestPlaywrightExecutorManager(t)
 	svc, err := newSvc(t, recorder.NewFFmpegManager())
 	require.NoError(t, err)
 	svc.playwrightExecutors = m
@@ -335,10 +420,18 @@ func TestPlaywrightExecutorHandlers(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.DeletePlaywrightExecutor204Response{}, deleted)
+	assert.True(t, tabs.isOpen(ok.Tab.TargetId), "close_tab=false should keep the tab")
 
 	missing, err := svc.DeletePlaywrightExecutor(ctx, oapi.DeletePlaywrightExecutorRequestObject{Name: "a"})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.DeletePlaywrightExecutor404JSONResponse{}, missing)
+
+	e1, ok1 := execute("e1").(oapi.ExecutePlaywrightCode200JSONResponse)
+	require.True(t, ok1)
+	deleted, err = svc.DeletePlaywrightExecutor(ctx, oapi.DeletePlaywrightExecutorRequestObject{Name: "e1"})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.DeletePlaywrightExecutor204Response{}, deleted)
+	assert.False(t, tabs.isOpen(e1.Tab.TargetId), "delete should close the tab by default")
 }
 
 func TestPlaywrightExecutorListIsNeverNil(t *testing.T) {

@@ -1570,7 +1570,8 @@ paths:
 
         A browser can have at most 8 executors. A call that would create another returns 409 with
         the open executors; delete one with DELETE /playwright/executors/{name}. Executors are not
-        removed automatically.
+        removed automatically while the API runs; when it shuts down, executors are removed and
+        their tabs closed.
       operationId: executePlaywrightCode
       x-telemetry-category: control
       requestBody:

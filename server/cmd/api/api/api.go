@@ -183,27 +183,28 @@ func New(
 	_ = mon.SetTelemetry(false)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &ApiService{
-		recordManager:       recordManager,
-		factory:             factory,
-		defaultRecorderID:   "default",
-		watches:             make(map[string]*fsWatch),
-		procs:               make(map[string]*processHandle),
-		upstreamMgr:         upstreamMgr,
-		stz:                 stz,
-		nekoAuthClient:      nekoAuthClient,
-		policy:              &policy.Policy{},
-		eventStream:         eventStream,
-		telemetrySession:    telemetrySession,
-		cdpMonitor:          mon,
-		otlpExport:          otlpExport,
-		s2Storage:           s2Storage,
-		webmcp:              webmcpclient.NewManager(upstreamMgr),
-		browserRepl:         newBrowserReplManager(),
-		playwrightExecutors: newPlaywrightExecutorManager(),
-		lifecycleCtx:        ctx,
-		lifecycleCancel:     cancel,
-	}, nil
+	s := &ApiService{
+		recordManager:     recordManager,
+		factory:           factory,
+		defaultRecorderID: "default",
+		watches:           make(map[string]*fsWatch),
+		procs:             make(map[string]*processHandle),
+		upstreamMgr:       upstreamMgr,
+		stz:               stz,
+		nekoAuthClient:    nekoAuthClient,
+		policy:            &policy.Policy{},
+		eventStream:       eventStream,
+		telemetrySession:  telemetrySession,
+		cdpMonitor:        mon,
+		otlpExport:        otlpExport,
+		s2Storage:         s2Storage,
+		webmcp:            webmcpclient.NewManager(upstreamMgr),
+		browserRepl:       newBrowserReplManager(),
+		lifecycleCtx:      ctx,
+		lifecycleCancel:   cancel,
+	}
+	s.playwrightExecutors = newPlaywrightExecutorManager(cdpPlaywrightExecutorTabs{withCDP: s.withCDPClient})
+	return s, nil
 }
 
 func (s *ApiService) StartRecording(ctx context.Context, req oapi.StartRecordingRequestObject) (oapi.StartRecordingResponseObject, error) {
@@ -477,7 +478,7 @@ func (s *ApiService) NetworkMetrics() (resets, completed uint64, up bool) {
 func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.lifecycleCancel()
 	replErr := s.browserRepl.Shutdown(ctx)
-	s.playwrightExecutors.Shutdown()
+	s.playwrightExecutors.Shutdown(ctx)
 
 	_ = s.webmcp.Close()
 	s.monitorMu.Lock()

@@ -5,19 +5,19 @@
  * connection to the browser, and uses esbuild for TypeScript transformation.
  *
  * Protocol (newline-delimited JSON):
- * Request:  { "id": string, "code": string, "timeout_ms"?: number, "executor"?: string, "target_id"?: string }
+ * Request:  { "id": string, "code": string, "timeout_ms"?: number,
+ *             "executor"?: string, "target_id"?: string, "tab_created"?: boolean }
  * Response: { "id": string, "success": boolean, "result"?: any, "error"?: string, "stack"?: string,
- *             "target_id"?: string, "tab_created"?: boolean, "timed_out"?: boolean }
+ *             "target_id"?: string, "tab_created"?: boolean, "timed_out"?: boolean, "tab_missing"?: boolean }
  *
  * "target_id" and "tab_created" in the response describe the tab `page` was
  * bound to; they are omitted if the call failed before binding one.
  *
- * When "executor" is set, `page` is bound to the executor's own tab: the page
- * whose CDP target ID is "target_id", or a new background tab when there is
- * none. The response reports the tab's target ID so the API can pass it back
- * on the executor's next call, including after this process is replaced. A new
- * tab is also reported as soon as it exists, before user code runs, with a
- * preliminary line: { "id": string, "tab": { "target_id": string, "tab_created": true } }
+ * When "executor" is set, the API owns the executor's tab: it opens the tab
+ * and passes its "target_id" (with "tab_created" when it just opened it), and
+ * `page` is bound to that tab. If the tab no longer exists the daemon answers
+ * with "tab_missing" without running the code, so the API can open a new tab
+ * and resend the request.
  */
 
 import { createServer, Socket } from 'net';
@@ -55,6 +55,7 @@ interface ExecuteRequest {
   timeout_ms?: number;
   executor?: string;
   target_id?: string;
+  tab_created?: boolean;
 }
 
 interface ExecuteResponse {
@@ -66,6 +67,7 @@ interface ExecuteResponse {
   target_id?: string;
   tab_created?: boolean;
   timed_out?: boolean;
+  tab_missing?: boolean;
 }
 
 // The tab a call bound `page` to. It is recorded as soon as it is known so a
@@ -307,73 +309,38 @@ async function targetExists(browser: Browser, targetId: string): Promise<boolean
 const NEW_TAB_ATTACH_ATTEMPTS = 50;
 const NEW_TAB_ATTACH_RETRY_DELAY_MS = 100;
 
-// Binds an executor's `page` to the tab it owns. A tab that still exists but
-// has no Playwright page yet (e.g. this connection is still attaching to it)
-// is an error rather than a reason to open a duplicate tab. Either way the
-// connection is dropped first, so the next call reconnects and re-attaches to
-// every tab instead of failing on the same stale connection.
-async function resolveExecutorPage(
-  browser: Browser,
-  tab: BoundTab,
-  onTabCreated: (targetId: string) => void,
-  targetId?: string,
-): Promise<Page> {
-  if (targetId) {
-    for (let attempt = 0; attempt < OWNED_PAGE_RESOLUTION_ATTEMPTS; attempt++) {
-      if (attempt > 0) {
-        await new Promise(resolve => setTimeout(resolve, OWNED_PAGE_RESOLUTION_RETRY_DELAY_MS));
-      }
-      const page = await findPage(browser, targetId, attempt > 0);
-      if (page) {
-        tab.targetId = targetId;
-        tab.created = false;
-        return page;
-      }
-      if (!(await targetExists(browser, targetId))) break;
-      if (attempt === OWNED_PAGE_RESOLUTION_ATTEMPTS - 1) {
-        await disconnectBrowser();
-        throw new Error(`executor tab ${targetId} is open but not available to Playwright yet; retry the call`);
-      }
+class TabMissingError extends Error {}
+
+// Binds an executor's `page` to the tab the API gave it. A tab the API just
+// opened gets longer to appear in this connection. A tab that exists but never
+// gets a Playwright page is an error; the connection is dropped first so the
+// next call reconnects and re-attaches to every tab instead of failing on the
+// same stale connection.
+async function resolveExecutorPage(browser: Browser, tab: BoundTab, targetId: string, created: boolean): Promise<Page> {
+  const attempts = created ? NEW_TAB_ATTACH_ATTEMPTS : OWNED_PAGE_RESOLUTION_ATTEMPTS;
+  const delayMs = created ? NEW_TAB_ATTACH_RETRY_DELAY_MS : OWNED_PAGE_RESOLUTION_RETRY_DELAY_MS;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    const page = await findPage(browser, targetId, attempt > 0);
+    if (page) {
+      tab.targetId = targetId;
+      tab.created = created;
+      return page;
+    }
+    if (!(await targetExists(browser, targetId))) {
+      throw new TabMissingError(`executor tab ${targetId} is closed`);
     }
   }
-
-  // Open the tab in the background so it does not take focus from the live
-  // view or change the active tab that calls without an executor bind to.
-  // Without a browserContextId the tab lands in the default context.
-  const root = await browser.newBrowserCDPSession();
-  let newTargetId: string;
-  try {
-    ({ targetId: newTargetId } = await root.send('Target.createTarget', { url: 'about:blank', background: true }));
-  } finally {
-    await root.detach().catch(() => {});
-  }
-  tab.targetId = newTargetId;
-  tab.created = true;
-  onTabCreated(newTargetId);
-
-  for (let attempt = 0; attempt < NEW_TAB_ATTACH_ATTEMPTS; attempt++) {
-    const page = await findPage(browser, newTargetId, attempt > 0);
-    if (page) return page;
-    await new Promise(resolve => setTimeout(resolve, NEW_TAB_ATTACH_RETRY_DELAY_MS));
-  }
-  // Close the unusable blank tab so the next call opens a fresh one.
-  const cleanup = await browser.newBrowserCDPSession();
-  try {
-    await cleanup.send('Target.closeTarget', { targetId: newTargetId });
-  } catch {
-    // The tab may already be gone.
-  } finally {
-    await cleanup.detach().catch(() => {});
-  }
   await disconnectBrowser();
-  throw new Error(`executor tab ${newTargetId} was opened but never became available to Playwright; retry the call`);
+  throw new Error(`executor tab ${targetId} is open but not available to Playwright yet; retry the call`);
 }
 
 async function executeCode(
   request: ExecuteRequest,
   signal: AbortSignal,
   tab: BoundTab,
-  onTabCreated: (targetId: string) => void,
 ): Promise<ExecuteResponse> {
   const { id, code } = request;
 
@@ -414,7 +381,10 @@ async function executeCode(
     }
     let page: Page;
     if (request.executor) {
-      page = await resolveExecutorPage(browserInstance, tab, onTabCreated, request.target_id);
+      if (!request.target_id) {
+        throw new Error('executor call has no target_id');
+      }
+      page = await resolveExecutorPage(browserInstance, tab, request.target_id, request.tab_created === true);
     } else {
       const contexts = browserInstance.contexts();
       const defaultContext = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
@@ -459,7 +429,24 @@ async function executeCode(
       success: false,
       error: error.message,
       stack: error.stack,
+      ...(error instanceof TabMissingError && { tab_missing: true }),
     };
+  }
+}
+
+// Serializes a response line. A result JSON cannot represent (a cycle, a
+// BigInt) becomes an error response instead of an exception that would leave
+// the caller without an answer.
+function responseLine(response: ExecuteResponse): string {
+  try {
+    return JSON.stringify(response) + '\n';
+  } catch (error: any) {
+    const { result: _result, ...rest } = response;
+    return JSON.stringify({
+      ...rest,
+      success: false,
+      error: `result is not JSON-serializable: ${error.message}`,
+    }) + '\n';
   }
 }
 
@@ -493,10 +480,7 @@ function handleConnection(socket: Socket): void {
       const tab: BoundTab = {};
       let response: ExecuteResponse;
       try {
-        const onTabCreated = (targetId: string) => {
-          socket.write(JSON.stringify({ id: request.id, tab: { target_id: targetId, tab_created: true } }) + '\n');
-        };
-        response = await withTimeout(executeCode(request, signal, tab, onTabCreated), signal);
+        response = await withTimeout(executeCode(request, signal, tab), signal);
       } catch (error: any) {
         if (signal.aborted) {
           await disconnectBrowser();
@@ -513,7 +497,7 @@ function handleConnection(socket: Socket): void {
         response.target_id = tab.targetId;
         response.tab_created = tab.created;
       }
-      socket.write(JSON.stringify(response) + '\n');
+      socket.write(responseLine(response));
     }
   });
 

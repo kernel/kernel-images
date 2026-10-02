@@ -24,11 +24,12 @@ const (
 )
 
 type playwrightDaemonRequest struct {
-	ID        string `json:"id"`
-	Code      string `json:"code"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
-	Executor  string `json:"executor,omitempty"`
-	TargetID  string `json:"target_id,omitempty"`
+	ID         string `json:"id"`
+	Code       string `json:"code"`
+	TimeoutMs  int    `json:"timeout_ms,omitempty"`
+	Executor   string `json:"executor,omitempty"`
+	TargetID   string `json:"target_id,omitempty"`
+	TabCreated bool   `json:"tab_created,omitempty"`
 }
 
 type playwrightDaemonResponse struct {
@@ -40,6 +41,7 @@ type playwrightDaemonResponse struct {
 	TargetID   string      `json:"target_id,omitempty"`
 	TabCreated bool        `json:"tab_created,omitempty"`
 	TimedOut   bool        `json:"timed_out,omitempty"`
+	TabMissing bool        `json:"tab_missing,omitempty"`
 }
 
 func (s *ApiService) ensurePlaywrightDaemon(ctx context.Context) error {
@@ -216,8 +218,8 @@ func (s *ApiService) executePlaywrightOnExecutor(ctx context.Context, name, code
 			Executors: s.playwrightExecutorsJSON(ctx, limitErr.executors),
 		}, nil
 	}
-	if errors.Is(err, errPlaywrightExecutorStart) {
-		log.Error("failed to start playwright executor", "executor", name, "error", err)
+	if errors.Is(err, errPlaywrightExecutorSetup) {
+		log.Error("failed to set up playwright executor", "executor", name, "error", err)
 		return oapi.ExecutePlaywrightCode500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
 				Message: err.Error(),
