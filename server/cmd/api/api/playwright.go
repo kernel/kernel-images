@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -26,14 +27,19 @@ type playwrightDaemonRequest struct {
 	ID        string `json:"id"`
 	Code      string `json:"code"`
 	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Executor  string `json:"executor,omitempty"`
+	TargetID  string `json:"target_id,omitempty"`
 }
 
 type playwrightDaemonResponse struct {
-	ID      string      `json:"id"`
-	Success bool        `json:"success"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   string      `json:"error,omitempty"`
-	Stack   string      `json:"stack,omitempty"`
+	ID         string      `json:"id"`
+	Success    bool        `json:"success"`
+	Result     interface{} `json:"result,omitempty"`
+	Error      string      `json:"error,omitempty"`
+	Stack      string      `json:"stack,omitempty"`
+	TargetID   string      `json:"target_id,omitempty"`
+	TabCreated bool        `json:"tab_created,omitempty"`
+	TimedOut   bool        `json:"timed_out,omitempty"`
 }
 
 func (s *ApiService) ensurePlaywrightDaemon(ctx context.Context) error {
@@ -131,11 +137,6 @@ func (s *ApiService) executeViaUnixSocket(ctx context.Context, code string, time
 }
 
 func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.ExecutePlaywrightCodeRequestObject) (oapi.ExecutePlaywrightCodeResponseObject, error) {
-	s.playwrightMu.Lock()
-	defer s.playwrightMu.Unlock()
-
-	log := logger.FromContext(ctx)
-
 	if request.Body == nil || request.Body.Code == "" {
 		return oapi.ExecutePlaywrightCode400JSONResponse{
 			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -150,6 +151,15 @@ func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.Exe
 	if request.Body.TimeoutSec != nil && *request.Body.TimeoutSec > 0 {
 		timeout = time.Duration(*request.Body.TimeoutSec) * time.Second
 	}
+
+	if request.Body.Executor != nil {
+		return s.executePlaywrightOnExecutor(ctx, *request.Body.Executor, request.Body.Code, timeout)
+	}
+
+	s.playwrightMu.Lock()
+	defer s.playwrightMu.Unlock()
+
+	log := logger.FromContext(ctx)
 
 	if err := s.ensurePlaywrightDaemon(ctx); err != nil {
 		log.Error("failed to ensure playwright daemon", "error", err)
@@ -184,4 +194,50 @@ func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.Exe
 		Success: true,
 		Result:  &resp.Result,
 	}, nil
+}
+
+func (s *ApiService) executePlaywrightOnExecutor(ctx context.Context, name, code string, timeout time.Duration) (oapi.ExecutePlaywrightCodeResponseObject, error) {
+	log := logger.FromContext(ctx)
+
+	if !playwrightExecutorNamePattern.MatchString(name) {
+		return oapi.ExecutePlaywrightCode400JSONResponse{
+			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
+				Message: "executor name must match " + playwrightExecutorNamePattern.String(),
+			},
+		}, nil
+	}
+
+	resp, err := s.playwrightExecutors.Execute(ctx, name, code, timeout)
+	var limitErr *playwrightExecutorLimitError
+	if errors.As(err, &limitErr) {
+		return oapi.ExecutePlaywrightCode409JSONResponse{
+			Message:   limitErr.Error(),
+			Executors: s.playwrightExecutorsJSON(ctx, limitErr.executors),
+		}, nil
+	}
+	if err != nil {
+		log.Error("playwright executor execution failed", "executor", name, "error", err)
+		errorMsg := fmt.Sprintf("execution failed: %v", err)
+		return oapi.ExecutePlaywrightCode200JSONResponse{
+			Success:  false,
+			Error:    &errorMsg,
+			Executor: &name,
+		}, nil
+	}
+
+	result := oapi.ExecutePlaywrightResult{
+		Success:  resp.Success,
+		Executor: &name,
+	}
+	if resp.TargetID != "" {
+		result.TargetId = &resp.TargetID
+		result.TabCreated = &resp.TabCreated
+	}
+	if resp.Success {
+		result.Result = &resp.Result
+	} else {
+		result.Error = &resp.Error
+		result.Stderr = &resp.Stack
+	}
+	return oapi.ExecutePlaywrightCode200JSONResponse(result), nil
 }
