@@ -280,6 +280,9 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Run("WebMCPScratchDocument", func(t *testing.T) {
 		testWebMCPScratchDocument(t, ctx, c, client)
 	})
+	t.Run("Executors", func(t *testing.T) {
+		testPlaywrightExecutors(t, ctx, client)
+	})
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
@@ -488,26 +491,7 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 	t.Log("playwright daemon recovery test passed")
 }
 
-func TestPlaywrightExecutors(t *testing.T) {
-	t.Parallel()
-
-	if _, err := exec.LookPath("docker"); err != nil {
-		t.Skipf("docker not available: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	c := NewTestContainer(t, headlessImage)
-	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
-	defer c.Stop(ctx)
-
-	require.NoError(t, c.WaitReady(ctx), "api not ready")
-	require.NoError(t, c.WaitBrowser(ctx), "browser not ready")
-
-	client, err := c.APIClient()
-	require.NoError(t, err)
-
+func testPlaywrightExecutors(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
 	execute := func(executor, code string) *instanceoapi.ExecutePlaywrightResult {
 		t.Helper()
 		body := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
@@ -580,4 +564,8 @@ func TestPlaywrightExecutors(t *testing.T) {
 	missing, err := client.DeletePlaywrightExecutorWithResponse(ctx, "b", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusNotFound, missing.StatusCode())
+
+	del, err = client.DeletePlaywrightExecutorWithResponse(ctx, "a", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, del.StatusCode(), "body=%s", string(del.Body))
 }

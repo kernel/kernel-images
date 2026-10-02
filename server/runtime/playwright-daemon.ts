@@ -306,7 +306,9 @@ const NEW_TAB_ATTACH_RETRY_DELAY_MS = 100;
 
 // Binds an executor's `page` to the tab it owns. A tab that still exists but
 // has no Playwright page yet (e.g. this connection is still attaching to it)
-// is an error rather than a reason to open a duplicate tab.
+// is an error rather than a reason to open a duplicate tab. Either way the
+// connection is dropped first, so the next call reconnects and re-attaches to
+// every tab instead of failing on the same stale connection.
 async function resolveExecutorPage(
   browser: Browser,
   tab: ExecutorTab,
@@ -326,6 +328,7 @@ async function resolveExecutorPage(
       }
       if (!(await targetExists(browser, targetId))) break;
       if (attempt === OWNED_PAGE_RESOLUTION_ATTEMPTS - 1) {
+        await disconnectBrowser();
         throw new Error(`executor tab ${targetId} is open but not available to Playwright yet; retry the call`);
       }
     }
@@ -350,7 +353,17 @@ async function resolveExecutorPage(
     if (page) return page;
     await new Promise(resolve => setTimeout(resolve, NEW_TAB_ATTACH_RETRY_DELAY_MS));
   }
-  throw new Error(`executor tab ${newTargetId} was opened but is not available to Playwright yet; retry the call`);
+  // Close the unusable blank tab so the next call opens a fresh one.
+  const cleanup = await browser.newBrowserCDPSession();
+  try {
+    await cleanup.send('Target.closeTarget', { targetId: newTargetId });
+  } catch {
+    // The tab may already be gone.
+  } finally {
+    await cleanup.detach().catch(() => {});
+  }
+  await disconnectBrowser();
+  throw new Error(`executor tab ${newTargetId} was opened but never became available to Playwright; retry the call`);
 }
 
 async function executeCode(
