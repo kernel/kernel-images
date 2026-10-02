@@ -413,6 +413,18 @@ func (m *playwrightExecutorManager) Delete(ctx context.Context, name string) (st
 	}
 	delete(m.executors, name)
 	e.gone = errPlaywrightExecutorDeleted
+	m.mu.Unlock()
+
+	return m.retire(ctx, e), nil
+}
+
+// retire kills a removed executor's process and returns its tab target ID, if
+// any. It waits for an in-flight call to unwind first, so a tab that call
+// opened is included: killing the process makes the call return promptly,
+// and a call records a tab before handing it to the process. The caller must
+// already have removed the executor and set gone.
+func (m *playwrightExecutorManager) retire(ctx context.Context, e *playwrightExecutor) string {
+	m.mu.Lock()
 	child := e.child
 	e.child = nil
 	m.mu.Unlock()
@@ -421,9 +433,6 @@ func (m *playwrightExecutorManager) Delete(ctx context.Context, name string) (st
 		child.kill()
 	}
 
-	// Wait for an in-flight call to unwind, so a tab it opened is included.
-	// Killing the process makes it return promptly, and a call records a tab
-	// before handing it to the process.
 	select {
 	case <-e.admission:
 		e.admission <- struct{}{}
@@ -432,7 +441,7 @@ func (m *playwrightExecutorManager) Delete(ctx context.Context, name string) (st
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return e.targetID, nil
+	return e.targetID
 }
 
 // List returns the open executors, oldest first.
@@ -465,27 +474,21 @@ func (m *playwrightExecutorManager) snapshotLocked() []*playwrightExecutor {
 // a later API process would have no way to reach.
 func (m *playwrightExecutorManager) Shutdown(ctx context.Context) {
 	m.mu.Lock()
-	children := make([]*playwrightExecutorChild, 0, len(m.executors))
-	targetIDs := make([]string, 0, len(m.executors))
+	executors := make([]*playwrightExecutor, 0, len(m.executors))
 	for _, e := range m.executors {
 		e.gone = errPlaywrightExecutorDeleted
-		if e.child != nil {
-			children = append(children, e.child)
-			e.child = nil
-		}
-		if e.targetID != "" {
-			targetIDs = append(targetIDs, e.targetID)
-		}
+		executors = append(executors, e)
 	}
 	m.executors = make(map[string]*playwrightExecutor)
 	m.mu.Unlock()
 
-	for _, child := range children {
-		child.kill()
-	}
 	ctx, cancel := context.WithTimeout(ctx, playwrightExecutorKillGrace)
 	defer cancel()
-	for _, targetID := range targetIDs {
+	for _, e := range executors {
+		targetID := m.retire(ctx, e)
+		if targetID == "" {
+			continue
+		}
 		if err := m.tabs.Close(ctx, targetID); err != nil {
 			logger.FromContext(ctx).Warn("failed to close playwright executor tab", "target_id", targetID, "error", err)
 		}

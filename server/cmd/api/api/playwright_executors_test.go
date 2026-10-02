@@ -57,13 +57,20 @@ net.createServer(socket => {
 `
 
 // fakeExecutorTabs records each open tab as a file the fake daemon can see.
+// When gate is set, Open signals opening and blocks until gate is closed.
 type fakeExecutorTabs struct {
-	dir string
-	mu  sync.Mutex
-	n   int
+	dir     string
+	mu      sync.Mutex
+	n       int
+	gate    chan struct{}
+	opening chan struct{}
 }
 
 func (f *fakeExecutorTabs) Open(context.Context) (string, error) {
+	if f.gate != nil {
+		f.opening <- struct{}{}
+		<-f.gate
+	}
 	f.mu.Lock()
 	f.n++
 	targetID := fmt.Sprintf("tab-%d", f.n)
@@ -273,6 +280,38 @@ func TestPlaywrightExecutorShutdownClosesTabs(t *testing.T) {
 	assert.False(t, tabs.isOpen(a.TargetID))
 	assert.False(t, tabs.isOpen(b.TargetID))
 	assert.Empty(t, m.List())
+}
+
+func TestPlaywrightExecutorShutdownClosesTabOpenedDuringShutdown(t *testing.T) {
+	m, tabs := newTestPlaywrightExecutorManager(t)
+	tabs.gate = make(chan struct{})
+	tabs.opening = make(chan struct{}, 1)
+	ctx := context.Background()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
+		done <- err
+	}()
+	<-tabs.opening
+
+	shutdown := make(chan struct{})
+	go func() {
+		m.Shutdown(ctx)
+		close(shutdown)
+	}()
+	select {
+	case <-shutdown:
+		t.Fatal("Shutdown returned before the in-flight call finished opening its tab")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	close(tabs.gate)
+	<-shutdown
+	assert.ErrorIs(t, <-done, errPlaywrightExecutorDeleted)
+	entries, err := os.ReadDir(tabs.dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "the tab opened during shutdown should be closed")
 }
 
 func TestPlaywrightExecutorLimit(t *testing.T) {
