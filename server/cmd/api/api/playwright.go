@@ -215,6 +215,14 @@ func (s *ApiService) executePlaywrightOnExecutor(ctx context.Context, name, code
 			Executors: s.playwrightExecutorsJSON(ctx, limitErr.executors),
 		}, nil
 	}
+	if errors.Is(err, errPlaywrightExecutorStart) {
+		log.Error("failed to start playwright executor", "executor", name, "error", err)
+		return oapi.ExecutePlaywrightCode500JSONResponse{
+			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+				Message: err.Error(),
+			},
+		}, nil
+	}
 	if err != nil {
 		log.Error("playwright executor execution failed", "executor", name, "error", err)
 		errorMsg := fmt.Sprintf("execution failed: %v", err)

@@ -10,9 +10,11 @@
  *             "target_id"?: string, "tab_created"?: boolean, "timed_out"?: boolean }
  *
  * When "executor" is set, `page` is bound to the executor's own tab: the page
- * whose CDP target ID is "target_id", or a new tab when there is none. The
- * response reports the tab's target ID so the API can pass it back on the
- * executor's next call, including after this process is replaced.
+ * whose CDP target ID is "target_id", or a new background tab when there is
+ * none. The response reports the tab's target ID so the API can pass it back
+ * on the executor's next call, including after this process is replaced. A new
+ * tab is also reported as soon as it exists, before user code runs, with a
+ * preliminary line: { "id": string, "tab": { "target_id": string, "tab_created": true } }
  */
 
 import { createServer, Socket } from 'net';
@@ -279,6 +281,14 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
 const OWNED_PAGE_RESOLUTION_ATTEMPTS = 3;
 const OWNED_PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
 
+async function findPage(browser: Browser, targetId: string, refresh: boolean): Promise<Page | undefined> {
+  const pages = browser
+    .contexts()
+    .flatMap(context => context.pages())
+    .filter(page => !page.isClosed());
+  return (await pageTargetIdCache.buildPageByTargetId(pages, { refresh })).get(targetId);
+}
+
 async function targetExists(browser: Browser, targetId: string): Promise<boolean> {
   const root = await browser.newBrowserCDPSession();
   try {
@@ -291,20 +301,24 @@ async function targetExists(browser: Browser, targetId: string): Promise<boolean
   }
 }
 
+const NEW_TAB_ATTACH_ATTEMPTS = 50;
+const NEW_TAB_ATTACH_RETRY_DELAY_MS = 100;
+
 // Binds an executor's `page` to the tab it owns. A tab that still exists but
 // has no Playwright page yet (e.g. this connection is still attaching to it)
 // is an error rather than a reason to open a duplicate tab.
-async function resolveExecutorPage(browser: Browser, tab: ExecutorTab, targetId?: string): Promise<Page> {
+async function resolveExecutorPage(
+  browser: Browser,
+  tab: ExecutorTab,
+  onTabCreated: (targetId: string) => void,
+  targetId?: string,
+): Promise<Page> {
   if (targetId) {
     for (let attempt = 0; attempt < OWNED_PAGE_RESOLUTION_ATTEMPTS; attempt++) {
       if (attempt > 0) {
         await new Promise(resolve => setTimeout(resolve, OWNED_PAGE_RESOLUTION_RETRY_DELAY_MS));
       }
-      const pages = browser
-        .contexts()
-        .flatMap(context => context.pages())
-        .filter(page => !page.isClosed());
-      const page = (await pageTargetIdCache.buildPageByTargetId(pages, { refresh: attempt > 0 })).get(targetId);
+      const page = await findPage(browser, targetId, attempt > 0);
       if (page) {
         tab.targetId = targetId;
         tab.created = false;
@@ -317,15 +331,34 @@ async function resolveExecutorPage(browser: Browser, tab: ExecutorTab, targetId?
     }
   }
 
-  const contexts = browser.contexts();
-  const context = contexts.length > 0 ? contexts[0] : await browser.newContext();
-  const page = await context.newPage();
-  tab.targetId = await pageTargetIdCache.get(page);
+  // Open the tab in the background so it does not take focus from the live
+  // view or change the active tab that calls without an executor bind to.
+  // Without a browserContextId the tab lands in the default context.
+  const root = await browser.newBrowserCDPSession();
+  let newTargetId: string;
+  try {
+    ({ targetId: newTargetId } = await root.send('Target.createTarget', { url: 'about:blank', background: true }));
+  } finally {
+    await root.detach().catch(() => {});
+  }
+  tab.targetId = newTargetId;
   tab.created = true;
-  return page;
+  onTabCreated(newTargetId);
+
+  for (let attempt = 0; attempt < NEW_TAB_ATTACH_ATTEMPTS; attempt++) {
+    const page = await findPage(browser, newTargetId, attempt > 0);
+    if (page) return page;
+    await new Promise(resolve => setTimeout(resolve, NEW_TAB_ATTACH_RETRY_DELAY_MS));
+  }
+  throw new Error(`executor tab ${newTargetId} was opened but is not available to Playwright yet; retry the call`);
 }
 
-async function executeCode(request: ExecuteRequest, signal: AbortSignal, tab: ExecutorTab): Promise<ExecuteResponse> {
+async function executeCode(
+  request: ExecuteRequest,
+  signal: AbortSignal,
+  tab: ExecutorTab,
+  onTabCreated: (targetId: string) => void,
+): Promise<ExecuteResponse> {
   const { id, code } = request;
 
   try {
@@ -365,7 +398,7 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal, tab: Ex
     }
     let page: Page;
     if (request.executor) {
-      page = await resolveExecutorPage(browserInstance, tab, request.target_id);
+      page = await resolveExecutorPage(browserInstance, tab, onTabCreated, request.target_id);
     } else {
       const contexts = browserInstance.contexts();
       const defaultContext = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
@@ -437,7 +470,10 @@ function handleConnection(socket: Socket): void {
       const tab: ExecutorTab = {};
       let response: ExecuteResponse;
       try {
-        response = await withTimeout(executeCode(request, signal, tab), signal);
+        const onTabCreated = (targetId: string) => {
+          socket.write(JSON.stringify({ id: request.id, tab: { target_id: targetId, tab_created: true } }) + '\n');
+        };
+        response = await withTimeout(executeCode(request, signal, tab, onTabCreated), signal);
       } catch (error: any) {
         if (signal.aborted) {
           await disconnectBrowser();

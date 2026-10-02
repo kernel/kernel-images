@@ -19,8 +19,9 @@ import (
 
 // fakePlaywrightDaemon speaks the daemon's socket protocol. Code is a command:
 // "sleep:<ms>" resolves after ms (reporting timed_out when it exceeds
-// timeout_ms, like the real daemon) and "hang" blocks the event loop. Every
-// result carries the process ID so tests can tell when a process is replaced.
+// timeout_ms, like the real daemon) and "hang" blocks the event loop. A call
+// without a target ID opens a tab and reports it before running. Every result
+// carries the process ID so tests can tell when a process is replaced.
 const fakePlaywrightDaemon = `
 const net = require('net');
 const socketPath = process.env.PLAYWRIGHT_DAEMON_SOCKET;
@@ -34,6 +35,9 @@ net.createServer(socket => {
       const req = JSON.parse(buffer.slice(0, i));
       buffer = buffer.slice(i + 1);
       const targetId = req.target_id || ('tab-' + process.pid + '-' + (++tabs));
+      if (!req.target_id) {
+        socket.write(JSON.stringify({ id: req.id, tab: { target_id: targetId, tab_created: true } }) + '\n');
+      }
       const respond = extra => socket.write(JSON.stringify({
         id: req.id, target_id: targetId, tab_created: !req.target_id, ...extra,
       }) + '\n');
@@ -97,13 +101,13 @@ func TestPlaywrightExecutorsRunConcurrently(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := m.Execute(ctx, name, "sleep:1000", 10*time.Second)
+			resp, err := m.Execute(ctx, name, "sleep:2000", 10*time.Second)
 			assert.NoError(t, err)
 			assert.True(t, resp.Success)
 		}()
 	}
 	wg.Wait()
-	assert.Less(t, time.Since(start), 1800*time.Millisecond, "different executors should overlap")
+	assert.Less(t, time.Since(start), 3500*time.Millisecond, "different executors should overlap")
 }
 
 func TestPlaywrightExecutorSerializesCallsOnOneName(t *testing.T) {
@@ -205,7 +209,7 @@ func TestPlaywrightExecutorLimit(t *testing.T) {
 	// Existing executors keep working at the limit, and deleting one frees a slot.
 	_, err = m.Execute(ctx, "e0", "sleep:0", 10*time.Second)
 	require.NoError(t, err)
-	_, err = m.Delete("e0")
+	_, err = m.Delete(ctx, "e0")
 	require.NoError(t, err)
 	_, err = m.Execute(ctx, "one-too-many", "sleep:0", 10*time.Second)
 	require.NoError(t, err)
@@ -228,7 +232,7 @@ func TestPlaywrightExecutorDelete(t *testing.T) {
 		return len(executors) == 1 && executors[0].busy
 	}, 2*time.Second, 10*time.Millisecond)
 
-	targetID, err := m.Delete("a")
+	targetID, err := m.Delete(ctx, "a")
 	require.NoError(t, err)
 	assert.Equal(t, first.TargetID, targetID)
 
@@ -240,7 +244,7 @@ func TestPlaywrightExecutorDelete(t *testing.T) {
 	}
 	assert.Empty(t, m.List())
 
-	_, err = m.Delete("a")
+	_, err = m.Delete(ctx, "a")
 	assert.ErrorIs(t, err, errPlaywrightExecutorNotFound)
 
 	// The name is reusable and gets a fresh tab.
@@ -248,6 +252,42 @@ func TestPlaywrightExecutorDelete(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, reused.TabCreated)
 	assert.NotEqual(t, first.TargetID, reused.TargetID)
+}
+
+func TestPlaywrightExecutorDeleteReportsTabOpenedByInFlightCall(t *testing.T) {
+	m := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+
+	done := make(chan *playwrightDaemonResponse, 1)
+	go func() {
+		resp, _ := m.Execute(ctx, "a", "sleep:5000", 10*time.Second)
+		done <- resp
+	}()
+	require.Eventually(t, func() bool {
+		executors := m.List()
+		return len(executors) == 1 && executors[0].targetID != ""
+	}, 3*time.Second, 10*time.Millisecond, "the tab should be known before the call finishes")
+	openedTab := m.List()[0].targetID
+
+	targetID, err := m.Delete(ctx, "a")
+	require.NoError(t, err)
+	assert.Equal(t, openedTab, targetID)
+	assert.Nil(t, <-done)
+}
+
+func TestPlaywrightExecutorStartFailure(t *testing.T) {
+	m := newTestPlaywrightExecutorManager(t)
+	m.script = filepath.Join(m.socketDir, "missing.js")
+	svc, err := newSvc(t, recorder.NewFFmpegManager())
+	require.NoError(t, err)
+	svc.playwrightExecutors = m
+
+	name := "a"
+	resp, err := svc.ExecutePlaywrightCode(context.Background(), oapi.ExecutePlaywrightCodeRequestObject{
+		Body: &oapi.ExecutePlaywrightCodeJSONRequestBody{Code: "sleep:0", Executor: &name},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.ExecutePlaywrightCode500JSONResponse{}, resp)
 }
 
 func TestPlaywrightExecutorHandlers(t *testing.T) {

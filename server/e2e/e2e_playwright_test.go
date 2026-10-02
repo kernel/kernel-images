@@ -521,6 +521,9 @@ func TestPlaywrightExecutors(t *testing.T) {
 		return rsp.JSON200
 	}
 
+	activeBefore := execute("", `await page.goto('data:text/html,active-tab'); return page.url();`)
+	require.True(t, activeBefore.Success)
+
 	t.Log("verifying the first call opens the executor's tab and later calls reuse it")
 	first := execute("a", `await page.goto('data:text/html,executor-a'); return page.url();`)
 	require.True(t, first.Success, "error=%v", first.Error)
@@ -553,6 +556,7 @@ func TestPlaywrightExecutors(t *testing.T) {
 	unnamed := execute("", `return page.url();`)
 	require.True(t, unnamed.Success)
 	require.Nil(t, unnamed.Executor)
+	require.Equal(t, "data:text/html,active-tab", unnamed.Result, "opening executor tabs should not change the active tab")
 
 	t.Log("verifying a closed executor tab is reopened and reported")
 	execute("a", `await page.close();`)

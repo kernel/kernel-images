@@ -1561,8 +1561,8 @@ paths:
         executor does not affect other executors or calls without 'executor'; the next call on
         that executor starts a fresh process.
 
-        Each executor owns a tab. Its first call opens a new tab, and 'page' is bound to that tab
-        on every later call while it stays open. If the tab is closed, the next call opens a new
+        Each executor owns a tab. Its first call opens a new background tab, and 'page' is bound to
+        that tab on every later call while it stays open. Opening it does not change the active tab. If the tab is closed, the next call opens a new
         one and reports 'tab_created: true'. Executor code can still reach other tabs through
         'context' and 'browser'; ownership only decides what 'page' is bound to.
 
@@ -7568,12 +7568,12 @@ components:
           $ref: "#/components/schemas/PlaywrightExecutorName"
         target_id:
           type: string
-          description: CDP page target ID of the executor's tab. Set only for executor calls.
+          description: CDP page target ID of the executor's tab. Set when an executor call bound its tab.
         tab_created:
           type: boolean
           description: |
             Whether this call opened the executor's tab, either because it was the executor's
-            first call or because its previous tab was closed. Set only for executor calls.
+            first call or because its previous tab was closed. Set when an executor call bound its tab.
       additionalProperties: false
     BrowserReplRequest:
       type: object
