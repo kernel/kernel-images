@@ -1565,7 +1565,7 @@ paths:
         context, and 'page' is bound to that tab on every later call while it stays open. Opening it
         does not change the active tab of an existing window; if the default context has no window,
         Chrome opens one. If the tab is closed, the next call opens a new
-        one and reports 'tab_created: true'. Executor code can still reach other tabs through
+        one and reports 'tab.created: true'. Executor code can still reach other tabs through
         'context' and 'browser'; ownership only decides what 'page' is bound to.
 
         A browser can have at most 8 executors. A call that would create another returns 409 with
@@ -7566,16 +7566,24 @@ components:
         stderr:
           type: string
           description: Standard error from the execution
-        executor:
-          $ref: "#/components/schemas/PlaywrightExecutorName"
+        tab:
+          $ref: "#/components/schemas/PlaywrightTab"
+      additionalProperties: false
+    PlaywrightTab:
+      type: object
+      description: |
+        The tab 'page' was bound to for this call. Absent if the call failed before binding a tab.
+      required: [target_id, created]
+      properties:
         target_id:
           type: string
-          description: CDP page target ID of the executor's tab. Set when an executor call bound its tab.
-        tab_created:
+          description: CDP page target ID of the tab
+        created:
           type: boolean
           description: |
-            Whether this call opened the executor's tab, either because it was the executor's
-            first call or because its previous tab was closed. Set when an executor call bound its tab.
+            Whether this call opened the tab. For an executor this happens on its first call and
+            after its previous tab was closed. Without an executor it happens only when the browser
+            had no open page.
       additionalProperties: false
     BrowserReplRequest:
       type: object

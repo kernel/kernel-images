@@ -309,9 +309,9 @@ func TestPlaywrightExecutorHandlers(t *testing.T) {
 	ok, isOK := execute("a").(oapi.ExecutePlaywrightCode200JSONResponse)
 	require.True(t, isOK)
 	assert.True(t, ok.Success)
-	assert.Equal(t, "a", *ok.Executor)
-	require.NotNil(t, ok.TargetId)
-	assert.True(t, *ok.TabCreated)
+	require.NotNil(t, ok.Tab)
+	assert.NotEmpty(t, ok.Tab.TargetId)
+	assert.True(t, ok.Tab.Created)
 
 	_, isBadRequest := execute("not a valid name").(oapi.ExecutePlaywrightCode400JSONResponse)
 	assert.True(t, isBadRequest)

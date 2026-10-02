@@ -180,20 +180,21 @@ func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.Exe
 		}, nil
 	}
 
-	if !resp.Success {
-		errorMsg := resp.Error
-		stderr := resp.Stack
-		return oapi.ExecutePlaywrightCode200JSONResponse{
-			Success: false,
-			Error:   &errorMsg,
-			Stderr:  &stderr,
-		}, nil
-	}
+	return oapi.ExecutePlaywrightCode200JSONResponse(playwrightResult(resp)), nil
+}
 
-	return oapi.ExecutePlaywrightCode200JSONResponse{
-		Success: true,
-		Result:  &resp.Result,
-	}, nil
+func playwrightResult(resp *playwrightDaemonResponse) oapi.ExecutePlaywrightResult {
+	result := oapi.ExecutePlaywrightResult{Success: resp.Success}
+	if resp.TargetID != "" {
+		result.Tab = &oapi.PlaywrightTab{TargetId: resp.TargetID, Created: resp.TabCreated}
+	}
+	if resp.Success {
+		result.Result = &resp.Result
+	} else {
+		result.Error = &resp.Error
+		result.Stderr = &resp.Stack
+	}
+	return result
 }
 
 func (s *ApiService) executePlaywrightOnExecutor(ctx context.Context, name, code string, timeout time.Duration) (oapi.ExecutePlaywrightCodeResponseObject, error) {
@@ -227,25 +228,9 @@ func (s *ApiService) executePlaywrightOnExecutor(ctx context.Context, name, code
 		log.Error("playwright executor execution failed", "executor", name, "error", err)
 		errorMsg := fmt.Sprintf("execution failed: %v", err)
 		return oapi.ExecutePlaywrightCode200JSONResponse{
-			Success:  false,
-			Error:    &errorMsg,
-			Executor: &name,
+			Success: false,
+			Error:   &errorMsg,
 		}, nil
 	}
-
-	result := oapi.ExecutePlaywrightResult{
-		Success:  resp.Success,
-		Executor: &name,
-	}
-	if resp.TargetID != "" {
-		result.TargetId = &resp.TargetID
-		result.TabCreated = &resp.TabCreated
-	}
-	if resp.Success {
-		result.Result = &resp.Result
-	} else {
-		result.Error = &resp.Error
-		result.Stderr = &resp.Stack
-	}
-	return oapi.ExecutePlaywrightCode200JSONResponse(result), nil
+	return oapi.ExecutePlaywrightCode200JSONResponse(playwrightResult(resp)), nil
 }

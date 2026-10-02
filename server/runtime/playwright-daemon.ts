@@ -9,6 +9,9 @@
  * Response: { "id": string, "success": boolean, "result"?: any, "error"?: string, "stack"?: string,
  *             "target_id"?: string, "tab_created"?: boolean, "timed_out"?: boolean }
  *
+ * "target_id" and "tab_created" in the response describe the tab `page` was
+ * bound to; they are omitted if the call failed before binding one.
+ *
  * When "executor" is set, `page` is bound to the executor's own tab: the page
  * whose CDP target ID is "target_id", or a new background tab when there is
  * none. The response reports the tab's target ID so the API can pass it back
@@ -65,9 +68,9 @@ interface ExecuteResponse {
   timed_out?: boolean;
 }
 
-// The executor tab bound by a call. It is recorded as soon as it is known so a
+// The tab a call bound `page` to. It is recorded as soon as it is known so a
 // timed-out call still reports it.
-interface ExecutorTab {
+interface BoundTab {
   targetId?: string;
   created?: boolean;
 }
@@ -311,7 +314,7 @@ const NEW_TAB_ATTACH_RETRY_DELAY_MS = 100;
 // every tab instead of failing on the same stale connection.
 async function resolveExecutorPage(
   browser: Browser,
-  tab: ExecutorTab,
+  tab: BoundTab,
   onTabCreated: (targetId: string) => void,
   targetId?: string,
 ): Promise<Page> {
@@ -369,7 +372,7 @@ async function resolveExecutorPage(
 async function executeCode(
   request: ExecuteRequest,
   signal: AbortSignal,
-  tab: ExecutorTab,
+  tab: BoundTab,
   onTabCreated: (targetId: string) => void,
 ): Promise<ExecuteResponse> {
   const { id, code } = request;
@@ -420,10 +423,17 @@ async function executeCode(
       // pages[0] bound `page` to the oldest tab regardless of which was active, so
       // calls like page.pdf() operated on the wrong tab whenever more than one was
       // open.
-      page =
+      const existing =
         (pages.length > 0 ? await resolveActivePage(browserInstance) : null) ??
-        pages.findLast(candidate => !candidate.isClosed()) ??
-        (await defaultContext.newPage());
+        pages.findLast(candidate => !candidate.isClosed());
+      page = existing ?? (await defaultContext.newPage());
+      try {
+        tab.targetId = await pageTargetIdCache.get(page);
+        tab.created = !existing;
+      } catch {
+        // A page that is crashing or closing can fail target discovery; the
+        // call still runs, it just reports no tab.
+      }
     }
     const context = page.context();
 
@@ -480,7 +490,7 @@ function handleConnection(socket: Socket): void {
       }
 
       const signal = AbortSignal.timeout(request.timeout_ms ?? 60000);
-      const tab: ExecutorTab = {};
+      const tab: BoundTab = {};
       let response: ExecuteResponse;
       try {
         const onTabCreated = (targetId: string) => {
@@ -499,7 +509,7 @@ function handleConnection(socket: Socket): void {
           ...(signal.aborted && { timed_out: true }),
         };
       }
-      if (request.executor && tab.targetId) {
+      if (tab.targetId) {
         response.target_id = tab.targetId;
         response.tab_created = tab.created;
       }
