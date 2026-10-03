@@ -482,14 +482,21 @@ func (m *playwrightExecutorManager) Shutdown(ctx context.Context) {
 	m.executors = make(map[string]*playwrightExecutor)
 	m.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(ctx, playwrightExecutorKillGrace)
-	defer cancel()
+	// Retiring and closing get separate budgets, so slow process exits cannot
+	// use up the time needed to close the tabs they leave behind.
+	retireCtx, cancelRetire := context.WithTimeout(ctx, playwrightExecutorKillGrace)
+	defer cancelRetire()
+	targetIDs := make([]string, 0, len(executors))
 	for _, e := range executors {
-		targetID := m.retire(ctx, e)
-		if targetID == "" {
-			continue
+		if targetID := m.retire(retireCtx, e); targetID != "" {
+			targetIDs = append(targetIDs, targetID)
 		}
-		if err := m.tabs.Close(ctx, targetID); err != nil {
+	}
+
+	closeCtx, cancelClose := context.WithTimeout(ctx, playwrightExecutorKillGrace)
+	defer cancelClose()
+	for _, targetID := range targetIDs {
+		if err := m.tabs.Close(closeCtx, targetID); err != nil {
 			logger.FromContext(ctx).Warn("failed to close playwright executor tab", "target_id", targetID, "error", err)
 		}
 	}
