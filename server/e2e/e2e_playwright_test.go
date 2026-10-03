@@ -488,6 +488,20 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 	// Step 4: Execute playwright code again - daemon should recover
 	waitForExecution("execution after chromium restart (daemon should recover)", 30*time.Second)
 
+	// Step 5: Restart the API. The daemon must exit with it rather than keep
+	// serving the socket, so the first call to the new API succeeds.
+	t.Log("restarting the API via supervisorctl")
+	code, output, err := c.Exec(ctx, []string{"supervisorctl", "-c", "/etc/supervisor/supervisord.conf", "restart", "kernel-images-api"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "supervisorctl restart kernel-images-api: %s", output)
+	require.NoError(t, c.WaitReady(ctx), "api not ready after restart")
+	executeAndVerify("first execution after API restart")
+
+	code, output, err = c.Exec(ctx, []string{"pgrep", "-fc", "/usr/local/lib/playwright-daemon.js"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "pgrep: %s", output)
+	require.Equal(t, "1", strings.TrimSpace(output), "the previous API's daemon should have exited")
+
 	t.Log("playwright daemon recovery test passed")
 }
 

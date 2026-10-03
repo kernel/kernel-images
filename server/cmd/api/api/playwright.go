@@ -71,6 +71,10 @@ func (s *ApiService) ensurePlaywrightDaemon(ctx context.Context) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
+	// Exit with the API, like the executor and REPL children. Otherwise a
+	// daemon left over from a previous API keeps serving the socket and fails
+	// the next API's first call.
+	configureBrowserReplCmd(cmd)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to start playwright daemon: %w", err)
