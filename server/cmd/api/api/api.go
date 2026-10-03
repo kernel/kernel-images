@@ -98,6 +98,10 @@ type ApiService struct {
 	// playwrightDaemonCmd holds the daemon process for cleanup
 	playwrightDaemonCmd *exec.Cmd
 
+	// playwrightExecutors runs named-executor Playwright calls, each executor
+	// in its own daemon process.
+	playwrightExecutors *playwrightExecutorManager
+
 	browserRepl *browserReplManager
 
 	webmcp webMCPClient
@@ -179,7 +183,7 @@ func New(
 	_ = mon.SetTelemetry(false)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	return &ApiService{
+	s := &ApiService{
 		recordManager:     recordManager,
 		factory:           factory,
 		defaultRecorderID: "default",
@@ -198,7 +202,9 @@ func New(
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
-	}, nil
+	}
+	s.playwrightExecutors = newPlaywrightExecutorManager(cdpPlaywrightExecutorTabs{withCDP: s.withCDPClient})
+	return s, nil
 }
 
 func (s *ApiService) StartRecording(ctx context.Context, req oapi.StartRecordingRequestObject) (oapi.StartRecordingResponseObject, error) {
@@ -472,6 +478,7 @@ func (s *ApiService) NetworkMetrics() (resets, completed uint64, up bool) {
 func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.lifecycleCancel()
 	replErr := s.browserRepl.Shutdown(ctx)
+	s.playwrightExecutors.Shutdown(ctx)
 
 	_ = s.webmcp.Close()
 	s.monitorMu.Lock()
