@@ -394,6 +394,8 @@ func TestProxyErrorE2E(t *testing.T) {
 		{"code published after the first release", "restricted_route_unavailable", "restricted_route_unavailable", nil, http.StatusBadGateway},
 		{"code this image does not know", "Some-Future Code", "unknown", "some_future_code", http.StatusBadGateway},
 		{"network policy denial", "network_policy_denied", "network_policy_denied", nil, http.StatusForbidden},
+		{"route proxy unavailable", "destination_route_unavailable", "destination_route_unavailable", nil, http.StatusBadGateway},
+		{"incomplete origin response", "origin_response_incomplete", "origin_response_incomplete", nil, http.StatusBadGateway},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

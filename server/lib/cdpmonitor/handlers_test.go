@@ -335,7 +335,7 @@ func TestNetworkEvents(t *testing.T) {
 		assert.Equal(t, "Document", data["resource_type"])
 	})
 
-	t.Run("proxy_error_gate_lt_502", func(t *testing.T) {
+	t.Run("proxy_error_gate_other_status", func(t *testing.T) {
 		cp := ec.checkpoint()
 		// Another status carrying the header must not be classified, even with
 		// a valid code; the following genuine 502 is the positive anchor.

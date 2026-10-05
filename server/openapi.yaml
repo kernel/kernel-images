@@ -2568,14 +2568,16 @@ components:
               description: CDP request identifier matching the originating request.
             code:
               type: string
-              enum: [destination_blocked, network_policy_denied, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, proxy_unavailable, restricted_route_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed, unknown]
+              enum: [destination_blocked, destination_route_unavailable, network_policy_denied, provider_blacklisted, provider_unreachable, provider_rejected, origin_tls_timeout, origin_response_incomplete, proxy_unavailable, restricted_route_unavailable, upstream_timeout, upstream_dns_failure, upstream_connect_failed, unknown]
               x-enum-varnames:
                 - DestinationBlocked
+                - DestinationRouteUnavailable
                 - NetworkPolicyDenied
                 - ProviderBlacklisted
                 - ProviderUnreachable
                 - ProviderRejected
                 - OriginTlsTimeout
+                - OriginResponseIncomplete
                 - ProxyUnavailable
                 - RestrictedRouteUnavailable
                 - UpstreamTimeout
@@ -2586,9 +2588,10 @@ components:
                 Proxy-layer error code: the `X-Kernel-Proxy-Error` response
                 header value from a branded error page served by the metro
                 egress host-proxy. Values mirror what the proxy emits:
-                destination_blocked, network_policy_denied,
-                provider_blacklisted, provider_unreachable, provider_rejected,
-                origin_tls_timeout, proxy_unavailable,
+                destination_blocked, destination_route_unavailable,
+                network_policy_denied, provider_blacklisted,
+                provider_unreachable, provider_rejected, origin_tls_timeout,
+                origin_response_incomplete, proxy_unavailable,
                 restricted_route_unavailable, upstream_timeout,
                 upstream_dns_failure, upstream_connect_failed. A header value
                 this image does not recognize is reported as unknown, with the
@@ -2603,7 +2606,7 @@ components:
                 replaced with _, at most 64 characters.
             status:
               type: integer
-              description: HTTP response status of the branded error page (502, or 403 for network_policy_denied).
+              description: HTTP response status of the branded error page (502, or 403 when the session's network policy blocks the destination).
             method:
               type: string
               description: HTTP method of the failed request, when known.
