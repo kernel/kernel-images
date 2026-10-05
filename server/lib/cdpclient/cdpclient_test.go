@@ -209,7 +209,10 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		}
 		url := startFakeCDP(t, f)
 
-		ctx := context.Background()
+		// The context outlives the wait timeout so the test fails instead of
+		// hanging if the wait is not bounded.
+		ctx, cancel := context.WithTimeout(context.Background(), pageTargetWaitTimeout+time.Second)
+		defer cancel()
 		client, err := Dial(ctx, url)
 		require.NoError(t, err)
 		defer client.Close()
@@ -218,6 +221,7 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no page target found")
+		assert.NotErrorIs(t, err, context.DeadlineExceeded)
 		assert.GreaterOrEqual(t, time.Since(start), pageTargetWaitTimeout)
 		assert.False(t, f.attachCalled)
 	})
@@ -243,6 +247,11 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 	})
 
 	t.Run("no page target respects context", func(t *testing.T) {
+		// A poll interval longer than the wait timeout means only the
+		// ctx.Done() case can end the wait before the deadline.
+		defer func(d time.Duration) { pageTargetPollInterval = d }(pageTargetPollInterval)
+		pageTargetPollInterval = time.Minute
+
 		f := &fakeCDP{
 			returnNoPageTargets: true,
 		}
