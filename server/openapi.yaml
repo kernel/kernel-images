@@ -1548,11 +1548,33 @@ paths:
         statusCode, code, invocationId, and body fields. The result of the code execution is returned
         in the response.
 
-        'page' is bound to an active tab reported by Chrome. In single-window sessions, this is
-        the foreground tab. When multiple browser windows are open, Chrome reports one active tab
-        per window and the selected window is unspecified. 'context' is the BrowserContext that owns
-        the selected page. If active-tab resolution races with a target change, execution falls back
-        to an existing page. Use 'browser.contexts()' to select a context or page explicitly.
+        Every call runs in an executor: a dedicated Node.js process with its own browser
+        connection. Calls on different executors run concurrently; calls on the same executor run
+        one at a time. A timeout, crash, or blocked event loop in one executor does not affect
+        other executors. After a timeout the executor keeps its process and drops its browser
+        connection, so code abandoned by the timeout cannot keep driving the browser. After a
+        crash or a blocked event loop, the next call on that executor starts a fresh process.
+
+        Calls without 'executor' run in the executor named 'default', which always exists and is
+        the same as passing 'executor: "default"'. In the default executor, 'page' is bound to an
+        active tab reported by Chrome. In single-window sessions, this is the foreground tab. When
+        multiple browser windows are open, Chrome reports one active tab per window and the
+        selected window is unspecified. 'context' is the BrowserContext that owns the selected
+        page. If active-tab resolution races with a target change, execution falls back to an
+        existing page. Use 'browser.contexts()' to select a context or page explicitly.
+
+        Pass any other name to run the call in a named executor. The first call with a new name
+        creates it. Each named executor owns a tab. Its first call opens a new background tab in the default browser
+        context, and 'page' is bound to that tab on every later call while it stays open. Opening it
+        does not change the active tab of an existing window; if the default context has no window,
+        Chrome opens one. If the tab is closed, the next call opens a new
+        one and reports 'tab.created: true'. Executor code can still reach other tabs through
+        'context' and 'browser'; ownership only decides what 'page' is bound to.
+
+        A browser can have at most 8 named executors; the default executor does not count. A call
+        that would create another returns 409 with the executors; delete one with
+        DELETE /playwright/executors/{name}. Named executors are not removed automatically while
+        the API runs; when it shuts down, they are removed and their tabs closed.
       operationId: executePlaywrightCode
       x-telemetry-category: control
       requestBody:
@@ -1570,6 +1592,62 @@ paths:
                 $ref: "#/components/schemas/ExecutePlaywrightResult"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: The call would create an executor beyond the per-browser limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaywrightExecutorLimitError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /playwright/executors:
+    get:
+      summary: List Playwright executors
+      description: Lists the default executor first, then the named executors created by POST /playwright/execute.
+      operationId: listPlaywrightExecutors
+      x-telemetry-category: control
+      responses:
+        "200":
+          description: Open executors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaywrightExecutorList"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /playwright/executors/{name}:
+    delete:
+      summary: Delete a Playwright executor
+      description: |
+        Stops the executor's process. A call running on it fails with an error saying the
+        executor was deleted. By default the executor's tab is closed too. The name can be
+        reused; the next call with it creates a new executor and tab.
+
+        The default executor is restarted instead of removed: its process is stopped, a call
+        running on it fails with an error saying the executor was restarted, and queued and later
+        calls run on a new process. It owns no tab, so 'close_tab' has no effect on it.
+      operationId: deletePlaywrightExecutor
+      x-telemetry-category: control
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/PlaywrightExecutorName"
+        - name: close_tab
+          in: query
+          required: false
+          description: Close the executor's tab. Defaults to true.
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "204":
+          description: Executor deleted
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
   /repl:
@@ -7423,6 +7501,60 @@ components:
           default: 60
           minimum: 1
           maximum: 300
+        executor:
+          $ref: "#/components/schemas/PlaywrightExecutorName"
+      additionalProperties: false
+    PlaywrightExecutorName:
+      type: string
+      description: |
+        Name of a Playwright executor. Calls with the same name run in the same executor; the
+        first call with a new name creates it. 'default' names the executor that runs calls
+        without a name.
+      pattern: "^[A-Za-z0-9_-]{1,64}$"
+    PlaywrightExecutor:
+      type: object
+      description: A named Playwright executor
+      required: [name, busy, created_at, last_used_at]
+      properties:
+        name:
+          $ref: "#/components/schemas/PlaywrightExecutorName"
+        busy:
+          type: boolean
+          description: Whether a call is running on the executor
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          description: When the most recent call on the executor started
+        target_id:
+          type: string
+          description: CDP page target ID of the executor's tab, once it has one
+        url:
+          type: string
+          description: Current URL of the executor's tab, when it is open
+      additionalProperties: false
+    PlaywrightExecutorList:
+      type: object
+      required: [executors]
+      properties:
+        executors:
+          type: array
+          items:
+            $ref: "#/components/schemas/PlaywrightExecutor"
+      additionalProperties: false
+    PlaywrightExecutorLimitError:
+      type: object
+      required: [message, executors]
+      properties:
+        message:
+          type: string
+        executors:
+          type: array
+          description: The default executor and the named executors
+          items:
+            $ref: "#/components/schemas/PlaywrightExecutor"
       additionalProperties: false
     ExecutePlaywrightResult:
       type: object
@@ -7443,6 +7575,24 @@ components:
         stderr:
           type: string
           description: Standard error from the execution
+        tab:
+          $ref: "#/components/schemas/PlaywrightTab"
+      additionalProperties: false
+    PlaywrightTab:
+      type: object
+      description: |
+        The tab 'page' was bound to for this call. Absent if the call failed before binding a tab.
+      required: [target_id, created]
+      properties:
+        target_id:
+          type: string
+          description: CDP page target ID of the tab
+        created:
+          type: boolean
+          description: |
+            Whether this call opened the tab. For an executor this happens on its first call and
+            after its previous tab was closed. Without an executor it happens only when the browser
+            had no open page.
       additionalProperties: false
     BrowserReplRequest:
       type: object
