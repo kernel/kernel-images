@@ -594,11 +594,11 @@ func relatedHosts(a, b string) bool {
 
 // pageTargetWaitTimeout bounds how long firstPageTargetID waits for a page
 // target. DevTools can accept connections shortly before Chromium opens its
-// first tab, both at startup and after a restart.
-const (
-	pageTargetWaitTimeout  = 5 * time.Second
-	pageTargetPollInterval = 100 * time.Millisecond
-)
+// first tab, both at startup and after a restart. It is a var so tests can
+// shorten it.
+var pageTargetWaitTimeout = 5 * time.Second
+
+const pageTargetPollInterval = 100 * time.Millisecond
 
 // firstPageTargetID returns the targetId of the first page target reported
 // by Target.getTargets, polling for up to pageTargetWaitTimeout if none

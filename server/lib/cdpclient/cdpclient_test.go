@@ -201,6 +201,9 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 	})
 
 	t.Run("no page target", func(t *testing.T) {
+		defer func(d time.Duration) { pageTargetWaitTimeout = d }(pageTargetWaitTimeout)
+		pageTargetWaitTimeout = 300 * time.Millisecond
+
 		f := &fakeCDP{
 			returnNoPageTargets: true,
 		}
@@ -255,6 +258,7 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		start := time.Now()
 		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
 		require.Error(t, err)
+		assert.ErrorIs(t, err, context.Canceled)
 		assert.Less(t, time.Since(start), pageTargetWaitTimeout)
 	})
 
