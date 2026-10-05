@@ -1551,7 +1551,8 @@ paths:
         Every call runs in an executor: a dedicated Node.js process with its own browser
         connection. Calls on different executors run concurrently; calls on the same executor run
         one at a time. A timeout, crash, or blocked event loop in one executor does not affect
-        other executors; the next call on that executor starts a fresh process.
+        other executors. After a crash or a blocked event loop, the next call on that executor
+        starts a fresh process; named executors also start a fresh process after a timeout.
 
         Calls without 'executor' run in the executor named 'default', which always exists and is
         the same as passing 'executor: "default"'. In the default executor, 'page' is bound to an
@@ -1622,8 +1623,8 @@ paths:
         reused; the next call with it creates a new executor and tab.
 
         The default executor is restarted instead of removed: its process is stopped, a call
-        running on it fails with an error saying the executor was restarted, and the next call
-        starts a new process. It owns no tab, so 'close_tab' has no effect on it.
+        running on it fails with an error saying the executor was restarted, and queued and later
+        calls run on a new process. It owns no tab, so 'close_tab' has no effect on it.
       operationId: deletePlaywrightExecutor
       x-telemetry-category: control
       parameters:

@@ -21,7 +21,8 @@ import (
 // fakePlaywrightDaemon speaks the daemon's socket protocol. Code is a command:
 // "sleep:<ms>" resolves after ms (reporting timed_out when it exceeds
 // timeout_ms, like the real daemon), "hang" blocks the event loop and "exit"
-// kills the process. A tab exists while its file exists in FAKE_TABS_DIR (see
+// kills the process. FAKE_START_DELAY_MS delays listening on the socket. A tab
+// exists while its file exists in FAKE_TABS_DIR (see
 // fakeExecutorTabs); a missing tab is answered with tab_missing. Every result
 // carries the process ID so tests can tell when a process is replaced.
 const fakePlaywrightDaemon = `
@@ -29,7 +30,7 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const socketPath = process.env.PLAYWRIGHT_DAEMON_SOCKET;
-net.createServer(socket => {
+const server = net.createServer(socket => {
   let buffer = '';
   socket.on('data', data => {
     buffer += data;
@@ -56,7 +57,8 @@ net.createServer(socket => {
       }
     }
   });
-}).listen(socketPath);
+});
+setTimeout(() => server.listen(socketPath), Number(process.env.FAKE_START_DELAY_MS || 0));
 `
 
 // fakeExecutorTabs records each open tab as a file the fake daemon can see.
@@ -316,7 +318,7 @@ func TestPlaywrightExecutorShutdownClosesTabOpenedDuringShutdown(t *testing.T) {
 
 	close(tabs.gate)
 	<-shutdown
-	assert.ErrorIs(t, <-done, errPlaywrightExecutorDeleted)
+	assert.ErrorIs(t, <-done, errPlaywrightExecutorsShutDown)
 	entries, err := os.ReadDir(tabs.dir)
 	require.NoError(t, err)
 	assert.Empty(t, entries, "the tab opened during shutdown should be closed")
@@ -591,4 +593,91 @@ func TestPlaywrightExecutorDeleteRestartsDefault(t *testing.T) {
 	next, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
 	require.NoError(t, err)
 	assert.NotEqual(t, executorPID(t, first), executorPID(t, next))
+}
+
+func TestPlaywrightExecutorRestartDefaultDuringStartup(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	t.Setenv("FAKE_START_DELAY_MS", "1000")
+	ctx := context.Background()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+		errCh <- err
+	}()
+	require.Eventually(t, func() bool { return m.List()[0].busy }, 2*time.Second, 10*time.Millisecond)
+
+	start := time.Now()
+	_, err := m.Delete(ctx, defaultPlaywrightExecutor)
+	require.NoError(t, err)
+	assert.Less(t, time.Since(start), 500*time.Millisecond, "restart should not wait for the starting call")
+	assert.ErrorIs(t, <-errCh, errPlaywrightExecutorRestarted, "a call starting its process during a restart should fail")
+
+	next, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	assert.True(t, next.Success)
+}
+
+func TestPlaywrightExecutorRestartDefaultDoesNotWaitForQueuedCalls(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+	_, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+
+	inFlight := make(chan error, 1)
+	go func() {
+		_, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:3000", 10*time.Second)
+		inFlight <- err
+	}()
+	require.Eventually(t, func() bool { return m.List()[0].busy }, 2*time.Second, 10*time.Millisecond)
+	queued := make(chan *playwrightDaemonResponse, 1)
+	go func() {
+		resp, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:1000", 10*time.Second)
+		assert.NoError(t, err)
+		queued <- resp
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	start := time.Now()
+	_, err = m.Delete(ctx, defaultPlaywrightExecutor)
+	require.NoError(t, err)
+	assert.Less(t, time.Since(start), 500*time.Millisecond, "restart should not wait for queued calls")
+	assert.ErrorIs(t, <-inFlight, errPlaywrightExecutorRestarted)
+
+	resp := <-queued
+	require.NotNil(t, resp)
+	queuedPID := executorPID(t, resp)
+	after, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, queuedPID, executorPID(t, after), "the process started for the queued call should be kept")
+}
+
+func TestPlaywrightExecutorDefaultKeepsProcessAfterTimeout(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+
+	first, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	timedOut, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:5000", time.Second)
+	require.NoError(t, err)
+	require.True(t, timedOut.TimedOut)
+
+	next, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	assert.Equal(t, executorPID(t, first), executorPID(t, next), "the default executor keeps its process after a reported timeout")
+}
+
+func TestPlaywrightExecutorRejectsCallsAfterShutdown(t *testing.T) {
+	m, tabs := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+	m.Shutdown(ctx)
+
+	for _, name := range []string{defaultPlaywrightExecutor, "a"} {
+		_, err := m.Execute(ctx, name, "sleep:0", 10*time.Second)
+		assert.ErrorIs(t, err, errPlaywrightExecutorsShutDown)
+	}
+	entries, err := os.ReadDir(tabs.dir)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "no tab should be opened after shutdown")
+	assert.Empty(t, m.List())
 }

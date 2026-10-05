@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +45,7 @@ var (
 
 	errPlaywrightExecutorDeleted   = errors.New("executor was deleted")
 	errPlaywrightExecutorRestarted = errors.New("executor was restarted")
+	errPlaywrightExecutorsShutDown = errors.New("playwright executors are shutting down")
 	errPlaywrightExecutorNotFound  = errors.New("executor not found")
 	errPlaywrightExecutorSetup     = errors.New("failed to set up playwright executor")
 )
@@ -107,9 +107,6 @@ type playwrightExecutorChild struct {
 	socket   string
 	exited   chan struct{} // closed once cmd.Wait returns
 	killOnce sync.Once
-	// stopped is why the API killed the process on purpose, if it did; set
-	// before the kill, read by the call the kill interrupted.
-	stopped atomic.Pointer[error]
 }
 
 func (c *playwrightExecutorChild) alive() bool {
@@ -149,6 +146,9 @@ type playwrightExecutor struct {
 	busy       bool
 	targetID   string
 	child      *playwrightExecutorChild
+	// restarts counts restarts of the default executor. A call that sees it
+	// change between admission and its result was interrupted by a restart.
+	restarts uint64
 	// gone is set when the executor is removed (deleted, shut down, or never
 	// started); calls still holding it fail with this error.
 	gone error
@@ -168,6 +168,7 @@ type playwrightExecutorManager struct {
 
 	mu        sync.Mutex
 	executors map[string]*playwrightExecutor
+	closed    bool
 }
 
 func newPlaywrightExecutorManager(tabs playwrightExecutorTabs) *playwrightExecutorManager {
@@ -200,6 +201,9 @@ func newPlaywrightExecutor(name string) *playwrightExecutor {
 func (m *playwrightExecutorManager) executorFor(name string) (*playwrightExecutor, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closed {
+		return nil, errPlaywrightExecutorsShutDown
+	}
 	if e, ok := m.executors[name]; ok {
 		return e, nil
 	}
@@ -248,6 +252,7 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 	e.busy = true
 	e.lastUsedAt = time.Now()
 	targetID := e.targetID
+	restarts := e.restarts
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -255,7 +260,7 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 		m.mu.Unlock()
 	}()
 
-	child, err := m.ensureChild(ctx, e)
+	child, err := m.ensureChild(ctx, e, restarts)
 	if err != nil {
 		return nil, err
 	}
@@ -268,7 +273,7 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 		created = true
 	}
 	resp, err := m.send(child, e, code, targetID, created, timeout)
-	if err == nil && resp.TabMissing {
+	if err == nil && resp.TabMissing && !e.pinned {
 		// The tab was closed since the last call. The daemon answered without
 		// running the code, so it is safe to send it again with a new tab.
 		if targetID, err = m.openTab(ctx, e); err != nil {
@@ -278,11 +283,16 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 		resp, err = m.send(child, e, code, targetID, created, timeout)
 	}
 
-	// The daemon cannot interrupt abandoned user code, so a timed-out or
-	// unresponsive process is replaced on the next call.
-	replace := err != nil || resp.TimedOut
+	// An unresponsive or dead process is replaced on the next call. The
+	// daemon cannot interrupt abandoned user code, so a named executor's
+	// process is also replaced after a timeout. The default executor keeps its
+	// process after a timeout, as calls without an executor always have: the
+	// daemon drops its browser connection, so abandoned code cannot keep
+	// driving the browser, and the next call does not pay a cold start.
+	replace := err != nil || (resp.TimedOut && !e.pinned)
 	m.mu.Lock()
 	gone := e.gone
+	restarted := e.restarts != restarts
 	if replace && e.child == child {
 		e.child = nil
 	}
@@ -294,8 +304,8 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 	if gone != nil {
 		return nil, gone
 	}
-	if stopped := child.stopped.Load(); stopped != nil && replace {
-		return nil, *stopped
+	if restarted {
+		return nil, errPlaywrightExecutorRestarted
 	}
 	if err != nil {
 		logger.FromContext(ctx).Error("playwright executor call failed", "executor", name, "error", err)
@@ -310,8 +320,10 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 }
 
 // ensureChild returns the executor's live process, starting a new one if
-// needed. The caller must hold the executor's admission.
-func (m *playwrightExecutorManager) ensureChild(ctx context.Context, e *playwrightExecutor) (*playwrightExecutorChild, error) {
+// needed. restarts is the executor's restart count when the call was
+// admitted; a process started across a restart is discarded. The caller must
+// hold the executor's admission.
+func (m *playwrightExecutorManager) ensureChild(ctx context.Context, e *playwrightExecutor, restarts uint64) (*playwrightExecutorChild, error) {
 	m.mu.Lock()
 	child := e.child
 	m.mu.Unlock()
@@ -337,6 +349,9 @@ func (m *playwrightExecutorManager) ensureChild(ctx context.Context, e *playwrig
 
 	m.mu.Lock()
 	gone := e.gone
+	if gone == nil && e.restarts != restarts {
+		gone = errPlaywrightExecutorRestarted
+	}
 	if gone == nil {
 		e.child = child
 	}
@@ -447,8 +462,9 @@ func (m *playwrightExecutorManager) send(child *playwrightExecutorChild, e *play
 
 // Delete removes the named executor and kills its process. It returns the
 // executor's tab target ID, if it had one, so the caller can close the tab.
-// The default executor is restarted instead: its process is killed and the
-// next call starts a new one.
+// The default executor is restarted instead: its process is killed without
+// waiting for queued calls, the call it interrupts fails, and the next call
+// starts a new process.
 func (m *playwrightExecutorManager) Delete(ctx context.Context, name string) (string, error) {
 	m.mu.Lock()
 	e, ok := m.executors[name]
@@ -457,8 +473,13 @@ func (m *playwrightExecutorManager) Delete(ctx context.Context, name string) (st
 		return "", errPlaywrightExecutorNotFound
 	}
 	if e.pinned {
+		e.restarts++
+		child := e.child
+		e.child = nil
 		m.mu.Unlock()
-		m.stop(ctx, e, errPlaywrightExecutorRestarted)
+		if child != nil {
+			child.kill()
+		}
 		return "", nil
 	}
 	delete(m.executors, name)
@@ -469,39 +490,29 @@ func (m *playwrightExecutorManager) Delete(ctx context.Context, name string) (st
 }
 
 // retire kills a removed executor's process and returns its tab target ID, if
-// any. The caller must already have removed the executor and set gone.
+// any. It waits for an in-flight call to unwind first, so a tab that call
+// opened is included: killing the process makes the call return promptly,
+// and a call records a tab before handing it to the process. The caller must
+// already have removed the executor and set gone.
 func (m *playwrightExecutorManager) retire(ctx context.Context, e *playwrightExecutor) string {
-	m.stop(ctx, e, errPlaywrightExecutorDeleted)
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return e.targetID
-}
-
-// stop kills the executor's process and waits for an in-flight call to
-// unwind, so a tab that call opened is recorded by the time it returns:
-// killing the process makes the call return promptly, and a call records a
-// tab before handing it to the process. The interrupted call fails with
-// reason. A process the in-flight call was still starting is killed once the
-// call unwinds, so the next call always gets a new process.
-func (m *playwrightExecutorManager) stop(ctx context.Context, e *playwrightExecutor, reason error) {
-	m.killChild(e, reason)
-	select {
-	case <-e.admission:
-		m.killChild(e, reason)
-		e.admission <- struct{}{}
-	case <-ctx.Done():
-	}
-}
-
-func (m *playwrightExecutorManager) killChild(e *playwrightExecutor, reason error) {
 	m.mu.Lock()
 	child := e.child
 	e.child = nil
 	m.mu.Unlock()
+
 	if child != nil {
-		child.stopped.Store(&reason)
 		child.kill()
 	}
+
+	select {
+	case <-e.admission:
+		e.admission <- struct{}{}
+	case <-ctx.Done():
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return e.targetID
 }
 
 // List returns the executors, the default executor first and the rest oldest
@@ -542,9 +553,10 @@ func (m *playwrightExecutorManager) snapshotLocked() []*playwrightExecutor {
 // a later API process would have no way to reach.
 func (m *playwrightExecutorManager) Shutdown(ctx context.Context) {
 	m.mu.Lock()
+	m.closed = true
 	executors := make([]*playwrightExecutor, 0, len(m.executors))
 	for _, e := range m.executors {
-		e.gone = errPlaywrightExecutorDeleted
+		e.gone = errPlaywrightExecutorsShutDown
 		executors = append(executors, e)
 	}
 	m.executors = make(map[string]*playwrightExecutor)
