@@ -180,14 +180,17 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 			m.handleTimelineEvent(p, msg.SessionID)
 		}
 	case "Inspector.targetCrashed":
-		// No params; the crashed page is identified by the session it fires on.
+		// No params; the target is identified by the session it fires on.
 		m.handleTargetCrashed(msg.SessionID)
 	}
 }
 
-// handleTargetCrashed publishes a page_crashed event for a renderer crash on
-// sessionID. The URL comes from the tracked target info; target id and type are
-// stamped into source metadata by publishEvent.
+// handleTargetCrashed publishes an event for Inspector.targetCrashed on
+// sessionID. Chromium also sends it when a shared worker ends or a service
+// worker stops, so worker targets report worker_ended and every other target
+// reports page_crashed. The session stays tracked either way: a stopped service
+// worker restarts on the same session. The URL comes from the tracked target
+// info; target id and type are stamped into source metadata by publishEvent.
 func (m *Monitor) handleTargetCrashed(sessionID string) {
 	m.sessionsMu.RLock()
 	info, tracked := m.sessions[sessionID]
@@ -203,6 +206,16 @@ func (m *Monitor) handleTargetCrashed(sessionID string) {
 	targetType := oapi.BrowserTargetType(info.targetType)
 	if targetType == "" {
 		targetType = oapi.BrowserTargetTypeOther
+	}
+	switch targetType {
+	case oapi.BrowserTargetTypeWorker, oapi.BrowserTargetTypeSharedWorker, oapi.BrowserTargetTypeServiceWorker:
+		data, _ := json.Marshal(oapi.BrowserWorkerEndedEventData{
+			TargetId:   info.targetID,
+			TargetType: targetType,
+			Url:        info.url,
+		})
+		m.publishEvent(EventWorkerEnded, events.Page, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Inspector.targetCrashed", data, sessionID)
+		return
 	}
 	data, _ := json.Marshal(oapi.BrowserPageCrashedEventData{
 		TargetId:   info.targetID,

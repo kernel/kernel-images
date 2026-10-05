@@ -111,7 +111,7 @@ targets, not requests issued before their capture domains finish initializing.
 
 ## Event taxonomy
 
-**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` (classified from a branded 5xx response carrying the `X-Kernel-Proxy-Error` header), `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`. `proxy_error` is an opt-in per-session/per-URL refinement of the raw `network` events: it is only observable while the network category (CDP collector) is running, so it is not a default-on alerting signal.
+**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` (classified from a branded 5xx response carrying the `X-Kernel-Proxy-Error` header), `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`, `page_crashed` and `worker_ended` (both from `Inspector.targetCrashed`, split by target type). `proxy_error` is an opt-in per-session/per-URL refinement of the raw `network` events: it is only observable while the network category (CDP collector) is running, so it is not a default-on alerting signal.
 
 **Computed** (inferred from sequences of CDP events): `network_idle` (fires when in-flight requests drop to zero), `page_layout_settled` (1 s after `page_load` with no intervening layout shifts), `page_navigation_settled` (fires once `page_dom_content_loaded` and `page_layout_settled` have both fired for the same navigation; intentionally independent of `network_idle` so that a single hung request cannot stall the event).
 
@@ -372,6 +372,8 @@ Unless otherwise noted, events also include the nav context fields described abo
 | `page_load` | Nav context + `cdp_timestamp` (CDP monotonic seconds). |
 | `page_layout_shift` | Nav context + `source_frame_id`, `time`, `duration`. Optional `layout_shift_details`: `value`, `had_recent_input`. |
 | `page_lcp` | Nav context + `source_frame_id`, `time`. Optional `lcp_details`: `render_time`, `load_time`, `size`, `element_id`, `url`, `node_id`. |
+| `page_crashed` | `target_id`, `target_type`, `url`. The renderer process of a non-worker target (page, iframe, background page) crashed. No nav context. |
+| `worker_ended` | `target_id`, `target_type`, `url`. Chromium sends `Inspector.targetCrashed` on a worker's session when a shared worker ends or a service worker stops, so it is not a crash. A stopped service worker restarts on the same session and reports this again on its next stop. No nav context. |
 
 #### Computed events
 

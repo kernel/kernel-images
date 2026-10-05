@@ -41,6 +41,7 @@ var categoryByType = map[string]oapi.TelemetryEventCategory{
 	"proxy_error":                oapi.TelemetryEventCategory("network"),
 	"service_crashed":            oapi.TelemetryEventCategory("system"),
 	"system_oom_kill":            oapi.TelemetryEventCategory("system"),
+	"worker_ended":               oapi.TelemetryEventCategory("page"),
 }
 
 // CategoryForType returns the authoritative category for a known event

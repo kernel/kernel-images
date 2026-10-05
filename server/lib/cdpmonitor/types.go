@@ -28,7 +28,8 @@ const (
 	EventLayoutShift          = "page_layout_shift"       // PerformanceTimeline event of type "layout-shift"
 	EventLCP                  = "page_lcp"                // PerformanceTimeline event of type "largest-contentful-paint"
 	EventTabOpened            = "page_tab_opened"         // Target.attachedToTarget for type=page
-	EventPageCrashed          = "page_crashed"            // Inspector.targetCrashed (renderer process crash)
+	EventPageCrashed          = "page_crashed"            // Inspector.targetCrashed on a non-worker target (renderer process crash)
+	EventWorkerEnded          = "worker_ended"            // Inspector.targetCrashed on a worker target (shared worker ended, service worker stopped)
 )
 
 // Computed events — synthetic events derived by computed.go state machines.
