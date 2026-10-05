@@ -19,6 +19,7 @@ import (
 // SetDeviceMetricsOverride and GetBrowserVersion.
 type fakeCDP struct {
 	getTargetsCalled    bool
+	getTargetsCalls     int
 	attachCalled        bool
 	setMetricsCalled    bool
 	setMetricsWidth     int
@@ -29,6 +30,9 @@ type fakeCDP struct {
 	failGetTargets      bool
 	failSetMetrics      bool
 	returnNoPageTargets bool
+	// noPageTargetsFor makes the first N Target.getTargets calls return no
+	// page target, as Chromium does before it opens its first tab.
+	noPageTargetsFor    int
 	getVersionCalled    bool
 	failGetVersion      bool
 	productResponse     string
@@ -71,11 +75,12 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 		switch req.Method {
 		case "Target.getTargets":
 			f.getTargetsCalled = true
+			f.getTargetsCalls++
 			if f.failGetTargets {
 				cdpErr = &Error{Code: -1, Message: "mock error"}
 			} else {
 				targets := []map[string]string{}
-				if !f.returnNoPageTargets {
+				if !f.returnNoPageTargets && f.getTargetsCalls > f.noPageTargetsFor {
 					targets = append(targets, map[string]string{
 						"targetId": f.pageTargetID,
 						"type":     "page",
@@ -206,9 +211,51 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		require.NoError(t, err)
 		defer client.Close()
 
+		start := time.Now()
 		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "no page target found")
+		assert.GreaterOrEqual(t, time.Since(start), pageTargetWaitTimeout)
+		assert.False(t, f.attachCalled)
+	})
+
+	t.Run("waits for first page target", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID:     "target-123",
+			sessionID:        "session-abc",
+			noPageTargetsFor: 3,
+		}
+		url := startFakeCDP(t, f)
+
+		ctx := context.Background()
+		client, err := Dial(ctx, url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
+		require.NoError(t, err)
+
+		assert.Equal(t, 4, f.getTargetsCalls)
+		assert.True(t, f.setMetricsCalled)
+	})
+
+	t.Run("no page target respects context", func(t *testing.T) {
+		f := &fakeCDP{
+			returnNoPageTargets: true,
+		}
+		url := startFakeCDP(t, f)
+
+		client, err := Dial(context.Background(), url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(250*time.Millisecond, cancel)
+
+		start := time.Now()
+		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
+		require.Error(t, err)
+		assert.Less(t, time.Since(start), pageTargetWaitTimeout)
 	})
 
 	t.Run("getTargets failure", func(t *testing.T) {
