@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -89,17 +88,8 @@ type ApiService struct {
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
 
-	// playwrightMu serializes Playwright code execution (only one execution at a time)
-	playwrightMu sync.Mutex
-
-	// playwrightDaemonStarting is an atomic flag to prevent concurrent daemon starts
-	playwrightDaemonStarting int32
-
-	// playwrightDaemonCmd holds the daemon process for cleanup
-	playwrightDaemonCmd *exec.Cmd
-
-	// playwrightExecutors runs named-executor Playwright calls, each executor
-	// in its own daemon process.
+	// playwrightExecutors runs Playwright calls, each executor (including the
+	// default one) in its own daemon process.
 	playwrightExecutors *playwrightExecutorManager
 
 	browserRepl *browserReplManager

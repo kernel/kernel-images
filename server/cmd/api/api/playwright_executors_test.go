@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -36,7 +37,9 @@ net.createServer(socket => {
     while ((i = buffer.indexOf('\n')) !== -1) {
       const req = JSON.parse(buffer.slice(0, i));
       buffer = buffer.slice(i + 1);
-      if (!fs.existsSync(path.join(process.env.FAKE_TABS_DIR, req.target_id))) {
+      if (!req.executor) {
+        req.target_id = 'active-tab';
+      } else if (!fs.existsSync(path.join(process.env.FAKE_TABS_DIR, req.target_id))) {
         socket.write(JSON.stringify({ id: req.id, success: false, error: 'tab closed', tab_missing: true }) + '\n');
         continue;
       }
@@ -110,6 +113,11 @@ func newTestPlaywrightExecutorManager(t *testing.T) (*playwrightExecutorManager,
 	m.responseGrace = 500 * time.Millisecond
 	t.Cleanup(func() { m.Shutdown(context.Background()) })
 	return m, tabs
+}
+
+// namedExecutors drops the default executor, which always exists.
+func namedExecutors(executors []*playwrightExecutor) []*playwrightExecutor {
+	return slices.DeleteFunc(executors, func(e *playwrightExecutor) bool { return e.pinned })
 }
 
 func executorPID(t *testing.T, resp *playwrightDaemonResponse) int {
@@ -326,7 +334,7 @@ func TestPlaywrightExecutorLimit(t *testing.T) {
 	_, err := m.Execute(ctx, "one-too-many", "sleep:0", 10*time.Second)
 	var limitErr *playwrightExecutorLimitError
 	require.ErrorAs(t, err, &limitErr)
-	assert.Len(t, limitErr.executors, maxPlaywrightExecutors)
+	assert.Len(t, namedExecutors(limitErr.executors), maxPlaywrightExecutors)
 	assert.Contains(t, limitErr.Error(), "DELETE /playwright/executors/{name}")
 
 	// Existing executors keep working at the limit, and deleting one frees a slot.
@@ -351,7 +359,7 @@ func TestPlaywrightExecutorDelete(t *testing.T) {
 		errCh <- err
 	}()
 	require.Eventually(t, func() bool {
-		executors := m.List()
+		executors := namedExecutors(m.List())
 		return len(executors) == 1 && executors[0].busy
 	}, 2*time.Second, 10*time.Millisecond)
 
@@ -365,7 +373,7 @@ func TestPlaywrightExecutorDelete(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("in-flight call did not fail after delete")
 	}
-	assert.Empty(t, m.List())
+	assert.Empty(t, namedExecutors(m.List()))
 
 	_, err = m.Delete(ctx, "a")
 	assert.ErrorIs(t, err, errPlaywrightExecutorNotFound)
@@ -387,10 +395,10 @@ func TestPlaywrightExecutorDeleteReportsTabOpenedByInFlightCall(t *testing.T) {
 		done <- resp
 	}()
 	require.Eventually(t, func() bool {
-		executors := m.List()
+		executors := namedExecutors(m.List())
 		return len(executors) == 1 && executors[0].targetID != ""
 	}, 3*time.Second, 10*time.Millisecond, "the tab should be known before the call finishes")
-	openedTab := m.List()[0].targetID
+	openedTab := namedExecutors(m.List())[0].targetID
 
 	targetID, err := m.Delete(ctx, "a")
 	require.NoError(t, err)
@@ -411,7 +419,16 @@ func TestPlaywrightExecutorStartFailure(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.IsType(t, oapi.ExecutePlaywrightCode500JSONResponse{}, resp)
-	assert.Empty(t, m.List(), "an executor that never started should not take a slot")
+	assert.Empty(t, namedExecutors(m.List()), "an executor that never started should not take a slot")
+
+	resp, err = svc.ExecutePlaywrightCode(context.Background(), oapi.ExecutePlaywrightCodeRequestObject{
+		Body: &oapi.ExecutePlaywrightCodeJSONRequestBody{Code: "sleep:0"},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, oapi.ExecutePlaywrightCode500JSONResponse{}, resp)
+	executors := m.List()
+	require.Len(t, executors, 1, "a failed start must not remove the default executor")
+	assert.Equal(t, defaultPlaywrightExecutor, executors[0].name)
 }
 
 func TestPlaywrightExecutorHandlers(t *testing.T) {
@@ -445,12 +462,13 @@ func TestPlaywrightExecutorHandlers(t *testing.T) {
 	}
 	limit, isLimit := execute("one-too-many").(oapi.ExecutePlaywrightCode409JSONResponse)
 	require.True(t, isLimit)
-	assert.Len(t, limit.Executors, maxPlaywrightExecutors)
-	assert.Equal(t, "a", limit.Executors[0].Name)
+	assert.Len(t, limit.Executors, maxPlaywrightExecutors+1, "the default executor is listed but not counted")
+	assert.Equal(t, defaultPlaywrightExecutor, limit.Executors[0].Name)
+	assert.Equal(t, "a", limit.Executors[1].Name)
 
 	list, err := svc.ListPlaywrightExecutors(ctx, oapi.ListPlaywrightExecutorsRequestObject{})
 	require.NoError(t, err)
-	assert.Len(t, list.(oapi.ListPlaywrightExecutors200JSONResponse).Executors, maxPlaywrightExecutors)
+	assert.Len(t, list.(oapi.ListPlaywrightExecutors200JSONResponse).Executors, maxPlaywrightExecutors+1)
 
 	keepTab := false
 	deleted, err := svc.DeletePlaywrightExecutor(ctx, oapi.DeletePlaywrightExecutorRequestObject{
@@ -473,12 +491,104 @@ func TestPlaywrightExecutorHandlers(t *testing.T) {
 	assert.False(t, tabs.isOpen(e1.Tab.TargetId), "delete should close the tab by default")
 }
 
-func TestPlaywrightExecutorListIsNeverNil(t *testing.T) {
+func TestPlaywrightExecutorListIncludesDefault(t *testing.T) {
 	svc, err := newSvc(t, recorder.NewFFmpegManager())
 	require.NoError(t, err)
 	list, err := svc.ListPlaywrightExecutors(context.Background(), oapi.ListPlaywrightExecutorsRequestObject{})
 	require.NoError(t, err)
-	raw, err := json.Marshal(list)
+	executors := list.(oapi.ListPlaywrightExecutors200JSONResponse).Executors
+	require.Len(t, executors, 1)
+	assert.Equal(t, defaultPlaywrightExecutor, executors[0].Name)
+	assert.Nil(t, executors[0].TargetId, "the default executor owns no tab")
+}
+
+func TestPlaywrightExecutorDefaultLane(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	svc, err := newSvc(t, recorder.NewFFmpegManager())
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"executors":[]}`, string(raw))
+	svc.playwrightExecutors = m
+	ctx := context.Background()
+
+	execute := func(executor *string) oapi.ExecutePlaywrightCodeResponseObject {
+		t.Helper()
+		resp, err := svc.ExecutePlaywrightCode(ctx, oapi.ExecutePlaywrightCodeRequestObject{
+			Body: &oapi.ExecutePlaywrightCodeJSONRequestBody{Code: "sleep:0", Executor: executor},
+		})
+		require.NoError(t, err)
+		return resp
+	}
+
+	unnamed, ok := execute(nil).(oapi.ExecutePlaywrightCode200JSONResponse)
+	require.True(t, ok)
+	require.NotNil(t, unnamed.Tab)
+	assert.Equal(t, "active-tab", unnamed.Tab.TargetId, "the default executor binds the active tab")
+	assert.False(t, unnamed.Tab.Created)
+
+	name := defaultPlaywrightExecutor
+	explicit, ok := execute(&name).(oapi.ExecutePlaywrightCode200JSONResponse)
+	require.True(t, ok)
+	assert.Equal(t, executorPID(t, &playwrightDaemonResponse{Success: true, Result: unnamed.Result}),
+		executorPID(t, &playwrightDaemonResponse{Success: true, Result: explicit.Result}),
+		`executor "default" should run on the same process as calls without an executor`)
+
+	for i := range maxPlaywrightExecutors {
+		n := fmt.Sprintf("e%d", i)
+		_, ok := execute(&n).(oapi.ExecutePlaywrightCode200JSONResponse)
+		require.True(t, ok, "the default executor should not take a named slot")
+	}
+	_, ok = execute(nil).(oapi.ExecutePlaywrightCode200JSONResponse)
+	assert.True(t, ok, "the default executor works at the named executor limit")
+}
+
+func TestPlaywrightExecutorDefaultRecoversFromBlockedProcess(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+
+	first, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+
+	hung, err := m.Execute(ctx, defaultPlaywrightExecutor, "hang", time.Second)
+	require.NoError(t, err)
+	assert.False(t, hung.Success)
+
+	for range 3 {
+		start := time.Now()
+		next, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+		require.NoError(t, err)
+		assert.NotEqual(t, executorPID(t, first), executorPID(t, next))
+		assert.Less(t, time.Since(start), 3*time.Second, "calls after a blocked process should not wait on it")
+	}
+}
+
+func TestPlaywrightExecutorDeleteRestartsDefault(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	ctx := context.Background()
+
+	first, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:5000", 10*time.Second)
+		errCh <- err
+	}()
+	require.Eventually(t, func() bool { return m.List()[0].busy }, 2*time.Second, 10*time.Millisecond)
+
+	targetID, err := m.Delete(ctx, defaultPlaywrightExecutor)
+	require.NoError(t, err)
+	assert.Empty(t, targetID, "the default executor owns no tab to close")
+	select {
+	case err := <-errCh:
+		assert.ErrorIs(t, err, errPlaywrightExecutorRestarted)
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight call did not fail after restart")
+	}
+
+	executors := m.List()
+	require.Len(t, executors, 1, "restarting the default executor must not remove it")
+	assert.Equal(t, defaultPlaywrightExecutor, executors[0].name)
+
+	next, err := m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	require.NoError(t, err)
+	assert.NotEqual(t, executorPID(t, first), executorPID(t, next))
 }
