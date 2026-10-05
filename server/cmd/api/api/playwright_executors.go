@@ -51,7 +51,7 @@ var (
 )
 
 type playwrightExecutorLimitError struct {
-	executors []*playwrightExecutor
+	executors []playwrightExecutorInfo
 }
 
 func (e *playwrightExecutorLimitError) Error() string {
@@ -124,7 +124,7 @@ func (c *playwrightExecutorChild) alive() bool {
 // reused process group ID is never signaled.
 func (c *playwrightExecutorChild) kill() {
 	c.killOnce.Do(func() {
-		_ = signalBrowserReplGroup(c.cmd, killSignal)
+		_ = signalChildProcessGroup(c.cmd, killSignal)
 		select {
 		case <-c.exited:
 		case <-time.After(playwrightExecutorKillGrace):
@@ -152,6 +152,17 @@ type playwrightExecutor struct {
 	// gone is set when the executor is removed (deleted, shut down, or never
 	// started); calls still holding it fail with this error.
 	gone error
+}
+
+// playwrightExecutorInfo is a point-in-time copy of an executor's listed
+// fields, safe to read without the manager's mu.
+type playwrightExecutorInfo struct {
+	name       string
+	pinned     bool
+	createdAt  time.Time
+	lastUsedAt time.Time
+	busy       bool
+	targetID   string
 }
 
 // playwrightExecutorManager owns the named executors behind
@@ -384,7 +395,7 @@ func (m *playwrightExecutorManager) start(ctx context.Context, name string) (*pl
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "PLAYWRIGHT_DAEMON_SOCKET="+socket)
-	configureBrowserReplCmd(cmd)
+	configureChildProcessCmd(cmd)
 
 	log.Info("starting playwright executor", "executor", name)
 	if err := cmd.Start(); err != nil {
@@ -517,7 +528,7 @@ func (m *playwrightExecutorManager) retire(ctx context.Context, e *playwrightExe
 
 // List returns the executors, the default executor first and the rest oldest
 // first.
-func (m *playwrightExecutorManager) List() []*playwrightExecutor {
+func (m *playwrightExecutorManager) List() []playwrightExecutorInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.snapshotLocked()
@@ -525,10 +536,10 @@ func (m *playwrightExecutorManager) List() []*playwrightExecutor {
 
 // snapshotLocked copies the executors so callers can read them without mu.
 // The caller must hold mu.
-func (m *playwrightExecutorManager) snapshotLocked() []*playwrightExecutor {
-	executors := make([]*playwrightExecutor, 0, len(m.executors))
+func (m *playwrightExecutorManager) snapshotLocked() []playwrightExecutorInfo {
+	executors := make([]playwrightExecutorInfo, 0, len(m.executors))
 	for _, e := range m.executors {
-		executors = append(executors, &playwrightExecutor{
+		executors = append(executors, playwrightExecutorInfo{
 			name:       e.name,
 			pinned:     e.pinned,
 			createdAt:  e.createdAt,
@@ -537,7 +548,7 @@ func (m *playwrightExecutorManager) snapshotLocked() []*playwrightExecutor {
 			targetID:   e.targetID,
 		})
 	}
-	slices.SortFunc(executors, func(a, b *playwrightExecutor) int {
+	slices.SortFunc(executors, func(a, b playwrightExecutorInfo) int {
 		if a.pinned != b.pinned {
 			if a.pinned {
 				return -1
@@ -584,9 +595,9 @@ func (m *playwrightExecutorManager) Shutdown(ctx context.Context) {
 
 // playwrightExecutorsJSON converts executors to API objects, adding the
 // current URL of each executor's tab when the browser can report it.
-func (s *ApiService) playwrightExecutorsJSON(ctx context.Context, executors []*playwrightExecutor) []oapi.PlaywrightExecutor {
+func (s *ApiService) playwrightExecutorsJSON(ctx context.Context, executors []playwrightExecutorInfo) []oapi.PlaywrightExecutor {
 	urls := make(map[string]string)
-	if slices.ContainsFunc(executors, func(e *playwrightExecutor) bool { return e.targetID != "" }) {
+	if slices.ContainsFunc(executors, func(e playwrightExecutorInfo) bool { return e.targetID != "" }) {
 		err := s.withCDPClient(ctx, func(ctx context.Context, c *cdpclient.Client) error {
 			raw, err := c.Send(ctx, "Target.getTargets", nil, "")
 			if err != nil {

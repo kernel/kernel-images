@@ -15,9 +15,9 @@ var (
 	killSignal = syscall.SIGKILL
 )
 
-func configureBrowserReplCmd(cmd *exec.Cmd) {}
+func configureChildProcessCmd(cmd *exec.Cmd) {}
 
-func signalBrowserReplGroup(cmd *exec.Cmd, sig syscall.Signal) error {
+func signalChildProcessGroup(cmd *exec.Cmd, sig syscall.Signal) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}

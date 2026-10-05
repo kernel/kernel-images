@@ -118,8 +118,8 @@ func newTestPlaywrightExecutorManager(t *testing.T) (*playwrightExecutorManager,
 }
 
 // namedExecutors drops the default executor, which always exists.
-func namedExecutors(executors []*playwrightExecutor) []*playwrightExecutor {
-	return slices.DeleteFunc(executors, func(e *playwrightExecutor) bool { return e.pinned })
+func namedExecutors(executors []playwrightExecutorInfo) []playwrightExecutorInfo {
+	return slices.DeleteFunc(executors, func(e playwrightExecutorInfo) bool { return e.pinned })
 }
 
 func executorPID(t *testing.T, resp *playwrightDaemonResponse) int {
