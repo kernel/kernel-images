@@ -111,7 +111,7 @@ targets, not requests issued before their capture domains finish initializing.
 
 ## Event taxonomy
 
-**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` (classified from a branded 5xx response carrying the `X-Kernel-Proxy-Error` header), `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`. `proxy_error` is an opt-in per-session/per-URL refinement of the raw `network` events: it is only observable while the network category (CDP collector) is running, so it is not a default-on alerting signal.
+**CDP-derived** (1-to-1 with a CDP notification): `console_log`, `console_error`, `network_request`, `network_response`, `network_loading_failed`, `proxy_error` (classified from a branded 502 or 403 response carrying the `X-Kernel-Proxy-Error` header), `page_tab_opened`, `page_navigation`, `page_dom_content_loaded`, `page_load`, `page_layout_shift`, `page_lcp`. `proxy_error` is an opt-in per-session/per-URL refinement of the raw `network` events: it is only observable while the network category (CDP collector) is running, so it is not a default-on alerting signal.
 
 **Computed** (inferred from sequences of CDP events): `network_idle` (fires when in-flight requests drop to zero), `page_layout_settled` (1 s after `page_load` with no intervening layout shifts), `page_navigation_settled` (fires once `page_dom_content_loaded` and `page_layout_settled` have both fired for the same navigation; intentionally independent of `network_idle` so that a single hung request cannot stall the event).
 
@@ -360,7 +360,7 @@ Unless otherwise noted, events also include the nav context fields described abo
 | `network_request` | `request_id`, `loader_id`, `frame_id`, `document_url`, `method`, `url`, `headers`, `initiator_type`. Optional: `post_data`, `resource_type`, `is_redirect` + `redirect_url`. |
 | `network_response` | `request_id`, `loader_id`, `frame_id`, `method`, `url`, `status`, `headers`. Optional: `status_text`, `mime_type`, `resource_type`, `body` (truncated text body for textual MIME types). |
 | `network_loading_failed` | `request_id`, `error_text`, `canceled`. Optional (absent when the request record was not found): `url`, `loader_id`, `frame_id`, `resource_type`. |
-| `proxy_error` | `request_id`, `code` (typed enum matching the metro header values), `status` (502). Optional: `raw_code` (sanitized original value when `code` is `unknown`), `url`, `loader_id`, `frame_id`, `method`, `resource_type`. Emitted when a 502 response carries the `X-Kernel-Proxy-Error` header. Unrecognized values are reported as `unknown`; all such values share one rate-limit slot. Emission is sampled to at most one per session+code+resource_type per second. WebSocket handshakes are not classified (documented non-goal). |
+| `proxy_error` | `request_id`, `code` (typed enum matching the metro header values), `status` (502, or 403 for `network_policy_denied`). Optional: `raw_code` (sanitized original value when `code` is `unknown`), `url`, `loader_id`, `frame_id`, `method`, `resource_type`. Emitted when a 502 or 403 response carries the `X-Kernel-Proxy-Error` header. Unrecognized values are reported as `unknown`; all such values share one rate-limit slot. Emission is sampled to at most one per session+code+resource_type per second. WebSocket handshakes are not classified (documented non-goal). |
 
 #### Page events
 

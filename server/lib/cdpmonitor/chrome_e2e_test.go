@@ -343,11 +343,12 @@ func (c *cdpConn) evalRect(t *testing.T, ctx context.Context, sessionID, selecto
 }
 
 // TestProxyErrorE2E drives a real browser to a stub origin that serves a branded
-// 502 with the X-Kernel-Proxy-Error header and asserts the CDP collector emits a
-// proxy_error telemetry event. It exercises the image-side detection
-// (Network.responseReceived header classification) end to end through a real
-// browser, without needing the metro host-proxy. The stub echoes the code query
-// parameter as the header value so each case drives a different code.
+// 502, or a 403 for network_policy_denied, with the X-Kernel-Proxy-Error header
+// and asserts the CDP collector emits a proxy_error telemetry event. It
+// exercises the image-side detection (Network.responseReceived header
+// classification) end to end through a real browser, without needing the metro
+// host-proxy. The stub echoes the code query parameter as the header value so
+// each case drives a different code.
 func TestProxyErrorE2E(t *testing.T) {
 	if os.Getenv("KERNEL_CDPMONITOR_CHROME_E2E") == "" {
 		t.Skip("set KERNEL_CDPMONITOR_CHROME_E2E=1 to run the real-Chromium proxy error test")
