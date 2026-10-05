@@ -203,6 +203,10 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 	t.Run("no page target", func(t *testing.T) {
 		defer func(d time.Duration) { pageTargetWaitTimeout = d }(pageTargetWaitTimeout)
 		pageTargetWaitTimeout = 300 * time.Millisecond
+		// A poll interval longer than the wait timeout means the wait only
+		// ends on time if the last sleep is clamped to the deadline.
+		defer func(d time.Duration) { pageTargetPollInterval = d }(pageTargetPollInterval)
+		pageTargetPollInterval = time.Minute
 
 		f := &fakeCDP{
 			returnNoPageTargets: true,
