@@ -1551,8 +1551,9 @@ paths:
         Every call runs in an executor: a dedicated Node.js process with its own browser
         connection. Calls on different executors run concurrently; calls on the same executor run
         one at a time. A timeout, crash, or blocked event loop in one executor does not affect
-        other executors. After a crash or a blocked event loop, the next call on that executor
-        starts a fresh process; named executors also start a fresh process after a timeout.
+        other executors. After a timeout the executor keeps its process and drops its browser
+        connection, so code abandoned by the timeout cannot keep driving the browser. After a
+        crash or a blocked event loop, the next call on that executor starts a fresh process.
 
         Calls without 'executor' run in the executor named 'default', which always exists and is
         the same as passing 'executor: "default"'. In the default executor, 'page' is bound to an

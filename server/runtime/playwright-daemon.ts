@@ -231,30 +231,44 @@ async function pageForTabTarget(
 // transient but has been observed to outlast back-to-back daemon calls, so an
 // immediate retry lands inside the same gap; the retries are spaced to give
 // Playwright time to attach. The delay is only paid when a pass fails, and
-// callers fall back to an open page if every attempt misses.
-const ACTIVE_PAGE_RESOLUTION_ATTEMPTS = 3;
-const ACTIVE_PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
+// callers fall back to an open page if every attempt misses. Executor tab
+// resolution reuses the same spacing for the same attach gap.
+const PAGE_RESOLUTION_ATTEMPTS = 3;
+const PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
+
+function openPages(browser: Browser): Page[] {
+  return browser
+    .contexts()
+    .flatMap(context => context.pages())
+    .filter(page => !page.isClosed());
+}
+
+// Runs fn with a browser-level CDP session and detaches it afterwards, which
+// also cleans up page sessions auto-attached through it.
+async function withRootSession<T>(browser: Browser, fn: (root: CDPSession) => Promise<T>): Promise<T> {
+  const root = await browser.newBrowserCDPSession();
+  try {
+    return await fn(root);
+  } finally {
+    await root.detach().catch(() => {});
+  }
+}
 
 async function resolveActivePage(browser: Browser): Promise<Page | null> {
   let activeTabIds: string[] = [];
 
-  for (let attempt = 0; attempt < ACTIVE_PAGE_RESOLUTION_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < PAGE_RESOLUTION_ATTEMPTS; attempt++) {
     if (attempt > 0) {
-      await new Promise(resolve => setTimeout(resolve, ACTIVE_PAGE_RESOLUTION_RETRY_DELAY_MS));
+      await new Promise(resolve => setTimeout(resolve, PAGE_RESOLUTION_RETRY_DELAY_MS));
     }
 
     try {
-      const pages = browser
-        .contexts()
-        .flatMap(context => context.pages())
-        .filter(page => !page.isClosed());
-      const pageByTargetId = await pageTargetIdCache.buildPageByTargetId(pages, { refresh: attempt > 0 });
+      const pageByTargetId = await pageTargetIdCache.buildPageByTargetId(openPages(browser), { refresh: attempt > 0 });
 
       // One browser-level session serves the whole attempt: the active-tab
-      // listing and every tab-to-page join. Detaching it also cleans up the
-      // page sessions auto-attached by pageForTabTarget.
-      const root = await browser.newBrowserCDPSession();
-      try {
+      // listing and every tab-to-page join, including the page sessions
+      // auto-attached by pageForTabTarget.
+      const page = await withRootSession(browser, async root => {
         activeTabIds = await activeTabTargetIds(root);
         for (const targetId of activeTabIds) {
           try {
@@ -265,9 +279,9 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
             // other active tabs reported by the same browser snapshot.
           }
         }
-      } finally {
-        await root.detach().catch(() => {});
-      }
+        return null;
+      });
+      if (page) return page;
 
       // No active tab matched this page snapshot. Retry with fresh snapshots.
     } catch {
@@ -277,33 +291,20 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
   }
 
   console.error(
-    `[playwright-daemon] active-tab resolution failed after ${ACTIVE_PAGE_RESOLUTION_ATTEMPTS} attempts; ` +
+    `[playwright-daemon] active-tab resolution failed after ${PAGE_RESOLUTION_ATTEMPTS} attempts; ` +
       `falling back (unmatched active tabs: ${activeTabIds.join(', ') || 'none reported'})`,
   );
   return null;
 }
 
-const OWNED_PAGE_RESOLUTION_ATTEMPTS = 3;
-const OWNED_PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
-
 async function findPage(browser: Browser, targetId: string, refresh: boolean): Promise<Page | undefined> {
-  const pages = browser
-    .contexts()
-    .flatMap(context => context.pages())
-    .filter(page => !page.isClosed());
-  return (await pageTargetIdCache.buildPageByTargetId(pages, { refresh })).get(targetId);
+  return (await pageTargetIdCache.buildPageByTargetId(openPages(browser), { refresh })).get(targetId);
 }
 
 async function targetExists(browser: Browser, targetId: string): Promise<boolean> {
-  const root = await browser.newBrowserCDPSession();
-  try {
-    await root.send('Target.getTargetInfo', { targetId });
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await root.detach().catch(() => {});
-  }
+  return withRootSession(browser, root =>
+    root.send('Target.getTargetInfo', { targetId }).then(() => true, () => false),
+  );
 }
 
 const NEW_TAB_ATTACH_ATTEMPTS = 50;
@@ -317,8 +318,8 @@ class TabMissingError extends Error {}
 // next call reconnects and re-attaches to every tab instead of failing on the
 // same stale connection.
 async function resolveExecutorPage(browser: Browser, tab: BoundTab, targetId: string, created: boolean): Promise<Page> {
-  const attempts = created ? NEW_TAB_ATTACH_ATTEMPTS : OWNED_PAGE_RESOLUTION_ATTEMPTS;
-  const delayMs = created ? NEW_TAB_ATTACH_RETRY_DELAY_MS : OWNED_PAGE_RESOLUTION_RETRY_DELAY_MS;
+  const attempts = created ? NEW_TAB_ATTACH_ATTEMPTS : PAGE_RESOLUTION_ATTEMPTS;
+  const delayMs = created ? NEW_TAB_ATTACH_RETRY_DELAY_MS : PAGE_RESOLUTION_RETRY_DELAY_MS;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (attempt > 0) {
       await new Promise(resolve => setTimeout(resolve, delayMs));

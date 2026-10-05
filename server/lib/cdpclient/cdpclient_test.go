@@ -44,6 +44,10 @@ type fakeCDP struct {
 	navigateURL         string
 	pageStates          []string
 	pageStateIndex      int
+	createdTargetID     string
+	createParams        map[string]any
+	closedTargetID      string
+	closeTargetMissing  bool
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -79,9 +83,22 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 					targets = append(targets, map[string]string{
 						"targetId": f.pageTargetID,
 						"type":     "page",
+						"url":      "https://example.com/",
 					})
 				}
 				result = map[string]any{"targetInfos": targets}
+			}
+		case "Target.createTarget":
+			_ = json.Unmarshal(req.Params, &f.createParams)
+			result = map[string]string{"targetId": f.createdTargetID}
+		case "Target.closeTarget":
+			var params map[string]string
+			_ = json.Unmarshal(req.Params, &params)
+			f.closedTargetID = params["targetId"]
+			if f.closeTargetMissing {
+				cdpErr = &Error{Code: -32602, Message: "No target with given id found"}
+			} else {
+				result = map[string]bool{"success": true}
 			}
 		case "Target.attachToTarget":
 			f.attachCalled = true
@@ -704,4 +721,52 @@ func TestClientCancelledCommandKeepsConnectionOpen(t *testing.T) {
 	require.False(t, client.IsClosed(), "cancelling one command closed the shared connection")
 	_, err = client.Send(context.Background(), "Test.next", nil, "")
 	require.NoError(t, err)
+}
+
+func TestCreateTarget(t *testing.T) {
+	f := &fakeCDP{createdTargetID: "new-tab"}
+	ctx := context.Background()
+	client, err := Dial(ctx, startFakeCDP(t, f))
+	require.NoError(t, err)
+	defer client.Close()
+
+	targetID, err := client.CreateTarget(ctx, "about:blank", true)
+	require.NoError(t, err)
+	assert.Equal(t, "new-tab", targetID)
+	assert.Equal(t, map[string]any{"url": "about:blank", "background": true}, f.createParams)
+}
+
+func TestCloseTarget(t *testing.T) {
+	t.Run("closes the target", func(t *testing.T) {
+		f := &fakeCDP{}
+		ctx := context.Background()
+		client, err := Dial(ctx, startFakeCDP(t, f))
+		require.NoError(t, err)
+		defer client.Close()
+
+		require.NoError(t, client.CloseTarget(ctx, "tab-1"))
+		assert.Equal(t, "tab-1", f.closedTargetID)
+	})
+
+	t.Run("a missing target is not an error", func(t *testing.T) {
+		f := &fakeCDP{closeTargetMissing: true}
+		ctx := context.Background()
+		client, err := Dial(ctx, startFakeCDP(t, f))
+		require.NoError(t, err)
+		defer client.Close()
+
+		require.NoError(t, client.CloseTarget(ctx, "gone"))
+	})
+}
+
+func TestTargetURLs(t *testing.T) {
+	f := &fakeCDP{pageTargetID: "tab-1"}
+	ctx := context.Background()
+	client, err := Dial(ctx, startFakeCDP(t, f))
+	require.NoError(t, err)
+	defer client.Close()
+
+	urls, err := client.TargetURLs(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"tab-1": "https://example.com/"}, urls)
 }

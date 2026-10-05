@@ -12,7 +12,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -73,32 +72,22 @@ type cdpPlaywrightExecutorTabs struct {
 }
 
 // Open creates a background tab in the default browser context, so it does
-// not take focus from the live view or change the active tab that calls
-// without an executor bind to.
+// not take focus from the live view or change the active tab that the default
+// executor binds to.
 func (t cdpPlaywrightExecutorTabs) Open(ctx context.Context) (string, error) {
-	var created struct {
-		TargetID string `json:"targetId"`
-	}
+	var targetID string
 	err := t.withCDP(ctx, func(ctx context.Context, c *cdpclient.Client) error {
-		raw, err := c.Send(ctx, "Target.createTarget", map[string]any{"url": "about:blank", "background": true}, "")
-		if err != nil {
-			return err
-		}
-		return json.Unmarshal(raw, &created)
-	})
-	return created.TargetID, err
-}
-
-// Close closes a tab. A tab that is already gone has nothing left to close.
-func (t cdpPlaywrightExecutorTabs) Close(ctx context.Context, targetID string) error {
-	err := t.withCDP(ctx, func(ctx context.Context, c *cdpclient.Client) error {
-		_, err := c.Send(ctx, "Target.closeTarget", map[string]any{"targetId": targetID}, "")
+		var err error
+		targetID, err = c.CreateTarget(ctx, "about:blank", true)
 		return err
 	})
-	if err != nil && strings.Contains(err.Error(), "No target with given id") {
-		return nil
-	}
-	return err
+	return targetID, err
+}
+
+func (t cdpPlaywrightExecutorTabs) Close(ctx context.Context, targetID string) error {
+	return t.withCDP(ctx, func(ctx context.Context, c *cdpclient.Client) error {
+		return c.CloseTarget(ctx, targetID)
+	})
 }
 
 // playwrightExecutorChild is one executor's daemon process.
@@ -107,6 +96,9 @@ type playwrightExecutorChild struct {
 	socket   string
 	exited   chan struct{} // closed once cmd.Wait returns
 	killOnce sync.Once
+	// unwatch stops the executor's life from killing this process; call it
+	// when the process is replaced while the executor lives on.
+	unwatch func() bool
 }
 
 func (c *playwrightExecutorChild) alive() bool {
@@ -136,6 +128,13 @@ func (c *playwrightExecutorChild) kill() {
 // playwrightExecutor is a named execution lane. admission serializes calls on
 // it; every other field is guarded by the manager's mu.
 type playwrightExecutor struct {
+	// life ends when the executor is deleted or shut down, or, for the
+	// default executor, restarted. Ending it kills the process started under
+	// it, and its cause is the error that calls admitted under it fail with.
+	// A restart gives the default executor a new life.
+	life context.Context
+	end  context.CancelCauseFunc
+
 	name string
 	// pinned marks the default executor: it is never removed, owns no tab,
 	// and binds `page` to the active tab.
@@ -146,12 +145,6 @@ type playwrightExecutor struct {
 	busy       bool
 	targetID   string
 	child      *playwrightExecutorChild
-	// restarts counts restarts of the default executor. A call that sees it
-	// change between admission and its result was interrupted by a restart.
-	restarts uint64
-	// gone is set when the executor is removed (deleted, shut down, or never
-	// started); calls still holding it fail with this error.
-	gone error
 }
 
 // playwrightExecutorInfo is a point-in-time copy of an executor's listed
@@ -167,8 +160,8 @@ type playwrightExecutorInfo struct {
 
 // playwrightExecutorManager owns the named executors behind
 // POST /playwright/execute. Each executor runs in its own daemon process, so
-// calls on different executors run concurrently and a timeout or crash only
-// takes down that executor's process. The manager opens each executor's tab
+// calls on different executors run concurrently and a crash only takes down
+// that executor's process. The manager opens each executor's tab
 // and keeps its target ID, so a replacement process binds `page` to the same
 // tab.
 type playwrightExecutorManager struct {
@@ -204,6 +197,7 @@ func newPlaywrightExecutor(name string) *playwrightExecutor {
 		lastUsedAt: now,
 		admission:  make(chan struct{}, 1),
 	}
+	e.life, e.end = context.WithCancelCause(context.Background())
 	e.admission <- struct{}{}
 	return e
 }
@@ -256,14 +250,14 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 	defer func() { e.admission <- struct{}{} }()
 
 	m.mu.Lock()
-	if e.gone != nil {
+	life := e.life
+	if cause := context.Cause(life); cause != nil {
 		m.mu.Unlock()
-		return nil, e.gone
+		return nil, cause
 	}
 	e.busy = true
 	e.lastUsedAt = time.Now()
 	targetID := e.targetID
-	restarts := e.restarts
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -271,7 +265,7 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 		m.mu.Unlock()
 	}()
 
-	child, err := m.ensureChild(ctx, e, restarts)
+	child, err := m.ensureChild(ctx, e, life)
 	if err != nil {
 		return nil, err
 	}
@@ -294,29 +288,21 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 		resp, err = m.send(child, e, code, targetID, created, timeout)
 	}
 
-	// An unresponsive or dead process is replaced on the next call. The
-	// daemon cannot interrupt abandoned user code, so a named executor's
-	// process is also replaced after a timeout. The default executor keeps its
-	// process after a timeout, as calls without an executor always have: the
-	// daemon drops its browser connection, so abandoned code cannot keep
-	// driving the browser, and the next call does not pay a cold start.
-	replace := err != nil || (resp.TimedOut && !e.pinned)
-	m.mu.Lock()
-	gone := e.gone
-	restarted := e.restarts != restarts
-	if replace && e.child == child {
-		e.child = nil
-	}
-	m.mu.Unlock()
-	if replace {
+	// An unresponsive or dead process is replaced on the next call. After a
+	// reported timeout the process is kept: the daemon drops its browser
+	// connection, so abandoned code cannot keep driving the browser.
+	if err != nil {
+		m.mu.Lock()
+		if e.child == child {
+			e.child = nil
+		}
+		m.mu.Unlock()
+		child.unwatch()
 		child.kill()
 	}
 
-	if gone != nil {
-		return nil, gone
-	}
-	if restarted {
-		return nil, errPlaywrightExecutorRestarted
+	if cause := context.Cause(life); cause != nil {
+		return nil, cause
 	}
 	if err != nil {
 		logger.FromContext(ctx).Error("playwright executor call failed", "executor", name, "error", err)
@@ -331,10 +317,9 @@ func (m *playwrightExecutorManager) Execute(ctx context.Context, name, code stri
 }
 
 // ensureChild returns the executor's live process, starting a new one if
-// needed. restarts is the executor's restart count when the call was
-// admitted; a process started across a restart is discarded. The caller must
-// hold the executor's admission.
-func (m *playwrightExecutorManager) ensureChild(ctx context.Context, e *playwrightExecutor, restarts uint64) (*playwrightExecutorChild, error) {
+// needed. The process is killed when life ends, including when it ends while
+// the process is starting. The caller must hold the executor's admission.
+func (m *playwrightExecutorManager) ensureChild(ctx context.Context, e *playwrightExecutor, life context.Context) (*playwrightExecutorChild, error) {
 	m.mu.Lock()
 	child := e.child
 	m.mu.Unlock()
@@ -342,6 +327,7 @@ func (m *playwrightExecutorManager) ensureChild(ctx context.Context, e *playwrig
 		return child, nil
 	}
 	if child != nil {
+		child.unwatch()
 		child.kill()
 	}
 
@@ -352,24 +338,21 @@ func (m *playwrightExecutorManager) ensureChild(ctx context.Context, e *playwrig
 		// so it does not take one of the limited slots.
 		if !e.pinned && e.targetID == "" && m.executors[e.name] == e {
 			delete(m.executors, e.name)
-			e.gone = err
+			e.end(err)
 		}
 		m.mu.Unlock()
 		return nil, err
 	}
+	child.unwatch = context.AfterFunc(life, child.kill)
 
 	m.mu.Lock()
-	gone := e.gone
-	if gone == nil && e.restarts != restarts {
-		gone = errPlaywrightExecutorRestarted
-	}
-	if gone == nil {
+	cause := context.Cause(life)
+	if cause == nil {
 		e.child = child
 	}
 	m.mu.Unlock()
-	if gone != nil {
-		child.kill()
-		return nil, gone
+	if cause != nil {
+		return nil, cause
 	}
 	return child, nil
 }
@@ -392,7 +375,7 @@ func (m *playwrightExecutorManager) start(ctx context.Context, name string) (*pl
 	socket := filepath.Join(m.socketDir, "playwright-executor-"+uuid.NewString()+".sock")
 
 	cmd := exec.Command("node", m.script)
-	cmd.Stdout = os.Stderr
+	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(), "PLAYWRIGHT_DAEMON_SOCKET="+socket)
 	configureChildProcessCmd(cmd)
@@ -484,37 +467,25 @@ func (m *playwrightExecutorManager) Delete(ctx context.Context, name string) (st
 		return "", errPlaywrightExecutorNotFound
 	}
 	if e.pinned {
-		e.restarts++
-		child := e.child
+		e.end(errPlaywrightExecutorRestarted)
+		e.life, e.end = context.WithCancelCause(context.Background())
 		e.child = nil
 		m.mu.Unlock()
-		if child != nil {
-			child.kill()
-		}
 		return "", nil
 	}
 	delete(m.executors, name)
-	e.gone = errPlaywrightExecutorDeleted
+	e.end(errPlaywrightExecutorDeleted)
 	m.mu.Unlock()
 
 	return m.retire(ctx, e), nil
 }
 
-// retire kills a removed executor's process and returns its tab target ID, if
-// any. It waits for an in-flight call to unwind first, so a tab that call
-// opened is included: killing the process makes the call return promptly,
-// and a call records a tab before handing it to the process. The caller must
-// already have removed the executor and set gone.
+// retire waits for a removed executor's process to die and its in-flight call
+// to unwind, then returns its tab target ID, if any. Waiting for the call
+// includes a tab that call opened: a call records a tab before handing it to
+// the process. The caller must already have removed the executor and ended
+// its life, which kills the process.
 func (m *playwrightExecutorManager) retire(ctx context.Context, e *playwrightExecutor) string {
-	m.mu.Lock()
-	child := e.child
-	e.child = nil
-	m.mu.Unlock()
-
-	if child != nil {
-		child.kill()
-	}
-
 	select {
 	case <-e.admission:
 		e.admission <- struct{}{}
@@ -522,8 +493,12 @@ func (m *playwrightExecutorManager) retire(ctx context.Context, e *playwrightExe
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	return e.targetID
+	child, targetID := e.child, e.targetID
+	m.mu.Unlock()
+	if child != nil {
+		child.kill()
+	}
+	return targetID
 }
 
 // List returns the executors, the default executor first and the rest oldest
@@ -567,7 +542,7 @@ func (m *playwrightExecutorManager) Shutdown(ctx context.Context) {
 	m.closed = true
 	executors := make([]*playwrightExecutor, 0, len(m.executors))
 	for _, e := range m.executors {
-		e.gone = errPlaywrightExecutorsShutDown
+		e.end(errPlaywrightExecutorsShutDown)
 		executors = append(executors, e)
 	}
 	m.executors = make(map[string]*playwrightExecutor)
@@ -596,26 +571,12 @@ func (m *playwrightExecutorManager) Shutdown(ctx context.Context) {
 // playwrightExecutorsJSON converts executors to API objects, adding the
 // current URL of each executor's tab when the browser can report it.
 func (s *ApiService) playwrightExecutorsJSON(ctx context.Context, executors []playwrightExecutorInfo) []oapi.PlaywrightExecutor {
-	urls := make(map[string]string)
+	var urls map[string]string
 	if slices.ContainsFunc(executors, func(e playwrightExecutorInfo) bool { return e.targetID != "" }) {
 		err := s.withCDPClient(ctx, func(ctx context.Context, c *cdpclient.Client) error {
-			raw, err := c.Send(ctx, "Target.getTargets", nil, "")
-			if err != nil {
-				return err
-			}
-			var targets struct {
-				TargetInfos []struct {
-					TargetID string `json:"targetId"`
-					URL      string `json:"url"`
-				} `json:"targetInfos"`
-			}
-			if err := json.Unmarshal(raw, &targets); err != nil {
-				return err
-			}
-			for _, t := range targets.TargetInfos {
-				urls[t.TargetID] = t.URL
-			}
-			return nil
+			var err error
+			urls, err = c.TargetURLs(ctx)
+			return err
 		})
 		if err != nil {
 			logger.FromContext(ctx).Warn("failed to read playwright executor tab URLs", "error", err)

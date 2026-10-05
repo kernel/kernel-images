@@ -12,6 +12,7 @@ import (
 	"time"
 
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -595,6 +596,21 @@ func testPlaywrightExecutors(t *testing.T, ctx context.Context, client *instance
 	require.Equal(t, "data:text/html,active-tab", unnamed.Result, "opening executor tabs should not change the active tab")
 	require.NotNil(t, unnamed.Tab)
 	require.Equal(t, activeTab.Tab.TargetId, unnamed.Tab.TargetId)
+
+	t.Log("verifying an executor keeps its process and tab after a timeout")
+	before := execute("a", `return process.pid;`)
+	timeoutSec := 1
+	timedOutRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code:       `await page.waitForTimeout(3000);`,
+		Executor:   lo.ToPtr("a"),
+		TimeoutSec: &timeoutSec,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, timedOutRsp.JSON200)
+	require.False(t, timedOutRsp.JSON200.Success)
+	after := execute("a", `return process.pid;`)
+	require.Equal(t, before.Result, after.Result, "a timeout should not replace the executor's process")
+	require.Equal(t, before.Tab.TargetId, after.Tab.TargetId)
 
 	t.Log("verifying a closed executor tab is reopened and reported")
 	execute("a", `await page.close();`)

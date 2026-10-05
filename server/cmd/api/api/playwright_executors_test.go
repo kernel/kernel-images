@@ -194,7 +194,7 @@ func TestPlaywrightExecutorKeepsItsTab(t *testing.T) {
 	assert.False(t, second.TabCreated)
 }
 
-func TestPlaywrightExecutorTimeoutReplacesOnlyThatProcess(t *testing.T) {
+func TestPlaywrightExecutorTimeoutKeepsProcessAndTab(t *testing.T) {
 	m, _ := newTestPlaywrightExecutorManager(t)
 	ctx := context.Background()
 
@@ -218,8 +218,8 @@ func TestPlaywrightExecutorTimeoutReplacesOnlyThatProcess(t *testing.T) {
 
 	next, err := m.Execute(ctx, "a", "sleep:0", 10*time.Second)
 	require.NoError(t, err)
-	assert.NotEqual(t, firstPID, executorPID(t, next), "a timed-out executor should get a fresh process")
-	assert.Equal(t, first.TargetID, next.TargetID, "the fresh process should be handed the executor's tab")
+	assert.Equal(t, firstPID, executorPID(t, next), "an executor keeps its process after a reported timeout")
+	assert.Equal(t, first.TargetID, next.TargetID)
 	assert.False(t, next.TabCreated)
 }
 
