@@ -18,7 +18,6 @@ import (
 // fakeCDP is a minimal CDP server that responds to the commands used by
 // SetDeviceMetricsOverride and GetBrowserVersion.
 type fakeCDP struct {
-	getTargetsCalled    bool
 	getTargetsCalls     int
 	attachCalled        bool
 	setMetricsCalled    bool
@@ -30,8 +29,6 @@ type fakeCDP struct {
 	failGetTargets      bool
 	failSetMetrics      bool
 	returnNoPageTargets bool
-	// noPageTargetsFor makes the first N Target.getTargets calls return no
-	// page target, as Chromium does before it opens its first tab.
 	noPageTargetsFor    int
 	getVersionCalled    bool
 	failGetVersion      bool
@@ -74,7 +71,6 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 
 		switch req.Method {
 		case "Target.getTargets":
-			f.getTargetsCalled = true
 			f.getTargetsCalls++
 			if f.failGetTargets {
 				cdpErr = &Error{Code: -1, Message: "mock error"}
@@ -192,7 +188,7 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
 		require.NoError(t, err)
 
-		assert.True(t, f.getTargetsCalled)
+		assert.Equal(t, 1, f.getTargetsCalls)
 		assert.True(t, f.attachCalled)
 		assert.True(t, f.setMetricsCalled)
 		assert.True(t, f.detachCalled)
@@ -203,18 +199,15 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 	t.Run("no page target", func(t *testing.T) {
 		defer func(d time.Duration) { pageTargetWaitTimeout = d }(pageTargetWaitTimeout)
 		pageTargetWaitTimeout = 300 * time.Millisecond
-		// A poll interval longer than the wait timeout means the wait only
-		// ends on time if the last sleep is clamped to the deadline.
 		defer func(d time.Duration) { pageTargetPollInterval = d }(pageTargetPollInterval)
-		pageTargetPollInterval = time.Minute
+		pageTargetPollInterval = time.Minute // only the deadline clamp ends the wait in time
 
 		f := &fakeCDP{
 			returnNoPageTargets: true,
 		}
 		url := startFakeCDP(t, f)
 
-		// The context outlives the wait timeout so the test fails instead of
-		// hanging if the wait is not bounded.
+		// Fail instead of hanging if the wait is unbounded.
 		ctx, cancel := context.WithTimeout(context.Background(), pageTargetWaitTimeout+time.Second)
 		defer cancel()
 		client, err := Dial(ctx, url)
@@ -251,10 +244,8 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 	})
 
 	t.Run("no page target respects context", func(t *testing.T) {
-		// A poll interval longer than the wait timeout means only the
-		// ctx.Done() case can end the wait before the deadline.
 		defer func(d time.Duration) { pageTargetPollInterval = d }(pageTargetPollInterval)
-		pageTargetPollInterval = time.Minute
+		pageTargetPollInterval = time.Minute // only ctx.Done() can end the wait early
 
 		f := &fakeCDP{
 			returnNoPageTargets: true,
