@@ -328,9 +328,13 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			return msg
 		}
 
+		// Clients may negotiate permessage-deflate with the proxy, so large CDP results
+		// (accessibility trees and DOM snapshots run to megabytes) are compressed once on
+		// the way out. The upstream leg stays uncompressed: it is loopback, and compressing
+		// it would only add a decompress and recompress per message.
 		acceptOpts := &websocket.AcceptOptions{
 			OriginPatterns:  []string{"*"},
-			CompressionMode: websocket.CompressionDisabled,
+			CompressionMode: websocket.CompressionNoContextTakeover,
 		}
 		dialOpts := &websocket.DialOptions{
 			CompressionMode: websocket.CompressionDisabled,

@@ -1,6 +1,7 @@
 package devtoolsproxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -162,6 +163,113 @@ func TestWebSocketProxyHandler_ProxiesEcho(t *testing.T) {
 	expectedPrefix := u.Path + "?" + u.RawQuery + "|"
 	if !strings.HasPrefix(string(resp), expectedPrefix) || !strings.HasSuffix(string(resp), msg) {
 		t.Fatalf("unexpected echo: %q", string(resp))
+	}
+}
+
+// countingConn counts the bytes read off the wire, before any decompression.
+type countingConn struct {
+	net.Conn
+	read atomic.Int64
+}
+
+func (c *countingConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.read.Add(int64(n))
+	return n, err
+}
+
+func TestWebSocketProxyHandler_NegotiatesCompressionWithClient(t *testing.T) {
+	// A large CDP result in the shape of Accessibility.getFullAXTree.
+	node := `{"nodeId":"123","ignored":false,"role":{"type":"role","value":"generic"},"childIds":["124","125"]},`
+	result := []byte(`{"id":1,"result":{"nodes":[` + strings.Repeat(node, 40000) + `{}]}}`)
+
+	var upstreamOffers atomic.Value
+	upstreamOffers.Store([]string{})
+	upstreamSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamOffers.Store(append(upstreamOffers.Load().([]string), r.Header.Get("Sec-WebSocket-Extensions")))
+		// Like Chromium, the upstream would compress if the proxy asked it to.
+		c, err := websocket.Accept(w, r, &websocket.AcceptOptions{CompressionMode: websocket.CompressionNoContextTakeover})
+		if err != nil {
+			return
+		}
+		defer c.Close(websocket.StatusNormalClosure, "")
+		for {
+			if _, _, err := c.Read(r.Context()); err != nil {
+				return
+			}
+			if err := c.Write(r.Context(), websocket.MessageText, result); err != nil {
+				return
+			}
+		}
+	}))
+	defer upstreamSrv.Close()
+	u, _ := url.Parse(upstreamSrv.URL)
+	u.Scheme = "ws"
+	u.Path = "/devtools/browser/test"
+
+	logger := silentLogger()
+	mgr := NewUpstreamManager("/dev/null", logger)
+	mgr.setCurrent(u.String())
+	proxySrv := httptest.NewServer(WebSocketProxyHandler(mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil, nil))
+	defer proxySrv.Close()
+	proxyURL := "ws" + strings.TrimPrefix(proxySrv.URL, "http")
+
+	for _, tc := range []struct {
+		name       string
+		mode       websocket.CompressionMode
+		compressed bool
+	}{
+		{name: "client offers permessage-deflate", mode: websocket.CompressionNoContextTakeover, compressed: true},
+		{name: "client does not offer it", mode: websocket.CompressionDisabled, compressed: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var wire *countingConn
+			client := &http.Client{Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+					if err != nil {
+						return nil, err
+					}
+					wire = &countingConn{Conn: conn}
+					return wire, nil
+				},
+			}}
+			ctx := context.Background()
+			conn, resp, err := websocket.Dial(ctx, proxyURL, &websocket.DialOptions{HTTPClient: client, CompressionMode: tc.mode})
+			if err != nil {
+				t.Fatalf("dial proxy failed: %v", err)
+			}
+			defer conn.Close(websocket.StatusNormalClosure, "")
+			conn.SetReadLimit(-1)
+
+			ext := resp.Header.Get("Sec-WebSocket-Extensions")
+			if strings.HasPrefix(ext, "permessage-deflate") != tc.compressed {
+				t.Fatalf("negotiated extensions = %q, compression expected: %v", ext, tc.compressed)
+			}
+			before := wire.read.Load()
+			if err := conn.Write(ctx, websocket.MessageText, []byte(`{"id":1,"method":"Accessibility.getFullAXTree"}`)); err != nil {
+				t.Fatalf("write failed: %v", err)
+			}
+			_, got, err := conn.Read(ctx)
+			if err != nil {
+				t.Fatalf("read failed: %v", err)
+			}
+			if !bytes.Equal(got, result) {
+				t.Fatalf("result differs: got %d bytes, want %d", len(got), len(result))
+			}
+			onWire := wire.read.Load() - before
+			if tc.compressed && onWire*10 > int64(len(result)) {
+				t.Fatalf("%d bytes on the wire for a %d byte result, want it compressed", onWire, len(result))
+			}
+			if !tc.compressed && onWire < int64(len(result)) {
+				t.Fatalf("%d bytes on the wire for a %d byte result without compression", onWire, len(result))
+			}
+		})
+	}
+	for _, offer := range upstreamOffers.Load().([]string) {
+		if offer != "" {
+			t.Fatalf("proxy offered %q to the upstream; the loopback leg should stay uncompressed", offer)
+		}
 	}
 }
 
