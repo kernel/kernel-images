@@ -2869,9 +2869,11 @@ components:
         type:
           type: string
           const: page_worker_ended
+          x-enum-varnames: [PageWorkerEnded]
         category:
           type: string
           const: page
+          x-enum-varnames: [BrowserPageWorkerEndedEventCategoryPage]
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
