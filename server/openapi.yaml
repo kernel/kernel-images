@@ -2811,9 +2811,10 @@ components:
       description: >
         A page's renderer process crashed (an "Aw, Snap!" failure) while the
         browser process itself stayed alive. Reported on the crashed page's
-        session, with the session and target ids on `source.metadata`. Worker
-        targets report `worker_ended` instead. Captured only while the `page`
-        category is enabled.
+        session, with the session and target ids on `source.metadata`. On images
+        that report `page_worker_ended`, shared and service worker targets report
+        that event instead; data from earlier images can contain `page_crashed`
+        for those targets. Captured only while the `page` category is enabled.
       required: [ts, type, category, source]
       properties:
         ts:
@@ -2833,7 +2834,7 @@ components:
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
-    BrowserWorkerEndedEventData:
+    BrowserPageWorkerEndedEventData:
       type: object
       additionalProperties: false
       required: [target_id, target_type, url]
@@ -2846,17 +2847,19 @@ components:
         url:
           type: string
           description: Script URL of the worker.
-    BrowserWorkerEndedEvent:
+    BrowserPageWorkerEndedEvent:
       type: object
       description: >
         A shared worker or service worker stopped running, for example a
         shared worker that closed itself or whose last connected document
-        closed, or a service worker replaced by a newer version. A service
-        worker that starts again keeps the same target and reports this event
-        again the next time it stops. CDP does not distinguish a worker ending
-        normally from its process exiting, so both produce this event. Reported
-        on the worker's session, with the session and target ids on
-        `source.metadata`. Captured only while the `page` category is enabled.
+        closed, or a service worker replaced by a newer version. Chrome does not
+        stop idle service workers while telemetry is attached to them, so idle
+        timeouts do not produce this event. A service worker that starts again
+        keeps the same target and reports this event again the next time it
+        stops. CDP does not distinguish a worker ending normally from its
+        process exiting, so both produce this event. Reported on the worker's
+        session, with the session and target ids on `source.metadata`. Captured
+        only while the `page` category is enabled.
       required: [ts, type, category, source]
       properties:
         ts:
@@ -2865,14 +2868,14 @@ components:
           description: Event timestamp in Unix microseconds.
         type:
           type: string
-          const: worker_ended
+          const: page_worker_ended
         category:
           type: string
           const: page
         source:
           $ref: "#/components/schemas/BrowserEventSource"
         data:
-          $ref: "#/components/schemas/BrowserWorkerEndedEventData"
+          $ref: "#/components/schemas/BrowserPageWorkerEndedEventData"
         truncated:
           type: boolean
           description: True if the data field was truncated due to size limits.
@@ -6500,7 +6503,7 @@ components:
         - $ref: "#/components/schemas/BrowserPageLoadEvent"
         - $ref: "#/components/schemas/BrowserPageTabOpenedEvent"
         - $ref: "#/components/schemas/BrowserPageCrashedEvent"
-        - $ref: "#/components/schemas/BrowserWorkerEndedEvent"
+        - $ref: "#/components/schemas/BrowserPageWorkerEndedEvent"
         - $ref: "#/components/schemas/BrowserPageLayoutShiftEvent"
         - $ref: "#/components/schemas/BrowserPageLcpEvent"
         - $ref: "#/components/schemas/BrowserPageLayoutSettledEvent"
@@ -6540,7 +6543,7 @@ components:
           page_load: "#/components/schemas/BrowserPageLoadEvent"
           page_tab_opened: "#/components/schemas/BrowserPageTabOpenedEvent"
           page_crashed: "#/components/schemas/BrowserPageCrashedEvent"
-          worker_ended: "#/components/schemas/BrowserWorkerEndedEvent"
+          page_worker_ended: "#/components/schemas/BrowserPageWorkerEndedEvent"
           page_layout_shift: "#/components/schemas/BrowserPageLayoutShiftEvent"
           page_lcp: "#/components/schemas/BrowserPageLcpEvent"
           page_layout_settled: "#/components/schemas/BrowserPageLayoutSettledEvent"

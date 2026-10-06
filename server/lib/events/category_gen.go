@@ -37,11 +37,11 @@ var categoryByType = map[string]oapi.TelemetryEventCategory{
 	"page_navigation":            oapi.TelemetryEventCategory("page"),
 	"page_navigation_settled":    oapi.TelemetryEventCategory("page"),
 	"page_tab_opened":            oapi.TelemetryEventCategory("page"),
+	"page_worker_ended":          oapi.TelemetryEventCategory("page"),
 	"platform_api_call":          oapi.TelemetryEventCategory("platform"),
 	"proxy_error":                oapi.TelemetryEventCategory("network"),
 	"service_crashed":            oapi.TelemetryEventCategory("system"),
 	"system_oom_kill":            oapi.TelemetryEventCategory("system"),
-	"worker_ended":               oapi.TelemetryEventCategory("page"),
 }
 
 // CategoryForType returns the authoritative category for a known event

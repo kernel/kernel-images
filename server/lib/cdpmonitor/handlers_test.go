@@ -569,7 +569,7 @@ func TestTargetCrashed(t *testing.T) {
 }
 
 // Chromium sends Inspector.targetCrashed when a shared worker ends or a service
-// worker stops, so worker targets report worker_ended, not page_crashed. An
+// worker stops, so those targets report page_worker_ended, not page_crashed. An
 // out-of-process iframe crash is a real renderer crash and stays page_crashed.
 func TestTargetCrashedByTargetType(t *testing.T) {
 	for _, tc := range []struct {
@@ -577,10 +577,9 @@ func TestTargetCrashedByTargetType(t *testing.T) {
 		want       string
 		notWant    string
 	}{
-		{"worker", "worker_ended", "page_crashed"},
-		{"shared_worker", "worker_ended", "page_crashed"},
-		{"service_worker", "worker_ended", "page_crashed"},
-		{"iframe", "page_crashed", "worker_ended"},
+		{"shared_worker", "page_worker_ended", "page_crashed"},
+		{"service_worker", "page_worker_ended", "page_crashed"},
+		{"iframe", "page_crashed", "page_worker_ended"},
 	} {
 		t.Run(tc.targetType, func(t *testing.T) {
 			srv := newTestServer(t)

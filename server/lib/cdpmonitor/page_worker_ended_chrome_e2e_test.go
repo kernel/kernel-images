@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,9 +18,10 @@ import (
 
 // Chromium sends Inspector.targetCrashed on a shared worker's session when the
 // worker ends and on a service worker's session when the browser stops it.
-// Neither is a crash, so both must surface as worker_ended. A stopped service
-// worker restarts on the same session, so its telemetry must keep flowing.
-func TestWorkerEndedChrome(t *testing.T) {
+// Neither is a crash, so both must surface as page_worker_ended. A stopped
+// service worker restarts on the same session, so its telemetry must keep
+// flowing.
+func TestPageWorkerEndedChrome(t *testing.T) {
 	if os.Getenv("KERNEL_CDPMONITOR_CHROME_E2E") == "" {
 		t.Skip("set KERNEL_CDPMONITOR_CHROME_E2E=1 to run real-Chromium worker tests")
 	}
@@ -66,7 +68,7 @@ func TestWorkerEndedChrome(t *testing.T) {
 		})()`)
 		waitForWorkerTarget(t, ctx, cdp, "shared_worker", stub.URL+"/shared.js")
 		evaluateNetworkScript(t, ctx, cdp, sessionID, `(async () => { sharedWorker.port.postMessage('close'); return true; })()`)
-		waitForWorkerEnded(t, ec, cp, "shared_worker", stub.URL+"/shared.js")
+		waitForPageWorkerEnded(t, ec, cp, "shared_worker", stub.URL+"/shared.js")
 	})
 
 	t.Run("service worker stops and restarts", func(t *testing.T) {
@@ -88,7 +90,7 @@ func TestWorkerEndedChrome(t *testing.T) {
 
 		cp := ec.checkpoint()
 		cdp.call(t, ctx, sessionID, "ServiceWorker.stopAllWorkers", nil)
-		ended := waitForWorkerEnded(t, ec, cp, "service_worker", stub.URL+"/service.js")
+		ended := waitForPageWorkerEnded(t, ec, cp, "service_worker", stub.URL+"/service.js")
 		require.NotNil(t, ended.Source.Metadata)
 		workerSession := (*ended.Source.Metadata)["cdp_session_id"]
 		require.NotEmpty(t, workerSession)
@@ -100,7 +102,7 @@ func TestWorkerEndedChrome(t *testing.T) {
 
 		cp = ec.checkpoint()
 		cdp.call(t, ctx, sessionID, "ServiceWorker.stopAllWorkers", nil)
-		again := waitForWorkerEnded(t, ec, cp, "service_worker", stub.URL+"/service.js")
+		again := waitForPageWorkerEnded(t, ec, cp, "service_worker", stub.URL+"/service.js")
 		assert.Equal(t, workerSession, (*again.Source.Metadata)["cdp_session_id"])
 	})
 
@@ -111,18 +113,43 @@ func TestWorkerEndedChrome(t *testing.T) {
 		require.Eventually(t, func() bool {
 			return cdp.evalBool(ctx, crashSession, `document.readyState === 'complete' && window.__kernelEventInjected === true`)
 		}, 15*time.Second, 50*time.Millisecond)
-		// Page.crash never answers; the renderer is gone before it can.
-		crashCtx, crashCancel := context.WithTimeout(ctx, time.Second)
-		_, _ = cdp.roundtrip(crashCtx, crashSession, "Page.crash", nil)
-		crashCancel()
-		ev := ec.waitForNew(t, EventPageCrashed, cp, 10*time.Second)
-		var data struct {
-			TargetID   string `json:"target_id"`
-			TargetType string `json:"target_type"`
+		// SIGKILL every renderer rather than sending Page.crash: a killed renderer
+		// is reported without waiting on Chrome's crash handler.
+		raw := cdp.call(t, ctx, "", "SystemInfo.getProcessInfo", nil).raw
+		var info struct {
+			Result struct {
+				ProcessInfo []struct {
+					Type string `json:"type"`
+					ID   int    `json:"id"`
+				} `json:"processInfo"`
+			} `json:"result"`
 		}
-		require.NoError(t, json.Unmarshal(ev.Data, &data))
-		assert.Equal(t, crashID, data.TargetID)
-		assert.Equal(t, "page", data.TargetType)
+		require.NoError(t, json.Unmarshal(raw, &info))
+		killed := 0
+		for _, process := range info.Result.ProcessInfo {
+			if process.Type == "renderer" {
+				require.NoError(t, syscall.Kill(process.ID, syscall.SIGKILL))
+				killed++
+			}
+		}
+		require.NotZero(t, killed, "no renderer processes reported")
+		require.Eventually(t, func() bool {
+			ec.mu.Lock()
+			defer ec.mu.Unlock()
+			for _, ev := range ec.events[cp:] {
+				if ev.Type != EventPageCrashed {
+					continue
+				}
+				var data struct {
+					TargetID   string `json:"target_id"`
+					TargetType string `json:"target_type"`
+				}
+				if json.Unmarshal(ev.Data, &data) == nil && data.TargetID == crashID {
+					return data.TargetType == "page"
+				}
+			}
+			return false
+		}, 10*time.Second, 25*time.Millisecond, "missing page_crashed for the killed page")
 	})
 
 	ec.mu.Lock()
@@ -163,14 +190,14 @@ func waitForWorkerTarget(t *testing.T, ctx context.Context, cdp *cdpConn, target
 	}, 5*time.Second, 50*time.Millisecond, "%s target was not created", targetType)
 }
 
-func waitForWorkerEnded(t *testing.T, ec *eventCollector, since int, targetType, url string) events.Event {
+func waitForPageWorkerEnded(t *testing.T, ec *eventCollector, since int, targetType, url string) events.Event {
 	t.Helper()
 	var found events.Event
 	require.Eventually(t, func() bool {
 		ec.mu.Lock()
 		defer ec.mu.Unlock()
 		for _, ev := range ec.events[since:] {
-			if ev.Type != EventWorkerEnded {
+			if ev.Type != EventPageWorkerEnded {
 				continue
 			}
 			var data struct {
@@ -183,7 +210,7 @@ func waitForWorkerEnded(t *testing.T, ec *eventCollector, since int, targetType,
 			}
 		}
 		return false
-	}, 10*time.Second, 25*time.Millisecond, "missing worker_ended for %s %s", targetType, url)
+	}, 10*time.Second, 25*time.Millisecond, "missing page_worker_ended for %s %s", targetType, url)
 	assert.Equal(t, events.Page, found.Category)
 	return found
 }

@@ -29,7 +29,7 @@ const (
 	EventLCP                  = "page_lcp"                // PerformanceTimeline event of type "largest-contentful-paint"
 	EventTabOpened            = "page_tab_opened"         // Target.attachedToTarget for type=page
 	EventPageCrashed          = "page_crashed"            // Inspector.targetCrashed on a non-worker target (renderer process crash)
-	EventWorkerEnded          = "worker_ended"            // Inspector.targetCrashed on a worker target (shared worker ended, service worker stopped)
+	EventPageWorkerEnded      = "page_worker_ended"       // Inspector.targetCrashed on a shared or service worker (worker ended or stopped)
 )
 
 // Computed events — synthetic events derived by computed.go state machines.
