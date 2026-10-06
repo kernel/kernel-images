@@ -568,6 +568,70 @@ func TestTargetCrashed(t *testing.T) {
 	assert.Equal(t, "https://crash.example.com", data["url"])
 }
 
+// Chromium sends Inspector.targetCrashed when a shared worker ends or a service
+// worker stops, so those targets report page_worker_ended, not page_crashed. An
+// out-of-process iframe crash is a real renderer crash and stays page_crashed.
+func TestTargetCrashedByTargetType(t *testing.T) {
+	for _, tc := range []struct {
+		targetType string
+		want       string
+		notWant    string
+	}{
+		{"shared_worker", "page_worker_ended", "page_crashed"},
+		{"service_worker", "page_worker_ended", "page_crashed"},
+		{"iframe", "page_crashed", "page_worker_ended"},
+	} {
+		t.Run(tc.targetType, func(t *testing.T) {
+			srv := newTestServer(t)
+			defer srv.close()
+
+			m, ec, cleanup := startMonitor(t, srv, nil)
+			defer cleanup()
+
+			sessionID := "sess-" + tc.targetType
+			url := "https://example.com/" + tc.targetType + ".js"
+			srv.sendToMonitor(t, map[string]any{
+				"method": "Target.attachedToTarget",
+				"params": map[string]any{
+					"sessionId": sessionID,
+					"targetInfo": map[string]any{
+						"targetId": "target-" + tc.targetType, "type": tc.targetType,
+						"url": url, "attached": true,
+					},
+					"waitingForDebugger": false,
+				},
+			})
+			require.Eventually(t, func() bool {
+				m.sessionsMu.RLock()
+				defer m.sessionsMu.RUnlock()
+				_, ok := m.sessions[sessionID]
+				return ok
+			}, 2*time.Second, 10*time.Millisecond)
+
+			cp := ec.checkpoint()
+			srv.sendToMonitor(t, map[string]any{
+				"method":    "Inspector.targetCrashed",
+				"sessionId": sessionID,
+				"params":    map[string]any{},
+			})
+			ev := ec.waitFor(t, tc.want, 2*time.Second)
+			assert.Equal(t, events.Page, ev.Category)
+			assert.Equal(t, "Inspector.targetCrashed", *ev.Source.Event)
+			var data map[string]any
+			require.NoError(t, json.Unmarshal(ev.Data, &data))
+			assert.Equal(t, "target-"+tc.targetType, data["target_id"])
+			assert.Equal(t, tc.targetType, data["target_type"])
+			assert.Equal(t, url, data["url"])
+			ec.assertNone(t, tc.notWant, cp, 200*time.Millisecond)
+
+			m.sessionsMu.RLock()
+			_, stillTracked := m.sessions[sessionID]
+			m.sessionsMu.RUnlock()
+			assert.True(t, stillTracked, "session must stay tracked")
+		})
+	}
+}
+
 // A crash on a session the monitor never attached to still emits page_crashed,
 // but target_type must stay a valid enum ("other"), not an empty string.
 func TestTargetCrashedUntracked(t *testing.T) {
