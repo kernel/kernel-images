@@ -260,6 +260,7 @@ RUN useradd -m -s /bin/bash kernel
 COPY images/chromium-headless/image/start-xvfb.sh /images/chromium-headless/image/start-xvfb.sh
 RUN chmod +x /images/chromium-headless/image/start-xvfb.sh
 COPY shared/start-pulseaudio.sh /usr/local/bin/start-pulseaudio.sh
+COPY shared/pulseaudio-daemon.conf /etc/pulse/daemon.conf.d/10-kernel-sample-rate.conf
 RUN chmod +x /usr/local/bin/start-pulseaudio.sh
 
 # Container entrypoint wrapper (Go binary, replaces wrapper.sh)
