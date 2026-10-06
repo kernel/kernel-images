@@ -423,6 +423,59 @@ func (c *Client) CountPageTargets(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// CreateTarget opens a page target at url in the default browser context and
+// returns its target ID. A background target does not become the active tab
+// of its window.
+func (c *Client) CreateTarget(ctx context.Context, url string, background bool) (string, error) {
+	raw, err := c.Send(ctx, "Target.createTarget", map[string]any{"url": url, "background": background}, "")
+	if err != nil {
+		return "", fmt.Errorf("Target.createTarget: %w", err)
+	}
+	var created struct {
+		TargetID string `json:"targetId"`
+	}
+	if err := json.Unmarshal(raw, &created); err != nil {
+		return "", fmt.Errorf("unmarshal Target.createTarget: %w", err)
+	}
+	return created.TargetID, nil
+}
+
+// CloseTarget closes a target. A target that no longer exists has nothing left
+// to close, so it is not an error.
+func (c *Client) CloseTarget(ctx context.Context, targetID string) error {
+	_, err := c.Send(ctx, "Target.closeTarget", map[string]any{"targetId": targetID}, "")
+	var cdpErr *Error
+	if errors.As(err, &cdpErr) && strings.Contains(cdpErr.Message, "No target with given id") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("Target.closeTarget: %w", err)
+	}
+	return nil
+}
+
+// TargetURLs returns the current URL of every target, keyed by target ID.
+func (c *Client) TargetURLs(ctx context.Context) (map[string]string, error) {
+	raw, err := c.Send(ctx, "Target.getTargets", nil, "")
+	if err != nil {
+		return nil, fmt.Errorf("Target.getTargets: %w", err)
+	}
+	var targets struct {
+		TargetInfos []struct {
+			TargetID string `json:"targetId"`
+			URL      string `json:"url"`
+		} `json:"targetInfos"`
+	}
+	if err := json.Unmarshal(raw, &targets); err != nil {
+		return nil, fmt.Errorf("unmarshal targets: %w", err)
+	}
+	urls := make(map[string]string, len(targets.TargetInfos))
+	for _, t := range targets.TargetInfos {
+		urls[t.TargetID] = t.URL
+	}
+	return urls, nil
+}
+
 // DispatchStartURL closes extra page targets and dispatches a navigation on the
 // first page target. It does not wait for lifecycle events; Chrome owns the
 // eventual navigation result.

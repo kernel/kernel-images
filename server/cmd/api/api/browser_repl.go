@@ -228,7 +228,7 @@ func (m *browserReplManager) ensureLocked(ctx context.Context) error {
 				"repl_id", child.id, "exit_err", err)
 			child.done = closedWaitChannel(err)
 			// The group leader exited, but descendants may still be alive.
-			_ = signalBrowserReplGroup(child.cmd, killSignal)
+			_ = signalChildProcessGroup(child.cmd, killSignal)
 			m.clearLocked(ctx, child)
 		default:
 			return nil
@@ -282,7 +282,7 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 		"BROWSER_REPL_SOCKET="+socketPath,
 		"BROWSER_REPL_ID="+replID,
 	)
-	configureBrowserReplCmd(cmd)
+	configureChildProcessCmd(cmd)
 
 	log.Info("starting browser REPL", "repl_id", replID, "socket", socketPath)
 	if err := cmd.Start(); err != nil {
@@ -307,7 +307,7 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 		select {
 		case waitErr := <-child.done:
 			child.done = closedWaitChannel(waitErr)
-			_ = signalBrowserReplGroup(child.cmd, killSignal)
+			_ = signalChildProcessGroup(child.cmd, killSignal)
 			m.clearLocked(ctx, child)
 			return fmt.Errorf("browser REPL exited during startup: %w", waitErr)
 		case <-ctx.Done():
@@ -338,21 +338,21 @@ func (m *browserReplManager) terminateLocked(ctx context.Context, reason string)
 	log.Info("terminating browser REPL", "repl_id", child.id, "reason", reason)
 
 	// SIGTERM the whole process group so any grandchildren go down too.
-	_ = signalBrowserReplGroup(child.cmd, termSignal)
+	_ = signalChildProcessGroup(child.cmd, termSignal)
 
 	select {
 	case err := <-child.done:
 		child.done = closedWaitChannel(err)
 		// The group leader exiting does not imply descendants honored SIGTERM.
 		// Kill the process group before relinquishing ownership.
-		_ = signalBrowserReplGroup(child.cmd, killSignal)
+		_ = signalChildProcessGroup(child.cmd, killSignal)
 		m.clearLocked(ctx, child)
 		return err
 	case <-time.After(browserReplShutdownGrace):
 	}
 
 	log.Warn("browser REPL did not exit on SIGTERM; escalating to SIGKILL", "repl_id", child.id)
-	_ = signalBrowserReplGroup(child.cmd, killSignal)
+	_ = signalChildProcessGroup(child.cmd, killSignal)
 
 	var waitErr error
 	select {
@@ -364,7 +364,7 @@ func (m *browserReplManager) terminateLocked(ctx context.Context, reason string)
 	}
 	// Re-signal after the leader is reaped: descendants remain members of the
 	// original process group even if the leader exited first.
-	_ = signalBrowserReplGroup(child.cmd, killSignal)
+	_ = signalChildProcessGroup(child.cmd, killSignal)
 	m.clearLocked(ctx, child)
 	return waitErr
 }
@@ -382,7 +382,7 @@ func (m *browserReplManager) killLocked(ctx context.Context, reason string) {
 	}
 	log := logger.FromContext(ctx)
 	log.Info("killing browser REPL", "repl_id", child.id, "reason", reason)
-	_ = signalBrowserReplGroup(child.cmd, killSignal)
+	_ = signalChildProcessGroup(child.cmd, killSignal)
 
 	select {
 	case err := <-child.done:
@@ -390,7 +390,7 @@ func (m *browserReplManager) killLocked(ctx context.Context, reason string) {
 	case <-time.After(browserReplShutdownGrace):
 		log.Error("browser REPL did not exit after SIGKILL", "repl_id", child.id)
 	}
-	_ = signalBrowserReplGroup(child.cmd, killSignal)
+	_ = signalChildProcessGroup(child.cmd, killSignal)
 	m.clearLocked(ctx, child)
 }
 

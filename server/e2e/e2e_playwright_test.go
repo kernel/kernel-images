@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/samber/lo"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -278,6 +281,9 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Run("WebMCPScratchDocument", func(t *testing.T) {
 		testWebMCPScratchDocument(t, ctx, c, client)
 	})
+	t.Run("Executors", func(t *testing.T) {
+		testPlaywrightExecutors(t, ctx, client)
+	})
 }
 
 func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
@@ -362,6 +368,31 @@ await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
 	require.True(t, lateRsp.JSON200.Success)
 	require.NotNil(t, lateRsp.JSON200.Result)
 	require.Equal(t, "initial", lateRsp.JSON200.Result, "timed-out execution mutated the page after returning")
+
+	// A script that blocks the daemon's event loop cannot answer its own
+	// timeout. Later calls must still work instead of waiting on the blocked
+	// process until their socket deadlines.
+	t.Log("executing playwright code that blocks the event loop")
+	blockedReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code:       `while (true) {}`,
+		TimeoutSec: &timeoutSec,
+	}
+	blockedRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, blockedReq)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, blockedRsp.StatusCode())
+	require.NotNil(t, blockedRsp.JSON200)
+	require.False(t, blockedRsp.JSON200.Success, "expected success=false for a blocked event loop")
+
+	for i := range 3 {
+		start := time.Now()
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, recoveryReq)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, rsp.StatusCode())
+		require.NotNil(t, rsp.JSON200)
+		require.True(t, rsp.JSON200.Success, "call %d after a blocked event loop failed: %s", i+1, rsp.Body)
+		require.Equal(t, "initial", rsp.JSON200.Result)
+		require.Less(t, time.Since(start), 10*time.Second, "call %d after a blocked event loop should not wait on the blocked process", i+1)
+	}
 
 	t.Log("playwright timeout regression test passed")
 }
@@ -483,5 +514,141 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 	// Step 4: Execute playwright code again - daemon should recover
 	waitForExecution("execution after chromium restart (daemon should recover)", 30*time.Second)
 
+	// Step 5: Restart the API. The daemon must exit with it rather than keep
+	// serving the socket, so the first call to the new API succeeds.
+	t.Log("restarting the API via supervisorctl")
+	code, output, err := c.Exec(ctx, []string{"supervisorctl", "-c", "/etc/supervisor/supervisord.conf", "restart", "kernel-images-api"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "supervisorctl restart kernel-images-api: %s", output)
+	require.NoError(t, c.WaitReady(ctx), "api not ready after restart")
+	executeAndVerify("first execution after API restart")
+
+	code, output, err = c.Exec(ctx, []string{"pgrep", "-fc", "/usr/local/lib/playwright-daemon.js"})
+	require.NoError(t, err)
+	require.Equal(t, 0, code, "pgrep: %s", output)
+	require.Equal(t, "1", strings.TrimSpace(output), "the previous API's daemon should have exited")
+
 	t.Log("playwright daemon recovery test passed")
+}
+
+func testPlaywrightExecutors(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
+	execute := func(executor, code string) *instanceoapi.ExecutePlaywrightResult {
+		t.Helper()
+		body := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
+		if executor != "" {
+			body.Executor = &executor
+		}
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, body)
+		require.NoError(t, err)
+		require.Equal(t, http.StatusOK, rsp.StatusCode(), "body=%s", string(rsp.Body))
+		require.NotNil(t, rsp.JSON200)
+		return rsp.JSON200
+	}
+
+	// Executor tabs open in the default context. Start from a single window
+	// whose active tab is in that context, since earlier subtests leave other
+	// contexts and windows behind.
+	activeBefore := execute("", `
+		await Promise.all(browser.contexts().slice(1).map(context => context.close()));
+		const active = await browser.contexts()[0].newPage();
+		await active.goto('data:text/html,active-tab');
+		await Promise.all(browser.contexts()[0].pages().filter(p => p !== active).map(p => p.close()));
+		await active.bringToFront();
+		return active.url();
+	`)
+	require.True(t, activeBefore.Success, "error=%v", activeBefore.Error)
+	activeTab := execute("", `return page.url();`)
+	require.Equal(t, "data:text/html,active-tab", activeTab.Result)
+	require.NotNil(t, activeTab.Tab, "calls without an executor should report the tab they bound")
+	require.False(t, activeTab.Tab.Created)
+
+	t.Log("verifying the first call opens the executor's tab and later calls reuse it")
+	first := execute("a", `await page.goto('data:text/html,executor-a'); return page.url();`)
+	require.True(t, first.Success, "error=%v", first.Error)
+	require.NotNil(t, first.Tab)
+	require.True(t, first.Tab.Created)
+	execute("b", `await page.goto('data:text/html,executor-b'); return page.url();`)
+
+	again := execute("a", `return page.url();`)
+	require.True(t, again.Success)
+	require.Equal(t, "data:text/html,executor-a", again.Result)
+	require.Equal(t, first.Tab.TargetId, again.Tab.TargetId)
+	require.False(t, again.Tab.Created)
+
+	t.Log("verifying different executors run concurrently")
+	start := time.Now()
+	var wg sync.WaitGroup
+	for _, name := range []string{"a", "b"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result := execute(name, `await page.waitForTimeout(3000); return page.url();`)
+			assert.True(t, result.Success, "executor %s error=%v", name, result.Error)
+			assert.Equal(t, "data:text/html,executor-"+name, result.Result)
+		}()
+	}
+	wg.Wait()
+	require.Less(t, time.Since(start), 5*time.Second, "two 3s calls on different executors should overlap")
+
+	t.Log("verifying calls without an executor still bind the active tab")
+	unnamed := execute("", `return page.url();`)
+	require.True(t, unnamed.Success)
+	require.Equal(t, "data:text/html,active-tab", unnamed.Result, "opening executor tabs should not change the active tab")
+	require.NotNil(t, unnamed.Tab)
+	require.Equal(t, activeTab.Tab.TargetId, unnamed.Tab.TargetId)
+
+	t.Log("verifying an executor keeps its process and tab after a timeout")
+	before := execute("a", `return process.pid;`)
+	timeoutSec := 1
+	timedOutRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code:       `await page.waitForTimeout(3000);`,
+		Executor:   lo.ToPtr("a"),
+		TimeoutSec: &timeoutSec,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, timedOutRsp.JSON200)
+	require.False(t, timedOutRsp.JSON200.Success)
+	after := execute("a", `return process.pid;`)
+	require.Equal(t, before.Result, after.Result, "a timeout should not replace the executor's process")
+	require.Equal(t, before.Tab.TargetId, after.Tab.TargetId)
+
+	t.Log("verifying a closed executor tab is reopened and reported")
+	execute("a", `await page.close();`)
+	reopened := execute("a", `return page.url();`)
+	require.True(t, reopened.Success)
+	require.True(t, reopened.Tab.Created)
+	require.NotEqual(t, first.Tab.TargetId, reopened.Tab.TargetId)
+
+	t.Log("verifying list and delete")
+	list, err := client.ListPlaywrightExecutorsWithResponse(ctx)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, list.StatusCode())
+	require.Len(t, list.JSON200.Executors, 3)
+	require.Equal(t, "default", list.JSON200.Executors[0].Name, "the default executor is listed first")
+	require.Nil(t, list.JSON200.Executors[0].TargetId, "the default executor owns no tab")
+
+	del, err := client.DeletePlaywrightExecutorWithResponse(ctx, "b", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, del.StatusCode(), "body=%s", string(del.Body))
+	urls := execute("", `return browser.contexts().flatMap(c => c.pages()).map(p => p.url());`)
+	require.NotContains(t, urls.Result, "data:text/html,executor-b", "deleting an executor should close its tab")
+
+	missing, err := client.DeletePlaywrightExecutorWithResponse(ctx, "b", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNotFound, missing.StatusCode())
+
+	del, err = client.DeletePlaywrightExecutorWithResponse(ctx, "a", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, del.StatusCode(), "body=%s", string(del.Body))
+
+	t.Log("verifying deleting the default executor restarts it and keeps the active tab")
+	del, err = client.DeletePlaywrightExecutorWithResponse(ctx, "default", nil)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, del.StatusCode(), "body=%s", string(del.Body))
+	restarted := execute("", `return page.url();`)
+	require.True(t, restarted.Success, "error=%v", restarted.Error)
+	require.Equal(t, "data:text/html,active-tab", restarted.Result)
+	require.Equal(t, activeTab.Tab.TargetId, restarted.Tab.TargetId)
+	explicitDefault := execute("default", `return page.url();`)
+	require.Equal(t, "data:text/html,active-tab", explicitDefault.Result, `executor "default" should bind the active tab`)
 }

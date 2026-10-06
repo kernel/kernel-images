@@ -5,8 +5,19 @@
  * connection to the browser, and uses esbuild for TypeScript transformation.
  *
  * Protocol (newline-delimited JSON):
- * Request:  { "id": string, "code": string, "timeout_ms"?: number }
- * Response: { "id": string, "success": boolean, "result"?: any, "error"?: string, "stack"?: string }
+ * Request:  { "id": string, "code": string, "timeout_ms"?: number,
+ *             "executor"?: string, "target_id"?: string, "tab_created"?: boolean }
+ * Response: { "id": string, "success": boolean, "result"?: any, "error"?: string, "stack"?: string,
+ *             "target_id"?: string, "tab_created"?: boolean, "timed_out"?: boolean, "tab_missing"?: boolean }
+ *
+ * "target_id" and "tab_created" in the response describe the tab `page` was
+ * bound to; they are omitted if the call failed before binding one.
+ *
+ * When "executor" is set, the API owns the executor's tab: it opens the tab
+ * and passes its "target_id" (with "tab_created" when it just opened it), and
+ * `page` is bound to that tab. If the tab no longer exists the daemon answers
+ * with "tab_missing" without running the code, so the API can open a new tab
+ * and resend the request.
  */
 
 import { createServer, Socket } from 'net';
@@ -42,6 +53,9 @@ interface ExecuteRequest {
   id: string;
   code: string;
   timeout_ms?: number;
+  executor?: string;
+  target_id?: string;
+  tab_created?: boolean;
 }
 
 interface ExecuteResponse {
@@ -50,6 +64,17 @@ interface ExecuteResponse {
   result?: unknown;
   error?: string;
   stack?: string;
+  target_id?: string;
+  tab_created?: boolean;
+  timed_out?: boolean;
+  tab_missing?: boolean;
+}
+
+// The tab a call bound `page` to. It is recorded as soon as it is known so a
+// timed-out call still reports it.
+interface BoundTab {
+  targetId?: string;
+  created?: boolean;
 }
 
 function withTimeout<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -206,30 +231,44 @@ async function pageForTabTarget(
 // transient but has been observed to outlast back-to-back daemon calls, so an
 // immediate retry lands inside the same gap; the retries are spaced to give
 // Playwright time to attach. The delay is only paid when a pass fails, and
-// callers fall back to an open page if every attempt misses.
-const ACTIVE_PAGE_RESOLUTION_ATTEMPTS = 3;
-const ACTIVE_PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
+// callers fall back to an open page if every attempt misses. Executor tab
+// resolution reuses the same spacing for the same attach gap.
+const PAGE_RESOLUTION_ATTEMPTS = 3;
+const PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
+
+function openPages(browser: Browser): Page[] {
+  return browser
+    .contexts()
+    .flatMap(context => context.pages())
+    .filter(page => !page.isClosed());
+}
+
+// Runs fn with a browser-level CDP session and detaches it afterwards, which
+// also cleans up page sessions auto-attached through it.
+async function withRootSession<T>(browser: Browser, fn: (root: CDPSession) => Promise<T>): Promise<T> {
+  const root = await browser.newBrowserCDPSession();
+  try {
+    return await fn(root);
+  } finally {
+    await root.detach().catch(() => {});
+  }
+}
 
 async function resolveActivePage(browser: Browser): Promise<Page | null> {
   let activeTabIds: string[] = [];
 
-  for (let attempt = 0; attempt < ACTIVE_PAGE_RESOLUTION_ATTEMPTS; attempt++) {
+  for (let attempt = 0; attempt < PAGE_RESOLUTION_ATTEMPTS; attempt++) {
     if (attempt > 0) {
-      await new Promise(resolve => setTimeout(resolve, ACTIVE_PAGE_RESOLUTION_RETRY_DELAY_MS));
+      await new Promise(resolve => setTimeout(resolve, PAGE_RESOLUTION_RETRY_DELAY_MS));
     }
 
     try {
-      const pages = browser
-        .contexts()
-        .flatMap(context => context.pages())
-        .filter(page => !page.isClosed());
-      const pageByTargetId = await pageTargetIdCache.buildPageByTargetId(pages, { refresh: attempt > 0 });
+      const pageByTargetId = await pageTargetIdCache.buildPageByTargetId(openPages(browser), { refresh: attempt > 0 });
 
       // One browser-level session serves the whole attempt: the active-tab
-      // listing and every tab-to-page join. Detaching it also cleans up the
-      // page sessions auto-attached by pageForTabTarget.
-      const root = await browser.newBrowserCDPSession();
-      try {
+      // listing and every tab-to-page join, including the page sessions
+      // auto-attached by pageForTabTarget.
+      const page = await withRootSession(browser, async root => {
         activeTabIds = await activeTabTargetIds(root);
         for (const targetId of activeTabIds) {
           try {
@@ -240,9 +279,9 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
             // other active tabs reported by the same browser snapshot.
           }
         }
-      } finally {
-        await root.detach().catch(() => {});
-      }
+        return null;
+      });
+      if (page) return page;
 
       // No active tab matched this page snapshot. Retry with fresh snapshots.
     } catch {
@@ -252,13 +291,58 @@ async function resolveActivePage(browser: Browser): Promise<Page | null> {
   }
 
   console.error(
-    `[playwright-daemon] active-tab resolution failed after ${ACTIVE_PAGE_RESOLUTION_ATTEMPTS} attempts; ` +
+    `[playwright-daemon] active-tab resolution failed after ${PAGE_RESOLUTION_ATTEMPTS} attempts; ` +
       `falling back (unmatched active tabs: ${activeTabIds.join(', ') || 'none reported'})`,
   );
   return null;
 }
 
-async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promise<ExecuteResponse> {
+async function findPage(browser: Browser, targetId: string, refresh: boolean): Promise<Page | undefined> {
+  return (await pageTargetIdCache.buildPageByTargetId(openPages(browser), { refresh })).get(targetId);
+}
+
+async function targetExists(browser: Browser, targetId: string): Promise<boolean> {
+  return withRootSession(browser, root =>
+    root.send('Target.getTargetInfo', { targetId }).then(() => true, () => false),
+  );
+}
+
+const NEW_TAB_ATTACH_ATTEMPTS = 50;
+const NEW_TAB_ATTACH_RETRY_DELAY_MS = 100;
+
+class TabMissingError extends Error {}
+
+// Binds an executor's `page` to the tab the API gave it. A tab the API just
+// opened gets longer to appear in this connection. A tab that exists but never
+// gets a Playwright page is an error; the connection is dropped first so the
+// next call reconnects and re-attaches to every tab instead of failing on the
+// same stale connection.
+async function resolveExecutorPage(browser: Browser, tab: BoundTab, targetId: string, created: boolean): Promise<Page> {
+  const attempts = created ? NEW_TAB_ATTACH_ATTEMPTS : PAGE_RESOLUTION_ATTEMPTS;
+  const delayMs = created ? NEW_TAB_ATTACH_RETRY_DELAY_MS : PAGE_RESOLUTION_RETRY_DELAY_MS;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    const page = await findPage(browser, targetId, attempt > 0);
+    if (page) {
+      tab.targetId = targetId;
+      tab.created = created;
+      return page;
+    }
+    if (!(await targetExists(browser, targetId))) {
+      throw new TabMissingError(`executor tab ${targetId} is closed`);
+    }
+  }
+  await disconnectBrowser();
+  throw new Error(`executor tab ${targetId} is open but not available to Playwright yet; retry the call`);
+}
+
+async function executeCode(
+  request: ExecuteRequest,
+  signal: AbortSignal,
+  tab: BoundTab,
+): Promise<ExecuteResponse> {
   const { id, code } = request;
 
   try {
@@ -296,17 +380,32 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
         };
       }
     }
-    const contexts = browserInstance.contexts();
-    const defaultContext = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
-    const pages = contexts.flatMap(context => context.pages());
-    // Bind `page` to the actual foreground tab (see resolveActivePage). Using
-    // pages[0] bound `page` to the oldest tab regardless of which was active, so
-    // calls like page.pdf() operated on the wrong tab whenever more than one was
-    // open.
-    const page =
-      (pages.length > 0 ? await resolveActivePage(browserInstance) : null) ??
-      pages.findLast(candidate => !candidate.isClosed()) ??
-      (await defaultContext.newPage());
+    let page: Page;
+    if (request.executor) {
+      if (!request.target_id) {
+        throw new Error('executor call has no target_id');
+      }
+      page = await resolveExecutorPage(browserInstance, tab, request.target_id, request.tab_created === true);
+    } else {
+      const contexts = browserInstance.contexts();
+      const defaultContext = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
+      const pages = contexts.flatMap(context => context.pages());
+      // Bind `page` to the actual foreground tab (see resolveActivePage). Using
+      // pages[0] bound `page` to the oldest tab regardless of which was active, so
+      // calls like page.pdf() operated on the wrong tab whenever more than one was
+      // open.
+      const existing =
+        (pages.length > 0 ? await resolveActivePage(browserInstance) : null) ??
+        pages.findLast(candidate => !candidate.isClosed());
+      page = existing ?? (await defaultContext.newPage());
+      try {
+        tab.targetId = await pageTargetIdCache.get(page);
+        tab.created = !existing;
+      } catch {
+        // A page that is crashing or closing can fail target discovery; the
+        // call still runs, it just reports no tab.
+      }
+    }
     const context = page.context();
 
     const webmcp = createWebMCPClient({apiBaseUrl: KERNEL_API_ENDPOINT, signal});
@@ -331,7 +430,24 @@ async function executeCode(request: ExecuteRequest, signal: AbortSignal): Promis
       success: false,
       error: error.message,
       stack: error.stack,
+      ...(error instanceof TabMissingError && { tab_missing: true }),
     };
+  }
+}
+
+// Serializes a response line. A result JSON cannot represent (a cycle, a
+// BigInt) becomes an error response instead of an exception that would leave
+// the caller without an answer.
+function responseLine(response: ExecuteResponse): string {
+  try {
+    return JSON.stringify(response) + '\n';
+  } catch (error: any) {
+    const { result: _result, ...rest } = response;
+    return JSON.stringify({
+      ...rest,
+      success: false,
+      error: `result is not JSON-serializable: ${error.message}`,
+    }) + '\n';
   }
 }
 
@@ -362,9 +478,10 @@ function handleConnection(socket: Socket): void {
       }
 
       const signal = AbortSignal.timeout(request.timeout_ms ?? 60000);
+      const tab: BoundTab = {};
       let response: ExecuteResponse;
       try {
-        response = await withTimeout(executeCode(request, signal), signal);
+        response = await withTimeout(executeCode(request, signal, tab), signal);
       } catch (error: any) {
         if (signal.aborted) {
           await disconnectBrowser();
@@ -374,9 +491,14 @@ function handleConnection(socket: Socket): void {
           success: false,
           error: error.message,
           stack: error.stack,
+          ...(signal.aborted && { timed_out: true }),
         };
       }
-      socket.write(JSON.stringify(response) + '\n');
+      if (tab.targetId) {
+        response.target_id = tab.targetId;
+        response.tab_created = tab.created;
+      }
+      socket.write(responseLine(response));
     }
   });
 
