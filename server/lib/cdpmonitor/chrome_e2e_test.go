@@ -343,11 +343,12 @@ func (c *cdpConn) evalRect(t *testing.T, ctx context.Context, sessionID, selecto
 }
 
 // TestProxyErrorE2E drives a real browser to a stub origin that serves a branded
-// 502 with the X-Kernel-Proxy-Error header and asserts the CDP collector emits a
-// proxy_error telemetry event. It exercises the image-side detection
-// (Network.responseReceived header classification) end to end through a real
-// browser, without needing the metro host-proxy. The stub echoes the code query
-// parameter as the header value so each case drives a different code.
+// 502, or a 403 for network_policy_denied, with the X-Kernel-Proxy-Error header
+// and asserts the CDP collector emits a proxy_error telemetry event. It
+// exercises the image-side detection (Network.responseReceived header
+// classification) end to end through a real browser, without needing the metro
+// host-proxy. The stub echoes the code query parameter as the header value so
+// each case drives a different code.
 func TestProxyErrorE2E(t *testing.T) {
 	if os.Getenv("KERNEL_CDPMONITOR_CHROME_E2E") == "" {
 		t.Skip("set KERNEL_CDPMONITOR_CHROME_E2E=1 to run the real-Chromium proxy error test")
@@ -365,8 +366,12 @@ func TestProxyErrorE2E(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
+		status := http.StatusBadGateway
+		if code == "network_policy_denied" {
+			status = http.StatusForbidden
+		}
 		w.Header().Set("X-Kernel-Proxy-Error", code)
-		w.WriteHeader(http.StatusBadGateway)
+		w.WriteHeader(status)
 		fmt.Fprintln(w, "<html><body>proxy error</body></html>")
 	}))
 	defer stub.Close()
@@ -383,10 +388,14 @@ func TestProxyErrorE2E(t *testing.T) {
 	cases := []struct {
 		name, header, code string
 		rawCode            any
+		status             int
 	}{
-		{"published code", "provider_blacklisted", "provider_blacklisted", nil},
-		{"code published after the first release", "restricted_route_unavailable", "restricted_route_unavailable", nil},
-		{"code this image does not know", "Some-Future Code", "unknown", "some_future_code"},
+		{"published code", "provider_blacklisted", "provider_blacklisted", nil, http.StatusBadGateway},
+		{"code published after the first release", "restricted_route_unavailable", "restricted_route_unavailable", nil, http.StatusBadGateway},
+		{"code this image does not know", "Some-Future Code", "unknown", "some_future_code", http.StatusBadGateway},
+		{"network policy denial", "network_policy_denied", "network_policy_denied", nil, http.StatusForbidden},
+		{"route proxy unavailable", "destination_route_unavailable", "destination_route_unavailable", nil, http.StatusBadGateway},
+		{"incomplete origin response", "origin_response_incomplete", "origin_response_incomplete", nil, http.StatusBadGateway},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -410,7 +419,7 @@ func TestProxyErrorE2E(t *testing.T) {
 			if tc.rawCode == nil {
 				require.NotContains(t, data, "raw_code")
 			}
-			require.Equal(t, float64(502), data["status"])
+			require.Equal(t, float64(tc.status), data["status"])
 		})
 	}
 }

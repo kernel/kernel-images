@@ -257,6 +257,57 @@ func TestNetworkEvents(t *testing.T) {
 		assert.Equal(t, "https://blocked.example.com/", data["url"])
 	})
 
+	t.Run("proxy_error_network_policy_denied", func(t *testing.T) {
+		cp := ec.checkpoint()
+		// A website's own 403 carries no header and must not be classified; the
+		// branded 403 that follows is the positive anchor.
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-site-403",
+				"response": map[string]any{
+					"status": 403, "statusText": "Forbidden",
+					"headers":  map[string]any{"Content-Type": "text/html"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.requestWillBeSent",
+			"params": map[string]any{
+				"requestId": "req-denied",
+				"request":   map[string]any{"method": "GET", "url": "https://unlisted.example.com/"},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-denied",
+				"response": map[string]any{
+					"status": 403, "statusText": "Forbidden",
+					"headers":  map[string]any{"X-Kernel-Proxy-Error": "network_policy_denied"},
+					"mimeType": "text/html",
+				},
+			},
+		})
+		ev := ec.waitForNew(t, "proxy_error", cp, 2*time.Second)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.Equal(t, "network_policy_denied", data["code"])
+		assert.NotContains(t, data, "raw_code")
+		assert.Equal(t, float64(403), data["status"])
+		assert.Equal(t, "https://unlisted.example.com/", data["url"])
+		ec.mu.Lock()
+		defer ec.mu.Unlock()
+		count := 0
+		for _, ev := range ec.events[cp:] {
+			if ev.Type == EventProxyError {
+				count++
+			}
+		}
+		assert.Equal(t, 1, count, "a 403 without the header must not emit proxy_error")
+	})
+
 	t.Run("proxy_error_untracked_request", func(t *testing.T) {
 		cp := ec.checkpoint()
 		// No prior Network.requestWillBeSent, so the request is untracked. The
@@ -284,10 +335,10 @@ func TestNetworkEvents(t *testing.T) {
 		assert.Equal(t, "Document", data["resource_type"])
 	})
 
-	t.Run("proxy_error_gate_lt_502", func(t *testing.T) {
+	t.Run("proxy_error_gate_other_status", func(t *testing.T) {
 		cp := ec.checkpoint()
-		// A non-502 carrying the header must not be classified, even with a
-		// valid code; the following genuine 502 is the positive anchor.
+		// Another status carrying the header must not be classified, even with
+		// a valid code; the following genuine 502 is the positive anchor.
 		srv.sendToMonitor(t, map[string]any{
 			"method": "Network.responseReceived",
 			"params": map[string]any{
@@ -319,7 +370,7 @@ func TestNetworkEvents(t *testing.T) {
 				count++
 			}
 		}
-		assert.Equal(t, 1, count, "non-502 response must not emit proxy_error")
+		assert.Equal(t, 1, count, "a status other than 502 or 403 must not emit proxy_error")
 	})
 
 	t.Run("proxy_error_unknown_code_reported_as_unknown", func(t *testing.T) {
