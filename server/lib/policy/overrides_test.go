@@ -56,9 +56,9 @@ func TestChromiumPolicyOverrides_Validate_DeveloperToolsAvailability(t *testing.
 	}{
 		{value: `0`},
 		{value: `1`},
-		{value: `2`, wantErr: "only 0 or 1 are allowed"},
-		{value: `3`, wantErr: "only 0 or 1 are allowed"},
-		{value: `-1`, wantErr: "only 0 or 1 are allowed"},
+		{value: `2`, wantErr: `"DeveloperToolsAvailability": must be 0 or 1, got 2`},
+		{value: `3`, wantErr: "must be 0 or 1, got 3"},
+		{value: `-1`, wantErr: "must be 0 or 1, got -1"},
 		{value: `"1"`, wantErr: "expected integer"},
 	}
 

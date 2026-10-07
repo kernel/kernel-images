@@ -128,7 +128,7 @@ func validateDeveloperToolsAvailability(name string, raw json.RawMessage) error 
 		return fmt.Errorf("policy %q: invalid JSON value", name)
 	}
 	if v != 0 && v != 1 {
-		return fmt.Errorf("policy %q: only 0 or 1 are allowed, 2 disables CDP connectivity", name)
+		return fmt.Errorf("policy %q: must be 0 or 1, got %v", name, v)
 	}
 	return nil
 }
