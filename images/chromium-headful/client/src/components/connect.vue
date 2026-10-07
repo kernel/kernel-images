@@ -115,8 +115,13 @@
         displayname = this.$accessor.displayname || usr
       }
 
-      // KERNEL: auto-login
-      this.$accessor.login({ displayname: 'kernel', password: 'admin' })
+      // KERNEL: auto-login, but respect caller-supplied credentials first.
+      // This keeps the legacy fallback for existing deployments while allowing
+      // embeds and links that provide explicit credentials to work as intended.
+      this.$accessor.login({
+        displayname: displayname || 'kernel',
+        password: password || 'admin',
+      })
       this.autoPassword = null
     }
 
