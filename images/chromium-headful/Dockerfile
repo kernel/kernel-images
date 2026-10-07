@@ -385,6 +385,7 @@ COPY --from=xorg-deps /usr/local/lib/xorg/modules/drivers/dummy_drv.so /usr/lib/
 COPY --from=xorg-deps /usr/local/lib/xorg/modules/input/neko_drv.so /usr/lib/xorg/modules/input/neko_drv.so
 
 COPY shared/start-pulseaudio.sh /usr/local/bin/start-pulseaudio.sh
+COPY shared/pulseaudio-daemon.conf /etc/pulse/daemon.conf.d/10-kernel-sample-rate.conf
 RUN chmod +x /usr/local/bin/start-pulseaudio.sh
 COPY images/chromium-headful/supervisord.conf /etc/supervisor/supervisord.conf
 COPY images/chromium-headful/supervisor/services/ /etc/supervisor/conf.d/services/
