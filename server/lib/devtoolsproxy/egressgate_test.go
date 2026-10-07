@@ -88,6 +88,48 @@ func TestEgressGateRefusal(t *testing.T) {
 			filtered: filtered,
 			frame:    `{"id":1,"method":"Target.createBrowserContext","params":`,
 		},
+		{
+			// Chromium accepts an integral float as an id and creates the
+			// context, so a check that depended on decoding the id into an
+			// integer let this through.
+			name:     "float id refused",
+			filtered: filtered,
+			frame:    `{"id":1.0,"method":"Target.createBrowserContext","params":{"proxyServer":"http://127.0.0.1:9"}}`,
+			refuse:   true,
+		},
+		{
+			name:     "string id refused",
+			filtered: filtered,
+			frame:    `{"id":"1","method":"Target.createBrowserContext","params":{"proxyServer":""}}`,
+			refuse:   true,
+		},
+		{
+			name:     "id beyond int64 refused",
+			filtered: filtered,
+			frame:    `{"id":9007199254740993000000,"method":"Target.createBrowserContext","params":{"proxyServer":""}}`,
+			refuse:   true,
+		},
+		{
+			// The session only labels the reply, so an unreadable one must not
+			// decide the command.
+			name:     "unreadable session id refused",
+			filtered: filtered,
+			frame:    `{"id":1,"sessionId":7,"method":"Target.createBrowserContext","params":{"proxyServer":""}}`,
+			refuse:   true,
+		},
+		{
+			// Params that cannot be read cannot be checked, and the frame has
+			// already named the gated command.
+			name:     "params that are not an object refused",
+			filtered: filtered,
+			frame:    `{"id":1,"method":"Target.createBrowserContext","params":5}`,
+			refuse:   true,
+		},
+		{
+			name:     "null params forwarded",
+			filtered: filtered,
+			frame:    `{"id":1,"method":"Target.createBrowserContext","params":null}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -247,5 +289,62 @@ func TestWebSocketProxyRefusesContextProxyEndToEnd(t *testing.T) {
 	}
 	if len(upstreamSaw) != 1 {
 		t.Fatalf("upstream saw %d commands, want 1", len(upstreamSaw))
+	}
+}
+
+// Chromium answers an integral float id with the integer, so a refusal has to
+// be matched to the command the same way.
+func TestEgressGateRepliesToAFloatID(t *testing.T) {
+	gate := newEgressGate(filtered, silentLogger())
+	reply, refuse := gate.refuse(websocket.MessageText,
+		[]byte(`{"id":12.0,"method":"Target.createBrowserContext","params":{"proxyServer":""}}`))
+	if !refuse {
+		t.Fatal("command was not refused")
+	}
+	var got cdpErrorResponse
+	if err := json.Unmarshal(reply, &got); err != nil {
+		t.Fatalf("unmarshal reply: %v", err)
+	}
+	if got.ID != 12 {
+		t.Fatalf("id = %d, want 12", got.ID)
+	}
+}
+
+// An id the reply cannot carry still refuses the command; Chromium does not
+// run one either.
+func TestEgressGateRefusesUnanswerableIDsWithoutReplying(t *testing.T) {
+	for name, frame := range map[string]string{
+		"string":   `{"id":"1","method":"Target.createBrowserContext","params":{"proxyServer":""}}`,
+		"fraction": `{"id":1.5,"method":"Target.createBrowserContext","params":{"proxyServer":""}}`,
+		"absent":   `{"method":"Target.createBrowserContext","params":{"proxyServer":""}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			gate := newEgressGate(filtered, silentLogger())
+			reply, refuse := gate.refuse(websocket.MessageText, []byte(frame))
+			if !refuse {
+				t.Fatal("command was not refused")
+			}
+			if len(reply) != 0 {
+				t.Fatalf("reply = %q, want none", reply)
+			}
+		})
+	}
+}
+
+// A session the reply cannot carry is dropped from it, not treated as a
+// reason to leave the command unanswered.
+func TestEgressGateDropsAnUnreadableSessionFromTheReply(t *testing.T) {
+	gate := newEgressGate(filtered, silentLogger())
+	reply, refuse := gate.refuse(websocket.MessageText,
+		[]byte(`{"id":3,"sessionId":7,"method":"Target.createBrowserContext","params":{"proxyServer":""}}`))
+	if !refuse {
+		t.Fatal("command was not refused")
+	}
+	var got cdpErrorResponse
+	if err := json.Unmarshal(reply, &got); err != nil {
+		t.Fatalf("unmarshal reply: %v", err)
+	}
+	if got.ID != 3 || got.SessionID != "" {
+		t.Fatalf("reply = %+v, want id 3 and no session", got)
 	}
 }
