@@ -29,6 +29,7 @@ import (
 	"github.com/kernel/kernel-images/server/cmd/config"
 	"github.com/kernel/kernel-images/server/lib/chromedriverproxy"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -188,6 +189,10 @@ func main() {
 		s2Streams.RecordAppliedPayload(payload)
 	}
 
+	// What the control plane has told this VM about the session's egress
+	// allowlist. Written by PUT /network/egress-policy, read by the CDP proxy.
+	egressPolicy := egresspolicy.New()
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
@@ -199,6 +204,7 @@ func main() {
 		config.DisplayNum,
 		otlpExporter,
 		s2Storage,
+		egressPolicy,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)
@@ -297,7 +303,7 @@ func main() {
 	// lock-free view rather than taking the telemetry lock.
 	controlEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Control) }
 	rDevtools.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, telemetrySession.ExcludedCdpMethods, wsRegistry).ServeHTTP(w, r)
+		devtoolsproxy.WebSocketProxyHandler(upstreamMgr, slogger, config.LogCDPMessages, stz, telemetrySession.Publish, controlEnabled, telemetrySession.ExcludedCdpMethods, egressPolicy.Filtered, wsRegistry).ServeHTTP(w, r)
 	})
 
 	srvDevtools := &http.Server{

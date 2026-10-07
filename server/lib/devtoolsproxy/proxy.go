@@ -313,7 +313,10 @@ type EventPublisher func(ev events.Event) (events.Envelope, bool)
 // nil to disable emission. controlEnabled gates cdp_command classification and is
 // checked once per forwarded client frame; pass nil to disable it. excludedMethods
 // names the control methods configured out of the stream; nil reports them all.
-func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, reg *wsdrain.Registry) http.Handler {
+// egressFiltered reports whether the session runs under an egress allowlist, which
+// makes the proxy refuse commands that would route a context around it; pass nil
+// to forward every command.
+func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, egressFiltered EgressFilteredFunc, reg *wsdrain.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Names this connection on every event it produces, so a reader can tell
 		// two clients driving the same browser apart.
@@ -384,6 +387,10 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 
 		pumpCtx, pumpCancel := context.WithCancel(r.Context())
 
+		// Refusal runs inside the pump, ahead of the forward: a command that
+		// would put a context on its own proxy must not reach Chromium.
+		gate := newEgressGate(egressFiltered, logger)
+
 		// Classification of client commands runs behind the pump, not inside it:
 		// a frame is observed only once Chromium has accepted it.
 		observer := newCdpObserver(pumpCtx, connectionID, publish, controlEnabled, excludedMethods, logger)
@@ -445,7 +452,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			})
 		}
 
-		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform, observe)
+		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform, gate.refuse, observe)
 	})
 }
 

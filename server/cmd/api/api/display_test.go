@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
@@ -36,7 +37,7 @@ func testFFmpegFactory(t *testing.T, tempDir string) recorder.FFmpegRecorderFact
 func newTestServiceWithFactory(t *testing.T, mgr recorder.RecordManager, factory recorder.FFmpegRecorderFactory) *ApiService {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil)
+	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, egresspolicy.New())
 	require.NoError(t, err)
 	return svc
 }

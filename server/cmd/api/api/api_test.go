@@ -12,6 +12,7 @@ import (
 	"log/slog"
 
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -399,7 +400,7 @@ func newTelemetrySession(t *testing.T) (*telemetry.TelemetrySession, *events.Eve
 func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil)
+	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, egresspolicy.New())
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
+	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
@@ -409,7 +410,7 @@ func (m *mockRecordManager) StopAll(_ context.Context) error                    
 func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil)
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, egresspolicy.New())
 	require.NoError(t, err)
 	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc

@@ -1718,6 +1718,60 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /network/egress-policy:
+    get:
+      summary: Get the session's egress policy
+      description: >
+        Returns the egress policy the control plane last applied to this
+        session. A session nothing has been applied to reports `filtered:
+        false`.
+      operationId: getNetworkEgressPolicy
+      x-telemetry-category: platform
+      responses:
+        "200":
+          description: Current egress policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkEgressPolicy"
+    put:
+      summary: Set the session's egress policy
+      description: >
+        Tells the VM whether its session's egress is restricted to an
+        allowlist. The allowlist itself is enforced outside the VM, by Kernel's
+        egress proxy, and is deliberately not sent here: the proxy is the only
+        enforcement point, and a second copy of the destination list inside the
+        VM could only drift from it.
+
+
+        The VM uses this to refuse requests that would route traffic around
+        that proxy. Today that is the CDP command
+        `Target.createBrowserContext` carrying `proxyServer` or
+        `proxyBypassList`, which Playwright exposes as
+        `browser.newContext({ proxy })`: with `filtered: true` the proxy
+        answers it with a protocol error instead of forwarding it to Chromium.
+
+
+        Idempotent, and applied by the control plane both when the session is
+        set up and whenever an allowlist is added to or removed from a running
+        session.
+      operationId: putNetworkEgressPolicy
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NetworkEgressPolicy"
+      responses:
+        "200":
+          description: Egress policy applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetworkEgressPolicy"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
   /telemetry:
     get:
       summary: Get telemetry configuration
@@ -6526,6 +6580,20 @@ components:
           captcha_challenge_result: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
           system_oom_kill: "#/components/schemas/BrowserSystemOomKillEvent"
           service_crashed: "#/components/schemas/BrowserServiceCrashedEvent"
+    NetworkEgressPolicy:
+      type: object
+      description: >-
+        What the VM knows about its session's egress policy. Not the policy
+        itself, which is enforced outside the VM.
+      required: [filtered]
+      properties:
+        filtered:
+          type: boolean
+          description: >-
+            Whether the session's egress is restricted to an allowlist. When
+            true, the VM refuses requests that would reach destinations without
+            going through the proxy that enforces it.
+      additionalProperties: false
     TelemetryState:
       type: object
       description: Current telemetry configuration.
