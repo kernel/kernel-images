@@ -37,6 +37,15 @@ interface HTMLAttributes {
 
 interface MarkdownState extends State {}
 
+function escapeAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/'/g, '&#x27;')
+}
+
 function htmlTag(
   tagName: string,
   content: string,
@@ -58,7 +67,7 @@ function htmlTag(
   let attributeString = ''
   for (const attr in attributes) {
     if (Object.prototype.hasOwnProperty.call(attributes, attr) && attributes[attr]) {
-      attributeString += ` ${attr}="${attributes[attr]}"` // md.sanitizeText(attr)
+      attributeString += ` ${attr}="${escapeAttr(attributes[attr])}"`
     }
   }
 
