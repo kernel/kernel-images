@@ -31,7 +31,9 @@ func TestChromiumPolicyOverrides_Validate_BlockedPolicies(t *testing.T) {
 		{"ExtensionSettings", "ExtensionSettings", `{}`},
 		{"ExtensionInstallForcelist", "ExtensionInstallForcelist", `[]`},
 		{"RemoteDebuggingAllowed", "RemoteDebuggingAllowed", `false`},
-		{"DeveloperToolsAvailability", "DeveloperToolsAvailability", `2`},
+		{"DeveloperToolsDisabled", "DeveloperToolsDisabled", `true`},
+		{"DeveloperToolsAvailabilityAllowlist", "DeveloperToolsAvailabilityAllowlist", `["chrome-extension://abc"]`},
+		{"DeveloperToolsAvailabilityBlocklist", "DeveloperToolsAvailabilityBlocklist", `["*"]`},
 		{"ProxySettings", "ProxySettings", `{}`},
 	}
 
@@ -43,6 +45,35 @@ func TestChromiumPolicyOverrides_Validate_BlockedPolicies(t *testing.T) {
 			err := overrides.Validate()
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "cannot be overridden")
+		})
+	}
+}
+
+func TestChromiumPolicyOverrides_Validate_DeveloperToolsAvailability(t *testing.T) {
+	tests := []struct {
+		value   string
+		wantErr string
+	}{
+		{value: `0`},
+		{value: `1`},
+		{value: `2`, wantErr: `"DeveloperToolsAvailability": must be 0 or 1, got 2`},
+		{value: `3`, wantErr: "must be 0 or 1, got 3"},
+		{value: `-1`, wantErr: "must be 0 or 1, got -1"},
+		{value: `"1"`, wantErr: "expected integer"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			overrides := ChromiumPolicyOverrides{
+				"DeveloperToolsAvailability": json.RawMessage(tt.value),
+			}
+			err := overrides.Validate()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }

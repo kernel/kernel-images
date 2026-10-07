@@ -59,7 +59,6 @@ var blockedPolicies = map[string]string{
 
 	// Required for CDP / automation
 	"RemoteDebuggingAllowed":                 "required for CDP connectivity",
-	"DeveloperToolsAvailability":             "required for CDP connectivity",
 	"DeveloperToolsDisabled":                 "required for CDP connectivity",
 	"DeveloperToolsAvailabilityAllowlist":    "required for CDP connectivity",
 	"DeveloperToolsAvailabilityBlocklist":    "required for CDP connectivity",
@@ -106,11 +105,30 @@ func (o ChromiumPolicyOverrides) Validate() error {
 
 		if err := validatePolicyValue(name, raw, expectedType); err != nil {
 			errs = append(errs, err.Error())
+			continue
+		}
+
+		if name == "DeveloperToolsAvailability" {
+			if err := validateDeveloperToolsAvailability(name, raw); err != nil {
+				errs = append(errs, err.Error())
+			}
 		}
 	}
 
 	if len(errs) > 0 {
 		return fmt.Errorf("invalid chromium policy overrides:\n  %s", strings.Join(errs, "\n  "))
+	}
+	return nil
+}
+
+// validateDeveloperToolsAvailability allows 0 and 1; 2 disables CDP everywhere.
+func validateDeveloperToolsAvailability(name string, raw json.RawMessage) error {
+	var v float64
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return fmt.Errorf("policy %q: invalid JSON value", name)
+	}
+	if v != 0 && v != 1 {
+		return fmt.Errorf("policy %q: must be 0 or 1, got %v", name, v)
 	}
 	return nil
 }
