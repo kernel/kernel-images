@@ -142,7 +142,9 @@ func TestEgressGateRefusesCommandWithoutIDWithoutReplying(t *testing.T) {
 	}
 }
 
-// Binary frames are not CDP commands.
+// A binary frame carrying the same JSON creates nothing on a real browser,
+// which drops the connection instead of acting on it, so forwarding one is
+// not a way past the gate.
 func TestEgressGateIgnoresBinaryFrames(t *testing.T) {
 	gate := newEgressGate(filtered, silentLogger())
 	if _, refuse := gate.refuse(websocket.MessageBinary,

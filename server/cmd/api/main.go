@@ -191,7 +191,9 @@ func main() {
 
 	// What the control plane has told this VM about the session's egress
 	// allowlist. Written by PUT /network/egress-policy, read by the CDP proxy.
-	egressPolicy := egresspolicy.New()
+	// Loaded from disk so a restart of this process does not come back
+	// unfiltered while the session's allowlist is still in force.
+	egressPolicy := egresspolicy.Load(egresspolicy.DefaultStatePath, slogger)
 
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),

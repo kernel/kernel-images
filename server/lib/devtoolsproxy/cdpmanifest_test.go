@@ -32,9 +32,10 @@ const (
 )
 
 type protocolSnapshot struct {
-	Commit    string              `json:"commit"`
-	Permalink string              `json:"permalink"`
-	Commands  map[string][]string `json:"commands"`
+	Commit        string              `json:"commit"`
+	Permalink     string              `json:"permalink"`
+	Commands      map[string][]string `json:"commands"`
+	ProxyCommands map[string][]string `json:"proxy_commands"`
 }
 
 // argumentDecision is "retained" as a bare string, or a mapping carrying the
@@ -257,5 +258,33 @@ func TestProtocolSnapshotIsPinned(t *testing.T) {
 	}
 	if !strings.Contains(snap.Permalink, snap.Commit) {
 		t.Fatalf("permalink %q does not point at the pinned commit", snap.Permalink)
+	}
+}
+
+// The egress gate refuses one command because, in the pinned protocol, one
+// command takes a proxy argument. That is a property of the protocol rather
+// than something the gate can assert about itself, so it is checked against
+// the snapshot's scan of all 581 commands, not just the 38 the proxy reports.
+// A bump that puts a proxy argument on another command, or renames these, then
+// fails here instead of quietly leaving a way around the egress proxy.
+func TestEgressGateRefusesEveryProxyCommandInTheProtocol(t *testing.T) {
+	snap := loadProtocolSnapshot(t)
+	if len(snap.ProxyCommands) == 0 {
+		t.Fatal("protocol snapshot records no proxy commands, so this test proves nothing")
+	}
+
+	gated := append([]string(nil), contextProxyParams...)
+	sort.Strings(gated)
+	want := map[string][]string{targetCreateBrowserContext: gated}
+
+	got := make(map[string][]string, len(snap.ProxyCommands))
+	for method, args := range snap.ProxyCommands {
+		sorted := append([]string(nil), args...)
+		sort.Strings(sorted)
+		got[method] = sorted
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the protocol's proxy arguments are %v, but the gate refuses %v", got, want)
 	}
 }

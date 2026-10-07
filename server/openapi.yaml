@@ -1754,7 +1754,9 @@ paths:
 
         Idempotent, and applied by the control plane both when the session is
         set up and whenever an allowlist is added to or removed from a running
-        session.
+        session. The policy is persisted, so it survives a restart of the
+        instance API process; a request that cannot persist it returns 500
+        rather than reporting a policy that would be lost.
       operationId: putNetworkEgressPolicy
       x-telemetry-category: platform
       requestBody:
@@ -1772,6 +1774,8 @@ paths:
                 $ref: "#/components/schemas/NetworkEgressPolicy"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /telemetry:
     get:
       summary: Get telemetry configuration

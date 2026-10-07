@@ -15,6 +15,24 @@ package devtoolsproxy
 // one place every CDP client passes through: a customer's own connection, the
 // in-VM Playwright daemon, and ChromeDriver, which is handed this proxy's
 // address as its debuggerAddress.
+//
+// Reading the top-level method of a text frame is enough to see every way a
+// client can send this command, which was checked against a real browser
+// rather than assumed:
+//
+//   - A flat session from Target.attachToBrowserTarget creates contexts, and
+//     its commands carry the method at the top level with a sessionId beside
+//     it, so they are decoded here like any other.
+//   - Target.sendMessageToTarget, which would nest the command out of sight,
+//     is refused by Chromium itself: with the session in the params it answers
+//     "When using flat protocol, messages are routed to the target via the
+//     sessionId attribute", and with the session on the envelope, "Session id
+//     must be specified". Neither created a context.
+//   - A page session answers "Not allowed", so a context cannot be created
+//     from one at all.
+//   - A binary frame carrying the same JSON creates nothing; Chromium drops
+//     the connection instead of acting on it. That is why only text frames are
+//     inspected.
 
 import (
 	"encoding/json"

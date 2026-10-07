@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"log/slog"
+	"path/filepath"
 
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
@@ -396,11 +397,18 @@ func newTelemetrySession(t *testing.T) (*telemetry.TelemetrySession, *events.Eve
 	return telemetry.NewTelemetrySession(es), es
 }
 
+// testEgressPolicy builds a policy backed by a temp file, so a test never
+// writes to the path the process uses on a VM.
+func testEgressPolicy(t *testing.T) *egresspolicy.State {
+	t.Helper()
+	return egresspolicy.Load(filepath.Join(t.TempDir(), "egress-policy.json"), slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
 // newSvc constructs an ApiService with a fresh telemetry session and event stream.
 func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, egresspolicy.New())
+	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t))
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {
