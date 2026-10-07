@@ -30,6 +30,17 @@ type MessageTransform func(direction string, mt websocket.MessageType, msg []byt
 // retained by the pump after the call, so an observer may take ownership.
 type Observer func(direction string, mt websocket.MessageType, msg []byte, ts int64)
 
+// Gate inspects a client-to-upstream message before it is forwarded. refuse
+// reports whether to hold the message back; reply, when non-empty, is written
+// to the client in its place so the caller still gets an answer to the request
+// it made. The two are separate so that a gate which cannot build a reply
+// still refuses the message rather than letting it through.
+//
+// Unlike an Observer, a Gate runs ahead of the forward, so whatever it does is
+// latency on the message it is looking at rather than on the next one. Keep it
+// to a decision.
+type Gate func(mt websocket.MessageType, msg []byte) (reply []byte, refuse bool)
+
 // ProxyOptions configures the proxy accept/dial behavior and optional message
 // transformation. Zero values are valid and use sensible defaults.
 type ProxyOptions struct {
@@ -63,10 +74,12 @@ const (
 // Pump bidirectionally copies messages between client and upstream until
 // either side errors or ctx is cancelled, then calls onClose with the cause.
 // If transform is non-nil it is called for every message; the returned bytes
-// are forwarded to the other side. If observe is non-nil it is called for
-// every message that was forwarded successfully, so a message whose write
-// failed is never observed.
-func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExitCause), logger *slog.Logger, transform MessageTransform, observe Observer) {
+// are forwarded to the other side. If gate is non-nil it is called for every
+// client-to-upstream message after transform, and a message it refuses is
+// answered to the client instead of being forwarded. If observe is non-nil it
+// is called for every message that was forwarded successfully, so a message
+// whose write failed, or that the gate refused, is never observed.
+func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExitCause), logger *slog.Logger, transform MessageTransform, gate Gate, observe Observer) {
 	causeChan := make(chan PumpExitCause, 2)
 
 	go func() {
@@ -79,6 +92,21 @@ func Pump(ctx context.Context, client, upstream Conn, onClose func(cause PumpExi
 			}
 			if transform != nil {
 				msg = transform("->", mt, msg)
+			}
+			if gate != nil {
+				if reply, refuse := gate(mt, msg); refuse {
+					// Writing to the client from this goroutine while the
+					// other one writes upstream frames to it is supported:
+					// coder/websocket allows concurrent Write.
+					if len(reply) > 0 {
+						if err := client.Write(ctx, mt, reply); err != nil {
+							logger.Error("client write error", slog.String("err", err.Error()))
+							causeChan <- PumpExitClient
+							return
+						}
+					}
+					continue
+				}
 			}
 			if err := upstream.Write(ctx, mt, msg); err != nil {
 				logger.Error("upstream write error", slog.String("err", err.Error()))
@@ -163,5 +191,5 @@ func Proxy(w http.ResponseWriter, r *http.Request, upstreamURL string, opts Prox
 		})
 	}
 
-	Pump(r.Context(), clientConn, upstreamConn, cleanup, logger, opts.Transform, opts.Observe)
+	Pump(r.Context(), clientConn, upstreamConn, cleanup, logger, opts.Transform, nil, opts.Observe)
 }

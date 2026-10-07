@@ -50,7 +50,7 @@ func echoProxy(t *testing.T, publish EventPublisher, controlEnabled ControlEnabl
 	mgr.setCurrent(u.String())
 
 	proxy := httptest.NewServer(WebSocketProxyHandler(
-		mgr, logger, false, scaletozero.NewNoopController(), publish, controlEnabled, nil, nil))
+		mgr, logger, false, scaletozero.NewNoopController(), publish, controlEnabled, nil, nil, nil))
 	t.Cleanup(proxy.Close)
 
 	pu, _ := url.Parse(proxy.URL)

@@ -266,5 +266,11 @@
       "panelId",
       "targetId"
     ]
+  },
+  "proxy_commands": {
+    "Target.createBrowserContext": [
+      "proxyBypassList",
+      "proxyServer"
+    ]
   }
 }

@@ -90,7 +90,7 @@ func TestPumpDoesNotObserveMessagesWhoseWriteFailed(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	Pump(ctx, client, upstream, func(PumpExitCause) {}, silent(), nil, observe)
+	Pump(ctx, client, upstream, func(PumpExitCause) {}, silent(), nil, nil, observe)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -121,7 +121,7 @@ func TestPumpObservesForwardedMessagesInOrder(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	Pump(ctx, client, upstream, func(PumpExitCause) {}, silent(), nil, observe)
+	Pump(ctx, client, upstream, func(PumpExitCause) {}, silent(), nil, nil, observe)
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -135,5 +135,75 @@ func TestPumpObservesForwardedMessagesInOrder(t *testing.T) {
 	}
 	if got := len(upstream.writes()); got != len(frames) {
 		t.Fatalf("forwarded %d messages, want %d", got, len(frames))
+	}
+}
+
+// A refused message must not reach upstream, and the gate's reply goes back to
+// the client in its place.
+func TestPumpGateRefusesWithoutForwarding(t *testing.T) {
+	idle := make(chan struct{})
+	defer close(idle)
+	client := &fakeConn{reads: [][]byte{[]byte("refuse me"), []byte("let me through")}}
+	upstream := &fakeConn{idle: idle}
+
+	gate := func(mt websocket.MessageType, msg []byte) ([]byte, bool) {
+		if string(msg) == "refuse me" {
+			return []byte("refused"), true
+		}
+		return nil, false
+	}
+
+	var observed []string
+	var mu sync.Mutex
+	observe := func(direction string, mt websocket.MessageType, msg []byte, ts int64) {
+		if direction != "->" {
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		observed = append(observed, string(msg))
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	Pump(ctx, client, upstream, func(PumpExitCause) {}, silent(), nil, gate, observe)
+
+	forwarded := upstream.writes()
+	if len(forwarded) != 1 || string(forwarded[0]) != "let me through" {
+		t.Fatalf("forwarded %q, want only the unrefused message", forwarded)
+	}
+	replies := client.writes()
+	if len(replies) != 1 || string(replies[0]) != "refused" {
+		t.Fatalf("client got %q, want the gate's reply", replies)
+	}
+	// A refused message was never forwarded, so it was never observed.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(observed) != 1 || observed[0] != "let me through" {
+		t.Fatalf("observed %q, want only the forwarded message", observed)
+	}
+}
+
+// A gate that refuses without a reply drops the message silently: the client
+// is told nothing and upstream never sees it.
+func TestPumpGateRefusesWithoutReply(t *testing.T) {
+	idle := make(chan struct{})
+	defer close(idle)
+	client := &fakeConn{reads: [][]byte{[]byte("refuse me")}, idle: idle}
+	upstream := &fakeConn{idle: idle}
+
+	gate := func(mt websocket.MessageType, msg []byte) ([]byte, bool) {
+		return nil, true
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	Pump(ctx, client, upstream, func(PumpExitCause) {}, silent(), nil, gate, nil)
+
+	if got := upstream.writes(); len(got) != 0 {
+		t.Fatalf("forwarded %q, want nothing", got)
+	}
+	if got := client.writes(); len(got) != 0 {
+		t.Fatalf("client got %q, want nothing", got)
 	}
 }

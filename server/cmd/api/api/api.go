@@ -11,6 +11,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
@@ -134,7 +135,13 @@ type ApiService struct {
 	// from the storage-off check until the config is committed or rolled back,
 	// so reconcileStorage only reads a settled config. reconcileStorage never
 	// takes monitorMu, so the order is always monitorMu then storageMu.
-	storageMu       sync.Mutex
+	storageMu sync.Mutex
+
+	// egressPolicy is what the control plane has told this VM about the
+	// session's egress allowlist. Shared with the CDP proxy, which reads it to
+	// decide whether to refuse a context that would set its own proxy.
+	egressPolicy *egresspolicy.State
+
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
 }
@@ -152,6 +159,7 @@ func New(
 	displayNum int,
 	otlpExport OTLPExporter,
 	s2Storage S2Storage,
+	egressPolicy *egresspolicy.State,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -166,6 +174,8 @@ func New(
 		return nil, fmt.Errorf("telemetrySession cannot be nil")
 	case eventStream == nil:
 		return nil, fmt.Errorf("eventStream cannot be nil")
+	case egressPolicy == nil:
+		return nil, fmt.Errorf("egressPolicy cannot be nil")
 	}
 
 	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
@@ -188,6 +198,7 @@ func New(
 		cdpMonitor:        mon,
 		otlpExport:        otlpExport,
 		s2Storage:         s2Storage,
+		egressPolicy:      egressPolicy,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
