@@ -645,10 +645,38 @@ func relatedHosts(a, b string) bool {
 	return a == b || strings.HasSuffix(a, "."+b) || strings.HasSuffix(b, "."+a)
 }
 
+// DevTools can accept connections shortly before Chromium opens its first tab,
+// so firstPageTargetID polls for a page target. Vars so tests can adjust them.
+var (
+	pageTargetWaitTimeout  = 5 * time.Second
+	pageTargetPollInterval = 100 * time.Millisecond
+)
+
 // firstPageTargetID returns the targetId of the first page target reported
-// by Target.getTargets. Callers that need to operate on the user-facing
-// browser window (Emulation, Browser.* window bounds) use this to find it.
+// by Target.getTargets, polling for up to pageTargetWaitTimeout if none
+// exists yet. Callers that need to operate on the user-facing browser window
+// (Emulation, Browser.* window bounds) use this to find it.
 func (c *Client) firstPageTargetID(ctx context.Context) (string, error) {
+	deadline := time.Now().Add(pageTargetWaitTimeout)
+	for {
+		targetID, err := c.findPageTargetID(ctx)
+		if err != nil || targetID != "" {
+			return targetID, err
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("no page target found")
+		}
+		select {
+		case <-ctx.Done():
+			return "", fmt.Errorf("no page target found: %w", ctx.Err())
+		case <-time.After(min(pageTargetPollInterval, time.Until(deadline))):
+		}
+	}
+}
+
+// findPageTargetID returns the targetId of the first page target, or "" if
+// there is none.
+func (c *Client) findPageTargetID(ctx context.Context) (string, error) {
 	targetsResult, err := c.Send(ctx, "Target.getTargets", nil, "")
 	if err != nil {
 		return "", fmt.Errorf("Target.getTargets: %w", err)
@@ -667,7 +695,7 @@ func (c *Client) firstPageTargetID(ctx context.Context) (string, error) {
 			return t.TargetID, nil
 		}
 	}
-	return "", fmt.Errorf("no page target found")
+	return "", nil
 }
 
 // SetWindowBoundsMaximized puts the OS window backing the first page target

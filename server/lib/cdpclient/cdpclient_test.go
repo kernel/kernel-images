@@ -18,7 +18,7 @@ import (
 // fakeCDP is a minimal CDP server that responds to the commands used by
 // SetDeviceMetricsOverride and GetBrowserVersion.
 type fakeCDP struct {
-	getTargetsCalled    bool
+	getTargetsCalls     int
 	attachCalled        bool
 	setMetricsCalled    bool
 	setMetricsWidth     int
@@ -29,6 +29,7 @@ type fakeCDP struct {
 	failGetTargets      bool
 	failSetMetrics      bool
 	returnNoPageTargets bool
+	noPageTargetsFor    int
 	getVersionCalled    bool
 	failGetVersion      bool
 	productResponse     string
@@ -74,12 +75,12 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 
 		switch req.Method {
 		case "Target.getTargets":
-			f.getTargetsCalled = true
+			f.getTargetsCalls++
 			if f.failGetTargets {
 				cdpErr = &Error{Code: -1, Message: "mock error"}
 			} else {
 				targets := []map[string]string{}
-				if !f.returnNoPageTargets {
+				if !f.returnNoPageTargets && f.getTargetsCalls > f.noPageTargetsFor {
 					targets = append(targets, map[string]string{
 						"targetId": f.pageTargetID,
 						"type":     "page",
@@ -204,7 +205,7 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
 		require.NoError(t, err)
 
-		assert.True(t, f.getTargetsCalled)
+		assert.Equal(t, 1, f.getTargetsCalls)
 		assert.True(t, f.attachCalled)
 		assert.True(t, f.setMetricsCalled)
 		assert.True(t, f.detachCalled)
@@ -213,8 +214,37 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 	})
 
 	t.Run("no page target", func(t *testing.T) {
+		defer func(d time.Duration) { pageTargetWaitTimeout = d }(pageTargetWaitTimeout)
+		pageTargetWaitTimeout = 300 * time.Millisecond
+		defer func(d time.Duration) { pageTargetPollInterval = d }(pageTargetPollInterval)
+		pageTargetPollInterval = time.Minute // only the deadline clamp ends the wait in time
+
 		f := &fakeCDP{
 			returnNoPageTargets: true,
+		}
+		url := startFakeCDP(t, f)
+
+		// Fail instead of hanging if the wait is unbounded.
+		ctx, cancel := context.WithTimeout(context.Background(), pageTargetWaitTimeout+time.Second)
+		defer cancel()
+		client, err := Dial(ctx, url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		start := time.Now()
+		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no page target found")
+		assert.NotErrorIs(t, err, context.DeadlineExceeded)
+		assert.GreaterOrEqual(t, time.Since(start), pageTargetWaitTimeout)
+		assert.False(t, f.attachCalled)
+	})
+
+	t.Run("waits for first page target", func(t *testing.T) {
+		f := &fakeCDP{
+			pageTargetID:     "target-123",
+			sessionID:        "session-abc",
+			noPageTargetsFor: 3,
 		}
 		url := startFakeCDP(t, f)
 
@@ -224,8 +254,33 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 		defer client.Close()
 
 		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
+		require.NoError(t, err)
+
+		assert.Equal(t, 4, f.getTargetsCalls)
+		assert.True(t, f.setMetricsCalled)
+	})
+
+	t.Run("no page target respects context", func(t *testing.T) {
+		defer func(d time.Duration) { pageTargetPollInterval = d }(pageTargetPollInterval)
+		pageTargetPollInterval = time.Minute // only ctx.Done() can end the wait early
+
+		f := &fakeCDP{
+			returnNoPageTargets: true,
+		}
+		url := startFakeCDP(t, f)
+
+		client, err := Dial(context.Background(), url)
+		require.NoError(t, err)
+		defer client.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(250*time.Millisecond, cancel)
+
+		start := time.Now()
+		err = client.SetDeviceMetricsOverride(ctx, 1920, 1080)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no page target found")
+		assert.ErrorIs(t, err, context.Canceled)
+		assert.Less(t, time.Since(start), pageTargetWaitTimeout)
 	})
 
 	t.Run("getTargets failure", func(t *testing.T) {
