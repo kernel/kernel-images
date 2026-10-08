@@ -49,6 +49,7 @@ func TestPutNetworkEgressPolicy(t *testing.T) {
 func TestPutNetworkEgressPolicyFailsWhenThePinCannotBeApplied(t *testing.T) {
 	svc, err := newSvc(t, newMockRecordManager())
 	require.NoError(t, err)
+	// Leaves supervisorctl off PATH, so the restart fails.
 	t.Setenv("PATH", t.TempDir())
 
 	resp, err := svc.PutNetworkEgressPolicy(context.Background(), oapi.PutNetworkEgressPolicyRequestObject{

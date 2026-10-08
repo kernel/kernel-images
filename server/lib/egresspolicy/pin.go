@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 // DefaultPinPath is where the proxy pin is written. Chromium merges every file
 // in its managed policy directory, so the pin sits beside policy.json rather
-// than inside it and never races the writers of that file.
-const DefaultPinPath = "/etc/chromium/policies/managed/kernel-egress.json"
+// than inside it and never races the writers of that file. Where two files set
+// the same policy, the one that sorts last wins, so the name keeps the pin
+// ahead of policy.json.
+const DefaultPinPath = "/etc/chromium/policies/managed/zz-kernel-egress.json"
 
 // Pin fixes Chromium's proxy with managed policy while the session is filtered.
 //
@@ -24,8 +27,17 @@ const DefaultPinPath = "/etc/chromium/policies/managed/kernel-egress.json"
 // The pin is derived from the flags Chromium is launched with, so it is written
 // by the launcher on every start. Once it is in place Chromium ignores
 // --proxy-bypass-list as well as --proxy-server, which is why it carries both.
+//
+// WebRTC sends UDP straight to the network rather than through an HTTP proxy,
+// so a page can reach any STUN or TURN server whatever the proxy says. The pin
+// also restricts WebRTC to connections that go through the proxy.
 type Pin struct {
 	Path string
+}
+
+type pinPolicy struct {
+	ProxySettings    proxySettings `json:"ProxySettings"`
+	WebRtcIPHandling string        `json:"WebRtcIPHandling"`
 }
 
 type proxySettings struct {
@@ -45,13 +57,17 @@ func (p Pin) Sync(filtered bool, flags []string) error {
 		return errors.New("egress is filtered but Chromium has no --proxy-server to pin")
 	}
 	bypass, _ := lastFlagValue(flags, "--proxy-bypass-list")
-	data, err := json.Marshal(map[string]proxySettings{
-		"ProxySettings": {ProxyMode: "fixed_servers", ProxyServer: server, ProxyBypassList: bypass},
+	data, err := json.Marshal(pinPolicy{
+		ProxySettings:    proxySettings{ProxyMode: "fixed_servers", ProxyServer: server, ProxyBypassList: bypass},
+		WebRtcIPHandling: "disable_non_proxied_udp",
 	})
 	if err != nil {
 		return fmt.Errorf("encode proxy pin: %w", err)
 	}
-	tmp := p.Path + ".tmp"
+	// Staged outside the policy directory: Chromium reads every file in it,
+	// whatever the name, so a temporary file left there would pin the proxy
+	// where Present and Remove cannot see it.
+	tmp := filepath.Join(filepath.Dir(filepath.Dir(p.Path)), filepath.Base(p.Path)+".tmp")
 	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
 		return fmt.Errorf("write proxy pin: %w", err)
 	}

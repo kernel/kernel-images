@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
+	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/require"
 )
 
-const egressPinPath = "/etc/chromium/policies/managed/kernel-egress.json"
-
-// TestEgressProxyPin checks that a filtered session pins Chromium's proxy with
-// managed policy, so an extension loaded over CDP cannot take control of it,
-// and that the pin comes off again when the session is unfiltered.
+// TestEgressProxyPin checks that a filtered session pins Chromium's proxy and
+// WebRTC IP handling with managed policy, so an extension loaded over CDP cannot
+// take control of either, and that the pin comes off again when the session is
+// unfiltered.
 func TestEgressProxyPin(t *testing.T) {
 	t.Parallel()
 
@@ -48,10 +48,11 @@ func TestEgressProxyPin(t *testing.T) {
 
 	putEgressPolicy(t, ctx, client, true)
 
-	out, err := execCombinedOutputWithClient(ctx, c, "cat", []string{egressPinPath})
+	out, err := execCombinedOutputWithClient(ctx, c, "cat", []string{egresspolicy.DefaultPinPath})
 	require.NoError(t, err, "read pin: %s", out)
 	var pin struct {
-		ProxySettings map[string]string `json:"ProxySettings"`
+		ProxySettings    map[string]string `json:"ProxySettings"`
+		WebRtcIPHandling string            `json:"WebRtcIPHandling"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &pin), "decode pin: %s", out)
 	require.Equal(t, map[string]string{
@@ -59,6 +60,7 @@ func TestEgressProxyPin(t *testing.T) {
 		"ProxyServer":     "http://127.0.0.1:9",
 		"ProxyBypassList": "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7",
 	}, pin.ProxySettings)
+	require.Equal(t, "disable_non_proxied_udp", pin.WebRtcIPHandling)
 
 	// Loaded after the restart that applied the pin: extensions loaded over CDP
 	// do not survive one. The connection stays open for the rest of the test
@@ -67,20 +69,27 @@ func TestEgressProxyPin(t *testing.T) {
 	require.NoError(t, err)
 	defer cdp.Close()
 	worker := attachProxyExtensionWorker(t, ctx, c, cdp)
-	level, err := proxyLevelOfControl(ctx, cdp, worker)
+	level, err := levelOfControl(ctx, cdp, worker, proxySetting)
 	require.NoError(t, err)
 	require.Equal(t, "not_controllable", level, "an extension can take over the proxy of a filtered session")
+	level, err = levelOfControl(ctx, cdp, worker, webRTCSetting)
+	require.NoError(t, err)
+	require.Equal(t, "not_controllable", level, "an extension can let WebRTC send UDP around the proxy of a filtered session")
 
 	putEgressPolicy(t, ctx, client, false)
 
-	_, err = execCombinedOutputWithClient(ctx, c, "test", []string{"!", "-e", egressPinPath})
+	_, err = execCombinedOutputWithClient(ctx, c, "test", []string{"!", "-e", egresspolicy.DefaultPinPath})
 	require.NoError(t, err, "pin still present after the session was unfiltered")
 
 	// Chromium reloads its policy directory on its own, so the extension
 	// regains control without a restart.
 	require.Eventually(t, func() bool {
-		level, err := proxyLevelOfControl(ctx, cdp, worker)
-		return err == nil && level == "controllable_by_this_extension"
+		proxy, err := levelOfControl(ctx, cdp, worker, proxySetting)
+		if err != nil {
+			return false
+		}
+		webRTC, err := levelOfControl(ctx, cdp, worker, webRTCSetting)
+		return err == nil && proxy == "controllable_by_this_extension" && webRTC == "controllable_by_this_extension"
 	}, time.Minute, time.Second, "proxy still pinned after the session was unfiltered")
 }
 
@@ -91,12 +100,12 @@ func putEgressPolicy(t *testing.T, ctx context.Context, client *instanceoapi.Cli
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "put egress policy filtered=%t: %s", filtered, string(rsp.Body))
 }
 
-// attachProxyExtensionWorker loads an extension with the proxy permission the
-// way a CDP client can, and returns a session attached to its service worker.
+// attachProxyExtensionWorker loads an extension with the proxy and privacy
+// permissions the way a CDP client can, and returns a session attached to its service worker.
 func attachProxyExtensionWorker(t *testing.T, ctx context.Context, c *TestContainer, cdp *cdpclient.Client) string {
 	t.Helper()
 	const dir = "/tmp/egress-pin-ext"
-	manifest := `{"manifest_version":3,"name":"proxy","version":"1.0","permissions":["proxy"],"background":{"service_worker":"bg.js"}}`
+	manifest := `{"manifest_version":3,"name":"proxy","version":"1.0","permissions":["proxy","privacy"],"background":{"service_worker":"bg.js"}}`
 	script := fmt.Sprintf("mkdir -p %[1]s && printf '%%s' '%[2]s' > %[1]s/manifest.json && printf '' > %[1]s/bg.js && chmod -R a+rX %[1]s", dir, manifest)
 	out, err := execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", script})
 	require.NoError(t, err, "write extension: %s", out)
@@ -139,11 +148,17 @@ func attachProxyExtensionWorker(t *testing.T, ctx context.Context, c *TestContai
 	return attached.SessionID
 }
 
-// proxyLevelOfControl asks the extension's service worker whether it can set
-// Chromium's proxy.
-func proxyLevelOfControl(ctx context.Context, cdp *cdpclient.Client, worker string) (string, error) {
+// The extension settings the pin takes away from extensions.
+const (
+	proxySetting  = "chrome.proxy.settings"
+	webRTCSetting = "chrome.privacy.network.webRTCIPHandlingPolicy"
+)
+
+// levelOfControl asks the extension's service worker whether it can change a
+// Chromium setting.
+func levelOfControl(ctx context.Context, cdp *cdpclient.Client, worker, setting string) (string, error) {
 	raw, err := cdp.Send(ctx, "Runtime.evaluate", map[string]any{
-		"expression":    `new Promise((resolve) => chrome.proxy.settings.get({}, (d) => resolve(d.levelOfControl)))`,
+		"expression":    `new Promise((resolve) => ` + setting + `.get({}, (d) => resolve(d.levelOfControl)))`,
 		"awaitPromise":  true,
 		"returnByValue": true,
 	}, worker)

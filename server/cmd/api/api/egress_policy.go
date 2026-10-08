@@ -52,6 +52,11 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 // it to reload its policy directory, so the pin is in force before the control
 // plane hands the session to a client. Chromium does not need a restart for the
 // pin to come off.
+//
+// The launcher does not take chromiumConfigMu, so a Chromium that crashed and is
+// restarting as the policy flips to unfiltered can write the pin again after it
+// is removed. That leaves the session pinned until Chromium next starts, which
+// fails closed.
 func (s *ApiService) applyEgressPin(ctx context.Context, filtered bool) error {
 	if !filtered {
 		return s.egressPin.Remove()

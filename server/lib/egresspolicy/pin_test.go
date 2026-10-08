@@ -7,9 +7,15 @@ import (
 	"testing"
 )
 
+// testPin lays out a policy directory the way the image does, so the pin's
+// temporary file lands where it would on a real VM.
 func testPin(t *testing.T) Pin {
 	t.Helper()
-	return Pin{Path: filepath.Join(t.TempDir(), "kernel-egress.json")}
+	managed := filepath.Join(t.TempDir(), "managed")
+	if err := os.Mkdir(managed, 0o755); err != nil {
+		t.Fatalf("create policy dir: %v", err)
+	}
+	return Pin{Path: filepath.Join(managed, "zz-kernel-egress.json")}
 }
 
 func readPin(t *testing.T, p Pin) proxySettings {
@@ -18,18 +24,21 @@ func readPin(t *testing.T, p Pin) proxySettings {
 	if err != nil {
 		t.Fatalf("read pin: %v", err)
 	}
-	var policy map[string]proxySettings
+	var policy map[string]json.RawMessage
 	if err := json.Unmarshal(data, &policy); err != nil {
 		t.Fatalf("decode pin: %v", err)
 	}
-	if len(policy) != 1 {
-		t.Fatalf("pin sets %d policies, want only ProxySettings: %s", len(policy), data)
+	if len(policy) != 2 {
+		t.Fatalf("pin sets %d policies, want ProxySettings and WebRtcIPHandling: %s", len(policy), data)
 	}
-	settings, ok := policy["ProxySettings"]
-	if !ok {
-		t.Fatalf("pin does not set ProxySettings: %s", data)
+	var pinned pinPolicy
+	if err := json.Unmarshal(data, &pinned); err != nil {
+		t.Fatalf("decode pin: %v", err)
 	}
-	return settings
+	if pinned.WebRtcIPHandling != "disable_non_proxied_udp" {
+		t.Fatalf("pin lets WebRTC send UDP around the proxy: %s", data)
+	}
+	return pinned.ProxySettings
 }
 
 // Once the pin is in place Chromium ignores the proxy flags entirely, so the
@@ -76,6 +85,26 @@ func TestPinSyncFollowsChromiumFlags(t *testing.T) {
 				t.Fatalf("pin mismatch:\n got: %+v\nwant: %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+// Chromium applies every file in the policy directory, whatever its name, so a
+// write that fails before the rename must not leave its temporary file there.
+func TestPinSyncFailureLeavesNothingInThePolicyDirectory(t *testing.T) {
+	p := testPin(t)
+	// A directory in the pin's place makes the rename fail after the write.
+	if err := os.MkdirAll(filepath.Join(p.Path, "blocker"), 0o755); err != nil {
+		t.Fatalf("block pin path: %v", err)
+	}
+	if err := p.Sync(true, []string{"--proxy-server=http://192.0.2.1:3129"}); err == nil {
+		t.Fatal("Sync succeeded over a directory")
+	}
+	entries, err := os.ReadDir(filepath.Dir(p.Path))
+	if err != nil {
+		t.Fatalf("read policy dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != filepath.Base(p.Path) {
+		t.Fatalf("policy dir holds %v, want only the blocked pin path", entries)
 	}
 }
 
