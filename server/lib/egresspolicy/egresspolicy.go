@@ -3,10 +3,11 @@
 //
 // The policy itself lives outside the VM: a session's allowlist is enforced by
 // Kernel's egress proxy, which is the only component that knows which
-// destinations are allowed. The VM is told one thing — that an allowlist
-// exists — because some of what it can be asked to do would route traffic
-// around that proxy, and it cannot refuse those requests without knowing the
-// session is filtered at all.
+// destinations are allowed. The VM is told that an allowlist exists, because
+// some of what it can be asked to do would route traffic around that proxy,
+// and it cannot refuse those requests without knowing the session is filtered
+// at all. It is also told the session's private hosts, the destinations that
+// are meant to bypass the proxy, so that it can pin exactly those.
 package egresspolicy
 
 import (
@@ -15,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -24,8 +26,22 @@ import (
 // identity, since both are per-boot state the control plane hands the VM.
 const DefaultStatePath = "/run/kernel/egress-policy.json"
 
-type persisted struct {
+// Policy is what the control plane tells the VM about its session's egress.
+type Policy struct {
+	// Filtered is whether the session's egress is restricted to an allowlist.
 	Filtered bool `json:"filtered"`
+	// PrivateHosts is the session's private_hosts, which bypass the egress
+	// proxy. Nil leaves the image's default bypass in place; an empty list
+	// bypasses nothing.
+	PrivateHosts *[]string `json:"private_hosts,omitempty"`
+}
+
+// Equal reports whether p and o are the same policy.
+func (p Policy) Equal(o Policy) bool {
+	if p.Filtered != o.Filtered || (p.PrivateHosts == nil) != (o.PrivateHosts == nil) {
+		return false
+	}
+	return p.PrivateHosts == nil || slices.Equal(*p.PrivateHosts, *o.PrivateHosts)
 }
 
 // State is the session's egress policy as the control plane last reported it.
@@ -38,8 +54,9 @@ type State struct {
 	path string
 	// mu serializes a write with the store that follows it, so the file and
 	// the memory copy cannot disagree about which update came last.
-	mu       sync.Mutex
-	filtered atomic.Bool
+	mu           sync.Mutex
+	filtered     atomic.Bool
+	privateHosts *[]string
 }
 
 // Load reads the policy left by a previous run of the process. A session that
@@ -60,13 +77,14 @@ func Load(path string, logger *slog.Logger) *State {
 		s.filtered.Store(true)
 		return s
 	}
-	var p persisted
+	var p Policy
 	if err := json.Unmarshal(data, &p); err != nil {
 		logger.Error("could not decode the egress policy; treating the session as filtered", "path", path, "err", err)
 		s.filtered.Store(true)
 		return s
 	}
 	s.filtered.Store(p.Filtered)
+	s.privateHosts = p.PrivateHosts
 	return s
 }
 
@@ -77,25 +95,45 @@ func (s *State) Filtered() bool {
 	return s != nil && s.filtered.Load()
 }
 
-// SetFiltered records the policy the control plane applied, and does not take
-// effect unless it was persisted: a caller that is told the policy is applied
-// must be able to rely on it surviving a restart.
-//
-// It is called when the session is set up and again whenever an allowlist is
-// added to or removed from a running session, so it is safe to call repeatedly
-// with the same value.
-func (s *State) SetFiltered(filtered bool) error {
+// Policy returns the policy as the control plane last reported it.
+func (s *State) Policy() Policy {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.persist(filtered); err != nil {
+	return Policy{Filtered: s.filtered.Load(), PrivateHosts: cloneHosts(s.privateHosts)}
+}
+
+// Set records the policy the control plane applied, and does not take effect
+// unless it was persisted: a caller that is told the policy is applied must be
+// able to rely on it surviving a restart.
+//
+// It is called when the session is set up and again whenever a running
+// session's allowlist changes, so it is safe to call repeatedly with the same
+// value.
+func (s *State) Set(p Policy) error {
+	p.PrivateHosts = cloneHosts(p.PrivateHosts)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.persist(p); err != nil {
 		return err
 	}
-	s.filtered.Store(filtered)
+	s.filtered.Store(p.Filtered)
+	s.privateHosts = p.PrivateHosts
 	return nil
 }
 
-func (s *State) persist(filtered bool) error {
-	data, err := json.Marshal(persisted{Filtered: filtered})
+func cloneHosts(hosts *[]string) *[]string {
+	if hosts == nil {
+		return nil
+	}
+	c := slices.Clone(*hosts)
+	if c == nil {
+		c = []string{}
+	}
+	return &c
+}
+
+func (s *State) persist(p Policy) error {
+	data, err := json.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("encode egress policy: %w", err)
 	}

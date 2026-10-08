@@ -1752,24 +1752,19 @@ paths:
         answers it with a protocol error instead of forwarding it to Chromium.
 
 
-        With `filtered: true` the VM also pins Chromium's proxy with the
-        managed `ProxySettings` policy, so an extension with the `proxy`
-        permission cannot switch Chromium to direct connections, and with the
-        `WebRtcIPHandling` and `WebRtcIPHandlingUrl` policies, so WebRTC
-        cannot send UDP around the proxy. The pinned proxy server is the one
-        in Chromium's base flags; a `--proxy-server` added at runtime, for
-        example with `PATCH /chromium/flags`, does not replace it while the
-        session is filtered. The pinned bypass list is the
-        `--proxy-bypass-list` Chromium starts with, keeping only the entries
-        the session's `private_hosts` would accept: private IPs and CIDRs, and
-        hostnames with a wildcard only over a registrable domain. Other
-        entries are sent through the proxy.
-        If the pin is not already in place, Chromium is restarted to apply it
-        before the request returns, so filtering a running session closes
-        its open pages. With `filtered: false` the pin is removed without a
-        restart; Chromium normally stops applying it within a few seconds, but
-        a session unfiltered just after Chromium starts can stay pinned for up
-        to 15 minutes.
+        With `filtered: true` the VM also pins Chromium's network settings
+        with managed policy, which neither extensions nor `chrome_policy`
+        overrides can change: `ProxySettings` holds Chromium on the proxy in
+        its base flags, with `private_hosts` as the bypass list;
+        `WebRtcIPHandling` and an empty `WebRtcIPHandlingUrl` keep WebRTC
+        from sending UDP around the proxy; and `DnsOverHttpsMode` is `off`.
+        While filtered, the proxy and bypass list come only from the base
+        flags and this request, and runtime flags that remap hosts
+        (`--host-resolver-rules`, `--host-rules`) are ignored.
+        If the pin is not already in place for this policy, Chromium is
+        restarted to apply it before the request returns. With
+        `filtered: false` the pin is removed without a restart, and
+        Chromium stops applying it on its next policy reload.
 
 
         Idempotent, and applied by the control plane both when the session is
@@ -6617,6 +6612,16 @@ components:
             Whether the session's egress is restricted to an allowlist. When
             true, the VM refuses requests that would reach destinations without
             going through the proxy that enforces it.
+        private_hosts:
+          type: array
+          items:
+            type: string
+          description: >-
+            The session's `network.private_hosts`, which bypass the egress
+            proxy while the session is filtered. Omitted keeps the image's
+            default bypass of private ranges; an empty list bypasses nothing.
+            Entries are passed to Chromium's bypass list as validated by the
+            control plane, and may not contain `;`, `,` or whitespace.
       additionalProperties: false
     TelemetryState:
       type: object

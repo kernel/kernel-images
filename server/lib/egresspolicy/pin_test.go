@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 )
 
@@ -29,8 +30,8 @@ func readPin(t *testing.T, p Pin) proxySettings {
 	if err := json.Unmarshal(data, &policy); err != nil {
 		t.Fatalf("decode pin: %v", err)
 	}
-	if len(policy) != 3 {
-		t.Fatalf("pin sets %d policies, want ProxySettings, WebRtcIPHandling and WebRtcIPHandlingUrl: %s", len(policy), data)
+	if len(policy) != 4 {
+		t.Fatalf("pin sets %d policies, want ProxySettings, WebRtcIPHandling, WebRtcIPHandlingUrl and DnsOverHttpsMode: %s", len(policy), data)
 	}
 	if string(policy["WebRtcIPHandlingUrl"]) != "[]" {
 		t.Fatalf("pin leaves per-URL WebRTC rules in place: %s", data)
@@ -42,79 +43,89 @@ func readPin(t *testing.T, p Pin) proxySettings {
 	if pinned.WebRtcIPHandling != "disable_non_proxied_udp" {
 		t.Fatalf("pin lets WebRTC send UDP around the proxy: %s", data)
 	}
+	if pinned.DnsOverHttpsMode != "off" {
+		t.Fatalf("pin lets Chromium connect to a DNS-over-HTTPS server around the proxy: %s", data)
+	}
 	return pinned.ProxySettings
 }
 
 // Once the pin is in place Chromium ignores the proxy flags entirely, so the
-// pin has to reproduce the egress proxy from the base flags and the bypass list
-// Chromium starts with.
-func TestPinSyncFollowsChromiumFlags(t *testing.T) {
+// pin has to reproduce the egress proxy from the base flags, and the bypass list
+// from the private hosts the control plane sent, or from the base flags when it
+// sent none.
+func TestPinSyncFollowsBaseFlagsAndPolicy(t *testing.T) {
 	const proxy = "--proxy-server=http://192.0.2.1:3129"
+	const defaultBypass = "--proxy-bypass-list=10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7"
+	private := []string{"10.1.0.0/16", "preview.internal:8443"}
 	tests := []struct {
-		name  string
-		base  []string
-		final []string
-		want  proxySettings
+		name   string
+		base   []string
+		policy Policy
+		want   proxySettings
 	}{
 		{
-			name:  "image default bypass",
-			base:  []string{"--kiosk", proxy},
-			final: []string{"--kiosk", proxy, "--proxy-bypass-list=10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7"},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129", ProxyBypassList: "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7"},
+			name:   "no private hosts keeps the image default bypass",
+			base:   []string{"--kiosk", proxy, defaultBypass},
+			policy: Policy{Filtered: true},
+			want:   proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129", ProxyBypassList: "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7"},
 		},
 		{
-			name:  "runtime bypass list after base flags wins",
-			base:  []string{proxy, "--proxy-bypass-list=10.0.0.0/8"},
-			final: []string{proxy, "--proxy-bypass-list=10.0.0.0/8", "--proxy-bypass-list=preview.internal"},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129", ProxyBypassList: "preview.internal"},
+			name:   "private hosts replace the base bypass list",
+			base:   []string{proxy, defaultBypass},
+			policy: Policy{Filtered: true, PrivateHosts: &private},
+			want:   proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129", ProxyBypassList: "10.1.0.0/16;preview.internal:8443"},
 		},
 		{
-			name:  "bypass entries that are not private hosts are left out",
-			base:  []string{proxy},
-			final: []string{proxy, "--proxy-bypass-list=*;<local>;*.com;8.8.8.0/24;10.1.0.0/16;preview.internal:8443"},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129", ProxyBypassList: "10.1.0.0/16;preview.internal:8443"},
+			name:   "empty private hosts bypass nothing",
+			base:   []string{proxy, defaultBypass},
+			policy: Policy{Filtered: true, PrivateHosts: &[]string{}},
+			want:   proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
 		},
 		{
-			name:  "bypass list with nothing private pins no bypass",
-			base:  []string{proxy},
-			final: []string{proxy, "--proxy-bypass-list=*"},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
+			name:   "last base proxy server wins",
+			base:   []string{"--proxy-server=http://old:1", proxy},
+			policy: Policy{Filtered: true},
+			want:   proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
 		},
 		{
-			name:  "runtime proxy server is not pinned",
-			base:  []string{"--proxy-server=http://old:1", proxy},
-			final: []string{"--proxy-server=http://old:1", proxy, "--proxy-server=direct://"},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
-		},
-		{
-			name:  "explicit empty bypass list",
-			base:  []string{proxy},
-			final: []string{proxy, "--proxy-bypass-list=10.0.0.0/8", "--proxy-bypass-list="},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
-		},
-		{
-			name:  "bare empty bypass list",
-			base:  []string{proxy},
-			final: []string{proxy, "--proxy-bypass-list"},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
-		},
-		{
-			name:  "no bypass list",
-			base:  []string{proxy},
-			final: []string{proxy},
-			want:  proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
+			name:   "bare empty base bypass list",
+			base:   []string{proxy, "--proxy-bypass-list"},
+			policy: Policy{Filtered: true},
+			want:   proxySettings{ProxyMode: "fixed_servers", ProxyServer: "http://192.0.2.1:3129"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := testPin(t)
-			if _, err := p.Sync(true, tt.base, tt.final); err != nil {
+			if err := p.Sync(tt.policy, tt.base); err != nil {
 				t.Fatalf("Sync: %v", err)
 			}
 			if got := readPin(t, p); got != tt.want {
 				t.Fatalf("pin mismatch:\n got: %+v\nwant: %+v", got, tt.want)
 			}
 		})
+	}
+}
+
+// Chromium resolves the egress proxy's own address through host mapping rules,
+// whatever the pin says, so a runtime rule could send every request to another
+// proxy.
+func TestDropHostMappingFlags(t *testing.T) {
+	kept, dropped := DropHostMappingFlags([]string{
+		"--kiosk",
+		"--host-resolver-rules=MAP 192.0.2.1 198.51.100.7:8080",
+		"--host-rules=MAP * 198.51.100.7",
+		"-host-resolver-rules=MAP * 198.51.100.7",
+		"--host-resolver-rules",
+		"--host-resolver-rules-extra=1",
+		"--proxy-server=http://198.51.100.7:8080",
+	})
+	wantKept := []string{"--kiosk", "--host-resolver-rules-extra=1", "--proxy-server=http://198.51.100.7:8080"}
+	if !slices.Equal(kept, wantKept) {
+		t.Fatalf("kept = %q, want %q", kept, wantKept)
+	}
+	if len(dropped) != 4 {
+		t.Fatalf("dropped = %q, want the four host mapping flags", dropped)
 	}
 }
 
@@ -127,8 +138,7 @@ func TestPinSyncFailureLeavesNoTemporaryFile(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(p.Path, "blocker"), 0o755); err != nil {
 		t.Fatalf("block pin path: %v", err)
 	}
-	flags := []string{"--proxy-server=http://192.0.2.1:3129"}
-	if _, err := p.Sync(true, flags, flags); err == nil {
+	if err := p.Sync(Policy{Filtered: true}, []string{"--proxy-server=http://192.0.2.1:3129"}); err == nil {
 		t.Fatal("Sync succeeded over a directory")
 	}
 	entries, err := os.ReadDir(filepath.Dir(p.Path))
@@ -149,17 +159,14 @@ func TestPinSyncFailureLeavesNoTemporaryFile(t *testing.T) {
 
 // A filtered session without a proxy to pin would come up with nothing
 // stopping an extension from going direct, so the launcher must not start it.
-// A --proxy-server that only the runtime flags carry does not count: anyone
-// holding the session's token can write those.
 func TestPinSyncRefusesFilteredSessionWithoutProxy(t *testing.T) {
-	runtimeProxy := []string{"--proxy-server=http://192.0.2.1:3129"}
 	for _, base := range [][]string{nil, {"--proxy-server="}, {"--proxy-server"}} {
 		p := testPin(t)
-		if _, err := p.Sync(true, base, runtimeProxy); err == nil {
-			t.Fatalf("Sync(true, %q) succeeded", base)
+		if err := p.Sync(Policy{Filtered: true}, base); err == nil {
+			t.Fatalf("Sync(filtered, %q) succeeded", base)
 		}
 		if present, _ := p.Present(); present {
-			t.Fatalf("Sync(true, %q) wrote a pin", base)
+			t.Fatalf("Sync(filtered, %q) wrote a pin", base)
 		}
 	}
 }
@@ -168,12 +175,11 @@ func TestPinSyncRefusesFilteredSessionWithoutProxy(t *testing.T) {
 // extension the customer chose can set it again.
 func TestPinSyncRemovesPinWhenUnfiltered(t *testing.T) {
 	p := testPin(t)
-	flags := []string{"--proxy-server=http://192.0.2.1:3129"}
-	if _, err := p.Sync(true, flags, flags); err != nil {
-		t.Fatalf("Sync(true): %v", err)
+	if err := p.Sync(Policy{Filtered: true}, []string{"--proxy-server=http://192.0.2.1:3129"}); err != nil {
+		t.Fatalf("Sync(filtered): %v", err)
 	}
 	for range 2 {
-		if _, err := p.Sync(false, nil, nil); err != nil {
+		if err := p.Sync(Policy{}, nil); err != nil {
 			t.Fatalf("Sync(false): %v", err)
 		}
 		present, err := p.Present()
@@ -195,8 +201,7 @@ func TestPinSyncClosesThePolicyDirectories(t *testing.T) {
 			t.Fatalf("open %s: %v", dir, err)
 		}
 	}
-	flags := []string{"--proxy-server=http://192.0.2.1:3129"}
-	if _, err := p.Sync(true, flags, flags); err != nil {
+	if err := p.Sync(Policy{Filtered: true}, []string{"--proxy-server=http://192.0.2.1:3129"}); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	for _, dir := range []string{p.StageDir, filepath.Dir(p.Path)} {
@@ -217,9 +222,10 @@ func TestPinPresentRequiresAPin(t *testing.T) {
 	for _, content := range []string{
 		"",
 		"{}",
-		`{"ProxySettings":{"ProxyMode":"direct"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[]}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"default","WebRtcIPHandlingUrl":[]}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"disable_non_proxied_udp"}`,
+		`{"ProxySettings":{"ProxyMode":"direct"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"default","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"disable_non_proxied_udp","DnsOverHttpsMode":"off"}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[]}`,
 	} {
 		if err := os.WriteFile(p.Path, []byte(content), 0o644); err != nil {
 			t.Fatalf("write %q: %v", content, err)
@@ -232,8 +238,7 @@ func TestPinPresentRequiresAPin(t *testing.T) {
 			t.Fatalf("Present(%q) reported a pin", content)
 		}
 	}
-	flags := []string{"--proxy-server=http://192.0.2.1:3129"}
-	if _, err := p.Sync(true, flags, flags); err != nil {
+	if err := p.Sync(Policy{Filtered: true}, []string{"--proxy-server=http://192.0.2.1:3129"}); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
 	if present, err := p.Present(); err != nil || !present {

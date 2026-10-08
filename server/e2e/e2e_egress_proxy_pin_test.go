@@ -43,19 +43,28 @@ func TestEgressProxyPin(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	putEgressPolicy(t, ctx, client, true)
+	putEgressPolicy(t, ctx, client, instanceoapi.NetworkEgressPolicy{
+		Filtered:     true,
+		PrivateHosts: &[]string{"10.1.0.0/16", "example.com:8443"},
+	})
 
 	// Anyone holding the session's token can write runtime flags and chrome
 	// policy. Neither may undo the pin: each write restarts Chromium, and the
-	// launcher pins the base flags' proxy, keeps only private hosts in the
-	// bypass list, and clears per-URL WebRTC rules.
+	// launcher pins the base flags' proxy and the policy's private hosts,
+	// clears per-URL WebRTC rules, turns DNS-over-HTTPS off, and leaves out
+	// runtime flags that remap hosts.
 	policyRsp, err := client.PatchChromiumPoliciesWithResponse(ctx, instanceoapi.PatchChromiumPoliciesJSONRequestBody{
 		"WebRtcIPHandlingUrl": []map[string]string{{"url": "*", "handling": "default"}},
+		"DnsOverHttpsMode":    "secure",
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, policyRsp.StatusCode(), "patch policies: %s", string(policyRsp.Body))
 	flagsRsp, err := client.PatchChromiumFlagsWithResponse(ctx, instanceoapi.PatchChromiumFlagsJSONRequestBody{
-		Flags: []string{"--proxy-server=http://127.0.0.1:8", "--proxy-bypass-list=*;example.com:8443;10.1.0.0/16"},
+		Flags: []string{
+			"--proxy-server=http://127.0.0.1:8",
+			"--proxy-bypass-list=*;exfil.example.com",
+			"--host-resolver-rules=MAP 127.0.0.1 127.0.0.1:8",
+		},
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, flagsRsp.StatusCode(), "patch flags: %s", string(flagsRsp.Body))
@@ -66,17 +75,24 @@ func TestEgressProxyPin(t *testing.T) {
 		ProxySettings       map[string]string `json:"ProxySettings"`
 		WebRtcIPHandling    string            `json:"WebRtcIPHandling"`
 		WebRtcIPHandlingURL []any             `json:"WebRtcIPHandlingUrl"`
+		DnsOverHttpsMode    string            `json:"DnsOverHttpsMode"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &pin), "decode pin: %s", out)
 	require.Equal(t, map[string]string{
 		"ProxyMode":       "fixed_servers",
 		"ProxyServer":     "http://127.0.0.1:9",
-		"ProxyBypassList": "example.com:8443;10.1.0.0/16",
+		"ProxyBypassList": "10.1.0.0/16;example.com:8443",
 	}, pin.ProxySettings)
 
 	require.Equal(t, "disable_non_proxied_udp", pin.WebRtcIPHandling)
 	require.NotNil(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
 	require.Empty(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
+	require.Equal(t, "off", pin.DnsOverHttpsMode)
+
+	// The flag's name is split so this script's own command line does not
+	// match it.
+	out, err = execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", `! grep -qa -- "--host-resolver""-rules" /proc/[0-9]*/cmdline`})
+	require.NoError(t, err, "chromium started with a runtime host mapping rule on a filtered session: %s", out)
 
 	// The user Chromium runs as must not be able to add a policy file that
 	// sorts after the pin, or remove it.
@@ -103,7 +119,7 @@ func TestEgressProxyPin(t *testing.T) {
 	require.Empty(t, udp, "WebRTC gathered UDP candidates on a filtered session")
 
 	waitForPolicyWatch(t, ctx, c)
-	putEgressPolicy(t, ctx, client, false)
+	putEgressPolicy(t, ctx, client, instanceoapi.NetworkEgressPolicy{Filtered: false})
 
 	_, err = execCombinedOutputWithClient(ctx, c, "test", []string{"!", "-e", egresspolicy.DefaultPin.Path})
 	require.NoError(t, err, "pin still present after the session was unfiltered")
@@ -126,11 +142,11 @@ func TestEgressProxyPin(t *testing.T) {
 	}, time.Minute, time.Second, "per-URL WebRTC rule still cleared after the session was unfiltered")
 }
 
-func putEgressPolicy(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, filtered bool) {
+func putEgressPolicy(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, policy instanceoapi.NetworkEgressPolicy) {
 	t.Helper()
-	rsp, err := client.PutNetworkEgressPolicyWithResponse(ctx, instanceoapi.PutNetworkEgressPolicyJSONRequestBody{Filtered: filtered})
+	rsp, err := client.PutNetworkEgressPolicyWithResponse(ctx, policy)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, rsp.StatusCode(), "put egress policy filtered=%t: %s", filtered, string(rsp.Body))
+	require.Equal(t, http.StatusOK, rsp.StatusCode(), "put egress policy filtered=%t: %s", policy.Filtered, string(rsp.Body))
 }
 
 // attachProxyExtensionWorker loads an extension with the proxy and privacy

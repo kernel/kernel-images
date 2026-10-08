@@ -82,23 +82,27 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed reading runtime flags: %v\n", err)
 		os.Exit(1)
 	}
-	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
-	final = chromiumflags.TranslateKernelDisableFeatures(final)
-	final = withDefaultPrivateNetworkBypass(final)
 
 	// A filtered session must not start without its proxy pinned: an extension
 	// could otherwise switch Chromium to direct connections around the egress
 	// proxy and the allowlist it enforces.
-	egress := egresspolicy.Load(egresspolicy.DefaultStatePath, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-	base := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, nil)
-	dropped, err := egresspolicy.DefaultPin.Sync(egress.Filtered(), base, final)
-	if len(dropped) > 0 {
-		fmt.Fprintf(os.Stderr, "egress proxy pin leaves out bypass entries that are not private hosts: %s\n", strings.Join(dropped, ";"))
+	egress := egresspolicy.Load(egresspolicy.DefaultStatePath, slog.New(slog.NewTextHandler(os.Stderr, nil))).Policy()
+	if egress.Filtered {
+		var dropped []string
+		runtimeTokens, dropped = egresspolicy.DropHostMappingFlags(runtimeTokens)
+		if len(dropped) > 0 {
+			fmt.Fprintf(os.Stderr, "egress is filtered; ignoring runtime flags that remap hosts: %s\n", strings.Join(dropped, " "))
+		}
 	}
-	if err != nil {
+	base := withDefaultPrivateNetworkBypass(chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, nil))
+	if err := egresspolicy.DefaultPin.Sync(egress, base); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to sync egress proxy pin: %v\n", err)
 		os.Exit(1)
 	}
+
+	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
+	final = chromiumflags.TranslateKernelDisableFeatures(final)
+	final = withDefaultPrivateNetworkBypass(final)
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
