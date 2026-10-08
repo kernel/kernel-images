@@ -1752,6 +1752,14 @@ paths:
         answers it with a protocol error instead of forwarding it to Chromium.
 
 
+        With `filtered: true` the VM also pins Chromium's proxy with the
+        managed `ProxySettings` policy, so an extension with the `proxy`
+        permission cannot switch Chromium to direct connections. If the pin is
+        not already in place, Chromium is restarted to apply it before the
+        request returns. With `filtered: false` the pin is removed without a
+        restart.
+
+
         Idempotent, and applied by the control plane both when the session is
         set up and whenever an allowlist is added to or removed from a running
         session. The policy is persisted, so it survives a restart of the

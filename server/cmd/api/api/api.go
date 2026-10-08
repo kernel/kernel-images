@@ -141,6 +141,10 @@ type ApiService struct {
 	// session's egress allowlist. Shared with the CDP proxy, which reads it to
 	// decide whether to refuse a context that would set its own proxy.
 	egressPolicy *egresspolicy.State
+	// egressPin is the managed policy that holds Chromium on the egress proxy
+	// while the session is filtered. The launcher writes it; the egress policy
+	// handler restarts Chromium to get it written and removes it.
+	egressPin egresspolicy.Pin
 
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
@@ -199,6 +203,7 @@ func New(
 		otlpExport:        otlpExport,
 		s2Storage:         s2Storage,
 		egressPolicy:      egressPolicy,
+		egressPin:         egresspolicy.Pin{Path: egresspolicy.DefaultPinPath},
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,

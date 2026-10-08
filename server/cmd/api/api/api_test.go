@@ -408,7 +408,12 @@ func testEgressPolicy(t *testing.T) *egresspolicy.State {
 func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t))
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t))
+	if err != nil {
+		return nil, err
+	}
+	svc.egressPin = egresspolicy.Pin{Path: filepath.Join(t.TempDir(), "kernel-egress.json")}
+	return svc, nil
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {

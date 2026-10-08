@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
@@ -83,6 +85,15 @@ func main() {
 	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
 	final = chromiumflags.TranslateKernelDisableFeatures(final)
 	final = withDefaultPrivateNetworkBypass(final)
+
+	// A filtered session must not start without its proxy pinned: an extension
+	// could otherwise switch Chromium to direct connections around the egress
+	// proxy and the allowlist it enforces.
+	egress := egresspolicy.Load(egresspolicy.DefaultStatePath, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	if err := (egresspolicy.Pin{Path: egresspolicy.DefaultPinPath}).Sync(egress.Filtered(), final); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to sync egress proxy pin: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
