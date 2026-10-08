@@ -1759,10 +1759,17 @@ paths:
         cannot send UDP around the proxy. The pinned proxy server is the one
         in Chromium's base flags; a `--proxy-server` added at runtime, for
         example with `PATCH /chromium/flags`, does not replace it while the
-        session is filtered. If the pin is not already in place, Chromium is
-        restarted to apply it before the request returns, so filtering a
-        running session closes its open pages. With `filtered: false` the pin
-        is removed without a restart.
+        session is filtered. The pinned bypass list is the
+        `--proxy-bypass-list` Chromium starts with, keeping only the entries
+        the session's `private_hosts` would accept: private IPs and CIDRs, and
+        hostnames with a wildcard only over a registrable domain. Other
+        entries are sent through the proxy.
+        If the pin is not already in place, Chromium is restarted to apply it
+        before the request returns, so filtering a running session closes
+        its open pages. With `filtered: false` the pin is removed without a
+        restart; Chromium normally stops applying it within a few seconds, but
+        a session unfiltered just after Chromium starts can stay pinned for up
+        to 15 minutes.
 
 
         Idempotent, and applied by the control plane both when the session is

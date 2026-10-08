@@ -91,7 +91,11 @@ func main() {
 	// proxy and the allowlist it enforces.
 	egress := egresspolicy.Load(egresspolicy.DefaultStatePath, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	base := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, nil)
-	if err := (egresspolicy.Pin{Path: egresspolicy.DefaultPinPath}).Sync(egress.Filtered(), base, final); err != nil {
+	dropped, err := egresspolicy.DefaultPin.Sync(egress.Filtered(), base, final)
+	if len(dropped) > 0 {
+		fmt.Fprintf(os.Stderr, "egress proxy pin leaves out bypass entries that are not private hosts: %s\n", strings.Join(dropped, ";"))
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to sync egress proxy pin: %v\n", err)
 		os.Exit(1)
 	}

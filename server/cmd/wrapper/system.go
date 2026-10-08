@@ -54,5 +54,4 @@ func prepareUserDirs(asRoot bool) {
 	_ = exec.Command("chown", "-R", "kernel:kernel",
 		"/home/kernel", "/home/kernel/user-data", "/home/kernel/.config",
 		"/home/kernel/.pki", "/home/kernel/.cache").Run()
-	_ = exec.Command("chown", "-R", "kernel:kernel", "/etc/chromium/policies").Run()
 }

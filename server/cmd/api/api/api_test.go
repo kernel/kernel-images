@@ -412,11 +412,12 @@ func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	if err != nil {
 		return nil, err
 	}
-	managed := filepath.Join(t.TempDir(), "managed")
+	policies := t.TempDir()
+	managed := filepath.Join(policies, "managed")
 	if err := os.Mkdir(managed, 0o755); err != nil {
 		return nil, err
 	}
-	svc.egressPin = egresspolicy.Pin{Path: filepath.Join(managed, "zz-kernel-egress.json")}
+	svc.egressPin = egresspolicy.Pin{Path: filepath.Join(managed, "zz-kernel-egress.json"), StageDir: policies}
 	return svc, nil
 }
 

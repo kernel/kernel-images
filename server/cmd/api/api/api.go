@@ -203,7 +203,7 @@ func New(
 		otlpExport:        otlpExport,
 		s2Storage:         s2Storage,
 		egressPolicy:      egressPolicy,
-		egressPin:         egresspolicy.Pin{Path: egresspolicy.DefaultPinPath},
+		egressPin:         egresspolicy.DefaultPin,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,

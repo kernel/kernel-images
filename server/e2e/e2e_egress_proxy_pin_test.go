@@ -47,19 +47,20 @@ func TestEgressProxyPin(t *testing.T) {
 
 	// Anyone holding the session's token can write runtime flags and chrome
 	// policy. Neither may undo the pin: each write restarts Chromium, and the
-	// launcher pins the base flags' proxy and clears per-URL WebRTC rules.
+	// launcher pins the base flags' proxy, keeps only private hosts in the
+	// bypass list, and clears per-URL WebRTC rules.
 	policyRsp, err := client.PatchChromiumPoliciesWithResponse(ctx, instanceoapi.PatchChromiumPoliciesJSONRequestBody{
 		"WebRtcIPHandlingUrl": []map[string]string{{"url": "*", "handling": "default"}},
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, policyRsp.StatusCode(), "patch policies: %s", string(policyRsp.Body))
 	flagsRsp, err := client.PatchChromiumFlagsWithResponse(ctx, instanceoapi.PatchChromiumFlagsJSONRequestBody{
-		Flags: []string{"--proxy-server=http://127.0.0.1:8"},
+		Flags: []string{"--proxy-server=http://127.0.0.1:8", "--proxy-bypass-list=*;example.com:8443;10.1.0.0/16"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, flagsRsp.StatusCode(), "patch flags: %s", string(flagsRsp.Body))
 
-	out, err := execCombinedOutputWithClient(ctx, c, "cat", []string{egresspolicy.DefaultPinPath})
+	out, err := execCombinedOutputWithClient(ctx, c, "cat", []string{egresspolicy.DefaultPin.Path})
 	require.NoError(t, err, "read pin: %s", out)
 	var pin struct {
 		ProxySettings       map[string]string `json:"ProxySettings"`
@@ -70,11 +71,18 @@ func TestEgressProxyPin(t *testing.T) {
 	require.Equal(t, map[string]string{
 		"ProxyMode":       "fixed_servers",
 		"ProxyServer":     "http://127.0.0.1:9",
-		"ProxyBypassList": "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7",
+		"ProxyBypassList": "example.com:8443;10.1.0.0/16",
 	}, pin.ProxySettings)
+
 	require.Equal(t, "disable_non_proxied_udp", pin.WebRtcIPHandling)
 	require.NotNil(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
 	require.Empty(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
+
+	// The user Chromium runs as must not be able to add a policy file that
+	// sorts after the pin, or remove it.
+	out, err = execCombinedOutputWithClient(ctx, c, "stat", []string{"-c", "%U %a", "/etc/chromium/policies", "/etc/chromium/policies/managed"})
+	require.NoError(t, err, "stat policy dirs: %s", out)
+	require.Equal(t, "root 755\nroot 755", strings.TrimSpace(out))
 
 	// Loaded after the restarts above: extensions loaded over CDP do not
 	// survive one. The connection stays open for the rest of the test because
@@ -97,7 +105,7 @@ func TestEgressProxyPin(t *testing.T) {
 	waitForPolicyWatch(t, ctx, c)
 	putEgressPolicy(t, ctx, client, false)
 
-	_, err = execCombinedOutputWithClient(ctx, c, "test", []string{"!", "-e", egresspolicy.DefaultPinPath})
+	_, err = execCombinedOutputWithClient(ctx, c, "test", []string{"!", "-e", egresspolicy.DefaultPin.Path})
 	require.NoError(t, err, "pin still present after the session was unfiltered")
 
 	// Chromium reloads its policy directory on its own, so the extension
