@@ -1755,17 +1755,21 @@ paths:
         With `filtered: true` the VM also pins Chromium's proxy with the
         managed `ProxySettings` policy, so an extension with the `proxy`
         permission cannot switch Chromium to direct connections, and with the
-        `WebRtcIPHandling` policy, so WebRTC cannot send UDP around the proxy.
-        If the pin is not already in place, Chromium is restarted to apply it
-        before the request returns. With `filtered: false` the pin is removed
-        without a restart.
+        `WebRtcIPHandling` and `WebRtcIPHandlingUrl` policies, so WebRTC
+        cannot send UDP around the proxy. The pinned proxy server is the one
+        in Chromium's base flags; a `--proxy-server` added at runtime, for
+        example with `PATCH /chromium/flags`, does not replace it while the
+        session is filtered. If the pin is not already in place, Chromium is
+        restarted to apply it before the request returns, so filtering a
+        running session closes its open pages. With `filtered: false` the pin
+        is removed without a restart.
 
 
         Idempotent, and applied by the control plane both when the session is
-        set up and whenever an allowlist is added to or removed from a running
-        session. The policy is persisted, so it survives a restart of the
-        instance API process; a request that cannot persist it returns 500
-        rather than reporting a policy that would be lost.
+        set up and whenever a running session's allowlist changes. The policy
+        is persisted, so it survives a restart of the instance API process; a
+        request that cannot persist it returns 500 rather than reporting a
+        policy that would be lost.
       operationId: putNetworkEgressPolicy
       x-telemetry-category: platform
       requestBody:

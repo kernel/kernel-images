@@ -30,14 +30,18 @@ const DefaultPinPath = "/etc/chromium/policies/managed/zz-kernel-egress.json"
 //
 // WebRTC sends UDP straight to the network rather than through an HTTP proxy,
 // so a page can reach any STUN or TURN server whatever the proxy says. The pin
-// also restricts WebRTC to connections that go through the proxy.
+// also restricts WebRTC to connections that go through the proxy, and clears
+// the per-URL WebRtcIPHandlingUrl rules, which Chromium consults before
+// WebRtcIPHandling and which a chrome_policy override could otherwise use to
+// turn direct UDP back on.
 type Pin struct {
 	Path string
 }
 
 type pinPolicy struct {
-	ProxySettings    proxySettings `json:"ProxySettings"`
-	WebRtcIPHandling string        `json:"WebRtcIPHandling"`
+	ProxySettings       proxySettings `json:"ProxySettings"`
+	WebRtcIPHandling    string        `json:"WebRtcIPHandling"`
+	WebRtcIPHandlingURL []struct{}    `json:"WebRtcIPHandlingUrl"`
 }
 
 type proxySettings struct {
@@ -46,20 +50,28 @@ type proxySettings struct {
 	ProxyBypassList string `json:"ProxyBypassList,omitempty"`
 }
 
-// Sync writes the pin for the given Chromium flags when the session is
-// filtered, and removes it when it is not.
-func (p Pin) Sync(filtered bool, flags []string) error {
+// Sync writes the pin when the session is filtered, and removes it when it is
+// not.
+//
+// The proxy server is taken from base, the flags the control plane launches
+// the VM with, never from runtime flags: anyone holding the session's token
+// can write those, and a runtime --proxy-server would otherwise be pinned in
+// place of the egress proxy. The bypass list is taken from final, the flags
+// Chromium is about to start with, because the control plane sets a session's
+// private hosts at runtime.
+func (p Pin) Sync(filtered bool, base, final []string) error {
 	if !filtered {
 		return p.Remove()
 	}
-	server, ok := lastFlagValue(flags, "--proxy-server")
+	server, ok := lastFlagValue(base, "--proxy-server")
 	if !ok || server == "" {
-		return errors.New("egress is filtered but Chromium has no --proxy-server to pin")
+		return errors.New("egress is filtered but Chromium's base flags have no --proxy-server to pin")
 	}
-	bypass, _ := lastFlagValue(flags, "--proxy-bypass-list")
+	bypass, _ := lastFlagValue(final, "--proxy-bypass-list")
 	data, err := json.Marshal(pinPolicy{
-		ProxySettings:    proxySettings{ProxyMode: "fixed_servers", ProxyServer: server, ProxyBypassList: bypass},
-		WebRtcIPHandling: "disable_non_proxied_udp",
+		ProxySettings:       proxySettings{ProxyMode: "fixed_servers", ProxyServer: server, ProxyBypassList: bypass},
+		WebRtcIPHandling:    "disable_non_proxied_udp",
+		WebRtcIPHandlingURL: []struct{}{},
 	})
 	if err != nil {
 		return fmt.Errorf("encode proxy pin: %w", err)

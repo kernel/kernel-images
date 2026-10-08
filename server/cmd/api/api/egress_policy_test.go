@@ -27,7 +27,8 @@ func TestGetNetworkEgressPolicyDefaultsToUnfiltered(t *testing.T) {
 func TestPutNetworkEgressPolicy(t *testing.T) {
 	svc, err := newSvc(t, newMockRecordManager())
 	require.NoError(t, err)
-	require.NoError(t, svc.egressPin.Sync(true, []string{"--proxy-server=http://192.0.2.1:3129"}))
+	flags := []string{"--proxy-server=http://192.0.2.1:3129"}
+	require.NoError(t, svc.egressPin.Sync(true, flags, flags))
 
 	for _, want := range []bool{true, true, false, false} {
 		resp, err := svc.PutNetworkEgressPolicy(context.Background(), oapi.PutNetworkEgressPolicyRequestObject{

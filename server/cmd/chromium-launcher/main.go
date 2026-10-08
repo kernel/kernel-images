@@ -90,7 +90,8 @@ func main() {
 	// could otherwise switch Chromium to direct connections around the egress
 	// proxy and the allowlist it enforces.
 	egress := egresspolicy.Load(egresspolicy.DefaultStatePath, slog.New(slog.NewTextHandler(os.Stderr, nil)))
-	if err := (egresspolicy.Pin{Path: egresspolicy.DefaultPinPath}).Sync(egress.Filtered(), final); err != nil {
+	base := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, nil)
+	if err := (egresspolicy.Pin{Path: egresspolicy.DefaultPinPath}).Sync(egress.Filtered(), base, final); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to sync egress proxy pin: %v\n", err)
 		os.Exit(1)
 	}

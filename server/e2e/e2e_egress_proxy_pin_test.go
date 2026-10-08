@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,21 +17,25 @@ import (
 )
 
 // TestEgressProxyPin checks that a filtered session pins Chromium's proxy and
-// WebRTC IP handling with managed policy, so an extension loaded over CDP cannot
-// take control of either, and that the pin comes off again when the session is
-// unfiltered.
+// WebRTC IP handling with managed policy, so that neither an extension loaded
+// over CDP nor a runtime flag or chrome policy written through the instance API
+// can take control of either, and that the pin comes off again when the session
+// is unfiltered.
 func TestEgressProxyPin(t *testing.T) {
 	t.Parallel()
 
 	if _, err := exec.LookPath("docker"); err != nil {
-		require.NoError(t, err, "docker not available: %v", err)
+		t.Skipf("docker not available: %v", err)
 	}
 
 	c := NewTestContainer(t, headlessImage)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
 
-	require.NoError(t, c.Start(ctx, ContainerConfig{}), "failed to start container")
+	// Proxy v3 browsers are launched with the egress proxy in their base flags.
+	// Nothing listens on this one; the test only loads loopback pages, which
+	// Chromium never sends through a proxy.
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: map[string]string{"CHROMIUM_FLAGS": "--proxy-server=http://127.0.0.1:9"}}), "failed to start container")
 	defer c.Stop(ctx)
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
 	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
@@ -38,21 +43,28 @@ func TestEgressProxyPin(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
-	// Proxy v3 browsers are launched with the egress proxy on the command line.
-	// Nothing listens on this one; the test never loads a page.
+	putEgressPolicy(t, ctx, client, true)
+
+	// Anyone holding the session's token can write runtime flags and chrome
+	// policy. Neither may undo the pin: each write restarts Chromium, and the
+	// launcher pins the base flags' proxy and clears per-URL WebRTC rules.
+	policyRsp, err := client.PatchChromiumPoliciesWithResponse(ctx, instanceoapi.PatchChromiumPoliciesJSONRequestBody{
+		"WebRtcIPHandlingUrl": []map[string]string{{"url": "*", "handling": "default"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, policyRsp.StatusCode(), "patch policies: %s", string(policyRsp.Body))
 	flagsRsp, err := client.PatchChromiumFlagsWithResponse(ctx, instanceoapi.PatchChromiumFlagsJSONRequestBody{
-		Flags: []string{"--proxy-server=http://127.0.0.1:9"},
+		Flags: []string{"--proxy-server=http://127.0.0.1:8"},
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, flagsRsp.StatusCode(), "patch flags: %s", string(flagsRsp.Body))
 
-	putEgressPolicy(t, ctx, client, true)
-
 	out, err := execCombinedOutputWithClient(ctx, c, "cat", []string{egresspolicy.DefaultPinPath})
 	require.NoError(t, err, "read pin: %s", out)
 	var pin struct {
-		ProxySettings    map[string]string `json:"ProxySettings"`
-		WebRtcIPHandling string            `json:"WebRtcIPHandling"`
+		ProxySettings       map[string]string `json:"ProxySettings"`
+		WebRtcIPHandling    string            `json:"WebRtcIPHandling"`
+		WebRtcIPHandlingURL []any             `json:"WebRtcIPHandlingUrl"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &pin), "decode pin: %s", out)
 	require.Equal(t, map[string]string{
@@ -61,10 +73,12 @@ func TestEgressProxyPin(t *testing.T) {
 		"ProxyBypassList": "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7",
 	}, pin.ProxySettings)
 	require.Equal(t, "disable_non_proxied_udp", pin.WebRtcIPHandling)
+	require.NotNil(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
+	require.Empty(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
 
-	// Loaded after the restart that applied the pin: extensions loaded over CDP
-	// do not survive one. The connection stays open for the rest of the test
-	// because an attached DevTools session keeps the service worker alive.
+	// Loaded after the restarts above: extensions loaded over CDP do not
+	// survive one. The connection stays open for the rest of the test because
+	// an attached DevTools session keeps the service worker alive.
 	cdp, err := cdpclient.Dial(ctx, c.CDPURL())
 	require.NoError(t, err)
 	defer cdp.Close()
@@ -75,6 +89,10 @@ func TestEgressProxyPin(t *testing.T) {
 	level, err = levelOfControl(ctx, cdp, worker, webRTCSetting)
 	require.NoError(t, err)
 	require.Equal(t, "not_controllable", level, "an extension can let WebRTC send UDP around the proxy of a filtered session")
+	page := attachLoopbackPage(t, ctx, cdp)
+	udp, err := udpCandidates(ctx, cdp, page)
+	require.NoError(t, err)
+	require.Empty(t, udp, "WebRTC gathered UDP candidates on a filtered session")
 
 	putEgressPolicy(t, ctx, client, false)
 
@@ -91,6 +109,12 @@ func TestEgressProxyPin(t *testing.T) {
 		webRTC, err := levelOfControl(ctx, cdp, worker, webRTCSetting)
 		return err == nil && proxy == "controllable_by_this_extension" && webRTC == "controllable_by_this_extension"
 	}, time.Minute, time.Second, "proxy still pinned after the session was unfiltered")
+	// The customer's per-URL rule applies again, which also shows the page can
+	// gather UDP candidates when nothing stops it.
+	require.Eventually(t, func() bool {
+		udp, err := udpCandidates(ctx, cdp, page)
+		return err == nil && len(udp) > 0
+	}, time.Minute, time.Second, "per-URL WebRTC rule still cleared after the session was unfiltered")
 }
 
 func putEgressPolicy(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, filtered bool) {
@@ -146,6 +170,62 @@ func attachProxyExtensionWorker(t *testing.T, ctx context.Context, c *TestContai
 	}
 	require.NoError(t, json.Unmarshal(raw, &attached))
 	return attached.SessionID
+}
+
+// attachLoopbackPage opens a page on the DevTools HTTP endpoint, which needs no
+// network and is never proxied, and returns a session attached to it.
+func attachLoopbackPage(t *testing.T, ctx context.Context, cdp *cdpclient.Client) string {
+	t.Helper()
+	raw, err := cdp.Send(ctx, "Target.createTarget", map[string]any{"url": "http://127.0.0.1:9223/json/version"}, "")
+	require.NoError(t, err)
+	var created struct {
+		TargetID string `json:"targetId"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &created))
+	raw, err = cdp.Send(ctx, "Target.attachToTarget", map[string]any{"targetId": created.TargetID, "flatten": true}, "")
+	require.NoError(t, err)
+	var attached struct {
+		SessionID string `json:"sessionId"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &attached))
+	return attached.SessionID
+}
+
+// udpCandidates gathers ICE candidates in the page and returns the UDP ones. No
+// STUN server is configured: a host candidate is enough to show WebRTC may send
+// UDP directly.
+func udpCandidates(ctx context.Context, cdp *cdpclient.Client, page string) ([]string, error) {
+	raw, err := cdp.Send(ctx, "Runtime.evaluate", map[string]any{
+		"expression": `new Promise((resolve) => {
+  const pc = new RTCPeerConnection();
+  const candidates = [];
+  const done = () => { pc.close(); resolve(candidates); };
+  pc.onicecandidate = (e) => e.candidate ? candidates.push(e.candidate.candidate) : done();
+  pc.createDataChannel('probe');
+  pc.createOffer().then((offer) => pc.setLocalDescription(offer));
+  setTimeout(done, 5000);
+})`,
+		"awaitPromise":  true,
+		"returnByValue": true,
+	}, page)
+	if err != nil {
+		return nil, err
+	}
+	var eval struct {
+		Result struct {
+			Value []string `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &eval); err != nil {
+		return nil, err
+	}
+	var udp []string
+	for _, candidate := range eval.Result.Value {
+		if strings.Contains(strings.ToLower(candidate), " udp ") {
+			udp = append(udp, candidate)
+		}
+	}
+	return udp, nil
 }
 
 // The extension settings the pin takes away from extensions.
