@@ -94,6 +94,7 @@ func TestEgressProxyPin(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, udp, "WebRTC gathered UDP candidates on a filtered session")
 
+	waitForPolicyWatch(t, ctx, c)
 	putEgressPolicy(t, ctx, client, false)
 
 	_, err = execCombinedOutputWithClient(ctx, c, "test", []string{"!", "-e", egresspolicy.DefaultPinPath})
@@ -170,6 +171,23 @@ func attachProxyExtensionWorker(t *testing.T, ctx context.Context, c *TestContai
 	}
 	require.NoError(t, json.Unmarshal(raw, &attached))
 	return attached.SessionID
+}
+
+// waitForPolicyWatch waits until Chromium watches its managed policy
+// directory. It installs the watch in a best-effort task some time after it
+// starts, and a pin removed before then goes unnoticed until the periodic
+// policy reload 15 minutes later: Chromium finds the change when it installs
+// the watch, but the periodic reload it schedules next replaces the one it
+// scheduled for the change.
+func waitForPolicyWatch(t *testing.T, ctx context.Context, c *TestContainer) {
+	t.Helper()
+	const script = `ino=$(printf '%x' "$(stat -c %i /etc/chromium/policies/managed)")
+browser=$(for p in $(pgrep -f -- --remote-debugging-port); do grep -qa -- --type= /proc/$p/cmdline || echo $p; done | sort -n | tail -n 1)
+grep -qs "ino:$ino " /proc/$browser/fdinfo/*`
+	require.Eventually(t, func() bool {
+		_, err := execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", script})
+		return err == nil
+	}, time.Minute, 500*time.Millisecond, "chromium never started watching its policy directory")
 }
 
 // attachLoopbackPage opens a page on the DevTools HTTP endpoint, which needs no
