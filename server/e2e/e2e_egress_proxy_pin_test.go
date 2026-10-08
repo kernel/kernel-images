@@ -170,6 +170,23 @@ func attachProxyExtensionWorker(t *testing.T, ctx context.Context, c *TestContai
 		SessionID string `json:"sessionId"`
 	}
 	require.NoError(t, json.Unmarshal(raw, &attached))
+
+	// The worker target can be listed before its extension APIs are bound.
+	require.Eventually(t, func() bool {
+		raw, err := cdp.Send(ctx, "Runtime.evaluate", map[string]any{
+			"expression":    `typeof ` + proxySetting + `?.get === "function" && typeof ` + webRTCSetting + `?.get === "function"`,
+			"returnByValue": true,
+		}, attached.SessionID)
+		if err != nil {
+			return false
+		}
+		var eval struct {
+			Result struct {
+				Value bool `json:"value"`
+			} `json:"result"`
+		}
+		return json.Unmarshal(raw, &eval) == nil && eval.Result.Value
+	}, 30*time.Second, 250*time.Millisecond, "extension APIs never became available in the service worker")
 	return attached.SessionID
 }
 
@@ -265,11 +282,23 @@ func levelOfControl(ctx context.Context, cdp *cdpclient.Client, worker, setting 
 	}
 	var eval struct {
 		Result struct {
-			Value string `json:"value"`
+			Value json.RawMessage `json:"value"`
 		} `json:"result"`
+		ExceptionDetails *struct {
+			Exception struct {
+				Description string `json:"description"`
+			} `json:"exception"`
+		} `json:"exceptionDetails"`
 	}
 	if err := json.Unmarshal(raw, &eval); err != nil {
 		return "", err
 	}
-	return eval.Result.Value, nil
+	if eval.ExceptionDetails != nil {
+		return "", fmt.Errorf("read %s: %s", setting, eval.ExceptionDetails.Exception.Description)
+	}
+	var level string
+	if err := json.Unmarshal(eval.Result.Value, &level); err != nil {
+		return "", fmt.Errorf("read %s: %w", setting, err)
+	}
+	return level, nil
 }
