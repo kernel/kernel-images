@@ -344,6 +344,10 @@
   // kept in the overlay so soft keyboards that only emit input events still report backspace
   const INPUT_SENTINEL = ' '
 
+  function nearSpot(a: Point, b: Point) {
+    return Math.hypot(a.x - b.x, a.y - b.y) <= CURSOR_SAME_SPOT
+  }
+
   type TapKeyboardMode = 'auto' | 'chip' | 'always' | 'off'
 
   const CONTROL_POSITION_KEY = 'touch_control_position'
@@ -398,6 +402,9 @@
     // remote pointer position: last sent, and where the current cursor shape applies
     private pointer: Point | null = null
     private shapeAt: Point | null = null
+    // when the pointer last moved to a new spot, and the time before that
+    private pointerJumpAt = 0
+    private previousPointerJumpAt = 0
     private keyboardInset = 0
     private touchLayout: ControlLayout = { mode: 'overlay', band: 0 }
     private controlPosition: ControlPosition = decodePosition(get<string>(CONTROL_POSITION_KEY, ''))
@@ -407,7 +414,7 @@
     private safeArea: SafeArea = { top: 0, bottom: 0, left: 0, right: 0 }
     private touchBeganAt = 0
     private lastTap: { p: Point; at: number } | null = null
-    private pendingTap: { p: Point; at: number } | null = null
+    private pendingTap: { p: Point; here: Point; at: number } | null = null
     private pendingTapTimer = 0
     private scrollRemainder = { x: 0, y: 0 }
     private composing = false
@@ -1025,8 +1032,19 @@
     }
 
     sendPointer(p: Point) {
-      this.pointer = this.remotePoint(p)
-      this.$client.sendData('mousemove', this.pointer)
+      const next = this.remotePoint(p)
+      if (!this.pointer || !nearSpot(next, this.pointer)) {
+        this.previousPointerJumpAt = this.pointerJumpAt
+        this.pointerJumpAt = performance.now()
+      }
+      this.pointer = next
+      this.$client.sendData('mousemove', next)
+    }
+
+    // The remote pointer position a new cursor image belongs to, or null when
+    // an update for an earlier position could still be in flight.
+    cursorImageOwner() {
+      return this.pointerJumpAt - this.previousPointerJumpAt >= CURSOR_WAIT_MS ? this.pointer : null
     }
 
     clickAt(p: Point, button: number) {
@@ -1198,8 +1216,7 @@
       const here = this.remotePoint(p)
       const fresh = this.cursorChangedAt >= this.touchBeganAt
       const settled = now - this.touchBeganAt >= CURSOR_SETTLE_MS
-      const sameSpot =
-        !!this.shapeAt && Math.hypot(here.x - this.shapeAt.x, here.y - this.shapeAt.y) <= CURSOR_SAME_SPOT
+      const sameSpot = !!this.shapeAt && nearSpot(here, this.shapeAt)
       if (fresh || settled || sameSpot) {
         if (settled) this.shapeAt = here
         this.applyCursorToKeyboard(p, true)
@@ -1207,13 +1224,14 @@
       }
 
       // the cursor update for this position may still be in flight
-      this.pendingTap = { p, at: now }
+      this.pendingTap = { p, here, at: now }
       this.pendingTapTimer = window.setTimeout(() => {
         if (!this.pendingTap) return
         const tap = this.pendingTap
         this.pendingTap = null
-        // no update arrived, so the shape did not change at the new position
-        this.shapeAt = this.pointer
+        // no update arrived, so the shape did not change at the tap position,
+        // as long as the pointer is still there
+        this.shapeAt = this.pointer && nearSpot(this.pointer, tap.here) ? tap.here : null
         this.applyCursorToKeyboard(tap.p, false)
       }, CURSOR_WAIT_MS)
     }
@@ -1234,7 +1252,7 @@
     onCursorImage(image: CursorImage) {
       // classification is async; only the newest cursor image may apply
       const seq = ++this.cursorSeq
-      const at = this.pointer
+      const at = this.cursorImageOwner()
       const apply = (kind: CursorKind) => {
         if (seq !== this.cursorSeq) return
         this.cursorKind = kind
