@@ -86,6 +86,7 @@
       <button
         v-if="showTouchControls"
         class="touch-button keyboard-button"
+        :style="{ bottom: `calc(12px + env(safe-area-inset-bottom) + ${keyboardInset}px)` }"
         @touchend.stop.prevent="toggleMobileKeyboard"
         @click.stop.prevent="toggleMobileKeyboard"
       >
@@ -152,7 +153,6 @@
 
       .keyboard-button {
         right: calc(12px + env(safe-area-inset-right));
-        bottom: calc(12px + env(safe-area-inset-bottom));
       }
 
       .zoom-chip {
@@ -378,6 +378,8 @@
     private typeChipTimer = 0
     private cursorKind: CursorKind = 'unknown'
     private cursorChangedAt = 0
+    private cursorSeq = 0
+    private keyboardInset = 0
     private touchBeganAt = 0
     private lastTap: { p: Point; at: number } | null = null
     private pendingTap: { p: Point; at: number } | null = null
@@ -700,6 +702,8 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
+      window.visualViewport?.addEventListener('resize', this.updateKeyboardInset)
+      window.visualViewport?.addEventListener('scroll', this.updateKeyboardInset)
       window.addEventListener('pagehide', this.resetKeyboard)
       document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
 
@@ -758,6 +762,8 @@
         this._wheelHandler = null
       }
       window.removeEventListener('blur', this.resetKeyboard)
+      window.visualViewport?.removeEventListener('resize', this.updateKeyboardInset)
+      window.visualViewport?.removeEventListener('scroll', this.updateKeyboardInset)
       window.removeEventListener('pagehide', this.resetKeyboard)
       document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
       this.observer.disconnect()
@@ -1184,7 +1190,10 @@
     }
 
     onCursorImage(image: CursorImage) {
+      // classification is async; only the newest cursor image may apply
+      const seq = ++this.cursorSeq
       const apply = (kind: CursorKind) => {
+        if (seq !== this.cursorSeq) return
         this.cursorKind = kind
         this.cursorChangedAt = performance.now()
 
@@ -1227,6 +1236,15 @@
     focusForTyping() {
       this.resetInputSentinel()
       this._overlay.focus({ preventScroll: true })
+    }
+
+    // iOS overlays the soft keyboard on the layout viewport instead of resizing
+    // it, so lift the keyboard button by the part the visual viewport lost
+    updateKeyboardInset() {
+      const viewport = window.visualViewport
+      if (!viewport) return
+      const covered = document.documentElement.clientHeight - viewport.height - viewport.offsetTop
+      this.keyboardInset = Math.max(0, Math.round(covered))
     }
 
     toggleMobileKeyboard() {
