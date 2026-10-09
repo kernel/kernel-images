@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"unicode"
 
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -30,7 +31,7 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 		for _, host := range *req.Body.PrivateHosts {
 			// Chromium splits its bypass list on both separators, so one entry
 			// carrying either would add rules of its own.
-			if host == "" || strings.ContainsAny(host, ";, \t\r\n") {
+			if host == "" || strings.ContainsAny(host, ";,") || strings.ContainsFunc(host, unicode.IsSpace) {
 				return oapi.PutNetworkEgressPolicy400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "private_hosts entries must be non-empty and contain no ';', ',' or whitespace"}}, nil
 			}
 		}

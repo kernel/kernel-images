@@ -82,7 +82,7 @@ func TestPutNetworkEgressPolicyRejectsMalformedPrivateHosts(t *testing.T) {
 	svc, err := newSvc(t, newMockRecordManager())
 	require.NoError(t, err)
 
-	for _, host := range []string{"", "a.internal;*", "a.internal,*", "a.internal *"} {
+	for _, host := range []string{"", "a.internal;*", "a.internal,*", "a.internal *", "a.internal\v*", "a.internal\u00a0*"} {
 		hosts := []string{"10.1.0.0/16", host}
 		resp, err := svc.PutNetworkEgressPolicy(context.Background(), oapi.PutNetworkEgressPolicyRequestObject{
 			Body: &oapi.NetworkEgressPolicy{Filtered: true, PrivateHosts: &hosts},
