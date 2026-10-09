@@ -338,6 +338,8 @@
   const CURSOR_SETTLE_MS = 200
   // how long a late cursor update can still act on the tap that caused it
   const CURSOR_WAIT_MS = 800
+  // a tap this close (remote px) to where the current cursor shape was seen reuses it
+  const CURSOR_SAME_SPOT = 16
   const TYPE_CHIP_MS = 4000
   // kept in the overlay so soft keyboards that only emit input events still report backspace
   const INPUT_SENTINEL = ' '
@@ -393,6 +395,9 @@
     private cursorKind: CursorKind = 'unknown'
     private cursorChangedAt = 0
     private cursorSeq = 0
+    // remote pointer position: last sent, and where the current cursor shape applies
+    private pointer: Point | null = null
+    private shapeAt: Point | null = null
     private keyboardInset = 0
     private touchLayout: ControlLayout = { mode: 'overlay', band: 0 }
     private controlPosition: ControlPosition = decodePosition(get<string>(CONTROL_POSITION_KEY, ''))
@@ -1020,7 +1025,8 @@
     }
 
     sendPointer(p: Point) {
-      this.$client.sendData('mousemove', this.remotePoint(p))
+      this.pointer = this.remotePoint(p)
+      this.$client.sendData('mousemove', this.pointer)
     }
 
     clickAt(p: Point, button: number) {
@@ -1185,10 +1191,17 @@
         return
       }
 
+      // Over a real network the cursor update usually arrives after the finger
+      // lifts, so the shape is only known here if it changed during this touch,
+      // the touch was long enough, or it was already seen at this spot.
       const now = performance.now()
+      const here = this.remotePoint(p)
       const fresh = this.cursorChangedAt >= this.touchBeganAt
       const settled = now - this.touchBeganAt >= CURSOR_SETTLE_MS
-      if (fresh || settled) {
+      const sameSpot =
+        !!this.shapeAt && Math.hypot(here.x - this.shapeAt.x, here.y - this.shapeAt.y) <= CURSOR_SAME_SPOT
+      if (fresh || settled || sameSpot) {
+        if (settled) this.shapeAt = here
         this.applyCursorToKeyboard(p, true)
         return
       }
@@ -1199,6 +1212,8 @@
         if (!this.pendingTap) return
         const tap = this.pendingTap
         this.pendingTap = null
+        // no update arrived, so the shape did not change at the new position
+        this.shapeAt = this.pointer
         this.applyCursorToKeyboard(tap.p, false)
       }, CURSOR_WAIT_MS)
     }
@@ -1219,9 +1234,11 @@
     onCursorImage(image: CursorImage) {
       // classification is async; only the newest cursor image may apply
       const seq = ++this.cursorSeq
+      const at = this.pointer
       const apply = (kind: CursorKind) => {
         if (seq !== this.cursorSeq) return
         this.cursorKind = kind
+        this.shapeAt = at
         this.cursorChangedAt = performance.now()
 
         const tap = this.pendingTap
