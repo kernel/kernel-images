@@ -18,43 +18,41 @@ import (
 // fakeCDP is a minimal CDP server that responds to the commands used by
 // SetDeviceMetricsOverride and GetBrowserVersion.
 type fakeCDP struct {
-	getTargetsCalls       int
-	attachCalled          bool
-	setMetricsCalled      bool
-	setMetricsWidth       int
-	setMetricsHeight      int
-	detachCalled          bool
-	pageTargetID          string
-	sessionID             string
-	failGetTargets        bool
-	failSetMetrics        bool
-	returnNoPageTargets   bool
-	noPageTargetsFor      int
-	getVersionCalled      bool
-	failGetVersion        bool
-	productResponse       string
-	browserLocale         string
-	browserLanguages      string
-	browserTimezone       string
-	browserDateTimeLocale string
-	browserNumberLocale   string
-	browserCollatorLocale string
-	loadUnpackedCalled    bool
-	loadUnpackedPath      string
-	loadUnpackedID        string
-	failLoadUnpacked      bool
-	getExtensionsCalled   bool
-	extensions            []ExtensionInfo
-	failGetExtensions     bool
-	navigateCalled        bool
-	navigateCalls         int
-	navigateURL           string
-	pageStates            []string
-	pageStateIndex        int
-	createdTargetID       string
-	createParams          map[string]any
-	closedTargetID        string
-	closeTargetMissing    bool
+	getTargetsCalls     int
+	attachCalled        bool
+	setMetricsCalled    bool
+	setMetricsWidth     int
+	setMetricsHeight    int
+	detachCalled        bool
+	pageTargetID        string
+	sessionID           string
+	failGetTargets      bool
+	failSetMetrics      bool
+	returnNoPageTargets bool
+	noPageTargetsFor    int
+	getVersionCalled    bool
+	failGetVersion      bool
+	productResponse     string
+	browserGeneration   uint64
+	browserLocale       string
+	browserLanguages    string
+	browserTimezone     string
+	loadUnpackedCalled  bool
+	loadUnpackedPath    string
+	loadUnpackedID      string
+	failLoadUnpacked    bool
+	getExtensionsCalled bool
+	extensions          []ExtensionInfo
+	failGetExtensions   bool
+	navigateCalled      bool
+	navigateCalls       int
+	navigateURL         string
+	pageStates          []string
+	pageStateIndex      int
+	createdTargetID     string
+	createParams        map[string]any
+	closedTargetID      string
+	closeTargetMissing  bool
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -141,17 +139,21 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 					"jsVersion":       "1.2.3",
 				}
 			}
-		case "Browser.validateKernelBrowserLocation":
-			result = map[string]any{"dateTimeLocale": f.browserDateTimeLocale, "numberLocale": f.browserNumberLocale, "collatorLocale": f.browserCollatorLocale}
 		case "Browser.setKernelBrowserLocation":
-			var params map[string]string
+			var params struct {
+				Generation      uint64 `json:"generation"`
+				Locale          string `json:"locale"`
+				AcceptLanguages string `json:"acceptLanguages"`
+				TimeZone        string `json:"timezone"`
+			}
 			_ = json.Unmarshal(req.Params, &params)
-			f.browserLocale = params["locale"]
-			f.browserLanguages = params["acceptLanguages"]
-			f.browserTimezone = params["timezone"]
+			f.browserGeneration = params.Generation
+			f.browserLocale = params.Locale
+			f.browserLanguages = params.AcceptLanguages
+			f.browserTimezone = params.TimeZone
 			result = map[string]any{}
 		case "Browser.getKernelBrowserLocation":
-			result = map[string]any{"locale": f.browserLocale, "acceptLanguages": f.browserLanguages, "timezone": f.browserTimezone, "dateTimeLocale": f.browserDateTimeLocale, "numberLocale": f.browserNumberLocale, "collatorLocale": f.browserCollatorLocale, "renderersConverged": true, "networkContextsConverged": true}
+			result = map[string]any{"generation": f.browserGeneration, "locale": f.browserLocale, "acceptLanguages": f.browserLanguages, "timezone": f.browserTimezone, "renderersConverged": true, "timezoneConverged": true, "networkContextsConverged": true}
 		case "Extensions.loadUnpacked":
 			f.loadUnpackedCalled = true
 			var params map[string]string
@@ -844,18 +846,14 @@ func TestTargetURLs(t *testing.T) {
 }
 
 func TestBrowserLocation(t *testing.T) {
-	f := &fakeCDP{browserTimezone: "Europe/Berlin", browserDateTimeLocale: "de", browserNumberLocale: "de", browserCollatorLocale: "de"}
+	f := &fakeCDP{}
 	url := startFakeCDP(t, f)
 	client, err := Dial(context.Background(), url)
 	require.NoError(t, err)
 	defer client.Close()
 
-	resolution, err := client.ValidateBrowserLocation(context.Background(), "de-DE")
-	require.NoError(t, err)
-	assert.Equal(t, BrowserLocationResolution{DateTimeLocale: "de", NumberLocale: "de", CollatorLocale: "de"}, resolution)
-
-	require.NoError(t, client.SetBrowserLocation(context.Background(), "de-DE", "de-DE,de", "Europe/Berlin"))
+	require.NoError(t, client.SetBrowserLocation(context.Background(), 7, "de-DE", "de-DE,de", "Europe/Berlin"))
 	location, err := client.GetBrowserLocation(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, BrowserLocation{Locale: "de-DE", AcceptLanguages: "de-DE,de", TimeZone: "Europe/Berlin", DateTimeLocale: "de", NumberLocale: "de", CollatorLocale: "de", RenderersConverged: true, NetworkContextsConverged: true}, location)
+	assert.Equal(t, BrowserLocation{Generation: 7, Locale: "de-DE", AcceptLanguages: "de-DE,de", TimeZone: "Europe/Berlin", RenderersConverged: true, TimeZoneConverged: true, NetworkContextsConverged: true}, location)
 }
