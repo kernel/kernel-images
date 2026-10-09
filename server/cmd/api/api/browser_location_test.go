@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,9 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -211,4 +215,63 @@ func TestBrowserLocationPersistenceFailureDoesNotChangeEpoch(t *testing.T) {
 	err := service.resetBrowserLocation("", testLocationBundle("lease-a", 1))
 	require.Error(t, err)
 	assert.Empty(t, service.browserLocationSnapshot().ActiveEpoch)
+}
+
+func TestGetBrowserLocationHTTPConfirmsAppliedWithChromium(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	bundle := testLocationBundle("lease-a", 1)
+	require.NoError(t, service.resetBrowserLocation("", bundle))
+	service.browserLocationMu.Lock()
+	applied := bundle
+	service.browserLocation.applied = &applied
+	service.browserLocation.components = browserLocationComponents{TimeZone: true, Browser: true, Renderers: true, NetworkContexts: true}
+	service.browserLocationMu.Unlock()
+
+	// Chromium reports this generation until it restarts and reports none.
+	var chromiumGeneration atomic.Uint64
+	chromiumGeneration.Store(service.browserLocation.browserGeneration)
+	chromium := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		for {
+			var command struct {
+				ID int `json:"id"`
+			}
+			if wsjson.Read(r.Context(), conn, &command) != nil {
+				return
+			}
+			_ = wsjson.Write(r.Context(), conn, map[string]any{"id": command.ID, "result": map[string]any{
+				"generation": chromiumGeneration.Load(), "locale": "en-US", "acceptLanguages": "en-US,en", "timezone": "UTC",
+				"renderersConverged": true, "timezoneConverged": true, "networkContextsConverged": true,
+			}})
+		}
+	}))
+	defer chromium.Close()
+
+	logPath := filepath.Join(t.TempDir(), "chromium.log")
+	wsURL := "ws" + strings.TrimPrefix(chromium.URL, "http") + "/devtools/browser/a"
+	require.NoError(t, os.WriteFile(logPath, []byte("DevTools listening on "+wsURL+"\n"), 0o600))
+	manager := devtoolsproxy.NewUpstreamManager(logPath, slog.New(slog.DiscardHandler))
+	manager.Start(service.lifecycleCtx)
+	service.upstreamMgr = manager
+	require.Eventually(t, func() bool { return manager.Current() == wsURL }, 3*time.Second, 10*time.Millisecond)
+
+	status := func() browserLocationStatus {
+		response := httptest.NewRecorder()
+		service.GetBrowserLocationHTTP(response, httptest.NewRequest(http.MethodGet, "/browser/location", nil))
+		var got browserLocationStatus
+		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &got))
+		return got
+	}
+	got := status()
+	require.NotNil(t, got.Applied)
+	assert.True(t, got.Components.Renderers)
+
+	chromiumGeneration.Store(0)
+	got = status()
+	assert.Nil(t, got.Applied, "a restarted Chromium must not be reported as applied")
+	assert.Equal(t, browserLocationComponents{}, got.Components)
 }

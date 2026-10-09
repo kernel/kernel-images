@@ -269,7 +269,7 @@ func configureLocation(ctx context.Context, t *testing.T, c *TestContainer, bund
 	writer := multipart.NewWriter(&body)
 	require.NoError(t, writer.WriteField("browser_location", string(payload)))
 	require.NoError(t, writer.Close())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBaseURL()+"/chromium/configure", &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBaseURL()+"/configure", &body)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	resp, err := http.DefaultClient.Do(req)
