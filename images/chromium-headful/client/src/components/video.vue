@@ -334,11 +334,9 @@
   const TOUCH_SCROLL_UNITS_PER_PX = 1.1
   const DOUBLE_TAP_MS = 300
   const DOUBLE_TAP_SLOP = 40
-  // a cursor shape unchanged this long after the pointer moved belongs to the new position
-  const CURSOR_SETTLE_MS = 200
-  // how long a late cursor update can still act on the tap that caused it
+  // how long after a tap a text cursor can still offer the keyboard
   const CURSOR_WAIT_MS = 800
-  // a tap this close (remote px) to where the current cursor shape was seen reuses it
+  // a tap this close (remote px) to where a text cursor was seen raises the keyboard
   const CURSOR_SAME_SPOT = 16
   const TYPE_CHIP_MS = 4000
   // kept in the overlay so soft keyboards that only emit input events still report backspace
@@ -399,9 +397,9 @@
     private cursorKind: CursorKind = 'unknown'
     private cursorChangedAt = 0
     private cursorSeq = 0
-    // remote pointer position: last sent, and where the current cursor shape applies
+    // remote pointer position: last sent, and where a text cursor was last seen
     private pointer: Point | null = null
-    private shapeAt: Point | null = null
+    private textSpot: Point | null = null
     // when the pointer last moved to a new spot, and the time before that
     private pointerJumpAt = 0
     private previousPointerJumpAt = 0
@@ -1198,7 +1196,10 @@
     // Runs inside touchend, the only place iOS lets focus() raise the keyboard.
     // The remote cursor shape is the signal: Chromium shows an I-beam over text
     // fields (and over selectable page text, which is the false positive), and
-    // the pointer was moved to the tap position on touchstart.
+    // the pointer was moved to the tap position on touchstart. Over a real
+    // network the update usually arrives after the finger lifts, so the keyboard
+    // opens here only if a text cursor showed up during this touch or was seen
+    // at this spot before; otherwise a later text cursor offers the chip.
     keyboardAfterTap(p: Point) {
       window.clearTimeout(this.pendingTapTimer)
       this.pendingTap = null
@@ -1209,44 +1210,35 @@
         return
       }
 
-      // Over a real network the cursor update usually arrives after the finger
-      // lifts, so the shape is only known here if it changed during this touch,
-      // the touch was long enough, or it was already seen at this spot.
-      const now = performance.now()
       const here = this.remotePoint(p)
-      const fresh = this.cursorChangedAt >= this.touchBeganAt
-      const settled = now - this.touchBeganAt >= CURSOR_SETTLE_MS
-      const sameSpot = !!this.shapeAt && nearSpot(here, this.shapeAt)
-      if (fresh || settled || sameSpot) {
-        if (settled) this.shapeAt = here
-        this.applyCursorToKeyboard(p, true)
+      const textDuringTouch = this.cursorKind === 'text' && this.cursorChangedAt >= this.touchBeganAt
+      if (textDuringTouch || (this.textSpot && nearSpot(here, this.textSpot))) {
+        this.offerKeyboard(p, true)
         return
       }
 
-      // the cursor update for this position may still be in flight
-      this.pendingTap = { p, here, at: now }
-      this.pendingTapTimer = window.setTimeout(() => {
-        if (!this.pendingTap) return
-        const tap = this.pendingTap
-        this.pendingTap = null
-        // no update arrived, so the shape did not change at the tap position,
-        // as long as the pointer is still there
-        this.shapeAt = this.pointer && nearSpot(this.pointer, tap.here) ? tap.here : null
-        this.applyCursorToKeyboard(tap.p, false)
-      }, CURSOR_WAIT_MS)
+      // Pages often flash another cursor before the I-beam, so any text cursor
+      // within the window counts; only the end of the window means "not text".
+      this.pendingTap = { p, here, at: performance.now() }
+      this.pendingTapTimer = window.setTimeout(this.endPendingTap, CURSOR_WAIT_MS)
     }
 
-    applyCursorToKeyboard(p: Point, inGesture: boolean) {
-      if (this.cursorKind === 'text') {
-        if (this.keyboardOpen) return
-        if (inGesture && this.tapKeyboard === 'auto') {
-          this.focusForTyping()
-        } else {
-          this.showTypeChip(p)
-        }
-      } else if (this.cursorKind === 'other' && this.keyboardOpen) {
-        this._overlay.blur()
+    offerKeyboard(p: Point, inGesture: boolean) {
+      if (this.keyboardOpen) return
+      if (inGesture && this.tapKeyboard === 'auto') {
+        this.focusForTyping()
+      } else {
+        this.showTypeChip(p)
       }
+    }
+
+    // no text cursor showed up for the tap: it was not on a text field
+    endPendingTap() {
+      const tap = this.pendingTap
+      if (!tap) return
+      this.pendingTap = null
+      if (this.textSpot && nearSpot(tap.here, this.textSpot)) this.textSpot = null
+      if (this.keyboardOpen) this._overlay.blur()
     }
 
     onCursorImage(image: CursorImage) {
@@ -1256,14 +1248,15 @@
       const apply = (kind: CursorKind) => {
         if (seq !== this.cursorSeq) return
         this.cursorKind = kind
-        this.shapeAt = at
         this.cursorChangedAt = performance.now()
+        if (kind !== 'text') return
 
+        if (at) this.textSpot = at
         const tap = this.pendingTap
         if (tap && performance.now() - tap.at < CURSOR_WAIT_MS) {
           window.clearTimeout(this.pendingTapTimer)
           this.pendingTap = null
-          this.applyCursorToKeyboard(tap.p, false)
+          this.offerKeyboard(tap.p, false)
         }
       }
 
