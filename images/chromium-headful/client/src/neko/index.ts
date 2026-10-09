@@ -4,6 +4,7 @@ import { BaseClient, BaseEvents } from './base'
 import { Member } from './types'
 import { EVENT } from './events'
 import { accessor } from '~/store'
+import { parseCursorImage } from '~/utils/cursor-shape'
 
 import {
   SystemMessagePayload,
@@ -131,7 +132,17 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
     this.$accessor.video.setStream(0)
   }
 
-  protected [EVENT.DATA]() {}
+  protected [EVENT.DATA](data: ArrayBuffer | Blob) {
+    if (data instanceof Blob) {
+      data.arrayBuffer().then((buffer) => this[EVENT.DATA](buffer))
+      return
+    }
+
+    const image = parseCursorImage(data)
+    if (image) {
+      this.emit('cursor', image)
+    }
+  }
 
   /////////////////////////////
   // System Events
