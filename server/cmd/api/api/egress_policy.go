@@ -18,10 +18,9 @@ func (s *ApiService) GetNetworkEgressPolicy(_ context.Context, _ oapi.GetNetwork
 }
 
 // PutNetworkEgressPolicy handles PUT /network/egress-policy.
-// Records whether the session's egress is restricted to an allowlist, which is
-// what the CDP proxy consults before forwarding a command that would put a
-// browser context on its own proxy, and pins Chromium's proxy with managed
-// policy so an extension cannot switch it to direct connections.
+// Records whether the session's egress is restricted to an allowlist, which the
+// CDP proxy consults before forwarding a command that would put a browser
+// context on its own proxy, and pins Chromium's proxy with managed policy.
 func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNetworkEgressPolicyRequestObject) (oapi.PutNetworkEgressPolicyResponseObject, error) {
 	log := logger.FromContext(ctx)
 	if req.Body == nil {
@@ -29,8 +28,7 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 	}
 	if req.Body.PrivateHosts != nil {
 		for _, host := range *req.Body.PrivateHosts {
-			// Chromium splits its bypass list on both separators, so one entry
-			// carrying either would add rules of its own.
+			// Chromium splits its bypass list on these.
 			if host == "" || strings.ContainsAny(host, ";,") || strings.ContainsFunc(host, unicode.IsSpace) {
 				return oapi.PutNetworkEgressPolicy400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "private_hosts entries must be non-empty and contain no ';', ',' or whitespace"}}, nil
 			}
@@ -38,9 +36,7 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 	}
 	policy := egresspolicy.Policy{Filtered: req.Body.Filtered, PrivateHosts: req.Body.PrivateHosts}
 
-	// The pin is written by the launcher from the flags Chromium starts with,
-	// so applying it means a restart, which must not interleave with another
-	// configuration change.
+	// Applying the pin can restart Chromium.
 	s.chromiumConfigMu.Lock()
 	defer s.chromiumConfigMu.Unlock()
 
@@ -62,15 +58,11 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 // applyEgressPin brings Chromium's proxy pin in line with the policy. The
 // caller must hold chromiumConfigMu.
 //
-// A pin that is missing, or is not the one this policy produces, is rewritten
-// by restarting Chromium rather than by waiting for it to reload its policy
-// directory, so the pin is in force before the control plane hands the session
-// to a client. Chromium does not need a restart for the pin to come off.
-//
-// The launcher does not take chromiumConfigMu, so a Chromium that crashed and is
-// restarting as the policy flips to unfiltered can write the pin again after it
-// is removed. That leaves the session pinned until Chromium next starts, which
-// fails closed.
+// A missing or stale pin is written by restarting Chromium, so it is in force
+// before the request returns; Chromium's own policy reload would be late.
+// Removal needs no restart. A Chromium restarting on its own as the policy
+// flips to unfiltered can write the pin back, which fails closed until its
+// next start.
 func (s *ApiService) applyEgressPin(ctx context.Context, policy egresspolicy.Policy) error {
 	if !policy.Filtered {
 		return s.egressPin.Remove()

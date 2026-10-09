@@ -93,7 +93,7 @@ func main() {
 		}
 	}
 	if err := egresspolicy.DefaultPin.Sync(egress, egresspolicy.BaseFlags(baseFlags)); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to sync egress proxy pin: %v\n", err)
+		fmt.Fprintf(os.Stderr, "not starting chromium: failed to sync egress proxy pin: %v\n", err)
 		os.Exit(1)
 	}
 

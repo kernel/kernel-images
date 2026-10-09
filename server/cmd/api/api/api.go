@@ -141,12 +141,10 @@ type ApiService struct {
 	// session's egress allowlist. Shared with the CDP proxy, which reads it to
 	// decide whether to refuse a context that would set its own proxy.
 	egressPolicy *egresspolicy.State
-	// egressPin is the managed policy that holds Chromium on the egress proxy
-	// while the session is filtered. The launcher writes it; the egress policy
-	// handler restarts Chromium to get it written and removes it.
+	// egressPin holds Chromium on the egress proxy while filtered. The
+	// launcher writes it; the egress policy handler checks and removes it.
 	egressPin egresspolicy.Pin
-	// chromiumBaseFlags are the flags the launcher derives the pin from, so the
-	// handler can tell whether the pin in place is the one the policy needs.
+	// chromiumBaseFlags are the flags the launcher derives the pin from.
 	chromiumBaseFlags []string
 
 	lifecycleCtx    context.Context

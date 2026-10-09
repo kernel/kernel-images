@@ -1752,19 +1752,12 @@ paths:
         answers it with a protocol error instead of forwarding it to Chromium.
 
 
-        With `filtered: true` the VM also pins Chromium's network settings
-        with managed policy, which neither extensions nor `chrome_policy`
-        overrides can change: `ProxySettings` holds Chromium on the proxy in
-        its base flags, with `private_hosts` as the bypass list;
-        `WebRtcIPHandling` and an empty `WebRtcIPHandlingUrl` keep WebRTC
-        from sending UDP around the proxy; and `DnsOverHttpsMode` is `off`.
-        While filtered, the proxy and bypass list come only from the base
-        flags and this request, and runtime flags that remap hosts
-        (`--host-resolver-rules`, `--host-rules`) are ignored.
-        If the pin is not already in place for this policy, Chromium is
-        restarted to apply it before the request returns. With
-        `filtered: false` the pin is removed without a restart, and
-        Chromium stops applying it on its next policy reload.
+        With `filtered: true` the VM also pins Chromium's proxy, WebRTC and
+        DNS-over-HTTPS settings with managed policy, using the proxy from the
+        base flags and `private_hosts` as the bypass list. While filtered,
+        runtime `--host-resolver-rules` and `--host-rules` are ignored.
+        Chromium restarts if the pin is not already in place for this
+        policy. With `filtered: false` the pin is removed without a restart.
 
 
         Idempotent, and applied by the control plane both when the session is
@@ -6618,10 +6611,9 @@ components:
             type: string
           description: >-
             The session's `network.private_hosts`, which bypass the egress
-            proxy while the session is filtered. Omitted keeps the image's
-            default bypass of private ranges; an empty list bypasses nothing.
-            Entries are passed to Chromium's bypass list as validated by the
-            control plane, and may not contain `;`, `,` or whitespace.
+            proxy while filtered. Omitted keeps the image's default bypass of
+            private ranges; an empty list bypasses nothing. Entries may not
+            contain `;`, `,` or whitespace.
       additionalProperties: false
     TelemetryState:
       type: object

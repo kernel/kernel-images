@@ -6,8 +6,7 @@
 // destinations are allowed. The VM is told that an allowlist exists, because
 // some of what it can be asked to do would route traffic around that proxy,
 // and it cannot refuse those requests without knowing the session is filtered
-// at all. It is also told the session's private hosts, the destinations that
-// are meant to bypass the proxy, so that it can pin exactly those.
+// at all. It is also told the session's private hosts, which bypass the proxy.
 package egresspolicy
 
 import (

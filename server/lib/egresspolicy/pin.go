@@ -14,49 +14,30 @@ import (
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
 
-// DefaultPin is the pin as the image lays it out. Chromium merges every file
-// in its managed policy directory, so the pin sits beside policy.json rather
-// than inside it and never races the writers of that file. Where two files set
-// the same policy, the one that sorts last wins, so the name keeps the pin
-// ahead of policy.json.
+// DefaultPin sits beside policy.json rather than inside it, so it never races
+// that file's writers. Chromium merges every file in the directory and the one
+// that sorts last wins, so the name keeps the pin ahead of policy.json.
 var DefaultPin = Pin{
 	Path:     "/etc/chromium/policies/managed/zz-kernel-egress.json",
 	StageDir: "/etc/chromium/policies",
 }
 
-// Pin fixes Chromium's proxy with managed policy while the session is filtered.
+// Pin fixes Chromium's network settings with managed policy while the session
+// is filtered. Chromium applies proxy settings in the order policy, extensions,
+// command line, so without it an extension can switch --proxy-server to direct.
 //
-// Chromium is pointed at the egress proxy with --proxy-server, but it applies
-// proxy settings in the order policy, extensions, command line. An extension
-// with the proxy permission can therefore switch it to direct connections, and
-// a CDP client can load such an extension with Extensions.loadUnpacked. Policy
-// is the one source an extension cannot override.
-//
-// The pin is derived from the base flags Chromium is launched with and the
-// policy, and is written by the launcher on every start. Once it is in place
-// Chromium ignores --proxy-bypass-list as well as --proxy-server, which is why
-// it carries both.
-//
-// WebRTC sends UDP straight to the network rather than through an HTTP proxy,
-// so a page can reach any STUN or TURN server whatever the proxy says. The pin
-// also restricts WebRTC to connections that go through the proxy, and clears
-// the per-URL WebRtcIPHandlingUrl rules, which Chromium consults before
-// WebRtcIPHandling and which a chrome_policy override could otherwise use to
-// turn direct UDP back on. A list policy that PolicyListMultipleSourceMergeList
-// names is merged from every file that sets it rather than taken from the last,
-// so the pin also empties that list, or an override naming WebRtcIPHandlingUrl
-// would add its rules to the pin's.
-//
-// Chromium connects to a DNS-over-HTTPS server directly rather than through
-// the proxy, whenever it resolves a name itself, as it does for a bypassed
-// hostname. The pin turns DNS-over-HTTPS off, so a chrome_policy override
-// cannot name a server for it to connect to.
+// Besides ProxySettings, the pin restricts WebRTC to proxied connections, since
+// WebRTC sends UDP around an HTTP proxy, and turns DNS-over-HTTPS off, since
+// Chromium connects to a DoH server directly. It empties WebRtcIPHandlingUrl,
+// which Chromium consults before WebRtcIPHandling, and
+// PolicyListMultipleSourceMergeList, which would otherwise merge another file's
+// WebRtcIPHandlingUrl rules into the pin's.
 type Pin struct {
 	// Path is the pin's file in Chromium's managed policy directory.
 	Path string
 	// StageDir is where the pin is written before it is renamed into place.
-	// It must be outside the policy directory, since Chromium applies every
-	// file there whatever its name, and on the same filesystem.
+	// Chromium applies every file in the policy directory whatever its name,
+	// so this must be outside it, on the same filesystem.
 	StageDir string
 }
 
@@ -81,19 +62,14 @@ const (
 )
 
 // Sync writes the pin when the session is filtered, and removes it when it is
-// not. base is the flags the control plane launches the VM with, before any
-// runtime flags are merged in.
+// not. base is the flags from BaseFlags.
 //
-// Nothing in the pin comes from runtime flags: anyone holding the session's
-// token can write those, and a pinned runtime --proxy-server or
-// --proxy-bypass-list would route traffic around the egress proxy. The proxy
-// server is the base flags' own. The bypass list is the policy's private hosts,
-// which only the control plane can set, or the base flags' bypass list when the
-// control plane set none.
+// Nothing in the pin comes from runtime flags, which anyone holding the
+// session's token can write. The proxy server comes from base, and the bypass
+// list from the policy's private hosts, or from base when the policy has none.
 //
-// The policy directory, and the staging directory the pin is renamed from,
-// are made the writer's own and closed to everyone else, so the user Chromium
-// runs as cannot add a policy file that sorts after the pin or remove it.
+// Both directories are made root-owned and closed to others, so the user
+// Chromium runs as cannot add a policy file that sorts after the pin.
 func (p Pin) Sync(policy Policy, base []string) error {
 	if !policy.Filtered {
 		return p.Remove()
@@ -143,8 +119,8 @@ func encodePin(policy Policy, base []string) ([]byte, error) {
 	return append(data, '\n'), nil
 }
 
-// writeSynced writes data to path and flushes it to disk, so a crash after the
-// rename that follows cannot leave a torn pin in the policy directory.
+// writeSynced writes data to path and flushes it, so a crash after the rename
+// cannot leave a torn pin.
 func writeSynced(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
@@ -161,20 +137,13 @@ func writeSynced(path string, data []byte) error {
 	return f.Close()
 }
 
-// hostMappingFlags rewrite the address Chromium connects to for a host,
-// including the egress proxy's own address, so a runtime rule could send every
-// request to a different proxy. Chromium honors them whatever the pin says.
-//
-// This is not every switch that touches the network. The token that writes
-// runtime flags can also run processes in the VM, which egress without
-// Chromium, so the list closes the routes found through Chromium's own
-// configuration rather than defending against that token.
+// hostMappingFlags can remap the egress proxy's own address, which Chromium
+// honors whatever the pin says.
 var hostMappingFlags = []string{"host-resolver-rules", "host-rules"}
 
-// DropHostMappingFlags returns runtime flags without the ones that remap
-// hosts, and the flags it removed. The launcher applies it while the session
-// is filtered. Switches are matched by name whatever their dash prefix,
-// since Chromium accepts "-name" as well as "--name".
+// DropHostMappingFlags splits runtime flags into the ones to keep and the
+// host-mapping ones to drop while filtered. Chromium accepts "-name" as well
+// as "--name", so any dash prefix matches.
 func DropHostMappingFlags(runtime []string) (kept, dropped []string) {
 	for _, flag := range runtime {
 		name, _, _ := strings.Cut(strings.TrimLeft(flag, "-"), "=")
@@ -187,10 +156,8 @@ func DropHostMappingFlags(runtime []string) (kept, dropped []string) {
 	return kept, dropped
 }
 
-// Matches reports whether the pin in place is exactly the one Sync writes for
-// policy and base: none at all for an unfiltered policy. Anything else at the
-// pin's path, including a pin written for other private hosts, does not match,
-// so the caller has the real one written over it.
+// Matches reports whether the pin on disk is exactly what Sync writes for
+// policy and base, or absent for an unfiltered policy.
 func (p Pin) Matches(policy Policy, base []string) (bool, error) {
 	data, err := os.ReadFile(p.Path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -209,8 +176,7 @@ func (p Pin) Matches(policy Policy, base []string) (bool, error) {
 	return bytes.Equal(data, want), nil
 }
 
-// Remove deletes the pin. Chromium reloads its policy directory on its own, so
-// the proxy reverts to the command line without a restart.
+// Remove deletes the pin. Chromium picks the removal up without a restart.
 func (p Pin) Remove() error {
 	if err := os.Remove(p.Path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("remove proxy pin: %w", err)
@@ -237,9 +203,8 @@ func ownDir(dir string) error {
 	return nil
 }
 
-// DefaultPrivateNetworkBypassFlag is the image's bypass list, which sends
-// private ranges around the proxy when the control plane sets no list of its
-// own.
+// DefaultPrivateNetworkBypassFlag is the image's bypass list, used when the
+// control plane sets none.
 const DefaultPrivateNetworkBypassFlag = "--proxy-bypass-list=10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7"
 
 // WithDefaultPrivateNetworkBypass appends the image's bypass list unless flags
@@ -253,17 +218,15 @@ func WithDefaultPrivateNetworkBypass(flags []string) []string {
 	return append(flags, DefaultPrivateNetworkBypassFlag)
 }
 
-// BaseFlags returns the flags the pin is derived from: chromiumFlags, the
-// CHROMIUM_FLAGS the control plane launches the VM with, before any runtime
-// flags, plus the image's default bypass list. The launcher writes the pin from
-// them and the egress policy handler checks it against them, so both must call
-// this.
+// BaseFlags returns CHROMIUM_FLAGS, without runtime flags, plus the image's
+// default bypass list. The launcher writes the pin from these and the handler
+// checks it against them, so both must call this.
 func BaseFlags(chromiumFlags string) []string {
 	return WithDefaultPrivateNetworkBypass(chromiumflags.MergeFlagsWithRuntimeTokens(chromiumFlags, nil))
 }
 
-// lastFlagValue returns the value of the last occurrence of name, which is the
-// one Chromium uses. A missing or bare flag has an empty value.
+// lastFlagValue returns the value of name's last occurrence, which is the one
+// Chromium uses.
 func lastFlagValue(flags []string, name string) string {
 	var value string
 	for _, flag := range flags {
