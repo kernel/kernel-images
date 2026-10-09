@@ -7,9 +7,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/policy"
 )
 
 // testPin lays out a policy directory the way the image does, with the pin
@@ -51,6 +53,22 @@ func readPin(t *testing.T, p Pin) proxySettings {
 		t.Fatalf("pin lets Chromium connect to a DNS-over-HTTPS server around the proxy: %s", data)
 	}
 	return pinned.ProxySettings
+}
+
+// Chromium applies every file in its managed policy directory, and where two
+// set the same policy the one that sorts last wins. The pin has to sit beside
+// policy.json and sort after it, and be staged outside the directory.
+func TestDefaultPinLayout(t *testing.T) {
+	dir := filepath.Dir(DefaultPin.Path)
+	if filepath.Dir(policy.PolicyPath) != dir {
+		t.Fatalf("pin %s is not beside %s", DefaultPin.Path, policy.PolicyPath)
+	}
+	if filepath.Base(DefaultPin.Path) <= filepath.Base(policy.PolicyPath) {
+		t.Fatalf("pin %s does not sort after %s", DefaultPin.Path, policy.PolicyPath)
+	}
+	if rel, err := filepath.Rel(dir, DefaultPin.StageDir); err != nil || !strings.HasPrefix(rel, "..") {
+		t.Fatalf("pin is staged in %s, inside the policy directory %s", DefaultPin.StageDir, dir)
+	}
 }
 
 // Once the pin is in place Chromium ignores the proxy flags entirely, so the
