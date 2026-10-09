@@ -161,7 +161,7 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
-FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.1 AS neko
+FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.2 AS neko
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/library/docker:29.8.2-dind AS docker
 ARG TARGETARCH
