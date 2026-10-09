@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/browserlocation"
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 	"github.com/kernel/kernel-images/server/lib/x11"
 )
@@ -35,7 +36,7 @@ func main() {
 	runtimeFlagsPath := flag.String("runtime-flags", "/chromium/flags", "Path to runtime flags overlay file")
 	flag.Parse()
 
-	if err := applyStartupTimezone(startupTimezone(os.Getenv)); err != nil {
+	if err := applyStartupTimezone(startupTimezone(os.Getenv, os.ReadFile)); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize browser timezone: %v\n", err)
 		os.Exit(1)
 	}
@@ -259,7 +260,14 @@ func withoutEnvironmentVariable(env []string, key string) []string {
 	return out
 }
 
-func startupTimezone(getenv func(string) string) string {
+// startupTimezone prefers the bundle the image API accepted, so a restarted
+// Chromium starts in the session's current timezone rather than the VM's.
+func startupTimezone(getenv func(string) string, readFile func(string) ([]byte, error)) string {
+	if data, err := readFile(browserlocation.StatePath()); err == nil {
+		if timezone := browserlocation.AcceptedTimeZone(data); timezone != "" {
+			return timezone
+		}
+	}
 	if timezone := getenv("KERNEL_BROWSER_TIMEZONE"); timezone != "" {
 		return timezone
 	}

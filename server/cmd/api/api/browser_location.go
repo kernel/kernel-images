@@ -21,10 +21,9 @@ import (
 )
 
 const (
-	browserLocationApplyTimeout     = 5 * time.Second
-	defaultBrowserLocationStatePath = "/run/kernel/browser-location.json"
-	trustedControlPlaneHeader       = "X-Kernel-Trusted-Control-Plane"
-	trustedControlPlaneHeaderValue  = "1"
+	browserLocationApplyTimeout    = 5 * time.Second
+	trustedControlPlaneHeader      = "X-Kernel-Trusted-Control-Plane"
+	trustedControlPlaneHeaderValue = "1"
 )
 
 type browserLocationBundle struct {
@@ -310,10 +309,7 @@ func rewriteLocaltime(timezone string) error {
 }
 
 func (s *ApiService) browserLocationStatePath() string {
-	if value := strings.TrimSpace(os.Getenv("KERNEL_BROWSER_LOCATION_STATE_PATH")); value != "" {
-		return value
-	}
-	return defaultBrowserLocationStatePath
+	return browserlocation.StatePath()
 }
 
 func (s *ApiService) persistBrowserLocationState(state browserLocationDurableState) error {
@@ -479,10 +475,38 @@ func (s *ApiService) ResetBrowserLocationHTTP(w http.ResponseWriter, r *http.Req
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// GetBrowserLocationHTTP exposes accepted/applied component state for internal reconciliation.
-func (s *ApiService) GetBrowserLocationHTTP(w http.ResponseWriter, _ *http.Request) {
+// GetBrowserLocationHTTP exposes accepted/applied component state for internal
+// reconciliation. Applied is confirmed against the running Chromium, so a
+// restarted or unreachable browser is never reported as applied.
+func (s *ApiService) GetBrowserLocationHTTP(w http.ResponseWriter, r *http.Request) {
+	status := s.browserLocationSnapshot()
+	if status.Applied != nil {
+		generation, current := s.browserLocationGeneration(*status.Applied)
+		if !current || !s.browserLocationLive(r.Context(), *status.Applied, generation) {
+			status.Applied = nil
+			status.Components = browserLocationComponents{}
+		}
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(s.browserLocationSnapshot())
+	_ = json.NewEncoder(w).Encode(status)
+}
+
+// browserLocationLive reports whether the running Chromium holds bundle at
+// generation with every component acknowledged.
+func (s *ApiService) browserLocationLive(ctx context.Context, bundle browserLocationBundle, generation uint64) bool {
+	if s.upstreamMgr == nil {
+		return false
+	}
+	var observed cdpclient.BrowserLocation
+	err := s.withCDPClientTimeout(ctx, 500*time.Millisecond, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		var err error
+		observed, err = client.GetBrowserLocation(cdpCtx)
+		return err
+	})
+	return err == nil && observed.Generation == generation &&
+		observed.Locale == bundle.Locale && observed.AcceptLanguages == strings.Join(bundle.Languages, ",") &&
+		observed.TimeZone == bundle.TimeZone && observed.TimeZoneConverged &&
+		observed.RenderersConverged && observed.NetworkContextsConverged
 }
 
 func browserLocationBundlesEqual(a, b browserLocationBundle) bool {
