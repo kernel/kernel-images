@@ -21,6 +21,18 @@ func TestGetNetworkEgressPolicyDefaultsToUnfiltered(t *testing.T) {
 	require.Equal(t, oapi.GetNetworkEgressPolicy200JSONResponse{Filtered: false}, resp)
 }
 
+// The policy is reported as it was applied, private hosts included.
+func TestGetNetworkEgressPolicyReportsPrivateHosts(t *testing.T) {
+	svc, err := newSvc(t, newMockRecordManager())
+	require.NoError(t, err)
+	hosts := []string{"10.1.0.0/16"}
+	require.NoError(t, svc.egressPolicy.Set(egresspolicy.Policy{Filtered: true, PrivateHosts: &hosts}))
+
+	resp, err := svc.GetNetworkEgressPolicy(context.Background(), oapi.GetNetworkEgressPolicyRequestObject{})
+	require.NoError(t, err)
+	require.Equal(t, oapi.GetNetworkEgressPolicy200JSONResponse{Filtered: true, PrivateHosts: &hosts}, resp)
+}
+
 // The control plane applies the policy at setup and again whenever a running
 // session's allowlist changes, so the endpoint has to carry a session both ways
 // and tolerate being told the same thing twice. The session starts filtered
