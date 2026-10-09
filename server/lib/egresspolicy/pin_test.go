@@ -240,8 +240,10 @@ func TestPinSyncRemovesPinWhenUnfiltered(t *testing.T) {
 // add a policy file that sorts after the pin, or remove it.
 func TestPinSyncClosesThePolicyDirectories(t *testing.T) {
 	p := testPin(t)
-	for _, dir := range []string{p.StageDir, filepath.Dir(p.Path)} {
-		if err := os.Chmod(dir, 0o777); err != nil {
+	// One open to the group only and one to others only, so each write bit
+	// has to be cleared on its own.
+	for dir, mode := range map[string]os.FileMode{p.StageDir: 0o775, filepath.Dir(p.Path): 0o757} {
+		if err := os.Chmod(dir, mode); err != nil {
 			t.Fatalf("open %s: %v", dir, err)
 		}
 	}
