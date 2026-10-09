@@ -42,7 +42,10 @@ var DefaultPin = Pin{
 // also restricts WebRTC to connections that go through the proxy, and clears
 // the per-URL WebRtcIPHandlingUrl rules, which Chromium consults before
 // WebRtcIPHandling and which a chrome_policy override could otherwise use to
-// turn direct UDP back on.
+// turn direct UDP back on. A list policy that PolicyListMultipleSourceMergeList
+// names is merged from every file that sets it rather than taken from the last,
+// so the pin also empties that list, or an override naming WebRtcIPHandlingUrl
+// would add its rules to the pin's.
 //
 // Chromium connects to a DNS-over-HTTPS server directly rather than through
 // the proxy, whenever it resolves a name itself, as it does for a bypassed
@@ -62,6 +65,7 @@ type pinPolicy struct {
 	WebRtcIPHandling    string            `json:"WebRtcIPHandling"`
 	WebRtcIPHandlingURL []json.RawMessage `json:"WebRtcIPHandlingUrl"`
 	DnsOverHttpsMode    string            `json:"DnsOverHttpsMode"`
+	ListMergeList       []string          `json:"PolicyListMultipleSourceMergeList"`
 }
 
 type proxySettings struct {
@@ -131,6 +135,7 @@ func encodePin(policy Policy, base []string) ([]byte, error) {
 		WebRtcIPHandling:    pinWebRtcIPHandling,
 		WebRtcIPHandlingURL: []json.RawMessage{},
 		DnsOverHttpsMode:    pinDnsOverHttpsMode,
+		ListMergeList:       []string{},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encode proxy pin: %w", err)

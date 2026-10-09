@@ -36,11 +36,14 @@ func readPin(t *testing.T, p Pin) proxySettings {
 	if err := json.Unmarshal(data, &policy); err != nil {
 		t.Fatalf("decode pin: %v", err)
 	}
-	if len(policy) != 4 {
-		t.Fatalf("pin sets %d policies, want ProxySettings, WebRtcIPHandling, WebRtcIPHandlingUrl and DnsOverHttpsMode: %s", len(policy), data)
+	if len(policy) != 5 {
+		t.Fatalf("pin sets %d policies, want ProxySettings, WebRtcIPHandling, WebRtcIPHandlingUrl, DnsOverHttpsMode and PolicyListMultipleSourceMergeList: %s", len(policy), data)
 	}
 	if string(policy["WebRtcIPHandlingUrl"]) != "[]" {
 		t.Fatalf("pin leaves per-URL WebRTC rules in place: %s", data)
+	}
+	if string(policy["PolicyListMultipleSourceMergeList"]) != "[]" {
+		t.Fatalf("pin lets chrome policy merge per-URL WebRTC rules into its own: %s", data)
 	}
 	var pinned pinPolicy
 	if err := json.Unmarshal(data, &pinned); err != nil {
@@ -275,10 +278,11 @@ func TestPinMatchesRequiresThePolicysPin(t *testing.T) {
 		"",
 		"{}",
 		string(stale),
-		`{"ProxySettings":{"ProxyMode":"direct"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"default","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"disable_non_proxied_udp","DnsOverHttpsMode":"off"}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[]}`,
+		`{"ProxySettings":{"ProxyMode":"direct"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off","PolicyListMultipleSourceMergeList":[]}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"default","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off","PolicyListMultipleSourceMergeList":[]}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"disable_non_proxied_udp","DnsOverHttpsMode":"off","PolicyListMultipleSourceMergeList":[]}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[],"PolicyListMultipleSourceMergeList":[]}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
 	} {
 		if err := os.WriteFile(p.Path, []byte(content), 0o644); err != nil {
 			t.Fatalf("write %q: %v", content, err)

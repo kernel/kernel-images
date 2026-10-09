@@ -61,8 +61,9 @@ func TestEgressProxyPin(t *testing.T) {
 	// clears per-URL WebRTC rules, turns DNS-over-HTTPS off, and leaves out
 	// runtime flags that remap hosts.
 	policyRsp, err := client.PatchChromiumPoliciesWithResponse(ctx, instanceoapi.PatchChromiumPoliciesJSONRequestBody{
-		"WebRtcIPHandlingUrl": []map[string]string{{"url": "*", "handling": "default"}},
-		"DnsOverHttpsMode":    "secure",
+		"WebRtcIPHandlingUrl":               []map[string]string{{"url": "*", "handling": "default"}},
+		"PolicyListMultipleSourceMergeList": []string{"WebRtcIPHandlingUrl"},
+		"DnsOverHttpsMode":                  "secure",
 	})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, policyRsp.StatusCode(), "patch policies: %s", string(policyRsp.Body))
@@ -87,6 +88,8 @@ func TestEgressProxyPin(t *testing.T) {
 	require.NotNil(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %+v", pin)
 	require.Empty(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %+v", pin)
 	require.Equal(t, "off", pin.DnsOverHttpsMode)
+	require.NotNil(t, pin.ListMergeList, "pin lets chrome policy merge per-URL WebRTC rules into its own: %+v", pin)
+	require.Empty(t, pin.ListMergeList, "pin lets chrome policy merge per-URL WebRTC rules into its own: %+v", pin)
 
 	// The flag's name is split so this script's own command line does not
 	// match it.
@@ -146,6 +149,7 @@ type egressPin struct {
 	WebRtcIPHandling    string            `json:"WebRtcIPHandling"`
 	WebRtcIPHandlingURL []any             `json:"WebRtcIPHandlingUrl"`
 	DnsOverHttpsMode    string            `json:"DnsOverHttpsMode"`
+	ListMergeList       []string          `json:"PolicyListMultipleSourceMergeList"`
 }
 
 func readEgressPin(t *testing.T, ctx context.Context, c *TestContainer) egressPin {
