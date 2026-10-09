@@ -118,9 +118,6 @@ func cloneHosts(hosts *[]string) *[]string {
 		return nil
 	}
 	c := slices.Clone(*hosts)
-	if c == nil {
-		c = []string{}
-	}
 	return &c
 }
 

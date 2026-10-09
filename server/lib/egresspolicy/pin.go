@@ -120,15 +120,15 @@ func (p Pin) Sync(policy Policy, base []string) error {
 
 // encodePin returns the pin Sync writes for a filtered policy.
 func encodePin(policy Policy, base []string) ([]byte, error) {
-	server, ok := lastFlagValue(base, "--proxy-server")
-	if !ok || server == "" {
+	server := lastFlagValue(base, "--proxy-server")
+	if server == "" {
 		return nil, errors.New("egress is filtered but Chromium's base flags have no --proxy-server to pin")
 	}
 	var bypass string
 	if policy.PrivateHosts != nil {
 		bypass = strings.Join(*policy.PrivateHosts, ";")
 	} else {
-		bypass, _ = lastFlagValue(base, "--proxy-bypass-list")
+		bypass = lastFlagValue(base, "--proxy-bypass-list")
 	}
 	data, err := json.Marshal(pinPolicy{
 		ProxySettings:       proxySettings{ProxyMode: pinProxyMode, ProxyServer: server, ProxyBypassList: bypass},
@@ -263,16 +263,16 @@ func BaseFlags(chromiumFlags string) []string {
 }
 
 // lastFlagValue returns the value of the last occurrence of name, which is the
-// one Chromium uses. A bare flag has an empty value.
-func lastFlagValue(flags []string, name string) (string, bool) {
-	value, found := "", false
+// one Chromium uses. A missing or bare flag has an empty value.
+func lastFlagValue(flags []string, name string) string {
+	var value string
 	for _, flag := range flags {
 		switch {
 		case flag == name:
-			value, found = "", true
+			value = ""
 		case strings.HasPrefix(flag, name+"="):
-			value, found = strings.TrimPrefix(flag, name+"="), true
+			value = strings.TrimPrefix(flag, name+"=")
 		}
 	}
-	return value, found
+	return value
 }
