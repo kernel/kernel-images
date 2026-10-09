@@ -111,6 +111,25 @@ func TestPinSyncFollowsBaseFlagsAndPolicy(t *testing.T) {
 	}
 }
 
+// The launcher and the egress policy handler both derive the pin from
+// BaseFlags, so a session the control plane sends no private hosts for keeps
+// the image's default bypass, or the bypass list in CHROMIUM_FLAGS.
+func TestPinSyncFromBaseFlags(t *testing.T) {
+	const proxy = "--proxy-server=http://192.0.2.1:3129"
+	for chromiumFlags, want := range map[string]string{
+		proxy: "10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7",
+		proxy + " --proxy-bypass-list=preview.internal": "preview.internal",
+	} {
+		p := testPin(t)
+		if err := p.Sync(Policy{Filtered: true}, BaseFlags(chromiumFlags)); err != nil {
+			t.Fatalf("Sync(%q): %v", chromiumFlags, err)
+		}
+		if got := readPin(t, p).ProxyBypassList; got != want {
+			t.Fatalf("bypass list pinned from %q = %q, want %q", chromiumFlags, got, want)
+		}
+	}
+}
+
 // Chromium resolves the egress proxy's own address through host mapping rules,
 // whatever the pin says, so a runtime rule could send every request to another
 // proxy.

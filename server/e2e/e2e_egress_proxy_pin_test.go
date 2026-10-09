@@ -43,6 +43,13 @@ func TestEgressProxyPin(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
+	// Without private hosts the pin keeps the image's default bypass. The
+	// request only succeeds if the pin the launcher writes is the one the
+	// handler expects.
+	putEgressPolicy(t, ctx, client, instanceoapi.NetworkEgressPolicy{Filtered: true})
+	pin := readEgressPin(t, ctx, c)
+	require.Equal(t, strings.TrimPrefix(egresspolicy.DefaultPrivateNetworkBypassFlag, "--proxy-bypass-list="), pin.ProxySettings["ProxyBypassList"])
+
 	putEgressPolicy(t, ctx, client, instanceoapi.NetworkEgressPolicy{
 		Filtered:     true,
 		PrivateHosts: &[]string{"10.1.0.0/16", "example.com:8443"},
@@ -69,15 +76,7 @@ func TestEgressProxyPin(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, flagsRsp.StatusCode(), "patch flags: %s", string(flagsRsp.Body))
 
-	out, err := execCombinedOutputWithClient(ctx, c, "cat", []string{egresspolicy.DefaultPin.Path})
-	require.NoError(t, err, "read pin: %s", out)
-	var pin struct {
-		ProxySettings       map[string]string `json:"ProxySettings"`
-		WebRtcIPHandling    string            `json:"WebRtcIPHandling"`
-		WebRtcIPHandlingURL []any             `json:"WebRtcIPHandlingUrl"`
-		DnsOverHttpsMode    string            `json:"DnsOverHttpsMode"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &pin), "decode pin: %s", out)
+	pin = readEgressPin(t, ctx, c)
 	require.Equal(t, map[string]string{
 		"ProxyMode":       "fixed_servers",
 		"ProxyServer":     "http://127.0.0.1:9",
@@ -85,13 +84,13 @@ func TestEgressProxyPin(t *testing.T) {
 	}, pin.ProxySettings)
 
 	require.Equal(t, "disable_non_proxied_udp", pin.WebRtcIPHandling)
-	require.NotNil(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
-	require.Empty(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %s", out)
+	require.NotNil(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %+v", pin)
+	require.Empty(t, pin.WebRtcIPHandlingURL, "pin does not clear per-URL WebRTC rules: %+v", pin)
 	require.Equal(t, "off", pin.DnsOverHttpsMode)
 
 	// The flag's name is split so this script's own command line does not
 	// match it.
-	out, err = execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", `! grep -qa -- "--host-resolver""-rules" /proc/[0-9]*/cmdline`})
+	out, err := execCombinedOutputWithClient(ctx, c, "sh", []string{"-c", `! grep -qa -- "--host-resolver""-rules" /proc/[0-9]*/cmdline`})
 	require.NoError(t, err, "chromium started with a runtime host mapping rule on a filtered session: %s", out)
 
 	// The user Chromium runs as must not be able to add a policy file that
@@ -140,6 +139,22 @@ func TestEgressProxyPin(t *testing.T) {
 		udp, err := udpCandidates(ctx, cdp, page)
 		return err == nil && len(udp) > 0
 	}, time.Minute, time.Second, "per-URL WebRTC rule still cleared after the session was unfiltered")
+}
+
+type egressPin struct {
+	ProxySettings       map[string]string `json:"ProxySettings"`
+	WebRtcIPHandling    string            `json:"WebRtcIPHandling"`
+	WebRtcIPHandlingURL []any             `json:"WebRtcIPHandlingUrl"`
+	DnsOverHttpsMode    string            `json:"DnsOverHttpsMode"`
+}
+
+func readEgressPin(t *testing.T, ctx context.Context, c *TestContainer) egressPin {
+	t.Helper()
+	out, err := execCombinedOutputWithClient(ctx, c, "cat", []string{egresspolicy.DefaultPin.Path})
+	require.NoError(t, err, "read pin: %s", out)
+	var pin egressPin
+	require.NoError(t, json.Unmarshal([]byte(out), &pin), "decode pin: %s", out)
+	return pin
 }
 
 func putEgressPolicy(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, policy instanceoapi.NetworkEgressPolicy) {
