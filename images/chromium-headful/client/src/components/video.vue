@@ -83,16 +83,18 @@
           -->
         </li>
       </ul>
-      <button
+      <neko-touch-controls
         v-if="showTouchControls"
-        class="touch-button keyboard-button"
-        :style="{ bottom: `calc(12px + env(safe-area-inset-bottom) + ${keyboardInset}px)` }"
-        @touchend.stop.prevent="toggleMobileKeyboard"
-        @click.stop.prevent="toggleMobileKeyboard"
-      >
-        <i class="fas fa-keyboard" />
-        <span>{{ keyboardOpen ? 'Hide keyboard' : 'Keyboard' }}</span>
-      </button>
+        ref="controls"
+        :mode="touchLayout.mode"
+        :position="controlPosition"
+        :keyboard-open="keyboardOpen"
+        :area-width="playerWidth"
+        :area-height="playerHeight"
+        :keyboard-inset="keyboardInset"
+        @toggle="toggleMobileKeyboard"
+        @move="onControlMove"
+      />
       <button
         v-if="zoomed && !hideControls"
         class="touch-button zoom-chip"
@@ -124,6 +126,7 @@
 
     .player {
       position: absolute;
+      box-sizing: border-box;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -149,10 +152,6 @@
         cursor: pointer;
         touch-action: manipulation;
         -webkit-tap-highlight-color: transparent;
-      }
-
-      .keyboard-button {
-        right: calc(12px + env(safe-area-inset-right));
       }
 
       .zoom-chip {
@@ -298,6 +297,8 @@
   import { isClipboardReadGranted } from '~/utils/clipboard'
   import { TouchGestures, Point } from '~/utils/touch-gestures'
   import { ZoomPan, Box } from '~/utils/zoom-pan'
+  import { ControlLayout, ControlPosition, controlLayout, decodePosition, encodePosition } from '~/utils/touch-controls'
+  import { get, set } from '~/utils/localstorage'
   import { CursorImage, CursorKind, cachedCursorKind, classifyCursor } from '~/utils/cursor-shape'
   import {
     XK_BACKSPACE,
@@ -312,6 +313,7 @@
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
   import Clipboard from './clipboard.vue'
+  import TouchControls from './touch-controls.vue'
 
   // @ts-ignore
   import GuacamoleKeyboard from '~/utils/guacamole-keyboard.ts'
@@ -334,12 +336,15 @@
 
   type TapKeyboardMode = 'auto' | 'chip' | 'always' | 'off'
 
+  const CONTROL_POSITION_KEY = 'touch_control_position'
+
   @Component({
     name: 'neko-video',
     components: {
       'neko-emote': Emote,
       'neko-resolution': Resolution,
       'neko-clipboard': Clipboard,
+      'neko-touch-controls': TouchControls,
     },
   })
   export default class extends Vue {
@@ -353,6 +358,7 @@
 
     private _wheelHandler: ((e: WheelEvent) => void) | null = null
     @Ref('clipboard') readonly _clipboard!: Clipboard
+    @Ref('controls') readonly _controls?: TouchControls
 
     // all controls are hidden (e.g. for cast mode)
     @Prop(Boolean) readonly hideControls!: boolean
@@ -380,6 +386,11 @@
     private cursorChangedAt = 0
     private cursorSeq = 0
     private keyboardInset = 0
+    private touchLayout: ControlLayout = { mode: 'overlay', band: 0 }
+    private controlPosition: ControlPosition = decodePosition(get<string>(CONTROL_POSITION_KEY, ''))
+    private playerWidth = 0
+    private playerHeight = 0
+    private safeAreaProbe: HTMLElement | null = null
     private touchBeganAt = 0
     private lastTap: { p: Point; at: number } | null = null
     private pendingTap: { p: Point; at: number } | null = null
@@ -757,6 +768,7 @@
       this.$client.off('cursor', this.onCursorImage)
       window.clearTimeout(this.typeChipTimer)
       window.clearTimeout(this.pendingTapTimer)
+      if (this.safeAreaProbe) this.safeAreaProbe.remove()
       if (this._wheelHandler) {
         document.removeEventListener('wheel', this._wheelHandler, { capture: true })
         this._wheelHandler = null
@@ -1011,6 +1023,7 @@
     onGestureBegin(p: Point) {
       this.unmuteOnInteraction()
       this.hideTypeChip()
+      if (this._controls) this._controls.wake()
       this.touchBeganAt = performance.now()
 
       if (!this.controlling && this.implicitHosting && !this.locked) {
@@ -1122,8 +1135,13 @@
       }
     }
 
+    // the area the zoomed video may fill: the player minus the control band
     playerBox(): Box {
       const { left, top, width, height } = this._player.getBoundingClientRect()
+      const { mode, band } = this.touchLayout
+      if (mode === 'bottom') return { left, top, width, height: height - band }
+      if (mode === 'left') return { left: left + band, top, width: width - band, height }
+      if (mode === 'right') return { left, top, width: width - band, height }
       return { left, top, width, height }
     }
 
@@ -1498,11 +1516,59 @@
       }
       this._player.style.width = `${offsetWidth}px`
       this._player.style.height = `${offsetHeight}px`
-      const aspectPreservingMaxWidth = (this.horizontal / this.vertical) * offsetHeight
-      this._container.style.maxWidth = `${
-        !this.fullscreen ? Math.min(this.width, aspectPreservingMaxWidth) : aspectPreservingMaxWidth
-      }px`
+      this.playerWidth = offsetWidth
+      this.playerHeight = offsetHeight
+
+      const aspect = this.horizontal / this.vertical
+      const maxWidth = (height: number) => (!this.fullscreen ? Math.min(this.width, aspect * height) : aspect * height)
+
+      // Reserve a band outside the video for the touch controls, shrinking the
+      // video slightly if needed; with no room they overlay the stream instead.
+      const videoWidth = Math.min(offsetWidth, maxWidth(offsetHeight))
+      this.touchLayout = this.showTouchControls
+        ? controlLayout(
+            offsetWidth,
+            offsetHeight,
+            videoWidth,
+            videoWidth / aspect,
+            this.safeAreaInsets(),
+            this.controlPosition.side,
+          )
+        : { mode: 'overlay', band: 0 }
+      const { mode, band } = this.touchLayout
+      this._player.style.paddingBottom = mode === 'bottom' ? `${band}px` : ''
+      this._player.style.paddingLeft = mode === 'left' ? `${band}px` : ''
+      this._player.style.paddingRight = mode === 'right' ? `${band}px` : ''
+
+      this._container.style.maxWidth = `${maxWidth(offsetHeight - (mode === 'bottom' ? band : 0))}px`
       this._aspect.style.paddingBottom = `${(this.vertical / this.horizontal) * 100}%`
+    }
+
+    safeAreaInsets() {
+      if (!this.safeAreaProbe) {
+        this.safeAreaProbe = document.createElement('div')
+        this.safeAreaProbe.style.cssText =
+          'position:fixed;visibility:hidden;pointer-events:none;' +
+          'padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
+        document.body.appendChild(this.safeAreaProbe)
+      }
+      const style = getComputedStyle(this.safeAreaProbe)
+      return {
+        bottom: parseFloat(style.paddingBottom) || 0,
+        left: parseFloat(style.paddingLeft) || 0,
+        right: parseFloat(style.paddingRight) || 0,
+      }
+    }
+
+    onControlMove(position: ControlPosition) {
+      this.controlPosition = position
+      set(CONTROL_POSITION_KEY, encodePosition(position))
+      this.onResize()
+    }
+
+    @Watch('showTouchControls')
+    onShowTouchControls() {
+      this.$nextTick(this.onResize)
     }
 
     @Watch('focused')
