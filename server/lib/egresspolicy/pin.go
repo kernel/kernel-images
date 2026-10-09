@@ -32,9 +32,10 @@ var DefaultPin = Pin{
 // a CDP client can load such an extension with Extensions.loadUnpacked. Policy
 // is the one source an extension cannot override.
 //
-// The pin is derived from the flags Chromium is launched with, so it is written
-// by the launcher on every start. Once it is in place Chromium ignores
-// --proxy-bypass-list as well as --proxy-server, which is why it carries both.
+// The pin is derived from the base flags Chromium is launched with and the
+// policy, and is written by the launcher on every start. Once it is in place
+// Chromium ignores --proxy-bypass-list as well as --proxy-server, which is why
+// it carries both.
 //
 // WebRTC sends UDP straight to the network rather than through an HTTP proxy,
 // so a page can reach any STUN or TURN server whatever the proxy says. The pin
