@@ -3,8 +3,10 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
@@ -130,6 +133,7 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 					"realized", fmt.Sprintf("%dx%d", realizedW, realizedH))
 			}
 			width, height = realizedW, realizedH
+			_, _, refreshRate, _, err = s.getCurrentResolutionFromXrandr(ctx)
 		}
 		// Re-assert the maximized window state via CDP so mutter reflows the
 		// window onto the new root; applyResolutionAndConverge already verified
@@ -183,6 +187,9 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 
 	if err != nil {
 		log.Error("failed to change resolution", "error", err)
+		if isNekoScreenRejection(err) {
+			return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+		}
 		return oapi.PatchDisplay500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
 				Message: fmt.Sprintf("failed to change resolution: %s", err.Error()),
@@ -553,6 +560,27 @@ func abs(x int) int {
 // relaunching Chromium in --kiosk — must go through here rather than call
 // setResolutionViaNeko directly.
 func (s *ApiService) applyResolutionAndConverge(ctx context.Context, width, height, refreshRate int, useNeko bool) (int, int, error) {
+	previousW, previousH, previousRate, _, err := s.getCurrentResolutionFromXrandr(ctx)
+	if err != nil {
+		return 0, 0, err
+	}
+	realizedW, realizedH, err := s.setResolutionAndConverge(ctx, width, height, refreshRate, useNeko)
+	if err == nil {
+		return realizedW, realizedH, nil
+	}
+
+	// Mode creation can move the X root even when the screen change fails.
+	// Restoration needs the same retries as resizing: Neko can drop a reconfig.
+	restoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 35*time.Second)
+	defer cancel()
+	if _, _, restoreErr := s.setResolutionAndConverge(restoreCtx, previousW, previousH, previousRate, useNeko); restoreErr != nil {
+		logger.FromContext(ctx).Error("failed to restore display after resize failure", "error", restoreErr)
+		err = fmt.Errorf("%w; failed to restore display: %s", err, restoreErr)
+	}
+	return realizedW, realizedH, err
+}
+
+func (s *ApiService) setResolutionAndConverge(ctx context.Context, width, height, refreshRate int, useNeko bool) (int, int, error) {
 	log := logger.FromContext(ctx)
 	var err error
 	if useNeko {
@@ -591,6 +619,11 @@ func (s *ApiService) applyResolutionAndConverge(ctx context.Context, width, heig
 		return realizedW, realizedH, fmt.Errorf("display did not converge to %dx%d (X root reports %dx%d)", width, height, realizedW, realizedH)
 	}
 	return realizedW, realizedH, nil
+}
+
+func isNekoScreenRejection(err error) bool {
+	var screenErr *nekoclient.ScreenConfigurationError
+	return errors.As(err, &screenErr) && screenErr.StatusCode >= 400 && screenErr.StatusCode < 500
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
@@ -719,7 +752,7 @@ func (s *ApiService) getCurrentResolution(ctx context.Context) (int, int, int, e
 
 // getCurrentResolutionFromXrandr queries xrandr for the current display
 // resolution. The fourth return value reports whether the refresh rate was
-// parsed from xrandr output (true) or is the synthesized fallback (false);
+// parsed from xrandr output (true) or is unavailable (false);
 // callers can use it to prefer a previously-recorded rate when xrandr is
 // silent, as Xvfb is.
 func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, int, int, bool, error) {
@@ -727,8 +760,7 @@ func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, i
 	display := s.resolveDisplayFromEnv()
 
 	// Use xrandr to get current resolution
-	// Note: Using bash -c (not -lc) to avoid login shell overriding DISPLAY env var
-	cmd := exec.CommandContext(ctx, "bash", "-c", "xrandr | grep -E '\\*' | awk '{print $1}'")
+	cmd := exec.CommandContext(ctx, "xrandr", "--current")
 	cmd.Env = append(os.Environ(), fmt.Sprintf("DISPLAY=%s", display))
 
 	out, err := cmd.Output()
@@ -737,40 +769,35 @@ func (s *ApiService) getCurrentResolutionFromXrandr(ctx context.Context) (int, i
 		return 0, 0, 0, false, fmt.Errorf("failed to execute xrandr command: %w", err)
 	}
 
-	resStr := strings.TrimSpace(string(out))
-	parts := strings.Split(resStr, "x")
-	if len(parts) != 2 {
-		log.Error("unexpected xrandr output format", "output", resStr)
-		return 0, 0, 0, false, fmt.Errorf("unexpected xrandr output format: %s", resStr)
-	}
+	return parseCurrentResolutionFromXrandr(string(out))
+}
 
-	width, err := strconv.Atoi(parts[0])
-	if err != nil {
-		log.Error("failed to parse width", "error", err, "value", parts[0])
-		return 0, 0, 0, false, fmt.Errorf("failed to parse width '%s': %w", parts[0], err)
-	}
-
-	// Parse height and refresh rate (e.g., "1080_60.00" -> height=1080, rate=60)
-	heightStr := parts[1]
-	refreshRate := 60 // default when xrandr omits the _rate suffix (e.g. Xvfb)
-	rateFromXrandr := false
-	if idx := strings.Index(heightStr, "_"); idx != -1 {
-		rateStr := heightStr[idx+1:]
-		heightStr = heightStr[:idx]
-		// Parse the refresh rate (e.g., "60.00" -> 60)
-		if rateFloat, err := strconv.ParseFloat(rateStr, 64); err == nil {
-			refreshRate = int(rateFloat)
-			rateFromXrandr = true
+func parseCurrentResolutionFromXrandr(out string) (int, int, int, bool, error) {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		for _, field := range fields[1:] {
+			if !strings.Contains(field, "*") {
+				continue
+			}
+			rate, err := strconv.ParseFloat(strings.TrimRight(field, "*+"), 64)
+			if err != nil {
+				return 0, 0, 0, false, fmt.Errorf("invalid xrandr refresh rate %q: %w", field, err)
+			}
+			modeName := strings.SplitN(fields[0], "_", 2)[0]
+			var width, height int
+			if _, err := fmt.Sscanf(modeName, "%dx%d", &width, &height); err != nil {
+				return 0, 0, 0, false, fmt.Errorf("invalid xrandr mode %q: %w", fields[0], err)
+			}
+			if rate == 0 {
+				return width, height, 60, false, nil
+			}
+			return width, height, int(math.Round(rate)), true, nil
 		}
 	}
-
-	height, err := strconv.Atoi(heightStr)
-	if err != nil {
-		log.Error("failed to parse height", "error", err, "value", heightStr)
-		return 0, 0, 0, false, fmt.Errorf("failed to parse height '%s': %w", heightStr, err)
-	}
-
-	return width, height, refreshRate, rateFromXrandr, nil
+	return 0, 0, 0, false, fmt.Errorf("no current mode in xrandr output")
 }
 
 // stoppedRecordingInfo holds state captured from a recording that was stopped
