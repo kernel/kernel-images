@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,6 +23,12 @@ func TestValidateBrowserLocationBundle(t *testing.T) {
 		t.Skip("zoneinfo unavailable")
 	}
 
+	for _, locale := range []string{"en-US", "de-DE", "pt-BR", "es-MX", "en-SG", "zh-TW"} {
+		raw := fmt.Sprintf(`{"epoch":"lease-1","generation":2,"timezone":"America/New_York","locale":%q,"languages":[%q]}`, locale, locale)
+		bundle, err := validateBrowserLocationBundle(raw)
+		require.NoError(t, err, locale)
+		assert.Equal(t, locale, bundle.Locale)
+	}
 	bundle, err := validateBrowserLocationBundle(`{"epoch":"lease-1","generation":2,"timezone":"America/New_York","locale":"en-US","languages":["en-US","en"]}`)
 	require.NoError(t, err)
 	assert.Equal(t, uint64(2), bundle.Generation)
@@ -30,25 +36,15 @@ func TestValidateBrowserLocationBundle(t *testing.T) {
 
 	for _, raw := range []string{
 		`{"epoch":"lease-1","generation":2,"timezone":"../../etc/passwd","locale":"en-US","languages":["en-US"]}`,
+		`{"epoch":"lease-1","generation":2,"timezone":"Mars/Olympus_Mons","locale":"en-US","languages":["en-US"]}`,
 		`{"epoch":"lease-1","generation":2,"timezone":"America/New_York","locale":"en-us","languages":["en-us"]}`,
+		`{"epoch":"lease-1","generation":2,"timezone":"America/New_York","locale":"en-QQ","languages":["en-QQ"]}`,
 		`{"epoch":"lease-1","generation":2,"timezone":"America/New_York","locale":"en-US","languages":["de-DE"]}`,
+		`{"epoch":"lease-1","generation":2,"timezone":"America/New_York","locale":"en-US","languages":["en-US","EN"]}`,
 	} {
 		_, err := validateBrowserLocationBundle(raw)
-		assert.Error(t, err)
+		assert.Error(t, err, raw)
 	}
-}
-
-func TestResolvedLocalesMatchRequiresRegionalResolution(t *testing.T) {
-	assert.True(t, resolvedLocalesMatch("de-DE", cdpclient.BrowserLocation{
-		DateTimeLocale: "de-DE",
-		NumberLocale:   "de-DE",
-		CollatorLocale: "de-DE",
-	}))
-	assert.False(t, resolvedLocalesMatch("de-DE", cdpclient.BrowserLocation{
-		DateTimeLocale: "de",
-		NumberLocale:   "de-DE",
-		CollatorLocale: "de-DE",
-	}))
 }
 
 func TestBrowserLocationBundlesEqual(t *testing.T) {
@@ -96,6 +92,30 @@ func TestBrowserLocationEpochOrdering(t *testing.T) {
 	assert.ErrorIs(t, service.acceptBrowserLocation(conflict), errConflictBrowserLocation)
 }
 
+func TestBrowserGenerationIncreasesAcrossEpochs(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	require.NoError(t, service.resetBrowserLocation("", testLocationBundle("lease-a", 1)))
+	assert.Equal(t, uint64(1), service.browserLocation.browserGeneration)
+	require.NoError(t, service.acceptBrowserLocation(testLocationBundle("lease-a", 2)))
+	assert.Equal(t, uint64(2), service.browserLocation.browserGeneration)
+
+	// Retries keep the generation; a new lease epoch restarts bundle
+	// generations but not Chromium's.
+	require.NoError(t, service.acceptBrowserLocation(testLocationBundle("lease-a", 2)))
+	assert.Equal(t, uint64(2), service.browserLocation.browserGeneration)
+	require.NoError(t, service.resetBrowserLocation("lease-a", testLocationBundle("lease-b", 1)))
+	assert.Equal(t, uint64(3), service.browserLocation.browserGeneration)
+
+	restored := &ApiService{lifecycleCtx: service.lifecycleCtx}
+	require.NoError(t, restored.initializeBrowserLocation())
+	assert.Equal(t, uint64(3), restored.browserLocation.browserGeneration)
+	generation, current := restored.browserLocationGeneration(testLocationBundle("lease-b", 1))
+	assert.True(t, current)
+	assert.Equal(t, uint64(3), generation)
+	_, current = restored.browserLocationGeneration(testLocationBundle("lease-a", 2))
+	assert.False(t, current)
+}
+
 func TestBrowserLocationStateSurvivesAPIRestart(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	bundle := testLocationBundle("lease-a", 1)
@@ -136,6 +156,11 @@ func TestBrowserLocationReconcilesAfterChromiumRestart(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("location was not reconciled after Chromium became ready")
 	}
+	service.browserLocationMu.Lock()
+	applied := bundle
+	service.browserLocation.applied = &applied
+	service.browserLocation.components = browserLocationComponents{TimeZone: true, Browser: true, Renderers: true, NetworkContexts: true}
+	service.browserLocationMu.Unlock()
 	_, err = file.WriteString("DevTools listening on ws://127.0.0.1:9222/devtools/browser/b\n")
 	require.NoError(t, err)
 	select {
@@ -144,11 +169,13 @@ func TestBrowserLocationReconcilesAfterChromiumRestart(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("location was not reconciled after Chromium restart")
 	}
+	status := service.browserLocationSnapshot()
+	assert.Nil(t, status.Applied, "a restarted Chromium must acknowledge the bundle again")
+	assert.Equal(t, browserLocationComponents{}, status.Components)
 }
 
 func TestResetBrowserLocationHTTPRequiresInstanceIdentity(t *testing.T) {
 	service := newBrowserLocationStateService(t)
-	service.browserLocationValidate = func(context.Context, browserLocationBundle) error { return nil }
 	t.Setenv("KERNEL_INSTANCE_JWT", "instance-token")
 	body := `{"previous_epoch":"","bundle":{"epoch":"lease-a","generation":1,"timezone":"UTC","locale":"en-US","languages":["en-US","en"]}}`
 
@@ -167,7 +194,6 @@ func TestResetBrowserLocationHTTPRequiresInstanceIdentity(t *testing.T) {
 
 func TestResetBrowserLocationHTTPAcceptsTrustedControlPlane(t *testing.T) {
 	service := newBrowserLocationStateService(t)
-	service.browserLocationValidate = func(context.Context, browserLocationBundle) error { return nil }
 	body := `{"previous_epoch":"","bundle":{"epoch":"lease-a","generation":1,"timezone":"UTC","locale":"en-US","languages":["en-US","en"]}}`
 
 	request := httptest.NewRequest(http.MethodPost, "/internal/browser-location/reset", strings.NewReader(body))

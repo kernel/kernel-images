@@ -353,13 +353,6 @@ func (s *ApiService) applyBrowserLocationConfig(ctx context.Context, st *chromiu
 	if st.browserLocation == nil {
 		return nil
 	}
-	validate := s.browserLocationValidate
-	if validate == nil {
-		validate = s.validateBrowserLocationSupport
-	}
-	if err := validate(ctx, *st.browserLocation); err != nil {
-		return oapi.ChromiumConfigure400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}
-	}
 	err := s.acceptBrowserLocation(*st.browserLocation)
 	if err == nil {
 		return nil

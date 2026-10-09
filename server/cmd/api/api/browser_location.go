@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/browserlocation"
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/metrics"
@@ -34,27 +35,34 @@ type browserLocationBundle struct {
 	Languages  []string `json:"languages"`
 }
 
+// browserLocationComponents records the acknowledgements Chromium returned for
+// the accepted bundle's browser generation.
 type browserLocationComponents struct {
-	TimeZone        bool   `json:"timezone"`
-	Browser         bool   `json:"browser"`
-	Renderers       bool   `json:"renderers"`
-	NetworkContexts bool   `json:"network_contexts"`
-	DateTimeLocale  string `json:"date_time_locale,omitempty"`
-	NumberLocale    string `json:"number_locale,omitempty"`
-	CollatorLocale  string `json:"collator_locale,omitempty"`
+	// TimeZone: /etc/localtime was replaced and every renderer observed it.
+	TimeZone bool `json:"timezone"`
+	// Browser: Chromium holds this generation's locale and languages.
+	Browser bool `json:"browser"`
+	// Renderers: every renderer applied them to its pages and existing workers.
+	Renderers       bool `json:"renderers"`
+	NetworkContexts bool `json:"network_contexts"`
 }
 
 type browserLocationStatus struct {
-	ActiveEpoch string                    `json:"active_epoch,omitempty"`
-	Accepted    *browserLocationBundle    `json:"accepted,omitempty"`
-	Applied     *browserLocationBundle    `json:"applied,omitempty"`
-	Components  browserLocationComponents `json:"components"`
-	Error       string                    `json:"error,omitempty"`
+	ActiveEpoch         string                    `json:"active_epoch,omitempty"`
+	Accepted            *browserLocationBundle    `json:"accepted,omitempty"`
+	Applied             *browserLocationBundle    `json:"applied,omitempty"`
+	Components          browserLocationComponents `json:"components"`
+	Error               string                    `json:"error,omitempty"`
+	CapabilitiesVersion string                    `json:"capabilities_version"`
 }
 
 type browserLocationDurableState struct {
 	ActiveEpoch string                 `json:"active_epoch"`
 	Accepted    *browserLocationBundle `json:"accepted,omitempty"`
+	// BrowserGeneration is the monotonic generation sent to Chromium for
+	// Accepted. Bundle generations restart with every lease epoch, but
+	// Chromium's must keep increasing for the life of the process.
+	BrowserGeneration uint64 `json:"browser_generation,omitempty"`
 }
 
 var (
@@ -71,6 +79,10 @@ func validateBrowserLocationBundle(raw string) (browserLocationBundle, error) {
 	if bundle.Epoch == "" || bundle.Generation == 0 {
 		return bundle, fmt.Errorf("browser_location epoch and generation are required")
 	}
+	capabilities := browserlocation.Current()
+	if !capabilities.SupportsTimeZone(bundle.TimeZone) {
+		return bundle, fmt.Errorf("unsupported browser_location timezone")
+	}
 	zonePath, err := browserLocationZonePath(bundle.TimeZone)
 	if err != nil {
 		return bundle, err
@@ -78,9 +90,8 @@ func validateBrowserLocationBundle(raw string) (browserLocationBundle, error) {
 	if _, err := os.Stat(zonePath); err != nil {
 		return bundle, fmt.Errorf("unsupported browser_location timezone")
 	}
-	locale, err := language.Parse(bundle.Locale)
-	if err != nil || locale.String() != bundle.Locale {
-		return bundle, fmt.Errorf("browser_location locale must be canonical BCP 47")
+	if !capabilities.SupportsLocale(bundle.Locale) {
+		return bundle, fmt.Errorf("unsupported browser_location locale")
 	}
 	if len(bundle.Languages) == 0 || bundle.Languages[0] != bundle.Locale {
 		return bundle, fmt.Errorf("browser_location languages must start with locale")
@@ -106,27 +117,6 @@ func browserLocationZonePath(timezone string) (string, error) {
 	return path, nil
 }
 
-func (s *ApiService) validateBrowserLocationSupport(ctx context.Context, bundle browserLocationBundle) error {
-	var resolution cdpclient.BrowserLocationResolution
-	err := s.withCDPClientTimeout(ctx, time.Second, func(cdpCtx context.Context, client *cdpclient.Client) error {
-		var err error
-		resolution, err = client.ValidateBrowserLocation(cdpCtx, bundle.Locale)
-		return err
-	})
-	if err != nil {
-		return fmt.Errorf("validate browser_location locale: %w", err)
-	}
-	observed := cdpclient.BrowserLocation{
-		DateTimeLocale: resolution.DateTimeLocale,
-		NumberLocale:   resolution.NumberLocale,
-		CollatorLocale: resolution.CollatorLocale,
-	}
-	if !resolvedLocalesMatch(bundle.Locale, observed) {
-		return fmt.Errorf("browser_location locale does not resolve consistently")
-	}
-	return nil
-}
-
 func (s *ApiService) resetBrowserLocation(previousEpoch string, bundle browserLocationBundle) error {
 	if bundle.Generation != 1 {
 		return fmt.Errorf("browser location reset requires generation 1")
@@ -148,13 +138,15 @@ func (s *ApiService) resetBrowserLocation(previousEpoch string, bundle browserLo
 		return errBrowserLocationEpoch
 	}
 	copy := bundle
-	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: bundle.Epoch, Accepted: &copy}); err != nil {
+	browserGeneration := s.browserLocation.browserGeneration + 1
+	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: bundle.Epoch, Accepted: &copy, BrowserGeneration: browserGeneration}); err != nil {
 		return err
 	}
 	if s.browserLocation.cancel != nil {
 		s.browserLocation.cancel()
 	}
 	s.browserLocation.activeEpoch = bundle.Epoch
+	s.browserLocation.browserGeneration = browserGeneration
 	s.browserLocation.accepted = &copy
 	s.browserLocation.applied = nil
 	s.browserLocation.components = browserLocationComponents{}
@@ -190,9 +182,11 @@ func (s *ApiService) acceptBrowserLocation(bundle browserLocationBundle) error {
 		}
 	}
 	copy := bundle
-	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: s.browserLocation.activeEpoch, Accepted: &copy}); err != nil {
+	browserGeneration := s.browserLocation.browserGeneration + 1
+	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: s.browserLocation.activeEpoch, Accepted: &copy, BrowserGeneration: browserGeneration}); err != nil {
 		return err
 	}
+	s.browserLocation.browserGeneration = browserGeneration
 	s.browserLocation.accepted = &copy
 	s.browserLocation.applied = nil
 	s.browserLocation.components = browserLocationComponents{}
@@ -222,7 +216,8 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browse
 	var lastErr error
 	for {
 		s.browserLocationApplyMu.Lock()
-		if ctx.Err() != nil || !s.browserLocationIsCurrent(bundle) {
+		browserGeneration, current := s.browserLocationGeneration(bundle)
+		if ctx.Err() != nil || !current {
 			s.browserLocationApplyMu.Unlock()
 			return
 		}
@@ -230,23 +225,23 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browse
 		if err := rewriteLocaltime(bundle.TimeZone); err != nil {
 			lastErr = err
 		} else {
-			components.TimeZone = true
 			lastErr = s.withCDPClientTimeout(ctx, time.Second, func(cdpCtx context.Context, client *cdpclient.Client) error {
 				languages := strings.Join(bundle.Languages, ",")
-				if err := client.SetBrowserLocation(cdpCtx, bundle.Locale, languages, bundle.TimeZone); err != nil {
+				if err := client.SetBrowserLocation(cdpCtx, browserGeneration, bundle.Locale, languages, bundle.TimeZone); err != nil {
 					return err
 				}
 				observed, err := client.GetBrowserLocation(cdpCtx)
 				if err != nil {
 					return err
 				}
-				components.Browser = observed.Locale == bundle.Locale && observed.AcceptLanguages == languages && observed.TimeZone == bundle.TimeZone
+				if observed.Generation != browserGeneration {
+					return fmt.Errorf("browser location generation %d is not current", browserGeneration)
+				}
+				components.Browser = observed.Locale == bundle.Locale && observed.AcceptLanguages == languages
+				components.TimeZone = observed.TimeZone == bundle.TimeZone && observed.TimeZoneConverged
 				components.Renderers = observed.RenderersConverged
 				components.NetworkContexts = observed.NetworkContextsConverged
-				components.DateTimeLocale = observed.DateTimeLocale
-				components.NumberLocale = observed.NumberLocale
-				components.CollatorLocale = observed.CollatorLocale
-				if !components.Browser || !components.Renderers || !components.NetworkContexts || !resolvedLocalesMatch(bundle.Locale, observed) {
+				if !components.Browser || !components.TimeZone || !components.Renderers || !components.NetworkContexts {
 					return fmt.Errorf("browser location components have not converged")
 				}
 				return nil
@@ -289,24 +284,13 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browse
 	}
 }
 
-func (s *ApiService) browserLocationIsCurrent(bundle browserLocationBundle) bool {
+// browserLocationGeneration returns the browser generation assigned to bundle
+// and whether bundle is still the accepted one.
+func (s *ApiService) browserLocationGeneration(bundle browserLocationBundle) (uint64, bool) {
 	s.browserLocationMu.Lock()
 	defer s.browserLocationMu.Unlock()
-	return s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.accepted, bundle)
-}
-
-func resolvedLocalesMatch(expected string, observed cdpclient.BrowserLocation) bool {
-	want, err := language.Parse(expected)
-	if err != nil {
-		return false
-	}
-	for _, value := range []string{observed.DateTimeLocale, observed.NumberLocale, observed.CollatorLocale} {
-		tag, err := language.Parse(value)
-		if err != nil || tag.String() != want.String() {
-			return false
-		}
-	}
-	return true
+	current := s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.accepted, bundle)
+	return s.browserLocation.browserGeneration, current
 }
 
 func rewriteLocaltime(timezone string) error {
@@ -383,6 +367,7 @@ func (s *ApiService) initializeBrowserLocation() error {
 		}
 		s.browserLocation.activeEpoch = state.ActiveEpoch
 		s.browserLocation.accepted = state.Accepted
+		s.browserLocation.browserGeneration = state.BrowserGeneration
 	}
 	if s.upstreamMgr != nil {
 		go s.browserLocationLifecycleLoop()
@@ -408,6 +393,11 @@ func (s *ApiService) browserLocationLifecycleLoop() {
 			if upstreamChanged {
 				lastUpstream = upstream
 			}
+			if upstreamChanged {
+				// A new Chromium process has not acknowledged anything yet.
+				s.browserLocation.applied = nil
+				s.browserLocation.components = browserLocationComponents{}
+			}
 			needsRetry := s.browserLocation.accepted != nil && s.browserLocation.applied == nil && s.browserLocation.lastError != "" && time.Since(s.browserLocation.lastAttempt) >= browserLocationApplyTimeout
 			if s.browserLocation.accepted != nil && (upstreamChanged || needsRetry) {
 				s.startBrowserLocationReconcileLocked(*s.browserLocation.accepted)
@@ -421,11 +411,12 @@ func (s *ApiService) browserLocationSnapshot() browserLocationStatus {
 	s.browserLocationMu.Lock()
 	defer s.browserLocationMu.Unlock()
 	return browserLocationStatus{
-		ActiveEpoch: s.browserLocation.activeEpoch,
-		Accepted:    s.browserLocation.accepted,
-		Applied:     s.browserLocation.applied,
-		Components:  s.browserLocation.components,
-		Error:       s.browserLocation.lastError,
+		ActiveEpoch:         s.browserLocation.activeEpoch,
+		Accepted:            s.browserLocation.accepted,
+		Applied:             s.browserLocation.applied,
+		Components:          s.browserLocation.components,
+		Error:               s.browserLocation.lastError,
+		CapabilitiesVersion: browserlocation.Current().Version,
 	}
 }
 
@@ -478,14 +469,6 @@ func (s *ApiService) ResetBrowserLocationHTTP(w http.ResponseWriter, r *http.Req
 	raw, _ := json.Marshal(reset.Bundle)
 	validated, err := validateBrowserLocationBundle(string(raw))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	validate := s.browserLocationValidate
-	if validate == nil {
-		validate = s.validateBrowserLocationSupport
-	}
-	if err := validate(r.Context(), validated); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
