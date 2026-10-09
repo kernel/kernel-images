@@ -22,6 +22,16 @@ export interface GuacamoleKeyboardInterface {
   onkeyup?: (keysym: number) => void
 
   /**
+   * Fired instead of onkeydown/onkeyup for Caps Lock on platforms where
+   * Caps Lock key events report a change in lock state rather than a
+   * physical press and release.
+   *
+   * @event
+   * @param {Boolean} capsLock Whether Caps Lock is locally enabled after the event.
+   */
+  oncapslock?: (capsLock: boolean) => void
+
+  /**
    * Marks a key as pressed, firing the keydown event if registered. The
    * return value of this function depends on the return value of the
    * keydown event handler, if any.
