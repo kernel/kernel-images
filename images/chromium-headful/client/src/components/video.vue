@@ -88,6 +88,7 @@
         ref="controls"
         :mode="touchLayout.mode"
         :position="controlPosition"
+        :safe-area="safeArea"
         :keyboard-open="keyboardOpen"
         :area-width="playerWidth"
         :area-height="playerHeight"
@@ -297,7 +298,14 @@
   import { isClipboardReadGranted } from '~/utils/clipboard'
   import { TouchGestures, Point } from '~/utils/touch-gestures'
   import { ZoomPan, Box } from '~/utils/zoom-pan'
-  import { ControlLayout, ControlPosition, controlLayout, decodePosition, encodePosition } from '~/utils/touch-controls'
+  import {
+    ControlLayout,
+    ControlPosition,
+    SafeArea,
+    controlLayout,
+    decodePosition,
+    encodePosition,
+  } from '~/utils/touch-controls'
   import { get, set } from '~/utils/localstorage'
   import { CursorImage, CursorKind, cachedCursorKind, classifyCursor } from '~/utils/cursor-shape'
   import {
@@ -391,6 +399,7 @@
     private playerWidth = 0
     private playerHeight = 0
     private safeAreaProbe: HTMLElement | null = null
+    private safeArea: SafeArea = { top: 0, bottom: 0, left: 0, right: 0 }
     private touchBeganAt = 0
     private lastTap: { p: Point; at: number } | null = null
     private pendingTap: { p: Point; at: number } | null = null
@@ -1525,13 +1534,14 @@
       // Reserve a band outside the video for the touch controls, shrinking the
       // video slightly if needed; with no room they overlay the stream instead.
       const videoWidth = Math.min(offsetWidth, maxWidth(offsetHeight))
+      this.safeArea = this.safeAreaInsets()
       this.touchLayout = this.showTouchControls
         ? controlLayout(
             offsetWidth,
             offsetHeight,
             videoWidth,
             videoWidth / aspect,
-            this.safeAreaInsets(),
+            this.safeArea,
             this.controlPosition.side,
           )
         : { mode: 'overlay', band: 0 }
@@ -1544,16 +1554,17 @@
       this._aspect.style.paddingBottom = `${(this.vertical / this.horizontal) * 100}%`
     }
 
-    safeAreaInsets() {
+    safeAreaInsets(): SafeArea {
       if (!this.safeAreaProbe) {
         this.safeAreaProbe = document.createElement('div')
         this.safeAreaProbe.style.cssText =
           'position:fixed;visibility:hidden;pointer-events:none;' +
-          'padding:0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
+          'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
         document.body.appendChild(this.safeAreaProbe)
       }
       const style = getComputedStyle(this.safeAreaProbe)
       return {
+        top: parseFloat(style.paddingTop) || 0,
         bottom: parseFloat(style.paddingBottom) || 0,
         left: parseFloat(style.paddingLeft) || 0,
         right: parseFloat(style.paddingRight) || 0,

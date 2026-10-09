@@ -1,11 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import {
   BAND_SIZE,
+  ControlFrame,
   DEFAULT_POSITION,
   controlLayout,
   decodePosition,
   dropControl,
   encodePosition,
+  placeControl,
 } from '../src/utils/touch-controls'
 
 const noInsets = { bottom: 0, left: 0, right: 0 }
@@ -38,18 +40,37 @@ describe('control layout', () => {
   })
 })
 
-describe('dragging the control', () => {
-  test('snaps to the nearest side edge and keeps the height', () => {
-    const dropped = dropControl('overlay', DEFAULT_POSITION, 350, 400, 390, 844)
+const frame = (overrides: Partial<ControlFrame> = {}): ControlFrame => ({
+  area: { width: 390, height: 844 },
+  control: { width: 44, height: 44 },
+  safe: { top: 0, bottom: 0, left: 0, right: 0 },
+  keyboardInset: 0,
+  ...overrides,
+})
+
+describe('placing and dragging the control', () => {
+  test('a dropped control snaps to the nearest side edge and keeps its height', () => {
+    const dropped = dropControl('overlay', DEFAULT_POSITION, 330, 380, frame())
     expect(dropped.side).toBe('right')
-    expect(dropped.y).toBeGreaterThan(0.4)
-    expect(dropped.y).toBeLessThan(0.5)
-    expect(dropControl('left', dropped, 20, 30, 390, 844)).toEqual({ ...dropped, side: 'left', y: 0 })
+    expect(placeControl('overlay', dropped, frame())).toEqual({ x: 390 - 6 - 44, y: 380 })
+    expect(dropControl('left', dropped, 20, -50, frame())).toEqual({ ...dropped, side: 'left', y: 0 })
   })
 
-  test('moves only along the bottom band', () => {
-    const dropped = dropControl('bottom', DEFAULT_POSITION, 390, 10, 390, 844)
-    expect(dropped).toEqual({ ...DEFAULT_POSITION, x: 1 })
+  test('drops a wide control where it was released, not where a 44px one would be', () => {
+    const wide = frame({ control: { width: 120, height: 44 } })
+    const dropped = dropControl('bottom', DEFAULT_POSITION, 150, 790, wide)
+    expect(placeControl('bottom', dropped, wide).x).toBeCloseTo(150)
+    // the bottom band only moves sideways
+    expect(placeControl('bottom', dropped, wide).y).toBe(844 - 4 - 44)
+  })
+
+  test('keeps the control out of the safe areas and above the soft keyboard', () => {
+    const notched = frame({ safe: { top: 47, bottom: 34, left: 0, right: 0 }, keyboardInset: 300 })
+    const top = placeControl('overlay', { ...DEFAULT_POSITION, y: 0 }, notched)
+    const bottom = placeControl('overlay', { ...DEFAULT_POSITION, y: 1 }, notched)
+    expect(top.y).toBe(47 + 8)
+    expect(bottom.y + 44).toBe(844 - 300 - 34 - 8)
+    expect(placeControl('bottom', DEFAULT_POSITION, notched).y).toBe(844 - 300 - 34 - 4 - 44)
   })
 
   test('round-trips the stored position and falls back to the default', () => {

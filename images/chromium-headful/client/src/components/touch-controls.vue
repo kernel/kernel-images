@@ -1,6 +1,7 @@
 <template>
   <div class="touch-controls">
     <button
+      ref="control"
       class="keyboard-control"
       data-role="keyboard-toggle"
       :class="[`mode-${mode}`, { dragging: !!dragPoint, faded, open: keyboardOpen }]"
@@ -50,7 +51,11 @@
     pointer-events: auto;
     touch-action: none;
     -webkit-tap-highlight-color: transparent;
-    transition: opacity 300ms ease;
+    transition: opacity 300ms ease, left 200ms ease-out, top 200ms ease-out;
+
+    &.dragging {
+      transition: opacity 300ms ease;
+    }
 
     // in a side strip the button is only as wide as the strip
     &.mode-left,
@@ -81,13 +86,19 @@
 </style>
 
 <script lang="ts">
-  import { Component, Prop, Vue, Watch } from 'vue-property-decorator'
-  import { CONTROL_SIZE, ControlMode, ControlPosition, EDGE_MARGIN, dropControl } from '~/utils/touch-controls'
+  import { Component, Prop, Ref, Vue, Watch } from 'vue-property-decorator'
+  import {
+    ControlFrame,
+    ControlMode,
+    ControlPosition,
+    SafeArea,
+    Size,
+    dropControl,
+    placeControl,
+  } from '~/utils/touch-controls'
 
   const IDLE_FADE_MS = 3000
   const DRAG_SLOP = 6
-  // gap between a band control and the band edges
-  const BAND_GAP = 4
 
   interface Point {
     x: number
@@ -96,50 +107,51 @@
 
   @Component({ name: 'neko-touch-controls' })
   export default class extends Vue {
+    @Ref('control') readonly _control!: HTMLElement
+
     @Prop({ type: String, required: true }) readonly mode!: ControlMode
     @Prop({ type: Object, required: true }) readonly position!: ControlPosition
+    @Prop({ type: Object, required: true }) readonly safeArea!: SafeArea
     @Prop(Boolean) readonly keyboardOpen!: boolean
     @Prop({ type: Number, default: 0 }) readonly areaWidth!: number
     @Prop({ type: Number, default: 0 }) readonly areaHeight!: number
     @Prop({ type: Number, default: 0 }) readonly keyboardInset!: number
 
+    private size: Size = { width: 44, height: 44 }
     private faded = false
     private fadeTimer = 0
     private touchStart: Point | null = null
+    // finger offset from the control's top-left corner, so a drag does not jump
+    private grab: Point = { x: 0, y: 0 }
     private dragPoint: Point | null = null
 
-    // Fractions place the control along its track without measuring it:
-    // calc(margin + f * (track - 2 * margin)) shifted back by f of its own size.
-    get controlStyle() {
-      if (this.dragPoint) {
-        return {
-          left: `${this.dragPoint.x - CONTROL_SIZE / 2}px`,
-          top: `${this.dragPoint.y - CONTROL_SIZE / 2}px`,
-        }
-      }
-
-      const inset = this.keyboardInset
-      if (this.mode === 'bottom') {
-        const x = this.position.x
-        return {
-          left: `calc(${EDGE_MARGIN}px + ${x} * (100% - ${2 * EDGE_MARGIN}px))`,
-          bottom: `calc(env(safe-area-inset-bottom) + ${BAND_GAP + inset}px)`,
-          transform: `translateX(${-x * 100}%)`,
-        }
-      }
-
-      const y = this.position.y
-      const side = this.mode === 'overlay' ? this.position.side : this.mode
-      const gap = this.mode === 'overlay' ? 6 : BAND_GAP
+    get frame(): ControlFrame {
       return {
-        [side]: `calc(env(safe-area-inset-${side}) + ${gap}px)`,
-        top: `calc(${EDGE_MARGIN}px + ${y} * (100% - ${2 * EDGE_MARGIN + inset}px))`,
-        transform: `translateY(${-y * 100}%)`,
+        area: { width: this.areaWidth, height: this.areaHeight },
+        control: this.size,
+        safe: this.safeArea,
+        keyboardInset: this.keyboardInset,
       }
     }
 
+    get corner(): Point {
+      if (this.dragPoint) {
+        return { x: this.dragPoint.x - this.grab.x, y: this.dragPoint.y - this.grab.y }
+      }
+      return placeControl(this.mode, this.position, this.frame)
+    }
+
+    get controlStyle() {
+      return { left: `${this.corner.x}px`, top: `${this.corner.y}px` }
+    }
+
     mounted() {
+      this.measure()
       this.wake()
+    }
+
+    updated() {
+      this.measure()
     }
 
     beforeDestroy() {
@@ -149,6 +161,14 @@
     @Watch('keyboardOpen')
     onKeyboardOpen() {
       this.wake()
+    }
+
+    // the label changes the control's size, which its placement depends on
+    measure() {
+      const { offsetWidth: width, offsetHeight: height } = this._control
+      if (width !== this.size.width || height !== this.size.height) {
+        this.size = { width, height }
+      }
     }
 
     // restore full opacity and restart the idle timer
@@ -172,7 +192,10 @@
 
     onTouchStart(e: TouchEvent) {
       this.wake()
-      this.touchStart = this.localPoint(e.changedTouches[0])
+      const p = this.localPoint(e.changedTouches[0])
+      const corner = this.corner
+      this.touchStart = p
+      this.grab = { x: p.x - corner.x, y: p.y - corner.y }
     }
 
     onTouchMove(e: TouchEvent) {
@@ -184,17 +207,16 @@
 
     // runs inside touchend, so a tap can still raise the soft keyboard
     onTouchEnd() {
-      const drop = this.dragPoint
-      this.touchStart = null
-      this.dragPoint = null
-
-      if (!drop) {
+      if (!this.dragPoint) {
+        this.touchStart = null
         this.toggle()
         return
       }
 
-      const height = this.areaHeight - this.keyboardInset
-      this.$emit('move', dropControl(this.mode, this.position, drop.x, drop.y, this.areaWidth, height))
+      const corner = this.corner
+      this.touchStart = null
+      this.dragPoint = null
+      this.$emit('move', dropControl(this.mode, this.position, corner.x, corner.y, this.frame))
       this.wake()
     }
 

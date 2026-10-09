@@ -2,7 +2,6 @@
 // video (shrinking the video a little to make one if needed) and only
 // overlays the stream when there is no room.
 
-export const CONTROL_SIZE = 44
 // a 44px target plus a 4px margin on each side
 export const BAND_SIZE = 52
 // how much the video may shrink to make room for a band
@@ -58,23 +57,79 @@ export function controlLayout(
   return bottomScale >= stripScale ? { mode: 'bottom', band: bottom } : { mode: side, band: strip }
 }
 
-function fraction(value: number, length: number) {
-  const range = length - CONTROL_SIZE - 2 * EDGE_MARGIN
-  return range > 0 ? Math.min(1, Math.max(0, (value - CONTROL_SIZE / 2 - EDGE_MARGIN) / range)) : 0.5
+export interface Size {
+  width: number
+  height: number
 }
 
-// Where a control dropped with its center at (x, y) ends up. Overlay and side
-// strips snap to the nearest side; the bottom band only moves along its length.
+export interface SafeArea extends Insets {
+  top: number
+}
+
+export interface ControlFrame {
+  area: Size
+  control: Size
+  safe: SafeArea
+  // height of the soft keyboard covering the bottom of the area
+  keyboardInset: number
+}
+
+// gap between the control and the edge it is docked to
+const DOCK_GAP = { band: 4, overlay: 6 }
+
+interface Track {
+  start: number
+  length: number
+}
+
+// the range the control's leading edge can move along
+function track(mode: ControlMode, frame: ControlFrame): Track {
+  const { area, control, safe, keyboardInset } = frame
+  if (mode === 'bottom') {
+    const start = safe.left + EDGE_MARGIN
+    return { start, length: Math.max(0, area.width - safe.right - EDGE_MARGIN - control.width - start) }
+  }
+  const start = safe.top + EDGE_MARGIN
+  const end = area.height - keyboardInset - safe.bottom - EDGE_MARGIN - control.height
+  return { start, length: Math.max(0, end - start) }
+}
+
+// top-left corner of the control in area coordinates
+export function placeControl(mode: ControlMode, position: ControlPosition, frame: ControlFrame) {
+  const { area, control, safe, keyboardInset } = frame
+  const t = track(mode, frame)
+  if (mode === 'bottom') {
+    return {
+      x: t.start + position.x * t.length,
+      y: area.height - keyboardInset - safe.bottom - DOCK_GAP.band - control.height,
+    }
+  }
+  const side = mode === 'overlay' ? position.side : mode
+  const gap = mode === 'overlay' ? DOCK_GAP.overlay : DOCK_GAP.band
+  return {
+    x: side === 'left' ? safe.left + gap : area.width - safe.right - gap - control.width,
+    y: t.start + position.y * t.length,
+  }
+}
+
+function fraction(offset: number, t: Track) {
+  return t.length > 0 ? Math.min(1, Math.max(0, (offset - t.start) / t.length)) : 0.5
+}
+
+// Where a control dropped with its top-left corner at (x, y) ends up. Overlay
+// and side strips snap to the nearest side; the bottom band only moves along
+// its length.
 export function dropControl(
   mode: ControlMode,
   position: ControlPosition,
   x: number,
   y: number,
-  width: number,
-  height: number,
+  frame: ControlFrame,
 ): ControlPosition {
-  if (mode === 'bottom') return { ...position, x: fraction(x, width) }
-  return { ...position, side: x < width / 2 ? 'left' : 'right', y: fraction(y, height) }
+  const t = track(mode, frame)
+  if (mode === 'bottom') return { ...position, x: fraction(x, t) }
+  const center = x + frame.control.width / 2
+  return { ...position, side: center < frame.area.width / 2 ? 'left' : 'right', y: fraction(y, t) }
 }
 
 export function encodePosition(position: ControlPosition) {
