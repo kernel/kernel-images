@@ -28,9 +28,8 @@ import (
 )
 
 var internalCDPMethods = map[string]struct{}{
-	"Browser.validateKernelBrowserLocation": {},
-	"Browser.setKernelBrowserLocation":      {},
-	"Browser.getKernelBrowserLocation":      {},
+	"Browser.setKernelBrowserLocation": {},
+	"Browser.getKernelBrowserLocation": {},
 }
 
 func filterInternalCDPMethod(message []byte) []byte {
