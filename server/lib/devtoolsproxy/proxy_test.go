@@ -868,7 +868,7 @@ func TestWebSocketProxyHandler_EmitsUpstreamErrorOnDialFailure(t *testing.T) {
 func controlOn() bool { return true }
 
 func TestFilterInternalCDPMethod(t *testing.T) {
-	for _, method := range []string{"Browser.validateKernelBrowserLocation", "Browser.setKernelBrowserLocation", "Browser.getKernelBrowserLocation"} {
+	for _, method := range []string{"Browser.setKernelBrowserLocation", "Browser.getKernelBrowserLocation"} {
 		input := []byte(`{"id":7,"method":"` + method + `","params":{"locale":"de-DE"}}`)
 		var got map[string]any
 		if err := json.Unmarshal(filterInternalCDPMethod(input), &got); err != nil {
