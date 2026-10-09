@@ -1,6 +1,7 @@
 package egresspolicy
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
 
 // DefaultPin is the pin as the image lays it out. Chromium merges every file
@@ -90,9 +93,31 @@ func (p Pin) Sync(policy Policy, base []string) error {
 	if !policy.Filtered {
 		return p.Remove()
 	}
+	data, err := encodePin(policy, base)
+	if err != nil {
+		return err
+	}
+	for _, dir := range []string{p.StageDir, filepath.Dir(p.Path)} {
+		if err := ownDir(dir); err != nil {
+			return err
+		}
+	}
+	tmp := filepath.Join(p.StageDir, filepath.Base(p.Path)+".tmp")
+	defer os.Remove(tmp)
+	if err := writeSynced(tmp, data); err != nil {
+		return fmt.Errorf("write proxy pin: %w", err)
+	}
+	if err := os.Rename(tmp, p.Path); err != nil {
+		return fmt.Errorf("replace proxy pin: %w", err)
+	}
+	return nil
+}
+
+// encodePin returns the pin Sync writes for a filtered policy.
+func encodePin(policy Policy, base []string) ([]byte, error) {
 	server, ok := lastFlagValue(base, "--proxy-server")
 	if !ok || server == "" {
-		return errors.New("egress is filtered but Chromium's base flags have no --proxy-server to pin")
+		return nil, errors.New("egress is filtered but Chromium's base flags have no --proxy-server to pin")
 	}
 	var bypass string
 	if policy.PrivateHosts != nil {
@@ -107,22 +132,9 @@ func (p Pin) Sync(policy Policy, base []string) error {
 		DnsOverHttpsMode:    pinDnsOverHttpsMode,
 	})
 	if err != nil {
-		return fmt.Errorf("encode proxy pin: %w", err)
+		return nil, fmt.Errorf("encode proxy pin: %w", err)
 	}
-	for _, dir := range []string{p.StageDir, filepath.Dir(p.Path)} {
-		if err := ownDir(dir); err != nil {
-			return err
-		}
-	}
-	tmp := filepath.Join(p.StageDir, filepath.Base(p.Path)+".tmp")
-	defer os.Remove(tmp)
-	if err := writeSynced(tmp, append(data, '\n')); err != nil {
-		return fmt.Errorf("write proxy pin: %w", err)
-	}
-	if err := os.Rename(tmp, p.Path); err != nil {
-		return fmt.Errorf("replace proxy pin: %w", err)
-	}
-	return nil
+	return append(data, '\n'), nil
 }
 
 // writeSynced writes data to path and flushes it to disk, so a crash after the
@@ -146,6 +158,11 @@ func writeSynced(path string, data []byte) error {
 // hostMappingFlags rewrite the address Chromium connects to for a host,
 // including the egress proxy's own address, so a runtime rule could send every
 // request to a different proxy. Chromium honors them whatever the pin says.
+//
+// This is not every switch that touches the network. The token that writes
+// runtime flags can also run processes in the VM, which egress without
+// Chromium, so the list closes the routes found through Chromium's own
+// configuration rather than defending against that token.
 var hostMappingFlags = []string{"host-resolver-rules", "host-rules"}
 
 // DropHostMappingFlags returns runtime flags without the ones that remap
@@ -164,30 +181,26 @@ func DropHostMappingFlags(runtime []string) (kept, dropped []string) {
 	return kept, dropped
 }
 
-// Present reports whether a pin is in place. A file at the pin's path that is
-// not a pin does not count, so the caller writes a real one over it.
-func (p Pin) Present() (bool, error) {
+// Matches reports whether the pin in place is exactly the one Sync writes for
+// policy and base: none at all for an unfiltered policy. Anything else at the
+// pin's path, including a pin written for other private hosts, does not match,
+// so the caller has the real one written over it.
+func (p Pin) Matches(policy Policy, base []string) (bool, error) {
 	data, err := os.ReadFile(p.Path)
 	if errors.Is(err, os.ErrNotExist) {
-		return false, nil
+		return !policy.Filtered, nil
 	}
 	if err != nil {
 		return false, fmt.Errorf("read proxy pin: %w", err)
 	}
-	var pinned struct {
-		ProxySettings       proxySettings      `json:"ProxySettings"`
-		WebRtcIPHandling    string             `json:"WebRtcIPHandling"`
-		WebRtcIPHandlingURL *[]json.RawMessage `json:"WebRtcIPHandlingUrl"`
-		DnsOverHttpsMode    string             `json:"DnsOverHttpsMode"`
-	}
-	if json.Unmarshal(data, &pinned) != nil {
+	if !policy.Filtered {
 		return false, nil
 	}
-	return pinned.ProxySettings.ProxyMode == pinProxyMode &&
-		pinned.ProxySettings.ProxyServer != "" &&
-		pinned.WebRtcIPHandling == pinWebRtcIPHandling &&
-		pinned.WebRtcIPHandlingURL != nil && len(*pinned.WebRtcIPHandlingURL) == 0 &&
-		pinned.DnsOverHttpsMode == pinDnsOverHttpsMode, nil
+	want, err := encodePin(policy, base)
+	if err != nil {
+		return false, err
+	}
+	return bytes.Equal(data, want), nil
 }
 
 // Remove deletes the pin. Chromium reloads its policy directory on its own, so
@@ -216,6 +229,31 @@ func ownDir(dir string) error {
 		}
 	}
 	return nil
+}
+
+// DefaultPrivateNetworkBypassFlag is the image's bypass list, which sends
+// private ranges around the proxy when the control plane sets no list of its
+// own.
+const DefaultPrivateNetworkBypassFlag = "--proxy-bypass-list=10.0.0.0/8;172.16.0.0/12;192.168.0.0/16;100.64.0.0/10;fc00::/7"
+
+// WithDefaultPrivateNetworkBypass appends the image's bypass list unless flags
+// already carry one.
+func WithDefaultPrivateNetworkBypass(flags []string) []string {
+	for _, flag := range flags {
+		if flag == "--proxy-bypass-list" || strings.HasPrefix(flag, "--proxy-bypass-list=") {
+			return flags
+		}
+	}
+	return append(flags, DefaultPrivateNetworkBypassFlag)
+}
+
+// BaseFlags returns the flags the pin is derived from: chromiumFlags, the
+// CHROMIUM_FLAGS the control plane launches the VM with, before any runtime
+// flags, plus the image's default bypass list. The launcher writes the pin from
+// them and the egress policy handler checks it against them, so both must call
+// this.
+func BaseFlags(chromiumFlags string) []string {
+	return WithDefaultPrivateNetworkBypass(chromiumflags.MergeFlagsWithRuntimeTokens(chromiumFlags, nil))
 }
 
 // lastFlagValue returns the value of the last occurrence of name, which is the

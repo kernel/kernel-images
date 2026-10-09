@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -93,7 +94,7 @@ func TestPrivateHostsSurviveProcessRestart(t *testing.T) {
 		if err := Load(path, silent()).Set(want); err != nil {
 			t.Fatalf("Set(%+v): %v", want, err)
 		}
-		if got := Load(path, silent()).Policy(); !got.Equal(want) {
+		if got := Load(path, silent()).Policy(); !reflect.DeepEqual(got, want) {
 			t.Fatalf("policy after restart = %+v, want %+v", got, want)
 		}
 	}

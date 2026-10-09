@@ -43,7 +43,6 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 	s.chromiumConfigMu.Lock()
 	defer s.chromiumConfigMu.Unlock()
 
-	previous := s.egressPolicy.Policy()
 	// A policy that was not persisted would be lost if this process restarted,
 	// so the caller is told it did not apply rather than being left to assume
 	// a refusal is in place.
@@ -51,7 +50,7 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 		log.Error("failed to apply egress policy", "err", err, "filtered", policy.Filtered)
 		return oapi.PutNetworkEgressPolicy500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to apply egress policy"}}, nil
 	}
-	if err := s.applyEgressPin(ctx, policy, previous); err != nil {
+	if err := s.applyEgressPin(ctx, policy); err != nil {
 		log.Error("failed to apply egress proxy pin", "err", err, "filtered", policy.Filtered)
 		return oapi.PutNetworkEgressPolicy500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to apply egress policy"}}, nil
 	}
@@ -62,7 +61,7 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 // applyEgressPin brings Chromium's proxy pin in line with the policy. The
 // caller must hold chromiumConfigMu.
 //
-// A pin that is missing, or was written for a different policy, is rewritten
+// A pin that is missing, or is not the one this policy produces, is rewritten
 // by restarting Chromium rather than by waiting for it to reload its policy
 // directory, so the pin is in force before the control plane hands the session
 // to a client. Chromium does not need a restart for the pin to come off.
@@ -71,25 +70,25 @@ func (s *ApiService) PutNetworkEgressPolicy(ctx context.Context, req oapi.PutNet
 // restarting as the policy flips to unfiltered can write the pin again after it
 // is removed. That leaves the session pinned until Chromium next starts, which
 // fails closed.
-func (s *ApiService) applyEgressPin(ctx context.Context, policy, previous egresspolicy.Policy) error {
+func (s *ApiService) applyEgressPin(ctx context.Context, policy egresspolicy.Policy) error {
 	if !policy.Filtered {
 		return s.egressPin.Remove()
 	}
-	present, err := s.egressPin.Present()
+	pinned, err := s.egressPin.Matches(policy, s.chromiumBaseFlags)
 	if err != nil {
 		return err
 	}
-	if present && policy.Equal(previous) {
+	if pinned {
 		return nil
 	}
 	if err := s.restartChromiumAndWait(ctx, "egress policy"); err != nil {
 		return err
 	}
-	present, err = s.egressPin.Present()
+	pinned, err = s.egressPin.Matches(policy, s.chromiumBaseFlags)
 	if err != nil {
 		return err
 	}
-	if !present {
+	if !pinned {
 		return errors.New("chromium restarted without the egress proxy pin")
 	}
 	return nil

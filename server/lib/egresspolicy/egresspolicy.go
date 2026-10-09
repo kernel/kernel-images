@@ -36,14 +36,6 @@ type Policy struct {
 	PrivateHosts *[]string `json:"private_hosts,omitempty"`
 }
 
-// Equal reports whether p and o are the same policy.
-func (p Policy) Equal(o Policy) bool {
-	if p.Filtered != o.Filtered || (p.PrivateHosts == nil) != (o.PrivateHosts == nil) {
-		return false
-	}
-	return p.PrivateHosts == nil || slices.Equal(*p.PrivateHosts, *o.PrivateHosts)
-}
-
 // State is the session's egress policy as the control plane last reported it.
 //
 // It is held on disk as well as in memory. The API process is restarted

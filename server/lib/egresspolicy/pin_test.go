@@ -2,10 +2,14 @@ package egresspolicy
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
+
+	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
 
 // testPin lays out a policy directory the way the image does, with the pin
@@ -165,7 +169,7 @@ func TestPinSyncRefusesFilteredSessionWithoutProxy(t *testing.T) {
 		if err := p.Sync(Policy{Filtered: true}, base); err == nil {
 			t.Fatalf("Sync(filtered, %q) succeeded", base)
 		}
-		if present, _ := p.Present(); present {
+		if _, err := os.Stat(p.Path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Sync(filtered, %q) wrote a pin", base)
 		}
 	}
@@ -182,11 +186,11 @@ func TestPinSyncRemovesPinWhenUnfiltered(t *testing.T) {
 		if err := p.Sync(Policy{}, nil); err != nil {
 			t.Fatalf("Sync(false): %v", err)
 		}
-		present, err := p.Present()
+		unpinned, err := p.Matches(Policy{}, nil)
 		if err != nil {
-			t.Fatalf("Present: %v", err)
+			t.Fatalf("Matches: %v", err)
 		}
-		if present {
+		if !unpinned {
 			t.Fatal("pin still present after the session became unfiltered")
 		}
 	}
@@ -215,33 +219,105 @@ func TestPinSyncClosesThePolicyDirectories(t *testing.T) {
 	}
 }
 
-// A file at the pin's path that is not a pin must not stop the egress policy
-// handler from restarting Chromium to write a real one.
-func TestPinPresentRequiresAPin(t *testing.T) {
+// A file at the pin's path that is not the pin for this policy must not stop
+// the egress policy handler from restarting Chromium to write the real one.
+// That includes a pin written for other private hosts, which is what a
+// restart that failed before the launcher ran leaves behind.
+func TestPinMatchesRequiresThePolicysPin(t *testing.T) {
+	base := []string{"--proxy-server=http://192.0.2.1:3129"}
+	policy := Policy{Filtered: true, PrivateHosts: &[]string{"preview.internal:8443"}}
 	p := testPin(t)
+	if err := p.Sync(Policy{Filtered: true, PrivateHosts: &[]string{"10.1.0.0/16"}}, base); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	stale, err := os.ReadFile(p.Path)
+	if err != nil {
+		t.Fatalf("read pin: %v", err)
+	}
 	for _, content := range []string{
 		"",
 		"{}",
+		string(stale),
 		`{"ProxySettings":{"ProxyMode":"direct"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"default","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"disable_non_proxied_udp","DnsOverHttpsMode":"off"}`,
-		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[]}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"default","WebRtcIPHandlingUrl":[],"DnsOverHttpsMode":"off"}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"disable_non_proxied_udp","DnsOverHttpsMode":"off"}`,
+		`{"ProxySettings":{"ProxyMode":"fixed_servers","ProxyServer":"http://192.0.2.1:3129","ProxyBypassList":"preview.internal:8443"},"WebRtcIPHandling":"disable_non_proxied_udp","WebRtcIPHandlingUrl":[]}`,
 	} {
 		if err := os.WriteFile(p.Path, []byte(content), 0o644); err != nil {
 			t.Fatalf("write %q: %v", content, err)
 		}
-		present, err := p.Present()
+		pinned, err := p.Matches(policy, base)
 		if err != nil {
-			t.Fatalf("Present(%q): %v", content, err)
+			t.Fatalf("Matches(%q): %v", content, err)
 		}
-		if present {
-			t.Fatalf("Present(%q) reported a pin", content)
+		if pinned {
+			t.Fatalf("Matches(%q) accepted it as the pin", content)
 		}
 	}
-	if err := p.Sync(Policy{Filtered: true}, []string{"--proxy-server=http://192.0.2.1:3129"}); err != nil {
+	if err := p.Sync(policy, base); err != nil {
 		t.Fatalf("Sync: %v", err)
 	}
-	if present, err := p.Present(); err != nil || !present {
-		t.Fatalf("Present after Sync = %t, %v", present, err)
+	if pinned, err := p.Matches(policy, base); err != nil || !pinned {
+		t.Fatalf("Matches after Sync = %t, %v", pinned, err)
+	}
+	if unpinned, err := p.Matches(Policy{}, base); err != nil || unpinned {
+		t.Fatalf("Matches(unfiltered) with a pin in place = %t, %v", unpinned, err)
+	}
+}
+
+func TestWithDefaultPrivateNetworkBypass(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags []string
+		want  []string
+	}{
+		{
+			name: "image default",
+			want: []string{DefaultPrivateNetworkBypassFlag},
+		},
+		{
+			name:  "default follows unrelated flags",
+			flags: []string{"--kiosk"},
+			want:  []string{"--kiosk", DefaultPrivateNetworkBypassFlag},
+		},
+		{
+			name:  "custom list replaces image default",
+			flags: []string{"--proxy-bypass-list=preview.internal"},
+			want:  []string{"--proxy-bypass-list=preview.internal"},
+		},
+		{
+			name:  "explicit empty list clears image default",
+			flags: []string{"--proxy-bypass-list="},
+			want:  []string{"--proxy-bypass-list="},
+		},
+		{
+			name:  "bare empty list clears image default",
+			flags: []string{"--proxy-bypass-list"},
+			want:  []string{"--proxy-bypass-list"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := WithDefaultPrivateNetworkBypass(tt.flags)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("WithDefaultPrivateNetworkBypass() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDefaultPrivateNetworkBypassPreservesRuntimePrecedence(t *testing.T) {
+	configured := chromiumflags.MergeFlagsWithRuntimeTokens(
+		"--proxy-bypass-list=preview.internal",
+		[]string{DefaultPrivateNetworkBypassFlag},
+	)
+	got := WithDefaultPrivateNetworkBypass(configured)
+	want := []string{
+		"--proxy-bypass-list=preview.internal",
+		DefaultPrivateNetworkBypassFlag,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("runtime precedence changed:\n got: %#v\nwant: %#v", got, want)
 	}
 }

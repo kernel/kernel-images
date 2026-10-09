@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
@@ -30,7 +31,7 @@ func TestPutNetworkEgressPolicy(t *testing.T) {
 	require.NoError(t, err)
 	filtered := egresspolicy.Policy{Filtered: true}
 	require.NoError(t, svc.egressPolicy.Set(filtered))
-	require.NoError(t, svc.egressPin.Sync(filtered, []string{"--proxy-server=http://192.0.2.1:3129"}))
+	require.NoError(t, svc.egressPin.Sync(filtered, svc.chromiumBaseFlags))
 
 	for _, want := range []bool{true, true, false, false} {
 		resp, err := svc.PutNetworkEgressPolicy(context.Background(), oapi.PutNetworkEgressPolicyRequestObject{
@@ -39,7 +40,7 @@ func TestPutNetworkEgressPolicy(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, oapi.PutNetworkEgressPolicy200JSONResponse{Filtered: want}, resp)
 		require.Equal(t, want, svc.egressPolicy.Filtered())
-		pinned, err := svc.egressPin.Present()
+		pinned, err := svc.egressPin.Matches(egresspolicy.Policy{Filtered: true}, svc.chromiumBaseFlags)
 		require.NoError(t, err)
 		require.Equal(t, want, pinned)
 	}
@@ -48,29 +49,29 @@ func TestPutNetworkEgressPolicy(t *testing.T) {
 // The pin's bypass list is the policy's private hosts, so a pin written for
 // other private hosts is rewritten with a restart, and one written for these
 // is left alone. The new hosts are recorded even when the restart fails, so the
-// next Chromium start pins them.
+// next Chromium start pins them, and a retry before that start still finds the
+// old pin and restarts again rather than reporting it applied.
 func TestPutNetworkEgressPolicyRestartsForChangedPrivateHosts(t *testing.T) {
 	svc, err := newSvc(t, newMockRecordManager())
 	require.NoError(t, err)
 	before := egresspolicy.Policy{Filtered: true, PrivateHosts: &[]string{"10.1.0.0/16"}}
 	require.NoError(t, svc.egressPolicy.Set(before))
-	require.NoError(t, svc.egressPin.Sync(before, []string{"--proxy-server=http://192.0.2.1:3129"}))
+	require.NoError(t, svc.egressPin.Sync(before, svc.chromiumBaseFlags))
 	// Leaves supervisorctl off PATH, so a restart fails.
 	t.Setenv("PATH", t.TempDir())
 
 	after := []string{"preview.internal:8443"}
-	resp, err := svc.PutNetworkEgressPolicy(context.Background(), oapi.PutNetworkEgressPolicyRequestObject{
-		Body: &oapi.NetworkEgressPolicy{Filtered: true, PrivateHosts: &after},
-	})
-	require.NoError(t, err)
-	require.IsType(t, oapi.PutNetworkEgressPolicy500JSONResponse{}, resp, "changed private hosts did not restart Chromium")
-	require.Equal(t, &after, svc.egressPolicy.Policy().PrivateHosts)
+	put := oapi.PutNetworkEgressPolicyRequestObject{Body: &oapi.NetworkEgressPolicy{Filtered: true, PrivateHosts: &after}}
+	for range 2 {
+		resp, err := svc.PutNetworkEgressPolicy(context.Background(), put)
+		require.NoError(t, err)
+		require.IsType(t, oapi.PutNetworkEgressPolicy500JSONResponse{}, resp, "a pin for other private hosts did not restart Chromium")
+		require.Equal(t, &after, svc.egressPolicy.Policy().PrivateHosts)
+	}
 
 	// Stands in for the launcher, which writes the pin on the next start.
-	require.NoError(t, svc.egressPin.Sync(svc.egressPolicy.Policy(), []string{"--proxy-server=http://192.0.2.1:3129"}))
-	resp, err = svc.PutNetworkEgressPolicy(context.Background(), oapi.PutNetworkEgressPolicyRequestObject{
-		Body: &oapi.NetworkEgressPolicy{Filtered: true, PrivateHosts: &after},
-	})
+	require.NoError(t, svc.egressPin.Sync(svc.egressPolicy.Policy(), svc.chromiumBaseFlags))
+	resp, err := svc.PutNetworkEgressPolicy(context.Background(), put)
 	require.NoError(t, err)
 	require.Equal(t, oapi.PutNetworkEgressPolicy200JSONResponse{Filtered: true, PrivateHosts: &after}, resp)
 }
@@ -108,9 +109,8 @@ func TestPutNetworkEgressPolicyFailsWhenThePinCannotBeApplied(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, oapi.PutNetworkEgressPolicy500JSONResponse{}, resp)
 	require.True(t, svc.egressPolicy.Filtered())
-	pinned, err := svc.egressPin.Present()
-	require.NoError(t, err)
-	require.False(t, pinned)
+	_, err = os.Stat(svc.egressPin.Path)
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestPutNetworkEgressPolicyRejectsMissingBody(t *testing.T) {

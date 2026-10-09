@@ -145,6 +145,9 @@ type ApiService struct {
 	// while the session is filtered. The launcher writes it; the egress policy
 	// handler restarts Chromium to get it written and removes it.
 	egressPin egresspolicy.Pin
+	// chromiumBaseFlags are the flags the launcher derives the pin from, so the
+	// handler can tell whether the pin in place is the one the policy needs.
+	chromiumBaseFlags []string
 
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
@@ -204,6 +207,7 @@ func New(
 		s2Storage:         s2Storage,
 		egressPolicy:      egressPolicy,
 		egressPin:         egresspolicy.DefaultPin,
+		chromiumBaseFlags: egresspolicy.BaseFlags(os.Getenv("CHROMIUM_FLAGS")),
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,

@@ -418,6 +418,7 @@ func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 		return nil, err
 	}
 	svc.egressPin = egresspolicy.Pin{Path: filepath.Join(managed, "zz-kernel-egress.json"), StageDir: policies}
+	svc.chromiumBaseFlags = egresspolicy.BaseFlags("--proxy-server=http://192.0.2.1:3129")
 	return svc, nil
 }
 
