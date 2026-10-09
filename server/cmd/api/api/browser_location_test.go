@@ -17,6 +17,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
+	"github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -215,6 +216,21 @@ func TestBrowserLocationPersistenceFailureDoesNotChangeEpoch(t *testing.T) {
 	err := service.resetBrowserLocation("", testLocationBundle("lease-a", 1))
 	require.Error(t, err)
 	assert.Empty(t, service.browserLocationSnapshot().ActiveEpoch)
+}
+
+func TestChromiumConfigureLocationPersistenceFailureReportsValidStep(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	require.NoError(t, service.resetBrowserLocation("", testLocationBundle("lease-a", 1)))
+	t.Setenv("KERNEL_BROWSER_LOCATION_STATE_PATH", "/proc/kernel-browser-location-state")
+	bundle := testLocationBundle("lease-a", 2)
+
+	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+
+	failure, ok := resp.(oapi.ChromiumConfigure500JSONResponse)
+	require.True(t, ok, "expected 500 response, got %T", resp)
+	require.NotNil(t, failure.Step)
+	assert.Equal(t, oapi.BrowserLocation, *failure.Step)
+	assert.True(t, failure.Step.Valid())
 }
 
 func TestGetBrowserLocationHTTPConfirmsAppliedWithChromium(t *testing.T) {

@@ -6920,6 +6920,7 @@ components:
             - display
             - chromium_flags
             - profile
+            - browser_location
     RecorderInfo:
       type: object
       required: [id, isRecording]

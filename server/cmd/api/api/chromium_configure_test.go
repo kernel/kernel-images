@@ -30,6 +30,21 @@ func TestPoliciesContentNonEmpty(t *testing.T) {
 	require.True(t, policiesContentNonEmpty(&real))
 }
 
+func TestChromiumConfigureStepsAreValidErrorSteps(t *testing.T) {
+	for _, step := range []chromiumConfigureStep{
+		chromiumConfigureStepStop,
+		chromiumConfigureStepStart,
+		chromiumConfigureStepPolicies,
+		chromiumConfigureStepExtensions,
+		chromiumConfigureStepDisplay,
+		chromiumConfigureStepFlags,
+		chromiumConfigureStepProfile,
+		chromiumConfigureStepLocation,
+	} {
+		require.True(t, oapi.ChromiumConfigureErrorStep(step).Valid(), step)
+	}
+}
+
 func TestChromiumConfigureModeFor(t *testing.T) {
 	stringPtr := func(value string) *string { return &value }
 
