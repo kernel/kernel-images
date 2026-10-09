@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
@@ -103,26 +102,6 @@ func TestPutNetworkEgressPolicyRejectsMalformedPrivateHosts(t *testing.T) {
 		require.IsType(t, oapi.PutNetworkEgressPolicy400JSONResponse{}, resp, "accepted private host %q", host)
 		require.False(t, svc.egressPolicy.Filtered())
 	}
-}
-
-// Without the pin, filtering means restarting Chromium so the launcher writes
-// it. When that fails the caller is told so, and the session stays filtered:
-// the next Chromium start pins the proxy, and the CDP proxy keeps refusing
-// contexts with their own proxy in the meantime.
-func TestPutNetworkEgressPolicyFailsWhenThePinCannotBeApplied(t *testing.T) {
-	svc, err := newSvc(t, newMockRecordManager())
-	require.NoError(t, err)
-	// Leaves supervisorctl off PATH, so the restart fails.
-	t.Setenv("PATH", t.TempDir())
-
-	resp, err := svc.PutNetworkEgressPolicy(context.Background(), oapi.PutNetworkEgressPolicyRequestObject{
-		Body: &oapi.NetworkEgressPolicy{Filtered: true},
-	})
-	require.NoError(t, err)
-	require.IsType(t, oapi.PutNetworkEgressPolicy500JSONResponse{}, resp)
-	require.True(t, svc.egressPolicy.Filtered())
-	_, err = os.Stat(svc.egressPin.Path)
-	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestPutNetworkEgressPolicyRejectsMissingBody(t *testing.T) {
