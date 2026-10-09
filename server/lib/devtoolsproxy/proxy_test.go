@@ -917,7 +917,7 @@ func TestWebSocketProxyRejectsInternalLocationMethods(t *testing.T) {
 	upstreamURL, _ := url.Parse(upstream.URL)
 	manager := NewUpstreamManager("/dev/null", silentLogger())
 	manager.setCurrent("ws://" + upstreamURL.Host)
-	proxy := httptest.NewServer(WebSocketProxyHandler(manager, silentLogger(), false, scaletozero.NewNoopController(), nil, nil, nil, nil))
+	proxy := httptest.NewServer(WebSocketProxyHandler(manager, silentLogger(), false, scaletozero.NewNoopController(), nil, nil, nil, nil, nil))
 	defer proxy.Close()
 	proxyURL, _ := url.Parse(proxy.URL)
 	proxyURL.Scheme = "ws"
