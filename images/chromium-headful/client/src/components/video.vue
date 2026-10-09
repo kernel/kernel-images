@@ -1239,11 +1239,11 @@
     }
 
     // iOS overlays the soft keyboard on the layout viewport instead of resizing
-    // it, so lift the keyboard button by the part the visual viewport lost
+    // it, so lift the keyboard button by the part of the player it covers
     updateKeyboardInset() {
       const viewport = window.visualViewport
       if (!viewport) return
-      const covered = document.documentElement.clientHeight - viewport.height - viewport.offsetTop
+      const covered = this._player.getBoundingClientRect().bottom - (viewport.offsetTop + viewport.height)
       this.keyboardInset = Math.max(0, Math.round(covered))
     }
 
