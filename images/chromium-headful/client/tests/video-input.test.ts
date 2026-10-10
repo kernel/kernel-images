@@ -1,8 +1,11 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import { parseComponent } from 'vue-template-compiler'
+
+mock.module('~/store', () => ({ accessor: {} }))
+const { state: remoteState, getters: remoteGetters, mutations: remoteMutations } = await import('../src/store/remote')
 
 // Load the real component methods without mounting its media player or child components.
 const script = parseComponent(readFileSync(new URL('../src/components/video.vue', import.meta.url), 'utf8')).script!
@@ -170,5 +173,66 @@ describe('video input during read-only transitions', () => {
     const methods = videoMethods(async () => '')
     // These unprovided callbacks would throw if invoked while locked.
     methods.onMouseEnter.call({ hosting: true, locked: true }, {})
+  })
+})
+
+describe('video Caps Lock synchronization', () => {
+  function capsLockContext(keyboardModifierState: number, locked = false) {
+    const remote = remoteState()
+    remote.keyboardModifierState = keyboardModifierState
+    const data: string[] = []
+    const ctx = {
+      hosting: true,
+      locked,
+      unmuteOnInteraction() {},
+      keyMap: (key: number) => key,
+      $client: { sendData: (event: string, { key }: { key: number }) => data.push(`${event}:${key}`) },
+      $accessor: {
+        remote: {
+          get capsLock() {
+            return (remoteGetters.capsLock as Function)(remote)
+          },
+          setCapsLock: (capsLock: boolean) => remoteMutations.setCapsLock(remote, capsLock),
+        },
+      },
+    }
+    return { ctx, remote, data }
+  }
+
+  test('toggles the remote only when local Caps Lock differs from it', () => {
+    const methods = videoMethods(async () => '')
+    const { ctx, remote, data } = capsLockContext(4)
+
+    methods.onCapsLock.call(ctx, true)
+    expect(data).toEqual(['keydown:65509', 'keyup:65509'])
+    expect(remote.keyboardModifierState).toBe(5)
+
+    methods.onCapsLock.call(ctx, true)
+    expect(data).toHaveLength(2)
+
+    methods.onCapsLock.call(ctx, false)
+    expect(data).toEqual(['keydown:65509', 'keyup:65509', 'keydown:65509', 'keyup:65509'])
+    expect(remote.keyboardModifierState).toBe(4)
+  })
+
+  test('toggles on every Caps Lock change while the remote state is unknown', () => {
+    const methods = videoMethods(async () => '')
+    const { ctx, remote, data } = capsLockContext(-1)
+
+    methods.onCapsLock.call(ctx, true)
+    methods.onCapsLock.call(ctx, false)
+
+    expect(data).toEqual(['keydown:65509', 'keyup:65509', 'keydown:65509', 'keyup:65509'])
+    expect(remote.keyboardModifierState).toBe(-1)
+  })
+
+  test('does not toggle Caps Lock while locked', () => {
+    const methods = videoMethods(async () => '')
+    const { ctx, remote, data } = capsLockContext(0, true)
+
+    methods.onCapsLock.call(ctx, true)
+
+    expect(data).toEqual([])
+    expect(remote.keyboardModifierState).toBe(0)
   })
 })

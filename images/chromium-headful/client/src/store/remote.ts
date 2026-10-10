@@ -36,6 +36,9 @@ export const getters = getterTree(state, {
   host: (state, getters, root) => {
     return root.user.members[state.id] || (state.implicitHosting && root.user.id) || null
   },
+  capsLock: (state) => {
+    return state.keyboardModifierState === -1 ? null : Boolean(state.keyboardModifierState & 1)
+  },
 })
 
 export const mutations = mutationTree(state, {
@@ -55,6 +58,12 @@ export const mutations = mutationTree(state, {
 
   setKeyboardModifierState(state, { capsLock, numLock, scrollLock }) {
     state.keyboardModifierState = keyboardModifierState(capsLock, numLock, scrollLock)
+  },
+
+  setCapsLock(state, capsLock: boolean) {
+    if (state.keyboardModifierState !== -1) {
+      state.keyboardModifierState = (state.keyboardModifierState & ~1) | Number(capsLock)
+    }
   },
 
   setLocked(state, locked: boolean) {
