@@ -12,9 +12,12 @@
           ref="overlay"
           class="overlay"
           spellcheck="false"
+          autocapitalize="off"
+          autocorrect="off"
+          autocomplete="off"
           tabindex="0"
           data-gramm="false"
-          :style="{ pointerEvents: hosting ? 'auto' : 'none' }"
+          :style="{ pointerEvents: hosting || is_touch_device ? 'auto' : 'none' }"
           @click.stop.prevent
           @contextmenu.stop.prevent
           @mousemove.stop.prevent="onMouseMove"
@@ -22,12 +25,16 @@
           @mouseup.stop.prevent="onMouseUp"
           @mouseenter.stop.prevent="onMouseEnter"
           @mouseleave.stop.prevent="onMouseLeave"
-          @touchmove.stop.prevent="onTouchHandler"
-          @touchstart.stop.prevent="onTouchHandler"
-          @touchend.stop.prevent="onTouchHandler"
+          @touchstart.stop.prevent="onTouchStart"
+          @touchmove.stop.prevent="onTouchMove"
+          @touchend.stop.prevent="onTouchEnd"
+          @touchcancel.stop.prevent="onTouchCancel"
+          @input="onOverlayInput"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
           @paste.stop.prevent="onPaste"
           @focus="onOverlayFocus"
-          @blur="resetKeyboard"
+          @blur="onOverlayBlur"
         />
         <!-- KERNEL
         <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute">
@@ -44,7 +51,10 @@
         <li><i @click.stop.prevent="requestFullscreen" class="fas fa-expand"></i></li>
         <li v-if="admin"><i @click.stop.prevent="openResolution" class="fas fa-desktop"></i></li>
         -->
-        <li v-if="!controlLocked && !implicitHosting && !readOnly" :class="extraControls || 'extra-control'">
+        <li
+          v-if="!controlLocked && !implicitHosting && !readOnly"
+          :class="extraControls || is_touch_device ? '' : 'extra-control'"
+        >
           <i
             :class="[
               hosted && !hosting ? 'disabled' : '',
@@ -72,14 +82,38 @@
           />
           -->
         </li>
-        <li
-          v-if="hosting && is_touch_device"
-          :class="extraControls || 'extra-control'"
-          @click.stop.prevent="openMobileKeyboard"
-        >
-          <i class="fas fa-keyboard" />
-        </li>
       </ul>
+      <neko-touch-controls
+        v-if="showTouchControls"
+        ref="controls"
+        :mode="touchLayout.mode"
+        :position="controlPosition"
+        :safe-area="safeArea"
+        :keyboard-open="keyboardOpen"
+        :area-width="playerWidth"
+        :area-height="playerHeight"
+        :keyboard-inset="keyboardInset"
+        @toggle="toggleMobileKeyboard"
+        @move="onControlMove"
+      />
+      <button
+        v-if="zoomed && !hideControls"
+        class="touch-button zoom-chip"
+        @touchend.stop.prevent="resetZoom"
+        @click.stop.prevent="resetZoom"
+      >
+        {{ zoomScale.toFixed(1) }}× · Reset
+      </button>
+      <button
+        v-if="typeChip"
+        class="touch-button type-chip"
+        :style="{ left: `${typeChip.x}px`, top: `${typeChip.y}px` }"
+        @touchend.stop.prevent="onTypeChip"
+        @click.stop.prevent="onTypeChip"
+      >
+        <i class="fas fa-keyboard" />
+        <span>Tap to type</span>
+      </button>
       <neko-resolution ref="resolution" v-if="admin" />
       <neko-clipboard ref="clipboard" v-if="hosting && (!clipboard_read_available || !clipboard_write_available)" />
     </div>
@@ -93,10 +127,44 @@
 
     .player {
       position: absolute;
+      box-sizing: border-box;
       display: flex;
       justify-content: center;
       align-items: center;
       background: #000;
+      overflow: hidden;
+      touch-action: none;
+
+      .touch-button {
+        position: absolute;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 44px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 22px;
+        background: rgba($color: #000, $alpha: 0.7);
+        color: #fff;
+        font-size: 15px;
+        font-weight: 600;
+        white-space: nowrap;
+        cursor: pointer;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .zoom-chip {
+        left: calc(12px + env(safe-area-inset-left));
+        top: calc(12px + env(safe-area-inset-top));
+      }
+
+      .type-chip {
+        transform: translateX(-50%);
+        background: #81b300;
+        color: #000;
+      }
 
       .video-menu {
         position: absolute;
@@ -153,6 +221,7 @@
         position: relative;
         width: 100%;
         max-width: calc(16 / 9 * 100vh);
+        transform-origin: 0 0;
 
         video {
           position: absolute;
@@ -205,8 +274,12 @@
           outline: 0;
           border: 0;
           color: transparent;
+          caret-color: transparent;
           background: transparent;
           resize: none;
+          touch-action: none;
+          // iOS zooms the page when focusing a field with a smaller font
+          font-size: 16px;
         }
 
         .player-aspect {
@@ -223,10 +296,32 @@
   import ResizeObserver from 'resize-observer-polyfill'
   import { elementRequestFullscreen, onFullscreenChange, isFullscreen, lockKeyboard, unlockKeyboard } from '~/utils'
   import { isClipboardReadGranted } from '~/utils/clipboard'
+  import { TouchGestures, Point } from '~/utils/touch-gestures'
+  import { ZoomPan, Box } from '~/utils/zoom-pan'
+  import {
+    ControlLayout,
+    ControlPosition,
+    SafeArea,
+    controlLayout,
+    decodePosition,
+    encodePosition,
+  } from '~/utils/touch-controls'
+  import { get, set } from '~/utils/localstorage'
+  import { CursorImage, CursorKind, cachedCursorKind, classifyCursor } from '~/utils/cursor-shape'
+  import {
+    XK_BACKSPACE,
+    XK_RETURN,
+    XK_SHIFT_L,
+    charToKeysym,
+    keysymNeedsShift,
+    needsShift,
+    textDiff,
+  } from '~/utils/text-input'
 
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
   import Clipboard from './clipboard.vue'
+  import TouchControls from './touch-controls.vue'
 
   // @ts-ignore
   import GuacamoleKeyboard from '~/utils/guacamole-keyboard.ts'
@@ -235,12 +330,33 @@
   const SCROLL_SENSITIVITY_BASE = 10
   const INT16_MAX = 32767
 
+  // wheel units per remote pixel of finger travel, so content tracks the finger
+  const TOUCH_SCROLL_UNITS_PER_PX = 1.1
+  const DOUBLE_TAP_MS = 300
+  const DOUBLE_TAP_SLOP = 40
+  // how long after a tap a text cursor can still offer the keyboard
+  const CURSOR_WAIT_MS = 800
+  // a tap this close (remote px) to where a text cursor was seen raises the keyboard
+  const CURSOR_SAME_SPOT = 16
+  const TYPE_CHIP_MS = 4000
+  // kept in the overlay so soft keyboards that only emit input events still report backspace
+  const INPUT_SENTINEL = ' '
+
+  function nearSpot(a: Point, b: Point) {
+    return Math.hypot(a.x - b.x, a.y - b.y) <= CURSOR_SAME_SPOT
+  }
+
+  type TapKeyboardMode = 'auto' | 'chip' | 'always' | 'off'
+
+  const CONTROL_POSITION_KEY = 'touch_control_position'
+
   @Component({
     name: 'neko-video',
     components: {
       'neko-emote': Emote,
       'neko-resolution': Resolution,
       'neko-clipboard': Clipboard,
+      'neko-touch-controls': TouchControls,
     },
   })
   export default class extends Vue {
@@ -254,6 +370,7 @@
 
     private _wheelHandler: ((e: WheelEvent) => void) | null = null
     @Ref('clipboard') readonly _clipboard!: Clipboard
+    @Ref('controls') readonly _controls?: TouchControls
 
     // all controls are hidden (e.g. for cast mode)
     @Prop(Boolean) readonly hideControls!: boolean
@@ -270,6 +387,39 @@
     private fullscreen = false
     private mutedOverlay = true
     private isVideoSyncing = false
+
+    private gestures!: TouchGestures
+    private zoom!: ZoomPan
+    private zoomScale = 1
+    private keyboardOpen = false
+    private typeChip: Point | null = null
+    private typeChipTimer = 0
+    private cursorKind: CursorKind = 'unknown'
+    private cursorChangedAt = 0
+    private cursorSeq = 0
+    // remote pointer position: last sent, and where a text cursor was last seen
+    private pointer: Point | null = null
+    private textSpot: Point | null = null
+    // when the pointer last moved to a new spot, and the time before that
+    private pointerJumpAt = 0
+    private previousPointerJumpAt = 0
+    private keyboardInset = 0
+    private touchLayout: ControlLayout = { mode: 'overlay', band: 0 }
+    private controlPosition: ControlPosition = decodePosition(get<string>(CONTROL_POSITION_KEY, ''))
+    private playerWidth = 0
+    private playerHeight = 0
+    private safeAreaProbe: HTMLElement | null = null
+    private safeArea: SafeArea = { top: 0, bottom: 0, left: 0, right: 0 }
+    private touchBeganAt = 0
+    private lastTap: { p: Point; at: number } | null = null
+    private pendingTap: { p: Point; here: Point; at: number } | null = null
+    private pendingTapTimer = 0
+    private scrollRemainder = { x: 0, y: 0 }
+    private composing = false
+    private composed = ''
+    private lastCompositionEnd = { data: '', at: 0 }
+    private lastKeydownAt = 0
+    private shiftWrapped = new Set<number>()
 
     get admin() {
       return this.$accessor.user.admin
@@ -399,13 +549,31 @@
       )
     }
 
+    get showTouchControls() {
+      return this.hosting && this.is_touch_device && !this.hideControls && !this.fullscreen
+    }
+
+    get zoomed() {
+      return this.zoomScale > 1.01
+    }
+
+    // ?tapKeyboard=auto (default) raises the keyboard when a tap lands on text,
+    // chip offers a "tap to type" button there instead, always raises it on
+    // every tap, off leaves it to the keyboard button
+    get tapKeyboard(): TapKeyboardMode {
+      const value = new URL(location.href).searchParams.get('tapKeyboard')
+      return value === 'chip' || value === 'always' || value === 'off' ? value : 'auto'
+    }
+
     @Watch('width')
     onWidthChanged() {
+      this.resetZoom()
       this.onResize()
     }
 
     @Watch('height')
     onHeightChanged() {
+      this.resetZoom()
       this.onResize()
     }
 
@@ -491,6 +659,22 @@
     }
 
     mounted() {
+      this.zoom = new ZoomPan(this.containerBox, this.playerBox, this.maxZoom)
+      this.gestures = new TouchGestures({
+        onTouchBegin: this.onGestureBegin,
+        onTap: this.onGestureTap,
+        onLongPress: this.onGestureLongPress,
+        onLongPressRelease: this.onGestureLongPressRelease,
+        onDragStart: this.onGestureDragStart,
+        onDragMove: this.onGestureDragMove,
+        onDragEnd: this.onGestureDragEnd,
+        onScroll: this.onGestureScroll,
+        onPinchStart: this.onGesturePinchStart,
+        onPinchMove: this.onGesturePinchMove,
+        onPinchEnd: this.onGesturePinchEnd,
+      })
+      this.$client.on('cursor', this.onCursorImage)
+
       this._container.addEventListener('resize', this.onResize)
       this.onVolumeChanged(this.volume)
       this.onMutedChanged(this.muted)
@@ -548,6 +732,8 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
+      window.visualViewport?.addEventListener('resize', this.updateKeyboardInset)
+      window.visualViewport?.addEventListener('scroll', this.updateKeyboardInset)
       window.addEventListener('pagehide', this.resetKeyboard)
       document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
 
@@ -570,6 +756,12 @@
           return true
         }
 
+        this.lastKeydownAt = performance.now()
+        if (this.is_touch_device && keysymNeedsShift(key) && !this.keyboard.modifiers.shift) {
+          this.shiftWrapped.add(key)
+          this.$client.sendData('keydown', { key: XK_SHIFT_L })
+        }
+
         this.$client.sendData('keydown', { key: this.keyMap(key) })
       }
       this.keyboard.onkeyup = (key: number) => {
@@ -583,16 +775,26 @@
         }
 
         this.$client.sendData('keyup', { key: this.keyMap(key) })
+        if (this.shiftWrapped.delete(key)) {
+          this.$client.sendData('keyup', { key: XK_SHIFT_L })
+        }
       }
       this.keyboard.listenTo(this._overlay)
     }
 
     beforeDestroy() {
+      this.gestures.destroy()
+      this.$client.off('cursor', this.onCursorImage)
+      window.clearTimeout(this.typeChipTimer)
+      window.clearTimeout(this.pendingTapTimer)
+      if (this.safeAreaProbe) this.safeAreaProbe.remove()
       if (this._wheelHandler) {
         document.removeEventListener('wheel', this._wheelHandler, { capture: true })
         this._wheelHandler = null
       }
       window.removeEventListener('blur', this.resetKeyboard)
+      window.visualViewport?.removeEventListener('resize', this.updateKeyboardInset)
+      window.visualViewport?.removeEventListener('scroll', this.updateKeyboardInset)
       window.removeEventListener('pagehide', this.resetKeyboard)
       document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
       this.observer.disconnect()
@@ -797,43 +999,405 @@
       }
     }
 
-    onTouchHandler(e: TouchEvent) {
-      let first = e.changedTouches[0]
-      let type = ''
-      switch (e.type) {
-        case 'touchstart':
-          type = 'mousedown'
-          break
-        case 'touchmove':
-          type = 'mousemove'
-          break
-        case 'touchend':
-          type = 'mouseup'
-          break
-        default:
-          return
-      }
-
-      const simulatedEvent = new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        screenX: first.screenX,
-        screenY: first.screenY,
-        clientX: first.clientX,
-        clientY: first.clientY,
-      })
-      first.target.dispatchEvent(simulatedEvent)
+    onTouchStart(e: TouchEvent) {
+      this.gestures.touchStart(e)
     }
 
-    focusOverlay(e: MouseEvent) {
-      // Touch input is translated into an untrusted mouse event above. Keep the
-      // existing mobile-keyboard behavior while allowing a real mouse to focus
-      // the overlay on touch-capable devices.
-      if (this.is_touch_device && !e.isTrusted) {
+    onTouchMove(e: TouchEvent) {
+      this.gestures.touchMove(e)
+    }
+
+    onTouchEnd(e: TouchEvent) {
+      this.gestures.touchEnd(e)
+    }
+
+    onTouchCancel() {
+      this.gestures.touchCancel()
+    }
+
+    canSendInput() {
+      return this.hosting && !this.locked
+    }
+
+    // maps a client point on the (possibly zoomed) video to remote screen pixels
+    remotePoint(p: Point) {
+      const { w, h } = this.$accessor.video.resolution
+      const rect = this._overlay.getBoundingClientRect()
+      return {
+        x: Math.max(0, Math.min(w - 1, Math.round((w / rect.width) * (p.x - rect.left)))),
+        y: Math.max(0, Math.min(h - 1, Math.round((h / rect.height) * (p.y - rect.top)))),
+      }
+    }
+
+    sendPointer(p: Point) {
+      const next = this.remotePoint(p)
+      if (!this.pointer || !nearSpot(next, this.pointer)) {
+        this.previousPointerJumpAt = this.pointerJumpAt
+        this.pointerJumpAt = performance.now()
+      }
+      this.pointer = next
+      this.$client.sendData('mousemove', next)
+    }
+
+    // The remote pointer position a new cursor image belongs to, or null when
+    // an update for an earlier position could still be in flight.
+    cursorImageOwner() {
+      return this.pointerJumpAt - this.previousPointerJumpAt >= CURSOR_WAIT_MS ? this.pointer : null
+    }
+
+    clickAt(p: Point, button: number) {
+      this.sendPointer(p)
+      this.$client.sendData('mousedown', { key: button })
+      this.$client.sendData('mouseup', { key: button })
+    }
+
+    onGestureBegin(p: Point) {
+      this.unmuteOnInteraction()
+      this.hideTypeChip()
+      if (this._controls) this._controls.wake()
+      this.touchBeganAt = performance.now()
+
+      if (!this.controlling && this.implicitHosting && !this.locked) {
+        this.$accessor.remote.request()
+      }
+      if (!this.hosting) {
+        this.$emit('control-attempt')
+      }
+      if (this.canSendInput()) {
+        this.sendPointer(p)
+      }
+    }
+
+    onGestureTap(p: Point) {
+      const now = performance.now()
+      const last = this.lastTap
+      this.lastTap = { p, at: now }
+
+      if (
+        this.zoomed &&
+        last &&
+        now - last.at < DOUBLE_TAP_MS &&
+        Math.hypot(p.x - last.p.x, p.y - last.p.y) < DOUBLE_TAP_SLOP
+      ) {
+        this.lastTap = null
+        this.resetZoom()
         return
       }
 
+      if (!this.canSendInput()) return
+      this.clickAt(p, 1)
+      this.keyboardAfterTap(p)
+    }
+
+    onGestureLongPress() {
+      if (!this.canSendInput()) return
+      if (navigator.vibrate) navigator.vibrate(15)
+    }
+
+    onGestureLongPressRelease(p: Point) {
+      if (!this.canSendInput()) return
+      this.clickAt(p, 3)
+    }
+
+    onGestureDragStart(p: Point) {
+      if (!this.canSendInput()) return
+      this.sendPointer(p)
+      this.pressedMouseButtons.add(1)
+      this.$client.sendData('mousedown', { key: 1 })
+    }
+
+    onGestureDragMove(p: Point) {
+      if (!this.canSendInput()) return
+      this.sendPointer(p)
+    }
+
+    onGestureDragEnd(p: Point) {
+      if (!this.pressedMouseButtons.has(1)) return
+      this.sendPointer(p)
+      this.pressedMouseButtons.delete(1)
+      this.$client.sendData('mouseup', { key: 1 })
+    }
+
+    onGestureScroll(dx: number, dy: number) {
+      if (!this.canSendInput()) {
+        this.gestures.stopFling()
+        return
+      }
+
+      // finger travel in remote pixels; content follows the finger, so scroll the opposite way
+      const remotePerClient = this.width / this._overlay.getBoundingClientRect().width
+      const units = TOUCH_SCROLL_UNITS_PER_PX * remotePerClient
+      this.scrollRemainder.x -= dx * units
+      this.scrollRemainder.y -= dy * units
+
+      const x = Math.trunc(this.scrollRemainder.x)
+      const y = Math.trunc(this.scrollRemainder.y)
+      if (x === 0 && y === 0) return
+      this.scrollRemainder.x -= x
+      this.scrollRemainder.y -= y
+      this.$client.sendData('wheel', {
+        x: Math.max(-INT16_MAX, Math.min(INT16_MAX, x)),
+        y: Math.max(-INT16_MAX, Math.min(INT16_MAX, y)),
+      })
+    }
+
+    onGesturePinchStart(mid: Point, distance: number) {
+      this.hideTypeChip()
+      this.zoom.pinchStart(mid, distance)
+    }
+
+    onGesturePinchMove(mid: Point, distance: number) {
+      this.zoom.pinchMove(mid, distance)
+      this.applyZoom(false)
+    }
+
+    onGesturePinchEnd() {
+      if (!this.zoom.zoomed) this.resetZoom()
+    }
+
+    // the container box before the zoom transform, in client coordinates
+    containerBox(): Box {
+      const player = this._player.getBoundingClientRect()
+      return {
+        left: player.left + this._container.offsetLeft,
+        top: player.top + this._container.offsetTop,
+        width: this._container.offsetWidth,
+        height: this._container.offsetHeight,
+      }
+    }
+
+    // the area the zoomed video may fill: the player minus the control band
+    playerBox(): Box {
+      const { left, top, width, height } = this._player.getBoundingClientRect()
+      const { mode, band } = this.touchLayout
+      if (mode === 'bottom') return { left, top, width, height: height - band }
+      if (mode === 'left') return { left: left + band, top, width: width - band, height }
+      if (mode === 'right') return { left, top, width: width - band, height }
+      return { left, top, width, height }
+    }
+
+    maxZoom() {
+      const fit = this.width / Math.max(this._container.offsetWidth, 1)
+      return Math.min(8, Math.max(3, fit * 1.5))
+    }
+
+    applyZoom(animate: boolean) {
+      this._container.style.transition = animate ? 'transform 150ms ease-out' : ''
+      this._container.style.transform = this.zoom.transform
+      this.zoomScale = this.zoom.scale
+    }
+
+    resetZoom() {
+      if (!this.zoom) return
+      this.zoom.reset()
+      this.applyZoom(true)
+    }
+
+    // Runs inside touchend, the only place iOS lets focus() raise the keyboard.
+    // The remote cursor shape is the signal: Chromium shows an I-beam over text
+    // fields (and over selectable page text, which is the false positive), and
+    // the pointer was moved to the tap position on touchstart. Over a real
+    // network the update usually arrives after the finger lifts, so the keyboard
+    // opens here only if a text cursor showed up during this touch or was seen
+    // at this spot before; otherwise a later text cursor offers the chip.
+    keyboardAfterTap(p: Point) {
+      window.clearTimeout(this.pendingTapTimer)
+      this.pendingTap = null
+
+      if (this.tapKeyboard === 'off') return
+      if (this.tapKeyboard === 'always') {
+        this.focusForTyping()
+        return
+      }
+
+      const here = this.remotePoint(p)
+      const textDuringTouch = this.cursorKind === 'text' && this.cursorChangedAt >= this.touchBeganAt
+      if (textDuringTouch || (this.textSpot && nearSpot(here, this.textSpot))) {
+        this.offerKeyboard(p, true)
+        return
+      }
+
+      // Pages often flash another cursor before the I-beam, so any text cursor
+      // within the window counts; only the end of the window means "not text".
+      this.pendingTap = { p, here, at: performance.now() }
+      this.pendingTapTimer = window.setTimeout(this.endPendingTap, CURSOR_WAIT_MS)
+    }
+
+    offerKeyboard(p: Point, inGesture: boolean) {
+      if (this.keyboardOpen) return
+      if (inGesture && this.tapKeyboard === 'auto') {
+        this.focusForTyping()
+      } else {
+        this.showTypeChip(p)
+      }
+    }
+
+    // No new text cursor showed up for the tap. An I-beam that was already
+    // showing stays put when the tap lands on text again, so only a non-text
+    // cursor means the tap was not on a text field.
+    endPendingTap() {
+      const tap = this.pendingTap
+      if (!tap) return
+      this.pendingTap = null
+      if (this.cursorKind === 'text') {
+        if (this.pointer && nearSpot(this.pointer, tap.here)) this.textSpot = tap.here
+        this.offerKeyboard(tap.p, false)
+        return
+      }
+      if (this.textSpot && nearSpot(tap.here, this.textSpot)) this.textSpot = null
+      if (this.keyboardOpen) this._overlay.blur()
+    }
+
+    onCursorImage(image: CursorImage) {
+      // classification is async; only the newest cursor image may apply
+      const seq = ++this.cursorSeq
+      const at = this.cursorImageOwner()
+      const apply = (kind: CursorKind) => {
+        if (seq !== this.cursorSeq) return
+        this.cursorKind = kind
+        this.cursorChangedAt = performance.now()
+        if (kind !== 'text') return
+
+        if (at) this.textSpot = at
+        const tap = this.pendingTap
+        if (tap && performance.now() - tap.at < CURSOR_WAIT_MS) {
+          window.clearTimeout(this.pendingTapTimer)
+          this.pendingTap = null
+          this.offerKeyboard(tap.p, false)
+        }
+      }
+
+      const cached = cachedCursorKind(image)
+      if (cached) {
+        apply(cached)
+      } else {
+        classifyCursor(image).then(apply)
+      }
+    }
+
+    showTypeChip(p: Point) {
+      const player = this._player.getBoundingClientRect()
+      this.typeChip = {
+        x: Math.max(80, Math.min(player.width - 80, p.x - player.left)),
+        y: Math.max(8, Math.min(player.height - 52, p.y - player.top - 64)),
+      }
+      window.clearTimeout(this.typeChipTimer)
+      this.typeChipTimer = window.setTimeout(this.hideTypeChip, TYPE_CHIP_MS)
+    }
+
+    hideTypeChip() {
+      window.clearTimeout(this.typeChipTimer)
+      this.typeChip = null
+    }
+
+    onTypeChip() {
+      this.hideTypeChip()
+      this.focusForTyping()
+    }
+
+    focusForTyping() {
+      this.resetInputSentinel()
+      this._overlay.focus({ preventScroll: true })
+    }
+
+    // iOS overlays the soft keyboard on the layout viewport instead of resizing
+    // it, so lift the keyboard button by the part of the player it covers
+    updateKeyboardInset() {
+      const viewport = window.visualViewport
+      if (!viewport) return
+      const covered = this._player.getBoundingClientRect().bottom - (viewport.offsetTop + viewport.height)
+      this.keyboardInset = Math.max(0, Math.round(covered))
+    }
+
+    toggleMobileKeyboard() {
+      if (this.keyboardOpen) {
+        this._overlay.blur()
+      } else {
+        this.focusForTyping()
+      }
+    }
+
+    resetInputSentinel() {
+      if (!this.is_touch_device) return
+      this._overlay.value = INPUT_SENTINEL
+      this._overlay.setSelectionRange(INPUT_SENTINEL.length, INPUT_SENTINEL.length)
+    }
+
+    // Soft keyboards that report keyCode 229 (Android) deliver text only through
+    // input events, which the Guacamole keyboard does not handle.
+    onOverlayInput(e: Event) {
+      if (!this.is_touch_device) return
+      const event = e as InputEvent
+
+      if (!this.canSendInput()) {
+        if (!this.composing) this.resetInputSentinel()
+        return
+      }
+
+      if (event.inputType === 'insertCompositionText') {
+        this.updateComposition(event.data || '')
+        return
+      }
+
+      // the Guacamole keyboard already sent this key
+      const handledByKeydown = performance.now() - this.lastKeydownAt < 50
+      const echoOfComposition =
+        event.data === this.lastCompositionEnd.data && performance.now() - this.lastCompositionEnd.at < 50
+
+      if (!handledByKeydown && !echoOfComposition) {
+        switch (event.inputType) {
+          case 'insertText':
+          case 'insertReplacementText':
+            this.typeText(event.data || '')
+            break
+          case 'insertLineBreak':
+          case 'insertParagraph':
+            this.pressKey(XK_RETURN)
+            break
+          case 'deleteContentBackward':
+            this.pressKey(XK_BACKSPACE)
+            break
+        }
+      }
+
+      if (!this.composing) this.resetInputSentinel()
+    }
+
+    onCompositionStart() {
+      this.composing = true
+      this.composed = ''
+    }
+
+    onCompositionEnd(e: CompositionEvent) {
+      if (this.canSendInput()) this.updateComposition(e.data || '')
+      this.lastCompositionEnd = { data: e.data || '', at: performance.now() }
+      this.composing = false
+      this.composed = ''
+      this.resetInputSentinel()
+    }
+
+    updateComposition(text: string) {
+      const { deletes, insert } = textDiff(this.composed, text)
+      for (let i = 0; i < deletes; i++) this.pressKey(XK_BACKSPACE)
+      this.typeText(insert)
+      this.composed = text
+    }
+
+    typeText(text: string) {
+      for (const ch of Array.from(text)) {
+        const shift = needsShift(ch) && !this.keyboard.modifiers.shift
+        if (shift) this.$client.sendData('keydown', { key: XK_SHIFT_L })
+        this.pressKey(charToKeysym(ch))
+        if (shift) this.$client.sendData('keyup', { key: XK_SHIFT_L })
+      }
+    }
+
+    pressKey(key: number) {
+      this.$client.sendData('keydown', { key })
+      this.$client.sendData('keyup', { key })
+    }
+
+    focusOverlay() {
       const focus = () => {
         if (this.hosting && !this.locked) {
           this._overlay.focus()
@@ -859,7 +1423,7 @@
         return
       }
 
-      this.focusOverlay(e)
+      this.focusOverlay()
 
       this.sendMousePos(e)
       this.pressedMouseButtons.add(e.button + 1)
@@ -871,7 +1435,7 @@
         return
       }
 
-      this.focusOverlay(e)
+      this.focusOverlay()
       this.sendMousePos(e)
       this.pressedMouseButtons.delete(e.button + 1)
       this.$client.sendData('mouseup', { key: e.button + 1 })
@@ -978,20 +1542,79 @@
     }
 
     onOverlayFocus() {
+      this.keyboardOpen = true
       if (this.hosting) {
         this.syncClipboard()
       }
     }
 
+    onOverlayBlur() {
+      this.keyboardOpen = false
+      this.resetKeyboard()
+    }
+
     onResize() {
       const { offsetWidth, offsetHeight } = !this.fullscreen ? this._component : document.body
+      if (`${offsetWidth}px` !== this._player.style.width || `${offsetHeight}px` !== this._player.style.height) {
+        this.resetZoom()
+      }
       this._player.style.width = `${offsetWidth}px`
       this._player.style.height = `${offsetHeight}px`
-      const aspectPreservingMaxWidth = (this.horizontal / this.vertical) * offsetHeight
-      this._container.style.maxWidth = `${
-        !this.fullscreen ? Math.min(this.width, aspectPreservingMaxWidth) : aspectPreservingMaxWidth
-      }px`
+      this.playerWidth = offsetWidth
+      this.playerHeight = offsetHeight
+
+      const aspect = this.horizontal / this.vertical
+      const maxWidth = (height: number) => (!this.fullscreen ? Math.min(this.width, aspect * height) : aspect * height)
+
+      // Reserve a band outside the video for the touch controls, shrinking the
+      // video slightly if needed; with no room they overlay the stream instead.
+      const videoWidth = Math.min(offsetWidth, maxWidth(offsetHeight))
+      this.safeArea = this.safeAreaInsets()
+      this.touchLayout = this.showTouchControls
+        ? controlLayout(
+            offsetWidth,
+            offsetHeight,
+            videoWidth,
+            videoWidth / aspect,
+            this.safeArea,
+            this.controlPosition.side,
+          )
+        : { mode: 'overlay', band: 0 }
+      const { mode, band } = this.touchLayout
+      this._player.style.paddingBottom = mode === 'bottom' ? `${band}px` : ''
+      this._player.style.paddingLeft = mode === 'left' ? `${band}px` : ''
+      this._player.style.paddingRight = mode === 'right' ? `${band}px` : ''
+
+      this._container.style.maxWidth = `${maxWidth(offsetHeight - (mode === 'bottom' ? band : 0))}px`
       this._aspect.style.paddingBottom = `${(this.vertical / this.horizontal) * 100}%`
+    }
+
+    safeAreaInsets(): SafeArea {
+      if (!this.safeAreaProbe) {
+        this.safeAreaProbe = document.createElement('div')
+        this.safeAreaProbe.style.cssText =
+          'position:fixed;visibility:hidden;pointer-events:none;' +
+          'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
+        document.body.appendChild(this.safeAreaProbe)
+      }
+      const style = getComputedStyle(this.safeAreaProbe)
+      return {
+        top: parseFloat(style.paddingTop) || 0,
+        bottom: parseFloat(style.paddingBottom) || 0,
+        left: parseFloat(style.paddingLeft) || 0,
+        right: parseFloat(style.paddingRight) || 0,
+      }
+    }
+
+    onControlMove(position: ControlPosition) {
+      this.controlPosition = position
+      set(CONTROL_POSITION_KEY, encodePosition(position))
+      this.onResize()
+    }
+
+    @Watch('showTouchControls')
+    onShowTouchControls() {
+      this.$nextTick(this.onResize)
     }
 
     @Watch('focused')
@@ -1007,11 +1630,6 @@
       if (this.focused && this.hosting && !this.locked) {
         this._overlay.focus()
       }
-    }
-
-    openMobileKeyboard() {
-      // focus opens the keyboard on mobile
-      this._overlay.focus()
     }
   }
 </script>

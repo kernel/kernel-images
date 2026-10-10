@@ -1,6 +1,7 @@
 import EventEmitter from 'eventemitter3'
 import { OPCODE } from './data'
 import { EVENT, WebSocketEvents } from './events'
+import { CursorImage } from '~/utils/cursor-shape'
 
 import {
   WebSocketMessages,
@@ -16,6 +17,7 @@ export interface BaseEvents {
   warn: (...message: any[]) => void
   debug: (...message: any[]) => void
   error: (error: Error) => void
+  cursor: (image: CursorImage) => void
 }
 
 export abstract class BaseClient extends EventEmitter<BaseEvents> {
