@@ -10,19 +10,21 @@ Chrome can restart independently of the monitor. The monitor retries startup fai
 
 ## Always-on network metrics
 
-The separate in-memory collector serves these **label-free** metrics on the existing
-`GET /metrics` endpoint, including zeros before capture starts:
+The separate in-memory collector serves these metrics on the existing
+`GET /metrics` endpoint, including zeros before capture starts. Only the failure
+counter has labels; the existing three metrics remain label-free:
 
 | Metric | Meaning |
 | --- | --- |
 | `kernel_chromium_connection_resets_total` | Observed terminal `Network.loadingFailed` outcomes with exactly `net::ERR_CONNECTION_RESET`. |
 | `kernel_chromium_network_requests_completed_total` | Observed terminal `Network.loadingFinished` or `Network.loadingFailed` outcomes. Includes cancellations, refusals, HTTP 500 responses, and unknown-start outcomes. |
+| `kernel_chromium_network_failures_total{error_code,canceled}` | Every observed `Network.loadingFailed` terminal, including cancellations, blocked requests, and missing/unrecognized error text. Explicit terminal kind prevents `loadingFinished` from counting as a failure. |
 | `kernel_chromium_network_monitor_up` | Discovery initialized, socket open, and Network plus dedicated-worker discovery initialized for every known attached target. Reattached targets also finish any retained interaction cleanup before becoming ready. Zero during setup, failures, reconnect, and shutdown. Not browser responsiveness or proof of complete request coverage. |
 
 These count **CDP request-chain observations, not socket resets**. Internal browser
 retries are not separately counted. Redirects reuse a request ID and contribute
 one final outcome, not one per hop. HTTP status does not classify transport errors.
-Missing `requestWillBeSent` does not exclude a valid terminal event from either
+Missing `requestWillBeSent` does not exclude a valid terminal event from any
 counter; metrics-only mode does not retain request-start records or bodies.
 
 Deduplication is first-terminal-wins within the most recent **8,192 distinct
@@ -42,8 +44,55 @@ or socket counts. The reset fraction uses the same observed-terminal denominator
 
 The existing short-lived `ChromeCollector` and its UMA behavior are unchanged.
 Network metrics remain available when Chrome/UMA collection fails; scrapes do not
-reset or increment the counters. No URLs, domains, identities, or error-string
-labels are emitted. No additional configuration or kill switch is introduced.
+reset or increment the counters. No URLs, domains, identities, raw error strings,
+request types, or top-level dimensions are emitted. No additional configuration
+or kill switch is introduced.
+
+### Failure taxonomy and zero emission
+
+`error_code` is an exact, case-sensitive allowlist of **83 Chromium codes** from
+[`net/base/net_error_list.h`](https://github.com/chromium/chromium/blob/b3a26bf9999acc0a411ba612ac1da3afe72f2d0f/net/base/net_error_list.h),
+plus `unknown` (missing/empty `errorText`) and `other` (all other text, including
+unsupported/new codes). Only exact `net::ERR_*` inputs match: no trimming,
+substring matching, arbitrary prefixes, or raw-text labels. The exhaustive
+supported labels are the keys in [`network_errors.go`](network_errors.go).
+They cover connection/reset/refusal/close, both `ERR_CONNECTION_TIMED_OUT` and
+`ERR_TIMED_OUT`, DNS/name resolution, SSL/certificates, proxy/tunnel/SOCKS,
+HTTP2/QUIC, blocked/security outcomes, aborts, and selected response/protocol errors.
+
+`canceled` is always `"false"` or `"true"`, directly from CDP (missing means false).
+It is not inferred from the code: a canceled event with missing or unrecognized
+text still increments `unknown` or `other` with `canceled="true"`. `ERR_ABORTED`
+is retained as its own code regardless of the flag. Blocked outcomes with no
+error text increment `unknown`; `blockedReason` does not add a dimension.
+
+All **85 × 2 = 170** failure series are emitted from the first scrape, even at
+zero and while monitor readiness is down. This gives cumulative-to-delta a zero
+baseline *before* a code's first failure rather than losing that failure when a
+sparse series first appears. The collector's normal first-scrape baseline still
+applies to activity before the first scrape. Use scrape availability plus
+`kernel_chromium_network_monitor_up` to distinguish zero from missing capture;
+a zero is not proof of complete coverage. Totals in all buckets survive reconnects.
+
+```prometheus
+kernel_chromium_network_failures_total{canceled="false",error_code="ERR_CONNECTION_RESET"} 10
+kernel_chromium_network_failures_total{canceled="true",error_code="ERR_ABORTED"} 1
+kernel_chromium_network_failures_total{canceled="true",error_code="unknown"} 0
+```
+
+Across both cancellation states, summing all buckets is at most completed;
+summing `ERR_CONNECTION_RESET` equals the legacy reset counter. Each accepted
+failed terminal increments exactly one bucket and the shared completed counter.
+HTTP 500 is a finished request, not a transport failure.
+
+Roll out the paired `kernel/infra` browser-VM collector label preservation **first**,
+then this image. The existing generic `kernel_` filter already admits the family;
+the old datapoint allowlist would collapse its dimensions. The new collector keeps
+`metro`/`platform` and only this family's bounded `error_code`/`canceled` labels;
+newer unsupported codes collapse to `other`. Old images have no failure family
+and their existing counters remain compatible during a mixed-version rollout.
+Taxonomy additions need coordinated edits in the image and collector allowlists.
+No control-plane or metro-api change is required.
 
 ### Local verification and remaining checks
 
@@ -57,7 +106,11 @@ go test ./lib/cdpmonitor -run '^$' -bench '^BenchmarkMetricsOnlyTerminalDispatch
 The metrics fixture uses local HTTP and TCP RST (`SetLinger(0)`), POST requests to
 avoid transparent GET retries, cache-disabled responses, and settled targets.
 It independently checks Chromium's error text and exact +10/+10 scrape deltas;
-then exercises non-reset outcomes, same-process frames, OOPIFs, dedicated/shared/
+independently confirms refusal and abort outcomes, verifies HTTP 500 adds no
+failure, and checks per-bucket scrape totals. A separate local TCP fixture accepts
+connections but never answers TLS, producing Chromium's real 30-second SSL
+handshake `net::ERR_TIMED_OUT`, confirmed on an independent CDP connection (not
+synthetic event injection). The suite also exercises same-process frames, OOPIFs, dedicated/shared/
 service workers, telemetry off/on/off cleanup, socket replacement, actual Chrome
 restart, and a fresh monitor's zero counters. API lifecycle/race tests cover
 startup, telemetry toggles, and shutdown. Additional regressions delay a cleanup
