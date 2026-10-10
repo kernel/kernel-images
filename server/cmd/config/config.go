@@ -39,6 +39,9 @@ type Config struct {
 	DevToolsProxyPort int  `envconfig:"DEVTOOLS_PROXY_PORT" default:"9222"`
 	LogCDPMessages    bool `envconfig:"LOG_CDP_MESSAGES" default:"false"`
 
+	// CDPRelayToken enables the private resumable transport. It must be unique to this instance.
+	CDPRelayToken string `envconfig:"CDP_RELAY_TOKEN"`
+
 	// How long to wait after the last active request before re-enabling scale-to-zero.
 	ScaleToZeroCooldown time.Duration `envconfig:"SCALE_TO_ZERO_COOLDOWN" default:"1s"`
 
@@ -99,6 +102,7 @@ func (c *Config) LogValue() slog.Value {
 		slog.String("ffmpeg_path", c.PathToFFmpeg),
 		slog.Int("devtools_proxy_port", c.DevToolsProxyPort),
 		slog.Bool("log_cdp_messages", c.LogCDPMessages),
+		slog.Bool("cdp_relay_enabled", c.CDPRelayToken != ""),
 		slog.Duration("scale_to_zero_cooldown", c.ScaleToZeroCooldown),
 		slog.Int("chromedriver_proxy_port", c.ChromeDriverProxyPort),
 		slog.String("chromedriver_upstream_addr", c.ChromeDriverUpstreamAddr),
@@ -136,6 +140,9 @@ func Load() (*Config, error) {
 }
 
 func validate(config *Config) error {
+	if config.CDPRelayToken != "" && len(config.CDPRelayToken) < 32 {
+		return fmt.Errorf("CDP_RELAY_TOKEN must contain at least 32 bytes")
+	}
 	if config.OutputDir == "" {
 		return fmt.Errorf("OUTPUT_DIR is required")
 	}
