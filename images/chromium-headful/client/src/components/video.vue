@@ -1232,11 +1232,18 @@
       }
     }
 
-    // no text cursor showed up for the tap: it was not on a text field
+    // No new text cursor showed up for the tap. An I-beam that was already
+    // showing stays put when the tap lands on text again, so only a non-text
+    // cursor means the tap was not on a text field.
     endPendingTap() {
       const tap = this.pendingTap
       if (!tap) return
       this.pendingTap = null
+      if (this.cursorKind === 'text') {
+        if (this.pointer && nearSpot(this.pointer, tap.here)) this.textSpot = tap.here
+        this.offerKeyboard(tap.p, false)
+        return
+      }
       if (this.textSpot && nearSpot(tap.here, this.textSpot)) this.textSpot = null
       if (this.keyboardOpen) this._overlay.blur()
     }
