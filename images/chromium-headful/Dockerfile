@@ -161,9 +161,12 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
-FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.0 AS neko
+FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.2 AS neko
 FROM node:22-bullseye-slim AS node-22
-FROM docker.io/library/docker:29.1.3-dind AS docker
+FROM docker.io/library/docker:29.8.2-dind AS docker
+ARG TARGETARCH
+COPY shared/docker/update-containerd.sh /tmp/update-containerd.sh
+RUN sh /tmp/update-containerd.sh "${TARGETARCH:-amd64}" && rm /tmp/update-containerd.sh
 FROM docker.io/ubuntu:22.04
 
 # Allow cross-compilation when building with BuildKit platforms
