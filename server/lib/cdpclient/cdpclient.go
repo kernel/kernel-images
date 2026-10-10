@@ -816,3 +816,41 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 
 	return nil
 }
+
+// BrowserLocation is Chromium's browser-owned location state and the
+// acknowledgements every component has returned for Generation.
+type BrowserLocation struct {
+	Generation               uint64 `json:"generation"`
+	Locale                   string `json:"locale"`
+	AcceptLanguages          string `json:"acceptLanguages"`
+	TimeZone                 string `json:"timezone"`
+	RenderersConverged       bool   `json:"renderersConverged"`
+	TimeZoneConverged        bool   `json:"timezoneConverged"`
+	NetworkContextsConverged bool   `json:"networkContextsConverged"`
+}
+
+// SetBrowserLocation updates Chromium's session-only locale and language
+// defaults. Generations must increase; repeating the current generation with
+// the same values retries renderers whose host timezone has not converged.
+func (c *Client) SetBrowserLocation(ctx context.Context, generation uint64, locale, acceptLanguages, timezone string) error {
+	_, err := c.Send(ctx, "Browser.setKernelBrowserLocation", map[string]any{
+		"generation": generation, "locale": locale, "acceptLanguages": acceptLanguages, "timezone": timezone,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Browser.setKernelBrowserLocation: %w", err)
+	}
+	return nil
+}
+
+// GetBrowserLocation reads Chromium's location state and acknowledgements.
+func (c *Client) GetBrowserLocation(ctx context.Context) (BrowserLocation, error) {
+	raw, err := c.Send(ctx, "Browser.getKernelBrowserLocation", nil, "")
+	if err != nil {
+		return BrowserLocation{}, fmt.Errorf("Browser.getKernelBrowserLocation: %w", err)
+	}
+	var location BrowserLocation
+	if err := json.Unmarshal(raw, &location); err != nil {
+		return BrowserLocation{}, fmt.Errorf("decode browser location: %w", err)
+	}
+	return location, nil
+}

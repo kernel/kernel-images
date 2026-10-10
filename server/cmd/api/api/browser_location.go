@@ -1,0 +1,514 @@
+package api
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/kernel/kernel-images/server/lib/browserlocation"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
+	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/metrics"
+	"golang.org/x/text/language"
+)
+
+const (
+	browserLocationApplyTimeout    = 5 * time.Second
+	trustedControlPlaneHeader      = "X-Kernel-Trusted-Control-Plane"
+	trustedControlPlaneHeaderValue = "1"
+)
+
+type browserLocationBundle struct {
+	Epoch      string   `json:"epoch"`
+	Generation uint64   `json:"generation"`
+	TimeZone   string   `json:"timezone"`
+	Locale     string   `json:"locale"`
+	Languages  []string `json:"languages"`
+}
+
+// browserLocationComponents records the acknowledgements Chromium returned for
+// the accepted bundle's browser generation.
+type browserLocationComponents struct {
+	// TimeZone: /etc/localtime was replaced and every renderer observed it.
+	TimeZone bool `json:"timezone"`
+	// Browser: Chromium holds this generation's locale and languages.
+	Browser bool `json:"browser"`
+	// Renderers: every renderer applied them to its pages and existing workers.
+	Renderers       bool `json:"renderers"`
+	NetworkContexts bool `json:"network_contexts"`
+}
+
+type browserLocationStatus struct {
+	ActiveEpoch         string                    `json:"active_epoch,omitempty"`
+	Accepted            *browserLocationBundle    `json:"accepted,omitempty"`
+	Applied             *browserLocationBundle    `json:"applied,omitempty"`
+	Components          browserLocationComponents `json:"components"`
+	Error               string                    `json:"error,omitempty"`
+	CapabilitiesVersion string                    `json:"capabilities_version"`
+}
+
+type browserLocationDurableState struct {
+	ActiveEpoch string                 `json:"active_epoch"`
+	Accepted    *browserLocationBundle `json:"accepted,omitempty"`
+	// BrowserGeneration is the monotonic generation sent to Chromium for
+	// Accepted. Bundle generations restart with every lease epoch, but
+	// Chromium's must keep increasing for the life of the process.
+	BrowserGeneration uint64 `json:"browser_generation,omitempty"`
+}
+
+var (
+	errStaleBrowserLocation    = errors.New("browser location generation is stale")
+	errConflictBrowserLocation = errors.New("browser location generation conflicts with accepted payload")
+	errBrowserLocationEpoch    = errors.New("browser location epoch is not active")
+)
+
+func validateBrowserLocationBundle(raw string) (browserLocationBundle, error) {
+	var bundle browserLocationBundle
+	if err := json.Unmarshal([]byte(raw), &bundle); err != nil {
+		return bundle, fmt.Errorf("invalid browser_location JSON")
+	}
+	if bundle.Epoch == "" || bundle.Generation == 0 {
+		return bundle, fmt.Errorf("browser_location epoch and generation are required")
+	}
+	capabilities := browserlocation.Current()
+	if !capabilities.SupportsTimeZone(bundle.TimeZone) {
+		return bundle, fmt.Errorf("unsupported browser_location timezone")
+	}
+	zonePath, err := browserLocationZonePath(bundle.TimeZone)
+	if err != nil {
+		return bundle, err
+	}
+	if _, err := os.Stat(zonePath); err != nil {
+		return bundle, fmt.Errorf("unsupported browser_location timezone")
+	}
+	if !capabilities.SupportsLocale(bundle.Locale) {
+		return bundle, fmt.Errorf("unsupported browser_location locale")
+	}
+	if len(bundle.Languages) == 0 || bundle.Languages[0] != bundle.Locale {
+		return bundle, fmt.Errorf("browser_location languages must start with locale")
+	}
+	for _, value := range bundle.Languages {
+		tag, err := language.Parse(value)
+		if err != nil || tag.String() != value {
+			return bundle, fmt.Errorf("browser_location languages must be canonical BCP 47")
+		}
+	}
+	return bundle, nil
+}
+
+func browserLocationZonePath(timezone string) (string, error) {
+	if timezone == "" || filepath.IsAbs(timezone) || strings.Contains(timezone, "..") || strings.ContainsRune(timezone, '\x00') {
+		return "", fmt.Errorf("invalid browser_location timezone")
+	}
+	root := "/usr/share/zoneinfo"
+	path := filepath.Join(root, filepath.FromSlash(timezone))
+	if !strings.HasPrefix(path, root+string(os.PathSeparator)) {
+		return "", fmt.Errorf("invalid browser_location timezone")
+	}
+	return path, nil
+}
+
+func (s *ApiService) resetBrowserLocation(previousEpoch string, bundle browserLocationBundle) error {
+	if bundle.Generation != 1 {
+		return fmt.Errorf("browser location reset requires generation 1")
+	}
+	s.browserLocationApplyMu.Lock()
+	defer s.browserLocationApplyMu.Unlock()
+	s.browserLocationMu.Lock()
+	defer s.browserLocationMu.Unlock()
+	if s.browserLocation.activeEpoch == bundle.Epoch {
+		if s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.accepted, bundle) {
+			s.browserLocation.retries.Add(1)
+			s.startBrowserLocationReconcileLocked(bundle)
+			return nil
+		}
+		return errConflictBrowserLocation
+	}
+	if s.browserLocation.activeEpoch != previousEpoch {
+		s.browserLocation.epochRejects.Add(1)
+		return errBrowserLocationEpoch
+	}
+	copy := bundle
+	browserGeneration := s.browserLocation.browserGeneration + 1
+	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: bundle.Epoch, Accepted: &copy, BrowserGeneration: browserGeneration}); err != nil {
+		return err
+	}
+	if s.browserLocation.cancel != nil {
+		s.browserLocation.cancel()
+	}
+	s.browserLocation.activeEpoch = bundle.Epoch
+	s.browserLocation.browserGeneration = browserGeneration
+	s.browserLocation.accepted = &copy
+	s.browserLocation.applied = nil
+	s.browserLocation.components = browserLocationComponents{}
+	s.browserLocation.lastError = ""
+	s.browserLocation.acceptedCount.Add(1)
+	s.startBrowserLocationReconcileLocked(bundle)
+	return nil
+}
+
+func (s *ApiService) acceptBrowserLocation(bundle browserLocationBundle) error {
+	s.browserLocationApplyMu.Lock()
+	defer s.browserLocationApplyMu.Unlock()
+	s.browserLocationMu.Lock()
+	defer s.browserLocationMu.Unlock()
+	if s.browserLocation.activeEpoch == "" || s.browserLocation.activeEpoch != bundle.Epoch {
+		s.browserLocation.epochRejects.Add(1)
+		return errBrowserLocationEpoch
+	}
+	current := s.browserLocation.accepted
+	if current != nil {
+		if bundle.Generation < current.Generation {
+			s.browserLocation.stale.Add(1)
+			return errStaleBrowserLocation
+		}
+		if bundle.Generation == current.Generation {
+			if !browserLocationBundlesEqual(*current, bundle) {
+				s.browserLocation.conflicts.Add(1)
+				return errConflictBrowserLocation
+			}
+			s.browserLocation.retries.Add(1)
+			s.startBrowserLocationReconcileLocked(bundle)
+			return nil
+		}
+	}
+	copy := bundle
+	browserGeneration := s.browserLocation.browserGeneration + 1
+	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: s.browserLocation.activeEpoch, Accepted: &copy, BrowserGeneration: browserGeneration}); err != nil {
+		return err
+	}
+	s.browserLocation.browserGeneration = browserGeneration
+	s.browserLocation.accepted = &copy
+	s.browserLocation.applied = nil
+	s.browserLocation.components = browserLocationComponents{}
+	s.browserLocation.lastError = ""
+	s.browserLocation.acceptedCount.Add(1)
+	s.startBrowserLocationReconcileLocked(bundle)
+	return nil
+}
+
+func (s *ApiService) startBrowserLocationReconcileLocked(bundle browserLocationBundle) {
+	s.browserLocation.lastAttempt = time.Now()
+	if s.browserLocation.cancel != nil {
+		s.browserLocation.cancel()
+	}
+	ctx, cancel := context.WithCancel(s.lifecycleCtx)
+	s.browserLocation.cancel = cancel
+	reconcile := s.browserLocationReconcile
+	if reconcile == nil {
+		reconcile = s.reconcileBrowserLocation
+	}
+	go reconcile(ctx, bundle)
+}
+
+func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browserLocationBundle) {
+	started := time.Now()
+	deadline := started.Add(browserLocationApplyTimeout)
+	var lastErr error
+	for {
+		s.browserLocationApplyMu.Lock()
+		browserGeneration, current := s.browserLocationGeneration(bundle)
+		if ctx.Err() != nil || !current {
+			s.browserLocationApplyMu.Unlock()
+			return
+		}
+		components := browserLocationComponents{}
+		if err := rewriteLocaltime(bundle.TimeZone); err != nil {
+			lastErr = err
+		} else {
+			lastErr = s.withCDPClientTimeout(ctx, time.Second, func(cdpCtx context.Context, client *cdpclient.Client) error {
+				languages := strings.Join(bundle.Languages, ",")
+				if err := client.SetBrowserLocation(cdpCtx, browserGeneration, bundle.Locale, languages, bundle.TimeZone); err != nil {
+					return err
+				}
+				observed, err := client.GetBrowserLocation(cdpCtx)
+				if err != nil {
+					return err
+				}
+				if observed.Generation != browserGeneration {
+					return fmt.Errorf("browser location generation %d is not current", browserGeneration)
+				}
+				components.Browser = observed.Locale == bundle.Locale && observed.AcceptLanguages == languages
+				components.TimeZone = observed.TimeZone == bundle.TimeZone && observed.TimeZoneConverged
+				components.Renderers = observed.RenderersConverged
+				components.NetworkContexts = observed.NetworkContextsConverged
+				if !components.Browser || !components.TimeZone || !components.Renderers || !components.NetworkContexts {
+					return fmt.Errorf("browser location components have not converged")
+				}
+				return nil
+			})
+		}
+		s.browserLocationApplyMu.Unlock()
+		s.browserLocationMu.Lock()
+		if accepted := s.browserLocation.accepted; accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
+			s.browserLocation.components = components
+		}
+		s.browserLocationMu.Unlock()
+		if lastErr == nil {
+			s.browserLocationMu.Lock()
+			if accepted := s.browserLocation.accepted; accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
+				copy := bundle
+				s.browserLocation.applied = &copy
+				s.browserLocation.lastError = ""
+				s.browserLocation.appliedCount.Add(1)
+				s.browserLocation.convergenceMs.Store(uint64(time.Since(started).Milliseconds()))
+			}
+			s.browserLocationMu.Unlock()
+			return
+		}
+		if time.Now().After(deadline) {
+			s.browserLocationMu.Lock()
+			if accepted := s.browserLocation.accepted; accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
+				s.browserLocation.lastError = lastErr.Error()
+				s.browserLocation.failures.Add(1)
+			}
+			s.browserLocationMu.Unlock()
+			logger.FromContext(ctx).Error("browser location did not converge", "error", lastErr, "generation", bundle.Generation)
+			return
+		}
+		s.browserLocation.retries.Add(1)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// browserLocationGeneration returns the browser generation assigned to bundle
+// and whether bundle is still the accepted one.
+func (s *ApiService) browserLocationGeneration(bundle browserLocationBundle) (uint64, bool) {
+	s.browserLocationMu.Lock()
+	defer s.browserLocationMu.Unlock()
+	current := s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.accepted, bundle)
+	return s.browserLocation.browserGeneration, current
+}
+
+func rewriteLocaltime(timezone string) error {
+	target, err := browserLocationZonePath(timezone)
+	if err != nil {
+		return err
+	}
+	tmp := fmt.Sprintf("/etc/.localtime-kernel-%d", time.Now().UnixNano())
+	if err := os.Symlink(target, tmp); err != nil {
+		return fmt.Errorf("stage localtime: %w", err)
+	}
+	defer os.Remove(tmp)
+	if err := os.Rename(tmp, "/etc/localtime"); err != nil {
+		return fmt.Errorf("replace localtime: %w", err)
+	}
+	return nil
+}
+
+func (s *ApiService) browserLocationStatePath() string {
+	return browserlocation.StatePath()
+}
+
+func (s *ApiService) persistBrowserLocationState(state browserLocationDurableState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	path := s.browserLocationStatePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create browser location state directory: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".browser-location-*")
+	if err != nil {
+		return fmt.Errorf("create browser location state: %w", err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("replace browser location state: %w", err)
+	}
+	return nil
+}
+
+func (s *ApiService) initializeBrowserLocation() error {
+	data, err := os.ReadFile(s.browserLocationStatePath())
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("read browser location state: %w", err)
+	}
+	if err == nil {
+		var state browserLocationDurableState
+		if err := json.Unmarshal(data, &state); err != nil {
+			return fmt.Errorf("decode browser location state: %w", err)
+		}
+		if state.Accepted != nil && state.ActiveEpoch != state.Accepted.Epoch {
+			return fmt.Errorf("browser location state epoch mismatch")
+		}
+		s.browserLocation.activeEpoch = state.ActiveEpoch
+		s.browserLocation.accepted = state.Accepted
+		s.browserLocation.browserGeneration = state.BrowserGeneration
+	}
+	if s.upstreamMgr != nil {
+		go s.browserLocationLifecycleLoop()
+	}
+	return nil
+}
+
+func (s *ApiService) browserLocationLifecycleLoop() {
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	lastUpstream := ""
+	for {
+		select {
+		case <-s.lifecycleCtx.Done():
+			return
+		case <-ticker.C:
+			upstream := s.upstreamMgr.Current()
+			if upstream == "" {
+				continue
+			}
+			s.browserLocationMu.Lock()
+			upstreamChanged := upstream != lastUpstream
+			if upstreamChanged {
+				lastUpstream = upstream
+			}
+			if upstreamChanged {
+				// A new Chromium process has not acknowledged anything yet.
+				s.browserLocation.applied = nil
+				s.browserLocation.components = browserLocationComponents{}
+			}
+			needsRetry := s.browserLocation.accepted != nil && s.browserLocation.applied == nil && s.browserLocation.lastError != "" && time.Since(s.browserLocation.lastAttempt) >= browserLocationApplyTimeout
+			if s.browserLocation.accepted != nil && (upstreamChanged || needsRetry) {
+				s.startBrowserLocationReconcileLocked(*s.browserLocation.accepted)
+			}
+			s.browserLocationMu.Unlock()
+		}
+	}
+}
+
+func (s *ApiService) browserLocationSnapshot() browserLocationStatus {
+	s.browserLocationMu.Lock()
+	defer s.browserLocationMu.Unlock()
+	return browserLocationStatus{
+		ActiveEpoch:         s.browserLocation.activeEpoch,
+		Accepted:            s.browserLocation.accepted,
+		Applied:             s.browserLocation.applied,
+		Components:          s.browserLocation.components,
+		Error:               s.browserLocation.lastError,
+		CapabilitiesVersion: browserlocation.Current().Version,
+	}
+}
+
+func (s *ApiService) BrowserLocationMetrics() metrics.BrowserLocationSnapshot {
+	s.browserLocationMu.Lock()
+	components := s.browserLocation.components
+	converged := s.browserLocation.applied != nil && s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.applied, *s.browserLocation.accepted)
+	s.browserLocationMu.Unlock()
+	return metrics.BrowserLocationSnapshot{
+		Accepted:           s.browserLocation.acceptedCount.Load(),
+		Applied:            s.browserLocation.appliedCount.Load(),
+		Retries:            s.browserLocation.retries.Load(),
+		Stale:              s.browserLocation.stale.Load(),
+		Conflicts:          s.browserLocation.conflicts.Load(),
+		EpochRejects:       s.browserLocation.epochRejects.Load(),
+		Failures:           s.browserLocation.failures.Load(),
+		ConvergenceMs:      s.browserLocation.convergenceMs.Load(),
+		Converged:          converged,
+		TimeZoneConverged:  components.TimeZone,
+		BrowserConverged:   components.Browser,
+		RenderersConverged: components.Renderers,
+		NetworkConverged:   components.NetworkContexts,
+	}
+}
+
+// ResetBrowserLocationHTTP is the lease-authoritative epoch transition. Ordinary
+// configure requests cannot change epochs. Direct callers authenticate with the
+// instance JWT. Metro-api may instead add the trusted control-plane marker after
+// it verifies Kernel's internal token and removes any caller-supplied marker.
+func (s *ApiService) ResetBrowserLocationHTTP(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	expected := os.Getenv("KERNEL_INSTANCE_JWT")
+	instanceAuthorized := expected != "" && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
+	controlPlaneAuthorized := subtle.ConstantTimeCompare([]byte(r.Header.Get(trustedControlPlaneHeader)), []byte(trustedControlPlaneHeaderValue)) == 1
+	if !instanceAuthorized && !controlPlaneAuthorized {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	defer r.Body.Close()
+	var reset struct {
+		PreviousEpoch string                `json:"previous_epoch"`
+		Bundle        browserLocationBundle `json:"bundle"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&reset); err != nil {
+		http.Error(w, "invalid browser location reset", http.StatusBadRequest)
+		return
+	}
+	raw, _ := json.Marshal(reset.Bundle)
+	validated, err := validateBrowserLocationBundle(string(raw))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.resetBrowserLocation(reset.PreviousEpoch, validated); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// GetBrowserLocationHTTP exposes accepted/applied component state for internal
+// reconciliation. Applied is confirmed against the running Chromium, so a
+// restarted or unreachable browser is never reported as applied.
+func (s *ApiService) GetBrowserLocationHTTP(w http.ResponseWriter, r *http.Request) {
+	status := s.browserLocationSnapshot()
+	if status.Applied != nil {
+		generation, current := s.browserLocationGeneration(*status.Applied)
+		if !current || !s.browserLocationLive(r.Context(), *status.Applied, generation) {
+			status.Applied = nil
+			status.Components = browserLocationComponents{}
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(status)
+}
+
+// browserLocationLive reports whether the running Chromium holds bundle at
+// generation with every component acknowledged.
+func (s *ApiService) browserLocationLive(ctx context.Context, bundle browserLocationBundle, generation uint64) bool {
+	if s.upstreamMgr == nil {
+		return false
+	}
+	var observed cdpclient.BrowserLocation
+	err := s.withCDPClientTimeout(ctx, 500*time.Millisecond, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		var err error
+		observed, err = client.GetBrowserLocation(cdpCtx)
+		return err
+	})
+	return err == nil && observed.Generation == generation &&
+		observed.Locale == bundle.Locale && observed.AcceptLanguages == strings.Join(bundle.Languages, ",") &&
+		observed.TimeZone == bundle.TimeZone && observed.TimeZoneConverged &&
+		observed.RenderersConverged && observed.NetworkContextsConverged
+}
+
+func browserLocationBundlesEqual(a, b browserLocationBundle) bool {
+	return a.Epoch == b.Epoch && a.Generation == b.Generation && a.TimeZone == b.TimeZone && a.Locale == b.Locale && slices.Equal(a.Languages, b.Languages)
+}

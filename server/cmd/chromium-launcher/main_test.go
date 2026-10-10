@@ -94,3 +94,33 @@ func TestExecLookPath(t *testing.T) {
 		t.Fatalf("execLookPath PATH search failed: p=%q err=%v", p, err)
 	}
 }
+
+func TestWithoutEnvironmentVariable(t *testing.T) {
+	got := withoutEnvironmentVariable([]string{"A=1", "TZ=", "B=2"}, "TZ")
+	if !reflect.DeepEqual(got, []string{"A=1", "B=2"}) {
+		t.Fatalf("unexpected env: %v", got)
+	}
+}
+
+func TestStartupTimezone(t *testing.T) {
+	values := map[string]string{"TZ": "America/Chicago", "KERNEL_BROWSER_TIMEZONE": "Europe/Berlin"}
+	getenv := func(key string) string { return values[key] }
+	state := []byte(`{"active_epoch":"lease-a","accepted":{"epoch":"lease-a","generation":2,"timezone":"Asia/Singapore"}}`)
+	readState := func(string) ([]byte, error) { return state, nil }
+	noState := func(string) ([]byte, error) { return nil, os.ErrNotExist }
+
+	if got := startupTimezone(getenv, readState); got != "Asia/Singapore" {
+		t.Fatalf("restart must keep the accepted timezone, got %s", got)
+	}
+	if got := startupTimezone(getenv, noState); got != "Europe/Berlin" {
+		t.Fatalf("unexpected timezone: %s", got)
+	}
+	delete(values, "KERNEL_BROWSER_TIMEZONE")
+	if got := startupTimezone(getenv, noState); got != "America/Chicago" {
+		t.Fatalf("unexpected fallback timezone: %s", got)
+	}
+	delete(values, "TZ")
+	if got := startupTimezone(getenv, noState); got != "" {
+		t.Fatalf("unexpected empty timezone: %s", got)
+	}
+}
