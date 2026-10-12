@@ -5,17 +5,24 @@
 // implementation.
 //
 // Protocol: the page calls BINDING with {id, op, mediation?, publicKey} and
-// resends the same id every RESEND_MS until it has a final answer.
-// kernel-images replies through REPLY with {id, ack: true} for every send it
-// receives and {id, result, ...} once answered. Silence for SILENCE_MS (no
-// connection, or kernel-images restarted) falls back to the browser.
+// resends the same id every RESEND_MS until it has a final answer, and with
+// {id, op: "abort"} when the caller aborts. kernel-images replies through
+// REPLY with {id, ack: true} for every send it receives and {id, result, ...}
+// once answered. Silence for SILENCE_MS (no connection, or kernel-images
+// restarted) or a missing binding for MISSING_MS falls back to the browser.
+// {suspend: true} sends every request to the browser until the script runs
+// in the document again.
 (function () {
   const BINDING = '__kernelPasskey';
   const REPLY = '__kernelPasskeyReply';
   const RESEND_MS = 1000;
   const SILENCE_MS = 10000;
+  const MISSING_MS = 3000;
 
-  if (Object.prototype.hasOwnProperty.call(globalThis, REPLY)) return;
+  if (Object.prototype.hasOwnProperty.call(globalThis, REPLY)) {
+    globalThis[REPLY]({ resume: true });
+    return;
+  }
   if (typeof CredentialsContainer !== 'function' || typeof PublicKeyCredential !== 'function') return;
 
   const container = CredentialsContainer.prototype;
@@ -27,9 +34,19 @@
   const now = Date.now.bind(Date);
   const stringify = JSON.stringify;
   const pending = new Map();
+  let suspended = false;
 
   Object.defineProperty(globalThis, REPLY, {
     value: function (message) {
+      if (message && message.suspend) {
+        suspended = true;
+        for (const request of [...pending.values()]) request.finish(null);
+        return;
+      }
+      if (message && message.resume) {
+        suspended = false;
+        return;
+      }
       const request = message && pending.get(message.id);
       if (!request) return;
       if (message.ack) {
@@ -124,6 +141,15 @@
     return signal.reason !== undefined ? signal.reason : new DOMException('The operation was aborted.', 'AbortError');
   }
 
+  function callBinding(payload) {
+    try {
+      globalThis[BINDING](payload);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // Resolves with the final answer, or null when kernel-images stays silent.
   function exchange(op, options, signal) {
     return new Promise((resolve, reject) => {
@@ -132,6 +158,7 @@
       if (options.mediation !== undefined) message.mediation = String(options.mediation);
       const payload = stringify(message);
       let timer;
+      let missingSince = 0;
       const request = { heard: now(), finish: (answer) => settle(() => resolve(answer)) };
       function settle(done) {
         pending.delete(id);
@@ -141,16 +168,20 @@
       }
       function onAbort() {
         settle(() => reject(abortReason(signal)));
+        callBinding(stringify({ id, op: 'abort' }));
       }
       function send() {
         if (now() - request.heard >= SILENCE_MS) {
           request.finish(null);
           return;
         }
-        try {
-          globalThis[BINDING](payload);
-        } catch {
-          // No binding yet: same as an unanswered send.
+        if (callBinding(payload)) {
+          missingSince = 0;
+        } else if (!missingSince) {
+          missingSince = now();
+        } else if (now() - missingSince >= MISSING_MS) {
+          request.finish(null);
+          return;
         }
         timer = setTimer(send, RESEND_MS);
       }
@@ -163,6 +194,7 @@
   async function intercept(op, native, container, options) {
     const signal = options.signal;
     if (signal && signal.aborted) throw abortReason(signal);
+    if (suspended) return native.call(container, options);
     const answer = await exchange(op, options, signal);
     if (answer && answer.result === 'credential') return credentialFrom(answer.credential);
     if (answer && answer.result === 'error') throw new DOMException(answer.message, answer.name);

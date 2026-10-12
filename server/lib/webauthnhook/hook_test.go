@@ -1,8 +1,11 @@
 package webauthnhook
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -28,7 +31,10 @@ type fakeSession struct {
 	mu        sync.Mutex
 	commands  []command
 	replies   []map[string]any
+	suspended []string        // contexts told to suspend
 	forbidden map[string]bool // permissions-policy features reported as not allowed
+	failures  map[string]int  // method -> number of calls still to fail
+	policy    chan struct{}   // when set, holds permissions-policy lookups until closed
 }
 
 func (f *fakeSession) Send(_ context.Context, method string, params any) (json.RawMessage, error) {
@@ -38,8 +44,18 @@ func (f *fakeSession) Send(_ context.Context, method string, params any) (json.R
 		_ = json.Unmarshal(data, &decoded)
 	}
 	f.mu.Lock()
+	policy := f.policy
+	f.mu.Unlock()
+	if method == "Page.getPermissionsPolicyState" && policy != nil {
+		<-policy
+	}
+	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.commands = append(f.commands, command{method, decoded})
+	if f.failures[method] > 0 {
+		f.failures[method]--
+		return nil, errors.New("injected failure")
+	}
 	switch method {
 	case "Page.addScriptToEvaluateOnNewDocument":
 		return json.RawMessage(`{"identifier":"script-1"}`), nil
@@ -51,6 +67,10 @@ func (f *fakeSession) Send(_ context.Context, method string, params any) (json.R
 		return json.Marshal(map[string]any{"states": states})
 	case "Runtime.evaluate":
 		expression := decoded["expression"].(string)
+		if expression == suspendExpression {
+			f.suspended = append(f.suspended, decoded["uniqueContextId"].(string))
+			break
+		}
 		argument := strings.TrimSuffix(strings.TrimPrefix(expression, replyFunction+"("), ")")
 		var reply map[string]any
 		if err := json.Unmarshal([]byte(argument), &reply); err != nil {
@@ -104,6 +124,7 @@ func (f *fakeSession) countReplies(id string, ack bool) int {
 type recordedRequest struct {
 	op  string
 	req Request
+	ctx context.Context
 }
 
 type fakeSigner struct {
@@ -113,9 +134,9 @@ type fakeSigner struct {
 	release  chan struct{}
 }
 
-func (f *fakeSigner) Answer(_ context.Context, op string, req Request) Answer {
+func (f *fakeSigner) Answer(ctx context.Context, op string, req Request) Answer {
 	f.mu.Lock()
-	f.requests = append(f.requests, recordedRequest{op, req})
+	f.requests = append(f.requests, recordedRequest{op, req, ctx})
 	release := f.release
 	f.mu.Unlock()
 	if release != nil {
@@ -130,11 +151,23 @@ func (f *fakeSigner) calls() []recordedRequest {
 	return append([]recordedRequest(nil), f.requests...)
 }
 
+type fakeDomains struct {
+	retained, released int
+}
+
+func (d *fakeDomains) RetainPageDomains() { d.retained++ }
+
+func (d *fakeDomains) ReleasePageDomains(context.Context) error {
+	d.released++
+	return nil
+}
+
 type harness struct {
-	hook     *Hook
-	signer   *fakeSigner
-	path     string
-	retained int
+	hook    *Hook
+	signer  *fakeSigner
+	path    string
+	domains *fakeDomains
+	logs    *bytes.Buffer
 }
 
 func newHarness(t *testing.T) *harness {
@@ -144,14 +177,35 @@ func newHarness(t *testing.T) *harness {
 
 func newHarnessAt(t *testing.T, path string) *harness {
 	t.Helper()
-	h := &harness{path: path, signer: &fakeSigner{answer: Answer{Result: "credential", Credential: json.RawMessage(`{"id":"cred"}`)}}}
-	h.hook = New(Config{StatePath: path, Signer: h.signer, Logger: discard}, func() { h.retained++ })
+	h := &harness{
+		path: path, domains: &fakeDomains{}, logs: &bytes.Buffer{},
+		signer: &fakeSigner{answer: Answer{Result: "credential", Credential: json.RawMessage(`{"id":"cred"}`)}},
+	}
+	logger := slog.New(slog.NewTextHandler(&lockedWriter{w: h.logs}, nil))
+	h.hook = New(Config{StatePath: path, Signer: h.signer, Logger: logger}, h.domains)
 	return h
+}
+
+type lockedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (l *lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 func (h *harness) attach(t *testing.T, id, targetType, parentFrameID string) *fakeSession {
 	t.Helper()
-	fake := &fakeSession{forbidden: map[string]bool{}}
+	return h.attachFake(id, targetType, parentFrameID, &fakeSession{})
+}
+
+func (h *harness) attachFake(id, targetType, parentFrameID string, fake *fakeSession) *fakeSession {
+	if fake.forbidden == nil {
+		fake.forbidden = map[string]bool{}
+	}
 	h.hook.reconcile(h.hook.track(&session{id: id, targetID: id, targetType: targetType, parentFrameID: parentFrameID, cdp: fake}))
 	return fake
 }
@@ -177,31 +231,56 @@ func getCall(id string) map[string]any {
 func TestSetInstallsAndRemovesHook(t *testing.T) {
 	h := newHarness(t)
 	page := h.attach(t, "page", "page", "")
-	require.Empty(t, page.methods(), "an inactive hook must not touch sessions")
+	require.Empty(t, page.methods(), "a disabled hook must not touch sessions")
 	h.hook.SessionAttached(cdpmonitor.Session{ID: "worker", TargetType: "worker"})
 	require.NotContains(t, h.hook.sessions, "worker", "only page and iframe documents can call WebAuthn")
+	installed := []string{"Runtime.enable", "Page.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"}
 
 	require.NoError(t, h.hook.Set(context.Background(), true))
-	require.Equal(t, 1, h.retained)
-	require.Equal(t, []string{"Runtime.enable", "Page.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"}, page.methods())
+	require.Equal(t, 1, h.domains.retained)
+	require.Equal(t, installed, page.methods())
 	require.Equal(t, bindingName, page.commands[2].params["name"])
 	require.Equal(t, true, page.commands[3].params["runImmediately"])
 	require.Equal(t, hookSource, page.commands[3].params["source"])
 
 	require.NoError(t, h.hook.Set(context.Background(), true))
 	require.Len(t, page.methods(), 4, "enabling twice must not register the script twice")
+	require.Equal(t, 1, h.domains.retained)
+
+	h.context("page", 1, "https://example.com", "page")
+	h.context("page", 2, "https://example.com", "child")
+	require.NoError(t, h.hook.Set(context.Background(), false))
+	require.ElementsMatch(t, []string{"page-https://example.com", "page-https://example.com"}, page.suspended)
+	require.Equal(t, []string{"Runtime.evaluate", "Runtime.evaluate", "Page.removeScriptToEvaluateOnNewDocument", "Runtime.removeBinding"}, page.methods()[4:])
+	require.Equal(t, "script-1", page.commands[6].params["identifier"])
+	require.Equal(t, bindingName, page.commands[7].params["name"])
+	require.Equal(t, 1, h.domains.released)
 
 	require.NoError(t, h.hook.Set(context.Background(), false))
-	require.Equal(t, "Page.removeScriptToEvaluateOnNewDocument", page.methods()[4])
-	require.Equal(t, "script-1", page.commands[4].params["identifier"])
-	require.Len(t, page.methods(), 5, "disabling keeps the domains and binding for hooked documents")
+	require.Len(t, page.methods(), 8)
+	require.Equal(t, 1, h.domains.released)
 
 	require.NoError(t, h.hook.Set(context.Background(), true))
-	require.Equal(t, []string{"Page.addScriptToEvaluateOnNewDocument"}, page.methods()[5:])
-	require.Equal(t, 1, h.retained)
+	require.Equal(t, installed, page.methods()[8:])
+	require.Equal(t, 2, h.domains.retained)
 
 	later := h.attach(t, "later", "iframe", "page")
-	require.Equal(t, []string{"Runtime.enable", "Page.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"}, later.methods())
+	require.Equal(t, installed, later.methods())
+}
+
+func TestSetupFailureIsRetriedOnce(t *testing.T) {
+	h := newHarness(t)
+	require.NoError(t, h.hook.Set(context.Background(), true))
+	page := h.attachFake("page", "page", "", &fakeSession{failures: map[string]int{"Runtime.addBinding": 1}})
+	require.Equal(t, []string{
+		"Runtime.enable", "Page.enable", "Runtime.addBinding",
+		"Runtime.enable", "Page.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument",
+	}, page.methods())
+	require.NotContains(t, h.logs.String(), "level=ERROR")
+
+	h.attachFake("broken", "page", "", &fakeSession{failures: map[string]int{"Runtime.enable": 2}})
+	require.Contains(t, h.logs.String(), "level=ERROR")
+	require.Contains(t, h.logs.String(), "session=broken")
 }
 
 func TestEnabledFlagSurvivesRestart(t *testing.T) {
@@ -210,13 +289,13 @@ func TestEnabledFlagSurvivesRestart(t *testing.T) {
 	require.NoError(t, first.hook.Set(context.Background(), true))
 
 	restarted := newHarnessAt(t, path)
-	require.Equal(t, 1, restarted.retained, "a restored hook retains page domains before the monitor starts")
+	require.Equal(t, 1, restarted.domains.retained, "a restored hook retains page domains before the monitor starts")
 	page := restarted.attach(t, "page", "page", "")
 	require.Contains(t, page.methods(), "Page.addScriptToEvaluateOnNewDocument")
 
 	require.NoError(t, restarted.hook.Set(context.Background(), false))
 	again := newHarnessAt(t, path)
-	require.Zero(t, again.retained)
+	require.Zero(t, again.domains.retained)
 	require.Empty(t, again.attach(t, "page", "page", "").methods())
 }
 
@@ -335,12 +414,37 @@ func TestRequestsLeftToBrowser(t *testing.T) {
 }
 
 func TestLocalhostIsServed(t *testing.T) {
+	for _, origin := range []string{"http://localhost:8080", "http://app.localhost:3000"} {
+		h := newHarness(t)
+		require.NoError(t, h.hook.Set(context.Background(), true))
+		page := h.attach(t, "page", "page", "")
+		h.context("page", 1, origin, "page")
+		h.call("page", 1, getCall("r1"))
+		require.Equal(t, "credential", page.finalReply(t, "r1")["result"], origin)
+	}
+}
+
+func TestTopOriginFollowsNewestMainFrameContext(t *testing.T) {
 	h := newHarness(t)
 	require.NoError(t, h.hook.Set(context.Background(), true))
-	page := h.attach(t, "page", "page", "")
-	h.context("page", 1, "http://localhost:8080", "page")
-	h.call("page", 1, getCall("r1"))
-	require.Equal(t, "credential", page.finalReply(t, "r1")["result"])
+	h.attach(t, "page", "page", "")
+	frame := h.attach(t, "frame", "iframe", "page")
+	h.context("frame", 1, "https://login.example.com", "frame")
+	// The navigated-to document's context arrives before the old one is destroyed.
+	for i := 1; i <= 20; i++ {
+		h.context("page", i, fmt.Sprintf("https://site%d.example", i), "page")
+	}
+	destroyed, _ := json.Marshal(map[string]any{"executionContextId": 3})
+	h.hook.ProtocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+
+	h.call("frame", 1, getCall("r1"))
+	require.Equal(t, "credential", frame.finalReply(t, "r1")["result"])
+	require.Equal(t, "https://site20.example", h.signer.calls()[0].req.TopOrigin)
+
+	destroyed, _ = json.Marshal(map[string]any{"executionContextId": 20})
+	h.hook.ProtocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	h.call("frame", 1, getCall("r2"))
+	require.Equal(t, "not_handled", frame.finalReply(t, "r2")["result"], "a destroyed main-frame document has no top origin")
 }
 
 func TestDisabledHookAnswersNotHandled(t *testing.T) {
@@ -379,16 +483,76 @@ func TestIgnoredCalls(t *testing.T) {
 	require.Empty(t, h.signer.calls())
 }
 
-func TestSessionCallsAreBounded(t *testing.T) {
+func TestOnlyUnansweredCallsAreBounded(t *testing.T) {
 	h := newHarness(t)
-	h.signer.release = make(chan struct{})
-	defer close(h.signer.release)
 	require.NoError(t, h.hook.Set(context.Background(), true))
 	page := h.attach(t, "page", "page", "")
 	h.context("page", 1, "https://example.com", "page")
-	for i := range maxSessionCalls {
-		h.call("page", 1, getCall("r"+string(rune('a'+i))))
+	for i := range 2 * maxPendingCalls {
+		id := fmt.Sprintf("answered-%d", i)
+		h.call("page", 1, getCall(id))
+		require.Equal(t, "credential", page.finalReply(t, id)["result"])
 	}
+
+	h.signer.release = make(chan struct{})
+	defer close(h.signer.release)
+	for i := range maxPendingCalls {
+		h.call("page", 1, getCall(fmt.Sprintf("pending-%d", i)))
+	}
+	require.Eventually(t, func() bool { return len(h.signer.calls()) == 3*maxPendingCalls }, 5*time.Second, 10*time.Millisecond)
+	require.NotContains(t, h.logs.String(), "too many unanswered requests")
 	h.call("page", 1, getCall("overflow"))
 	require.Equal(t, "not_handled", page.finalReply(t, "overflow")["result"])
+	require.Contains(t, h.logs.String(), "level=WARN")
+	require.Contains(t, h.logs.String(), "too many unanswered requests")
+}
+
+func TestAnsweredCallsAreEvictedOldestFirst(t *testing.T) {
+	h := newHarness(t)
+	require.NoError(t, h.hook.Set(context.Background(), true))
+	page := h.attach(t, "page", "page", "")
+	h.context("page", 1, "https://example.com", "page")
+	for i := range maxTrackedCalls + 1 {
+		id := fmt.Sprintf("r%d", i)
+		h.call("page", 1, getCall(id))
+		page.finalReply(t, id)
+	}
+	h.hook.mu.Lock()
+	defer h.hook.mu.Unlock()
+	calls := h.hook.sessions["page"].calls
+	require.Len(t, calls, maxTrackedCalls)
+	require.NotContains(t, calls, callKey{contextID: "page-https://example.com", requestID: "r0"})
+}
+
+func TestAbortBeforeDispatchSkipsSigner(t *testing.T) {
+	h := newHarness(t)
+	require.NoError(t, h.hook.Set(context.Background(), true))
+	page := h.attachFake("page", "page", "", &fakeSession{policy: make(chan struct{})})
+	h.context("page", 1, "https://example.com", "page")
+
+	h.call("page", 1, getCall("r1"))
+	require.Eventually(t, func() bool { return page.countReplies("r1", true) == 1 }, 5*time.Second, 10*time.Millisecond)
+	h.call("page", 1, map[string]any{"id": "r1", "op": "abort"})
+	close(page.policy)
+
+	time.Sleep(100 * time.Millisecond)
+	require.Empty(t, h.signer.calls())
+	require.Zero(t, page.countReplies("r1", false), "an aborted request gets no answer")
+}
+
+func TestAbortAfterDispatchCancelsSigner(t *testing.T) {
+	h := newHarness(t)
+	h.signer.release = make(chan struct{})
+	require.NoError(t, h.hook.Set(context.Background(), true))
+	page := h.attach(t, "page", "page", "")
+	h.context("page", 1, "https://example.com", "page")
+
+	h.call("page", 1, getCall("r1"))
+	require.Eventually(t, func() bool { return len(h.signer.calls()) == 1 }, 5*time.Second, 10*time.Millisecond)
+	h.call("page", 1, map[string]any{"id": "r1", "op": "abort"})
+	require.Error(t, h.signer.calls()[0].ctx.Err())
+	close(h.signer.release)
+
+	time.Sleep(100 * time.Millisecond)
+	require.Zero(t, page.countReplies("r1", false))
 }

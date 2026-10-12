@@ -187,7 +187,7 @@ func New(
 	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
 	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default(), screenshotEnabled)
 	_ = mon.SetTelemetry(false)
-	webauthnHook := webauthnhook.New(webauthn, mon.RetainPageDomains)
+	webauthnHook := webauthnhook.New(webauthn, mon)
 	mon.SetExtension(webauthnHook)
 	ctx, cancel := context.WithCancel(context.Background())
 

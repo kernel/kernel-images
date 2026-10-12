@@ -161,8 +161,10 @@ when a connection is replaced, regardless of telemetry state. It sends commands
 through the `Session` it was given, which stays bound to that connection.
 Telemetry cleanup normally disables Page and Runtime on page and iframe
 sessions; Chromium then drops `Runtime.addBinding` bindings and stops applying
-new-document scripts. `RetainPageDomains` makes cleanup leave both enabled for
-the rest of the monitor's lifetime, and waits for any disable already in flight.
+new-document scripts. While an extension holds `RetainPageDomains`, cleanup
+leaves both enabled, and retaining waits for any disable already in flight.
+`ReleasePageDomains` disables them on the sessions telemetry is not capturing,
+restoring what cleanup would have left.
 
 ### Reconnect and shutdown
 

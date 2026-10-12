@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -50,10 +51,16 @@ func TestMetroSignerPostsRequest(t *testing.T) {
 	}, got.body)
 }
 
-func TestMetroSignerRetriesServerErrors(t *testing.T) {
-	var attempts atomic.Int32
+func TestMetroSignerRetriesServerErrorsWithIdenticalBody(t *testing.T) {
+	var mu sync.Mutex
+	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if attempts.Add(1) < 3 {
+		data, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(data))
+		attempt := len(bodies)
+		mu.Unlock()
+		if attempt < 3 {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
@@ -61,9 +68,13 @@ func TestMetroSignerRetriesServerErrors(t *testing.T) {
 	}))
 	defer server.Close()
 
-	answer := metroSigner(server.URL).Answer(context.Background(), "create", Request{})
+	answer := metroSigner(server.URL).Answer(context.Background(), "create", Request{
+		Origin: "https://example.com", TopOrigin: "https://example.com", PublicKey: json.RawMessage(`{"challenge":"AAAA"}`),
+	})
 	require.Equal(t, notHandled, answer)
-	require.EqualValues(t, 3, attempts.Load())
+	require.Len(t, bodies, 3)
+	require.Equal(t, bodies[0], bodies[1])
+	require.Equal(t, bodies[0], bodies[2])
 }
 
 func TestMetroSignerGivesUpAtDeadline(t *testing.T) {

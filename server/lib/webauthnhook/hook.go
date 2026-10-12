@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,13 +30,19 @@ const (
 
 const (
 	setupTimeout     = 10 * time.Second
+	setupRetryDelay  = time.Second
 	deliverTimeout   = 5 * time.Second
 	maxCallBytes     = 256 << 10
 	maxRequestIDLen  = 64
-	maxSessionCalls  = 16
+	maxPendingCalls  = 16  // unanswered calls per session
+	maxTrackedCalls  = 256 // answered calls kept per session for resends
 	answeredRetained = 30 * time.Second
 	maxFrameDepth    = 32
 )
+
+// suspendExpression tells a hooked document to leave every request to the
+// browser until the hook script runs in it again.
+const suspendExpression = "typeof " + replyFunction + ` === "function" && ` + replyFunction + `({"suspend":true})`
 
 //go:embed hook.js
 var hookSource string
@@ -45,6 +52,13 @@ type Config struct {
 	StatePath string
 	Signer    Signer
 	Logger    *slog.Logger
+}
+
+// PageDomains keeps telemetry cleanup from disabling the Page and Runtime
+// domains the hook needs while it is on. *cdpmonitor.Monitor implements it.
+type PageDomains interface {
+	RetainPageDomains()
+	ReleasePageDomains(ctx context.Context) error
 }
 
 type executionContext struct {
@@ -59,10 +73,12 @@ type callKey struct {
 }
 
 // call is one page request. reply is empty until the request is answered;
-// the page resends until it sees that reply.
+// the page resends until it sees that reply. cancel ends the request when the
+// page aborts it.
 type call struct {
 	reply      json.RawMessage
 	answeredAt time.Time
+	cancel     context.CancelFunc
 }
 
 type sender interface {
@@ -77,44 +93,44 @@ type session struct {
 	cdp           sender
 
 	setupMu  sync.Mutex
-	domains  bool   // setupMu: Runtime, Page, and the binding are enabled
+	domains  bool   // setupMu: the binding may be installed
 	scriptID string // setupMu: new-document registration while enabled
 
-	contexts map[int]executionContext // Hook.mu; main-world contexts only
-	calls    map[callKey]*call        // Hook.mu
+	contexts      map[int]executionContext // Hook.mu; main-world contexts only
+	frameContexts map[string]int           // Hook.mu; frame ID -> its newest main-world context
+	calls         map[callKey]*call        // Hook.mu
 }
 
 // Hook implements cdpmonitor.Extension.
 type Hook struct {
-	cfg    Config
-	retain func()
-	log    *slog.Logger
+	cfg     Config
+	domains PageDomains
+	log     *slog.Logger
 
 	setMu sync.Mutex // serializes Set
 
 	mu       sync.Mutex
 	enabled  bool
-	active   bool // sessions get the binding; stays true once enabled
 	sessions map[string]*session
 }
 
 var _ cdpmonitor.Extension = (*Hook)(nil)
 
-// New restores the flag a previous run of the process left. retainPageDomains
-// is called before the hook first enables domains, so telemetry cleanup stops
-// disabling them.
-func New(cfg Config, retainPageDomains func()) *Hook {
-	h := &Hook{cfg: cfg, retain: retainPageDomains, log: cfg.Logger, sessions: make(map[string]*session)}
+// New restores the flag a previous run of the process left. While the hook
+// is on it retains domains, so telemetry cleanup does not disable them.
+func New(cfg Config, domains PageDomains) *Hook {
+	h := &Hook{cfg: cfg, domains: domains, log: cfg.Logger, sessions: make(map[string]*session)}
 	if loadEnabled(cfg.StatePath, cfg.Logger) {
-		h.retain()
-		h.enabled, h.active = true, true
+		h.domains.RetainPageDomains()
+		h.enabled = true
 	}
 	return h
 }
 
-// Set turns the hook on or off, persisting the flag first, and waits until
-// the current sessions are reconciled or ctx ends. Pages hooked while it was
-// on keep their hook while it is off; their requests are left to the browser.
+// Set turns the hook on or off, persisting the flag first, and waits until the
+// current sessions are reconciled. Turning it off tells hooked documents to
+// leave requests to the browser, removes the script and binding, and releases
+// the Page and Runtime domains to telemetry.
 func (h *Hook) Set(ctx context.Context, enabled bool) error {
 	h.setMu.Lock()
 	defer h.setMu.Unlock()
@@ -122,14 +138,13 @@ func (h *Hook) Set(ctx context.Context, enabled bool) error {
 		return err
 	}
 	h.mu.Lock()
-	activate := enabled && !h.active
+	changed := h.enabled != enabled
 	h.mu.Unlock()
-	if activate {
-		h.retain()
+	if changed && enabled {
+		h.domains.RetainPageDomains()
 	}
 	h.mu.Lock()
 	h.enabled = enabled
-	h.active = h.active || enabled
 	sessions := make([]*session, 0, len(h.sessions))
 	for _, s := range h.sessions {
 		sessions = append(sessions, s)
@@ -140,11 +155,11 @@ func (h *Hook) Set(ctx context.Context, enabled bool) error {
 	for _, s := range sessions {
 		wg.Go(func() { h.reconcile(s) })
 	}
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-ctx.Done():
+	wg.Wait()
+	if changed && !enabled {
+		if err := h.domains.ReleasePageDomains(ctx); err != nil {
+			h.log.Warn("webauthn: failed to release page domains", "err", err)
+		}
 	}
 	return nil
 }
@@ -160,6 +175,7 @@ func (h *Hook) SessionAttached(s cdpmonitor.Session) {
 
 func (h *Hook) track(s *session) *session {
 	s.contexts = make(map[int]executionContext)
+	s.frameContexts = make(map[string]int)
 	s.calls = make(map[callKey]*call)
 	h.mu.Lock()
 	h.sessions[s.id] = s
@@ -179,66 +195,101 @@ func (h *Hook) Reset() {
 	h.mu.Unlock()
 }
 
-// reconcile brings one session to the current flag. Domains and the binding
-// stay once added so already-hooked documents keep an answer.
+// reconcile brings one session to the current flag, retrying once after a
+// short delay so a tab is not left unhooked by a transient failure.
 func (h *Hook) reconcile(s *session) {
-	s.setupMu.Lock()
-	defer s.setupMu.Unlock()
-	h.mu.Lock()
-	active, enabled, live := h.active, h.enabled, h.sessions[s.id] == s
-	h.mu.Unlock()
-	if !active || !live {
+	err := h.reconcileOnce(s)
+	if err == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
-	defer cancel()
-	if err := h.reconcileSession(ctx, s, enabled); err != nil {
-		h.mu.Lock()
-		live = h.sessions[s.id] == s
-		h.mu.Unlock()
-		if live {
-			h.log.Warn("webauthn: failed to set up hook", "session", s.id, "target_type", s.targetType, "err", err)
-		}
+	time.Sleep(setupRetryDelay)
+	if err = h.reconcileOnce(s); err != nil && h.live(s) {
+		h.log.Error("webauthn: failed to reconcile hook", "session", s.id, "target_type", s.targetType, "err", err)
 	}
 }
 
-func (h *Hook) reconcileSession(ctx context.Context, s *session, enabled bool) error {
-	if !s.domains {
-		for _, command := range []struct {
-			method string
-			params any
-		}{
-			{"Runtime.enable", nil},
-			{"Page.enable", nil},
-			{"Runtime.addBinding", map[string]any{"name": bindingName}},
-		} {
-			if _, err := s.cdp.Send(ctx, command.method, command.params); err != nil {
-				return err
-			}
-		}
-		s.domains = true
+func (h *Hook) live(s *session) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.sessions[s.id] == s
+}
+
+func (h *Hook) reconcileOnce(s *session) error {
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
+	h.mu.Lock()
+	enabled, live := h.enabled, h.sessions[s.id] == s
+	contexts := make([]executionContext, 0, len(s.contexts))
+	for _, ec := range s.contexts {
+		contexts = append(contexts, ec)
 	}
-	switch {
-	case enabled && s.scriptID == "":
-		raw, err := s.cdp.Send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
-			"source": hookSource, "runImmediately": true,
+	h.mu.Unlock()
+	if !live {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
+	defer cancel()
+	if enabled {
+		return h.install(ctx, s)
+	}
+	return h.uninstall(ctx, s, contexts)
+}
+
+func (h *Hook) install(ctx context.Context, s *session) error {
+	if s.scriptID != "" {
+		return nil
+	}
+	for _, command := range []struct {
+		method string
+		params any
+	}{
+		{"Runtime.enable", nil},
+		{"Page.enable", nil},
+		{"Runtime.addBinding", map[string]any{"name": bindingName}},
+	} {
+		if _, err := s.cdp.Send(ctx, command.method, command.params); err != nil {
+			return err
+		}
+	}
+	s.domains = true
+	raw, err := s.cdp.Send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
+		"source": hookSource, "runImmediately": true,
+	})
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Identifier string `json:"identifier"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return err
+	}
+	s.scriptID = result.Identifier
+	return nil
+}
+
+// uninstall suspends the hook in the session's documents before removing the
+// binding, so they fall back at once rather than after a timeout. The domains
+// themselves are released together, once every session is done.
+func (h *Hook) uninstall(ctx context.Context, s *session, contexts []executionContext) error {
+	if !s.domains {
+		return nil
+	}
+	for _, ec := range contexts {
+		_, _ = s.cdp.Send(ctx, "Runtime.evaluate", map[string]any{
+			"expression": suspendExpression, "uniqueContextId": ec.uniqueID, "silent": true,
 		})
-		if err != nil {
-			return err
-		}
-		var result struct {
-			Identifier string `json:"identifier"`
-		}
-		if err := json.Unmarshal(raw, &result); err != nil {
-			return err
-		}
-		s.scriptID = result.Identifier
-	case !enabled && s.scriptID != "":
+	}
+	if s.scriptID != "" {
 		if _, err := s.cdp.Send(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{"identifier": s.scriptID}); err != nil {
 			return err
 		}
 		s.scriptID = ""
 	}
+	if _, err := s.cdp.Send(ctx, "Runtime.removeBinding", map[string]any{"name": bindingName}); err != nil {
+		return err
+	}
+	s.domains = false
 	return nil
 }
 
@@ -264,6 +315,7 @@ func (h *Hook) ProtocolEvent(sessionID, method string, params json.RawMessage) {
 			s.contexts[event.Context.ID] = executionContext{
 				uniqueID: event.Context.UniqueID, origin: event.Context.Origin, frameID: event.Context.AuxData.FrameID,
 			}
+			s.frameContexts[event.Context.AuxData.FrameID] = event.Context.ID
 		}
 		h.mu.Unlock()
 	case "Runtime.executionContextDestroyed":
@@ -277,6 +329,9 @@ func (h *Hook) ProtocolEvent(sessionID, method string, params json.RawMessage) {
 		if s := h.sessions[sessionID]; s != nil {
 			if destroyed, ok := s.contexts[event.ID]; ok {
 				delete(s.contexts, event.ID)
+				if s.frameContexts[destroyed.frameID] == event.ID {
+					delete(s.frameContexts, destroyed.frameID)
+				}
 				for key := range s.calls {
 					if key.contextID == destroyed.uniqueID {
 						delete(s.calls, key)
@@ -289,6 +344,7 @@ func (h *Hook) ProtocolEvent(sessionID, method string, params json.RawMessage) {
 		h.mu.Lock()
 		if s := h.sessions[sessionID]; s != nil {
 			clear(s.contexts)
+			clear(s.frameContexts)
 			clear(s.calls)
 		}
 		h.mu.Unlock()
@@ -319,7 +375,7 @@ type pageReply struct {
 func (h *Hook) handleCall(sessionID string, contextID int, payload string) {
 	var pc pageCall
 	if json.Unmarshal([]byte(payload), &pc) != nil || pc.ID == "" || len(pc.ID) > maxRequestIDLen ||
-		(pc.Op != "get" && pc.Op != "create") {
+		(pc.Op != "get" && pc.Op != "create" && pc.Op != "abort") {
 		return
 	}
 	h.mu.Lock()
@@ -334,7 +390,18 @@ func (h *Hook) handleCall(sessionID string, contextID int, payload string) {
 		return
 	}
 	key := callKey{contextID: ec.uniqueID, requestID: pc.ID}
-	if existing := s.calls[key]; existing != nil {
+	existing := s.calls[key]
+	if pc.Op == "abort" {
+		// A request the page discarded is not sent to metro-api if it has not
+		// been already, and stops retrying if it has.
+		if existing != nil && existing.reply == nil {
+			existing.cancel()
+			delete(s.calls, key)
+		}
+		h.mu.Unlock()
+		return
+	}
+	if existing != nil {
 		reply := existing.reply
 		h.mu.Unlock()
 		if reply == nil {
@@ -343,33 +410,35 @@ func (h *Hook) handleCall(sessionID string, contextID int, payload string) {
 		go h.deliver(s, ec, reply)
 		return
 	}
-	for k, c := range s.calls {
-		if c.reply != nil && time.Since(c.answeredAt) > answeredRetained {
-			delete(s.calls, k)
-		}
-	}
-	if len(s.calls) >= maxSessionCalls {
+	if !h.admitLocked(s) {
 		h.mu.Unlock()
+		h.log.Warn("webauthn: too many unanswered requests; leaving the request to the browser", "session", sessionID, "limit", maxPendingCalls)
 		go h.deliver(s, ec, encodeReply(pc.ID, notHandled))
 		return
 	}
-	c := &call{}
+	callCtx, cancel := context.WithCancel(context.Background())
+	c := &call{cancel: cancel}
 	s.calls[key] = c
 	enabled := h.enabled
 	topOrigin, topKnown := h.topOriginLocked(s)
 	h.mu.Unlock()
 
 	go func() {
+		defer cancel()
 		h.deliver(s, ec, ack(pc.ID))
 		answer := notHandled
 		origin, secure := secureOrigin(ec.origin)
 		top, topSecure := secureOrigin(topOrigin)
-		if enabled && secure && topKnown && topSecure && h.permitted(s, ec.frameID, pc.Op) {
-			answer = h.cfg.Signer.Answer(context.Background(), pc.Op, Request{
+		if enabled && secure && topKnown && topSecure && h.permitted(s, ec.frameID, pc.Op) && callCtx.Err() == nil {
+			answer = h.cfg.Signer.Answer(callCtx, pc.Op, Request{
 				Origin: origin, TopOrigin: top, Mediation: pc.Mediation, PublicKey: pc.PublicKey,
 			})
 		}
-		h.log.Info("webauthn: answered page request", "op", pc.Op, "origin", ec.origin, "top_origin", topOrigin, "result", answer.Result)
+		if callCtx.Err() != nil {
+			h.log.Debug("webauthn: page aborted request", "op", pc.Op, "origin", ec.origin)
+			return
+		}
+		h.log.Debug("webauthn: answered page request", "op", pc.Op, "origin", ec.origin, "top_origin", topOrigin, "result", answer.Result)
 		reply := encodeReply(pc.ID, answer)
 		h.mu.Lock()
 		c.reply, c.answeredAt = reply, time.Now()
@@ -378,17 +447,39 @@ func (h *Hook) handleCall(sessionID string, contextID int, payload string) {
 	}()
 }
 
+// admitLocked reports whether the session may start another request. Only
+// unanswered requests count; answered ones are kept for resends until they
+// expire, or until the oldest is evicted to bound memory.
+func (h *Hook) admitLocked(s *session) bool {
+	pending := 0
+	var oldest callKey
+	var oldestAt time.Time
+	for key, c := range s.calls {
+		switch {
+		case c.reply == nil:
+			pending++
+		case time.Since(c.answeredAt) > answeredRetained:
+			delete(s.calls, key)
+		case oldestAt.IsZero() || c.answeredAt.Before(oldestAt):
+			oldest, oldestAt = key, c.answeredAt
+		}
+	}
+	if pending >= maxPendingCalls {
+		return false
+	}
+	if len(s.calls) >= maxTrackedCalls {
+		delete(s.calls, oldest)
+	}
+	return true
+}
+
 // topOriginLocked follows out-of-process iframes up to their page. Every
 // frame in a session shares the session root's top-level document.
 func (h *Hook) topOriginLocked(s *session) (string, bool) {
 	for range maxFrameDepth {
 		if s.targetType == "page" {
-			for _, ec := range s.contexts {
-				if ec.frameID == s.targetID {
-					return ec.origin, true
-				}
-			}
-			return "", false
+			id, ok := s.frameContexts[s.targetID]
+			return s.contexts[id].origin, ok
 		}
 		if s = h.frameOwnerLocked(s.parentFrameID); s == nil {
 			return "", false
@@ -402,10 +493,8 @@ func (h *Hook) frameOwnerLocked(frameID string) *session {
 		return nil
 	}
 	for _, s := range h.sessions {
-		for _, ec := range s.contexts {
-			if ec.frameID == frameID {
-				return s
-			}
+		if _, ok := s.frameContexts[frameID]; ok {
+			return s
 		}
 	}
 	return nil
@@ -440,14 +529,14 @@ func (h *Hook) permitted(s *session, frameID, op string) bool {
 }
 
 // secureOrigin accepts the origins WebAuthn serves: https, and http on
-// localhost. Opaque origins do not parse to a host.
+// localhost and its subdomains. Opaque origins do not parse to a host.
 func secureOrigin(origin string) (string, bool) {
 	u, err := url.Parse(origin)
 	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return "", false
 	}
 	switch {
-	case u.Scheme == "https", u.Scheme == "http" && u.Hostname() == "localhost":
+	case u.Scheme == "https", u.Scheme == "http" && (u.Hostname() == "localhost" || strings.HasSuffix(u.Hostname(), ".localhost")):
 		return origin, true
 	}
 	return "", false

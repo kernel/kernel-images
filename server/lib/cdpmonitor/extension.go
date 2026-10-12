@@ -3,6 +3,7 @@ package cdpmonitor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 )
@@ -40,11 +41,40 @@ func (m *Monitor) SetExtension(ext Extension) {
 }
 
 // RetainPageDomains stops telemetry cleanup from disabling the Page and
-// Runtime domains on page and iframe sessions, for the rest of the monitor's
-// lifetime. Disabling them would drop an extension's bindings and pause its
+// Runtime domains on page and iframe sessions until ReleasePageDomains.
+// Disabling them would drop an extension's bindings and pause its
 // new-document scripts. Once it returns, no disable is still in flight.
 func (m *Monitor) RetainPageDomains() {
 	m.pageDomainsMu.Lock()
 	m.pageDomainsRetained = true
 	m.pageDomainsMu.Unlock()
+}
+
+// ReleasePageDomains undoes RetainPageDomains and disables Page and Runtime on
+// the page and iframe sessions telemetry is not capturing, leaving them as
+// telemetry cleanup would have.
+func (m *Monitor) ReleasePageDomains(ctx context.Context) error {
+	// Excludes telemetry setup and cleanup, which decide what it owns.
+	m.telemetryMu.Lock()
+	defer m.telemetryMu.Unlock()
+	m.pageDomainsMu.Lock()
+	m.pageDomainsRetained = false
+	m.pageDomainsMu.Unlock()
+	m.sessionsMu.RLock()
+	var idle []string
+	for id, info := range m.sessions {
+		if _, captured := m.optionalSessions[id]; !captured && isPageLikeTarget(info.targetType) {
+			idle = append(idle, id)
+		}
+	}
+	m.sessionsMu.RUnlock()
+	var err error
+	for _, id := range idle {
+		for _, method := range []string{"Page.disable", "Runtime.disable"} {
+			if _, sendErr := m.send(ctx, method, nil, id); sendErr != nil {
+				err = errors.Join(err, sendErr)
+			}
+		}
+	}
+	return err
 }

@@ -53,7 +53,7 @@ func TestChromiumPageHook(t *testing.T) {
 		registered = result.Credential
 		requireHookCredential(t, registered, "attestation")
 		require.Equal(t, -7, registered.Algorithm)
-		require.Equal(t, []string{"internal", "hybrid"}, registered.Transports)
+		require.Equal(t, fakeTransports, registered.Transports)
 
 		request := env.metro.last(t)
 		require.Equal(t, "create", request.op)
@@ -105,6 +105,28 @@ func TestChromiumPageHook(t *testing.T) {
 		requireHookCredential(t, result.Credential, "assertion")
 		require.Equal(t, before+1, env.metro.count())
 		require.Equal(t, "conditional", env.metro.last(t).body.Mediation)
+	})
+
+	// Decision pinned here: targets are not paused on attach, so a new tab's
+	// first document runs its load-time script before the hook is installed.
+	// The call goes to the browser; a reload is answered.
+	t.Run("a new tab's first document is unhooked at load, and a reload is answered", func(t *testing.T) {
+		before := env.metro.count()
+		tab := env.openDirect(t, login+"/conditional")
+		tab.waitHooked(t)
+		require.JSONEq(t, `"pending"`, string(tab.eval(t,
+			`Promise.race([window.conditional.then(() => 'answered', () => 'rejected'), new Promise((r) => setTimeout(() => r('pending'), 500))])`)))
+		require.Equal(t, before, env.metro.count())
+
+		tab.env.driver.call(t, tab.sessionID, "Page.reload", nil)
+		require.Eventually(t, func() bool {
+			value, err := tab.evalRaw(`document.readyState === 'complete' && typeof window.conditional === 'object'`)
+			return err == nil && string(value) == "true"
+		}, 15*time.Second, 50*time.Millisecond)
+		result := tab.settle(t, "window.conditional")
+		require.Empty(t, result.Error)
+		requireHookCredential(t, result.Credential, "assertion")
+		require.Equal(t, before+1, env.metro.count())
 	})
 
 	t.Run("capabilities report a platform passkey authenticator", func(t *testing.T) {
@@ -222,21 +244,61 @@ func TestChromiumPageHook(t *testing.T) {
 		requireHookCredential(t, result.Credential, "assertion")
 	})
 
-	t.Run("disabling stops new documents from getting the hook", func(t *testing.T) {
+	t.Run("disabling suspends hooked documents and stops new ones from getting the hook", func(t *testing.T) {
 		tab := env.open(t, login+"/page")
 		tab.addVirtualAuthenticator(t)
 		require.NoError(t, env.hook.Set(ctx, false))
 		defer func() { require.NoError(t, env.hook.Set(ctx, true)) }()
 
 		before := env.metro.count()
+		started := time.Now()
 		result := tab.settle(t, createCall)
 		require.Empty(t, result.Error)
 		require.False(t, result.Credential.Own, "an already-hooked document falls back to the browser")
+		require.Less(t, time.Since(started), 2*time.Second, "a suspended document falls back without waiting")
 		require.Equal(t, before, env.metro.count())
 
 		tab.navigate(t, login+"/page?reloaded")
 		require.JSONEq(t, `false`, string(tab.eval(t, hookedExpression)))
 		require.JSONEq(t, `true`, string(tab.eval(t, `CredentialsContainer.prototype.get.toString().includes('[native code]')`)))
+	})
+
+	t.Run("re-enabling resumes a suspended document", func(t *testing.T) {
+		tab := env.open(t, login+"/page")
+		require.NoError(t, env.hook.Set(ctx, false))
+		require.NoError(t, env.hook.Set(ctx, true))
+		result := tab.settle(t, pageGet(registered.ID))
+		require.Empty(t, result.Error)
+		requireHookCredential(t, result.Credential, "assertion")
+	})
+
+	t.Run("a missing binding falls back after three seconds", func(t *testing.T) {
+		tab := env.open(t, login+"/page")
+		tab.addVirtualAuthenticator(t)
+		tab.eval(t, `delete window.__kernelPasskey`)
+		started := time.Now()
+		result := tab.settle(t, createCall)
+		require.Empty(t, result.Error)
+		require.False(t, result.Credential.Own)
+		require.GreaterOrEqual(t, time.Since(started), 3*time.Second)
+		require.Less(t, time.Since(started), 6*time.Second)
+	})
+
+	t.Run("an abort stops kernel-images asking metro-api", func(t *testing.T) {
+		env.metro.setMode("unavailable")
+		defer env.metro.setMode("sign")
+		tab := env.open(t, login+"/page")
+		before := env.metro.count()
+		result := tab.settle(t, `(() => {
+			const controller = new AbortController();
+			const promise = navigator.credentials.get({signal: controller.signal, publicKey: {challenge: new Uint8Array(32)}});
+			setTimeout(() => controller.abort(), 300);
+			return promise;
+		})()`)
+		require.Equal(t, "AbortError", result.Error)
+		attempts := env.metro.count() - before
+		time.Sleep(3 * time.Second)
+		require.Equal(t, attempts, env.metro.count()-before, "an aborted request stops retrying")
 	})
 
 	t.Run("an unavailable signer falls back after the window", func(t *testing.T) {
@@ -502,7 +564,7 @@ func newChromeEnv(t *testing.T, ctx context.Context) *chromeEnv {
 			Logger:  discard,
 		},
 		Logger: discard,
-	}, monitor.RetainPageDomains)
+	}, monitor)
 	monitor.SetExtension(hook)
 	require.NoError(t, monitor.Start(ctx))
 	t.Cleanup(monitor.Stop)
@@ -543,7 +605,18 @@ func (e *chromeEnv) open(t *testing.T, pageURL string) *tab {
 	t.Helper()
 	// Start on a page the hook reaches through runImmediately, so its
 	// new-document registration exists before the real navigation.
-	raw := e.driver.call(t, "", "Target.createTarget", map[string]any{"url": e.site("login.example.test") + "/page"})
+	tb := e.openDirect(t, e.site("login.example.test")+"/page")
+	tb.waitHooked(t)
+	tb.navigate(t, pageURL)
+	tb.waitHooked(t)
+	return tb
+}
+
+// openDirect opens a tab on pageURL, racing the hook's attachment as a new
+// tab would.
+func (e *chromeEnv) openDirect(t *testing.T, pageURL string) *tab {
+	t.Helper()
+	raw := e.driver.call(t, "", "Target.createTarget", map[string]any{"url": pageURL})
 	var target struct {
 		TargetID string `json:"targetId"`
 	}
@@ -552,15 +625,18 @@ func (e *chromeEnv) open(t *testing.T, pageURL string) *tab {
 		_, _ = e.driver.client.Send(context.Background(), "Target.closeTarget", map[string]any{"targetId": target.TargetID}, "")
 	})
 	tb := &tab{env: e, sessionID: e.driver.attach(t, target.TargetID)}
-	tb.waitHooked(t)
-	tb.navigate(t, pageURL)
-	tb.waitHooked(t)
+	tb.waitLoaded(t, pageURL)
 	return tb
 }
 
 func (tb *tab) navigate(t *testing.T, pageURL string) {
 	t.Helper()
 	tb.env.driver.call(t, tb.sessionID, "Page.navigate", map[string]any{"url": pageURL})
+	tb.waitLoaded(t, pageURL)
+}
+
+func (tb *tab) waitLoaded(t *testing.T, pageURL string) {
+	t.Helper()
 	require.Eventually(t, func() bool {
 		var state string
 		value, err := tb.evalRaw("document.readyState === 'complete' && location.href")

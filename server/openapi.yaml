@@ -1788,10 +1788,10 @@ paths:
         browser's own implementation. Private keys never enter the VM.
 
 
-        Turning it off stops new documents from getting the script. Documents
-        that already have it keep it, and their requests fall back to the
-        browser. Idempotent. The flag is persisted, so it survives a restart
-        of the instance API process.
+        Turning it off stops new documents from getting the script and tells
+        documents that already have it to leave every request to the browser.
+        Idempotent. The flag is persisted, so it survives a restart of the
+        instance API process.
       operationId: putWebAuthnHook
       x-telemetry-category: platform
       requestBody:

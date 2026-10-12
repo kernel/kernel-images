@@ -137,3 +137,63 @@ func TestRetainedPageDomainsSurviveTelemetryCleanup(t *testing.T) {
 	require.NotContains(t, methods, "Page.disable")
 	require.NotContains(t, methods, "Runtime.disable")
 }
+
+func TestReleasePageDomainsRestoresTelemetryCleanup(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+	var mu sync.Mutex
+	var sent []cdpMessage
+	stop := make(chan struct{})
+	defer close(stop)
+	go listenAndRespond(srv, stop, func(msg cdpMessage) any {
+		mu.Lock()
+		sent = append(sent, msg)
+		mu.Unlock()
+		if msg.Method == "Page.addScriptToEvaluateOnNewDocument" {
+			return map[string]any{"id": msg.ID, "result": map[string]any{"identifier": "script"}}
+		}
+		return nil
+	})
+	disables := func(sessionID string) []string {
+		mu.Lock()
+		defer mu.Unlock()
+		var methods []string
+		for _, msg := range sent {
+			if msg.SessionID == sessionID && (msg.Method == "Page.disable" || msg.Method == "Runtime.disable") {
+				methods = append(methods, msg.Method)
+			}
+		}
+		return methods
+	}
+	m := New(newTestUpstream(srv.wsURL()), newEventCollector().publishFn(), 0, discardLogger, nil)
+	require.NoError(t, m.SetTelemetry(false))
+	require.NoError(t, m.Start(context.Background()))
+	defer m.Stop()
+	<-srv.connCh
+	srv.sendToMonitor(t, map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "s", "targetInfo": map[string]any{"targetId": "t", "type": "page"}}})
+	require.Eventually(t, func() bool {
+		m.sessionsMu.RLock()
+		defer m.sessionsMu.RUnlock()
+		return m.networkReady["s"]
+	}, 3*time.Second, 10*time.Millisecond)
+
+	// Telemetry is off, so release disables what the extension had enabled.
+	m.RetainPageDomains()
+	require.NoError(t, m.ReleasePageDomains(context.Background()))
+	require.Equal(t, []string{"Page.disable", "Runtime.disable"}, disables("s"))
+
+	// A session telemetry captures keeps its domains until telemetry cleanup,
+	// which disables them again once nothing retains them.
+	require.NoError(t, m.SetTelemetry(true))
+	require.Eventually(t, func() bool {
+		m.sessionsMu.RLock()
+		defer m.sessionsMu.RUnlock()
+		return m.optionalSessions["s"] != ""
+	}, 3*time.Second, 10*time.Millisecond)
+	m.RetainPageDomains()
+	require.NoError(t, m.ReleasePageDomains(context.Background()))
+	require.Len(t, disables("s"), 2)
+	require.NoError(t, m.SetTelemetry(false))
+	waitForTelemetryReconcile(t, m, false)
+	require.Equal(t, []string{"Page.disable", "Runtime.disable", "Page.disable", "Runtime.disable"}, disables("s"))
+}

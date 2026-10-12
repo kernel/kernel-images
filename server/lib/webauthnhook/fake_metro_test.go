@@ -30,6 +30,8 @@ const (
 	flagAT = 0x40
 )
 
+var fakeTransports = []string{"internal", "hybrid"}
+
 type metroRequest struct {
 	op   string
 	auth string
@@ -170,7 +172,7 @@ func (f *fakeMetro) sign(op string, req Request) (json.RawMessage, error) {
 			"clientExtensionResults": map[string]any{},
 			"response": map[string]any{
 				"clientDataJSON": b64(clientDataJSON), "attestationObject": b64(attestation), "authenticatorData": b64(authData),
-				"publicKey": b64(spki), "publicKeyAlgorithm": -7, "transports": []string{"internal", "hybrid"},
+				"publicKey": b64(spki), "publicKeyAlgorithm": -7, "transports": fakeTransports,
 			},
 		})
 	}
