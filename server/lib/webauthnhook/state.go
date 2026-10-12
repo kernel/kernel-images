@@ -1,3 +1,9 @@
+// The on/off switch set by PUT /webauthn/hook is written to
+// /run/kernel/webauthn-hook.json. If the kernel-images API process restarts,
+// it reads the file and turns the hook back on, so browsers with armed
+// passkeys keep working. /run is per boot, so a new VM always starts with the
+// hook off. A file that cannot be read means off.
+
 package webauthnhook
 
 import (
@@ -9,7 +15,7 @@ import (
 )
 
 // DefaultStatePath sits with the other per-boot state the control plane
-// hands the VM, so it survives restarts of the API process.
+// hands the VM.
 const DefaultStatePath = "/run/kernel/webauthn-hook.json"
 
 type persisted struct {

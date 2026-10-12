@@ -45,6 +45,43 @@ type Signer interface {
 
 // MetroSigner forwards requests to metro-api, authenticated as the instance.
 // Both values are read per request: a forked VM learns them after boot.
+//
+// HTTP interface:
+//
+//	POST {KERNEL_METRO_API_BASE_URL}/webauthn/get
+//	POST {KERNEL_METRO_API_BASE_URL}/webauthn/create
+//	Authorization: Bearer <instance JWT>
+//	Content-Type: application/json
+//
+//	{"origin": "https://login.example.com", "top_origin": "https://example.com",
+//	 "mediation": "conditional", "public_key": {...}}
+//
+// origin is the calling document's origin and top_origin its top-level
+// document's, both as Chromium reports them, never as the page states them;
+// they are equal for a top-level document. mediation is the page's value and
+// is omitted when the page set none. public_key is the WebAuthn L3
+// PublicKeyCredentialRequestOptionsJSON (get) or CreationOptionsJSON (create),
+// base64url-encoded. The page supplies it, so it is untrusted.
+//
+// A 200 response is one of:
+//
+//	{"result": "credential", "credential": {...}}
+//	{"result": "not_handled"}
+//	{"result": "error", "name": "NotAllowedError", "message": "..."}
+//
+// credential is the WebAuthn L3 AuthenticationResponseJSON or
+// RegistrationResponseJSON. It must carry id, rawId, response.clientDataJSON,
+// and response.authenticatorData, plus response.signature for get or
+// response.attestationObject for create; anything less is treated as
+// not_handled. not_handled sends the page to the browser's own implementation.
+// error rejects the page's call with a DOMException of that name, one of
+// SecurityError, NotAllowedError, InvalidStateError, or NotSupportedError;
+// another name becomes NotAllowedError.
+//
+// 5xx responses and transport failures are retried with backoff for up to
+// signerWindow, each with an identical body, so the server can replay the
+// answer to a retried create. 401, 403, every other status, and malformed
+// bodies are treated as not_handled.
 type MetroSigner struct {
 	BaseURL func() string
 	Token   func() string

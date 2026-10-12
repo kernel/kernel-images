@@ -29,7 +29,7 @@ type instanceIdentity struct {
 // instanceIdentityProvider resolves the instance identity per use.
 //
 // In fork-identity-wait mode the platform delivers a fresh KERNEL_INSTANCE_JWT
-// (and INST_NAME/METRO_NAME/SESSION_INTEL_URL) in the applied identity payload
+// (and INST_NAME/METRO_NAME/KERNEL_METRO_API_BASE_URL) in the applied identity payload
 // after kernel-images-api has already started, and the process is not
 // restarted, so the boot-time env values are stale (empty on an unbound fork).
 // This provider reads the identity from the applied payload instead, falling
@@ -97,6 +97,6 @@ func (p *instanceIdentityProvider) resolve() (instanceIdentity, bool) {
 		jwt:          forkidentity.FirstNonEmpty(payload.Get("kernel_instance_jwt"), p.boot.jwt),
 		instanceName: forkidentity.FirstNonEmpty(payload.InstanceName(), p.boot.instanceName),
 		metro:        forkidentity.FirstNonEmpty(payload.Get("metro_name"), p.boot.metro),
-		metroAPIURL:  forkidentity.FirstNonEmpty(forkidentity.ExtensionAPIURL(payload), p.boot.metroAPIURL),
+		metroAPIURL:  forkidentity.FirstNonEmpty(forkidentity.MetroAPIURL(payload), p.boot.metroAPIURL),
 	}, true
 }

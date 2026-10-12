@@ -29,8 +29,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestChromiumPageHook drives the hook through a real Chromium and the real
-// cdpmonitor connection, answered by a fake metro-api that signs with ES256.
+// TestChromiumPageHook drives the hook through a real Chromium over its own
+// DevTools connection, answered by a fake metro-api that signs with ES256. A
+// telemetry monitor runs alongside it on a separate connection.
 // Sites are served over HTTPS under example.test and other.test, so the
 // cross-site iframe runs out of process.
 //
@@ -227,28 +228,40 @@ func TestChromiumPageHook(t *testing.T) {
 		require.Equal(t, before, env.metro.count())
 	})
 
-	t.Run("telemetry on and off leaves the hook working", func(t *testing.T) {
+	t.Run("telemetry capture on and off leaves the hook answering", func(t *testing.T) {
 		tab := env.open(t, login+"/page")
-		require.NoError(t, env.monitor.SetTelemetry(true))
-		time.Sleep(time.Second)
-		require.NoError(t, env.monitor.SetTelemetry(false))
-		time.Sleep(2 * time.Second)
-		result := tab.settle(t, pageGet(registered.ID))
-		require.Empty(t, result.Error)
-		requireHookCredential(t, result.Credential, "assertion")
+		interaction := func(want string) {
+			require.Eventually(t, func() bool {
+				value, err := tab.evalRaw(`window.__kernelEventInjected === true`)
+				return err == nil && string(value) == want
+			}, 15*time.Second, 50*time.Millisecond, "telemetry interaction capture did not reach %s", want)
+		}
+		answers := func() {
+			result := tab.settle(t, pageGet(registered.ID))
+			require.Empty(t, result.Error)
+			requireHookCredential(t, result.Credential, "assertion")
+		}
 
+		require.NoError(t, env.monitor.SetTelemetry(true))
+		interaction("true")
+		answers()
+
+		// Telemetry cleanup disables Runtime and Page on its own sessions.
+		require.NoError(t, env.monitor.SetTelemetry(false))
+		interaction("false")
+		answers()
 		tab.navigate(t, login+"/page?after-telemetry")
 		tab.waitHooked(t)
-		result = tab.settle(t, pageGet(registered.ID))
-		require.Empty(t, result.Error)
-		requireHookCredential(t, result.Credential, "assertion")
+		answers()
 	})
 
 	t.Run("disabling suspends hooked documents and stops new ones from getting the hook", func(t *testing.T) {
 		tab := env.open(t, login+"/page")
-		tab.addVirtualAuthenticator(t)
 		require.NoError(t, env.hook.Set(ctx, false))
 		defer func() { require.NoError(t, env.hook.Set(ctx, true)) }()
+		// Chromium drops a tab's virtual authenticators when another DevTools
+		// session on it detaches, so add one only after the hook's has.
+		tab.addVirtualAuthenticator(t)
 
 		before := env.metro.count()
 		started := time.Now()
@@ -313,11 +326,24 @@ func TestChromiumPageHook(t *testing.T) {
 		require.GreaterOrEqual(t, time.Since(started), signerWindow)
 	})
 
+	t.Run("a new upstream URL re-dials and the same document is answered", func(t *testing.T) {
+		tab := env.open(t, login+"/page")
+		before := env.hook.currentConnection()
+		env.upstream.set(env.browser, true)
+		require.Eventually(t, func() bool {
+			conn := env.hook.currentConnection()
+			return conn != nil && conn != before
+		}, 15*time.Second, 50*time.Millisecond, "the hook did not reconnect")
+		result := tab.settle(t, pageGet(registered.ID))
+		require.Empty(t, result.Error)
+		requireHookCredential(t, result.Credential, "assertion")
+	})
+
 	t.Run("a lost connection falls back, and a new one answers the same document", func(t *testing.T) {
 		tab := env.open(t, login+"/page")
-		env.monitor.Stop()
-		// Chromium drops a tab's virtual authenticators when another DevTools
-		// session on it detaches, so add one only after the monitor's has.
+		env.upstream.set("", false)
+		_ = env.hook.currentConnection().protocol.Close()
+		require.Eventually(t, func() bool { return env.hook.currentConnection() == nil }, 5*time.Second, 50*time.Millisecond)
 		tab.addVirtualAuthenticator(t)
 		before := env.metro.count()
 		started := time.Now()
@@ -327,7 +353,7 @@ func TestChromiumPageHook(t *testing.T) {
 		require.GreaterOrEqual(t, time.Since(started), 10*time.Second)
 		require.Equal(t, before, env.metro.count())
 
-		require.NoError(t, env.monitor.Start(ctx))
+		env.upstream.set(env.browser, true)
 		result = tab.settle(t, pageGet(registered.ID))
 		require.Empty(t, result.Error)
 		requireHookCredential(t, result.Credential, "assertion")
@@ -533,13 +559,14 @@ func unb64(t *testing.T, text string) []byte {
 // --- environment ---
 
 type chromeEnv struct {
-	ctx     context.Context
-	port    string
-	browser string
-	driver  *driver
-	metro   *fakeMetro
-	monitor *cdpmonitor.Monitor
-	hook    *Hook
+	ctx      context.Context
+	port     string
+	browser  string
+	driver   *driver
+	metro    *fakeMetro
+	monitor  *cdpmonitor.Monitor
+	upstream *switchableUpstream
+	hook     *Hook
 }
 
 func newChromeEnv(t *testing.T, ctx context.Context) *chromeEnv {
@@ -553,8 +580,12 @@ func newChromeEnv(t *testing.T, ctx context.Context) *chromeEnv {
 	t.Cleanup(metroServer.Close)
 
 	browser := launchChromium(t, ctx, "--ignore-certificate-errors", "--host-resolver-rules=MAP *.test 127.0.0.1")
-	monitor := cdpmonitor.New(staticUpstream(browser), func(events.Event) (events.Envelope, bool) { return events.Envelope{}, false }, 0, discard, nil)
+	monitor := cdpmonitor.New(&switchableUpstream{url: browser}, func(events.Event) (events.Envelope, bool) { return events.Envelope{}, false }, 0, discard, nil)
 	require.NoError(t, monitor.SetTelemetry(false))
+	require.NoError(t, monitor.Start(ctx))
+	t.Cleanup(monitor.Stop)
+
+	upstream := &switchableUpstream{url: browser}
 	hook := New(Config{
 		StatePath: filepath.Join(t.TempDir(), "webauthn-hook.json"),
 		Signer: &MetroSigner{
@@ -564,13 +595,15 @@ func newChromeEnv(t *testing.T, ctx context.Context) *chromeEnv {
 			Logger:  discard,
 		},
 		Logger: discard,
-	}, monitor)
-	monitor.SetExtension(hook)
-	require.NoError(t, monitor.Start(ctx))
-	t.Cleanup(monitor.Stop)
+	}, upstream)
+	hook.Start(ctx)
+	t.Cleanup(hook.Stop)
 	require.NoError(t, hook.Set(ctx, true))
 
-	return &chromeEnv{ctx: ctx, port: siteURL.Port(), browser: browser, driver: dialDriver(t, ctx, browser), metro: metro, monitor: monitor, hook: hook}
+	return &chromeEnv{
+		ctx: ctx, port: siteURL.Port(), browser: browser, driver: dialDriver(t, ctx, browser),
+		metro: metro, monitor: monitor, upstream: upstream, hook: hook,
+	}
 }
 
 func (e *chromeEnv) site(host string) string {
@@ -815,12 +848,10 @@ func (d *driver) contextFor(sessionID, origin string) int {
 	return 0
 }
 
-type staticUpstream string
-
-func (u staticUpstream) Current() string { return string(u) }
-
-func (u staticUpstream) Subscribe() (<-chan string, func()) {
-	return make(chan string), func() {}
+func (h *Hook) currentConnection() *connection {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.conn
 }
 
 var devToolsURL = regexp.MustCompile(`ws://\S+`)

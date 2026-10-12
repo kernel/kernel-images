@@ -152,7 +152,7 @@ func main() {
 		jwt:          config.InstanceJWT,
 		instanceName: config.InstanceName,
 		metro:        config.MetroName,
-		metroAPIURL:  forkidentity.FirstNonEmpty(config.SessionIntelURL, config.MetroAPIBaseURL),
+		metroAPIURL:  config.MetroAPIBaseURL,
 	}, slogger)
 
 	var otlpExporter api.OTLPExporter
@@ -230,6 +230,7 @@ func main() {
 		slogger.Error("failed to start network monitor", "err", err)
 		os.Exit(1)
 	}
+	apiService.StartWebAuthnHook()
 
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))

@@ -25,10 +25,11 @@ func withForkIdentityFiles(t *testing.T) {
 func writeAppliedPayload(t *testing.T, jwt, instanceName, metro string) {
 	t.Helper()
 	p := forkidentity.Payload{
-		"instance_name":       instanceName,
-		"metro_name":          metro,
-		"session_intel_url":   "https://intel.example",
-		"kernel_instance_jwt": jwt,
+		"instance_name":             instanceName,
+		"metro_name":                metro,
+		"session_intel_url":         "https://intel.example",
+		"kernel_metro_api_base_url": "https://metro.example",
+		"kernel_instance_jwt":       jwt,
 	}
 	if err := forkidentity.WritePayload(p); err != nil {
 		t.Fatalf("write payload: %v", err)
@@ -39,7 +40,7 @@ func writeAppliedPayload(t *testing.T, jwt, instanceName, metro string) {
 }
 
 func bootIdentity() instanceIdentity {
-	return instanceIdentity{jwt: "boot-jwt", instanceName: "boot-inst", metro: "boot-metro", metroAPIURL: "https://boot-intel.example"}
+	return instanceIdentity{jwt: "boot-jwt", instanceName: "boot-inst", metro: "boot-metro", metroAPIURL: "https://boot-metro.example"}
 }
 
 func TestInstanceIdentityProvider(t *testing.T) {
@@ -48,7 +49,7 @@ func TestInstanceIdentityProvider(t *testing.T) {
 		t.Setenv(forkidentity.WaitEnv, "")
 		writeAppliedPayload(t, "payload-jwt", "payload-inst", "payload-metro") // ignored in non-fork
 		p := newInstanceIdentityProvider(bootIdentity(), slog.Default())
-		if p.Token() != "boot-jwt" || p.InstanceName() != "boot-inst" || p.Metro() != "boot-metro" || p.MetroAPIURL() != "https://boot-intel.example" {
+		if p.Token() != "boot-jwt" || p.InstanceName() != "boot-inst" || p.Metro() != "boot-metro" || p.MetroAPIURL() != "https://boot-metro.example" {
 			t.Errorf("got (%q,%q,%q,%q), want boot values", p.Token(), p.InstanceName(), p.Metro(), p.MetroAPIURL())
 		}
 	})
@@ -69,7 +70,7 @@ func TestInstanceIdentityProvider(t *testing.T) {
 		// the applied payload.
 		p := newInstanceIdentityProvider(instanceIdentity{}, slog.Default())
 		writeAppliedPayload(t, "fresh-jwt", "fresh-inst", "fresh-metro")
-		if p.Token() != "fresh-jwt" || p.InstanceName() != "fresh-inst" || p.Metro() != "fresh-metro" || p.MetroAPIURL() != "https://intel.example" {
+		if p.Token() != "fresh-jwt" || p.InstanceName() != "fresh-inst" || p.Metro() != "fresh-metro" || p.MetroAPIURL() != "https://metro.example" {
 			t.Errorf("got (%q,%q,%q,%q), want fresh payload values", p.Token(), p.InstanceName(), p.Metro(), p.MetroAPIURL())
 		}
 	})

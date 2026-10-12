@@ -77,8 +77,6 @@ type Config struct {
 	MetroName    string `envconfig:"METRO_NAME"          default:""`
 
 	// Metro API base URL, which answers the WebAuthn page hook's requests.
-	// Image variants set one or the other; SESSION_INTEL_URL wins.
-	SessionIntelURL string `envconfig:"SESSION_INTEL_URL"         default:""`
 	MetroAPIBaseURL string `envconfig:"KERNEL_METRO_API_BASE_URL" default:""`
 }
 
@@ -121,7 +119,6 @@ func (c *Config) LogValue() slog.Value {
 		slog.Duration("otlp_export_timeout", c.OTLPExportTimeout),
 		slog.String("otlp_instance_name", c.InstanceName),
 		slog.String("otlp_metro", c.MetroName),
-		slog.String("session_intel_url", c.SessionIntelURL),
 		slog.String("metro_api_base_url", c.MetroAPIBaseURL),
 	)
 }

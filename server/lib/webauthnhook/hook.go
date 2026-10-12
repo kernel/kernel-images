@@ -1,12 +1,14 @@
 // Package webauthnhook answers pages' navigator.credentials.get/create
 // publicKey requests with passkeys held outside the VM.
 //
-// A script installed in every page and iframe document replaces the WebAuthn
-// entry points and sends each request through a CDP binding on the
-// cdpmonitor's persistent connection. The hook adds the calling document's
-// origin as Chromium reports it, forwards the request to a Signer
-// (metro-api), and replies in the same execution context. Requests nothing
-// answers fall back to the browser's own implementation.
+// While the hook is on it keeps its own DevTools connection to Chromium,
+// separate from telemetry's. Over it, a script installed in every page and
+// iframe document replaces the WebAuthn entry points and sends each request
+// through a CDP binding. The hook adds the calling document's origin as
+// Chromium reports it, forwards the request to a Signer (metro-api), and
+// replies in the same execution context. Requests nothing answers fall back
+// to the browser's own implementation. Turning the hook off closes the
+// connection, which removes its bindings and scripts.
 package webauthnhook
 
 import (
@@ -19,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 )
 
 // bindingName must match BINDING and replyFunction must match REPLY in hook.js.
@@ -54,11 +56,11 @@ type Config struct {
 	Logger    *slog.Logger
 }
 
-// PageDomains keeps telemetry cleanup from disabling the Page and Runtime
-// domains the hook needs while it is on. *cdpmonitor.Monitor implements it.
-type PageDomains interface {
-	RetainPageDomains()
-	ReleasePageDomains(ctx context.Context) error
+// Upstream reports Chromium's DevTools URL and its changes.
+// *devtoolsproxy.UpstreamManager implements it.
+type Upstream interface {
+	Current() string
+	Subscribe() (<-chan string, func())
 }
 
 type executionContext struct {
@@ -85,6 +87,16 @@ type sender interface {
 	Send(ctx context.Context, method string, params any) (json.RawMessage, error)
 }
 
+// cdpSession sends commands to one target over the hook's connection.
+type cdpSession struct {
+	protocol *cdpclient.Client
+	id       string
+}
+
+func (c cdpSession) Send(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	return c.protocol.Send(ctx, method, params, c.id)
+}
+
 type session struct {
 	id            string
 	targetID      string
@@ -92,45 +104,63 @@ type session struct {
 	parentFrameID string
 	cdp           sender
 
-	setupMu  sync.Mutex
-	domains  bool   // setupMu: the binding may be installed
-	scriptID string // setupMu: new-document registration while enabled
-
+	attempted     bool                     // Hook.mu; first setup attempt has finished
 	contexts      map[int]executionContext // Hook.mu; main-world contexts only
 	frameContexts map[string]int           // Hook.mu; frame ID -> its newest main-world context
 	calls         map[callKey]*call        // Hook.mu
 }
 
-// Hook implements cdpmonitor.Extension.
 type Hook struct {
-	cfg     Config
-	domains PageDomains
-	log     *slog.Logger
+	cfg      Config
+	upstream Upstream
+	log      *slog.Logger
 
-	setMu sync.Mutex // serializes Set
+	setMu     sync.Mutex         // serializes Start, Stop, and Set
+	lifecycle context.Context    // setMu; set by Start
+	stopRun   context.CancelFunc // setMu; non-nil while the connection loop runs
+	runDone   chan struct{}      // setMu
 
 	mu       sync.Mutex
 	enabled  bool
+	conn     *connection // started connection, nil while there is none
 	sessions map[string]*session
 }
 
-var _ cdpmonitor.Extension = (*Hook)(nil)
-
-// New restores the flag a previous run of the process left. While the hook
-// is on it retains domains, so telemetry cleanup does not disable them.
-func New(cfg Config, domains PageDomains) *Hook {
-	h := &Hook{cfg: cfg, domains: domains, log: cfg.Logger, sessions: make(map[string]*session)}
-	if loadEnabled(cfg.StatePath, cfg.Logger) {
-		h.domains.RetainPageDomains()
-		h.enabled = true
+// New restores the flag a previous run of the process left. Nothing connects
+// until Start.
+func New(cfg Config, upstream Upstream) *Hook {
+	return &Hook{
+		cfg: cfg, upstream: upstream, log: cfg.Logger,
+		enabled:  loadEnabled(cfg.StatePath, cfg.Logger),
+		sessions: make(map[string]*session),
 	}
-	return h
 }
 
-// Set turns the hook on or off, persisting the flag first, and waits until the
-// current sessions are reconciled. Turning it off tells hooked documents to
-// leave requests to the browser, removes the script and binding, and releases
-// the Page and Runtime domains to telemetry.
+// Start connects to Chromium if the hook is on. Connections live until ctx
+// ends, Stop, or the hook is turned off.
+func (h *Hook) Start(ctx context.Context) {
+	h.setMu.Lock()
+	defer h.setMu.Unlock()
+	h.lifecycle = ctx
+	h.mu.Lock()
+	enabled := h.enabled
+	h.mu.Unlock()
+	if enabled {
+		h.startLocked()
+	}
+}
+
+// Stop closes the connection without changing the flag.
+func (h *Hook) Stop() {
+	h.setMu.Lock()
+	defer h.setMu.Unlock()
+	h.stopLocked()
+}
+
+// Set turns the hook on or off, persisting the flag first. Turning it on
+// connects and waits, within ctx and installWait, until the documents already
+// open are hooked. Turning it off tells hooked documents to leave requests to
+// the browser, then closes the connection.
 func (h *Hook) Set(ctx context.Context, enabled bool) error {
 	h.setMu.Lock()
 	defer h.setMu.Unlock()
@@ -138,39 +168,66 @@ func (h *Hook) Set(ctx context.Context, enabled bool) error {
 		return err
 	}
 	h.mu.Lock()
-	changed := h.enabled != enabled
-	h.mu.Unlock()
-	if changed && enabled {
-		h.domains.RetainPageDomains()
-	}
-	h.mu.Lock()
 	h.enabled = enabled
-	sessions := make([]*session, 0, len(h.sessions))
-	for _, s := range h.sessions {
-		sessions = append(sessions, s)
-	}
 	h.mu.Unlock()
-
-	var wg sync.WaitGroup
-	for _, s := range sessions {
-		wg.Go(func() { h.reconcile(s) })
+	if enabled {
+		h.startLocked()
+		h.waitInstalled(ctx)
+		return nil
 	}
-	wg.Wait()
-	if changed && !enabled {
-		if err := h.domains.ReleasePageDomains(ctx); err != nil {
-			h.log.Warn("webauthn: failed to release page domains", "err", err)
-		}
-	}
+	h.suspendAll()
+	h.stopLocked()
 	return nil
 }
 
-func (h *Hook) SessionAttached(s cdpmonitor.Session) {
-	if s.TargetType != "page" && s.TargetType != "iframe" {
+func (h *Hook) startLocked() {
+	if h.lifecycle == nil || h.stopRun != nil {
 		return
 	}
-	go h.reconcile(h.track(&session{
-		id: s.ID, targetID: s.TargetID, targetType: s.TargetType, parentFrameID: s.ParentFrameID, cdp: s,
-	}))
+	ctx, cancel := context.WithCancel(h.lifecycle)
+	done := make(chan struct{})
+	h.stopRun, h.runDone = cancel, done
+	go func() {
+		defer close(done)
+		h.run(ctx)
+	}()
+}
+
+func (h *Hook) stopLocked() {
+	if h.stopRun == nil {
+		return
+	}
+	h.stopRun()
+	<-h.runDone
+	h.stopRun, h.runDone = nil, nil
+}
+
+// suspendAll makes every hooked document fall back at once, rather than after
+// the page's timeout once the connection is gone.
+func (h *Hook) suspendAll() {
+	type target struct {
+		s  *session
+		ec executionContext
+	}
+	var targets []target
+	h.mu.Lock()
+	for _, s := range h.sessions {
+		for _, ec := range s.contexts {
+			targets = append(targets, target{s, ec})
+		}
+	}
+	h.mu.Unlock()
+	var wg sync.WaitGroup
+	for _, t := range targets {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), deliverTimeout)
+			defer cancel()
+			_, _ = t.s.cdp.Send(ctx, "Runtime.evaluate", map[string]any{
+				"expression": suspendExpression, "uniqueContextId": t.ec.uniqueID, "silent": true,
+			})
+		})
+	}
+	wg.Wait()
 }
 
 func (h *Hook) track(s *session) *session {
@@ -183,29 +240,19 @@ func (h *Hook) track(s *session) *session {
 	return s
 }
 
-func (h *Hook) SessionRemoved(sessionID string) {
-	h.mu.Lock()
-	delete(h.sessions, sessionID)
-	h.mu.Unlock()
-}
-
-func (h *Hook) Reset() {
-	h.mu.Lock()
-	clear(h.sessions)
-	h.mu.Unlock()
-}
-
-// reconcile brings one session to the current flag, retrying once after a
-// short delay so a tab is not left unhooked by a transient failure.
+// reconcile hooks a newly attached session, retrying once after a short
+// delay so a tab is not left unhooked by a transient failure.
 func (h *Hook) reconcile(s *session) {
-	err := h.reconcileOnce(s)
-	if err == nil {
-		return
+	err := h.install(s)
+	if err != nil {
+		time.Sleep(setupRetryDelay)
+		if err = h.install(s); err != nil && h.live(s) {
+			h.log.Error("webauthn: failed to install hook", "session", s.id, "target_type", s.targetType, "err", err)
+		}
 	}
-	time.Sleep(setupRetryDelay)
-	if err = h.reconcileOnce(s); err != nil && h.live(s) {
-		h.log.Error("webauthn: failed to reconcile hook", "session", s.id, "target_type", s.targetType, "err", err)
-	}
+	h.mu.Lock()
+	s.attempted = true
+	h.mu.Unlock()
 }
 
 func (h *Hook) live(s *session) bool {
@@ -214,31 +261,15 @@ func (h *Hook) live(s *session) bool {
 	return h.sessions[s.id] == s
 }
 
-func (h *Hook) reconcileOnce(s *session) error {
-	s.setupMu.Lock()
-	defer s.setupMu.Unlock()
+func (h *Hook) install(s *session) error {
 	h.mu.Lock()
 	enabled, live := h.enabled, h.sessions[s.id] == s
-	contexts := make([]executionContext, 0, len(s.contexts))
-	for _, ec := range s.contexts {
-		contexts = append(contexts, ec)
-	}
 	h.mu.Unlock()
-	if !live {
+	if !enabled || !live {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), setupTimeout)
 	defer cancel()
-	if enabled {
-		return h.install(ctx, s)
-	}
-	return h.uninstall(ctx, s, contexts)
-}
-
-func (h *Hook) install(ctx context.Context, s *session) error {
-	if s.scriptID != "" {
-		return nil
-	}
 	for _, command := range []struct {
 		method string
 		params any
@@ -246,54 +277,16 @@ func (h *Hook) install(ctx context.Context, s *session) error {
 		{"Runtime.enable", nil},
 		{"Page.enable", nil},
 		{"Runtime.addBinding", map[string]any{"name": bindingName}},
+		{"Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": hookSource, "runImmediately": true}},
 	} {
 		if _, err := s.cdp.Send(ctx, command.method, command.params); err != nil {
 			return err
 		}
 	}
-	s.domains = true
-	raw, err := s.cdp.Send(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
-		"source": hookSource, "runImmediately": true,
-	})
-	if err != nil {
-		return err
-	}
-	var result struct {
-		Identifier string `json:"identifier"`
-	}
-	if err := json.Unmarshal(raw, &result); err != nil {
-		return err
-	}
-	s.scriptID = result.Identifier
 	return nil
 }
 
-// uninstall suspends the hook in the session's documents before removing the
-// binding, so they fall back at once rather than after a timeout. The domains
-// themselves are released together, once every session is done.
-func (h *Hook) uninstall(ctx context.Context, s *session, contexts []executionContext) error {
-	if !s.domains {
-		return nil
-	}
-	for _, ec := range contexts {
-		_, _ = s.cdp.Send(ctx, "Runtime.evaluate", map[string]any{
-			"expression": suspendExpression, "uniqueContextId": ec.uniqueID, "silent": true,
-		})
-	}
-	if s.scriptID != "" {
-		if _, err := s.cdp.Send(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{"identifier": s.scriptID}); err != nil {
-			return err
-		}
-		s.scriptID = ""
-	}
-	if _, err := s.cdp.Send(ctx, "Runtime.removeBinding", map[string]any{"name": bindingName}); err != nil {
-		return err
-	}
-	s.domains = false
-	return nil
-}
-
-func (h *Hook) ProtocolEvent(sessionID, method string, params json.RawMessage) {
+func (h *Hook) protocolEvent(sessionID, method string, params json.RawMessage) {
 	switch method {
 	case "Runtime.executionContextCreated":
 		var event struct {

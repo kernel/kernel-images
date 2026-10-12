@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
+	"github.com/kernel/kernel-images/server/lib/browsersurface"
 	"github.com/stretchr/testify/require"
 )
 
@@ -151,23 +151,49 @@ func (f *fakeSigner) calls() []recordedRequest {
 	return append([]recordedRequest(nil), f.requests...)
 }
 
-type fakeDomains struct {
-	retained, released int
+// switchableUpstream is a DevTools URL that tests can change, notifying
+// subscribers the way the upstream manager does after a Chromium restart.
+type switchableUpstream struct {
+	mu   sync.Mutex
+	url  string
+	subs []chan string
 }
 
-func (d *fakeDomains) RetainPageDomains() { d.retained++ }
+func (u *switchableUpstream) Current() string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.url
+}
 
-func (d *fakeDomains) ReleasePageDomains(context.Context) error {
-	d.released++
-	return nil
+func (u *switchableUpstream) Subscribe() (<-chan string, func()) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	ch := make(chan string, 1)
+	u.subs = append(u.subs, ch)
+	return ch, func() {}
+}
+
+// set changes the URL; notify also tells subscribers, as a restart would.
+func (u *switchableUpstream) set(url string, notify bool) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.url = url
+	if !notify {
+		return
+	}
+	for _, ch := range u.subs {
+		select {
+		case ch <- url:
+		default:
+		}
+	}
 }
 
 type harness struct {
-	hook    *Hook
-	signer  *fakeSigner
-	path    string
-	domains *fakeDomains
-	logs    *bytes.Buffer
+	hook   *Hook
+	signer *fakeSigner
+	path   string
+	logs   *bytes.Buffer
 }
 
 func newHarness(t *testing.T) *harness {
@@ -178,11 +204,17 @@ func newHarness(t *testing.T) *harness {
 func newHarnessAt(t *testing.T, path string) *harness {
 	t.Helper()
 	h := &harness{
-		path: path, domains: &fakeDomains{}, logs: &bytes.Buffer{},
+		path: path, logs: &bytes.Buffer{},
 		signer: &fakeSigner{answer: Answer{Result: "credential", Credential: json.RawMessage(`{"id":"cred"}`)}},
 	}
 	logger := slog.New(slog.NewTextHandler(&lockedWriter{w: h.logs}, nil))
-	h.hook = New(Config{StatePath: path, Signer: h.signer, Logger: logger}, h.domains)
+	h.hook = New(Config{StatePath: path, Signer: h.signer, Logger: logger}, &switchableUpstream{})
+	ctx, cancel := context.WithCancel(context.Background())
+	h.hook.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		h.hook.Stop()
+	})
 	return h
 }
 
@@ -215,57 +247,50 @@ func (h *harness) context(sessionID string, id int, origin, frameID string) {
 		"id": id, "uniqueId": sessionID + "-" + origin, "origin": origin,
 		"auxData": map[string]any{"frameId": frameID, "isDefault": true},
 	}})
-	h.hook.ProtocolEvent(sessionID, "Runtime.executionContextCreated", params)
+	h.hook.protocolEvent(sessionID, "Runtime.executionContextCreated", params)
 }
 
 func (h *harness) call(sessionID string, contextID int, payload map[string]any) {
 	data, _ := json.Marshal(payload)
 	params, _ := json.Marshal(map[string]any{"name": bindingName, "payload": string(data), "executionContextId": contextID})
-	h.hook.ProtocolEvent(sessionID, "Runtime.bindingCalled", params)
+	h.hook.protocolEvent(sessionID, "Runtime.bindingCalled", params)
 }
 
 func getCall(id string) map[string]any {
 	return map[string]any{"id": id, "op": "get", "publicKey": map[string]any{"challenge": "AAAA"}}
 }
 
-func TestSetInstallsAndRemovesHook(t *testing.T) {
+func TestSetInstallsAndSuspends(t *testing.T) {
 	h := newHarness(t)
 	page := h.attach(t, "page", "page", "")
 	require.Empty(t, page.methods(), "a disabled hook must not touch sessions")
-	h.hook.SessionAttached(cdpmonitor.Session{ID: "worker", TargetType: "worker"})
+	h.hook.handleEvent(&connection{}, browsersurface.Event{
+		Kind: browsersurface.EventSessionAttached, SessionID: "worker", Target: browsersurface.SessionTarget{Type: "worker"},
+	})
 	require.NotContains(t, h.hook.sessions, "worker", "only page and iframe documents can call WebAuthn")
-	installed := []string{"Runtime.enable", "Page.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"}
 
 	require.NoError(t, h.hook.Set(context.Background(), true))
-	require.Equal(t, 1, h.domains.retained)
-	require.Equal(t, installed, page.methods())
+	page = h.attach(t, "page", "page", "")
+	require.Equal(t, []string{"Runtime.enable", "Page.enable", "Runtime.addBinding", "Page.addScriptToEvaluateOnNewDocument"}, page.methods())
 	require.Equal(t, bindingName, page.commands[2].params["name"])
 	require.Equal(t, true, page.commands[3].params["runImmediately"])
 	require.Equal(t, hookSource, page.commands[3].params["source"])
-
-	require.NoError(t, h.hook.Set(context.Background(), true))
-	require.Len(t, page.methods(), 4, "enabling twice must not register the script twice")
-	require.Equal(t, 1, h.domains.retained)
 
 	h.context("page", 1, "https://example.com", "page")
 	h.context("page", 2, "https://example.com", "child")
 	require.NoError(t, h.hook.Set(context.Background(), false))
 	require.ElementsMatch(t, []string{"page-https://example.com", "page-https://example.com"}, page.suspended)
-	require.Equal(t, []string{"Runtime.evaluate", "Runtime.evaluate", "Page.removeScriptToEvaluateOnNewDocument", "Runtime.removeBinding"}, page.methods()[4:])
-	require.Equal(t, "script-1", page.commands[6].params["identifier"])
-	require.Equal(t, bindingName, page.commands[7].params["name"])
-	require.Equal(t, 1, h.domains.released)
+	require.Equal(t, []string{"Runtime.evaluate", "Runtime.evaluate"}, page.methods()[4:], "the closed connection removes the binding and script")
+}
 
-	require.NoError(t, h.hook.Set(context.Background(), false))
-	require.Len(t, page.methods(), 8)
-	require.Equal(t, 1, h.domains.released)
-
+func TestSetStartsAndStopsConnectionLoop(t *testing.T) {
+	h := newHarness(t)
+	require.Nil(t, h.hook.stopRun)
 	require.NoError(t, h.hook.Set(context.Background(), true))
-	require.Equal(t, installed, page.methods()[8:])
-	require.Equal(t, 2, h.domains.retained)
-
-	later := h.attach(t, "later", "iframe", "page")
-	require.Equal(t, installed, later.methods())
+	require.NotNil(t, h.hook.stopRun)
+	require.NoError(t, h.hook.Set(context.Background(), true))
+	require.NoError(t, h.hook.Set(context.Background(), false))
+	require.Nil(t, h.hook.stopRun)
 }
 
 func TestSetupFailureIsRetriedOnce(t *testing.T) {
@@ -289,13 +314,13 @@ func TestEnabledFlagSurvivesRestart(t *testing.T) {
 	require.NoError(t, first.hook.Set(context.Background(), true))
 
 	restarted := newHarnessAt(t, path)
-	require.Equal(t, 1, restarted.domains.retained, "a restored hook retains page domains before the monitor starts")
+	require.NotNil(t, restarted.hook.stopRun, "a restored hook connects at start")
 	page := restarted.attach(t, "page", "page", "")
 	require.Contains(t, page.methods(), "Page.addScriptToEvaluateOnNewDocument")
 
 	require.NoError(t, restarted.hook.Set(context.Background(), false))
 	again := newHarnessAt(t, path)
-	require.Zero(t, again.domains.retained)
+	require.Nil(t, again.hook.stopRun)
 	require.Empty(t, again.attach(t, "page", "page", "").methods())
 }
 
@@ -435,14 +460,14 @@ func TestTopOriginFollowsNewestMainFrameContext(t *testing.T) {
 		h.context("page", i, fmt.Sprintf("https://site%d.example", i), "page")
 	}
 	destroyed, _ := json.Marshal(map[string]any{"executionContextId": 3})
-	h.hook.ProtocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	h.hook.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
 
 	h.call("frame", 1, getCall("r1"))
 	require.Equal(t, "credential", frame.finalReply(t, "r1")["result"])
 	require.Equal(t, "https://site20.example", h.signer.calls()[0].req.TopOrigin)
 
 	destroyed, _ = json.Marshal(map[string]any{"executionContextId": 20})
-	h.hook.ProtocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	h.hook.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
 	h.call("frame", 1, getCall("r2"))
 	require.Equal(t, "not_handled", frame.finalReply(t, "r2")["result"], "a destroyed main-frame document has no top origin")
 }
@@ -470,10 +495,10 @@ func TestIgnoredCalls(t *testing.T) {
 	h.call("page", 1, map[string]any{"op": "get"})
 	h.call("page", 1, map[string]any{"id": strings.Repeat("x", maxRequestIDLen+1), "op": "get"})
 	other, _ := json.Marshal(map[string]any{"name": "__kernelEvent", "payload": `{"id":"x","op":"get"}`, "executionContextId": 1})
-	h.hook.ProtocolEvent("page", "Runtime.bindingCalled", other)
+	h.hook.protocolEvent("page", "Runtime.bindingCalled", other)
 
 	destroyed, _ := json.Marshal(map[string]any{"executionContextId": 1})
-	h.hook.ProtocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	h.hook.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
 	h.call("page", 1, getCall("after-destroy"))
 
 	time.Sleep(50 * time.Millisecond)

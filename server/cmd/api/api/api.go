@@ -143,7 +143,7 @@ type ApiService struct {
 	// decide whether to refuse a context that would set its own proxy.
 	egressPolicy *egresspolicy.State
 
-	// webauthnHook answers pages' WebAuthn calls over the CDP monitor's
+	// webauthnHook answers pages' WebAuthn calls over its own DevTools
 	// connection; PUT /webauthn/hook turns it on and off.
 	webauthnHook *webauthnhook.Hook
 
@@ -187,8 +187,6 @@ func New(
 	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
 	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default(), screenshotEnabled)
 	_ = mon.SetTelemetry(false)
-	webauthnHook := webauthnhook.New(webauthn, mon)
-	mon.SetExtension(webauthnHook)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &ApiService{
@@ -207,7 +205,7 @@ func New(
 		otlpExport:        otlpExport,
 		s2Storage:         s2Storage,
 		egressPolicy:      egressPolicy,
-		webauthnHook:      webauthnHook,
+		webauthnHook:      webauthnhook.New(webauthn, upstreamMgr),
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
@@ -480,6 +478,12 @@ func (s *ApiService) StartNetworkMonitor() error {
 	return s.cdpMonitor.Start(s.lifecycleCtx)
 }
 
+// StartWebAuthnHook reconnects the WebAuthn page hook when a previous run of
+// the process left it on.
+func (s *ApiService) StartWebAuthnHook() {
+	s.webauthnHook.Start(s.lifecycleCtx)
+}
+
 func (s *ApiService) NetworkMetrics() (resets, completed uint64, up bool) {
 	snapshot := s.cdpMonitor.NetworkSnapshot()
 	return snapshot.Resets, snapshot.Completed, snapshot.Up
@@ -491,6 +495,7 @@ func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.playwrightExecutors.Shutdown(ctx)
 
 	_ = s.webmcp.Close()
+	s.webauthnHook.Stop()
 	s.monitorMu.Lock()
 	s.cdpMonitor.Stop()
 	s.telemetrySession.Stop()

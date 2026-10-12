@@ -133,9 +133,6 @@ func (m *Monitor) disableOptionalDomains(ctx context.Context, sessionID, scriptI
 	if !exists {
 		return nil
 	}
-	m.pageDomainsMu.RLock()
-	defer m.pageDomainsMu.RUnlock()
-	keepDomains := m.pageDomainsRetained && isPageLikeTarget(info.targetType)
 	var cleanupErr error
 	if scriptID != "" {
 		_, cleanupErr = m.send(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{"identifier": scriptID}, sessionID)
@@ -153,18 +150,13 @@ func (m *Monitor) disableOptionalDomains(ctx context.Context, sessionID, scriptI
 			{"Inspector.disable", nil},
 			{"Page.disable", nil},
 		} {
-			if keepDomains && command.method == "Page.disable" {
-				continue
-			}
 			if _, err := m.send(ctx, command.method, command.params, sessionID); err != nil {
 				cleanupErr = errors.Join(cleanupErr, err)
 			}
 		}
 	}
-	if !keepDomains {
-		_, err := m.send(ctx, "Runtime.disable", nil, sessionID)
-		cleanupErr = errors.Join(cleanupErr, err)
-	}
+	_, err := m.send(ctx, "Runtime.disable", nil, sessionID)
+	cleanupErr = errors.Join(cleanupErr, err)
 	if cleanupErr == nil {
 		m.sessionsMu.Lock()
 		delete(m.interactionTargets, info.targetID)
