@@ -8,61 +8,65 @@ import (
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 )
 
-// otlpIdentityCacheTTL bounds how often the provider re-reads the applied
+// identityCacheTTL bounds how often the provider re-reads the applied
 // fork-identity payload from disk. Export requests are frequent; the identity
 // changes at most once per fork, so a few seconds of staleness is harmless and
 // avoids a filesystem read on every request. Only a payload-sourced identity is
 // cached; a boot fallback during the pre-apply window is returned uncached so
 // the fresh identity is picked up on the very next request.
-const otlpIdentityCacheTTL = 3 * time.Second
+const identityCacheTTL = 3 * time.Second
 
-// otlpIdentity is the platform identity stamped onto OTLP export: the relay
-// bearer credential plus the resource attributes.
-type otlpIdentity struct {
+// instanceIdentity is the platform identity this VM presents to Kernel
+// services: the instance JWT used as a bearer credential (by the OTLP relay
+// and the metro API), the OTLP resource attributes, and the metro API URL.
+type instanceIdentity struct {
 	jwt          string
 	instanceName string
 	metro        string
+	metroAPIURL  string
 }
 
-// otlpIdentityProvider resolves the OTLP identity per use.
+// instanceIdentityProvider resolves the instance identity per use.
 //
 // In fork-identity-wait mode the platform delivers a fresh KERNEL_INSTANCE_JWT
-// (and INST_NAME/METRO_NAME) in the applied identity payload after
-// kernel-images-api has already started, and the process is not restarted, so
-// the boot-time env values are stale (empty on an unbound fork). This provider
-// reads the identity from the applied payload instead, falling back to the boot
-// values. Outside fork mode it returns the boot identity unchanged.
-type otlpIdentityProvider struct {
-	boot        otlpIdentity
+// (and INST_NAME/METRO_NAME/SESSION_INTEL_URL) in the applied identity payload
+// after kernel-images-api has already started, and the process is not
+// restarted, so the boot-time env values are stale (empty on an unbound fork).
+// This provider reads the identity from the applied payload instead, falling
+// back to the boot values. Outside fork mode it returns the boot identity
+// unchanged.
+type instanceIdentityProvider struct {
+	boot        instanceIdentity
 	forkEnabled bool
 
 	mu       sync.Mutex
-	cached   otlpIdentity
+	cached   instanceIdentity
 	cachedOK bool
 	cachedAt time.Time
 }
 
-func newOTLPIdentityProvider(boot otlpIdentity, log *slog.Logger) *otlpIdentityProvider {
+func newInstanceIdentityProvider(boot instanceIdentity, log *slog.Logger) *instanceIdentityProvider {
 	enabled, err := forkidentity.WaitEnabled()
 	if err != nil {
 		// Malformed flag: treat as disabled but surface it, otherwise a fork VM
 		// would silently keep using the stale boot identity.
 		log.Warn("fork-identity wait flag invalid; treating as disabled", "err", err)
 	}
-	return &otlpIdentityProvider{boot: boot, forkEnabled: enabled}
+	return &instanceIdentityProvider{boot: boot, forkEnabled: enabled}
 }
 
-func (p *otlpIdentityProvider) Token() string        { return p.current().jwt }
-func (p *otlpIdentityProvider) InstanceName() string { return p.current().instanceName }
-func (p *otlpIdentityProvider) Metro() string        { return p.current().metro }
+func (p *instanceIdentityProvider) Token() string        { return p.current().jwt }
+func (p *instanceIdentityProvider) InstanceName() string { return p.current().instanceName }
+func (p *instanceIdentityProvider) Metro() string        { return p.current().metro }
+func (p *instanceIdentityProvider) MetroAPIURL() string  { return p.current().metroAPIURL }
 
 // current returns the identity, caching only a payload-sourced (or non-fork,
 // stable) result so a boot fallback during the pre-apply window is retried on
 // the next call rather than pinned for the TTL.
-func (p *otlpIdentityProvider) current() otlpIdentity {
+func (p *instanceIdentityProvider) current() instanceIdentity {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.cachedOK && time.Since(p.cachedAt) < otlpIdentityCacheTTL {
+	if p.cachedOK && time.Since(p.cachedAt) < identityCacheTTL {
 		return p.cached
 	}
 	id, ok := p.resolve()
@@ -75,7 +79,7 @@ func (p *otlpIdentityProvider) current() otlpIdentity {
 // resolve reads the applied fork-identity payload. The bool reports whether the
 // result is stable/cacheable: true for the boot identity outside fork mode or a
 // successfully read payload, false for a boot fallback while a fork is mid-apply.
-func (p *otlpIdentityProvider) resolve() (otlpIdentity, bool) {
+func (p *instanceIdentityProvider) resolve() (instanceIdentity, bool) {
 	if !p.forkEnabled {
 		return p.boot, true
 	}
@@ -89,9 +93,10 @@ func (p *otlpIdentityProvider) resolve() (otlpIdentity, bool) {
 	if err != nil {
 		return p.boot, false
 	}
-	return otlpIdentity{
+	return instanceIdentity{
 		jwt:          forkidentity.FirstNonEmpty(payload.Get("kernel_instance_jwt"), p.boot.jwt),
 		instanceName: forkidentity.FirstNonEmpty(payload.InstanceName(), p.boot.instanceName),
 		metro:        forkidentity.FirstNonEmpty(payload.Get("metro_name"), p.boot.metro),
+		metroAPIURL:  forkidentity.FirstNonEmpty(forkidentity.ExtensionAPIURL(payload), p.boot.metroAPIURL),
 	}, true
 }

@@ -1776,6 +1776,41 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /webauthn/hook:
+    put:
+      summary: Turn the WebAuthn page hook on or off
+      description: >
+        While on, every page and iframe document gets a script that answers
+        `navigator.credentials.get` and `navigator.credentials.create` calls
+        for public-key credentials through the VM: the request goes to the
+        metro API with the origin Chromium reports for the calling document,
+        and anything the metro API does not answer falls back to the
+        browser's own implementation. Private keys never enter the VM.
+
+
+        Turning it off stops new documents from getting the script. Documents
+        that already have it keep it, and their requests fall back to the
+        browser. Idempotent. The flag is persisted, so it survives a restart
+        of the instance API process.
+      operationId: putWebAuthnHook
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebAuthnHook"
+      responses:
+        "200":
+          description: Hook state applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebAuthnHook"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /telemetry:
     get:
       summary: Get telemetry configuration
@@ -6597,6 +6632,14 @@ components:
             Whether the session's egress is restricted to an allowlist. When
             true, the VM refuses requests that would reach destinations without
             going through the proxy that enforces it.
+      additionalProperties: false
+    WebAuthnHook:
+      type: object
+      description: Whether the WebAuthn page hook is installed in new documents.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
       additionalProperties: false
     TelemetryState:
       type: object

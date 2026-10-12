@@ -38,25 +38,25 @@ func writeAppliedPayload(t *testing.T, jwt, instanceName, metro string) {
 	}
 }
 
-func bootIdentity() otlpIdentity {
-	return otlpIdentity{jwt: "boot-jwt", instanceName: "boot-inst", metro: "boot-metro"}
+func bootIdentity() instanceIdentity {
+	return instanceIdentity{jwt: "boot-jwt", instanceName: "boot-inst", metro: "boot-metro", metroAPIURL: "https://boot-intel.example"}
 }
 
-func TestOTLPIdentityProvider(t *testing.T) {
+func TestInstanceIdentityProvider(t *testing.T) {
 	t.Run("non-fork returns boot identity", func(t *testing.T) {
 		withForkIdentityFiles(t)
 		t.Setenv(forkidentity.WaitEnv, "")
 		writeAppliedPayload(t, "payload-jwt", "payload-inst", "payload-metro") // ignored in non-fork
-		p := newOTLPIdentityProvider(bootIdentity(), slog.Default())
-		if p.Token() != "boot-jwt" || p.InstanceName() != "boot-inst" || p.Metro() != "boot-metro" {
-			t.Errorf("got (%q,%q,%q), want boot values", p.Token(), p.InstanceName(), p.Metro())
+		p := newInstanceIdentityProvider(bootIdentity(), slog.Default())
+		if p.Token() != "boot-jwt" || p.InstanceName() != "boot-inst" || p.Metro() != "boot-metro" || p.MetroAPIURL() != "https://boot-intel.example" {
+			t.Errorf("got (%q,%q,%q,%q), want boot values", p.Token(), p.InstanceName(), p.Metro(), p.MetroAPIURL())
 		}
 	})
 
 	t.Run("fork before apply falls back to boot", func(t *testing.T) {
 		withForkIdentityFiles(t)
 		t.Setenv(forkidentity.WaitEnv, "true")
-		p := newOTLPIdentityProvider(bootIdentity(), slog.Default())
+		p := newInstanceIdentityProvider(bootIdentity(), slog.Default())
 		if p.Token() != "boot-jwt" || p.InstanceName() != "boot-inst" {
 			t.Errorf("got (%q,%q), want boot fallback", p.Token(), p.InstanceName())
 		}
@@ -67,17 +67,17 @@ func TestOTLPIdentityProvider(t *testing.T) {
 		t.Setenv(forkidentity.WaitEnv, "true")
 		// Empty boot values mirror an unbound fork; the fresh identity comes from
 		// the applied payload.
-		p := newOTLPIdentityProvider(otlpIdentity{}, slog.Default())
+		p := newInstanceIdentityProvider(instanceIdentity{}, slog.Default())
 		writeAppliedPayload(t, "fresh-jwt", "fresh-inst", "fresh-metro")
-		if p.Token() != "fresh-jwt" || p.InstanceName() != "fresh-inst" || p.Metro() != "fresh-metro" {
-			t.Errorf("got (%q,%q,%q), want fresh payload values", p.Token(), p.InstanceName(), p.Metro())
+		if p.Token() != "fresh-jwt" || p.InstanceName() != "fresh-inst" || p.Metro() != "fresh-metro" || p.MetroAPIURL() != "https://intel.example" {
+			t.Errorf("got (%q,%q,%q,%q), want fresh payload values", p.Token(), p.InstanceName(), p.Metro(), p.MetroAPIURL())
 		}
 	})
 
 	t.Run("boot fallback is not cached; apply is picked up next call", func(t *testing.T) {
 		withForkIdentityFiles(t)
 		t.Setenv(forkidentity.WaitEnv, "true")
-		p := newOTLPIdentityProvider(bootIdentity(), slog.Default())
+		p := newInstanceIdentityProvider(bootIdentity(), slog.Default())
 		// Pre-apply: boot fallback, and must not be cached.
 		if got := p.Token(); got != "boot-jwt" {
 			t.Fatalf("pre-apply Token() = %q, want boot-jwt", got)

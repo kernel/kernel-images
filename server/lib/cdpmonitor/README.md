@@ -134,6 +134,7 @@ targets, not requests issued before their capture domains finish initializing.
 | Screenshot capture via ffmpeg | `screenshot.go` |
 | CDP protocol types | `cdp_proto.go`, `types.go` |
 | Interaction tracking injected into the page | `interaction.js` |
+| Non-telemetry consumers of the monitor's sessions (`Extension`) | `extension.go` |
 | Body/MIME capture sizing, text truncation, and typed payload helpers | `util.go` |
 
 ## Internals
@@ -151,6 +152,17 @@ that subscription is also installed on worker sessions to discover nested worker
 Only `worker` targets match this auto-attach filter, avoiding duplicate attachment
 of explicitly discovered OOPIFs. WebMCP's default tracker still tracks page/frame
 locations and does not subscribe to workers.
+
+### Extensions
+
+An `Extension` (the WebAuthn page hook in `../webauthnhook`) receives every
+attached session, its removal, every session-scoped protocol event, and a reset
+when a connection is replaced, regardless of telemetry state. It sends commands
+through the `Session` it was given, which stays bound to that connection.
+Telemetry cleanup normally disables Page and Runtime on page and iframe
+sessions; Chromium then drops `Runtime.addBinding` bindings and stops applying
+new-document scripts. `RetainPageDomains` makes cleanup leave both enabled for
+the rest of the monitor's lifetime, and waits for any disable already in flight.
 
 ### Reconnect and shutdown
 

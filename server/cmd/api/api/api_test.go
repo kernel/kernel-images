@@ -20,6 +20,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/webauthnhook"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -404,11 +405,19 @@ func testEgressPolicy(t *testing.T) *egresspolicy.State {
 	return egresspolicy.Load(filepath.Join(t.TempDir(), "egress-policy.json"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+func testWebAuthn(t *testing.T) webauthnhook.Config {
+	t.Helper()
+	return webauthnhook.Config{
+		StatePath: filepath.Join(t.TempDir(), "webauthn-hook.json"),
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
 // newSvc constructs an ApiService with a fresh telemetry session and event stream.
 func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t))
+	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t), testWebAuthn(t))
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {

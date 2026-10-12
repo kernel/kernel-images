@@ -84,6 +84,10 @@ type Monitor struct {
 	proxyRateMu   sync.Mutex
 	proxyLastEmit map[string]time.Time
 
+	extension           Extension
+	pageDomainsMu       sync.RWMutex
+	pageDomainsRetained bool
+
 	// Lifecycle workers survive reconnects. Capture work is drained before
 	// replacing a connection so stale sessions cannot write into the next one.
 	asyncWg   sync.WaitGroup
@@ -281,6 +285,12 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 		if !conn.surface.SessionExists(event.SessionID) {
 			return
 		}
+		if m.extension != nil {
+			m.extension.SessionAttached(Session{
+				ID: event.SessionID, TargetID: event.Target.ID, TargetType: event.Target.Type,
+				ParentFrameID: event.Target.ParentFrameID, protocol: conn.protocol,
+			})
+		}
 		m.handleAttachedToTarget(conn.ctx, cdpTargetAttachedToTargetParams{
 			SessionID: event.SessionID,
 			TargetInfo: cdpTargetTargetInfo{
@@ -290,6 +300,9 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 			},
 		})
 	case browsersurface.EventSessionRemoved:
+		if m.extension != nil {
+			m.extension.SessionRemoved(event.SessionID)
+		}
 		m.handleDetachedFromTarget(cdpTargetDetachedFromTargetParams{SessionID: event.SessionID})
 	case browsersurface.EventProtocol:
 		if event.Message.Method == "Target.targetDestroyed" {
@@ -312,6 +325,9 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 		// discovered through enumeration whose attach response arrived first.
 		if event.Message.Method == "Target.attachedToTarget" || event.Message.Method == "Target.detachedFromTarget" {
 			return
+		}
+		if m.extension != nil && event.Message.SessionID != "" {
+			m.extension.ProtocolEvent(event.Message.SessionID, event.Message.Method, event.Message.Params)
 		}
 		// Preserve crash reporting even if Chrome has already detached the session.
 		if event.Message.SessionID != "" && event.Message.Method != "Inspector.targetCrashed" {
@@ -352,6 +368,9 @@ func (m *Monitor) clearState() {
 	m.proxyRateMu.Lock()
 	m.proxyLastEmit = make(map[string]time.Time)
 	m.proxyRateMu.Unlock()
+	if m.extension != nil {
+		m.extension.Reset()
+	}
 }
 
 const pendingRequestTTL = 5 * time.Minute

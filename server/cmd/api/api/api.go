@@ -20,6 +20,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/webauthnhook"
 	"github.com/kernel/kernel-images/server/lib/webmcpclient"
 )
 
@@ -142,6 +143,10 @@ type ApiService struct {
 	// decide whether to refuse a context that would set its own proxy.
 	egressPolicy *egresspolicy.State
 
+	// webauthnHook answers pages' WebAuthn calls over the CDP monitor's
+	// connection; PUT /webauthn/hook turns it on and off.
+	webauthnHook *webauthnhook.Hook
+
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
 }
@@ -160,6 +165,7 @@ func New(
 	otlpExport OTLPExporter,
 	s2Storage S2Storage,
 	egressPolicy *egresspolicy.State,
+	webauthn webauthnhook.Config,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -181,6 +187,8 @@ func New(
 	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
 	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default(), screenshotEnabled)
 	_ = mon.SetTelemetry(false)
+	webauthnHook := webauthnhook.New(webauthn, mon.RetainPageDomains)
+	mon.SetExtension(webauthnHook)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	s := &ApiService{
@@ -199,6 +207,7 @@ func New(
 		otlpExport:        otlpExport,
 		s2Storage:         s2Storage,
 		egressPolicy:      egressPolicy,
+		webauthnHook:      webauthnHook,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
