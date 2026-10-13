@@ -3,15 +3,14 @@ package metrics
 import "context"
 
 // BrowserLocationSnapshot contains process-lifetime control-plane counters and
-// current component convergence. It intentionally carries no lease or locale
-// labels so metric cardinality remains bounded.
+// current component convergence. It intentionally carries no locale or
+// timezone labels so metric cardinality remains bounded.
 type BrowserLocationSnapshot struct {
 	Accepted           uint64
 	Applied            uint64
 	Retries            uint64
 	Stale              uint64
 	Conflicts          uint64
-	EpochRejects       uint64
 	Failures           uint64
 	ConvergenceMs      uint64
 	Converged          bool
@@ -43,7 +42,6 @@ func (c *BrowserLocationCollector) Collect(_ context.Context, w *Writer) error {
 		{"kernel_browser_location_retries_total", "Browser location same-value and convergence retries.", s.Retries},
 		{"kernel_browser_location_stale_total", "Stale browser location generations rejected.", s.Stale},
 		{"kernel_browser_location_conflicts_total", "Equal-generation browser location payload conflicts rejected.", s.Conflicts},
-		{"kernel_browser_location_epoch_rejects_total", "Browser location bundles rejected for a non-active epoch.", s.EpochRejects},
 		{"kernel_browser_location_failures_total", "Browser location reconciliation attempts that exhausted their deadline.", s.Failures},
 	}
 	for _, counter := range counters {

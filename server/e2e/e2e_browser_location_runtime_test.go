@@ -16,8 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const locationInstanceToken = "e2e-instance-token"
-
 // locationProbeScript starts a dedicated worker on first use and reports the
 // page's and the worker's timezone, locale and language. The worker keeps
 // running across updates so it is an already-running recipient.
@@ -54,7 +52,6 @@ type locationProbeResult struct {
 }
 
 type imageLocationBundle struct {
-	Epoch      string   `json:"epoch"`
 	Generation uint64   `json:"generation"`
 	TimeZone   string   `json:"timezone"`
 	Locale     string   `json:"locale"`
@@ -62,11 +59,10 @@ type imageLocationBundle struct {
 }
 
 type imageLocationStatus struct {
-	ActiveEpoch string               `json:"active_epoch"`
-	Accepted    *imageLocationBundle `json:"accepted"`
-	Applied     *imageLocationBundle `json:"applied"`
-	Components  map[string]bool      `json:"components"`
-	Error       string               `json:"error"`
+	Accepted   *imageLocationBundle `json:"accepted"`
+	Applied    *imageLocationBundle `json:"applied"`
+	Components map[string]bool      `json:"components"`
+	Error      string               `json:"error"`
 }
 
 // TestBrowserTimezoneFollowsLocaltime starts Chromium with the production
@@ -162,7 +158,6 @@ func TestBrowserLocationRuntimeUpdate(t *testing.T) {
 		"LANG":                    "en_US.UTF-8",
 		"LC_ALL":                  "en_US.UTF-8",
 		"CHROMIUM_FLAGS":          "--lang=en-US --accept-lang=en-US,en --remote-allow-origins=*",
-		"KERNEL_INSTANCE_JWT":     locationInstanceToken,
 	}}), "failed to start container")
 	defer c.Stop(ctx)
 	require.NoError(t, c.WaitReady(ctx), "api not ready")
@@ -176,13 +171,12 @@ func TestBrowserLocationRuntimeUpdate(t *testing.T) {
 	defer page.Close(ctx)
 	requireLocation(ctx, t, c, page, "America/Los_Angeles", "en-US")
 
-	// A to B through the lease-reset endpoint, then B to C through configure.
-	singapore := imageLocationBundle{Epoch: "lease-a", Generation: 1, TimeZone: "Asia/Singapore", Locale: "en-SG", Languages: []string{"en-SG", "en"}}
-	resetLocation(ctx, t, c, "", singapore)
+	singapore := imageLocationBundle{Generation: 1, TimeZone: "Asia/Singapore", Locale: "en-SG", Languages: []string{"en-SG", "en"}}
+	configureLocation(ctx, t, c, singapore, http.StatusOK)
 	waitLocationApplied(ctx, t, c, singapore)
 	requireLocation(ctx, t, c, page, "Asia/Singapore", "en-SG")
 
-	berlin := imageLocationBundle{Epoch: "lease-a", Generation: 2, TimeZone: "Europe/Berlin", Locale: "de-DE", Languages: []string{"de-DE", "de"}}
+	berlin := imageLocationBundle{Generation: 2, TimeZone: "Europe/Berlin", Locale: "de-DE", Languages: []string{"de-DE", "de"}}
 	configureLocation(ctx, t, c, berlin, http.StatusOK)
 	waitLocationApplied(ctx, t, c, berlin)
 	requireLocation(ctx, t, c, page, "Europe/Berlin", "de-DE")
@@ -207,9 +201,9 @@ func TestBrowserLocationRuntimeUpdate(t *testing.T) {
 	defer restartedPage.Close(ctx)
 	requireLocation(ctx, t, c, restartedPage, "Europe/Berlin", "de-DE")
 
-	// A new lease epoch restarts bundle generations; Chromium's keep increasing.
-	newYork := imageLocationBundle{Epoch: "lease-b", Generation: 1, TimeZone: "America/New_York", Locale: "en-US", Languages: []string{"en-US", "en"}}
-	resetLocation(ctx, t, c, "lease-a", newYork)
+	// The restarted Chromium takes later generations as before.
+	newYork := imageLocationBundle{Generation: 3, TimeZone: "America/New_York", Locale: "en-US", Languages: []string{"en-US", "en"}}
+	configureLocation(ctx, t, c, newYork, http.StatusOK)
 	waitLocationApplied(ctx, t, c, newYork)
 	requireLocation(ctx, t, c, restartedPage, "America/New_York", "en-US")
 }
@@ -247,20 +241,6 @@ func requireLocation(ctx context.Context, t *testing.T, c *TestContainer, page *
 	require.Equal(t, time.Now().In(zone).Format("-0700"), strings.TrimSpace(date))
 }
 
-func resetLocation(ctx context.Context, t *testing.T, c *TestContainer, previousEpoch string, bundle imageLocationBundle) {
-	t.Helper()
-	body, err := json.Marshal(map[string]any{"previous_epoch": previousEpoch, "bundle": bundle})
-	require.NoError(t, err)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBaseURL()+"/internal/browser-location/reset", bytes.NewReader(body))
-	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer "+locationInstanceToken)
-	resp, err := http.DefaultClient.Do(req)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	require.Equal(t, http.StatusAccepted, resp.StatusCode, string(respBody))
-}
-
 func configureLocation(ctx context.Context, t *testing.T, c *TestContainer, bundle imageLocationBundle, wantStatus int) {
 	t.Helper()
 	payload, err := json.Marshal(bundle)
@@ -291,7 +271,7 @@ func waitLocationApplied(ctx context.Context, t *testing.T, c *TestContainer, bu
 		err = json.NewDecoder(resp.Body).Decode(&status)
 		resp.Body.Close()
 		require.NoError(t, err)
-		if status.Applied != nil && status.Applied.Epoch == bundle.Epoch && status.Applied.Generation == bundle.Generation {
+		if status.Applied != nil && status.Applied.Generation == bundle.Generation {
 			for _, component := range []string{"timezone", "browser", "renderers", "network_contexts"} {
 				require.True(t, status.Components[component], "applied without %s convergence: %+v", component, status)
 			}
@@ -299,5 +279,5 @@ func waitLocationApplied(ctx context.Context, t *testing.T, c *TestContainer, bu
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatalf("browser location %s/%d was not applied: %+v", bundle.Epoch, bundle.Generation, status)
+	t.Fatalf("browser location generation %d was not applied: %+v", bundle.Generation, status)
 }

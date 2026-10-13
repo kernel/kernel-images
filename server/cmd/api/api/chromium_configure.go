@@ -357,7 +357,7 @@ func (s *ApiService) applyBrowserLocationConfig(ctx context.Context, st *chromiu
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, errStaleBrowserLocation) || errors.Is(err, errConflictBrowserLocation) || errors.Is(err, errBrowserLocationEpoch) {
+	if errors.Is(err, errStaleBrowserLocation) || errors.Is(err, errConflictBrowserLocation) {
 		return oapi.ChromiumConfigure409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: err.Error()}}
 	}
 	return cfg500ConfigureStep(chromiumConfigureStepLocation, err.Error())

@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,14 +19,9 @@ import (
 	"golang.org/x/text/language"
 )
 
-const (
-	browserLocationApplyTimeout    = 5 * time.Second
-	trustedControlPlaneHeader      = "X-Kernel-Trusted-Control-Plane"
-	trustedControlPlaneHeaderValue = "1"
-)
+const browserLocationApplyTimeout = 5 * time.Second
 
 type browserLocationBundle struct {
-	Epoch      string   `json:"epoch"`
 	Generation uint64   `json:"generation"`
 	TimeZone   string   `json:"timezone"`
 	Locale     string   `json:"locale"`
@@ -35,7 +29,7 @@ type browserLocationBundle struct {
 }
 
 // browserLocationComponents records the acknowledgements Chromium returned for
-// the accepted bundle's browser generation.
+// the accepted bundle's generation.
 type browserLocationComponents struct {
 	// TimeZone: /etc/localtime was replaced and every renderer observed it.
 	TimeZone bool `json:"timezone"`
@@ -47,7 +41,6 @@ type browserLocationComponents struct {
 }
 
 type browserLocationStatus struct {
-	ActiveEpoch         string                    `json:"active_epoch,omitempty"`
 	Accepted            *browserLocationBundle    `json:"accepted,omitempty"`
 	Applied             *browserLocationBundle    `json:"applied,omitempty"`
 	Components          browserLocationComponents `json:"components"`
@@ -56,18 +49,12 @@ type browserLocationStatus struct {
 }
 
 type browserLocationDurableState struct {
-	ActiveEpoch string                 `json:"active_epoch"`
-	Accepted    *browserLocationBundle `json:"accepted,omitempty"`
-	// BrowserGeneration is the monotonic generation sent to Chromium for
-	// Accepted. Bundle generations restart with every lease epoch, but
-	// Chromium's must keep increasing for the life of the process.
-	BrowserGeneration uint64 `json:"browser_generation,omitempty"`
+	Accepted *browserLocationBundle `json:"accepted,omitempty"`
 }
 
 var (
 	errStaleBrowserLocation    = errors.New("browser location generation is stale")
 	errConflictBrowserLocation = errors.New("browser location generation conflicts with accepted payload")
-	errBrowserLocationEpoch    = errors.New("browser location epoch is not active")
 )
 
 func validateBrowserLocationBundle(raw string) (browserLocationBundle, error) {
@@ -75,8 +62,8 @@ func validateBrowserLocationBundle(raw string) (browserLocationBundle, error) {
 	if err := json.Unmarshal([]byte(raw), &bundle); err != nil {
 		return bundle, fmt.Errorf("invalid browser_location JSON")
 	}
-	if bundle.Epoch == "" || bundle.Generation == 0 {
-		return bundle, fmt.Errorf("browser_location epoch and generation are required")
+	if bundle.Generation == 0 {
+		return bundle, fmt.Errorf("browser_location generation is required")
 	}
 	capabilities := browserlocation.Current()
 	if !capabilities.SupportsTimeZone(bundle.TimeZone) {
@@ -116,54 +103,11 @@ func browserLocationZonePath(timezone string) (string, error) {
 	return path, nil
 }
 
-func (s *ApiService) resetBrowserLocation(previousEpoch string, bundle browserLocationBundle) error {
-	if bundle.Generation != 1 {
-		return fmt.Errorf("browser location reset requires generation 1")
-	}
-	s.browserLocationApplyMu.Lock()
-	defer s.browserLocationApplyMu.Unlock()
-	s.browserLocationMu.Lock()
-	defer s.browserLocationMu.Unlock()
-	if s.browserLocation.activeEpoch == bundle.Epoch {
-		if s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.accepted, bundle) {
-			s.browserLocation.retries.Add(1)
-			s.startBrowserLocationReconcileLocked(bundle)
-			return nil
-		}
-		return errConflictBrowserLocation
-	}
-	if s.browserLocation.activeEpoch != previousEpoch {
-		s.browserLocation.epochRejects.Add(1)
-		return errBrowserLocationEpoch
-	}
-	copy := bundle
-	browserGeneration := s.browserLocation.browserGeneration + 1
-	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: bundle.Epoch, Accepted: &copy, BrowserGeneration: browserGeneration}); err != nil {
-		return err
-	}
-	if s.browserLocation.cancel != nil {
-		s.browserLocation.cancel()
-	}
-	s.browserLocation.activeEpoch = bundle.Epoch
-	s.browserLocation.browserGeneration = browserGeneration
-	s.browserLocation.accepted = &copy
-	s.browserLocation.applied = nil
-	s.browserLocation.components = browserLocationComponents{}
-	s.browserLocation.lastError = ""
-	s.browserLocation.acceptedCount.Add(1)
-	s.startBrowserLocationReconcileLocked(bundle)
-	return nil
-}
-
 func (s *ApiService) acceptBrowserLocation(bundle browserLocationBundle) error {
 	s.browserLocationApplyMu.Lock()
 	defer s.browserLocationApplyMu.Unlock()
 	s.browserLocationMu.Lock()
 	defer s.browserLocationMu.Unlock()
-	if s.browserLocation.activeEpoch == "" || s.browserLocation.activeEpoch != bundle.Epoch {
-		s.browserLocation.epochRejects.Add(1)
-		return errBrowserLocationEpoch
-	}
 	current := s.browserLocation.accepted
 	if current != nil {
 		if bundle.Generation < current.Generation {
@@ -181,11 +125,9 @@ func (s *ApiService) acceptBrowserLocation(bundle browserLocationBundle) error {
 		}
 	}
 	copy := bundle
-	browserGeneration := s.browserLocation.browserGeneration + 1
-	if err := s.persistBrowserLocationState(browserLocationDurableState{ActiveEpoch: s.browserLocation.activeEpoch, Accepted: &copy, BrowserGeneration: browserGeneration}); err != nil {
+	if err := s.persistBrowserLocationState(browserLocationDurableState{Accepted: &copy}); err != nil {
 		return err
 	}
-	s.browserLocation.browserGeneration = browserGeneration
 	s.browserLocation.accepted = &copy
 	s.browserLocation.applied = nil
 	s.browserLocation.components = browserLocationComponents{}
@@ -215,8 +157,7 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browse
 	var lastErr error
 	for {
 		s.browserLocationApplyMu.Lock()
-		browserGeneration, current := s.browserLocationGeneration(bundle)
-		if ctx.Err() != nil || !current {
+		if ctx.Err() != nil || !s.browserLocationCurrent(bundle) {
 			s.browserLocationApplyMu.Unlock()
 			return
 		}
@@ -226,15 +167,15 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browse
 		} else {
 			lastErr = s.withCDPClientTimeout(ctx, time.Second, func(cdpCtx context.Context, client *cdpclient.Client) error {
 				languages := strings.Join(bundle.Languages, ",")
-				if err := client.SetBrowserLocation(cdpCtx, browserGeneration, bundle.Locale, languages, bundle.TimeZone); err != nil {
+				if err := client.SetBrowserLocation(cdpCtx, bundle.Generation, bundle.Locale, languages, bundle.TimeZone); err != nil {
 					return err
 				}
 				observed, err := client.GetBrowserLocation(cdpCtx)
 				if err != nil {
 					return err
 				}
-				if observed.Generation != browserGeneration {
-					return fmt.Errorf("browser location generation %d is not current", browserGeneration)
+				if observed.Generation != bundle.Generation {
+					return fmt.Errorf("browser location generation %d is not current", bundle.Generation)
 				}
 				components.Browser = observed.Locale == bundle.Locale && observed.AcceptLanguages == languages
 				components.TimeZone = observed.TimeZone == bundle.TimeZone && observed.TimeZoneConverged
@@ -283,13 +224,11 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle browse
 	}
 }
 
-// browserLocationGeneration returns the browser generation assigned to bundle
-// and whether bundle is still the accepted one.
-func (s *ApiService) browserLocationGeneration(bundle browserLocationBundle) (uint64, bool) {
+// browserLocationCurrent reports whether bundle is still the accepted one.
+func (s *ApiService) browserLocationCurrent(bundle browserLocationBundle) bool {
 	s.browserLocationMu.Lock()
 	defer s.browserLocationMu.Unlock()
-	current := s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.accepted, bundle)
-	return s.browserLocation.browserGeneration, current
+	return s.browserLocation.accepted != nil && browserLocationBundlesEqual(*s.browserLocation.accepted, bundle)
 }
 
 func rewriteLocaltime(timezone string) error {
@@ -358,12 +297,7 @@ func (s *ApiService) initializeBrowserLocation() error {
 		if err := json.Unmarshal(data, &state); err != nil {
 			return fmt.Errorf("decode browser location state: %w", err)
 		}
-		if state.Accepted != nil && state.ActiveEpoch != state.Accepted.Epoch {
-			return fmt.Errorf("browser location state epoch mismatch")
-		}
-		s.browserLocation.activeEpoch = state.ActiveEpoch
 		s.browserLocation.accepted = state.Accepted
-		s.browserLocation.browserGeneration = state.BrowserGeneration
 	}
 	if s.upstreamMgr != nil {
 		go s.browserLocationLifecycleLoop()
@@ -407,7 +341,6 @@ func (s *ApiService) browserLocationSnapshot() browserLocationStatus {
 	s.browserLocationMu.Lock()
 	defer s.browserLocationMu.Unlock()
 	return browserLocationStatus{
-		ActiveEpoch:         s.browserLocation.activeEpoch,
 		Accepted:            s.browserLocation.accepted,
 		Applied:             s.browserLocation.applied,
 		Components:          s.browserLocation.components,
@@ -427,7 +360,6 @@ func (s *ApiService) BrowserLocationMetrics() metrics.BrowserLocationSnapshot {
 		Retries:            s.browserLocation.retries.Load(),
 		Stale:              s.browserLocation.stale.Load(),
 		Conflicts:          s.browserLocation.conflicts.Load(),
-		EpochRejects:       s.browserLocation.epochRejects.Load(),
 		Failures:           s.browserLocation.failures.Load(),
 		ConvergenceMs:      s.browserLocation.convergenceMs.Load(),
 		Converged:          converged,
@@ -438,51 +370,13 @@ func (s *ApiService) BrowserLocationMetrics() metrics.BrowserLocationSnapshot {
 	}
 }
 
-// ResetBrowserLocationHTTP is the lease-authoritative epoch transition. Ordinary
-// configure requests cannot change epochs. Direct callers authenticate with the
-// instance JWT. Metro-api may instead add the trusted control-plane marker after
-// it verifies Kernel's internal token and removes any caller-supplied marker.
-func (s *ApiService) ResetBrowserLocationHTTP(w http.ResponseWriter, r *http.Request) {
-	token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	expected := os.Getenv("KERNEL_INSTANCE_JWT")
-	instanceAuthorized := expected != "" && subtle.ConstantTimeCompare([]byte(token), []byte(expected)) == 1
-	controlPlaneAuthorized := subtle.ConstantTimeCompare([]byte(r.Header.Get(trustedControlPlaneHeader)), []byte(trustedControlPlaneHeaderValue)) == 1
-	if !instanceAuthorized && !controlPlaneAuthorized {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-	defer r.Body.Close()
-	var reset struct {
-		PreviousEpoch string                `json:"previous_epoch"`
-		Bundle        browserLocationBundle `json:"bundle"`
-	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&reset); err != nil {
-		http.Error(w, "invalid browser location reset", http.StatusBadRequest)
-		return
-	}
-	raw, _ := json.Marshal(reset.Bundle)
-	validated, err := validateBrowserLocationBundle(string(raw))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.resetBrowserLocation(reset.PreviousEpoch, validated); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	w.WriteHeader(http.StatusAccepted)
-}
-
 // GetBrowserLocationHTTP exposes accepted/applied component state for internal
 // reconciliation. Applied is confirmed against the running Chromium, so a
 // restarted or unreachable browser is never reported as applied.
 func (s *ApiService) GetBrowserLocationHTTP(w http.ResponseWriter, r *http.Request) {
 	status := s.browserLocationSnapshot()
 	if status.Applied != nil {
-		generation, current := s.browserLocationGeneration(*status.Applied)
-		if !current || !s.browserLocationLive(r.Context(), *status.Applied, generation) {
+		if !s.browserLocationCurrent(*status.Applied) || !s.browserLocationLive(r.Context(), *status.Applied) {
 			status.Applied = nil
 			status.Components = browserLocationComponents{}
 		}
@@ -491,9 +385,9 @@ func (s *ApiService) GetBrowserLocationHTTP(w http.ResponseWriter, r *http.Reque
 	_ = json.NewEncoder(w).Encode(status)
 }
 
-// browserLocationLive reports whether the running Chromium holds bundle at
-// generation with every component acknowledged.
-func (s *ApiService) browserLocationLive(ctx context.Context, bundle browserLocationBundle, generation uint64) bool {
+// browserLocationLive reports whether the running Chromium holds bundle with
+// every component acknowledged.
+func (s *ApiService) browserLocationLive(ctx context.Context, bundle browserLocationBundle) bool {
 	if s.upstreamMgr == nil {
 		return false
 	}
@@ -503,12 +397,12 @@ func (s *ApiService) browserLocationLive(ctx context.Context, bundle browserLoca
 		observed, err = client.GetBrowserLocation(cdpCtx)
 		return err
 	})
-	return err == nil && observed.Generation == generation &&
+	return err == nil && observed.Generation == bundle.Generation &&
 		observed.Locale == bundle.Locale && observed.AcceptLanguages == strings.Join(bundle.Languages, ",") &&
 		observed.TimeZone == bundle.TimeZone && observed.TimeZoneConverged &&
 		observed.RenderersConverged && observed.NetworkContextsConverged
 }
 
 func browserLocationBundlesEqual(a, b browserLocationBundle) bool {
-	return a.Epoch == b.Epoch && a.Generation == b.Generation && a.TimeZone == b.TimeZone && a.Locale == b.Locale && slices.Equal(a.Languages, b.Languages)
+	return a.Generation == b.Generation && a.TimeZone == b.TimeZone && a.Locale == b.Locale && slices.Equal(a.Languages, b.Languages)
 }

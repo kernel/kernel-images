@@ -241,7 +241,6 @@ func main() {
 	// Enforce additionalProperties: false on POST /repl.
 	r.Use(api.StrictBrowserReplBodyMiddleware)
 	r.Get("/browser/location", apiService.GetBrowserLocationHTTP)
-	r.Post("/internal/browser-location/reset", apiService.ResetBrowserLocationHTTP)
 	strictHandler := oapi.NewStrictHandlerWithOptions(apiService, []oapi.StrictMiddlewareFunc{
 		api.TelemetryStrictMiddleware(),
 	}, oapi.StrictHTTPServerOptions{

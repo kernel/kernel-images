@@ -1327,8 +1327,8 @@ paths:
                   type: string
                 browser_location:
                   description: >-
-                    UTF-8 JSON browser location bundle with epoch, generation, timezone, locale,
-                    and languages. Accepted asynchronously without restarting Chromium.
+                    UTF-8 JSON browser location bundle with generation, timezone, locale, and
+                    languages. Accepted asynchronously without restarting Chromium.
                   type: string
                 extensions:
                   type: array

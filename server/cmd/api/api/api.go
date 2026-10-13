@@ -92,22 +92,19 @@ type ApiService struct {
 	browserLocationApplyMu   sync.Mutex
 	browserLocationReconcile func(context.Context, browserLocationBundle)
 	browserLocation          struct {
-		activeEpoch       string
-		browserGeneration uint64
-		accepted          *browserLocationBundle
-		applied           *browserLocationBundle
-		components        browserLocationComponents
-		lastError         string
-		cancel            context.CancelFunc
-		acceptedCount     atomic.Uint64
-		appliedCount      atomic.Uint64
-		retries           atomic.Uint64
-		stale             atomic.Uint64
-		conflicts         atomic.Uint64
-		epochRejects      atomic.Uint64
-		failures          atomic.Uint64
-		convergenceMs     atomic.Uint64
-		lastAttempt       time.Time
+		accepted      *browserLocationBundle
+		applied       *browserLocationBundle
+		components    browserLocationComponents
+		lastError     string
+		cancel        context.CancelFunc
+		acceptedCount atomic.Uint64
+		appliedCount  atomic.Uint64
+		retries       atomic.Uint64
+		stale         atomic.Uint64
+		conflicts     atomic.Uint64
+		failures      atomic.Uint64
+		convergenceMs atomic.Uint64
+		lastAttempt   time.Time
 	}
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
