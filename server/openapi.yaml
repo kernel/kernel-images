@@ -2133,6 +2133,25 @@ components:
           $ref: "#/components/schemas/BrowserTelemetryExportConfig"
         storage:
           $ref: "#/components/schemas/BrowserTelemetryStorageConfig"
+        browser_session:
+          $ref: "#/components/schemas/BrowserTelemetrySessionConfig"
+      additionalProperties: false
+    BrowserTelemetrySessionConfig:
+      type: object
+      description: >
+        Identity of the browser session that owns this capture. Each non-empty
+        field is stamped onto every captured event's `source.metadata`
+        (`session_id`, `session_name`), so exported and stored records can be
+        joined to the browser that produced them. In a PUT (full replace) an
+        omitted block clears the identity; in a PATCH an omitted field leaves
+        the current value unchanged and an empty string clears it.
+      properties:
+        id:
+          type: string
+          description: Browser session ID.
+        name:
+          type: string
+          description: Browser session name.
       additionalProperties: false
     BrowserTelemetryExportConfig:
       type: object

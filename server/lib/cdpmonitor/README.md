@@ -276,6 +276,8 @@ Every event arrives as an `Envelope`:
 | `event.category` | string | Emitted by this monitor: `console`, `network`, `page`, `interaction`, `screenshot`, `monitor` (collector health). |
 | `event.truncated` | bool | `true` if `data` was nulled to fit the 1 MB pipeline limit. |
 | `event.source.metadata.telemetry_session_id` | string | Pipeline-assigned ID for the telemetry session, stamped by the telemetry layer. |
+| `event.source.metadata.session_id` | string | Browser session that owns the capture, stamped by the telemetry layer when the telemetry config carries `browser_session.id`. |
+| `event.source.metadata.session_name` | string | That browser session's name, stamped when the config carries `browser_session.name`. |
 
 ### Source object
 

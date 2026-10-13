@@ -25,6 +25,8 @@ func attrsOf(rec log.Record) map[string]log.Value {
 func TestToLogRecord_CoreFields(t *testing.T) {
 	meta := map[string]string{
 		"telemetry_session_id": "cs_abc",
+		"session_id":           "browser_abc",
+		"session_name":         "checkout",
 		"cdp_session_id":       "s1",
 		"target_id":            "t1",
 	}
@@ -56,6 +58,8 @@ func TestToLogRecord_CoreFields(t *testing.T) {
 	assert.Equal(t, "cdp", attrs["kernel.source.kind"].AsString())
 	assert.Equal(t, "Network.loadingFinished", attrs["kernel.source.event"].AsString())
 	assert.Equal(t, "cs_abc", attrs["kernel.telemetry_session_id"].AsString())
+	assert.Equal(t, "browser_abc", attrs["kernel.session_id"].AsString())
+	assert.Equal(t, "checkout", attrs["kernel.session_name"].AsString())
 	assert.Equal(t, "s1", attrs["kernel.cdp_session_id"].AsString())
 	assert.Equal(t, "t1", attrs["kernel.target_id"].AsString())
 	// High-value network fields promoted to queryable attributes.
