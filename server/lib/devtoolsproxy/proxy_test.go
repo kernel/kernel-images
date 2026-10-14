@@ -883,6 +883,36 @@ func TestFilterInternalCDPMethod(t *testing.T) {
 	if got := filterInternalCDPMethod(emulation); string(got) != string(emulation) {
 		t.Fatalf("standard command changed: %s", got)
 	}
+
+	// A non-flat session's command travels as a string inside
+	// Target.sendMessageToTarget, possibly nested again.
+	inner := `{"id":1,"method":"Browser.setKernelBrowserLocation","params":{"generation":9}}`
+	outer, _ := json.Marshal(map[string]any{"id": 9, "method": "Target.sendMessageToTarget", "params": map[string]any{"sessionId": "S1", "message": inner}})
+	twice, _ := json.Marshal(map[string]any{"id": 10, "method": "Target.sendMessageToTarget", "params": map[string]any{"sessionId": "S0", "message": string(outer)}})
+	if got := nestedMessage(t, filterInternalCDPMethod(outer)); !strings.Contains(got, `"Kernel.internalMethodUnavailable"`) {
+		t.Fatalf("nested internal method passed the filter: %s", got)
+	}
+	if got := nestedMessage(t, []byte(nestedMessage(t, filterInternalCDPMethod(twice)))); !strings.Contains(got, `"Kernel.internalMethodUnavailable"`) {
+		t.Fatalf("doubly nested internal method passed the filter: %s", got)
+	}
+
+	page := []byte(`{"id":11,"method":"Target.sendMessageToTarget","params":{"sessionId":"S1","message":"{\"id\":1,\"method\":\"Page.navigate\"}"}}`)
+	if got := filterInternalCDPMethod(page); string(got) != string(page) {
+		t.Fatalf("nested standard command changed: %s", got)
+	}
+}
+
+func nestedMessage(t *testing.T, command []byte) string {
+	t.Helper()
+	var parsed struct {
+		Params struct {
+			Message string `json:"message"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(command, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	return parsed.Params.Message
 }
 
 func TestWebSocketProxyRejectsInternalLocationMethods(t *testing.T) {

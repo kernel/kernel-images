@@ -39,19 +39,57 @@ func filterInternalCDPMethod(message []byte) []byte {
 	if json.Unmarshal(message, &command) != nil {
 		return message
 	}
-	if _, blocked := internalCDPMethods[command.Method]; !blocked {
+	_, blocked := internalCDPMethods[command.Method]
+	// A non-flat session carries its commands inside this one.
+	nested := command.Method == "Target.sendMessageToTarget"
+	if !blocked && !nested {
 		return message
 	}
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(message, &fields) != nil {
 		return message
 	}
-	fields["method"] = json.RawMessage(`"Kernel.internalMethodUnavailable"`)
+	if blocked {
+		fields["method"] = json.RawMessage(`"Kernel.internalMethodUnavailable"`)
+	} else {
+		params, filtered := filterNestedCDPMessage(fields["params"])
+		if !filtered {
+			return message
+		}
+		fields["params"] = params
+	}
 	filtered, err := json.Marshal(fields)
 	if err != nil {
 		return message
 	}
 	return filtered
+}
+
+// filterNestedCDPMessage filters the command in Target.sendMessageToTarget's
+// message parameter, reporting whether it changed.
+func filterNestedCDPMessage(raw json.RawMessage) (json.RawMessage, bool) {
+	var params map[string]json.RawMessage
+	if json.Unmarshal(raw, &params) != nil {
+		return nil, false
+	}
+	var inner string
+	if json.Unmarshal(params["message"], &inner) != nil {
+		return nil, false
+	}
+	filtered := filterInternalCDPMethod([]byte(inner))
+	if string(filtered) == inner {
+		return nil, false
+	}
+	message, err := json.Marshal(string(filtered))
+	if err != nil {
+		return nil, false
+	}
+	params["message"] = message
+	out, err := json.Marshal(params)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
 }
 
 var devtoolsListeningRegexp = regexp.MustCompile(`DevTools listening on (ws://\S+)`)
