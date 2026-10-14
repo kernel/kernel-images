@@ -29,10 +29,13 @@ export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
   signaling: 3000,
   // Local: ICE reaches `checking` as soon as the local description is set, since
   // the remote candidates arrive in the offer — measured 1-16ms direct, ~90ms
-  // relay-only. The bound covers through `connected` rather than stopping at
-  // `checking`, so it also catches a peer that reaches `checking` and then
-  // stalls; that stretch is tens of milliseconds, inside the same budget.
-  media: 2000,
+  // relay-only. The bound covers through ICE `connected` rather than stopping at
+  // `checking`, and the timings above only recorded `checking`: 44 of 130 runs
+  // have no `connected` timestamp, all 30 ap-southeast runs among them. Nothing
+  // measured the stretch the bound now waits on, so 30s is an interim ceiling for
+  // it rather than a calibrated one, to be replaced once per-region timings
+  // through a successful connect exist.
+  media: 30000,
 }
 
 // Sent to the parent frame so an embedder can pick a recovery without parsing
