@@ -362,5 +362,5 @@ export function alreadyDeclaredError(name: string): SyntaxError {
 }
 
 export function builtinDeclarationError(name: string): SyntaxError {
-  return new SyntaxError(`\`${name}\` is a built-in Browser REPL global; use a different variable name`);
+  return new SyntaxError(`\`${name}\` is a built-in Browser REPL helper; use a different variable name`);
 }

@@ -425,43 +425,45 @@ cdpClient.onDialogAutoDismissed = (dialog) => {
   );
 };
 
-const replGlobals: Record<string, unknown> = {
-  console: consoleCapture,
-  repl,
-  ...browserGlobals,
-  browser: browserNamespace,
-  webmcp,
-  // Node conveniences. This endpoint is unrestricted code execution; the
-  // context is a state container, not a sandbox.
-  setTimeout,
-  clearTimeout,
-  setInterval,
-  clearInterval,
-  queueMicrotask,
-  Buffer,
-  process,
-  fetch,
-  URL,
-  URLSearchParams,
-  TextEncoder,
-  TextDecoder,
-  AbortController,
-  AbortSignal,
-  structuredClone,
-  atob,
-  btoa,
-  crypto,
-};
-
 // Cross-realm global handle captured right after context creation; cell
 // bindings are exposed here after each SourceTextModule evaluation.
 let contextGlobal: Record<PropertyKey, unknown>;
 
-const context: vm.Context = vm.createContext({ ...replGlobals }, { name: `browser-repl-${REPL_ID}` });
+const context: vm.Context = vm.createContext(
+  {
+    console: consoleCapture,
+    repl,
+    ...browserGlobals,
+    browser: browserNamespace,
+    webmcp,
+    // Node conveniences. This endpoint is unrestricted code execution; the
+    // context is a state container, not a sandbox.
+    setTimeout,
+    clearTimeout,
+    setInterval,
+    clearInterval,
+    queueMicrotask,
+    Buffer,
+    process,
+    fetch,
+    URL,
+    URLSearchParams,
+    TextEncoder,
+    TextDecoder,
+    AbortController,
+    AbortSignal,
+    structuredClone,
+    atob,
+    btoa,
+    crypto,
+  },
+  { name: `browser-repl-${REPL_ID}` },
+);
 
 contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, unknown>;
 
-const cellRuntime = new CellRuntime(context, contextGlobal, Object.keys(replGlobals));
+// Cells may not declare the browser helper names or `repl`; see CellRuntime.
+const cellRuntime = new CellRuntime(context, contextGlobal, ['repl', ...Object.keys(browserGlobals)]);
 
 async function evaluate(code: string): Promise<void> {
   await cellRuntime.evaluate(code);

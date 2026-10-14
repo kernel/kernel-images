@@ -21,9 +21,9 @@ export class CellRuntime {
   private readonly builtinNames: ReadonlySet<string>;
   private sequence = 0;
 
-  // builtinNames are the globals the REPL installs before any cell runs. A
-  // cell may not declare them: prepareBindings would replace the built-in
-  // with an uninitialized binding before the cell's initializers run.
+  // builtinNames are REPL-provided globals that cells may not declare:
+  // prepareBindings would replace the built-in with an uninitialized binding
+  // before the cell's initializers run.
   constructor(
     context: vm.Context,
     contextGlobal: Record<PropertyKey, unknown>,

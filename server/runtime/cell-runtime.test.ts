@@ -5,20 +5,20 @@ import vm from 'node:vm';
 import { CellRuntime } from './cell-runtime.ts';
 
 function fixture() {
-  const builtins: Record<string, unknown> = {
+  const helpers: Record<string, unknown> = {
     repl: Object.freeze({}),
     pageInfo: async () => ({ url: 'https://example.com/' }),
     iframeTarget: async (urlSubstring: string) => ({ targetId: `frame-${urlSubstring}` }),
     js: async (expression: string) => `evaluated ${expression}`,
   };
-  const context = vm.createContext({ ...builtins });
+  const context = vm.createContext({ ...helpers, crypto, fetch, console });
   const contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, unknown>;
-  const runtime = new CellRuntime(context, contextGlobal, Object.keys(builtins));
+  const runtime = new CellRuntime(context, contextGlobal, Object.keys(helpers));
   return { runtime, contextGlobal };
 }
 
 const builtinError = (name: string) =>
-  new RegExp(`^SyntaxError: \`${name}\` is a built-in Browser REPL global; use a different variable name$`);
+  new RegExp(`^SyntaxError: \`${name}\` is a built-in Browser REPL helper; use a different variable name$`);
 
 test('rejects declaring a built-in helper name and keeps the helper usable', async () => {
   const { runtime, contextGlobal } = fixture();
@@ -81,4 +81,14 @@ test('ordinary names, local scopes, and redeclaration rules are unchanged', asyn
   await assert.rejects(runtime.evaluate('var count = 2;'), /Identifier 'count' has already been declared/);
   await runtime.evaluate('count = 3; globalThis.count_ = count;');
   assert.equal(contextGlobal.count_, 3);
+});
+
+test('Node globals that are not REPL helpers may still be declared', async () => {
+  const { runtime, contextGlobal } = fixture();
+
+  await runtime.evaluate('const crypto = 1; var fetch = "custom"; let console = { log() {} };');
+  await runtime.evaluate('globalThis.cryptoValue = crypto; globalThis.fetchValue = fetch; globalThis.logType = typeof console.log;');
+  assert.equal(contextGlobal.cryptoValue, 1);
+  assert.equal(contextGlobal.fetchValue, 'custom');
+  assert.equal(contextGlobal.logType, 'function');
 });
