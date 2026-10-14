@@ -64,9 +64,12 @@ class FakeSocket {
 
 class TestClient extends BaseClient {
   reasons: (Error | undefined)[] = []
+  connectEvents = 0
   protected RECONNECTING() {}
   protected CONNECTING() {}
-  protected CONNECTED() {}
+  protected CONNECTED() {
+    this.connectEvents += 1
+  }
   protected DISCONNECTED(reason?: Error) {
     this.reasons.push(reason)
   }
@@ -268,10 +271,25 @@ describe('live view connect failures', () => {
     client['_peer']!.oniceconnectionstatechange()
 
     expect(client['_timeout']).toBeUndefined()
+    expect(client.connectEvents).toBe(1)
 
     runTimers(CONNECT_STAGE_TIMEOUT_MS.media)
 
     expect(posted).toEqual([])
+  })
+
+  test('a peer that reports connected and then completed is reported once', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client.provide()
+
+    client.connectPeer()
+
+    lastPeer!.iceConnectionState = 'completed'
+    client['_peer']!.oniceconnectionstatechange()
+
+    expect(client.connectEvents).toBe(1)
   })
 
   test('a stage timeout is not followed by a second event for the same connect', () => {

@@ -500,6 +500,13 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       return
     }
 
+    // ICE reports `connected` and then `completed` for a healthy peer, and
+    // `completed` can arrive on its own when gathering is already done. Either is
+    // the connect succeeding, so report it once.
+    if (this._everConnected) {
+      return
+    }
+
     this._everConnected = true
 
     this.emit('debug', `connected`)
@@ -515,11 +522,11 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this._timeout = window.setTimeout(this.onTimeout.bind(this), CONNECT_STAGE_TIMEOUT_MS[stage])
   }
 
-  // The media bound covers the connect up to ICE `connected`, and onConnected
-  // clears it. A later signal/offer must not start a fresh bound: once the peer
-  // is connected there is no first connect left to bound, and a timer armed then
-  // is one no future state change can clear, which would tear down a live
-  // session.
+  // The media bound covers the connect up to ICE success — `connected`, or
+  // `completed` — and onConnected clears it. A later signal/offer must not start
+  // a fresh bound: once the peer is connected there is no first connect left to
+  // bound, and a timer armed then is one no future state change can clear, which
+  // would tear down a live session.
   private armMediaStage() {
     if (this._gaveUp || this._everConnected || this.peerConnected) {
       return
