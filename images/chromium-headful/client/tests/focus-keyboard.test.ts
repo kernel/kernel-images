@@ -226,7 +226,7 @@ describe('focus keyboard closing', () => {
 describe('focus keyboard and the address bar', () => {
   // the cursor-shape guess raised the keyboard for a tap on the address bar
   const addressBar = (t: ReturnType<typeof setup>) => {
-    t.keyboard.browserTap()
+    t.keyboard.cursorTap(true)
     t.keyboard.blur()
     t.events.push('cursor opens keyboard')
   }
@@ -255,7 +255,7 @@ describe('focus keyboard and the address bar', () => {
     t.tap(search)
     t.report(search)
     t.advance(FOCUS_WAIT_MS)
-    t.keyboard.browserTap()
+    t.keyboard.cursorTap(true)
     t.report(null, false)
     t.advance(BLUR_GRACE_MS)
     expect(t.events).toEqual(['focus search in tap'])
@@ -270,13 +270,31 @@ describe('focus keyboard and the address bar', () => {
     t.tap(search)
     t.report(search)
     t.advance(FOCUS_WAIT_MS)
-    t.keyboard.browserTap()
+    t.keyboard.cursorTap(true)
     t.report(null, false)
     t.tap(search)
     t.report(search, true)
     t.advance(FOCUS_WAIT_MS)
     expect(t.overlay()).toBe('open')
     expect(t.events).toEqual(['focus search in tap', 'focus search in tap'])
+  })
+})
+
+describe('focus keyboard without the stream', () => {
+  test('a keyboard raised while the stream was down is closed by a field blur once it is back', () => {
+    const t = setup()
+    t.keyboard.cursorTap(false)
+    t.keyboard.blur()
+    t.events.push('cursor opens keyboard')
+    // the overlay is focused by the cursor-shape path
+    t.button()
+    t.report(null)
+    t.advance(BLUR_GRACE_MS)
+    expect(t.overlay()).toBe('open')
+    t.report(search)
+    t.report(null)
+    t.advance(BLUR_GRACE_MS)
+    expect(t.events).toEqual(['cursor opens keyboard', 'update search', 'release'])
   })
 })
 

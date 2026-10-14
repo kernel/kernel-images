@@ -1168,11 +1168,12 @@
       // as the address bar, and a live view without the focus stream use the
       // cursor shape.
       const stream = this.$accessor.video.resolution
-      if (this.remoteFocus && this.remoteFocus.inViewport(here, stream)) {
+      const focus = this.focusLive ? this.remoteFocus : undefined
+      if (focus && focus.inViewport(here, stream)) {
         this.tapKeyboard.cancel()
-        this.focusKeyboard.tap(this.remoteFocus.fieldAt(here, stream))
+        this.focusKeyboard.tap(focus.fieldAt(here, stream))
       } else {
-        this.focusKeyboard.browserTap()
+        this.focusKeyboard.cursorTap(!!focus)
         this.tapKeyboard.tap(here, this.remotePerClient())
       }
       if (this.keyboardOpen) this.updateKeyboardView()

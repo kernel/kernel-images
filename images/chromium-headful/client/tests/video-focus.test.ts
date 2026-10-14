@@ -147,7 +147,7 @@ describe('overlay text for autocorrect', () => {
 })
 
 describe('taps with the focus stream', () => {
-  const tapContext = (live: { inViewport: boolean; field: unknown } | null) => {
+  const tapContext = (live: { live: boolean; inViewport: boolean; field: unknown } | null) => {
     const calls: string[] = []
     const ctx: Record<string, any> = {
       keepText: false,
@@ -162,10 +162,11 @@ describe('taps with the focus stream', () => {
         inViewport: () => live.inViewport,
         fieldAt: () => live.field,
       },
+      focusLive: !!live && live.live,
       tapKeyboard: { tap: () => calls.push('cursor tap'), cancel: () => calls.push('cursor cancel') },
       focusKeyboard: {
         tap: (field: { type: string } | null) => calls.push(`focus tap ${field ? field.type : 'nothing'}`),
-        browserTap: () => calls.push('browser tap'),
+        cursorTap: (browserUi: boolean) => calls.push(browserUi ? 'browser tap' : 'untracked tap'),
       },
     }
     return { ctx, calls }
@@ -173,22 +174,24 @@ describe('taps with the focus stream', () => {
 
   test('a tap on the page follows the remote focus, with the field under it', () => {
     const methods = videoMethods({ activeElement: null })
-    const { ctx, calls } = tapContext({ inViewport: true, field: { type: 'email' } })
+    const { ctx, calls } = tapContext({ live: true, inViewport: true, field: { type: 'email' } })
     methods.onGestureTap.call(ctx, { x: 10, y: 200 })
     expect(calls).toEqual(['click', 'cursor cancel', 'focus tap email'])
   })
 
   test("a tap on the browser's UI uses the cursor shape", () => {
     const methods = videoMethods({ activeElement: null })
-    const { ctx, calls } = tapContext({ inViewport: false, field: null })
+    const { ctx, calls } = tapContext({ live: true, inViewport: false, field: null })
     methods.onGestureTap.call(ctx, { x: 10, y: 40 })
     expect(calls).toEqual(['click', 'browser tap', 'cursor tap'])
   })
 
   test('without the focus stream every tap uses the cursor shape', () => {
     const methods = videoMethods({ activeElement: null })
-    const { ctx, calls } = tapContext(null)
-    methods.onGestureTap.call(ctx, { x: 10, y: 200 })
-    expect(calls).toEqual(['click', 'browser tap', 'cursor tap'])
+    for (const live of [null, { live: false, inViewport: true, field: null }]) {
+      const { ctx, calls } = tapContext(live)
+      methods.onGestureTap.call(ctx, { x: 10, y: 200 })
+      expect(calls).toEqual(['click', 'untracked tap', 'cursor tap'])
+    }
   })
 })

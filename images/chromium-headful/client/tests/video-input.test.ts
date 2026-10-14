@@ -187,7 +187,7 @@ describe('video touch input', () => {
     remotePerClient: () => 1,
     $client: { sendData: (event: string, data: unknown) => sent.push(`${event} ${JSON.stringify(data)}`) },
     tapKeyboard: { tap: () => {}, cancel: () => sent.push('keyboard cancel') },
-    focusKeyboard: { browserTap: () => {}, cancel: () => sent.push('focus keyboard cancel') },
+    focusKeyboard: { cursorTap: () => {}, cancel: () => sent.push('focus keyboard cancel') },
     $accessor: { video: { resolution: { w: 1920, h: 1080 } } },
     gestures: { cancel: () => sent.push('gestures cancel') },
     resetZoom: () => sent.push('reset zoom'),

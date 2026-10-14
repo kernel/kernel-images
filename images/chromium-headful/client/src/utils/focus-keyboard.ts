@@ -146,12 +146,13 @@ export class FocusKeyboard {
     this.keyboardField = this.focused
   }
 
-  // A tap went to the browser's own UI, outside the page, where the cursor
-  // shape decides about the keyboard. A page field's blur does not close it;
-  // the page getting focus back does.
-  browserTap() {
+  // A tap the cursor shape decides about: one on the browser's own UI, or any
+  // tap while the focus stream is down. A page field's blur does not close
+  // the keyboard it raises. After a tap on the browser's UI, the page getting
+  // focus back does.
+  cursorTap(browserUi: boolean) {
     this.cancel()
-    this.owner = 'browser'
+    this.owner = browserUi ? 'browser' : 'none'
     this.pageLeft = !this.pageFocused
   }
 

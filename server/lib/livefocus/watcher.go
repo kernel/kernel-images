@@ -34,8 +34,8 @@ const (
 	// leaves, so a live view that reconnects finds it running
 	lingerDelay    = 30 * time.Second
 	commandTimeout = 5 * time.Second
-	// A frame that cannot take the watcher this many times in a row is gone
-	// or belongs to another process; a later frame scan picks it up again.
+	// After this many failures in a row, a frame is retried more slowly, and
+	// dropped once it is no longer in its session's frame tree.
 	injectAttempts = 3
 	retryDelay     = 200 * time.Millisecond
 	minBackoff     = 250 * time.Millisecond
@@ -375,11 +375,38 @@ func (c *connection) scanOnce(sessionID string, session *watchedSession) {
 	walk(result.FrameTree, true)
 }
 
+// frameExists reports whether the frame is still in its session's frame tree,
+// and true when that cannot be told.
+func (c *connection) frameExists(ctx context.Context, key frameKey) bool {
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	raw, err := c.protocol.Send(ctx, "Page.getFrameTree", nil, key.session)
+	var result struct {
+		FrameTree frameTree `json:"frameTree"`
+	}
+	if err != nil || json.Unmarshal(raw, &result) != nil {
+		return true
+	}
+	return result.FrameTree.contains(key.frame)
+}
+
 type frameTree struct {
 	Frame struct {
 		ID string `json:"id"`
 	} `json:"frame"`
 	ChildFrames []frameTree `json:"childFrames"`
+}
+
+func (t frameTree) contains(frameID string) bool {
+	if t.Frame.ID == frameID {
+		return true
+	}
+	for _, child := range t.ChildFrames {
+		if child.contains(frameID) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *connection) watchFrame(sessionID string, session *watchedSession, frameID string, top bool) {
@@ -401,7 +428,8 @@ func (c *connection) watchFrame(sessionID string, session *watchedSession, frame
 
 // pollFrame keeps a watcher in the frame's current document and reports
 // what it sees. A poll fails when the document goes away, and the next
-// document gets a new watcher.
+// document gets a new watcher. A frame that keeps failing, as one between
+// redirects or showing an error page can, is retried for as long as it exists.
 func (c *connection) pollFrame(ctx context.Context, key frameKey, frame *watchedFrame) {
 	defer func() {
 		c.mu.Lock()
@@ -412,9 +440,15 @@ func (c *connection) pollFrame(ctx context.Context, key frameKey, frame *watched
 		c.emit()
 	}()
 	failures := 0
+	backoff := retryDelay
 	for ctx.Err() == nil {
 		if failures >= injectAttempts {
-			return
+			if !c.frameExists(ctx, key) {
+				return
+			}
+			sleep(ctx, backoff)
+			backoff = min(backoff*2, maxBackoff)
+			failures = 0
 		}
 		objectID, err := c.inject(ctx, key)
 		if err != nil {
@@ -432,6 +466,7 @@ func (c *connection) pollFrame(ctx context.Context, key frameKey, frame *watched
 				break
 			}
 			failures = 0
+			backoff = retryDelay
 			seen = report.V
 			c.update(key, frame, report)
 			// a new document, or frames added or removed in this one
