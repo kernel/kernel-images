@@ -369,6 +369,11 @@ func TestChromiumPageHook(t *testing.T) {
 			defer conn.mu.Unlock()
 			return conn.sessions[sessionID] == nil
 		}, 5*time.Second, 20*time.Millisecond)
+		// The binding outlives the detach and drops calls without throwing, so
+		// the page waits out its 10-second silence window, not the 3-second
+		// missing-binding one; the 5-second refresh attaches it well within that.
+		require.JSONEq(t, `"dropped"`, string(tab.eval(t,
+			`(() => { try { __kernelPasskey('{}'); return 'dropped'; } catch { return 'threw'; } })()`)))
 
 		result := tab.settle(t, pageGet(registered.ID))
 		require.Empty(t, result.Error)
