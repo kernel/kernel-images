@@ -291,9 +291,13 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       switch (this._state) {
         // `checking` deliberately leaves the media bound armed. It only means the
         // peer started connecting, and onConnected — and KERNEL_CONNECTED — wait
-        // for `connected`, so clearing here left a connect that stalled in
-        // between with no timer watching and nothing reported.
+        // for a terminal ICE state, so clearing here left a connect that stalled
+        // in between with no timer watching and nothing reported. `completed`
+        // counts alongside `connected`: ICE can reach it directly from `checking`
+        // when gathering is already done, and leaving the bound armed there would
+        // time out a live session.
         case 'connected':
+        case 'completed':
           this.onConnected()
           break
         case 'disconnected':

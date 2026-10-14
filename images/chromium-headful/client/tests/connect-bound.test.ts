@@ -256,6 +256,24 @@ describe('live view connect failures', () => {
     expect(posted).toEqual([])
   })
 
+  test('ICE reaching completed from checking clears the media bound', async () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client.provide()
+
+    lastPeer!.iceConnectionState = 'checking'
+    client['_peer']!.oniceconnectionstatechange()
+    lastPeer!.iceConnectionState = 'completed'
+    client['_peer']!.oniceconnectionstatechange()
+
+    expect(client['_timeout']).toBeUndefined()
+
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.media)
+
+    expect(posted).toEqual([])
+  })
+
   test('a stage timeout is not followed by a second event for the same connect', () => {
     const client = new TestClient()
     client.connect('ws://host/ws', 'pw', 'kernel')
