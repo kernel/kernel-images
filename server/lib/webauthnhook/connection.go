@@ -59,6 +59,7 @@ type executionContext struct {
 
 type session struct {
 	id         string
+	targetID   string
 	targetType string
 	cdp        sender
 
@@ -163,6 +164,11 @@ func (h *Hook) serve(ctx context.Context, conn *connection, updates <-chan strin
 			// A bounded round trip also catches half-open sockets after suspend.
 			probeCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 			_, err := conn.protocol.GetBrowserVersion(probeCtx)
+			if err == nil {
+				// The tracker detaches a session whose initialization fails and
+				// only attaches its target again on a refresh.
+				err = conn.surface.RefreshTargets(probeCtx)
+			}
 			cancel()
 			if err != nil && ctx.Err() == nil {
 				h.log.Warn("webauthn: DevTools connection unresponsive; reconnecting", "err", err)
@@ -196,7 +202,7 @@ func (c *connection) handleEvent(event browsersurface.Event) {
 			return
 		}
 		go c.reconcile(c.track(&session{
-			id: event.SessionID, targetType: event.Target.Type,
+			id: event.SessionID, targetID: event.Target.ID, targetType: event.Target.Type,
 			cdp: cdpSession{protocol: c.protocol, id: event.SessionID},
 		}))
 	case browsersurface.EventSessionRemoved:

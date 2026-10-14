@@ -348,6 +348,33 @@ func TestChromiumPageHook(t *testing.T) {
 		requireHookCredential(t, result.Credential, "assertion")
 	})
 
+	// The tracker detaches a session whose initialization fails; the hook's
+	// periodic refresh attaches the target again, without a reload.
+	t.Run("a detached hook session is attached again and answers the same document", func(t *testing.T) {
+		tab := env.open(t, login+"/page")
+		conn := env.hook.current()
+		var sessionID string
+		conn.mu.Lock()
+		for id, s := range conn.sessions {
+			if s.targetID == tab.targetID && s.targetType == "page" {
+				sessionID = id
+			}
+		}
+		conn.mu.Unlock()
+		require.NotEmpty(t, sessionID)
+		_, err := conn.protocol.Send(ctx, "Target.detachFromTarget", map[string]any{"sessionId": sessionID}, "")
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			conn.mu.Lock()
+			defer conn.mu.Unlock()
+			return conn.sessions[sessionID] == nil
+		}, 5*time.Second, 20*time.Millisecond)
+
+		result := tab.settle(t, pageGet(registered.ID))
+		require.Empty(t, result.Error)
+		requireHookCredential(t, result.Credential, "assertion")
+	})
+
 	t.Run("a lost connection falls back, and a new one answers the same document", func(t *testing.T) {
 		tab := env.open(t, login+"/page")
 		env.upstream.set("", false)

@@ -15,6 +15,9 @@ const (
 	maxPendingCalls  = 16  // unanswered calls per session
 	maxTrackedCalls  = 256 // answered calls kept per session for resends
 	answeredRetained = 30 * time.Second
+	// topOriginWait bounds how long a request waits for the tracker to place
+	// its frame in a page; an iframe can call at load before that.
+	topOriginWait = 2 * time.Second
 )
 
 type callKey struct {
@@ -54,7 +57,6 @@ func (c *connection) handleCall(sessionID string, contextID int, payload string)
 		(pc.Op != "get" && pc.Op != "create" && pc.Op != "abort") {
 		return
 	}
-	pageSessionID, mainFrameID, pageKnown := c.pageSession(sessionID)
 	c.mu.Lock()
 	s := c.sessions[sessionID]
 	if s == nil {
@@ -93,21 +95,16 @@ func (c *connection) handleCall(sessionID string, contextID int, payload string)
 	ctx, cancel := context.WithCancel(context.Background())
 	pending := &call{cancel: cancel}
 	s.calls[key] = pending
-	topOrigin := ""
-	if page := c.sessions[pageSessionID]; pageKnown && page != nil {
-		if id, ok := page.frameContexts[mainFrameID]; ok {
-			topOrigin = page.contexts[id].origin
-		}
-	}
 	c.mu.Unlock()
-	go c.dispatch(ctx, s, ec, pc, pending, topOrigin)
+	go c.dispatch(ctx, s, ec, pc, pending)
 }
 
 // dispatch acknowledges a new request, asks the signer when the request is
 // eligible, and delivers the answer unless the request was dropped meanwhile.
-func (c *connection) dispatch(ctx context.Context, s *session, ec executionContext, pc pageCall, pending *call, topOrigin string) {
+func (c *connection) dispatch(ctx context.Context, s *session, ec executionContext, pc pageCall, pending *call) {
 	defer pending.cancel()
 	c.deliver(s, ec, pageMessage{ID: pc.ID, Ack: true})
+	topOrigin := c.topOrigin(ctx, s.id)
 	answer := notHandled
 	if req, ok := c.eligible(s, ec, pc, topOrigin); ok && ctx.Err() == nil {
 		answer = c.hook.cfg.Signer.Answer(ctx, pc.Op, req)
@@ -122,6 +119,41 @@ func (c *connection) dispatch(ctx context.Context, s *session, ec executionConte
 	pending.reply, pending.answeredAt = &reply, time.Now()
 	c.mu.Unlock()
 	c.deliver(s, ec, reply)
+}
+
+// topOrigin returns the origin of the main document of the page containing
+// the session, waiting up to topOriginWait for it to become known. It returns
+// "" if it does not, which leaves the request to the browser.
+func (c *connection) topOrigin(ctx context.Context, sessionID string) string {
+	ctx, cancel := context.WithTimeout(ctx, topOriginWait)
+	defer cancel()
+	tick := time.NewTicker(installPollGap)
+	defer tick.Stop()
+	for {
+		if origin, ok := c.lookupTopOrigin(sessionID); ok {
+			return origin
+		}
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-tick.C:
+		}
+	}
+}
+
+func (c *connection) lookupTopOrigin(sessionID string) (string, bool) {
+	pageSessionID, mainFrameID, ok := c.pageSession(sessionID)
+	if !ok {
+		return "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	page := c.sessions[pageSessionID]
+	if page == nil {
+		return "", false
+	}
+	id, ok := page.frameContexts[mainFrameID]
+	return page.contexts[id].origin, ok
 }
 
 // eligible builds the signer request when the hook is on, both origins are

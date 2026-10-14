@@ -489,6 +489,24 @@ func TestLocalhostIsServed(t *testing.T) {
 	}
 }
 
+// An iframe can call at load before the tracker has placed it in its page.
+// The request waits for that rather than settling as not_handled.
+func TestTopOriginWaitsForTheFrameToBePlaced(t *testing.T) {
+	h := newHarness(t)
+	require.NoError(t, h.hook.Set(context.Background(), true))
+	h.attach(t, "page", "page", "")
+	h.context("page", 1, "https://shop.example", "page")
+	frame := h.attach(t, "frame", "iframe", "page")
+	h.pages.Delete("frame")
+	h.context("frame", 1, "https://login.example.com", "frame")
+
+	h.call("frame", 1, getCall("r1"))
+	time.Sleep(topOriginWait / 4)
+	h.pages.Store("frame", "page")
+	require.Equal(t, "credential", frame.finalReply(t, "r1")["result"])
+	require.Equal(t, "https://shop.example", h.signer.calls()[0].req.TopOrigin)
+}
+
 func TestTopOriginFollowsNewestMainFrameContext(t *testing.T) {
 	h := newHarness(t)
 	require.NoError(t, h.hook.Set(context.Background(), true))
