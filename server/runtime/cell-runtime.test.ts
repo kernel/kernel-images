@@ -7,6 +7,7 @@ import { CellRuntime } from './cell-runtime.ts';
 function fixture() {
   const helpers: Record<string, unknown> = {
     repl: Object.freeze({}),
+    webmcp: Object.freeze({}),
     pageInfo: async () => ({ url: 'https://example.com/' }),
     iframeTarget: async (urlSubstring: string) => ({ targetId: `frame-${urlSubstring}` }),
     js: async (expression: string) => `evaluated ${expression}`,
@@ -40,6 +41,7 @@ test('rejects every persistent declaration form that names a built-in', async ()
   const cells: Array<[string, string]> = [
     ['let pageInfo = 1;', 'pageInfo'],
     ['const repl = {};', 'repl'],
+    ['let webmcp = null;', 'webmcp'],
     ['function js() {}', 'js'],
     ['class iframeTarget {}', 'iframeTarget'],
     ['const { url: pageInfo } = { url: "x" };', 'pageInfo'],

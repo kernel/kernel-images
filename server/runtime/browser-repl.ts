@@ -462,8 +462,8 @@ const context: vm.Context = vm.createContext(
 
 contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, unknown>;
 
-// Cells may not declare the browser helper names or `repl`; see CellRuntime.
-const cellRuntime = new CellRuntime(context, contextGlobal, ['repl', ...Object.keys(browserGlobals)]);
+// Cells may not declare the browser helper names, `repl`, or `webmcp`; see CellRuntime.
+const cellRuntime = new CellRuntime(context, contextGlobal, ['repl', 'webmcp', ...Object.keys(browserGlobals)]);
 
 async function evaluate(code: string): Promise<void> {
   await cellRuntime.evaluate(code);
