@@ -50,7 +50,7 @@ test-unit:
 	go test -v -race $$(go list ./... | grep -v /e2e$$)
 
 test-runtime: runtime-typecheck repl-help-check
-	node --test runtime/*.test.ts
+	node --experimental-vm-modules --test runtime/*.test.ts
 
 test-e2e:
 	@echo ""
