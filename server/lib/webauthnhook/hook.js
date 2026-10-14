@@ -191,14 +191,14 @@
     });
   }
 
-  async function intercept(op, native, container, options) {
+  async function intercept(op, native, credentials, options) {
     const signal = options.signal;
     if (signal && signal.aborted) throw abortReason(signal);
-    if (suspended) return native.call(container, options);
+    if (suspended) return native.call(credentials, options);
     const answer = await exchange(op, options, signal);
     if (answer && answer.result === 'credential') return credentialFrom(answer.credential);
     if (answer && answer.result === 'error') throw new DOMException(answer.message, answer.name);
-    return native.call(container, options);
+    return native.call(credentials, options);
   }
 
   function handles(options) {

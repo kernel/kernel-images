@@ -207,6 +207,20 @@ func TestChromiumPageHook(t *testing.T) {
 		verifyAssertion(t, registered, result.Credential, "widget.other.test", widget, true)
 	})
 
+	t.Run("a nested cross-site iframe gets the page's origin as top origin", func(t *testing.T) {
+		widget, deep := env.site("widget.other.test"), env.site("deep.third.test")
+		inner := deep + "/page"
+		outer := widget + "/page?frame=" + url.QueryEscape(inner) + "&allow=publickey-credentials-get"
+		tab := env.open(t, login+"/page?frame="+url.QueryEscape(outer)+"&allow=publickey-credentials-get")
+		frame := tab.oopif(t, deep)
+		result := frame.settle(t, pageGet(registered.ID))
+		require.Empty(t, result.Error)
+		requireHookCredential(t, result.Credential, "assertion")
+		request := env.metro.last(t)
+		require.Equal(t, deep, request.body.Origin)
+		require.Equal(t, login, request.body.TopOrigin)
+	})
+
 	t.Run("a same-site cross-origin iframe sends its own origin", func(t *testing.T) {
 		other := env.site("other.example.test")
 		tab := env.open(t, login+"/page?frame="+url.QueryEscape(other+"/page")+"&allow=publickey-credentials-get")
@@ -255,36 +269,6 @@ func TestChromiumPageHook(t *testing.T) {
 		answers()
 	})
 
-	t.Run("disabling suspends hooked documents and stops new ones from getting the hook", func(t *testing.T) {
-		tab := env.open(t, login+"/page")
-		require.NoError(t, env.hook.Set(ctx, false))
-		defer func() { require.NoError(t, env.hook.Set(ctx, true)) }()
-		// Chromium drops a tab's virtual authenticators when another DevTools
-		// session on it detaches, so add one only after the hook's has.
-		tab.addVirtualAuthenticator(t)
-
-		before := env.metro.count()
-		started := time.Now()
-		result := tab.settle(t, createCall)
-		require.Empty(t, result.Error)
-		require.False(t, result.Credential.Own, "an already-hooked document falls back to the browser")
-		require.Less(t, time.Since(started), 2*time.Second, "a suspended document falls back without waiting")
-		require.Equal(t, before, env.metro.count())
-
-		tab.navigate(t, login+"/page?reloaded")
-		require.JSONEq(t, `false`, string(tab.eval(t, hookedExpression)))
-		require.JSONEq(t, `true`, string(tab.eval(t, `CredentialsContainer.prototype.get.toString().includes('[native code]')`)))
-	})
-
-	t.Run("re-enabling resumes a suspended document", func(t *testing.T) {
-		tab := env.open(t, login+"/page")
-		require.NoError(t, env.hook.Set(ctx, false))
-		require.NoError(t, env.hook.Set(ctx, true))
-		result := tab.settle(t, pageGet(registered.ID))
-		require.Empty(t, result.Error)
-		requireHookCredential(t, result.Credential, "assertion")
-	})
-
 	t.Run("a missing binding falls back after three seconds", func(t *testing.T) {
 		tab := env.open(t, login+"/page")
 		tab.addVirtualAuthenticator(t)
@@ -313,6 +297,31 @@ func TestChromiumPageHook(t *testing.T) {
 		time.Sleep(3 * time.Second)
 		require.Equal(t, attempts, env.metro.count()-before, "an aborted request stops retrying")
 	})
+
+	// A request whose document is gone stops retrying metro-api, like an abort.
+	for _, leave := range []struct {
+		name string
+		do   func(t *testing.T, tab *tab)
+	}{
+		{"navigating away", func(t *testing.T, tab *tab) { tab.navigate(t, login+"/page?away") }},
+		{"closing the tab", func(t *testing.T, tab *tab) {
+			env.driver.call(t, "", "Target.closeTarget", map[string]any{"targetId": tab.targetID})
+		}},
+	} {
+		t.Run(leave.name+" stops kernel-images asking metro-api", func(t *testing.T) {
+			env.metro.setMode("unavailable")
+			defer env.metro.setMode("sign")
+			tab := env.open(t, login+"/page")
+			before := env.metro.count()
+			tab.eval(t, `navigator.credentials.get({publicKey: {challenge: new Uint8Array(32)}}).catch(() => {}), 1`)
+			require.Eventually(t, func() bool { return env.metro.count() > before }, 5*time.Second, 20*time.Millisecond)
+			leave.do(t, tab)
+			time.Sleep(500 * time.Millisecond)
+			attempts := env.metro.count()
+			time.Sleep(3 * time.Second)
+			require.Equal(t, attempts, env.metro.count(), "a request whose document is gone stops retrying")
+		})
+	}
 
 	t.Run("an unavailable signer falls back after the window", func(t *testing.T) {
 		env.metro.setMode("unavailable")
@@ -586,7 +595,7 @@ func newChromeEnv(t *testing.T, ctx context.Context) *chromeEnv {
 	t.Cleanup(monitor.Stop)
 
 	upstream := &switchableUpstream{url: browser}
-	hook := New(Config{
+	hook := New(ctx, Config{
 		StatePath: filepath.Join(t.TempDir(), "webauthn-hook.json"),
 		Signer: &MetroSigner{
 			BaseURL: func() string { return metroServer.URL },
@@ -596,7 +605,6 @@ func newChromeEnv(t *testing.T, ctx context.Context) *chromeEnv {
 		},
 		Logger: discard,
 	}, upstream)
-	hook.Start(ctx)
 	t.Cleanup(hook.Stop)
 	require.NoError(t, hook.Set(ctx, true))
 
@@ -630,6 +638,7 @@ func serveSite(w http.ResponseWriter, r *http.Request) {
 
 type tab struct {
 	env       *chromeEnv
+	targetID  string
 	sessionID string
 	contextID int
 }
@@ -657,7 +666,7 @@ func (e *chromeEnv) openDirect(t *testing.T, pageURL string) *tab {
 	t.Cleanup(func() {
 		_, _ = e.driver.client.Send(context.Background(), "Target.closeTarget", map[string]any{"targetId": target.TargetID}, "")
 	})
-	tb := &tab{env: e, sessionID: e.driver.attach(t, target.TargetID)}
+	tb := &tab{env: e, targetID: target.TargetID, sessionID: e.driver.attach(t, target.TargetID)}
 	tb.waitLoaded(t, pageURL)
 	return tb
 }
@@ -905,4 +914,49 @@ func launchChromium(t *testing.T, ctx context.Context, extraArgs ...string) stri
 		t.Fatal("chromium did not report a DevTools URL")
 		return ""
 	}
+}
+
+// TestChromiumPageHookDisable turns the hook off and on again in its own
+// browser, since that changes state the other cases rely on.
+func TestChromiumPageHookDisable(t *testing.T) {
+	if os.Getenv("KERNEL_WEBAUTHN_CHROME_E2E") == "" {
+		t.Skip("set KERNEL_WEBAUTHN_CHROME_E2E=1 to run the real-Chromium WebAuthn hook test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	env := newChromeEnv(t, ctx)
+	login := env.site("login.example.test")
+	created := env.open(t, login+"/page").settle(t, createCall)
+	require.Empty(t, created.Error)
+	registered := created.Credential
+
+	t.Run("disabling suspends hooked documents and stops new ones from getting the hook", func(t *testing.T) {
+		tab := env.open(t, login+"/page")
+		require.NoError(t, env.hook.Set(ctx, false))
+		defer func() { require.NoError(t, env.hook.Set(ctx, true)) }()
+		// Chromium drops a tab's virtual authenticators when another DevTools
+		// session on it detaches, so add one only after the hook's has.
+		tab.addVirtualAuthenticator(t)
+
+		before := env.metro.count()
+		started := time.Now()
+		result := tab.settle(t, createCall)
+		require.Empty(t, result.Error)
+		require.False(t, result.Credential.Own, "an already-hooked document falls back to the browser")
+		require.Less(t, time.Since(started), 2*time.Second, "a suspended document falls back without waiting")
+		require.Equal(t, before, env.metro.count())
+
+		tab.navigate(t, login+"/page?reloaded")
+		require.JSONEq(t, `false`, string(tab.eval(t, hookedExpression)))
+		require.JSONEq(t, `true`, string(tab.eval(t, `CredentialsContainer.prototype.get.toString().includes('[native code]')`)))
+	})
+
+	t.Run("re-enabling resumes a suspended document", func(t *testing.T) {
+		tab := env.open(t, login+"/page")
+		require.NoError(t, env.hook.Set(ctx, false))
+		require.NoError(t, env.hook.Set(ctx, true))
+		result := tab.settle(t, pageGet(registered.ID))
+		require.Empty(t, result.Error)
+		requireHookCredential(t, result.Credential, "assertion")
+	})
 }

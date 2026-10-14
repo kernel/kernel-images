@@ -15,9 +15,14 @@ func (s *ApiService) PutWebAuthnHook(ctx context.Context, req oapi.PutWebAuthnHo
 	if req.Body == nil {
 		return oapi.PutWebAuthnHook400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "missing body"}}, nil
 	}
-	if err := s.webauthnHook.Set(ctx, req.Body.Enabled); errors.Is(err, webauthnhook.ErrNotConfigured) {
+	err := s.webauthnHook.Set(ctx, req.Body.Enabled)
+	switch {
+	case errors.Is(err, webauthnhook.ErrNotConfigured):
 		return oapi.PutWebAuthnHook400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
-	} else if err != nil {
+	case errors.Is(err, webauthnhook.ErrNotInstalled):
+		log.Warn("WebAuthn hook is on but not installed everywhere", "err", err)
+		return oapi.PutWebAuthnHook500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: err.Error()}}, nil
+	case err != nil:
 		log.Error("failed to apply WebAuthn hook", "err", err, "enabled", req.Body.Enabled)
 		return oapi.PutWebAuthnHook500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to apply WebAuthn hook"}}, nil
 	}

@@ -198,6 +198,19 @@ func main() {
 	// unfiltered while the session's allowlist is still in force.
 	egressPolicy := egresspolicy.Load(egresspolicy.DefaultStatePath, slogger)
 
+	// Answers pages' WebAuthn calls through the metro API. Reconnects to
+	// Chromium at once if a previous run of this process left it on.
+	webauthnHook := webauthnhook.New(ctx, webauthnhook.Config{
+		StatePath: webauthnhook.DefaultStatePath,
+		Signer: &webauthnhook.MetroSigner{
+			BaseURL: identity.MetroAPIURL,
+			Token:   identity.Token,
+			Client:  &http.Client{},
+			Logger:  slogger,
+		},
+		Logger: slogger,
+	}, upstreamMgr)
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
@@ -210,16 +223,7 @@ func main() {
 		otlpExporter,
 		s2Storage,
 		egressPolicy,
-		webauthnhook.Config{
-			StatePath: webauthnhook.DefaultStatePath,
-			Signer: &webauthnhook.MetroSigner{
-				BaseURL: identity.MetroAPIURL,
-				Token:   identity.Token,
-				Client:  &http.Client{},
-				Logger:  slogger,
-			},
-			Logger: slogger,
-		},
+		webauthnHook,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)
@@ -230,7 +234,6 @@ func main() {
 		slogger.Error("failed to start network monitor", "err", err)
 		os.Exit(1)
 	}
-	apiService.StartWebAuthnHook()
 
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))

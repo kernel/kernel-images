@@ -407,15 +407,15 @@ func testEgressPolicy(t *testing.T) *egresspolicy.State {
 }
 
 // testWebAuthn wires the hook as main does on a VM without a metro API URL.
-func testWebAuthn(t *testing.T) webauthnhook.Config {
+func testWebAuthn(t *testing.T) *webauthnhook.Hook {
 	t.Helper()
 	return testWebAuthnWithMetro(t, "")
 }
 
-func testWebAuthnWithMetro(t *testing.T, metroURL string) webauthnhook.Config {
+func testWebAuthnWithMetro(t *testing.T, metroURL string) *webauthnhook.Hook {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return webauthnhook.Config{
+	hook := webauthnhook.New(t.Context(), webauthnhook.Config{
 		StatePath: filepath.Join(t.TempDir(), "webauthn-hook.json"),
 		Signer: &webauthnhook.MetroSigner{
 			BaseURL: func() string { return metroURL },
@@ -424,7 +424,9 @@ func testWebAuthnWithMetro(t *testing.T, metroURL string) webauthnhook.Config {
 			Logger:  logger,
 		},
 		Logger: logger,
-	}
+	}, newTestUpstreamManager())
+	t.Cleanup(hook.Stop)
+	return hook
 }
 
 // newSvc constructs an ApiService with a fresh telemetry session and event stream.

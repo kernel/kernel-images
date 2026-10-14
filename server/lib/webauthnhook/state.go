@@ -11,7 +11,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
+
+	"github.com/kernel/kernel-images/server/lib/statefile"
 )
 
 // DefaultStatePath sits with the other per-boot state the control plane
@@ -41,19 +42,8 @@ func loadEnabled(path string, log *slog.Logger) bool {
 }
 
 func saveEnabled(path string, enabled bool) error {
-	data, err := json.Marshal(persisted{Enabled: enabled})
-	if err != nil {
-		return fmt.Errorf("encode webauthn hook state: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create webauthn hook state directory: %w", err)
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write webauthn hook state: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return fmt.Errorf("replace webauthn hook state: %w", err)
+	if err := statefile.WriteJSON(path, persisted{Enabled: enabled}); err != nil {
+		return fmt.Errorf("persist webauthn hook state: %w", err)
 	}
 	return nil
 }

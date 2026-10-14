@@ -1794,6 +1794,9 @@ paths:
         instance API process.
 
 
+        Turning it on waits until the documents already open are hooked. If
+        they are not all hooked within 15 seconds it returns 500; the hook
+        stays on, new documents still get it, and the request can be retried.
         Turning it on returns 400 when the VM has no metro API URL
         (`KERNEL_METRO_API_BASE_URL`) to answer it. Turning it off always
         succeeds.

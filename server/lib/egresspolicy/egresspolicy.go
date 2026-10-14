@@ -14,9 +14,10 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
+
+	"github.com/kernel/kernel-images/server/lib/statefile"
 )
 
 // DefaultStatePath is where the policy is kept so it survives a restart of the
@@ -95,21 +96,8 @@ func (s *State) SetFiltered(filtered bool) error {
 }
 
 func (s *State) persist(filtered bool) error {
-	data, err := json.Marshal(persisted{Filtered: filtered})
-	if err != nil {
-		return fmt.Errorf("encode egress policy: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
-		return fmt.Errorf("create egress policy directory: %w", err)
-	}
-	// Written through a rename so a reader after a crash sees one value or the
-	// other, never a torn file.
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write egress policy: %w", err)
-	}
-	if err := os.Rename(tmp, s.path); err != nil {
-		return fmt.Errorf("replace egress policy: %w", err)
+	if err := statefile.WriteJSON(s.path, persisted{Filtered: filtered}); err != nil {
+		return fmt.Errorf("persist egress policy: %w", err)
 	}
 	return nil
 }

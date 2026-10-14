@@ -165,7 +165,7 @@ func New(
 	otlpExport OTLPExporter,
 	s2Storage S2Storage,
 	egressPolicy *egresspolicy.State,
-	webauthn webauthnhook.Config,
+	webauthnHook *webauthnhook.Hook,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -182,6 +182,8 @@ func New(
 		return nil, fmt.Errorf("eventStream cannot be nil")
 	case egressPolicy == nil:
 		return nil, fmt.Errorf("egressPolicy cannot be nil")
+	case webauthnHook == nil:
+		return nil, fmt.Errorf("webauthnHook cannot be nil")
 	}
 
 	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
@@ -205,7 +207,7 @@ func New(
 		otlpExport:        otlpExport,
 		s2Storage:         s2Storage,
 		egressPolicy:      egressPolicy,
-		webauthnHook:      webauthnhook.New(webauthn, upstreamMgr),
+		webauthnHook:      webauthnHook,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,
@@ -476,12 +478,6 @@ func (s *ApiService) StartNetworkMonitor() error {
 	s.monitorMu.Lock()
 	defer s.monitorMu.Unlock()
 	return s.cdpMonitor.Start(s.lifecycleCtx)
-}
-
-// StartWebAuthnHook reconnects the WebAuthn page hook when a previous run of
-// the process left it on.
-func (s *ApiService) StartWebAuthnHook() {
-	s.webauthnHook.Start(s.lifecycleCtx)
 }
 
 func (s *ApiService) NetworkMetrics() (resets, completed uint64, up bool) {

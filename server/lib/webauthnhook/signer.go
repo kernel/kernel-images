@@ -36,7 +36,14 @@ type Answer struct {
 	Message    string          `json:"message,omitempty"`
 }
 
-var notHandled = Answer{Result: "not_handled"}
+// Answer.Result values.
+const (
+	resultCredential = "credential"
+	resultNotHandled = "not_handled"
+	resultError      = "error"
+)
+
+var notHandled = Answer{Result: resultNotHandled}
 
 // Signer answers page requests. op is "get" or "create".
 type Signer interface {
@@ -164,12 +171,12 @@ var errorNames = map[string]bool{
 // an exception type the WebAuthn API does not throw.
 func validAnswer(op string, answer Answer) Answer {
 	switch answer.Result {
-	case "credential":
+	case resultCredential:
 		if !validCredential(op, answer.Credential) {
 			return notHandled
 		}
 		return Answer{Result: answer.Result, Credential: answer.Credential}
-	case "error":
+	case resultError:
 		if !errorNames[answer.Name] {
 			answer.Name = "NotAllowedError"
 		}

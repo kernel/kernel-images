@@ -2,12 +2,15 @@ package webauthnhook
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +18,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/kernel/kernel-images/server/lib/browsersurface"
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/stretchr/testify/require"
 )
 
@@ -67,14 +72,14 @@ func (f *fakeSession) Send(_ context.Context, method string, params any) (json.R
 		return json.Marshal(map[string]any{"states": states})
 	case "Runtime.evaluate":
 		expression := decoded["expression"].(string)
-		if expression == suspendExpression {
-			f.suspended = append(f.suspended, decoded["uniqueContextId"].(string))
-			break
-		}
 		argument := strings.TrimSuffix(strings.TrimPrefix(expression, replyFunction+"("), ")")
 		var reply map[string]any
 		if err := json.Unmarshal([]byte(argument), &reply); err != nil {
 			return nil, err
+		}
+		if reply["suspend"] == true {
+			f.suspended = append(f.suspended, decoded["uniqueContextId"].(string))
+			break
 		}
 		reply["context"] = decoded["uniqueContextId"]
 		f.replies = append(f.replies, reply)
@@ -127,11 +132,15 @@ type recordedRequest struct {
 	ctx context.Context
 }
 
+// fakeSigner answers with answer, holding each request until release is
+// closed or the request is cancelled, as MetroSigner returns on cancellation.
 type fakeSigner struct {
-	mu       sync.Mutex
-	requests []recordedRequest
-	answer   Answer
-	release  chan struct{}
+	mu          sync.Mutex
+	requests    []recordedRequest
+	answer      Answer
+	release     chan struct{}
+	inFlight    int
+	maxInFlight int
 }
 
 func (f *fakeSigner) Configured() bool { return true }
@@ -140,11 +149,28 @@ func (f *fakeSigner) Answer(ctx context.Context, op string, req Request) Answer 
 	f.mu.Lock()
 	f.requests = append(f.requests, recordedRequest{op, req, ctx})
 	release := f.release
+	f.inFlight++
+	f.maxInFlight = max(f.maxInFlight, f.inFlight)
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.inFlight--
+		f.mu.Unlock()
+	}()
 	if release != nil {
-		<-release
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return notHandled
+		}
 	}
 	return f.answer
+}
+
+func (f *fakeSigner) flight() (current, peak int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inFlight, f.maxInFlight
 }
 
 func (f *fakeSigner) calls() []recordedRequest {
@@ -193,9 +219,11 @@ func (u *switchableUpstream) set(url string, notify bool) {
 
 type harness struct {
 	hook   *Hook
+	conn   *connection
 	signer *fakeSigner
 	path   string
 	logs   *bytes.Buffer
+	pages  sync.Map // session ID -> page session ID
 }
 
 func newHarness(t *testing.T) *harness {
@@ -210,13 +238,20 @@ func newHarnessAt(t *testing.T, path string) *harness {
 		signer: &fakeSigner{answer: Answer{Result: "credential", Credential: json.RawMessage(`{"id":"cred"}`)}},
 	}
 	logger := slog.New(slog.NewTextHandler(&lockedWriter{w: h.logs}, nil))
-	h.hook = New(Config{StatePath: path, Signer: h.signer, Logger: logger}, &switchableUpstream{})
-	ctx, cancel := context.WithCancel(context.Background())
-	h.hook.Start(ctx)
-	t.Cleanup(func() {
-		cancel()
-		h.hook.Stop()
+	h.hook = New(t.Context(), Config{StatePath: path, Signer: h.signer, Logger: logger}, &switchableUpstream{})
+	t.Cleanup(h.hook.Stop)
+	// Sessions attach to a connection that has no browser behind it. A page's
+	// main frame ID is its session ID.
+	h.conn = h.hook.newConnection(func(sessionID string) (string, string, bool) {
+		page, ok := h.pages.Load(sessionID)
+		if !ok {
+			return "", "", false
+		}
+		return page.(string), page.(string), true
 	})
+	h.hook.mu.Lock()
+	h.hook.conn = h.conn
+	h.hook.mu.Unlock()
 	return h
 }
 
@@ -231,16 +266,18 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	return l.w.Write(p)
 }
 
-func (h *harness) attach(t *testing.T, id, targetType, parentFrameID string) *fakeSession {
+// attach adds a session in the page whose session is page; a page passes "".
+func (h *harness) attach(t *testing.T, id, targetType, page string) *fakeSession {
 	t.Helper()
-	return h.attachFake(id, targetType, parentFrameID, &fakeSession{})
+	return h.attachFake(id, targetType, page, &fakeSession{})
 }
 
-func (h *harness) attachFake(id, targetType, parentFrameID string, fake *fakeSession) *fakeSession {
+func (h *harness) attachFake(id, targetType, page string, fake *fakeSession) *fakeSession {
 	if fake.forbidden == nil {
 		fake.forbidden = map[string]bool{}
 	}
-	h.hook.reconcile(h.hook.track(&session{id: id, targetID: id, targetType: targetType, parentFrameID: parentFrameID, cdp: fake}))
+	h.pages.Store(id, cmp.Or(page, id))
+	h.conn.reconcile(h.conn.track(&session{id: id, targetType: targetType, cdp: fake}))
 	return fake
 }
 
@@ -249,13 +286,13 @@ func (h *harness) context(sessionID string, id int, origin, frameID string) {
 		"id": id, "uniqueId": sessionID + "-" + origin, "origin": origin,
 		"auxData": map[string]any{"frameId": frameID, "isDefault": true},
 	}})
-	h.hook.protocolEvent(sessionID, "Runtime.executionContextCreated", params)
+	h.conn.protocolEvent(sessionID, "Runtime.executionContextCreated", params)
 }
 
 func (h *harness) call(sessionID string, contextID int, payload map[string]any) {
 	data, _ := json.Marshal(payload)
 	params, _ := json.Marshal(map[string]any{"name": bindingName, "payload": string(data), "executionContextId": contextID})
-	h.hook.protocolEvent(sessionID, "Runtime.bindingCalled", params)
+	h.conn.protocolEvent(sessionID, "Runtime.bindingCalled", params)
 }
 
 func getCall(id string) map[string]any {
@@ -266,10 +303,10 @@ func TestSetInstallsAndSuspends(t *testing.T) {
 	h := newHarness(t)
 	page := h.attach(t, "page", "page", "")
 	require.Empty(t, page.methods(), "a disabled hook must not touch sessions")
-	h.hook.handleEvent(&connection{}, browsersurface.Event{
+	h.conn.handleEvent(browsersurface.Event{
 		Kind: browsersurface.EventSessionAttached, SessionID: "worker", Target: browsersurface.SessionTarget{Type: "worker"},
 	})
-	require.NotContains(t, h.hook.sessions, "worker", "only page and iframe documents can call WebAuthn")
+	require.NotContains(t, h.conn.sessions, "worker", "only page and iframe documents can call WebAuthn")
 
 	require.NoError(t, h.hook.Set(context.Background(), true))
 	page = h.attach(t, "page", "page", "")
@@ -395,9 +432,10 @@ func TestCrossOriginIframeGetsTopOrigin(t *testing.T) {
 	h.attach(t, "page", "page", "")
 	h.context("page", 1, "https://shop.example", "page")
 	h.context("page", 2, "https://shop.example", "child-frame")
-	h.attach(t, "outer", "iframe", "child-frame")
+	// The tracker resolves nested out-of-process frames to their page.
+	h.attach(t, "outer", "iframe", "page")
 	h.context("outer", 1, "https://widgets.example", "outer")
-	inner := h.attach(t, "inner", "iframe", "outer")
+	inner := h.attach(t, "inner", "iframe", "page")
 	h.context("inner", 1, "https://login.example.com", "inner")
 
 	h.call("inner", 1, getCall("r1"))
@@ -462,14 +500,14 @@ func TestTopOriginFollowsNewestMainFrameContext(t *testing.T) {
 		h.context("page", i, fmt.Sprintf("https://site%d.example", i), "page")
 	}
 	destroyed, _ := json.Marshal(map[string]any{"executionContextId": 3})
-	h.hook.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	h.conn.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
 
 	h.call("frame", 1, getCall("r1"))
 	require.Equal(t, "credential", frame.finalReply(t, "r1")["result"])
 	require.Equal(t, "https://site20.example", h.signer.calls()[0].req.TopOrigin)
 
 	destroyed, _ = json.Marshal(map[string]any{"executionContextId": 20})
-	h.hook.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	h.conn.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
 	h.call("frame", 1, getCall("r2"))
 	require.Equal(t, "not_handled", frame.finalReply(t, "r2")["result"], "a destroyed main-frame document has no top origin")
 }
@@ -497,10 +535,10 @@ func TestIgnoredCalls(t *testing.T) {
 	h.call("page", 1, map[string]any{"op": "get"})
 	h.call("page", 1, map[string]any{"id": strings.Repeat("x", maxRequestIDLen+1), "op": "get"})
 	other, _ := json.Marshal(map[string]any{"name": "__kernelEvent", "payload": `{"id":"x","op":"get"}`, "executionContextId": 1})
-	h.hook.protocolEvent("page", "Runtime.bindingCalled", other)
+	h.conn.protocolEvent("page", "Runtime.bindingCalled", other)
 
 	destroyed, _ := json.Marshal(map[string]any{"executionContextId": 1})
-	h.hook.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	h.conn.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
 	h.call("page", 1, getCall("after-destroy"))
 
 	time.Sleep(50 * time.Millisecond)
@@ -544,9 +582,9 @@ func TestAnsweredCallsAreEvictedOldestFirst(t *testing.T) {
 		h.call("page", 1, getCall(id))
 		page.finalReply(t, id)
 	}
-	h.hook.mu.Lock()
-	defer h.hook.mu.Unlock()
-	calls := h.hook.sessions["page"].calls
+	h.conn.mu.Lock()
+	defer h.conn.mu.Unlock()
+	calls := h.conn.sessions["page"].calls
 	require.Len(t, calls, maxTrackedCalls)
 	require.NotContains(t, calls, callKey{contextID: "page-https://example.com", requestID: "r0"})
 }
@@ -582,4 +620,80 @@ func TestAbortAfterDispatchCancelsSigner(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 	require.Zero(t, page.countReplies("r1", false))
+}
+
+func TestDroppedDocumentsCancelTheSigner(t *testing.T) {
+	for name, drop := range map[string]func(h *harness){
+		"context destroyed": func(h *harness) {
+			params, _ := json.Marshal(map[string]any{"executionContextId": 1})
+			h.conn.protocolEvent("page", "Runtime.executionContextDestroyed", params)
+		},
+		"contexts cleared": func(h *harness) {
+			h.conn.protocolEvent("page", "Runtime.executionContextsCleared", nil)
+		},
+		"session removed": func(h *harness) {
+			h.conn.handleEvent(browsersurface.Event{Kind: browsersurface.EventSessionRemoved, SessionID: "page"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			h.signer.release = make(chan struct{})
+			defer close(h.signer.release)
+			require.NoError(t, h.hook.Set(context.Background(), true))
+			page := h.attach(t, "page", "page", "")
+			h.context("page", 1, "https://example.com", "page")
+
+			h.call("page", 1, getCall("r1"))
+			require.Eventually(t, func() bool { return len(h.signer.calls()) == 1 }, 5*time.Second, 10*time.Millisecond)
+			drop(h)
+			require.Error(t, h.signer.calls()[0].ctx.Err(), "the signer must stop asking metro-api")
+			require.Eventually(t, func() bool { current, _ := h.signer.flight(); return current == 0 }, 5*time.Second, 10*time.Millisecond)
+			require.Zero(t, page.countReplies("r1", false))
+		})
+	}
+}
+
+// Frames that call once and go away must not let a page past the cap: each
+// dropped call is cancelled rather than left running uncounted.
+func TestFrameChurnStaysUnderTheCap(t *testing.T) {
+	h := newHarness(t)
+	h.signer.release = make(chan struct{})
+	defer close(h.signer.release)
+	require.NoError(t, h.hook.Set(context.Background(), true))
+	h.attach(t, "page", "page", "")
+	h.context("page", 1, "https://example.com", "page")
+	for i := range 3 * maxPendingCalls {
+		contextID := 100 + i
+		h.context("page", contextID, "https://example.com", fmt.Sprintf("frame-%d", i))
+		h.call("page", contextID, getCall("r"))
+		require.Eventually(t, func() bool { return len(h.signer.calls()) == i+1 }, 5*time.Second, 10*time.Millisecond)
+		destroyed, _ := json.Marshal(map[string]any{"executionContextId": contextID})
+		h.conn.protocolEvent("page", "Runtime.executionContextDestroyed", destroyed)
+	}
+	require.Eventually(t, func() bool { current, _ := h.signer.flight(); return current == 0 }, 5*time.Second, 10*time.Millisecond)
+	_, peak := h.signer.flight()
+	require.LessOrEqual(t, peak, maxPendingCalls)
+}
+
+// A target that failed to attach stays unhooked on this connection, so the
+// connection is closed and the next one attaches it.
+func TestFailedAttachClosesConnection(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.CloseNow()
+		_, _, _ = conn.Read(r.Context())
+	}))
+	defer server.Close()
+	protocol, err := cdpclient.DialWithEvents(context.Background(), "ws"+strings.TrimPrefix(server.URL, "http"))
+	require.NoError(t, err)
+	defer protocol.Close()
+
+	h := newHarness(t)
+	h.conn.protocol = protocol
+	h.conn.handleEvent(browsersurface.Event{Kind: browsersurface.EventDiscoveryFailed})
+	require.True(t, protocol.IsClosed())
+	require.Contains(t, h.logs.String(), "failed to attach a browser target")
 }
