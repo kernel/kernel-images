@@ -21,14 +21,15 @@ function helpersWithMatches(matches: unknown[]) {
     document: { querySelectorAll: () => matches },
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
   });
-  const client = {
+  // The selector resolvers use only these client members.
+  const client: Pick<BrowserReplCdpClient, 'sessionId' | 'ensureAttached' | 'evaluate'> = {
     sessionId: 'session',
     async ensureAttached() {},
-    async evaluate(_sessionId: string, expression: string) {
-      return vm.runInContext(expression, page);
+    async evaluate<T>(_sessionId: string, expression: string): Promise<T> {
+      return vm.runInContext(expression, page) as T;
     },
-  } as unknown as BrowserReplCdpClient;
-  return new BrowserHelpers(client);
+  };
+  return new BrowserHelpers(client as BrowserReplCdpClient);
 }
 
 test('selector click reports not found when nothing matches the selector', async () => {

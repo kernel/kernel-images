@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import vm from 'node:vm';
 
+import type { BrowserReplCdpClient } from './browser-cdp-client.ts';
+import { BrowserHelpers, browserReplReservedNames, buildBrowserGlobals } from './browser-helpers.ts';
+import { browserReplBrowserMethodNames } from './browser-repl-help.ts';
 import { CellRuntime } from './cell-runtime.ts';
 
 function fixture() {
@@ -93,4 +96,24 @@ test('Node globals that are not REPL helpers may still be declared', async () =>
   assert.equal(contextGlobal.cryptoValue, 1);
   assert.equal(contextGlobal.fetchValue, 'custom');
   assert.equal(contextGlobal.logType, 'function');
+});
+
+test('the production reserved names cover every browser global, repl, and webmcp', async () => {
+  // buildBrowserGlobals only reads helper properties; the client is never used.
+  const browserGlobals = buildBrowserGlobals(new BrowserHelpers({} as BrowserReplCdpClient));
+  const reserved = browserReplReservedNames(browserGlobals);
+  for (const name of ['browser', 'repl', 'webmcp', ...browserReplBrowserMethodNames]) {
+    assert.ok(reserved.includes(name), `${name} is not reserved`);
+  }
+  for (const name of ['crypto', 'fetch', 'process', 'URL', 'Buffer', 'console']) {
+    assert.ok(!reserved.includes(name), `${name} should not be reserved`);
+  }
+
+  const context = vm.createContext({ ...browserGlobals });
+  const contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, unknown>;
+  const runtime = new CellRuntime(context, contextGlobal, reserved);
+  for (const name of reserved) {
+    await assert.rejects(runtime.evaluate(`var ${name} = 1;`), builtinError(name));
+  }
+  await runtime.evaluate('const crypto = 1;');
 });

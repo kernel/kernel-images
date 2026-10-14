@@ -1159,3 +1159,9 @@ export function buildBrowserGlobals(helpers: BrowserHelpers): Record<string, unk
   const browser = Object.freeze({ ...namespace });
   return { browser, ...namespace };
 }
+
+// Globals that REPL cells may not declare: the browser helpers, the `browser`
+// namespace, and the REPL's own `repl` and `webmcp` objects.
+export function browserReplReservedNames(browserGlobals: Record<string, unknown>): string[] {
+  return ['repl', 'webmcp', ...Object.keys(browserGlobals)];
+}
