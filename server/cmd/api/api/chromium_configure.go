@@ -353,6 +353,9 @@ func (s *ApiService) applyBrowserLocationConfig(ctx context.Context, st *chromiu
 	if st.browserLocation == nil {
 		return nil
 	}
+	if !s.browserLocationSupported(ctx) {
+		return oapi.ChromiumConfigure400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: errBrowserLocationUnsupported.Error()}}
+	}
 	err := s.acceptBrowserLocation(*st.browserLocation)
 	if err == nil {
 		return nil

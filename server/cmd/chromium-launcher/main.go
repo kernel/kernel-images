@@ -234,19 +234,7 @@ func applyStartupTimezone(timezone string) error {
 	if timezone == "" {
 		return nil
 	}
-	if filepath.IsAbs(timezone) || strings.Contains(timezone, "..") || strings.ContainsRune(timezone, '\x00') {
-		return fmt.Errorf("invalid timezone")
-	}
-	target := filepath.Join("/usr/share/zoneinfo", filepath.FromSlash(timezone))
-	if _, err := os.Stat(target); err != nil {
-		return fmt.Errorf("unsupported timezone: %w", err)
-	}
-	tmp := fmt.Sprintf("/etc/.localtime-kernel-%d", time.Now().UnixNano())
-	if err := os.Symlink(target, tmp); err != nil {
-		return err
-	}
-	defer os.Remove(tmp)
-	return os.Rename(tmp, "/etc/localtime")
+	return browserlocation.SetLocaltime(timezone)
 }
 
 func withoutEnvironmentVariable(env []string, key string) []string {

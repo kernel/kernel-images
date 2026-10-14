@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -196,6 +197,27 @@ func TestGetBrowserLocationHTTPConfirmsAppliedWithChromium(t *testing.T) {
 	// Chromium reports this generation until it restarts and reports none.
 	var chromiumGeneration atomic.Uint64
 	chromiumGeneration.Store(bundle.Generation)
+	fakeChromium(t, service, func(method string, _ map[string]any) map[string]any {
+		return map[string]any{"result": map[string]any{
+			"generation": chromiumGeneration.Load(), "locale": "en-US", "acceptLanguages": "en-US,en", "timezone": "UTC",
+			"renderersConverged": true, "timezoneConverged": true, "networkContextsConverged": true,
+		}}
+	})
+
+	got := getBrowserLocationStatus(t, service)
+	require.NotNil(t, got.Applied)
+	assert.True(t, got.Components.Renderers)
+
+	chromiumGeneration.Store(0)
+	got = getBrowserLocationStatus(t, service)
+	assert.Nil(t, got.Applied, "a restarted Chromium must not be reported as applied")
+	assert.Equal(t, browserLocationComponents{}, got.Components)
+}
+
+// fakeChromium serves CDP at a DevTools URL the service's upstream manager
+// reports. respond returns the "result" or "error" member for each command.
+func fakeChromium(t *testing.T, service *ApiService, respond func(method string, params map[string]any) map[string]any) {
+	t.Helper()
 	chromium := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -204,18 +226,19 @@ func TestGetBrowserLocationHTTPConfirmsAppliedWithChromium(t *testing.T) {
 		defer conn.CloseNow()
 		for {
 			var command struct {
-				ID int `json:"id"`
+				ID     int            `json:"id"`
+				Method string         `json:"method"`
+				Params map[string]any `json:"params"`
 			}
 			if wsjson.Read(r.Context(), conn, &command) != nil {
 				return
 			}
-			_ = wsjson.Write(r.Context(), conn, map[string]any{"id": command.ID, "result": map[string]any{
-				"generation": chromiumGeneration.Load(), "locale": "en-US", "acceptLanguages": "en-US,en", "timezone": "UTC",
-				"renderersConverged": true, "timezoneConverged": true, "networkContextsConverged": true,
-			}})
+			response := respond(command.Method, command.Params)
+			response["id"] = command.ID
+			_ = wsjson.Write(r.Context(), conn, response)
 		}
 	}))
-	defer chromium.Close()
+	t.Cleanup(chromium.Close)
 
 	logPath := filepath.Join(t.TempDir(), "chromium.log")
 	wsURL := "ws" + strings.TrimPrefix(chromium.URL, "http") + "/devtools/browser/a"
@@ -224,20 +247,117 @@ func TestGetBrowserLocationHTTPConfirmsAppliedWithChromium(t *testing.T) {
 	manager.Start(service.lifecycleCtx)
 	service.upstreamMgr = manager
 	require.Eventually(t, func() bool { return manager.Current() == wsURL }, 3*time.Second, 10*time.Millisecond)
+}
 
-	status := func() browserLocationStatus {
-		response := httptest.NewRecorder()
-		service.GetBrowserLocationHTTP(response, httptest.NewRequest(http.MethodGet, "/browser/location", nil))
-		var got browserLocationStatus
-		require.NoError(t, json.Unmarshal(response.Body.Bytes(), &got))
-		return got
+func getBrowserLocationStatus(t *testing.T, service *ApiService) browserLocationStatus {
+	t.Helper()
+	response := httptest.NewRecorder()
+	service.GetBrowserLocationHTTP(response, httptest.NewRequest(http.MethodGet, "/browser/location", nil))
+	require.Equal(t, http.StatusOK, response.Code, response.Body.String())
+	var got browserLocationStatus
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &got))
+	return got
+}
+
+// stubLocaltime keeps reconciles from replacing the host's /etc/localtime.
+func stubLocaltime(t *testing.T) {
+	t.Helper()
+	previous := setBrowserLocaltime
+	setBrowserLocaltime = func(string) error { return nil }
+	t.Cleanup(func() { setBrowserLocaltime = previous })
+}
+
+// A Chromium without the location commands must be reported as unsupported,
+// refuse configure without accepting anything and never be retried.
+func TestBrowserLocationReportsChromiumWithoutLocationCommands(t *testing.T) {
+	stubLocaltime(t)
+	service := newBrowserLocationStateService(t)
+	var commands atomic.Int32
+	fakeChromium(t, service, func(method string, _ map[string]any) map[string]any {
+		commands.Add(1)
+		return map[string]any{"error": map[string]any{"code": -32601, "message": "'" + method + "' wasn't found"}}
+	})
+
+	response := httptest.NewRecorder()
+	service.GetBrowserLocationHTTP(response, httptest.NewRequest(http.MethodGet, "/browser/location", nil))
+	assert.Equal(t, http.StatusNotImplemented, response.Code, response.Body.String())
+	assert.Contains(t, response.Body.String(), `"unsupported"`)
+
+	bundle := testLocationBundle(1)
+	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+	require.IsType(t, oapi.ChromiumConfigure400JSONResponse{}, resp)
+	assert.Nil(t, service.browserLocationSnapshot().Accepted)
+	assert.Equal(t, int32(1), commands.Load(), "each Chromium process is probed once")
+
+	// A bundle accepted before the probe, for example from the persisted
+	// state, fails once without retrying.
+	service.browserLocation.probedUpstream = ""
+	service.browserLocationReconcile = nil
+	require.NoError(t, service.acceptBrowserLocation(bundle))
+	require.Eventually(t, func() bool { return service.browserLocationSnapshot().Error != "" }, 3*time.Second, 10*time.Millisecond)
+	assert.Equal(t, errBrowserLocationUnsupported.Error(), service.browserLocationSnapshot().Error)
+	attempts := commands.Load()
+	time.Sleep(200 * time.Millisecond)
+	assert.Equal(t, attempts, commands.Load(), "an unsupported browser must not be retried")
+}
+
+// Resending the accepted bundle after a failure retries it, and the failure
+// must not be reported while the retry runs.
+func TestBrowserLocationRetryClearsPreviousError(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	bundle := testLocationBundle(1)
+	require.NoError(t, service.acceptBrowserLocation(bundle))
+	service.browserLocationMu.Lock()
+	service.browserLocation.lastError = "browser location components have not converged"
+	service.browserLocationMu.Unlock()
+
+	require.NoError(t, service.acceptBrowserLocation(bundle))
+	assert.Empty(t, service.browserLocationSnapshot().Error)
+}
+
+// Chromium can hold a generation the image never sent, for example after a
+// client reached it directly. The image must move above it rather than retry
+// a stale generation until it times out.
+func TestBrowserLocationMovesAboveChromiumGeneration(t *testing.T) {
+	stubLocaltime(t)
+	service := newBrowserLocationStateService(t)
+	var mu sync.Mutex
+	held := map[string]any{"generation": float64(7), "locale": "fr-FR", "acceptLanguages": "fr-FR,fr", "timezone": "UTC"}
+	fakeChromium(t, service, func(method string, params map[string]any) map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		switch method {
+		case "Browser.setKernelBrowserLocation":
+			if params["generation"].(float64) <= held["generation"].(float64) {
+				return map[string]any{"error": map[string]any{"code": -32602, "message": "generation is stale"}}
+			}
+			held = map[string]any{"generation": params["generation"], "locale": params["locale"], "acceptLanguages": params["acceptLanguages"], "timezone": params["timezone"]}
+			return map[string]any{"result": map[string]any{}}
+		default:
+			result := map[string]any{"renderersConverged": true, "timezoneConverged": true, "networkContextsConverged": true}
+			for key, value := range held {
+				result[key] = value
+			}
+			return map[string]any{"result": result}
+		}
+	})
+	service.browserLocationReconcile = nil
+
+	bundle := testLocationBundle(2)
+	require.NoError(t, service.acceptBrowserLocation(bundle))
+	require.Eventually(t, func() bool { return getBrowserLocationStatus(t, service).Applied != nil }, 3*time.Second, 10*time.Millisecond)
+	mu.Lock()
+	assert.Equal(t, float64(8), held["generation"])
+	mu.Unlock()
+	assert.Empty(t, getBrowserLocationStatus(t, service).Error)
+}
+
+func TestValidateBrowserLocationBundleCapsGeneration(t *testing.T) {
+	if _, err := os.Stat("/usr/share/zoneinfo/Etc/UTC"); err != nil {
+		t.Skip("zoneinfo unavailable")
 	}
-	got := status()
-	require.NotNil(t, got.Applied)
-	assert.True(t, got.Components.Renderers)
-
-	chromiumGeneration.Store(0)
-	got = status()
-	assert.Nil(t, got.Applied, "a restarted Chromium must not be reported as applied")
-	assert.Equal(t, browserLocationComponents{}, got.Components)
+	_, err := validateBrowserLocationBundle(fmt.Sprintf(`{"generation":%d,"timezone":"Etc/UTC","locale":"en-US","languages":["en-US"]}`, uint64(maxBrowserLocationGeneration)))
+	require.NoError(t, err)
+	_, err = validateBrowserLocationBundle(fmt.Sprintf(`{"generation":%d,"timezone":"Etc/UTC","locale":"en-US","languages":["en-US"]}`, uint64(maxBrowserLocationGeneration)+1))
+	assert.Error(t, err)
 }

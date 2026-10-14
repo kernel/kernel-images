@@ -8,11 +8,13 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 	_ "time/tzdata"
 
+	"github.com/kernel/kernel-images/server/lib/browserlocation"
 	"github.com/stretchr/testify/require"
 )
 
@@ -206,6 +208,102 @@ func TestBrowserLocationRuntimeUpdate(t *testing.T) {
 	configureLocation(ctx, t, c, newYork, http.StatusOK)
 	waitLocationApplied(ctx, t, c, newYork)
 	requireLocation(ctx, t, c, restartedPage, "America/New_York", "en-US")
+}
+
+// timeZoneProbeScript reports the timezone the page and an already-running
+// worker use, and the one the page's Intl resolves the requested identifier
+// to, which is what a browser whose host timezone is that identifier reports.
+const timeZoneProbeScript = `(async () => {
+	if (!window.__zoneWorker) {
+		window.__zoneWorker = new Worker(URL.createObjectURL(new Blob([
+			'onmessage=()=>postMessage(Intl.DateTimeFormat().resolvedOptions().timeZone)'
+		], {type: 'text/javascript'})));
+	}
+	const worker = await new Promise((resolve, reject) => {
+		__zoneWorker.onmessage = event => resolve(event.data);
+		__zoneWorker.onerror = reject;
+		__zoneWorker.postMessage(null);
+	});
+	return JSON.stringify({
+		expected: new Intl.DateTimeFormat('en', {timeZone: %q}).resolvedOptions().timeZone,
+		page: Intl.DateTimeFormat().resolvedOptions().timeZone,
+		worker,
+	});
+})()`
+
+// TestBrowserLocationEveryTimeZone applies every timezone the capabilities
+// list. tzdata ships many identifiers as links to other zones (UTC to
+// Etc/UTC, Europe/Bratislava to Europe/Prague), and ICU names the host
+// timezone after the file /etc/localtime resolves to, so each one must still
+// be applied, which requires Chromium to report exactly that identifier, and
+// the page and an existing worker must resolve it as Intl resolves it.
+func TestBrowserLocationEveryTimeZone(t *testing.T) {
+	requireKernelBrowser(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: map[string]string{
+		"TZ":             "America/Los_Angeles",
+		"CHROMIUM_FLAGS": "--remote-allow-origins=*",
+	}}), "failed to start container")
+	defer c.Stop(ctx)
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+	page, err := openLocationPage(ctx, c.CDPURL())
+	require.NoError(t, err)
+	defer page.Close(ctx)
+
+	started := time.Now()
+	timezones := browserlocation.Current().TimeZones
+	var mismatches []string
+	for index, timezone := range timezones {
+		bundle := imageLocationBundle{Generation: uint64(index + 1), TimeZone: timezone, Locale: "en-US", Languages: []string{"en-US", "en"}}
+		configureLocation(ctx, t, c, bundle, http.StatusOK)
+		waitLocationApplied(ctx, t, c, bundle)
+		var observed struct {
+			Expected string `json:"expected"`
+			Page     string `json:"page"`
+			Worker   string `json:"worker"`
+		}
+		require.NoError(t, page.evalJSON(ctx, fmt.Sprintf(timeZoneProbeScript, timezone), &observed))
+		if observed.Page != observed.Expected || observed.Worker != observed.Expected {
+			mismatches = append(mismatches, fmt.Sprintf("%s: Intl %s, page %s, worker %s", timezone, observed.Expected, observed.Page, observed.Worker))
+		}
+	}
+	t.Logf("applied %d timezones in %v", len(timezones), time.Since(started).Round(time.Second))
+	require.Empty(t, mismatches, "pages must resolve each timezone as Intl resolves its identifier")
+}
+
+// TestBrowserLocationUnsupportedBrowser runs the image with a browser that
+// lacks the location commands. The image must report it unsupported and
+// refuse a location instead of accepting one it retries forever.
+func TestBrowserLocationUnsupportedBrowser(t *testing.T) {
+	if os.Getenv("E2E_KERNEL_BROWSER") == "1" {
+		t.Skip("the image ships a browser with the location commands")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	c := NewTestContainer(t, headlessImage)
+	require.NoError(t, c.Start(ctx, ContainerConfig{Env: map[string]string{
+		"TZ":             "America/Los_Angeles",
+		"CHROMIUM_FLAGS": "--remote-allow-origins=*",
+	}}), "failed to start container")
+	defer c.Stop(ctx)
+	require.NoError(t, c.WaitReady(ctx), "api not ready")
+	require.NoError(t, c.WaitDevTools(ctx), "devtools not ready")
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.APIBaseURL()+"/browser/location", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	require.Equal(t, http.StatusNotImplemented, resp.StatusCode, string(body))
+
+	singapore := imageLocationBundle{Generation: 1, TimeZone: "Asia/Singapore", Locale: "en-SG", Languages: []string{"en-SG", "en"}}
+	configureLocation(ctx, t, c, singapore, http.StatusBadRequest)
 }
 
 // chromiumProcess returns the browser process ID and its start time in clock

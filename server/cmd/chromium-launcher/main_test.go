@@ -105,7 +105,7 @@ func TestWithoutEnvironmentVariable(t *testing.T) {
 func TestStartupTimezone(t *testing.T) {
 	values := map[string]string{"TZ": "America/Chicago", "KERNEL_BROWSER_TIMEZONE": "Europe/Berlin"}
 	getenv := func(key string) string { return values[key] }
-	state := []byte(`{"active_epoch":"lease-a","accepted":{"epoch":"lease-a","generation":2,"timezone":"Asia/Singapore"}}`)
+	state := []byte(`{"accepted":{"generation":2,"timezone":"Asia/Singapore"}}`)
 	readState := func(string) ([]byte, error) { return state, nil }
 	noState := func(string) ([]byte, error) { return nil, os.ErrNotExist }
 

@@ -105,6 +105,12 @@ type ApiService struct {
 		failures      atomic.Uint64
 		convergenceMs atomic.Uint64
 		lastAttempt   time.Time
+
+		// chromiumGeneration is the generation Chromium holds accepted under.
+		chromiumGeneration uint64
+		// probedUpstream is the Chromium process supported describes.
+		probedUpstream string
+		supported      bool
 	}
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
