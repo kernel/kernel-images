@@ -244,6 +244,34 @@ func TestChromiumConfigureLocationReportsLateUnsupportedBrowser(t *testing.T) {
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Accepted)
 }
 
+// Resending an applied location waits for the browser to confirm it again
+// rather than trusting the earlier confirmation.
+func TestChromiumConfigureLocationResendConfirmsAgain(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	service.browserLocationReconcile = func(_ context.Context, bundle oapi.BrowserLocationBundle) {
+		service.browserLocationMu.Lock()
+		defer service.browserLocationMu.Unlock()
+		applied := bundle
+		service.browserLocation.applied = &applied
+	}
+	bundle := testLocationBundle(1)
+	require.Nil(t, service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle}))
+
+	// The browser lost the location and the resend can't apply it.
+	service.browserLocationReconcile = func(context.Context, oapi.BrowserLocationBundle) {
+		service.browserLocationMu.Lock()
+		defer service.browserLocationMu.Unlock()
+		service.browserLocation.lastError = "browser location components have not converged"
+	}
+	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+
+	failure, ok := resp.(oapi.ChromiumConfigure500JSONResponse)
+	require.True(t, ok, "expected 500, got %T", resp)
+	require.NotNil(t, failure.Step)
+	assert.Equal(t, oapi.BrowserLocation, *failure.Step)
+	assert.Nil(t, service.browserLocationSnapshot().Applied)
+}
+
 // A newer location accepted while configure waits replaces this one, which
 // the caller must learn about as a conflict.
 func TestChromiumConfigureLocationReportsReplacedLocation(t *testing.T) {

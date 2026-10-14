@@ -96,7 +96,11 @@ func (s *ApiService) acceptBrowserLocation(bundle oapi.BrowserLocationBundle) er
 				s.browserLocation.conflicts.Add(1)
 				return errConflictBrowserLocation
 			}
+			// A resend confirms the location again, so a caller waiting on it
+			// can't succeed on an earlier confirmation the browser has since lost.
 			s.browserLocation.retries.Add(1)
+			s.browserLocation.applied = nil
+			s.browserLocation.components = oapi.BrowserLocationComponents{}
 			s.startBrowserLocationReconcileLocked(bundle)
 			return nil
 		}
@@ -150,7 +154,8 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle oapi.B
 		}
 		if err == nil {
 			s.browserLocationMu.Lock()
-			if accepted := s.browserLocation.accepted; accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
+			// A resend that started after this attempt cancelled it.
+			if accepted := s.browserLocation.accepted; ctx.Err() == nil && accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
 				copy := bundle
 				s.browserLocation.applied = &copy
 				s.browserLocation.lastError = ""
@@ -162,7 +167,7 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle oapi.B
 		}
 		if errors.Is(err, errBrowserLocationUnsupported) || time.Now().After(deadline) {
 			s.browserLocationMu.Lock()
-			if accepted := s.browserLocation.accepted; accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
+			if accepted := s.browserLocation.accepted; ctx.Err() == nil && accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
 				s.browserLocation.lastError = err.Error()
 				s.browserLocation.failures.Add(1)
 			}
