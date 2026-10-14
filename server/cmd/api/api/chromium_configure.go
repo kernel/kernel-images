@@ -367,9 +367,9 @@ func (s *ApiService) applyBrowserLocationConfig(ctx context.Context, st *chromiu
 		return nil
 	case errors.Is(err, errStaleBrowserLocation), errors.Is(err, errConflictBrowserLocation):
 		return oapi.ChromiumConfigure409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: err.Error()}}
-	case errors.Is(err, errBrowserLocationUnsupported):
-		return oapi.ChromiumConfigure400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}
 	}
+	// Includes a browser found unsupported after the location was accepted:
+	// it stays accepted, so this isn't a 400.
 	return cfg500ConfigureStep(chromiumConfigureStepLocation, err.Error())
 }
 

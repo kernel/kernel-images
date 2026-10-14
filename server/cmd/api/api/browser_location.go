@@ -495,8 +495,6 @@ func (s *ApiService) waitBrowserLocationApplied(ctx context.Context, bundle oapi
 			return errConflictBrowserLocation
 		case applied != nil && browserLocationBundlesEqual(*applied, bundle):
 			return nil
-		case lastError == errBrowserLocationUnsupported.Error():
-			return errBrowserLocationUnsupported
 		case lastError != "":
 			return errors.New(lastError)
 		}

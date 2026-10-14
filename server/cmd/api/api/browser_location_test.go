@@ -224,6 +224,26 @@ func TestChromiumConfigureLocationReportsApplyFailure(t *testing.T) {
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Accepted)
 }
 
+// A browser found unsupported only after the location was accepted keeps it
+// accepted, so configure reports the location step rather than a 400.
+func TestChromiumConfigureLocationReportsLateUnsupportedBrowser(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	service.browserLocationReconcile = func(context.Context, oapi.BrowserLocationBundle) {
+		service.browserLocationMu.Lock()
+		defer service.browserLocationMu.Unlock()
+		service.browserLocation.lastError = errBrowserLocationUnsupported.Error()
+	}
+	bundle := testLocationBundle(1)
+
+	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+
+	failure, ok := resp.(oapi.ChromiumConfigure500JSONResponse)
+	require.True(t, ok, "expected 500, got %T", resp)
+	require.NotNil(t, failure.Step)
+	assert.Equal(t, oapi.BrowserLocation, *failure.Step)
+	assert.Equal(t, &bundle, service.browserLocationSnapshot().Accepted)
+}
+
 // A newer location accepted while configure waits replaces this one, which
 // the caller must learn about as a conflict.
 func TestChromiumConfigureLocationReportsReplacedLocation(t *testing.T) {
