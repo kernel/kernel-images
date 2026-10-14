@@ -315,8 +315,9 @@ type EventPublisher func(ev events.Event) (events.Envelope, bool)
 // names the control methods configured out of the stream; nil reports them all.
 // egressFiltered reports whether the session runs under an egress allowlist, which
 // makes the proxy refuse commands that would route a context around it; pass nil
-// to forward every command.
-func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, egressFiltered EgressFilteredFunc, reg *wsdrain.Registry) http.Handler {
+// to forward every command. inputGuard holds input and navigation commands while
+// ambient pointer movement owes the current page; pass nil to never hold them.
+func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMessages bool, ctrl scaletozero.Controller, publish EventPublisher, controlEnabled ControlEnabledFunc, excludedMethods ExcludedMethodsFunc, egressFiltered EgressFilteredFunc, inputGuard InputGuard, reg *wsdrain.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Names this connection on every event it produces, so a reader can tell
 		// two clients driving the same browser apart.
@@ -390,6 +391,15 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 		// Refusal runs inside the pump, ahead of the forward: a command that
 		// would put a context on its own proxy must not reach Chromium.
 		gate := newEgressGate(egressFiltered, logger)
+		// Holding happens after refusal, so a refused command is never held.
+		held := newInputGate(inputGuard)
+		forward := func(mt websocket.MessageType, msg []byte) ([]byte, bool) {
+			if reply, refuse := gate.refuse(mt, msg); refuse {
+				return reply, true
+			}
+			held.hold(pumpCtx, mt, msg)
+			return nil, false
+		}
 
 		// Classification of client commands runs behind the pump, not inside it:
 		// a frame is observed only once Chromium has accepted it.
@@ -452,7 +462,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			})
 		}
 
-		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform, gate.refuse, observe)
+		wsproxy.Pump(pumpCtx, clientConn, upstreamConn, cleanup, logger, transform, forward, observe)
 	})
 }
 

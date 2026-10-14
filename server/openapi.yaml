@@ -432,6 +432,49 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /computer/ambient_mouse:
+    get:
+      summary: Get whether ambient mouse movement is enabled
+      operationId: getAmbientMouse
+      x-telemetry-category: control
+      responses:
+        "200":
+          description: Current ambient mouse movement state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AmbientMouseState"
+    put:
+      summary: Enable or disable ambient mouse movement
+      description: |
+        While enabled, the real pointer makes small human-like movements inside
+        the page area: a burst after every top-level navigation, then occasional
+        short wanders. The movements are OS input, so they reach the page as
+        trusted mousemove events but never appear on a CDP connection or in the
+        telemetry stream.
+
+        After a navigation, input and navigation commands from CDP clients and
+        the computer input endpoints are held until the new page has had its
+        movement and time to score it, for at most a few seconds. Movement pauses
+        while a client is using the pointer itself. Not supported on headless
+        browsers.
+      operationId: setAmbientMouse
+      x-telemetry-category: control
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AmbientMouseState"
+      responses:
+        "200":
+          description: Ambient mouse movement state updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AmbientMouseState"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
   /computer/get_mouse_position:
     post:
       summary: Get the current mouse cursor position on the host computer
@@ -7023,6 +7066,15 @@ components:
         hidden:
           type: boolean
           description: Whether the cursor should be hidden
+      additionalProperties: false
+    AmbientMouseState:
+      type: object
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+          description: Whether ambient mouse movement is on
       additionalProperties: false
     MousePositionResponse:
       type: object

@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/ambientmouse"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/mousetrajectory"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -106,8 +107,7 @@ func (s *ApiService) doMoveMouseInstant(ctx context.Context, log *slog.Logger, b
 }
 
 func (s *ApiService) MoveMouse(ctx context.Context, request oapi.MoveMouseRequestObject) (oapi.MoveMouseResponseObject, error) {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
+	defer s.lockAgentInput(ctx)()
 
 	if request.Body == nil {
 		return oapi.MoveMouse400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -330,12 +330,17 @@ func (s *ApiService) doClickMouse(ctx context.Context, body oapi.ClickMouseReque
 		return &executionError{msg: "failed to execute mouse action"}
 	}
 
+	switch clickType {
+	case oapi.Down:
+		s.ambientMouse.AgentPointer(ambientmouse.PointerPress)
+	case oapi.Up:
+		s.ambientMouse.AgentPointer(ambientmouse.PointerRelease)
+	}
 	return nil
 }
 
 func (s *ApiService) ClickMouse(ctx context.Context, request oapi.ClickMouseRequestObject) (oapi.ClickMouseResponseObject, error) {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
+	defer s.lockAgentInput(ctx)()
 
 	if request.Body == nil {
 		return oapi.ClickMouse400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -687,8 +692,7 @@ func (s *ApiService) executeTypoMistake(
 }
 
 func (s *ApiService) TypeText(ctx context.Context, request oapi.TypeTextRequestObject) (oapi.TypeTextResponseObject, error) {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
+	defer s.lockAgentInput(ctx)()
 
 	if request.Body == nil {
 		return oapi.TypeText400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -956,8 +960,7 @@ func (s *ApiService) doPressKey(ctx context.Context, body oapi.PressKeyRequest) 
 }
 
 func (s *ApiService) PressKey(ctx context.Context, request oapi.PressKeyRequestObject) (oapi.PressKeyResponseObject, error) {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
+	defer s.lockAgentInput(ctx)()
 
 	if request.Body == nil {
 		return oapi.PressKey400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -1039,8 +1042,7 @@ func (s *ApiService) doScroll(ctx context.Context, body oapi.ScrollRequest) erro
 }
 
 func (s *ApiService) Scroll(ctx context.Context, request oapi.ScrollRequestObject) (oapi.ScrollResponseObject, error) {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
+	defer s.lockAgentInput(ctx)()
 
 	if request.Body == nil {
 		return oapi.Scroll400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -1320,8 +1322,7 @@ func smoothStepDelay(i, n, slowMs, fastMs int) int {
 }
 
 func (s *ApiService) DragMouse(ctx context.Context, request oapi.DragMouseRequestObject) (oapi.DragMouseResponseObject, error) {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
+	defer s.lockAgentInput(ctx)()
 
 	if request.Body == nil {
 		return oapi.DragMouse400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -1371,8 +1372,7 @@ func (s *ApiService) doSleep(ctx context.Context, body oapi.SleepAction) error {
 }
 
 func (s *ApiService) BatchComputerAction(ctx context.Context, request oapi.BatchComputerActionRequestObject) (oapi.BatchComputerActionResponseObject, error) {
-	s.inputMu.Lock()
-	defer s.inputMu.Unlock()
+	defer s.lockAgentInput(ctx)()
 
 	if request.Body == nil {
 		return oapi.BatchComputerAction400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{

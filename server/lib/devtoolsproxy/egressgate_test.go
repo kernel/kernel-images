@@ -240,7 +240,7 @@ func TestWebSocketProxyRefusesContextProxyEndToEnd(t *testing.T) {
 	mgr.setCurrent(u.String())
 
 	proxy := httptest.NewServer(WebSocketProxyHandler(
-		mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil, filtered, nil))
+		mgr, logger, false, scaletozero.NewNoopController(), nil, nil, nil, filtered, nil, nil))
 	t.Cleanup(proxy.Close)
 
 	pu, _ := url.Parse(proxy.URL)

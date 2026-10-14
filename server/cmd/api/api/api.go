@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/ambientmouse"
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
@@ -88,6 +89,9 @@ type ApiService struct {
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
+
+	// ambientMouse moves the pointer between agent actions when enabled.
+	ambientMouse *ambientmouse.Controller
 
 	// playwrightExecutors runs Playwright calls, each executor (including the
 	// default one) in its own daemon process.
@@ -205,6 +209,8 @@ func New(
 		lifecycleCancel:   cancel,
 	}
 	s.playwrightExecutors = newPlaywrightExecutorManager(cdpPlaywrightExecutorTabs{withCDP: s.withCDPClient})
+	s.ambientMouse = ambientmouse.New(ctx, ambientmouse.DefaultConfig(), xdoPointer{s}, &s.inputMu,
+		ambientmouse.WatchTargets(upstreamMgr, slog.Default()), slog.Default())
 	return s, nil
 }
 
