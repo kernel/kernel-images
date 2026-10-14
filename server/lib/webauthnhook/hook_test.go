@@ -134,6 +134,8 @@ type fakeSigner struct {
 	release  chan struct{}
 }
 
+func (f *fakeSigner) Configured() bool { return true }
+
 func (f *fakeSigner) Answer(ctx context.Context, op string, req Request) Answer {
 	f.mu.Lock()
 	f.requests = append(f.requests, recordedRequest{op, req, ctx})

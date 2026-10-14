@@ -15,6 +15,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/url"
 	"strings"
@@ -41,6 +42,10 @@ const (
 	answeredRetained = 30 * time.Second
 	maxFrameDepth    = 32
 )
+
+// ErrNotConfigured means the hook cannot be turned on because the VM has no
+// metro API to answer it.
+var ErrNotConfigured = errors.New("WebAuthn hook is not configured: KERNEL_METRO_API_BASE_URL is not set")
 
 // suspendExpression tells a hooked document to leave every request to the
 // browser until the hook script runs in it again.
@@ -158,12 +163,16 @@ func (h *Hook) Stop() {
 }
 
 // Set turns the hook on or off, persisting the flag first. Turning it on
+// fails with ErrNotConfigured when the signer is not configured, and otherwise
 // connects and waits, within ctx and installWait, until the documents already
 // open are hooked. Turning it off tells hooked documents to leave requests to
 // the browser, then closes the connection.
 func (h *Hook) Set(ctx context.Context, enabled bool) error {
 	h.setMu.Lock()
 	defer h.setMu.Unlock()
+	if enabled && !h.cfg.Signer.Configured() {
+		return ErrNotConfigured
+	}
 	if err := saveEnabled(h.cfg.StatePath, enabled); err != nil {
 		return err
 	}

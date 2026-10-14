@@ -40,6 +40,8 @@ var notHandled = Answer{Result: "not_handled"}
 
 // Signer answers page requests. op is "get" or "create".
 type Signer interface {
+	// Configured reports whether the signer has somewhere to send requests.
+	Configured() bool
 	Answer(ctx context.Context, op string, req Request) Answer
 }
 
@@ -87,6 +89,11 @@ type MetroSigner struct {
 	Token   func() string
 	Client  *http.Client
 	Logger  *slog.Logger
+}
+
+// Configured reports whether a metro API URL is set.
+func (m *MetroSigner) Configured() bool {
+	return strings.TrimSpace(m.BaseURL()) != ""
 }
 
 // Answer posts to {BaseURL}/webauthn/{op}. Server errors and transport
