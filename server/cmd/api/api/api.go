@@ -90,11 +90,11 @@ type ApiService struct {
 
 	browserLocationMu        sync.Mutex
 	browserLocationApplyMu   sync.Mutex
-	browserLocationReconcile func(context.Context, browserLocationBundle)
+	browserLocationReconcile func(context.Context, oapi.BrowserLocationBundle)
 	browserLocation          struct {
-		accepted      *browserLocationBundle
-		applied       *browserLocationBundle
-		components    browserLocationComponents
+		accepted      *oapi.BrowserLocationBundle
+		applied       *oapi.BrowserLocationBundle
+		components    oapi.BrowserLocationComponents
 		lastError     string
 		cancel        context.CancelFunc
 		acceptedCount atomic.Uint64

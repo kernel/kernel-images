@@ -37,7 +37,7 @@ type chromiumConfigureState struct {
 	hasProfile  bool
 
 	startURLRaw     *string
-	browserLocation *browserLocationBundle
+	browserLocation *oapi.BrowserLocationBundle
 
 	extItems []extensionZipItem // zipTemp paths; merged with chromiumCfgParseExtensions
 
@@ -356,12 +356,19 @@ func (s *ApiService) applyBrowserLocationConfig(ctx context.Context, st *chromiu
 	if !s.browserLocationSupported(ctx) {
 		return oapi.ChromiumConfigure400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: errBrowserLocationUnsupported.Error()}}
 	}
+	// The location applies before start_url navigation, and success means the
+	// running browser confirmed it.
 	err := s.acceptBrowserLocation(*st.browserLocation)
 	if err == nil {
-		return nil
+		err = s.waitBrowserLocationApplied(ctx, *st.browserLocation)
 	}
-	if errors.Is(err, errStaleBrowserLocation) || errors.Is(err, errConflictBrowserLocation) {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errStaleBrowserLocation), errors.Is(err, errConflictBrowserLocation):
 		return oapi.ChromiumConfigure409JSONResponse{ConflictErrorJSONResponse: oapi.ConflictErrorJSONResponse{Message: err.Error()}}
+	case errors.Is(err, errBrowserLocationUnsupported):
+		return oapi.ChromiumConfigure400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}
 	}
 	return cfg500ConfigureStep(chromiumConfigureStepLocation, err.Error())
 }

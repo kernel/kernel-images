@@ -240,7 +240,6 @@ func main() {
 	r.Use(api.WebMCPRequestSizeMiddleware)
 	// Enforce additionalProperties: false on POST /repl.
 	r.Use(api.StrictBrowserReplBodyMiddleware)
-	r.Get("/browser/location", apiService.GetBrowserLocationHTTP)
 	strictHandler := oapi.NewStrictHandlerWithOptions(apiService, []oapi.StrictMiddlewareFunc{
 		api.TelemetryStrictMiddleware(),
 	}, oapi.StrictHTTPServerOptions{

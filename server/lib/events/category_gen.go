@@ -69,6 +69,7 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"ExecuteBrowserRepl":         oapi.TelemetryEventCategory("control"),
 	"ExecutePlaywrightCode":      oapi.TelemetryEventCategory("control"),
 	"FileInfo":                   oapi.TelemetryEventCategory("platform"),
+	"GetBrowserLocation":         oapi.TelemetryEventCategory("platform"),
 	"GetMousePosition":           oapi.TelemetryEventCategory("control"),
 	"GetNetworkEgressPolicy":     oapi.TelemetryEventCategory("platform"),
 	"GetTelemetry":               oapi.TelemetryEventCategory("platform"),
