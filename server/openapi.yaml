@@ -1325,16 +1325,6 @@ paths:
                     URL text to navigate after configure. Bare hosts are normalized to https://,
                     length is capped at 2048 bytes, and Chrome decides which schemes are navigable.
                   type: string
-                browser_location:
-                  description: >-
-                    UTF-8 JSON object matching `#/components/schemas/BrowserLocationBundle`. Applied
-                    without restarting Chromium and before `start_url` navigation; the request
-                    returns once the running browser confirms the location, within about five
-                    seconds. A stale or conflicting generation returns 409, and a browser that cannot
-                    change location returns 400. If the browser doesn't confirm it, the request
-                    returns 500 with step `browser_location`; the location stays accepted, and
-                    resending the same bundle retries it.
-                  type: string
                 extensions:
                   type: array
                   description: Extension zips paired with consecutive extensions.name fields (same as upload-extensions-and-restart).
@@ -1732,10 +1722,11 @@ paths:
     get:
       summary: Get the browser's location state
       description: >
-        Reports the location the image last accepted through `POST /configure`,
-        the one the running browser has confirmed, and which of the browser's
-        components have acknowledged it. `applied` is re-checked against the
-        running browser, so a restarted or unreachable browser never reports it.
+        Reports the location the image last accepted through `PUT
+        /browser/location`, the one the running browser has confirmed, and
+        which of the browser's components have acknowledged it. `applied` and
+        `components` are read from the running browser, so a restarted or
+        unreachable browser never reports `applied`.
       operationId: getBrowserLocation
       x-telemetry-category: platform
       responses:
@@ -1747,6 +1738,57 @@ paths:
                 $ref: "#/components/schemas/BrowserLocationStatus"
         "501":
           description: The running browser cannot change location.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Set the browser's location
+      description: >
+        Applies a location to the running browser without restarting it and
+        returns once the browser confirms it, within about five seconds. The
+        image keeps the accepted location across Chromium restarts and applies
+        it again before a restart it performs completes.
+
+
+        Set by the control plane, which persists the session's location; a
+        customer write would leave the two disagreeing.
+      operationId: setBrowserLocation
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserLocationBundle"
+      responses:
+        "200":
+          description: The running browser applied the location.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserLocationStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: >-
+            The generation is lower than the accepted one, or equal with a
+            different location, or a newer location replaced this one before
+            it applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >-
+            The browser didn't confirm the location. It stays accepted, and
+            resending the same bundle retries it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: The running browser cannot change location. Nothing was accepted.
           content:
             application/json:
               schema:
@@ -6715,17 +6757,24 @@ components:
     BrowserLocationComponents:
       type: object
       description: Acknowledgements the running browser returned for the accepted location.
-      required: [timezone, browser, renderers, network_contexts]
+      required: [timezone, browser, renderers, renderers_pending, network_contexts]
       properties:
         timezone:
           type: boolean
-          description: /etc/localtime names the timezone and every renderer observed it.
+          description: /etc/localtime names the timezone and every renderer that acknowledged the location observed it.
         browser:
           type: boolean
           description: The browser holds the location's locale and languages.
         renderers:
           type: boolean
           description: Every renderer applied them to its pages and its workers that aren't frozen or paused.
+        renderers_pending:
+          type: integer
+          minimum: 0
+          description: >-
+            Renderers that have the location queued but haven't acknowledged
+            it, such as one blocked by a dialog or a long task. They apply it
+            when they resume.
         network_contexts:
           type: boolean
           description: Every network context sends the languages as Accept-Language.
@@ -6734,7 +6783,9 @@ components:
       description: >-
         `accepted` is the location the image last accepted, absent before the
         first. `applied` is the same location once the running browser has
-        confirmed every component, absent otherwise.
+        confirmed it, absent otherwise: the browser, timezone and network
+        contexts, and every renderer except those counted in
+        `components.renderers_pending`.
       required: [components, capabilities_version]
       properties:
         accepted:
@@ -7088,7 +7139,6 @@ components:
             - display
             - chromium_flags
             - profile
-            - browser_location
     RecorderInfo:
       type: object
       required: [id, isRecording]

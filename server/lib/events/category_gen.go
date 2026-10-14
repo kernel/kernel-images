@@ -103,6 +103,7 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"ReadFile":                   oapi.TelemetryEventCategory("platform"),
 	"RemoveCustomWebMCPTool":     oapi.TelemetryEventCategory("control"),
 	"Scroll":                     oapi.TelemetryEventCategory("control"),
+	"SetBrowserLocation":         oapi.TelemetryEventCategory("platform"),
 	"SetCursor":                  oapi.TelemetryEventCategory("control"),
 	"SetFilePermissions":         oapi.TelemetryEventCategory("platform"),
 	"StartFsWatch":               oapi.TelemetryEventCategory("platform"),

@@ -36,7 +36,8 @@ func main() {
 	runtimeFlagsPath := flag.String("runtime-flags", "/chromium/flags", "Path to runtime flags overlay file")
 	flag.Parse()
 
-	if err := applyStartupTimezone(startupTimezone(os.Getenv, os.ReadFile)); err != nil {
+	accepted := acceptedLocation(os.ReadFile)
+	if err := applyStartupTimezone(startupTimezone(os.Getenv, accepted)); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize browser timezone: %v\n", err)
 		os.Exit(1)
 	}
@@ -90,6 +91,7 @@ func main() {
 	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
 	final = chromiumflags.TranslateKernelDisableFeatures(final)
 	final = withDefaultPrivateNetworkBypass(final)
+	final = withAcceptedLanguages(final, accepted)
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
@@ -248,16 +250,41 @@ func withoutEnvironmentVariable(env []string, key string) []string {
 	return out
 }
 
+// acceptedLocation is the location the image API accepted, or nil before the
+// first.
+func acceptedLocation(readFile func(string) ([]byte, error)) *browserlocation.AcceptedLocation {
+	data, err := readFile(browserlocation.StatePath())
+	if err != nil {
+		return nil
+	}
+	return browserlocation.ReadAccepted(data)
+}
+
 // startupTimezone prefers the bundle the image API accepted, so a restarted
 // Chromium starts in the session's current timezone rather than the VM's.
-func startupTimezone(getenv func(string) string, readFile func(string) ([]byte, error)) string {
-	if data, err := readFile(browserlocation.StatePath()); err == nil {
-		if timezone := browserlocation.AcceptedTimeZone(data); timezone != "" {
-			return timezone
-		}
+func startupTimezone(getenv func(string) string, accepted *browserlocation.AcceptedLocation) string {
+	if accepted != nil && accepted.TimeZone != "" {
+		return accepted.TimeZone
 	}
 	if timezone := getenv("KERNEL_BROWSER_TIMEZONE"); timezone != "" {
 		return timezone
 	}
 	return getenv("TZ")
+}
+
+// withAcceptedLanguages replaces the locale and languages flags with the
+// accepted location's, so a restarted Chromium starts with the session's
+// languages rather than the VM's.
+func withAcceptedLanguages(flags []string, accepted *browserlocation.AcceptedLocation) []string {
+	if accepted == nil || accepted.Locale == "" || len(accepted.Languages) == 0 {
+		return flags
+	}
+	out := make([]string, 0, len(flags)+2)
+	for _, flag := range flags {
+		if strings.HasPrefix(flag, "--lang=") || strings.HasPrefix(flag, "--accept-lang=") {
+			continue
+		}
+		out = append(out, flag)
+	}
+	return append(out, "--lang="+accepted.Locale, "--accept-lang="+strings.Join(accepted.Languages, ","))
 }

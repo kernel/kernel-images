@@ -817,6 +817,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case upstream, ok := <-updates:
 			if ok && tryReady(upstream) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				s.reapplyBrowserLocation(ctx)
 				return nil
 			}
 		case err := <-errCh:
@@ -831,6 +832,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case <-ticker.C:
 			if tryReady(s.upstreamMgr.Current()) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
+				s.reapplyBrowserLocation(ctx)
 				return nil
 			}
 		case <-timeout.C:

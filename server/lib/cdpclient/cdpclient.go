@@ -825,6 +825,7 @@ type BrowserLocation struct {
 	AcceptLanguages          string `json:"acceptLanguages"`
 	TimeZone                 string `json:"timezone"`
 	RenderersConverged       bool   `json:"renderersConverged"`
+	RenderersPending         int    `json:"renderersPending"`
 	TimeZoneConverged        bool   `json:"timezoneConverged"`
 	NetworkContextsConverged bool   `json:"networkContextsConverged"`
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"strings"
@@ -174,19 +173,19 @@ func TestBrowserLocationRuntimeUpdate(t *testing.T) {
 	requireLocation(ctx, t, c, page, "America/Los_Angeles", "en-US")
 
 	singapore := imageLocationBundle{Generation: 1, TimeZone: "Asia/Singapore", Locale: "en-SG", Languages: []string{"en-SG", "en"}}
-	configureLocation(ctx, t, c, singapore, http.StatusOK)
+	setLocation(ctx, t, c, singapore, http.StatusOK)
 	waitLocationApplied(ctx, t, c, singapore)
 	requireLocation(ctx, t, c, page, "Asia/Singapore", "en-SG")
 
 	berlin := imageLocationBundle{Generation: 2, TimeZone: "Europe/Berlin", Locale: "de-DE", Languages: []string{"de-DE", "de"}}
-	configureLocation(ctx, t, c, berlin, http.StatusOK)
+	setLocation(ctx, t, c, berlin, http.StatusOK)
 	waitLocationApplied(ctx, t, c, berlin)
 	requireLocation(ctx, t, c, page, "Europe/Berlin", "de-DE")
 
 	// Same-value retry and stale generation.
-	configureLocation(ctx, t, c, berlin, http.StatusOK)
+	setLocation(ctx, t, c, berlin, http.StatusOK)
 	waitLocationApplied(ctx, t, c, berlin)
-	configureLocation(ctx, t, c, singapore, http.StatusConflict)
+	setLocation(ctx, t, c, singapore, http.StatusConflict)
 
 	restartedPID, restartedStart := chromiumProcess(ctx, t, c)
 	require.Equal(t, pid, restartedPID, "location updates must not restart Chromium")
@@ -205,7 +204,7 @@ func TestBrowserLocationRuntimeUpdate(t *testing.T) {
 
 	// The restarted Chromium takes later generations as before.
 	newYork := imageLocationBundle{Generation: 3, TimeZone: "America/New_York", Locale: "en-US", Languages: []string{"en-US", "en"}}
-	configureLocation(ctx, t, c, newYork, http.StatusOK)
+	setLocation(ctx, t, c, newYork, http.StatusOK)
 	waitLocationApplied(ctx, t, c, newYork)
 	requireLocation(ctx, t, c, restartedPage, "America/New_York", "en-US")
 }
@@ -259,7 +258,7 @@ func TestBrowserLocationEveryTimeZone(t *testing.T) {
 	var mismatches []string
 	for index, timezone := range timezones {
 		bundle := imageLocationBundle{Generation: uint64(index + 1), TimeZone: timezone, Locale: "en-US", Languages: []string{"en-US", "en"}}
-		configureLocation(ctx, t, c, bundle, http.StatusOK)
+		setLocation(ctx, t, c, bundle, http.StatusOK)
 		waitLocationApplied(ctx, t, c, bundle)
 		var observed struct {
 			Expected string `json:"expected"`
@@ -303,7 +302,7 @@ func TestBrowserLocationUnsupportedBrowser(t *testing.T) {
 	require.Equal(t, http.StatusNotImplemented, resp.StatusCode, string(body))
 
 	singapore := imageLocationBundle{Generation: 1, TimeZone: "Asia/Singapore", Locale: "en-SG", Languages: []string{"en-SG", "en"}}
-	configureLocation(ctx, t, c, singapore, http.StatusBadRequest)
+	setLocation(ctx, t, c, singapore, http.StatusNotImplemented)
 }
 
 // chromiumProcess returns the browser process ID and its start time in clock
@@ -339,17 +338,13 @@ func requireLocation(ctx context.Context, t *testing.T, c *TestContainer, page *
 	require.Equal(t, time.Now().In(zone).Format("-0700"), strings.TrimSpace(date))
 }
 
-func configureLocation(ctx context.Context, t *testing.T, c *TestContainer, bundle imageLocationBundle, wantStatus int) {
+func setLocation(ctx context.Context, t *testing.T, c *TestContainer, bundle imageLocationBundle, wantStatus int) {
 	t.Helper()
 	payload, err := json.Marshal(bundle)
 	require.NoError(t, err)
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	require.NoError(t, writer.WriteField("browser_location", string(payload)))
-	require.NoError(t, writer.Close())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.APIBaseURL()+"/configure", &body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.APIBaseURL()+"/browser/location", bytes.NewReader(payload))
 	require.NoError(t, err)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()

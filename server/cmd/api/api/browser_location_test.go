@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -30,14 +31,9 @@ func TestValidateBrowserLocationBundle(t *testing.T) {
 
 	for _, locale := range []string{"en-US", "de-DE", "pt-BR", "es-MX", "en-SG", "zh-TW"} {
 		raw := fmt.Sprintf(`{"generation":2,"timezone":"America/New_York","locale":%q,"languages":[%q]}`, locale, locale)
-		bundle, err := validateBrowserLocationBundle(raw)
-		require.NoError(t, err, locale)
-		assert.Equal(t, locale, bundle.Locale)
+		require.NoError(t, validateBrowserLocationBundle(decodeLocationBundle(t, raw)), locale)
 	}
-	bundle, err := validateBrowserLocationBundle(`{"generation":2,"timezone":"America/New_York","locale":"en-US","languages":["en-US","en"]}`)
-	require.NoError(t, err)
-	assert.Equal(t, int64(2), bundle.Generation)
-	assert.Equal(t, []string{"en-US", "en"}, bundle.Languages)
+	require.NoError(t, validateBrowserLocationBundle(decodeLocationBundle(t, `{"generation":2,"timezone":"America/New_York","locale":"en-US","languages":["en-US","en"]}`)))
 
 	for _, raw := range []string{
 		`{"generation":2,"timezone":"../../etc/passwd","locale":"en-US","languages":["en-US"]}`,
@@ -48,9 +44,15 @@ func TestValidateBrowserLocationBundle(t *testing.T) {
 		`{"generation":2,"timezone":"America/New_York","locale":"en-US","languages":["en-US","EN"]}`,
 		`{"generation":0,"timezone":"America/New_York","locale":"en-US","languages":["en-US"]}`,
 	} {
-		_, err := validateBrowserLocationBundle(raw)
-		assert.Error(t, err, raw)
+		assert.Error(t, validateBrowserLocationBundle(decodeLocationBundle(t, raw)), raw)
 	}
+}
+
+func decodeLocationBundle(t *testing.T, raw string) oapi.BrowserLocationBundle {
+	t.Helper()
+	var bundle oapi.BrowserLocationBundle
+	require.NoError(t, json.Unmarshal([]byte(raw), &bundle))
+	return bundle
 }
 
 func TestBrowserLocationBundlesEqual(t *testing.T) {
@@ -157,35 +159,30 @@ func TestBrowserLocationPersistenceFailureAcceptsNothing(t *testing.T) {
 	assert.Nil(t, service.browserLocationSnapshot().Accepted)
 }
 
-func TestChromiumConfigureLocationPersistenceFailureReportsValidStep(t *testing.T) {
+func TestSetBrowserLocationPersistenceFailure(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	require.NoError(t, service.acceptBrowserLocation(testLocationBundle(1)))
 	t.Setenv("KERNEL_BROWSER_LOCATION_STATE_PATH", "/proc/kernel-browser-location-state")
 	bundle := testLocationBundle(2)
 
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+	resp := service.applyBrowserLocation(context.Background(), bundle)
 
-	failure, ok := resp.(oapi.ChromiumConfigure500JSONResponse)
-	require.True(t, ok, "expected 500 response, got %T", resp)
-	require.NotNil(t, failure.Step)
-	assert.Equal(t, oapi.BrowserLocation, *failure.Step)
-	assert.True(t, failure.Step.Valid())
+	require.IsType(t, oapi.SetBrowserLocation500JSONResponse{}, resp)
 }
 
 // The API retries after a 409, so stale and conflicting bundles must report it.
-func TestChromiumConfigureLocationRejectsStaleGeneration(t *testing.T) {
+func TestSetBrowserLocationRejectsStaleGeneration(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	require.NoError(t, service.acceptBrowserLocation(testLocationBundle(2)))
 	stale := testLocationBundle(1)
 
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &stale})
+	resp := service.applyBrowserLocation(context.Background(), stale)
 
-	require.IsType(t, oapi.ChromiumConfigure409JSONResponse{}, resp)
+	require.IsType(t, oapi.SetBrowserLocation409JSONResponse{}, resp)
 }
 
-// Configure returns only once the running browser confirmed the location, so
-// start_url navigation and the 200 come after it.
-func TestChromiumConfigureLocationWaitsForApply(t *testing.T) {
+// The request returns only once the running browser confirmed the location.
+func TestSetBrowserLocationWaitsForApply(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	service.browserLocationReconcile = func(_ context.Context, bundle oapi.BrowserLocationBundle) {
 		time.Sleep(150 * time.Millisecond)
@@ -197,16 +194,16 @@ func TestChromiumConfigureLocationWaitsForApply(t *testing.T) {
 	bundle := testLocationBundle(1)
 
 	started := time.Now()
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+	resp := service.applyBrowserLocation(context.Background(), bundle)
 
-	require.Nil(t, resp)
+	require.IsType(t, oapi.SetBrowserLocation200JSONResponse{}, resp)
 	assert.GreaterOrEqual(t, time.Since(started), 150*time.Millisecond)
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Applied)
 }
 
-// A location the browser doesn't confirm fails configure with the location
-// step, and stays accepted so a resend retries it.
-func TestChromiumConfigureLocationReportsApplyFailure(t *testing.T) {
+// A location the browser doesn't confirm fails the request and stays
+// accepted, so a resend retries it.
+func TestSetBrowserLocationReportsApplyFailure(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	service.browserLocationReconcile = func(context.Context, oapi.BrowserLocationBundle) {
 		service.browserLocationMu.Lock()
@@ -215,18 +212,15 @@ func TestChromiumConfigureLocationReportsApplyFailure(t *testing.T) {
 	}
 	bundle := testLocationBundle(1)
 
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+	resp := service.applyBrowserLocation(context.Background(), bundle)
 
-	failure, ok := resp.(oapi.ChromiumConfigure500JSONResponse)
-	require.True(t, ok, "expected 500, got %T", resp)
-	require.NotNil(t, failure.Step)
-	assert.Equal(t, oapi.BrowserLocation, *failure.Step)
+	require.IsType(t, oapi.SetBrowserLocation500JSONResponse{}, resp)
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Accepted)
 }
 
 // A browser found unsupported only after the location was accepted keeps it
-// accepted, so configure reports the location step rather than a 400.
-func TestChromiumConfigureLocationReportsLateUnsupportedBrowser(t *testing.T) {
+// accepted, so the request fails with 500 rather than 501.
+func TestSetBrowserLocationReportsLateUnsupportedBrowser(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	service.browserLocationReconcile = func(context.Context, oapi.BrowserLocationBundle) {
 		service.browserLocationMu.Lock()
@@ -235,18 +229,15 @@ func TestChromiumConfigureLocationReportsLateUnsupportedBrowser(t *testing.T) {
 	}
 	bundle := testLocationBundle(1)
 
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+	resp := service.applyBrowserLocation(context.Background(), bundle)
 
-	failure, ok := resp.(oapi.ChromiumConfigure500JSONResponse)
-	require.True(t, ok, "expected 500, got %T", resp)
-	require.NotNil(t, failure.Step)
-	assert.Equal(t, oapi.BrowserLocation, *failure.Step)
+	require.IsType(t, oapi.SetBrowserLocation500JSONResponse{}, resp)
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Accepted)
 }
 
 // Resending an applied location waits for the browser to confirm it again
 // rather than trusting the earlier confirmation.
-func TestChromiumConfigureLocationResendConfirmsAgain(t *testing.T) {
+func TestSetBrowserLocationResendConfirmsAgain(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	service.browserLocationReconcile = func(_ context.Context, bundle oapi.BrowserLocationBundle) {
 		service.browserLocationMu.Lock()
@@ -255,7 +246,7 @@ func TestChromiumConfigureLocationResendConfirmsAgain(t *testing.T) {
 		service.browserLocation.applied = &applied
 	}
 	bundle := testLocationBundle(1)
-	require.Nil(t, service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle}))
+	require.IsType(t, oapi.SetBrowserLocation200JSONResponse{}, service.applyBrowserLocation(context.Background(), bundle))
 
 	// The browser lost the location and the resend can't apply it.
 	service.browserLocationReconcile = func(context.Context, oapi.BrowserLocationBundle) {
@@ -263,18 +254,15 @@ func TestChromiumConfigureLocationResendConfirmsAgain(t *testing.T) {
 		defer service.browserLocationMu.Unlock()
 		service.browserLocation.lastError = "browser location components have not converged"
 	}
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+	resp := service.applyBrowserLocation(context.Background(), bundle)
 
-	failure, ok := resp.(oapi.ChromiumConfigure500JSONResponse)
-	require.True(t, ok, "expected 500, got %T", resp)
-	require.NotNil(t, failure.Step)
-	assert.Equal(t, oapi.BrowserLocation, *failure.Step)
+	require.IsType(t, oapi.SetBrowserLocation500JSONResponse{}, resp)
 	assert.Nil(t, service.browserLocationSnapshot().Applied)
 }
 
-// A newer location accepted while configure waits replaces this one, which
+// A newer location accepted while the request waits replaces this one, which
 // the caller must learn about as a conflict.
-func TestChromiumConfigureLocationReportsReplacedLocation(t *testing.T) {
+func TestSetBrowserLocationReportsReplacedLocation(t *testing.T) {
 	service := newBrowserLocationStateService(t)
 	newer := testLocationBundle(2)
 	service.browserLocationReconcile = func(_ context.Context, bundle oapi.BrowserLocationBundle) {
@@ -284,9 +272,9 @@ func TestChromiumConfigureLocationReportsReplacedLocation(t *testing.T) {
 	}
 	bundle := testLocationBundle(1)
 
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
+	resp := service.applyBrowserLocation(context.Background(), bundle)
 
-	require.IsType(t, oapi.ChromiumConfigure409JSONResponse{}, resp)
+	require.IsType(t, oapi.SetBrowserLocation409JSONResponse{}, resp)
 }
 
 func TestGetBrowserLocationConfirmsAppliedWithChromium(t *testing.T) {
@@ -379,7 +367,7 @@ func stubLocaltime(t *testing.T) {
 }
 
 // A Chromium without the location commands must be reported as unsupported,
-// refuse configure without accepting anything and never be retried.
+// refuse the location without accepting anything and never be retried.
 func TestBrowserLocationReportsChromiumWithoutLocationCommands(t *testing.T) {
 	stubLocaltime(t)
 	service := newBrowserLocationStateService(t)
@@ -394,8 +382,8 @@ func TestBrowserLocationReportsChromiumWithoutLocationCommands(t *testing.T) {
 	assert.IsType(t, oapi.GetBrowserLocation501JSONResponse{}, resp501)
 
 	bundle := testLocationBundle(1)
-	resp := service.applyBrowserLocationConfig(context.Background(), &chromiumConfigureState{browserLocation: &bundle})
-	require.IsType(t, oapi.ChromiumConfigure400JSONResponse{}, resp)
+	resp := service.applyBrowserLocation(context.Background(), bundle)
+	require.IsType(t, oapi.SetBrowserLocation501JSONResponse{}, resp)
 	assert.Nil(t, service.browserLocationSnapshot().Accepted)
 	assert.Equal(t, int32(1), commands.Load(), "each Chromium process is probed once")
 
@@ -462,12 +450,100 @@ func TestBrowserLocationMovesAboveChromiumGeneration(t *testing.T) {
 	assert.Nil(t, getBrowserLocationStatus(t, service).Error)
 }
 
+// fakeLocationChromium holds the last location set on it and reports it with
+// the renderer acknowledgements in renderers.
+func fakeLocationChromium(t *testing.T, service *ApiService, renderers map[string]any) *atomic.Int32 {
+	t.Helper()
+	var mu sync.Mutex
+	var sets atomic.Int32
+	held := map[string]any{"generation": float64(0), "locale": "", "acceptLanguages": "", "timezone": "UTC"}
+	fakeChromium(t, service, func(method string, params map[string]any) map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		if method == "Browser.setKernelBrowserLocation" {
+			sets.Add(1)
+			held = map[string]any{"generation": params["generation"], "locale": params["locale"], "acceptLanguages": params["acceptLanguages"], "timezone": params["timezone"]}
+			return map[string]any{"result": map[string]any{}}
+		}
+		result := map[string]any{"timezoneConverged": true, "networkContextsConverged": true}
+		for key, value := range held {
+			result[key] = value
+		}
+		for key, value := range renderers {
+			result[key] = value
+		}
+		return map[string]any{"result": result}
+	})
+	service.browserLocationReconcile = nil
+	return &sets
+}
+
+// A renderer blocked by a dialog or a long task has the location queued and
+// applies it when it resumes, so it doesn't fail the request.
+func TestSetBrowserLocationAllowsPendingRenderers(t *testing.T) {
+	stubLocaltime(t)
+	service := newBrowserLocationStateService(t)
+	fakeLocationChromium(t, service, map[string]any{"renderersConverged": false, "renderersPending": 1})
+	bundle := testLocationBundle(1)
+
+	started := time.Now()
+	resp := service.applyBrowserLocation(context.Background(), bundle)
+
+	require.IsType(t, oapi.SetBrowserLocation200JSONResponse{}, resp)
+	assert.GreaterOrEqual(t, time.Since(started), browserLocationPendingRendererWait, "renderers get a chance to acknowledge first")
+	status := getBrowserLocationStatus(t, service)
+	require.NotNil(t, status.Applied)
+	assert.False(t, status.Components.Renderers)
+	assert.Equal(t, 1, status.Components.RenderersPending)
+}
+
+func TestBrowserLocationConfirmed(t *testing.T) {
+	converged := oapi.BrowserLocationComponents{Browser: true, Timezone: true, Renderers: true, NetworkContexts: true}
+	pending := converged
+	pending.Renderers = false
+	pending.RenderersPending = 2
+	unacknowledged := pending
+	unacknowledged.RenderersPending = 0
+	network := converged
+	network.NetworkContexts = false
+
+	assert.True(t, browserLocationConfirmed(converged, false))
+	assert.False(t, browserLocationConfirmed(pending, false))
+	assert.True(t, browserLocationConfirmed(pending, true))
+	assert.False(t, browserLocationConfirmed(unacknowledged, true), "a Chromium that reports no pending count has not confirmed")
+	assert.False(t, browserLocationConfirmed(network, true))
+}
+
+// A restart the image performs applies the accepted location to the new
+// Chromium before it completes, rather than trusting the previous Chromium's
+// confirmation.
+func TestReapplyBrowserLocationAfterRestart(t *testing.T) {
+	stubLocaltime(t)
+	service := newBrowserLocationStateService(t)
+	sets := fakeLocationChromium(t, service, map[string]any{"renderersConverged": true, "renderersPending": 0})
+
+	service.reapplyBrowserLocation(context.Background())
+	assert.Zero(t, sets.Load(), "nothing to apply before a location is accepted")
+
+	bundle := testLocationBundle(1)
+	require.NoError(t, service.acceptBrowserLocation(bundle))
+	service.browserLocationMu.Lock()
+	service.browserLocation.cancel()
+	previous := bundle
+	service.browserLocation.applied = &previous
+	service.browserLocationMu.Unlock()
+	sent := sets.Load()
+
+	service.reapplyBrowserLocation(context.Background())
+
+	assert.Greater(t, sets.Load(), sent, "the new Chromium must be sent the location")
+	assert.Equal(t, &bundle, service.browserLocationSnapshot().Applied)
+}
+
 func TestValidateBrowserLocationBundleCapsGeneration(t *testing.T) {
 	if _, err := os.Stat("/usr/share/zoneinfo/Etc/UTC"); err != nil {
 		t.Skip("zoneinfo unavailable")
 	}
-	_, err := validateBrowserLocationBundle(fmt.Sprintf(`{"generation":%d,"timezone":"Etc/UTC","locale":"en-US","languages":["en-US"]}`, uint64(maxBrowserLocationGeneration)))
-	require.NoError(t, err)
-	_, err = validateBrowserLocationBundle(fmt.Sprintf(`{"generation":%d,"timezone":"Etc/UTC","locale":"en-US","languages":["en-US"]}`, uint64(maxBrowserLocationGeneration)+1))
-	assert.Error(t, err)
+	require.NoError(t, validateBrowserLocationBundle(decodeLocationBundle(t, fmt.Sprintf(`{"generation":%d,"timezone":"Etc/UTC","locale":"en-US","languages":["en-US"]}`, uint64(maxBrowserLocationGeneration)))))
+	assert.Error(t, validateBrowserLocationBundle(decodeLocationBundle(t, fmt.Sprintf(`{"generation":%d,"timezone":"Etc/UTC","locale":"en-US","languages":["en-US"]}`, uint64(maxBrowserLocationGeneration)+1))))
 }

@@ -24,6 +24,11 @@ const (
 	// browserLocationRoundTimeout bounds how long one attempt waits for
 	// Chromium's acknowledgements before it sends the location again.
 	browserLocationRoundTimeout = 1500 * time.Millisecond
+	// browserLocationPendingRendererWait is how long a round waits for
+	// renderers that haven't acknowledged before it counts them as pending:
+	// blocked by a dialog or a long task, with the location queued for when
+	// they resume.
+	browserLocationPendingRendererWait = time.Second
 	// maxBrowserLocationGeneration is the largest integer a CDP number holds
 	// exactly, so the largest generation Chromium accepts.
 	maxBrowserLocationGeneration = 1<<53 - 1
@@ -43,41 +48,37 @@ var (
 	errBrowserLocationUnsupported = errors.New("this browser cannot change location")
 )
 
-func validateBrowserLocationBundle(raw string) (oapi.BrowserLocationBundle, error) {
-	var bundle oapi.BrowserLocationBundle
-	if err := json.Unmarshal([]byte(raw), &bundle); err != nil {
-		return bundle, fmt.Errorf("invalid browser_location JSON")
-	}
+func validateBrowserLocationBundle(bundle oapi.BrowserLocationBundle) error {
 	if bundle.Generation < 1 {
-		return bundle, fmt.Errorf("browser_location generation must be positive")
+		return fmt.Errorf("location generation must be positive")
 	}
 	if bundle.Generation > maxBrowserLocationGeneration {
-		return bundle, fmt.Errorf("browser_location generation must not exceed 2^53-1")
+		return fmt.Errorf("location generation must not exceed 2^53-1")
 	}
 	capabilities := browserlocation.Current()
 	if !capabilities.SupportsTimeZone(bundle.Timezone) {
-		return bundle, fmt.Errorf("unsupported browser_location timezone")
+		return fmt.Errorf("unsupported location timezone")
 	}
 	zonePath, err := browserlocation.ZonePath(bundle.Timezone)
 	if err != nil {
-		return bundle, err
+		return err
 	}
 	if _, err := os.Stat(zonePath); err != nil {
-		return bundle, fmt.Errorf("unsupported browser_location timezone")
+		return fmt.Errorf("unsupported location timezone")
 	}
 	if !capabilities.SupportsLocale(bundle.Locale) {
-		return bundle, fmt.Errorf("unsupported browser_location locale")
+		return fmt.Errorf("unsupported location locale")
 	}
 	if len(bundle.Languages) == 0 || bundle.Languages[0] != bundle.Locale {
-		return bundle, fmt.Errorf("browser_location languages must start with locale")
+		return fmt.Errorf("location languages must start with locale")
 	}
 	for _, value := range bundle.Languages {
 		tag, err := language.Parse(value)
 		if err != nil || tag.String() != value {
-			return bundle, fmt.Errorf("browser_location languages must be canonical BCP 47")
+			return fmt.Errorf("location languages must be canonical BCP 47")
 		}
 	}
-	return bundle, nil
+	return nil
 }
 
 func (s *ApiService) acceptBrowserLocation(bundle oapi.BrowserLocationBundle) error {
@@ -220,10 +221,12 @@ func (s *ApiService) sendBrowserLocation(ctx context.Context, bundle oapi.Browse
 }
 
 // waitBrowserLocation polls Chromium until every component acknowledges the
-// bundle, or until deadline.
+// bundle, or until deadline. Renderers that haven't acknowledged within
+// browserLocationPendingRendererWait while Chromium reports them pending don't
+// hold it back.
 func (s *ApiService) waitBrowserLocation(ctx context.Context, bundle oapi.BrowserLocationBundle, deadline time.Time) error {
+	started := time.Now()
 	return s.withCDPClientTimeout(ctx, time.Until(deadline), func(cdpCtx context.Context, client *cdpclient.Client) error {
-		languages := strings.Join(bundle.Languages, ",")
 		generation := s.chromiumGeneration(bundle)
 		for {
 			observed, err := client.GetBrowserLocation(cdpCtx)
@@ -236,18 +239,13 @@ func (s *ApiService) waitBrowserLocation(ctx context.Context, bundle oapi.Browse
 			if observed.Generation != generation {
 				return fmt.Errorf("browser location generation %d is not current", bundle.Generation)
 			}
-			components := oapi.BrowserLocationComponents{
-				Browser:         observed.Locale == bundle.Locale && observed.AcceptLanguages == languages,
-				Timezone:        observed.TimeZone == browserlocation.HostTimeZone(bundle.Timezone) && observed.TimeZoneConverged,
-				Renderers:       observed.RenderersConverged,
-				NetworkContexts: observed.NetworkContextsConverged,
-			}
+			components := browserLocationComponents(observed, bundle)
 			s.browserLocationMu.Lock()
 			if accepted := s.browserLocation.accepted; accepted != nil && browserLocationBundlesEqual(*accepted, bundle) {
 				s.browserLocation.components = components
 			}
 			s.browserLocationMu.Unlock()
-			if components.Browser && components.Timezone && components.Renderers && components.NetworkContexts {
+			if browserLocationConfirmed(components, time.Since(started) >= browserLocationPendingRendererWait) {
 				return nil
 			}
 			select {
@@ -460,21 +458,81 @@ func (s *ApiService) BrowserLocationMetrics() metrics.BrowserLocationSnapshot {
 	}
 }
 
-// GetBrowserLocation reports accepted and applied component state. Applied is
-// confirmed against the running Chromium, so a restarted or unreachable
-// browser is never reported as applied.
+// GetBrowserLocation reports accepted and applied component state. Applied and
+// its components are read from the running Chromium, so a restarted or
+// unreachable browser is never reported as applied.
 func (s *ApiService) GetBrowserLocation(ctx context.Context, _ oapi.GetBrowserLocationRequestObject) (oapi.GetBrowserLocationResponseObject, error) {
 	if !s.browserLocationSupported(ctx) {
 		return oapi.GetBrowserLocation501JSONResponse{Message: errBrowserLocationUnsupported.Error()}, nil
 	}
 	status := s.browserLocationSnapshot()
 	if status.Applied != nil {
-		if !s.browserLocationCurrent(*status.Applied) || !s.browserLocationLive(ctx, *status.Applied) {
+		components, live := s.browserLocationLive(ctx, *status.Applied)
+		if !s.browserLocationCurrent(*status.Applied) || !live {
 			status.Applied = nil
 			status.Components = oapi.BrowserLocationComponents{}
+		} else {
+			status.Components = components
 		}
 	}
 	return oapi.GetBrowserLocation200JSONResponse(status), nil
+}
+
+// SetBrowserLocation accepts a location and returns once the running browser
+// confirms it.
+func (s *ApiService) SetBrowserLocation(ctx context.Context, request oapi.SetBrowserLocationRequestObject) (oapi.SetBrowserLocationResponseObject, error) {
+	if request.Body == nil {
+		return oapi.SetBrowserLocation400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body is required"}}, nil
+	}
+	bundle := *request.Body
+	if err := validateBrowserLocationBundle(bundle); err != nil {
+		return oapi.SetBrowserLocation400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
+	}
+	return s.applyBrowserLocation(ctx, bundle), nil
+}
+
+// applyBrowserLocation accepts a validated bundle and waits until the running
+// browser confirms it.
+func (s *ApiService) applyBrowserLocation(ctx context.Context, bundle oapi.BrowserLocationBundle) oapi.SetBrowserLocationResponseObject {
+	if !s.browserLocationSupported(ctx) {
+		return oapi.SetBrowserLocation501JSONResponse{Message: errBrowserLocationUnsupported.Error()}
+	}
+	err := s.acceptBrowserLocation(bundle)
+	if err == nil {
+		err = s.waitBrowserLocationApplied(ctx, bundle)
+	}
+	switch {
+	case err == nil:
+		return oapi.SetBrowserLocation200JSONResponse(s.browserLocationSnapshot())
+	case errors.Is(err, errStaleBrowserLocation), errors.Is(err, errConflictBrowserLocation):
+		return oapi.SetBrowserLocation409JSONResponse{Message: err.Error()}
+	}
+	// Includes a browser found unsupported after the location was accepted,
+	// which keeps it accepted.
+	logger.FromContext(ctx).Error("browser location did not apply", "error", err, "generation", bundle.Generation)
+	return oapi.SetBrowserLocation500JSONResponse{Message: err.Error()}
+}
+
+// reapplyBrowserLocation applies the accepted location to a Chromium the image
+// has just restarted, before the restart completes, so nothing that follows it
+// sees the browser without its location. A failure is only logged: Chromium
+// started with the location's timezone and languages, and the lifecycle loop
+// keeps retrying.
+func (s *ApiService) reapplyBrowserLocation(ctx context.Context) {
+	s.browserLocationMu.Lock()
+	if s.browserLocation.accepted == nil {
+		s.browserLocationMu.Unlock()
+		return
+	}
+	bundle := *s.browserLocation.accepted
+	// The previous Chromium's confirmation says nothing about this one.
+	s.browserLocation.applied = nil
+	s.browserLocation.components = oapi.BrowserLocationComponents{}
+	s.startBrowserLocationReconcileLocked(bundle)
+	s.browserLocationMu.Unlock()
+	if err := s.waitBrowserLocationApplied(ctx, bundle); err != nil {
+		logger.FromContext(ctx).Error("browser location did not apply after chromium restart", "error", err, "generation", bundle.Generation)
+	}
 }
 
 func browserLocationError(message string) *string {
@@ -511,11 +569,12 @@ func (s *ApiService) waitBrowserLocationApplied(ctx context.Context, bundle oapi
 	}
 }
 
-// browserLocationLive reports whether the running Chromium holds bundle with
-// every component acknowledged.
-func (s *ApiService) browserLocationLive(ctx context.Context, bundle oapi.BrowserLocationBundle) bool {
+// browserLocationLive returns the running Chromium's components for bundle,
+// and whether it holds bundle with every component confirmed. Pending
+// renderers have it queued, so they don't count against it.
+func (s *ApiService) browserLocationLive(ctx context.Context, bundle oapi.BrowserLocationBundle) (oapi.BrowserLocationComponents, bool) {
 	if s.upstreamMgr == nil {
-		return false
+		return oapi.BrowserLocationComponents{}, false
 	}
 	var observed cdpclient.BrowserLocation
 	err := s.withCDPClientTimeout(ctx, 500*time.Millisecond, func(cdpCtx context.Context, client *cdpclient.Client) error {
@@ -523,10 +582,32 @@ func (s *ApiService) browserLocationLive(ctx context.Context, bundle oapi.Browse
 		observed, err = client.GetBrowserLocation(cdpCtx)
 		return err
 	})
-	return err == nil && observed.Generation == s.chromiumGeneration(bundle) &&
-		observed.Locale == bundle.Locale && observed.AcceptLanguages == strings.Join(bundle.Languages, ",") &&
-		observed.TimeZone == browserlocation.HostTimeZone(bundle.Timezone) && observed.TimeZoneConverged &&
-		observed.RenderersConverged && observed.NetworkContextsConverged
+	if err != nil || observed.Generation != s.chromiumGeneration(bundle) {
+		return oapi.BrowserLocationComponents{}, false
+	}
+	components := browserLocationComponents(observed, bundle)
+	return components, browserLocationConfirmed(components, true)
+}
+
+// browserLocationComponents compares what Chromium reports for the generation
+// it holds bundle under with bundle.
+func browserLocationComponents(observed cdpclient.BrowserLocation, bundle oapi.BrowserLocationBundle) oapi.BrowserLocationComponents {
+	return oapi.BrowserLocationComponents{
+		Browser:          observed.Locale == bundle.Locale && observed.AcceptLanguages == strings.Join(bundle.Languages, ","),
+		Timezone:         observed.TimeZone == browserlocation.HostTimeZone(bundle.Timezone) && observed.TimeZoneConverged,
+		Renderers:        observed.RenderersConverged,
+		RenderersPending: observed.RenderersPending,
+		NetworkContexts:  observed.NetworkContextsConverged,
+	}
+}
+
+// browserLocationConfirmed reports whether every component confirmed the
+// location, allowing renderers Chromium reports pending when allowPending.
+func browserLocationConfirmed(c oapi.BrowserLocationComponents, allowPending bool) bool {
+	if !c.Browser || !c.Timezone || !c.NetworkContexts {
+		return false
+	}
+	return c.Renderers || (allowPending && c.RenderersPending > 0)
 }
 
 func browserLocationBundlesEqual(a, b oapi.BrowserLocationBundle) bool {

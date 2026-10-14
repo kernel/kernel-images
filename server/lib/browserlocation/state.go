@@ -16,16 +16,21 @@ func StatePath() string {
 	return defaultStatePath
 }
 
-// AcceptedTimeZone returns the timezone of the persisted accepted bundle, or
-// "" when none has been accepted.
-func AcceptedTimeZone(data []byte) string {
+// AcceptedLocation is the location of the persisted accepted bundle.
+type AcceptedLocation struct {
+	TimeZone  string   `json:"timezone"`
+	Locale    string   `json:"locale"`
+	Languages []string `json:"languages"`
+}
+
+// ReadAccepted returns the location of the persisted accepted bundle, or nil
+// when none has been accepted.
+func ReadAccepted(data []byte) *AcceptedLocation {
 	var state struct {
-		Accepted *struct {
-			TimeZone string `json:"timezone"`
-		} `json:"accepted"`
+		Accepted *AcceptedLocation `json:"accepted"`
 	}
-	if json.Unmarshal(data, &state) != nil || state.Accepted == nil {
-		return ""
+	if json.Unmarshal(data, &state) != nil {
+		return nil
 	}
-	return state.Accepted.TimeZone
+	return state.Accepted
 }
