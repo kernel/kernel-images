@@ -62,8 +62,14 @@ type imageLocationBundle struct {
 type imageLocationStatus struct {
 	Accepted   *imageLocationBundle `json:"accepted"`
 	Applied    *imageLocationBundle `json:"applied"`
-	Components map[string]bool      `json:"components"`
-	Error      string               `json:"error"`
+	Components struct {
+		Timezone         bool `json:"timezone"`
+		Browser          bool `json:"browser"`
+		Renderers        bool `json:"renderers"`
+		RenderersPending int  `json:"renderers_pending"`
+		NetworkContexts  bool `json:"network_contexts"`
+	} `json:"components"`
+	Error string `json:"error"`
 }
 
 // TestBrowserTimezoneFollowsLocaltime starts Chromium with the production
@@ -365,9 +371,9 @@ func waitLocationApplied(ctx context.Context, t *testing.T, c *TestContainer, bu
 		resp.Body.Close()
 		require.NoError(t, err)
 		if status.Applied != nil && status.Applied.Generation == bundle.Generation {
-			for _, component := range []string{"timezone", "browser", "renderers", "network_contexts"} {
-				require.True(t, status.Components[component], "applied without %s convergence: %+v", component, status)
-			}
+			c := status.Components
+			require.True(t, c.Timezone && c.Browser && c.Renderers && c.NetworkContexts, "applied without every component: %+v", status)
+			require.Zero(t, c.RenderersPending, "no renderer is blocked: %+v", status)
 			return
 		}
 		time.Sleep(50 * time.Millisecond)

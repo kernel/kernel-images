@@ -111,6 +111,9 @@ type ApiService struct {
 		// probedUpstream is the Chromium process supported describes.
 		probedUpstream string
 		supported      bool
+		// upstream is the Chromium process the accepted location was last
+		// applied to.
+		upstream string
 	}
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)

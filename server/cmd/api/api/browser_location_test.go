@@ -538,6 +538,12 @@ func TestReapplyBrowserLocationAfterRestart(t *testing.T) {
 
 	assert.Greater(t, sets.Load(), sent, "the new Chromium must be sent the location")
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Applied)
+
+	// The lifecycle loop then sees the Chromium the location was applied to.
+	service.observeChromiumUpstream(service.upstreamMgr.Current())
+	assert.Equal(t, &bundle, service.browserLocationSnapshot().Applied, "a re-applied location must stay applied")
+	service.observeChromiumUpstream("ws://127.0.0.1:1/devtools/browser/other")
+	assert.Nil(t, service.browserLocationSnapshot().Applied, "another Chromium has not confirmed it")
 }
 
 func TestValidateBrowserLocationBundleCapsGeneration(t *testing.T) {

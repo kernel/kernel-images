@@ -395,33 +395,34 @@ func (s *ApiService) initializeBrowserLocation() error {
 func (s *ApiService) browserLocationLifecycleLoop() {
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
-	lastUpstream := ""
 	for {
 		select {
 		case <-s.lifecycleCtx.Done():
 			return
 		case <-ticker.C:
-			upstream := s.upstreamMgr.Current()
-			if upstream == "" {
-				continue
+			if upstream := s.upstreamMgr.Current(); upstream != "" {
+				s.observeChromiumUpstream(upstream)
 			}
-			s.browserLocationMu.Lock()
-			upstreamChanged := upstream != lastUpstream
-			if upstreamChanged {
-				lastUpstream = upstream
-			}
-			if upstreamChanged {
-				// A new Chromium process has not acknowledged anything yet.
-				s.browserLocation.applied = nil
-				s.browserLocation.components = oapi.BrowserLocationComponents{}
-			}
-			unsupported := s.browserLocation.probedUpstream == upstream && !s.browserLocation.supported
-			needsRetry := s.browserLocation.accepted != nil && s.browserLocation.applied == nil && s.browserLocation.lastError != "" && !unsupported && time.Since(s.browserLocation.lastAttempt) >= browserLocationApplyTimeout
-			if s.browserLocation.accepted != nil && (upstreamChanged || needsRetry) {
-				s.startBrowserLocationReconcileLocked(*s.browserLocation.accepted)
-			}
-			s.browserLocationMu.Unlock()
 		}
+	}
+}
+
+// observeChromiumUpstream applies the accepted location to a Chromium process
+// it hasn't been applied to, and retries a failed apply.
+func (s *ApiService) observeChromiumUpstream(upstream string) {
+	s.browserLocationMu.Lock()
+	defer s.browserLocationMu.Unlock()
+	upstreamChanged := upstream != s.browserLocation.upstream
+	if upstreamChanged {
+		s.browserLocation.upstream = upstream
+		// A new Chromium process has not acknowledged anything yet.
+		s.browserLocation.applied = nil
+		s.browserLocation.components = oapi.BrowserLocationComponents{}
+	}
+	unsupported := s.browserLocation.probedUpstream == upstream && !s.browserLocation.supported
+	needsRetry := s.browserLocation.accepted != nil && s.browserLocation.applied == nil && s.browserLocation.lastError != "" && !unsupported && time.Since(s.browserLocation.lastAttempt) >= browserLocationApplyTimeout
+	if s.browserLocation.accepted != nil && (upstreamChanged || needsRetry) {
+		s.startBrowserLocationReconcileLocked(*s.browserLocation.accepted)
 	}
 }
 
@@ -525,9 +526,13 @@ func (s *ApiService) reapplyBrowserLocation(ctx context.Context) {
 		return
 	}
 	bundle := *s.browserLocation.accepted
-	// The previous Chromium's confirmation says nothing about this one.
+	// The previous Chromium's confirmation says nothing about this one. The
+	// lifecycle loop must not start over once this one confirms.
 	s.browserLocation.applied = nil
 	s.browserLocation.components = oapi.BrowserLocationComponents{}
+	if s.upstreamMgr != nil {
+		s.browserLocation.upstream = s.upstreamMgr.Current()
+	}
 	s.startBrowserLocationReconcileLocked(bundle)
 	s.browserLocationMu.Unlock()
 	if err := s.waitBrowserLocationApplied(ctx, bundle); err != nil {
