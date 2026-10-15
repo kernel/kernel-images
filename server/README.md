@@ -57,6 +57,8 @@ Configure the server using environment variables:
 | `MAX_SIZE_MB`  | `500`     | Default maximum file size (MB)              |
 | `OUTPUT_DIR`   | `.`       | Directory to save recordings                |
 | `FFMPEG_PATH`  | `ffmpeg`  | Path to the ffmpeg binary                   |
+| `KERNEL_METRO_API_BASE_URL` | | Metro API base URL; answers the WebAuthn page hook (`PUT /webauthn/hook`) |
+| `KERNEL_INSTANCE_JWT` | | Instance credential sent to the metro API and the OTLP relay |
 
 #### Example Configuration
 

@@ -360,3 +360,7 @@ export function canRedeclare(existing: CellBindingKind, incoming: CellBindingKin
 export function alreadyDeclaredError(name: string): SyntaxError {
   return new SyntaxError(`Identifier '${name}' has already been declared; use a new name or reset the REPL to retry`);
 }
+
+export function builtinDeclarationError(name: string): SyntaxError {
+  return new SyntaxError(`\`${name}\` is a built-in Browser REPL helper; use a different variable name`);
+}

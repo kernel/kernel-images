@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"net/http"
 	"os"
 	"testing"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/webauthnhook"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -404,11 +406,34 @@ func testEgressPolicy(t *testing.T) *egresspolicy.State {
 	return egresspolicy.Load(filepath.Join(t.TempDir(), "egress-policy.json"), slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
+// testWebAuthn wires the hook as main does on a VM without a metro API URL.
+func testWebAuthn(t *testing.T) *webauthnhook.Hook {
+	t.Helper()
+	return testWebAuthnWithMetro(t, "")
+}
+
+func testWebAuthnWithMetro(t *testing.T, metroURL string) *webauthnhook.Hook {
+	t.Helper()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	hook := webauthnhook.New(t.Context(), webauthnhook.Config{
+		StatePath: filepath.Join(t.TempDir(), "webauthn-hook.json"),
+		Signer: &webauthnhook.MetroSigner{
+			BaseURL: func() string { return metroURL },
+			Token:   func() string { return "instance-jwt" },
+			Client:  &http.Client{},
+			Logger:  logger,
+		},
+		Logger: logger,
+	}, newTestUpstreamManager())
+	t.Cleanup(hook.Stop)
+	return hook
+}
+
 // newSvc constructs an ApiService with a fresh telemetry session and event stream.
 func newSvc(t *testing.T, mgr recorder.RecordManager) (*ApiService, error) {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t))
+	return New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t), testWebAuthn(t))
 }
 
 func TestApiService_PatchChromiumFlags(t *testing.T) {

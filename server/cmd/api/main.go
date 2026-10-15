@@ -40,6 +40,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/sysmon"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
+	"github.com/kernel/kernel-images/server/lib/webauthnhook"
 	"github.com/kernel/kernel-images/server/lib/wsdrain"
 )
 
@@ -143,18 +144,20 @@ func main() {
 	// Constructed when an endpoint is provisioned, but left stopped: export is
 	// off until turned on per-session via the telemetry API, so a VM that always
 	// has the relay injected does not export (and get dropped) by default.
+	// The OTLP relay and the metro API authenticate the VM by its instance JWT,
+	// sent as a bearer token. Identity is resolved dynamically: on a forked VM
+	// the boot env is stale, so it is re-read from the applied fork-identity
+	// payload (see instanceIdentityProvider).
+	identity := newInstanceIdentityProvider(instanceIdentity{
+		jwt:          config.InstanceJWT,
+		instanceName: config.InstanceName,
+		metro:        config.MetroName,
+		metroAPIURL:  config.MetroAPIBaseURL,
+	}, slogger)
+
 	var otlpExporter api.OTLPExporter
 	var otlpMetrics *events.OTLPMetrics
 	if config.OTLPEndpoint != "" {
-		// The relay authenticates the VM by its instance JWT, sent as a bearer
-		// token. Identity (JWT + resource attrs) is resolved dynamically: on a
-		// forked VM the boot env is stale, so it is re-read from the applied
-		// fork-identity payload (see otlpIdentityProvider).
-		identity := newOTLPIdentityProvider(otlpIdentity{
-			jwt:          config.InstanceJWT,
-			instanceName: config.InstanceName,
-			metro:        config.MetroName,
-		}, slogger)
 		slogger.Info("OTLP export available", "endpoint", config.OTLPEndpoint, "path", config.OTLPPath)
 		// The OTel log SDK reports batch-queue drops through its global logger at
 		// logr V(1), which slog renders just below Info, so a default Info handler
@@ -195,6 +198,19 @@ func main() {
 	// unfiltered while the session's allowlist is still in force.
 	egressPolicy := egresspolicy.Load(egresspolicy.DefaultStatePath, slogger)
 
+	// Answers pages' WebAuthn calls through the metro API. Reconnects to
+	// Chromium at once if a previous run of this process left it on.
+	webauthnHook := webauthnhook.New(ctx, webauthnhook.Config{
+		StatePath: webauthnhook.DefaultStatePath,
+		Signer: &webauthnhook.MetroSigner{
+			BaseURL: identity.MetroAPIURL,
+			Token:   identity.Token,
+			Client:  &http.Client{},
+			Logger:  slogger,
+		},
+		Logger: slogger,
+	}, upstreamMgr)
+
 	apiService, err := api.New(
 		recorder.NewFFmpegManager(),
 		recorder.NewFFmpegRecorderFactory(config.PathToFFmpeg, defaultParams, stz),
@@ -207,6 +223,7 @@ func main() {
 		otlpExporter,
 		s2Storage,
 		egressPolicy,
+		webauthnHook,
 	)
 	if err != nil {
 		slogger.Error("failed to create api service", "err", err)
@@ -500,7 +517,7 @@ func (r *s2StreamResolver) RecordAppliedPayload(payload forkidentity.Payload) {
 // this instance may bind yet, so the result is empty; pending reports that case.
 // Once one is applied only its own stream counts, never the boot env's.
 //
-// OTLP resolves its identity per use instead (otlpIdentityProvider), so a stale
+// OTLP resolves its identity per use instead (instanceIdentityProvider), so a stale
 // read there self-corrects; an S2 append session binds once, so this read has to
 // be right the first time.
 func appliedS2Stream(cfg *config.Config) (stream string, pending bool) {

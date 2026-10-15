@@ -11,8 +11,10 @@
   "include": [
     "browser-cdp-client.ts",
     "browser-helpers.ts",
+    "browser-helpers.test.ts",
     "browser-repl.ts",
     "cell-analysis.ts",
-    "cell-runtime.ts"
+    "cell-runtime.ts",
+    "cell-runtime.test.ts"
   ]
 }

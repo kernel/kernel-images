@@ -366,6 +366,34 @@ func TestSessionFramesReportOwnersAndRoots(t *testing.T) {
 	}, frames)
 }
 
+func TestPageSessionResolvesOutOfProcessFrames(t *testing.T) {
+	protocol := newFakeProtocol()
+	tracker := New(protocol)
+	require.NoError(t, tracker.Start(context.Background()))
+	protocol.emitTarget("Target.targetCreated", map[string]any{
+		"targetInfo": map[string]any{
+			"targetId": "oopif", "type": "iframe", "url": "https://cross-origin.example/",
+			"parentFrameId": "inner",
+		},
+	})
+	require.Eventually(t, func() bool {
+		_, _, ok := tracker.PageSession("oopif-session")
+		return ok
+	}, time.Second, 10*time.Millisecond)
+
+	for sessionID, want := range map[string][2]string{
+		"oopif-session": {"session-a", "root-a"},
+		"session-a":     {"session-a", "root-a"},
+		"session-b":     {"session-b", "root-b"},
+	} {
+		page, mainFrame, ok := tracker.PageSession(sessionID)
+		require.True(t, ok, sessionID)
+		require.Equal(t, want, [2]string{page, mainFrame}, sessionID)
+	}
+	_, _, ok := tracker.PageSession("missing")
+	require.False(t, ok)
+}
+
 func TestTrackerPreservesFramesDuringProcessSwap(t *testing.T) {
 	protocol := newFakeProtocol()
 	tracker := New(protocol)

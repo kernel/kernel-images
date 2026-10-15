@@ -1,14 +1,14 @@
 import { writeFileSync } from 'fs';
 import sharp from 'sharp';
-import { BrowserReplCdpClient, isInternalUrl, type CdpEvent } from './browser-cdp-client';
-import { browserReplBrowserMethodNames } from './browser-repl-help';
+import { BrowserReplCdpClient, isInternalUrl, type CdpEvent } from './browser-cdp-client.ts';
+import { browserReplBrowserMethodNames } from './browser-repl-help.ts';
 import {
   buildFunctionCallExpression,
   normalizeJsOptions,
   type JsOptions,
   type PageFunction,
-} from './page-evaluation';
-import { resolveUSKey, supportedUSKeyNames } from './us-keyboard-layout';
+} from './page-evaluation.ts';
+import { resolveUSKey, supportedUSKeyNames } from './us-keyboard-layout.ts';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -1032,7 +1032,9 @@ export class BrowserHelpers {
             const style = getComputedStyle(el);
             return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
           };
-          const candidates = [...document.querySelectorAll(selector)].filter(visible);
+          const matches = [...document.querySelectorAll(selector)];
+          if (matches.length === 0) return { status: 'not found' };
+          const candidates = matches.filter(visible);
           if (candidates.length === 0) return { status: 'not visible' };
           if (candidates.length > 1) return { status: 'multiple', count: candidates.length };
           const el = candidates[0];
@@ -1101,7 +1103,9 @@ export class BrowserHelpers {
             const style = getComputedStyle(el);
             return style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0';
           };
-          const candidates = [...document.querySelectorAll(selector)].filter(visible);
+          const matches = [...document.querySelectorAll(selector)];
+          if (matches.length === 0) return { status: 'not found' };
+          const candidates = matches.filter(visible);
           if (candidates.length === 0) return { status: 'not visible' };
           if (candidates.length > 1) return { status: 'multiple', count: candidates.length };
           const el = candidates[0];
@@ -1154,4 +1158,10 @@ export function buildBrowserGlobals(helpers: BrowserHelpers): Record<string, unk
   );
   const browser = Object.freeze({ ...namespace });
   return { browser, ...namespace };
+}
+
+// Globals that REPL cells may not declare: the browser helpers, the `browser`
+// namespace, and the REPL's own `repl` and `webmcp` objects.
+export function browserReplReservedNames(browserGlobals: Record<string, unknown>): string[] {
+  return ['repl', 'webmcp', ...Object.keys(browserGlobals)];
 }

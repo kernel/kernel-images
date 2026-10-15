@@ -4,23 +4,35 @@ import {
   alreadyDeclaredError,
   analyzeCell,
   applyEdits,
+  builtinDeclarationError,
   canRedeclare,
   type CellAnalysis,
   type CellBinding,
   type CellBindingKind,
-} from './cell-analysis';
+} from './cell-analysis.ts';
 
 type PersistentBinding = CellBinding & { initialized: boolean; value?: unknown };
 
 export class CellRuntime {
   private readonly declarations = new Map<string, CellBindingKind>();
   private readonly values = new Map<string, PersistentBinding>();
+  private readonly context: vm.Context;
+  private readonly contextGlobal: Record<PropertyKey, unknown>;
+  private readonly builtinNames: ReadonlySet<string>;
   private sequence = 0;
 
+  // builtinNames are REPL-provided globals that cells may not declare:
+  // prepareBindings would replace the built-in with an uninitialized binding
+  // before the cell's initializers run.
   constructor(
-    private readonly context: vm.Context,
-    private readonly contextGlobal: Record<PropertyKey, unknown>,
-  ) {}
+    context: vm.Context,
+    contextGlobal: Record<PropertyKey, unknown>,
+    builtinNames: Iterable<string>,
+  ) {
+    this.context = context;
+    this.contextGlobal = contextGlobal;
+    this.builtinNames = new Set(builtinNames);
+  }
 
   async evaluate(source: string): Promise<void> {
     const cellSequence = this.sequence++;
@@ -81,6 +93,7 @@ export class CellRuntime {
   private precheck(bindings: CellBinding[]): void {
     const cellDeclarations = new Map<string, CellBindingKind>();
     for (const binding of bindings) {
+      if (this.builtinNames.has(binding.name)) throw builtinDeclarationError(binding.name);
       const existing = this.declarations.get(binding.name) ?? cellDeclarations.get(binding.name);
       if (existing !== undefined && !canRedeclare(existing, binding.kind)) {
         throw alreadyDeclaredError(binding.name);

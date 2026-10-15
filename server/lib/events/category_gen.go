@@ -97,6 +97,7 @@ var categoryByOperationID = map[string]oapi.TelemetryEventCategory{
 	"PublishTelemetryEvent":      oapi.TelemetryEventCategory("platform"),
 	"PutNetworkEgressPolicy":     oapi.TelemetryEventCategory("platform"),
 	"PutTelemetry":               oapi.TelemetryEventCategory("platform"),
+	"PutWebAuthnHook":            oapi.TelemetryEventCategory("platform"),
 	"ReadClipboard":              oapi.TelemetryEventCategory("control"),
 	"ReadFile":                   oapi.TelemetryEventCategory("platform"),
 	"RemoveCustomWebMCPTool":     oapi.TelemetryEventCategory("control"),

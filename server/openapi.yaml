@@ -1776,6 +1776,49 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /webauthn/hook:
+    put:
+      summary: Turn the WebAuthn page hook on or off
+      description: >
+        While on, every page and iframe document gets a script that answers
+        `navigator.credentials.get` and `navigator.credentials.create` calls
+        for public-key credentials through the VM: the request goes to the
+        metro API with the origin Chromium reports for the calling document,
+        and anything the metro API does not answer falls back to the
+        browser's own implementation. Private keys never enter the VM.
+
+
+        Turning it off stops new documents from getting the script and tells
+        documents that already have it to leave every request to the browser.
+        Idempotent. The flag is persisted, so it survives a restart of the
+        instance API process.
+
+
+        Turning it on waits until the documents already open are hooked. If
+        they are not all hooked within 15 seconds it returns 500; the hook
+        stays on, new documents still get it, and the request can be retried.
+        Turning it on returns 400 when the VM has no metro API URL
+        (`KERNEL_METRO_API_BASE_URL`) to answer it. Turning it off always
+        succeeds.
+      operationId: putWebAuthnHook
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebAuthnHook"
+      responses:
+        "200":
+          description: Hook state applied
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebAuthnHook"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
   /telemetry:
     get:
       summary: Get telemetry configuration
@@ -6616,6 +6659,14 @@ components:
             Whether the session's egress is restricted to an allowlist. When
             true, the VM refuses requests that would reach destinations without
             going through the proxy that enforces it.
+      additionalProperties: false
+    WebAuthnHook:
+      type: object
+      description: Whether the WebAuthn page hook is installed in new documents.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
       additionalProperties: false
     TelemetryState:
       type: object

@@ -8,7 +8,7 @@ import { unlinkSync, existsSync, renameSync, writeFileSync, promises as fsp } fr
 import vm from 'vm';
 import util from 'util';
 import { BrowserReplCdpClient } from './browser-cdp-client';
-import { BrowserHelpers, buildBrowserGlobals } from './browser-helpers';
+import { BrowserHelpers, browserReplReservedNames, buildBrowserGlobals } from './browser-helpers';
 import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
 import { CustomWebMCPRegistry } from './custom-webmcp';
@@ -462,7 +462,7 @@ const context: vm.Context = vm.createContext(
 
 contextGlobal = vm.runInContext('globalThis', context) as Record<PropertyKey, unknown>;
 
-const cellRuntime = new CellRuntime(context, contextGlobal);
+const cellRuntime = new CellRuntime(context, contextGlobal, browserReplReservedNames(browserGlobals));
 
 async function evaluate(code: string): Promise<void> {
   await cellRuntime.evaluate(code);

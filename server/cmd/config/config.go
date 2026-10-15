@@ -75,6 +75,9 @@ type Config struct {
 	InstanceJWT  string `envconfig:"KERNEL_INSTANCE_JWT" default:""`
 	InstanceName string `envconfig:"INST_NAME"           default:""`
 	MetroName    string `envconfig:"METRO_NAME"          default:""`
+
+	// Metro API base URL, which answers the WebAuthn page hook's requests.
+	MetroAPIBaseURL string `envconfig:"KERNEL_METRO_API_BASE_URL" default:""`
 }
 
 // LogValue implements slog.LogValuer, redacting secret fields.
@@ -116,6 +119,7 @@ func (c *Config) LogValue() slog.Value {
 		slog.Duration("otlp_export_timeout", c.OTLPExportTimeout),
 		slog.String("otlp_instance_name", c.InstanceName),
 		slog.String("otlp_metro", c.MetroName),
+		slog.String("metro_api_base_url", c.MetroAPIBaseURL),
 	)
 }
 
