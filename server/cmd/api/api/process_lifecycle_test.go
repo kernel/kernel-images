@@ -20,6 +20,7 @@ import (
 
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/stretchr/testify/require"
 )
 
@@ -190,11 +191,13 @@ func TestProcessSlowReaderAndResume(t *testing.T) {
 	require.NoError(t, err)
 	for _, params := range []oapi.ProcessStdoutStreamParams{
 		{LastEventID: &lastID},
-		{Offset: first.Offset, LastEventID: ptrOf("ignored")},
+		{Offset: first.Offset},
+		{Offset: ptrOf(int64(0)), LastEventID: &lastID},
 	} {
 		stream := processStream(t, svc, spawn, params)
 		output, events := collectProcessStream(t, stream)
 		require.NoError(t, stream.Close())
+		require.Equal(t, 2<<20, len(firstData)+len(output), "resumed stream duplicated or lost output")
 		require.Equal(t, strings.Repeat("\x00", 2<<20), string(firstData)+output)
 		requireProcessExitEvent(t, events, 0)
 	}
@@ -203,6 +206,98 @@ func TestProcessSlowReaderAndResume(t *testing.T) {
 		require.NoError(t, err)
 		require.IsType(t, oapi.ProcessStdoutStream400JSONResponse{}, resp)
 	}
+	resp, err := svc.ProcessStdoutStream(context.Background(), oapi.ProcessStdoutStreamRequestObject{
+		ProcessId: *spawn.ProcessId, Params: oapi.ProcessStdoutStreamParams{Offset: ptrOf(int64(0)), LastEventID: ptrOf("invalid")},
+	})
+	require.NoError(t, err)
+	require.IsType(t, oapi.ProcessStdoutStream400JSONResponse{}, resp)
+}
+
+func TestProcessExecCancellationStopsChildren(t *testing.T) {
+	svc := newProcessTestService(t, ProcessOutputConfig{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pidFile := filepath.Join(t.TempDir(), "child-pid")
+	args := []string{"-c", `sleep 30 & child=$!; printf before; printf '%s' "$child" > "$1"; wait`, "sh", pidFile}
+	type result struct {
+		response oapi.ProcessExecResponseObject
+		err      error
+	}
+	completed := make(chan result, 1)
+	go func() {
+		response, err := svc.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: &oapi.ProcessExecRequest{Command: "sh", Args: &args}})
+		completed <- result{response: response, err: err}
+	}()
+	childPID := waitProcessPIDFile(t, pidFile)
+	cancel()
+	select {
+	case result := <-completed:
+		require.NoError(t, result.err)
+		require.IsType(t, oapi.ProcessExec422JSONResponse{}, result.response)
+		failure := result.response.(oapi.ProcessExec422JSONResponse)
+		require.Equal(t, oapi.ProcessCanceled, failure.Code)
+		require.Equal(t, base64.StdEncoding.EncodeToString([]byte("before")), *failure.StdoutB64)
+	case <-time.After(5 * time.Second):
+		t.Fatal("exec did not finish after request cancellation")
+	}
+	requireProcessStopped(t, childPID)
+}
+
+func TestProcessSpawnShutdownStopsChildren(t *testing.T) {
+	for _, tty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("tty=%v", tty), func(t *testing.T) {
+			svc, err := newSvc(t, recorder.NewFFmpegManager())
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				require.NoError(t, svc.Shutdown(ctx))
+			})
+			pidFile := filepath.Join(t.TempDir(), "child-pid")
+			args := []string{"-c", `sleep 30 & printf '%s' "$!" > "$1"; wait`, "sh", pidFile}
+			response, err := svc.ProcessSpawn(context.Background(), oapi.ProcessSpawnRequestObject{Body: &oapi.ProcessSpawnRequest{
+				Command: "sh", Args: &args, AllocateTty: &tty,
+			}})
+			require.NoError(t, err)
+			require.IsType(t, oapi.ProcessSpawn200JSONResponse{}, response)
+			spawn := response.(oapi.ProcessSpawn200JSONResponse)
+			childPID := waitProcessPIDFile(t, pidFile)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			require.NoError(t, svc.Shutdown(ctx))
+			requireProcessStopped(t, *spawn.Pid)
+			requireProcessStopped(t, childPID)
+			require.Eventually(t, func() bool {
+				status, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: *spawn.ProcessId})
+				require.NoError(t, err)
+				_, released := status.(oapi.ProcessStatus404JSONResponse)
+				return released
+			}, time.Second, 10*time.Millisecond, "shutdown did not release the process")
+		})
+	}
+}
+
+func waitProcessPIDFile(t *testing.T, path string) int {
+	t.Helper()
+	var pid int
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return false
+		}
+		pid, err = strconv.Atoi(string(data))
+		return err == nil && pid > 0
+	}, 5*time.Second, 10*time.Millisecond, "command did not start its child")
+	return pid
+}
+
+func requireProcessStopped(t *testing.T, pid int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		return os.IsNotExist(err) || strings.Contains(string(stat), ") Z ")
+	}, time.Second, 10*time.Millisecond, "process %d is still running", pid)
 }
 
 func TestProcessSpawnTimeoutSurvivesRequestCancellation(t *testing.T) {

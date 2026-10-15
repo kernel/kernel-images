@@ -72,7 +72,9 @@ func TestProcessLifecycle(t *testing.T) {
 				require.Equal(t, "stderr", errOut)
 				requireImageExitEvent(t, events, 0)
 				// Resume just after the first event and compare the remaining records.
-				response, err = client.ProcessStdoutStream(ctx, *id, &oapi.ProcessStdoutStreamParams{LastEventID: lo.ToPtr(strconv.FormatInt(*events[0].Offset, 10))})
+				response, err = client.ProcessStdoutStream(ctx, *id, &oapi.ProcessStdoutStreamParams{
+					Offset: lo.ToPtr(int64(0)), LastEventID: lo.ToPtr(strconv.FormatInt(*events[0].Offset, 10)),
+				})
 				require.NoError(t, err)
 				_, _, resumed := readImageProcessStream(t, response)
 				require.Equal(t, events[1:], resumed)
