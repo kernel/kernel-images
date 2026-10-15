@@ -230,3 +230,33 @@ func TestBlurWithNothingFocusedSendsNothing(t *testing.T) {
 	require.NoError(t, w.Blur(context.Background(), 0))
 	require.Zero(t, browser.count("blur"))
 }
+
+func TestAnEndedConnectionPublishesNothing(t *testing.T) {
+	browser := newFakeBrowser()
+	browser.focused = true
+	w := New(&staticUpstream{url: browser.serve(t)}, slog.Default())
+	defer w.Close()
+	states, unsubscribe := w.Subscribe()
+	defer unsubscribe()
+	waitFor(t, states, "the focused field", func(s State) bool { return s.Focus != nil })
+
+	w.mu.Lock()
+	c := w.conn
+	w.mu.Unlock()
+	require.NotNil(t, c)
+	// the connection drops; its last frame states are still around
+	_ = c.protocol.Close()
+	waitFor(t, states, "the empty state", func(s State) bool { return s.Focus == nil && s.Viewport == nil })
+	// a frame poll still draining reports its last state
+	c.mu.Lock()
+	c.frames[frameKey{session: "session", frame: "main"}] = &watchedFrame{state: frameState{
+		seq:    1,
+		report: &frameReport{Focused: true, Focus: &Field{Type: "text"}},
+	}}
+	c.mu.Unlock()
+	c.emit()
+	w.mu.Lock()
+	latest := string(w.latest)
+	w.mu.Unlock()
+	require.NotContains(t, latest, `"focus":{`)
+}

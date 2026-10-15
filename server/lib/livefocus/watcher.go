@@ -148,7 +148,7 @@ func (w *Watcher) stopLocked() {
 	w.latest = mustMarshal(emptyState())
 }
 
-// publish is a no-op once ctx, the run that produced state, has been stopped.
+// publish is a no-op once ctx, the run or connection that produced state, has ended.
 func (w *Watcher) publish(ctx context.Context, state State) {
 	data := mustMarshal(state)
 	w.mu.Lock()
@@ -198,7 +198,11 @@ func (w *Watcher) watch(ctx context.Context, url string) error {
 		return err
 	}
 	defer protocol.Close()
-	c := newConnection(ctx, protocol, func(state State) { w.publish(ctx, state) })
+	// Ended before the run publishes the empty state, so frame polls still
+	// draining from this connection cannot publish over it.
+	connCtx, cancelConn := context.WithCancel(ctx)
+	defer cancelConn()
+	c := newConnection(connCtx, protocol, func(state State) { w.publish(connCtx, state) })
 	w.mu.Lock()
 	w.conn = c
 	w.mu.Unlock()

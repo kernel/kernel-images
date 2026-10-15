@@ -144,7 +144,8 @@ export class RemoteFocus {
       return
     }
     this.heardAt = this.now()
-    const fieldsJson = JSON.stringify(state.fields)
+    // the focused field's rect counts too, since a covered field is not in fields
+    const fieldsJson = JSON.stringify([state.fields, state.focus && state.focus.rect])
     if (fieldsJson !== this.fieldsJson) {
       this.fieldsJson = fieldsJson
       this.fieldsAt = this.heardAt

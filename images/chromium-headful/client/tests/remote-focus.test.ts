@@ -141,6 +141,18 @@ describe('remote focus', () => {
     expect(t.focus.fieldAt({ x: 40, y: 630 }, stream)).not.toBe(null)
   })
 
+  test('a new rect for the focused field settles a scroll, even when it is not in fields', () => {
+    const t = setup()
+    t.focus.start()
+    const focus = (y: number) => ({ type: 'search', rect: { x: 10, y, w: 100, h: 30 } })
+    t.source().send(state({ fields: [], focus: focus(107) }))
+    t.advance(100)
+    t.focus.scrolled()
+    t.advance(100)
+    t.source().send(state({ fields: [], focus: focus(307) }))
+    expect(t.focus.fieldAt({ x: 40, y: 630 }, stream)).not.toBe(null)
+  })
+
   test('stop closes the stream and start opens a new one', () => {
     const t = setup()
     t.focus.start()
