@@ -232,11 +232,14 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 		if !chromiumStopped {
 			return nil
 		}
-		if err := s.startChromiumAndWait(ctx, "batched chromium configure"); err != nil {
+		err := s.startChromiumAndWait(ctx, "batched chromium configure")
+		if err != nil && !errors.Is(err, errBrowserLocationNotRestored) {
 			return err
 		}
+		// Running without its location is still running: recovery must not
+		// start it again, and the request fails before navigating.
 		chromiumStopped = false
-		return nil
+		return err
 	}
 	defer func() {
 		// Error paths restart recordings before Chromium recovery. chromiumStopped

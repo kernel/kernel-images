@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/browserlocation"
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 	"github.com/kernel/kernel-images/server/lib/x11"
 )
@@ -34,6 +35,13 @@ func main() {
 	chromiumPath := flag.String("chromium", "chromium", "Chromium binary path (default: chromium)")
 	runtimeFlagsPath := flag.String("runtime-flags", "/chromium/flags", "Path to runtime flags overlay file")
 	flag.Parse()
+
+	accepted := acceptedLocation(os.ReadFile)
+	if err := applyStartupTimezone(startupTimezone(os.Getenv, accepted)); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize browser timezone: %v\n", err)
+		os.Exit(1)
+	}
+	_ = os.Unsetenv("TZ")
 
 	// Clean up stale lock file from previous SIGKILL termination
 	// Chromium creates this lock and doesn't clean it up when killed
@@ -83,6 +91,7 @@ func main() {
 	final := chromiumflags.MergeFlagsWithRuntimeTokens(baseFlags, runtimeTokens)
 	final = chromiumflags.TranslateKernelDisableFeatures(final)
 	final = withDefaultPrivateNetworkBypass(final)
+	final = withAcceptedLanguages(final, accepted)
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
@@ -107,7 +116,7 @@ func main() {
 	// Prepare environment. PULSE_SERVER/PULSE_SINK route chromium's audio into the
 	// recorder's sink; the root path below relies on this inherited env, while the
 	// non-root path re-asserts them in its runuser env allowlist.
-	env := os.Environ()
+	env := withoutEnvironmentVariable(os.Environ(), "TZ")
 	env = append(env,
 		"DISPLAY=:1",
 		"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket",
@@ -220,4 +229,64 @@ func killExistingChromium() {
 	}
 	// Timeout - processes may still exist but we continue anyway
 	fmt.Fprintf(os.Stderr, "warning: chromium processes may still be running after kill attempt\n")
+}
+
+func applyStartupTimezone(timezone string) error {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		return nil
+	}
+	return browserlocation.SetLocaltime(timezone)
+}
+
+func withoutEnvironmentVariable(env []string, key string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env))
+	for _, value := range env {
+		if !strings.HasPrefix(value, prefix) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+// acceptedLocation is the location the image API accepted, or nil before the
+// first.
+func acceptedLocation(readFile func(string) ([]byte, error)) *browserlocation.AcceptedLocation {
+	data, err := readFile(browserlocation.StatePath())
+	if err != nil {
+		return nil
+	}
+	return browserlocation.ReadAccepted(data)
+}
+
+// startupTimezone prefers the bundle the image API accepted, so a restarted
+// Chromium starts in the session's current timezone rather than the VM's.
+func startupTimezone(getenv func(string) string, accepted *browserlocation.AcceptedLocation) string {
+	if accepted != nil && accepted.TimeZone != "" {
+		return accepted.TimeZone
+	}
+	if timezone := getenv("KERNEL_BROWSER_TIMEZONE"); timezone != "" {
+		return timezone
+	}
+	return getenv("TZ")
+}
+
+// withAcceptedLanguages replaces the languages flag with the accepted
+// location's, so a restarted Chromium sends the session's Accept-Language and
+// navigator.languages from its first request. Its Intl locale isn't set here:
+// on Linux Chromium ignores --lang and resolves its locale from the
+// environment to one it ships translations for, so the image applies the
+// locale once Chromium is up.
+func withAcceptedLanguages(flags []string, accepted *browserlocation.AcceptedLocation) []string {
+	if accepted == nil || len(accepted.Languages) == 0 {
+		return flags
+	}
+	out := make([]string, 0, len(flags)+1)
+	for _, flag := range flags {
+		if !strings.HasPrefix(flag, "--accept-lang=") {
+			out = append(out, flag)
+		}
+	}
+	return append(out, "--accept-lang="+strings.Join(accepted.Languages, ","))
 }
