@@ -61,6 +61,10 @@ func (m *Monitor) logUnmarshalErr(method string, err error) {
 
 // publishEvent stamps common fields and publishes an event.
 func (m *Monitor) publishEvent(eventType string, category oapi.TelemetryEventCategory, source oapi.BrowserEventSource, sourceEvent string, data json.RawMessage, sessionID string) {
+	m.publishEventAt(time.Now(), eventType, category, source, sourceEvent, data, sessionID)
+}
+
+func (m *Monitor) publishEventAt(observedAt time.Time, eventType string, category oapi.TelemetryEventCategory, source oapi.BrowserEventSource, sourceEvent string, data json.RawMessage, sessionID string) {
 	src := source
 	src.Event = &sourceEvent
 	if sessionID != "" {
@@ -71,15 +75,19 @@ func (m *Monitor) publishEvent(eventType string, category oapi.TelemetryEventCat
 			}
 		}
 		meta[MetadataKeyCDPSessionID] = sessionID
-		m.sessionsMu.RLock()
-		info := m.sessions[sessionID]
-		m.sessionsMu.RUnlock()
-		meta[MetadataKeyTargetID] = info.targetID
-		meta[MetadataKeyTargetType] = info.targetType
+		// Asynchronous network events carry the origin observed at request time.
+		if _, snapshotted := meta[MetadataKeyTargetID]; !snapshotted {
+			m.sessionsMu.RLock()
+			info := m.sessions[sessionID]
+			m.sessionsMu.RUnlock()
+			for k, v := range targetMetadata(info) {
+				meta[k] = v
+			}
+		}
 		src.Metadata = &meta
 	}
 	m.publish(events.Event{
-		Ts:       time.Now().UnixMicro(),
+		Ts:       observedAt.UnixMicro(),
 		Type:     eventType,
 		Category: category,
 		Source:   src,
@@ -143,6 +151,16 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		var p cdpNetworkRequestWillBeSentParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
 			m.handleNetworkRequest(p, msg.SessionID)
+		}
+	case "Network.requestWillBeSentExtraInfo":
+		var p cdpNetworkRequestWillBeSentExtraInfoParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleRequestExtraInfo(p, msg.SessionID)
+		}
+	case "Network.responseReceivedExtraInfo":
+		var p cdpNetworkResponseReceivedExtraInfoParams
+		if m.decodeParams(msg.Method, msg.Params, &p) {
+			m.handleResponseExtraInfo(p, msg.SessionID)
 		}
 	case "Network.responseReceived":
 		var p cdpNetworkResponseReceivedParams
@@ -425,6 +443,7 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 // This mirrors what CDP/DevTools itself exposes. Consumers should treat the
 // event stream as privileged data; opt-in redaction can be added later.
 func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sessionID string) {
+	observedAt := time.Now()
 	// Extract only the initiator type; the stack trace is too verbose and dominates event size.
 	var initiatorType string
 	var raw struct {
@@ -439,8 +458,10 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	m.sessionsMu.RUnlock()
 	cs := m.computedFor(sessionID)
 	var navSeq int64
+	countedNavSeq := -1
 	if cs != nil {
-		navSeq = int64(cs.currentNavSeq())
+		countedNavSeq = cs.currentNavSeq()
+		navSeq = int64(countedNavSeq)
 	}
 
 	// Redirects reuse the same requestId and fire additional requestWillBeSent
@@ -455,18 +476,21 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		addedAt = time.Now()
 	} else {
 		navSeq = existing.navSeq
+		countedNavSeq = existing.countedNavSeq
+		m.resolveNetworkHeadersLocked(existing.hop, p.RedirectHasExtraInfo)
 	}
 	m.pendingRequests[key] = networkReqState{
-		sessionID:    sessionID,
-		method:       p.Request.Method,
-		url:          p.Request.URL,
-		headers:      p.Request.Headers,
-		postData:     p.Request.PostData,
-		resourceType: p.Type,
-		loaderID:     p.LoaderID,
-		frameID:      p.FrameID,
-		navSeq:       navSeq,
-		addedAt:      addedAt,
+		sessionID:     sessionID,
+		method:        p.Request.Method,
+		url:           p.Request.URL,
+		headers:       p.Request.Headers,
+		postData:      p.Request.PostData,
+		resourceType:  p.Type,
+		loaderID:      p.LoaderID,
+		frameID:       p.FrameID,
+		navSeq:        navSeq,
+		countedNavSeq: countedNavSeq,
+		addedAt:       addedAt,
 	}
 	m.pendReqMu.Unlock()
 	var hdrs oapi.BrowserHttpHeaders
@@ -495,14 +519,33 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		payload.IsRedirect = ptrOf(true)
 		payload.RedirectUrl = ptrOf(existing.url)
 	}
-	data, _ := json.Marshal(payload)
-	m.publishEvent(EventNetworkRequest, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.requestWillBeSent", data, sessionID)
+	m.pendReqMu.Lock()
+	requestInfo := info
+	if p.DocumentURL != "" {
+		requestInfo.url = p.DocumentURL
+	}
+	hop := m.queueNetworkRequestLocked(key, payload, requestInfo, observedAt)
+	state := m.pendingRequests[key]
+	state.hop = hop
+	m.pendingRequests[key] = state
+	m.pendReqMu.Unlock()
+	var redirectPublished <-chan struct{}
+	if isRedirect && len(p.RedirectResponse) != 0 {
+		var response cdpNetworkResponse
+		if json.Unmarshal(p.RedirectResponse, &response) == nil {
+			existing.status, existing.statusText = response.Status, response.StatusText
+			existing.resHeaders, existing.mimeType = response.Headers, response.MimeType
+			redirectPublished = m.emitNetworkResponse(m.telemetryCtx, observedAt, key, existing, info, true)
+		}
+	}
+	m.publishNetworkRequest(m.telemetryCtx, key, hop, redirectPublished)
 	if !isRedirect && cs != nil {
 		cs.onRequest()
 	}
 }
 
 func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, sessionID string) {
+	observedAt := time.Now()
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	var (
@@ -514,6 +557,7 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 		st.statusText = p.Response.StatusText
 		st.resHeaders = p.Response.Headers
 		st.mimeType = p.Response.MimeType
+		m.resolveNetworkHeadersLocked(st.hop, p.HasExtraInfo)
 		m.pendingRequests[key] = st
 		state, ok = st, true
 	}
@@ -554,10 +598,17 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 			navSeq = int64(cs.currentNavSeq())
 		}
 	}
-	m.publishProxyError(sessionID, p.RequestID, code, p.Response.Status, navSeq, method, resType, url, frame, loader)
+	source := oapi.BrowserEventSource{Kind: oapi.Cdp}
+	if state.hop != nil {
+		source = state.hop.source
+	}
+	m.publishAfterNetworkRequest(state.hop, func() {
+		m.publishProxyError(observedAt, source, sessionID, p.RequestID, code, p.Response.Status, navSeq, method, resType, url, frame, loader)
+	})
 }
 
 func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoadingFinishedParams, sessionID string) {
+	observedAt := time.Now()
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	state, ok := m.pendingRequests[key]
@@ -571,79 +622,47 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 	m.sessionsMu.RLock()
 	info := m.sessions[sessionID]
 	m.sessionsMu.RUnlock()
-	if cs := m.computedFor(state.sessionID); cs != nil {
-		cs.onLoadingFinished()
-	}
-	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
-	m.telemetryWg.Go(func() {
-		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
-		var hdrs oapi.BrowserHttpHeaders
-		_ = json.Unmarshal(state.resHeaders, &hdrs)
-		resPayload := oapi.BrowserNetworkResponseEventData{
-			SessionId:  sessionID,
-			TargetId:   info.targetID,
-			TargetType: oapi.BrowserTargetType(info.targetType),
-			FrameId:    ptrOf(state.frameID),
-			LoaderId:   ptrOf(state.loaderID),
-			Url:        ptrOf(state.url),
-			NavSeq:     state.navSeq,
-			RequestId:  p.RequestID,
-			Method:     state.method,
-			Status:     state.status,
-			Headers:    hdrs,
-		}
-		if state.statusText != "" {
-			resPayload.StatusText = ptrOf(state.statusText)
-		}
-		if state.mimeType != "" {
-			resPayload.MimeType = ptrOf(state.mimeType)
-		}
-		if state.resourceType != "" {
-			resPayload.ResourceType = ptrOf(state.resourceType)
-		}
-		if body != "" {
-			resPayload.Body = ptrOf(body)
-		}
-		data, _ := json.Marshal(resPayload)
-		m.publishEvent(EventNetworkResponse, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.loadingFinished", data, sessionID)
-	})
+	m.finishNetworkRequest(state)
+	m.emitNetworkResponse(ctx, observedAt, key, state, info, false)
 }
 
 // fetchResponseBody retrieves and truncates the response body for textual resources.
-func (m *Monitor) fetchResponseBody(ctx context.Context, requestID, sessionID string, state networkReqState) string {
+func (m *Monitor) fetchResponseBody(ctx context.Context, requestID, sessionID string, state networkReqState) (string, error) {
 	if !isTextualResource(state.resourceType, state.mimeType) {
-		return ""
+		return "", nil
 	}
 	result, err := m.send(ctx, "Network.getResponseBody", map[string]any{
 		"requestId": requestID,
 	}, sessionID)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var resp struct {
 		Body          string `json:"body"`
 		Base64Encoded bool   `json:"base64Encoded"`
 	}
-	if json.Unmarshal(result, &resp) != nil {
-		return ""
+	if err := json.Unmarshal(result, &resp); err != nil {
+		return "", err
 	}
 	body := resp.Body
 	if resp.Base64Encoded {
 		decoded, err := base64.StdEncoding.DecodeString(body)
 		if err != nil {
-			return ""
+			return "", err
 		}
 		body = string(decoded)
 	}
-	return events.TruncateCaptured(body, bodyCapFor(state.mimeType))
+	return events.TruncateCaptured(body, bodyCapFor(state.mimeType)), nil
 }
 
 func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID string) {
+	observedAt := time.Now()
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	state, ok := m.pendingRequests[key]
 	if ok {
 		delete(m.pendingRequests, key)
+		m.resolveFailedHeadersLocked(state.hop)
 	}
 	m.pendReqMu.Unlock()
 
@@ -677,12 +696,16 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 		}
 	}
 	data, _ := json.Marshal(failPayload)
-	m.publishEvent(EventNetworkLoadingFailed, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.loadingFailed", data, sessionID)
+	source := oapi.BrowserEventSource{Kind: oapi.Cdp}
+	if state.hop != nil {
+		source = state.hop.source
+	}
+	m.publishAfterNetworkRequest(state.hop, func() {
+		m.publishEventAt(observedAt, EventNetworkLoadingFailed, events.Network, source, "Network.loadingFailed", data, sessionID)
+	})
 
 	if ok {
-		if cs := m.computedFor(state.sessionID); cs != nil {
-			cs.onLoadingFinished()
-		}
+		m.finishNetworkRequest(state)
 	}
 }
 
@@ -742,7 +765,7 @@ func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bo
 // the published enum lists it. The metro egress proxy gains codes on its own
 // release cadence, so a value this image does not know is reported as unknown
 // with the sanitized header value in raw_code rather than dropped.
-func (m *Monitor) publishProxyError(sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
+func (m *Monitor) publishProxyError(observedAt time.Time, source oapi.BrowserEventSource, sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
 	var rawCode *string
 	if code == proxyErrorUnknownCode || !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
 		raw := sanitizeProxyErrorRawCode(code)
@@ -771,16 +794,22 @@ func (m *Monitor) publishProxyError(sessionID, requestID, code string, status in
 		RawCode:      rawCode,
 		ResourceType: optPtr(resourceType),
 	})
-	m.publishEvent(EventProxyError, events.Network, oapi.BrowserEventSource{Kind: oapi.Cdp}, "Network.responseReceived", data, sessionID)
+	m.publishEventAt(observedAt, EventProxyError, events.Network, source, "Network.responseReceived", data, sessionID)
 }
 
 func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID string) {
 	// Pre-fetch target info and computedState before acquiring pendReqMu to
 	// avoid a pendReqMu → sessionsMu ordering cycle.
-	m.sessionsMu.RLock()
-	info := m.sessions[sessionID]
+	m.sessionsMu.Lock()
+	info, tracked := m.sessions[sessionID]
 	cs := m.computedStates[sessionID]
-	m.sessionsMu.RUnlock()
+	// Chromium uses an OOPIF's root frame ID as its target ID; that root can
+	// still have a parentId, unlike a top-level page's root.
+	if tracked && (p.Frame.ParentID == "" || p.Frame.ID == info.targetID) {
+		info.url = p.Frame.URL
+		m.sessions[sessionID] = info
+	}
+	m.sessionsMu.Unlock()
 
 	if info.targetType == "iframe" && p.Frame.ParentID == "" {
 		p.Frame.ParentID = info.parentFrameID
@@ -811,18 +840,24 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 		}
 
 		m.pendReqMu.Lock()
-		for id, req := range m.pendingRequests {
-			if req.sessionID == sessionID {
-				delete(m.pendingRequests, id)
-			}
-		}
-		// Reset while holding pendReqMu so new requests arriving concurrently
-		// can't increment netPending before the reset completes.
-		// inflight=0: remaining pendingRequests belong to other target sessions;
-		// their loadingFinished events decrement those sessions' own state machines,
-		// not this one, so we start fresh.
+		inflight := 0
+		nextSeq := -1
 		if cs != nil {
-			if err := cs.resetOnNavigation(0, navCtx); err != nil {
+			nextSeq = cs.currentNavSeq() + 1
+		}
+		for key, req := range m.pendingRequests {
+			if req.sessionID != sessionID {
+				continue
+			}
+			req.countedNavSeq = -1
+			if cs != nil && req.loaderID == p.Frame.LoaderID {
+				req.countedNavSeq = nextSeq
+				inflight++
+			}
+			m.pendingRequests[key] = req
+		}
+		if cs != nil {
+			if err := cs.resetOnNavigation(inflight, navCtx); err != nil {
 				m.log.Error("cdpmonitor: failed to build nav event payload", "err", err)
 			}
 		}
@@ -948,6 +983,11 @@ func (m *Monitor) handleDetachedFromTarget(p cdpTargetDetachedFromTargetParams) 
 	for key, request := range m.pendingRequests {
 		if request.sessionID == p.SessionID {
 			delete(m.pendingRequests, key)
+		}
+	}
+	for key := range m.networkExchanges {
+		if key.sessionID == p.SessionID {
+			delete(m.networkExchanges, key)
 		}
 	}
 	m.pendReqMu.Unlock()

@@ -390,10 +390,7 @@ func simulateRequest(m *Monitor, id string) {
 	}, "s1")
 }
 
-// simulateFinished stores minimal state and sends Network.loadingFinished.
+// simulateFinished completes the request without replacing its captured state.
 func simulateFinished(m *Monitor, id string) {
-	m.pendReqMu.Lock()
-	m.pendingRequests[networkRequestKey{"s1", id}] = networkReqState{sessionID: "s1", method: "GET", url: "https://example.com/" + id}
-	m.pendReqMu.Unlock()
 	m.handleLoadingFinished(context.Background(), cdpNetworkLoadingFinishedParams{RequestID: id}, "s1")
 }

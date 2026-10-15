@@ -199,6 +199,9 @@ func TestNetworkCaptureAcrossFrames(t *testing.T) {
 							require.NotEmpty(t, request.SessionId)
 							require.NotNil(t, request.FrameId)
 							require.NotEmpty(t, *request.FrameId)
+							if frame.targetType == "iframe" {
+								require.Equal(t, frame.target, *request.FrameId, "Chromium uses the OOPIF root frame ID as its target ID")
+							}
 							if aborted {
 								event := waitForNetworkURL(t, ec, EventNetworkLoadingFailed, frame.origin+path)
 								var failure oapi.BrowserNetworkLoadingFailedEventData

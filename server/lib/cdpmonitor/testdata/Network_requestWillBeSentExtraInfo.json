@@ -1,0 +1,9 @@
+{
+  "requestId": "149.2",
+  "associatedCookies": [],
+  "headers": {"Accept": "*/*", "Cookie": "session=test", "Host": "example.com"},
+  "connectTiming": {"requestTime": 123.5},
+  "clientSecurityState": {"initiatorIsSecureContext": true, "initiatorIPAddressSpace": "Public", "privateNetworkRequestPolicy": "Allow"},
+  "siteHasCookieInOtherPartition": true,
+  "appliedNetworkConditionsId": "conditions"
+}

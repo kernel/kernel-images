@@ -28,12 +28,13 @@ func TestSurfaceDropsNetworkEventsForUnknownAndRemovedSessions(t *testing.T) {
 	m.sessions["session"] = targetInfo{targetID: "frame", targetType: "iframe"}
 	m.handleSurfaceEvent(nil, event)
 	require.Len(t, m.pendingRequests, 1)
-	require.Len(t, ec.events, 1)
+	ec.waitFor(t, EventNetworkRequest, 2*time.Second)
+	require.Equal(t, 1, ec.checkpoint())
 
 	m.handleSurfaceEvent(nil, browsersurface.Event{Kind: browsersurface.EventSessionRemoved, SessionID: "session"})
 	m.handleSurfaceEvent(nil, event)
 	require.Empty(t, m.pendingRequests)
-	require.Len(t, ec.events, 1, "a removed session must not resume emitting metadata-free requests")
+	require.Equal(t, 1, ec.checkpoint(), "a removed session must not resume emitting metadata-free requests")
 }
 
 func TestSurfaceCarriesOOPIFParentFrameIntoNavigation(t *testing.T) {

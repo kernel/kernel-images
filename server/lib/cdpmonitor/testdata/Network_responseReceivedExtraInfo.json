@@ -1,0 +1,11 @@
+{
+  "requestId": "149.2",
+  "blockedCookies": [],
+  "headers": {"ETag": "v1"},
+  "resourceIPAddressSpace": "Public",
+  "statusCode": 304,
+  "headersText": "HTTP/1.1 304 Not Modified\r\nETag: v1\r\n\r\n",
+  "cookiePartitionKey": {"topLevelSite": "https://example.com", "hasCrossSiteAncestor": false},
+  "cookiePartitionKeyOpaque": true,
+  "exemptedCookies": []
+}
