@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  chromium-launcher-test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
