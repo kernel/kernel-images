@@ -191,8 +191,7 @@ func TestNetworkCaptureAcrossFrames(t *testing.T) {
 							var request oapi.BrowserNetworkRequestEventData
 							require.NoError(t, json.Unmarshal(requestEvent.Data, &request))
 							require.Equal(t, http.MethodPost, request.Method)
-							require.NotNil(t, request.PostData)
-							require.JSONEq(t, string(body), *request.PostData)
+							require.Nil(t, request.PostData, "request bodies are not published")
 							require.Equal(t, frame.target, request.TargetId)
 							require.Equal(t, frame.targetType, string(request.TargetType))
 							require.True(t, request.TargetType.Valid())

@@ -2,6 +2,7 @@ package cdpmonitor
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -9,6 +10,21 @@ import (
 )
 
 func ptrOf[T any](v T) *T { return &v }
+
+// credentialHeaders are never published: Chrome's sanitized HAR default, plus proxy auth.
+var credentialHeaders = []string{"authorization", "proxy-authorization", "cookie", "set-cookie"}
+
+// publishedHeaders decodes CDP headers without the credential headers.
+func publishedHeaders(raw json.RawMessage) oapi.BrowserHttpHeaders {
+	var hdrs oapi.BrowserHttpHeaders
+	_ = json.Unmarshal(raw, &hdrs)
+	for name := range hdrs {
+		if slices.Contains(credentialHeaders, strings.ToLower(name)) {
+			delete(hdrs, name)
+		}
+	}
+	return hdrs
+}
 
 // optPtr returns a pointer to s, or nil when s is empty.
 func optPtr(s string) *string {

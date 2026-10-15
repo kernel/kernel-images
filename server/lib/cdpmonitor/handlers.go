@@ -419,11 +419,9 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 	}
 }
 
-// handleNetworkRequest publishes network_request events.
-// NOTE: events include raw headers, post_data, and (on response) truncated
-// bodies which may contain cookies, bearer tokens, or other credentials.
-// This mirrors what CDP/DevTools itself exposes. Consumers should treat the
-// event stream as privileged data; opt-in redaction can be added later.
+// handleNetworkRequest publishes network_request events. Credential headers are
+// left out: the telemetry reader may not own them. Request bodies are left out
+// until a scrubber can remove the credentials in them.
 func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sessionID string) {
 	// Extract only the initiator type; the stack trace is too verbose and dominates event size.
 	var initiatorType string
@@ -461,7 +459,6 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		method:       p.Request.Method,
 		url:          p.Request.URL,
 		headers:      p.Request.Headers,
-		postData:     p.Request.PostData,
 		resourceType: p.Type,
 		loaderID:     p.LoaderID,
 		frameID:      p.FrameID,
@@ -469,8 +466,6 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		addedAt:      addedAt,
 	}
 	m.pendReqMu.Unlock()
-	var hdrs oapi.BrowserHttpHeaders
-	_ = json.Unmarshal(p.Request.Headers, &hdrs)
 	payload := oapi.BrowserNetworkRequestEventData{
 		SessionId:     sessionID,
 		TargetId:      info.targetID,
@@ -482,11 +477,8 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		RequestId:     p.RequestID,
 		Method:        p.Request.Method,
 		DocumentUrl:   p.DocumentURL,
-		Headers:       hdrs,
+		Headers:       publishedHeaders(p.Request.Headers),
 		InitiatorType: initiatorType,
-	}
-	if p.Request.PostData != "" {
-		payload.PostData = ptrOf(p.Request.PostData)
 	}
 	if p.Type != "" {
 		payload.ResourceType = ptrOf(p.Type)
@@ -577,8 +569,6 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 	// Fetch response body async to avoid blocking readLoop; binary types are skipped.
 	m.telemetryWg.Go(func() {
 		body := m.fetchResponseBody(ctx, p.RequestID, sessionID, state)
-		var hdrs oapi.BrowserHttpHeaders
-		_ = json.Unmarshal(state.resHeaders, &hdrs)
 		resPayload := oapi.BrowserNetworkResponseEventData{
 			SessionId:  sessionID,
 			TargetId:   info.targetID,
@@ -590,7 +580,7 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 			RequestId:  p.RequestID,
 			Method:     state.method,
 			Status:     state.status,
-			Headers:    hdrs,
+			Headers:    publishedHeaders(state.resHeaders),
 		}
 		if state.statusText != "" {
 			resPayload.StatusText = ptrOf(state.statusText)
