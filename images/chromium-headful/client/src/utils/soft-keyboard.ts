@@ -20,35 +20,23 @@ export class SoftKeyboard {
   // may never see one.
   measurable = false
   private width = -1
-  // the tallest viewport seen at this width, the height with nothing covering
-  // it; 0 while that is not known yet
+  // the tallest viewport seen at this width, the height with nothing covering it
   private fullHeight = 0
-  // the shortest viewport seen since a rotation with the keyboard up
-  private coveredHeight = 0
 
-  // Sizes are taken in screen pixels, which a zoom does not change: iOS can
-  // zoom the page when a field first takes focus, which changes the viewport's
-  // size in CSS pixels as the keyboard comes up. Returns 'up' or 'down' when
-  // the keyboard came or went.
-  measure(viewport: VisualViewport): 'up' | 'down' | null {
+  // A viewport, with the layout viewport's height, which the keyboard does
+  // not shrink. Sizes are taken in screen pixels, which a zoom does not change:
+  // iOS can zoom the page when a field first takes focus, which changes the
+  // viewport's size in CSS pixels as the keyboard comes up. Returns 'up' or
+  // 'down' when the keyboard came or went.
+  measure(viewport: VisualViewport, layoutHeight: number): 'up' | 'down' | null {
     const width = viewport.width * viewport.scale
     const height = viewport.height * viewport.scale
     // rounding in the reported sizes is not a rotation
     if (Math.abs(width - this.width) > 2) {
-      // A rotation keeps the keyboard as it was. With it up, the height with
-      // nothing covering it is learned when it goes, which grows the viewport
-      // by at least a keyboard's height.
+      // after a rotation, which can come with the keyboard going, the layout
+      // viewport is the best guess of the height with nothing covering it
       this.width = width
-      this.fullHeight = this.up ? 0 : height
-      this.coveredHeight = height
-      return null
-    }
-    if (!this.fullHeight) {
-      this.coveredHeight = Math.min(this.coveredHeight, height)
-      if (height - this.coveredHeight < KEYBOARD_MIN_HEIGHT) return null
-      this.fullHeight = height
-      this.up = false
-      return 'down'
+      this.fullHeight = Math.max(height, layoutHeight * viewport.scale)
     }
     this.fullHeight = Math.max(this.fullHeight, height)
     const up = this.fullHeight - height >= KEYBOARD_MIN_HEIGHT

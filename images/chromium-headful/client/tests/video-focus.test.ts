@@ -252,6 +252,8 @@ function phone(options: { zoomOnFirstFocus?: boolean; ignoreHeld?: boolean; hard
     rotate: () => {
       viewport.width = 844
       viewport.height = keyboardUp ? 200 : 390
+      window.innerWidth = 844
+      window.innerHeight = 390
       ctx.measureSoftKeyboard()
     },
     // iOS dismisses the keyboard in landscape without a blur
@@ -394,6 +396,18 @@ describe('the first keyboard after loading the live view', () => {
 })
 
 describe('rotating with the keyboard up', () => {
+  test('a dismissal that comes with the rotation is a Done', () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    t.dismissLandscape()
+    // the rotation and the dismissal in one viewport change
+    t.rotate()
+    expect(t.document.activeElement).toBe(null)
+    expect(t.row()).toBe(false)
+    expect(t.blurs).toHaveLength(1)
+  })
+
   test('keeps Hide and the keys row, and a dismissal after it is still a Done', () => {
     const t = phone()
     t.tap({ x: 50, y: 140 })

@@ -1537,7 +1537,7 @@
     measureSoftKeyboard() {
       const viewport = window.visualViewport
       if (!viewport || !this.is_touch_device) return
-      const change = this.softKeyboard.measure(viewport)
+      const change = this.softKeyboard.measure(viewport, window.innerHeight)
       this.softKeyboardUp = this.softKeyboard.up
       this.keyboardMeasurable = this.softKeyboard.measurable
       const settled = performance.now() - this.keyboardChangedAt > KEYBOARD_SETTLE_MS
