@@ -61,6 +61,10 @@ func (m *Monitor) logUnmarshalErr(method string, err error) {
 
 // publishEvent stamps common fields and publishes an event.
 func (m *Monitor) publishEvent(eventType string, category oapi.TelemetryEventCategory, source oapi.BrowserEventSource, sourceEvent string, data json.RawMessage, sessionID string) {
+	m.publishEventAt(time.Now(), eventType, category, source, sourceEvent, data, sessionID)
+}
+
+func (m *Monitor) publishEventAt(observedAt time.Time, eventType string, category oapi.TelemetryEventCategory, source oapi.BrowserEventSource, sourceEvent string, data json.RawMessage, sessionID string) {
 	src := source
 	src.Event = &sourceEvent
 	if sessionID != "" {
@@ -83,7 +87,7 @@ func (m *Monitor) publishEvent(eventType string, category oapi.TelemetryEventCat
 		src.Metadata = &meta
 	}
 	m.publish(events.Event{
-		Ts:       time.Now().UnixMicro(),
+		Ts:       observedAt.UnixMicro(),
 		Type:     eventType,
 		Category: category,
 		Source:   src,
@@ -439,6 +443,7 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 // This mirrors what CDP/DevTools itself exposes. Consumers should treat the
 // event stream as privileged data; opt-in redaction can be added later.
 func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sessionID string) {
+	observedAt := time.Now()
 	// Extract only the initiator type; the stack trace is too verbose and dominates event size.
 	var initiatorType string
 	var raw struct {
@@ -519,26 +524,28 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	if p.DocumentURL != "" {
 		requestInfo.url = p.DocumentURL
 	}
-	hop := m.queueNetworkRequestLocked(key, payload, requestInfo)
+	hop := m.queueNetworkRequestLocked(key, payload, requestInfo, observedAt)
 	state := m.pendingRequests[key]
 	state.hop = hop
 	m.pendingRequests[key] = state
 	m.pendReqMu.Unlock()
+	var redirectPublished <-chan struct{}
 	if isRedirect && len(p.RedirectResponse) != 0 {
 		var response cdpNetworkResponse
 		if json.Unmarshal(p.RedirectResponse, &response) == nil {
 			existing.status, existing.statusText = response.Status, response.StatusText
 			existing.resHeaders, existing.mimeType = response.Headers, response.MimeType
-			m.emitNetworkResponse(m.telemetryCtx, key, existing, info, true)
+			redirectPublished = m.emitNetworkResponse(m.telemetryCtx, observedAt, key, existing, info, true)
 		}
 	}
-	m.publishNetworkRequest(m.telemetryCtx, key, hop)
+	m.publishNetworkRequest(m.telemetryCtx, key, hop, redirectPublished)
 	if !isRedirect && cs != nil {
 		cs.onRequest()
 	}
 }
 
 func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, sessionID string) {
+	observedAt := time.Now()
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	var (
@@ -596,11 +603,12 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 		source = state.hop.source
 	}
 	m.publishAfterNetworkRequest(state.hop, func() {
-		m.publishProxyError(source, sessionID, p.RequestID, code, p.Response.Status, navSeq, method, resType, url, frame, loader)
+		m.publishProxyError(observedAt, source, sessionID, p.RequestID, code, p.Response.Status, navSeq, method, resType, url, frame, loader)
 	})
 }
 
 func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoadingFinishedParams, sessionID string) {
+	observedAt := time.Now()
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	state, ok := m.pendingRequests[key]
@@ -615,7 +623,7 @@ func (m *Monitor) handleLoadingFinished(ctx context.Context, p cdpNetworkLoading
 	info := m.sessions[sessionID]
 	m.sessionsMu.RUnlock()
 	m.finishNetworkRequest(state)
-	m.emitNetworkResponse(ctx, key, state, info, false)
+	m.emitNetworkResponse(ctx, observedAt, key, state, info, false)
 }
 
 // fetchResponseBody retrieves and truncates the response body for textual resources.
@@ -648,6 +656,7 @@ func (m *Monitor) fetchResponseBody(ctx context.Context, requestID, sessionID st
 }
 
 func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID string) {
+	observedAt := time.Now()
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	state, ok := m.pendingRequests[key]
@@ -692,7 +701,7 @@ func (m *Monitor) handleLoadingFailed(p cdpNetworkLoadingFailedParams, sessionID
 		source = state.hop.source
 	}
 	m.publishAfterNetworkRequest(state.hop, func() {
-		m.publishEvent(EventNetworkLoadingFailed, events.Network, source, "Network.loadingFailed", data, sessionID)
+		m.publishEventAt(observedAt, EventNetworkLoadingFailed, events.Network, source, "Network.loadingFailed", data, sessionID)
 	})
 
 	if ok {
@@ -756,7 +765,7 @@ func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bo
 // the published enum lists it. The metro egress proxy gains codes on its own
 // release cadence, so a value this image does not know is reported as unknown
 // with the sanitized header value in raw_code rather than dropped.
-func (m *Monitor) publishProxyError(source oapi.BrowserEventSource, sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
+func (m *Monitor) publishProxyError(observedAt time.Time, source oapi.BrowserEventSource, sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
 	var rawCode *string
 	if code == proxyErrorUnknownCode || !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
 		raw := sanitizeProxyErrorRawCode(code)
@@ -785,7 +794,7 @@ func (m *Monitor) publishProxyError(source oapi.BrowserEventSource, sessionID, r
 		RawCode:      rawCode,
 		ResourceType: optPtr(resourceType),
 	})
-	m.publishEvent(EventProxyError, events.Network, source, "Network.responseReceived", data, sessionID)
+	m.publishEventAt(observedAt, EventProxyError, events.Network, source, "Network.responseReceived", data, sessionID)
 }
 
 func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID string) {

@@ -128,19 +128,26 @@ best-effort when Chrome omits events or a target disconnects. Redirects emit a
 response for each hop, without a body. Request IDs remain the same across a
 redirect chain.
 
+Network event timestamps record wall-clock time when the CDP event is observed,
+before header collection, body retrieval, or publication waits. Response events
+use observation of `loadingFinished`, or the redirect notification for redirects.
+Timestamp differences therefore retain request duration despite delayed delivery.
+Other event types may publish during these waits, so timestamps need not increase
+in stream order.
+
 Responses, failures, and proxy errors for tracked requests publish after their
-request event. There is no ordering guarantee between different redirect hops:
-a hop's response can publish before or after the next hop's request.
+request event. Each redirect response publishes before the next hop's request.
+Header waits run concurrently across hops and remain bounded by one second;
+publication dependencies drain in order even when capture is canceled.
 Header correlation stays active for pending redirect responses after the final
 request completes or fails, until their capture finishes.
 
-`network_response.status` is the wire status when available. `effective_status`
-is present when Chrome's effective response differs, such as wire 304 with an
-effective 200 and a cached body. `headers` contains the wire response headers when
-available rather than Chrome's merged cache headers. When wire and effective status
-differ, `status_text` uses the standard HTTP reason phrase for the wire status
-(or is omitted for an unknown code), rather than the cached response's phrase.
-Otherwise Chrome's original `status_text`, including a custom phrase, is retained.
+`network_response.status` and `status_text` retain Chrome's effective response,
+including custom reason phrases. `wire_status` adds the wire status when available:
+a revalidated cached response has `status: 200`, `wire_status: 304`, and may carry
+Chrome's cached body. Existing success checks can continue using `status`.
+`headers` contains the wire response headers when available rather than Chrome's
+merged cache headers.
 
 While optional telemetry is enabled, `Network.enable` requests durable body
 storage with `maxTotalBufferSize` set to 10 MiB on each attached session. Disabling
@@ -431,7 +438,7 @@ Unless otherwise noted, events also include the nav context fields described abo
 | Event | Fields |
 | --- | --- |
 | `network_request` | `request_id`, `loader_id`, `frame_id`, `document_url`, `method`, `url`, `headers`, `initiator_type`. Optional: `post_data`, `resource_type`, `is_redirect` + `redirect_url`. |
-| `network_response` | `request_id`, `loader_id`, `frame_id`, `method`, `url`, `status`, `headers`. Optional: `status_text`, `mime_type`, `resource_type`, `body` (truncated text body for textual MIME types), `body_error`, `request_headers`, `effective_status`. |
+| `network_response` | `request_id`, `loader_id`, `frame_id`, `method`, `url`, `status`, `headers`. Optional: `status_text`, `mime_type`, `resource_type`, `body` (truncated text body for textual MIME types), `body_error`, `request_headers`, `wire_status`. |
 | `network_loading_failed` | `request_id`, `error_text`, `canceled`. Optional (absent when the request record was not found): `url`, `loader_id`, `frame_id`, `resource_type`. |
 | `proxy_error` | `request_id`, `code` (typed enum matching the metro header values), `status` (502, or 403 when the session's network policy blocks the destination). Optional: `raw_code` (sanitized original value when `code` is `unknown`), `url`, `loader_id`, `frame_id`, `method`, `resource_type`. Emitted when a 502 or 403 response carries the `X-Kernel-Proxy-Error` header. Unrecognized values are reported as `unknown`; all such values share one rate-limit slot. Emission is sampled to at most one per session+code+resource_type per second. WebSocket handshakes are not classified (documented non-goal). A CONNECT the proxy refuses outright, such as a `network_policy_denied` CONNECT to a port other than 443, is not classified either: Chromium does not expose the refusal, so it appears only as `network_loading_failed` with `net::ERR_TUNNEL_CONNECTION_FAILED`. |
 

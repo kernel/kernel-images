@@ -2573,7 +2573,7 @@ components:
               description: HTTP method of the original request.
             status:
               type: integer
-              description: HTTP response status code on the wire when available, otherwise the effective CDP status.
+              description: Effective HTTP response status reported by Chrome, including 200 for a cached response revalidated with a wire 304.
             status_text:
               type: string
               description: HTTP response status text (e.g. OK, Not Found).
@@ -2589,9 +2589,9 @@ components:
             request_headers:
               $ref: "#/components/schemas/BrowserHttpHeaders"
               description: Wire request headers when available, including headers that arrived after network_request was published.
-            effective_status:
+            wire_status:
               type: integer
-              description: Effective CDP status when different from the wire status, such as 200 for a revalidated 304 response.
+              description: HTTP status received on the wire when available, such as 304 for a revalidated cached response whose effective status is 200. Does not change the meaning of status or the cached body.
             body:
               type: string
               description: Truncated response body, present only for text MIME types.

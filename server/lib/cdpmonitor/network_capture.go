@@ -3,7 +3,6 @@ package cdpmonitor
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/events"
@@ -12,7 +11,7 @@ import (
 
 const (
 	networkHeaderWait       = time.Second
-	maxOrphanExchanges      = 8192
+	maxNetworkExchanges     = 8192
 	maxExtraInfoPerExchange = 64
 	durableBodyBufferSize   = 10 * 1024 * 1024
 )
@@ -33,6 +32,7 @@ type networkHop struct {
 	exchange         *networkExchange
 	request          oapi.BrowserNetworkRequestEventData
 	source           oapi.BrowserEventSource
+	observedAt       time.Time
 	known            bool
 	hasExtra         bool
 	requestHeaders   json.RawMessage
@@ -53,13 +53,14 @@ func (m *Monitor) exchangeLocked(key networkRequestKey) *networkExchange {
 	return e
 }
 
-func (m *Monitor) queueNetworkRequestLocked(key networkRequestKey, request oapi.BrowserNetworkRequestEventData, info targetInfo) *networkHop {
+func (m *Monitor) queueNetworkRequestLocked(key networkRequestKey, request oapi.BrowserNetworkRequestEventData, info targetInfo, observedAt time.Time) *networkHop {
 	e := m.exchangeLocked(key)
 	metadata := targetMetadata(info)
 	h := &networkHop{
 		exchange:         e,
 		request:          request,
 		source:           oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &metadata},
+		observedAt:       observedAt,
 		requestReady:     make(chan struct{}),
 		responseReady:    make(chan struct{}),
 		requestPublished: make(chan struct{}),
@@ -73,7 +74,7 @@ func (m *Monitor) handleRequestExtraInfo(p cdpNetworkRequestWillBeSentExtraInfoP
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	defer m.pendReqMu.Unlock()
-	if m.networkExchanges[key] == nil && len(m.networkExchanges) >= maxOrphanExchanges {
+	if m.networkExchanges[key] == nil && len(m.networkExchanges) >= maxNetworkExchanges {
 		return
 	}
 	e := m.exchangeLocked(key)
@@ -88,7 +89,7 @@ func (m *Monitor) handleResponseExtraInfo(p cdpNetworkResponseReceivedExtraInfoP
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	defer m.pendReqMu.Unlock()
-	if m.networkExchanges[key] == nil && len(m.networkExchanges) >= maxOrphanExchanges {
+	if m.networkExchanges[key] == nil && len(m.networkExchanges) >= maxNetworkExchanges {
 		return
 	}
 	e := m.exchangeLocked(key)
@@ -183,11 +184,14 @@ func waitNetworkHeaders(ctx context.Context, ready ...<-chan struct{}) {
 	}
 }
 
-func (m *Monitor) publishNetworkRequest(ctx context.Context, key networkRequestKey, h *networkHop) {
+func (m *Monitor) publishNetworkRequest(ctx context.Context, key networkRequestKey, h *networkHop, redirectPublished <-chan struct{}) {
 	m.telemetryWg.Go(func() {
 		defer m.finishNetworkPublication(key, h.exchange)
 		defer close(h.requestPublished)
 		waitNetworkHeaders(ctx, h.requestReady)
+		if redirectPublished != nil {
+			<-redirectPublished
+		}
 		m.pendReqMu.Lock()
 		payload := h.request
 		if h.requestHeaders != nil {
@@ -198,7 +202,7 @@ func (m *Monitor) publishNetworkRequest(ctx context.Context, key networkRequestK
 		}
 		m.pendReqMu.Unlock()
 		data, _ := json.Marshal(payload)
-		m.publishEvent(EventNetworkRequest, events.Network, h.source, "Network.requestWillBeSent", data, key.sessionID)
+		m.publishEventAt(h.observedAt, EventNetworkRequest, events.Network, h.source, "Network.requestWillBeSent", data, key.sessionID)
 	})
 }
 
@@ -215,7 +219,8 @@ func (m *Monitor) publishAfterNetworkRequest(h *networkHop, publish func()) {
 	})
 }
 
-func (m *Monitor) emitNetworkResponse(ctx context.Context, key networkRequestKey, state networkReqState, info targetInfo, redirect bool) {
+func (m *Monitor) emitNetworkResponse(ctx context.Context, observedAt time.Time, key networkRequestKey, state networkReqState, info targetInfo, redirect bool) <-chan struct{} {
+	published := make(chan struct{})
 	h := state.hop
 	if h != nil {
 		m.pendReqMu.Lock()
@@ -226,6 +231,7 @@ func (m *Monitor) emitNetworkResponse(ctx context.Context, key networkRequestKey
 		m.pendReqMu.Unlock()
 	}
 	m.telemetryWg.Go(func() {
+		defer close(published)
 		if h != nil {
 			defer m.finishNetworkPublication(key, h.exchange)
 		}
@@ -277,11 +283,7 @@ func (m *Monitor) emitNetworkResponse(ctx context.Context, key networkRequestKey
 				if json.Unmarshal(h.responseExtra.Headers, &responseHeaders) == nil && responseHeaders != nil {
 					payload.Headers = responseHeaders
 				}
-				payload.Status = h.responseExtra.StatusCode
-				if payload.Status != state.status {
-					payload.EffectiveStatus = ptrOf(state.status)
-					payload.StatusText = optPtr(http.StatusText(payload.Status))
-				}
+				payload.WireStatus = ptrOf(h.responseExtra.StatusCode)
 			}
 			m.pendReqMu.Unlock()
 		}
@@ -290,8 +292,9 @@ func (m *Monitor) emitNetworkResponse(ctx context.Context, key networkRequestKey
 		if redirect {
 			event = "Network.requestWillBeSent"
 		}
-		m.publishEvent(EventNetworkResponse, events.Network, source, event, data, key.sessionID)
+		m.publishEventAt(observedAt, EventNetworkResponse, events.Network, source, event, data, key.sessionID)
 	})
+	return published
 }
 
 func (m *Monitor) finishNetworkRequest(state networkReqState) {
