@@ -696,12 +696,28 @@ func chromiumPrepareProfileArchive(profilePath string, strip int) (preparedDir s
 		cleanup()
 		return "", nil, fmt.Errorf("extract profile archive: %w", err)
 	}
+	if err := removeGoogleDriveIndexedDB(preparedDir); err != nil {
+		cleanup()
+		return "", nil, err
+	}
 	out, err := exec.Command("chown", "-R", "kernel:kernel", preparedDir).CombinedOutput()
 	if err != nil {
 		cleanup()
 		return "", nil, fmt.Errorf("chown user-data: %w (%s)", err, string(out))
 	}
 	return preparedDir, cleanup, nil
+}
+
+func removeGoogleDriveIndexedDB(preparedDir string) error {
+	for _, name := range []string{
+		"https_drive.google.com_0.indexeddb.blob",
+		"https_drive.google.com_0.indexeddb.leveldb",
+	} {
+		if err := os.RemoveAll(filepath.Join(preparedDir, "Default", "IndexedDB", name)); err != nil {
+			return fmt.Errorf("remove Google Drive IndexedDB %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // stripProfileSessionRestore deletes the prepared profile's Default/Sessions so
