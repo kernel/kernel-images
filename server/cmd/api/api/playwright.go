@@ -76,10 +76,10 @@ func playwrightResult(resp *playwrightDaemonResponse) oapi.ExecutePlaywrightResu
 func (s *ApiService) executePlaywrightOnExecutor(ctx context.Context, name, code string, timeout time.Duration) (oapi.ExecutePlaywrightCodeResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	if !playwrightExecutorNamePattern.MatchString(name) {
+	if !executorNamePattern.MatchString(name) {
 		return oapi.ExecutePlaywrightCode400JSONResponse{
 			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
-				Message: "executor name must match " + playwrightExecutorNamePattern.String(),
+				Message: "executor name must match " + executorNamePattern.String(),
 			},
 		}, nil
 	}

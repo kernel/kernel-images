@@ -1692,10 +1692,34 @@ paths:
         methods, or `repl.emitImage(...)`. Pinned `patchright` and `playwright-core` packages are
         available through dynamic `import()`, and `cdp()` provides unrestricted DevTools access.
 
-        The runtime starts lazily and is owned by the API process. Reset, API restart, timeout,
-        crash, OOM, or protocol failure destroys its state and changes its CUID2 `repl_id`.
-        Executions are serialized. This endpoint is unrestricted code execution inside the browser
-        VM, equivalent in trust level to the process and Playwright execution APIs; it is not sandboxed.
+        Every call runs in an executor: a separate Node.js runtime process with its own persistent
+        state and browser connection. Calls without `executor` run in the executor named
+        `default`, which always exists; pass another name to run the call in a named executor,
+        created by its first call. Calls on different executors run concurrently; calls on one
+        executor run one at a time. A browser can have at most 8 named executors; the default
+        executor does not count. A call that would create another returns 409 with the executors;
+        delete one with DELETE /repl/executors/{name}. Named executors are not removed
+        automatically while the API runs; when it shuts down, they are removed and their tabs
+        closed.
+
+        Each runtime starts lazily and is owned by the API process. Reset, API restart, timeout,
+        crash, OOM, or protocol failure destroys that executor's state, and the next call reports
+        `new_state: true`; other executors are unaffected. A timeout always ends the executor's
+        process, because a cell that keeps running after its deadline would keep changing state
+        the next cell reads.
+
+        The default executor attaches to an existing page as before. Each named executor owns a
+        background tab that the API opens on its first call; its helpers attach to that tab without
+        making it the active tab, so it does not take focus from the live view or from the default
+        executor. A new process attaches to the same tab while it stays open; if it was closed and
+        nothing else is attached, the next call opens a new one and reports `tab.created: true`.
+        `switchTab()`, `newTab()`, and `cdp()` can still reach other tabs. Because a named
+        executor's tab is not the active tab, Chromium may auto-dismiss JavaScript dialogs it opens
+        in headless mode. Custom WebMCP tools can be added, listed, and removed only in the default
+        executor; every executor can discover and invoke them.
+
+        This endpoint is unrestricted code execution inside the browser VM, equivalent in trust
+        level to the process and Playwright execution APIs; it is not sandboxed.
       operationId: executeBrowserRepl
       x-telemetry-category: control
       requestBody:
@@ -1714,8 +1738,66 @@ paths:
                 $ref: "#/components/schemas/BrowserReplResult"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: The call would create a named executor beyond the per-browser limit
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserReplExecutorLimitError"
         "413":
           $ref: "#/components/responses/BadRequestError"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /repl/executors:
+    get:
+      summary: List Browser REPL executors
+      description: Lists the default executor first, then the named executors created by POST /repl.
+      operationId: listBrowserReplExecutors
+      x-telemetry-category: control
+      responses:
+        "200":
+          description: Browser REPL executors
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserReplExecutorList"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /repl/executors/{name}:
+    delete:
+      summary: Delete a Browser REPL executor
+      description: |
+        Stops the executor's process and discards its state. A call running on it, and any calls
+        queued behind it, fail with an error saying the executor was deleted. By default the tab
+        the API opened for the executor is closed too. The name can be reused; the next call with
+        it creates a new executor and tab.
+
+        The default executor is restarted instead of removed: a call running on it fails with an
+        error saying the executor was restarted, its process is stopped without waiting for queued
+        calls, and queued and later calls run in a new process. It owns no tab, so `close_tab` has
+        no effect on it. Use `reset: true` on POST /repl to clear state in order, after queued calls.
+      operationId: deleteBrowserReplExecutor
+      x-telemetry-category: control
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/BrowserReplExecutorName"
+        - name: close_tab
+          in: query
+          required: false
+          description: Close the tab the API opened for the executor. Defaults to true.
+          schema:
+            type: boolean
+            default: true
+      responses:
+        "204":
+          description: Executor deleted, or the default executor restarted
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "404":
+          $ref: "#/components/responses/NotFoundError"
         "500":
           $ref: "#/components/responses/InternalError"
   /network/egress-policy:
@@ -7778,23 +7860,106 @@ components:
           maximum: 300
         reset:
           type: boolean
-          description: Terminate the current REPL, start a fresh one, and then evaluate code.
+          description: Terminate the executor's current runtime, start a fresh one, and then evaluate code.
           default: false
+        executor:
+          $ref: "#/components/schemas/BrowserReplExecutorName"
+      additionalProperties: false
+    BrowserReplExecutorName:
+      type: string
+      description: |
+        Name of a Browser REPL executor. Calls with the same name run in the same executor; the
+        first call with a new name creates it. `default` names the executor that runs calls without
+        a name.
+      pattern: "^[A-Za-z0-9_-]{1,64}$"
+    BrowserReplExecutor:
+      type: object
+      description: A Browser REPL executor
+      required: [name, busy, created_at, last_used_at]
+      properties:
+        name:
+          $ref: "#/components/schemas/BrowserReplExecutorName"
+        busy:
+          type: boolean
+          description: Whether a call is running on the executor
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          description: When the most recent call on the executor started
+        target_id:
+          type: string
+          description: CDP page target ID of the tab the API opened for the executor, once it has one
+        url:
+          type: string
+          description: Current URL of that tab, when it is open
+      additionalProperties: false
+    BrowserReplExecutorList:
+      type: object
+      required: [executors]
+      properties:
+        executors:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrowserReplExecutor"
+      additionalProperties: false
+    BrowserReplExecutorLimitError:
+      type: object
+      required: [message, executors]
+      properties:
+        message:
+          type: string
+        executors:
+          type: array
+          description: The default executor and the named executors
+          items:
+            $ref: "#/components/schemas/BrowserReplExecutor"
+      additionalProperties: false
+    BrowserReplTab:
+      type: object
+      description: |
+        The tab the executor's runtime is attached to after the call. When nothing is attached
+        and the API opened the executor's tab for this call, that tab.
+      required: [target_id, created]
+      properties:
+        target_id:
+          type: string
+          description: CDP page target ID of the tab
+        created:
+          type: boolean
+          description: Whether the API opened the executor's tab for this call
       additionalProperties: false
     BrowserReplResult:
       type: object
       description: Result of Browser REPL code execution
-      required: [success, repl_id]
+      required: [success, repl_id, new_state]
       properties:
         success:
           type: boolean
           description: Whether the code executed successfully
+        new_state:
+          type: boolean
+          description: |
+            Whether this call started from empty state: the executor's first call, or the first
+            call after a reset, timeout, crash, restart, or API restart.
+        terminated:
+          type: boolean
+          description: |
+            Whether this call ended the executor's runtime (timeout, protocol corruption, crash,
+            uncaught exception, or a delete or restart while it ran). The next call reports
+            `new_state: true`.
+        tab:
+          $ref: "#/components/schemas/BrowserReplTab"
         repl_id:
           type: string
+          deprecated: true
           description: |
-            CUID2 identifying the exact state-holding REPL process used for this
-            execution. Stable across calls and Chromium reconnects; changes after
-            an API restart, explicit reset, execution timeout, or REPL crash.
+            Deprecated; use `new_state`. CUID2 identifying the exact state-holding REPL process
+            used for this execution. Stable across calls and Chromium reconnects; changes after
+            an API restart, explicit reset, execution timeout, or REPL crash. Empty when the call
+            never reached a runtime, for example when its executor was deleted while it waited.
         error:
           type: string
           description: Error message if execution failed
@@ -7811,8 +7976,9 @@ components:
           description: True if text or image output was dropped or truncated due to response limits, including the 1,000-item cap on stray output buffered between executions
         repl_terminated:
           type: boolean
+          deprecated: true
           description: |
-            True if the REPL identified by repl_id was terminated by this request
+            Deprecated; use `terminated`. True if the REPL identified by repl_id was terminated by this request
             (timeout, protocol corruption, or a REPL crash/uncaught exception).
             The next request lazily starts a fresh REPL with a new repl_id.
         duration_ms:

@@ -7,15 +7,22 @@ import { StringDecoder } from 'string_decoder';
 import { unlinkSync, existsSync, renameSync, writeFileSync, promises as fsp } from 'fs';
 import vm from 'vm';
 import util from 'util';
+import v8 from 'v8';
 import { BrowserReplCdpClient } from './browser-cdp-client';
 import { BrowserHelpers, browserReplReservedNames, buildBrowserGlobals } from './browser-helpers';
 import { formatBrowserReplHelp } from './browser-repl-help';
 import { CellRuntime } from './cell-runtime';
 import { CustomWebMCPRegistry } from './custom-webmcp';
+import { HeapMonitor } from './heap-monitor';
 import { createWebMCPClient, WebMCPRequestError } from './webmcp';
 
 const SOCKET_PATH = process.env.BROWSER_REPL_SOCKET || '/tmp/browser-repl.sock';
 const REPL_ID = process.env.BROWSER_REPL_ID || 'unknown';
+// Name of the executor this process serves. Custom WebMCP tools live only in
+// the default executor: every other executor shares the page-side
+// registration names and would remove the default executor's registrations.
+const EXECUTOR = process.env.BROWSER_REPL_EXECUTOR || 'default';
+const OWNS_CUSTOM_TOOLS = EXECUTOR === 'default';
 const CDP_ENDPOINT = process.env.CDP_ENDPOINT || 'ws://127.0.0.1:9222';
 const CUSTOM_TOOLS_STATE_PATH = `${SOCKET_PATH}.custom-tools.json`;
 // Keep the endpoint discoverable by dynamically imported browser clients even
@@ -257,6 +264,7 @@ async function normalizeImageInput(input: unknown): Promise<{ bytes: Buffer; mim
 
 const repl = Object.freeze({
   id: REPL_ID,
+  executor: EXECUTOR,
   help(methodName?: unknown): string {
     const text = formatBrowserReplHelp(methodName);
     writeOutput('write', text);
@@ -321,7 +329,7 @@ const publishCustomTools = (tools: ReturnType<CustomWebMCPRegistry['list']>) => 
   renameSync(temporaryPath, CUSTOM_TOOLS_STATE_PATH);
 };
 let pageInvocationActive = false;
-const customToolRegistry = new CustomWebMCPRegistry(
+const customToolRegistry = OWNS_CUSTOM_TOOLS ? new CustomWebMCPRegistry(
   cdpClient,
   (signal, callback, fromPage) => {
     if (!fromPage) return webmcpExecution.run(signal, callback);
@@ -339,20 +347,27 @@ const customToolRegistry = new CustomWebMCPRegistry(
     });
   },
   publishCustomTools,
-);
-publishCustomTools([]);
-customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
+) : null;
+if (customToolRegistry) {
+  publishCustomTools([]);
+  customToolRegistry.setErrorHandler((message) => process.stderr.write(`[custom-webmcp] ${message}\n`));
+}
+// Throws synchronously so a call fails the cell even when it is not awaited,
+// as the synchronous listCustomTools would on the default executor.
+const customToolsUnavailable = (): never => {
+  throw new Error(`custom WebMCP tools are only available in the default executor; this is executor "${EXECUTOR}"`);
+};
 let nativeToolRefs = new Set<string>();
 const webmcp = Object.freeze({
   ...webmcpClient,
   async listTools(options: {excludeCustom?: boolean} = {}) {
     const tools = await webmcpClient.listTools(options);
-    nativeToolRefs = new Set(tools.filter((tool) => !tool.source.custom || !customToolRegistry.isCDP(tool.source.custom.id))
+    nativeToolRefs = new Set(tools.filter((tool) => !tool.source.custom || !customToolRegistry?.isCDP(tool.source.custom.id))
       .map((tool) => tool.tool_ref));
     return tools;
   },
   async invokeTool(toolRef: string, input: Record<string, unknown> = {}, options: {timeoutSec?: number} = {}) {
-    if (nativeToolRefs.has(toolRef) || !customToolRegistry.hasCDP()) {
+    if (nativeToolRefs.has(toolRef) || !customToolRegistry?.hasCDP()) {
       return webmcpClient.invokeTool(toolRef, input, options);
     }
     const tool = (await webmcpClient.listTools()).find((candidate) => candidate.tool_ref === toolRef);
@@ -399,10 +414,10 @@ const webmcp = Object.freeze({
       if (timer) clearTimeout(timer);
     }
   },
-  addCustomTools: customToolRegistry.add,
-  listCustomTools: customToolRegistry.list,
-  removeCustomTool: customToolRegistry.remove,
-  invokeCustomCDPTool: customToolRegistry.invokeCDP,
+  addCustomTools: customToolRegistry?.add ?? customToolsUnavailable,
+  listCustomTools: customToolRegistry?.list ?? customToolsUnavailable,
+  removeCustomTool: customToolRegistry?.remove ?? customToolsUnavailable,
+  invokeCustomCDPTool: customToolRegistry?.invokeCDP ?? customToolsUnavailable,
 });
 const browserGlobals = buildBrowserGlobals(helpers);
 const browserNamespace = Object.freeze({
@@ -474,6 +489,9 @@ interface ExecuteRequest {
   id: string;
   code: string;
   timeout_ms?: number;
+  // The named executor's own tab, opened by the API. Absent for the default
+  // executor.
+  home_target_id?: string;
 }
 
 interface ExecuteResponse {
@@ -487,7 +505,16 @@ interface ExecuteResponse {
   content_truncated: boolean;
   timed_out?: boolean;
   exiting?: boolean;
+  // The tab the runtime is attached to after the execution.
+  target_id?: string;
+  // The executor's own tab is closed and nothing is attached; the code was
+  // not run, so the API can open a new tab and send it again.
+  tab_missing?: boolean;
   duration_ms: number;
+}
+
+function attachedTargetId(): string | undefined {
+  return cdpClient.sessionId && cdpClient.targetId ? cdpClient.targetId : undefined;
 }
 
 async function executeRequest(
@@ -495,6 +522,30 @@ async function executeRequest(
   respond: (response: ExecuteResponse) => void,
 ): Promise<ExecuteResponse> {
   const start = Date.now();
+  if (request.home_target_id) {
+    cdpClient.homeTargetId = request.home_target_id;
+    let homeExists = true;
+    try {
+      homeExists = attachedTargetId() !== undefined || await cdpClient.targetExists(request.home_target_id);
+    } catch {
+      // The browser is unreachable or the check failed. Run the cell anyway:
+      // browser helpers report a failure, and cells that do not use the
+      // browser still work.
+    }
+    if (!homeExists) {
+      return {
+        id: request.id,
+        repl_id: REPL_ID,
+        success: false,
+        error: `executor tab ${request.home_target_id} is closed`,
+        tab_missing: true,
+        content: [],
+        content_truncated: false,
+        duration_ms: Date.now() - start,
+      };
+    }
+  }
+
   const collector = new Collector(MAX_CONTENT_ITEMS);
   // Track the in-flight execution so the uncaughtException handler can
   // answer it with a deterministic failure (including partial content)
@@ -539,6 +590,7 @@ async function executeRequest(
       success: true,
       content: collector.items,
       content_truncated: collector.truncated,
+      target_id: attachedTargetId(),
       duration_ms: Date.now() - start,
     };
   } catch (err: any) {
@@ -556,6 +608,7 @@ async function executeRequest(
       // destructively, per the spec's timeout semantics) before serving
       // another execution.
       timed_out: timedOut || undefined,
+      target_id: attachedTargetId(),
       duration_ms: Date.now() - start,
     };
   } finally {
@@ -567,8 +620,21 @@ async function executeRequest(
     cdpClient.executionDeadlineMs = null;
     activeCollector = null;
     activeExecution = null;
+    heapMonitor.check();
   }
 }
+
+const heapMonitor = new HeapMonitor(
+  () => {
+    const stats = v8.getHeapStatistics();
+    return { usedBytes: stats.used_heap_size, limitBytes: stats.heap_size_limit };
+  },
+  ({ usedBytes, limitBytes }) => process.stderr.write(
+    `[browser-repl] level=WARN msg="heap usage above 90% of limit" executor=${EXECUTOR} ` +
+      `used_mb=${Math.round(usedBytes / 2 ** 20)} limit_mb=${Math.round(limitBytes / 2 ** 20)}\n`,
+  ),
+);
+setInterval(() => heapMonitor.check(), 1000).unref();
 
 // Serialize executions as defense in depth; the Go handler already holds a
 // mutex, but the daemon must never interleave two executions.
@@ -808,7 +874,7 @@ async function shutdown(signal: string): Promise<void> {
   shuttingDown = true;
   process.stderr.write(`[browser-repl] received ${signal}, shutting down (repl_id=${REPL_ID})\n`);
   try {
-    await customToolRegistry.dispose();
+    await customToolRegistry?.dispose();
   } catch {
     // The process is exiting; the next REPL also removes stale registrations.
   }

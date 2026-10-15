@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,7 +24,11 @@ import (
 	"github.com/nrednav/cuid2"
 )
 
-var errBrowserReplShuttingDown = errors.New("browser REPL is shutting down")
+var (
+	errBrowserReplShuttingDown = errors.New("browser REPL is shutting down")
+	errBrowserReplDeleted      = errors.New("executor was deleted")
+	errBrowserReplRestarted    = errors.New("executor was restarted")
+)
 
 const (
 	defaultBrowserReplSocket = "/tmp/browser-repl.sock"
@@ -72,26 +77,73 @@ type browserReplChild struct {
 	done chan error // receives the (single) cmd.Wait result
 }
 
-// browserReplManager owns execution admission and the persistent Node child.
-// Lifecycle synchronization stays behind its Execute and Shutdown methods.
+// browserReplManager is one Browser REPL executor: it owns execution
+// admission and the executor's persistent Node child. Lifecycle
+// synchronization stays behind its Execute, restart, retire and Shutdown
+// methods.
 type browserReplManager struct {
+	name string
+	// socket is a named executor's socket path; the default executor reads
+	// browserReplSocketPath() so tests can point it elsewhere.
+	socket string
+	// tabs opens a named executor's own tab; nil for the default executor,
+	// which attaches to an existing page instead.
+	tabs              executorTabs
 	admission         chan struct{}
 	lifecycle         context.Context
 	stop              context.CancelCauseFunc
 	child             *browserReplChild // guarded by admission
 	customToolsMu     sync.RWMutex
 	customToolsReplID string
+
+	// restartPending makes the next admitted operation replace the child, for
+	// a restart that found the executor busy.
+	restartPending atomic.Bool
+
+	// infoMu guards the fields below, which list and restart read without
+	// admission.
+	infoMu     sync.Mutex
+	createdAt  time.Time
+	lastUsedAt time.Time
+	busy       bool
+	// homeTargetID is the tab the API opened for a named executor. It is
+	// recorded before any child uses it.
+	homeTargetID string
+	// cancelCurrent interrupts the admitted Execute call, if any.
+	cancelCurrent context.CancelCauseFunc
 }
 
+// newBrowserReplManager returns the default executor.
 func newBrowserReplManager() *browserReplManager {
+	return newNamedBrowserReplManager(defaultBrowserReplExecutor, "", nil)
+}
+
+func newNamedBrowserReplManager(name, socket string, tabs executorTabs) *browserReplManager {
 	lifecycle, stop := context.WithCancelCause(context.Background())
 	admission := make(chan struct{}, 1)
 	admission <- struct{}{}
+	now := time.Now()
 	return &browserReplManager{
-		admission: admission,
-		lifecycle: lifecycle,
-		stop:      stop,
+		name:       name,
+		socket:     socket,
+		tabs:       tabs,
+		admission:  admission,
+		lifecycle:  lifecycle,
+		stop:       stop,
+		createdAt:  now,
+		lastUsedAt: now,
 	}
+}
+
+func (m *browserReplManager) isDefault() bool {
+	return m.name == defaultBrowserReplExecutor
+}
+
+func (m *browserReplManager) socketPath() string {
+	if m.socket != "" {
+		return m.socket
+	}
+	return browserReplSocketPath()
 }
 
 func (m *browserReplManager) setCustomToolsReplID(replID string) {
@@ -166,7 +218,7 @@ func (m *browserReplManager) acquire(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-m.lifecycle.Done():
-		return errBrowserReplShuttingDown
+		return context.Cause(m.lifecycle)
 	case <-m.admission:
 	}
 	if err := ctx.Err(); err != nil {
@@ -175,7 +227,10 @@ func (m *browserReplManager) acquire(ctx context.Context) error {
 	}
 	if m.lifecycle.Err() != nil {
 		m.release()
-		return errBrowserReplShuttingDown
+		return context.Cause(m.lifecycle)
+	}
+	if m.restartPending.Swap(false) {
+		m.terminateLocked(ctx, "restart")
 	}
 	return nil
 }
@@ -213,10 +268,10 @@ func (m *browserReplManager) Shutdown(ctx context.Context) error {
 	return m.terminateLocked(ctx, "api shutdown")
 }
 
-// ensureLocked starts the REPL child if none is running. If the previous
-// child died unexpectedly it is cleared and replaced with a fresh REPL and
-// fresh CUID2. The caller must hold admission.
-func (m *browserReplManager) ensureLocked(ctx context.Context) error {
+// ensureLocked starts the REPL child if none is running and reports whether
+// it started one. If the previous child died unexpectedly it is cleared and
+// replaced with a fresh REPL and fresh CUID2. The caller must hold admission.
+func (m *browserReplManager) ensureLocked(ctx context.Context) (bool, error) {
 	log := logger.FromContext(ctx)
 
 	if child := m.child; child != nil {
@@ -231,11 +286,11 @@ func (m *browserReplManager) ensureLocked(ctx context.Context) error {
 			_ = signalChildProcessGroup(child.cmd, killSignal)
 			m.clearLocked(ctx, child)
 		default:
-			return nil
+			return false, nil
 		}
 	}
 
-	return m.startLocked(ctx)
+	return true, m.startLocked(ctx)
 }
 
 // closedWaitChannel returns a channel that has already received (and closed
@@ -251,10 +306,12 @@ func closedWaitChannel(err error) chan error {
 func (m *browserReplManager) clearLocked(ctx context.Context, child *browserReplChild) {
 	if m.child == child {
 		m.child = nil
-		m.setCustomToolsReplID("")
-		_ = os.Remove(browserReplCustomToolsPath())
+		if m.isDefault() {
+			m.setCustomToolsReplID("")
+			_ = os.Remove(browserReplCustomToolsPath())
+		}
 	}
-	removeBrowserReplSocket(logger.FromContext(ctx), browserReplSocketPath())
+	removeBrowserReplSocket(logger.FromContext(ctx), m.socketPath())
 }
 
 func removeBrowserReplSocket(log *slog.Logger, socketPath string) {
@@ -266,8 +323,8 @@ func removeBrowserReplSocket(log *slog.Logger, socketPath string) {
 // startLocked spawns a new REPL child with a fresh CUID2 and waits for its
 // socket to accept connections. The caller must hold admission.
 func (m *browserReplManager) startLocked(ctx context.Context) error {
-	log := logger.FromContext(ctx)
-	socketPath := browserReplSocketPath()
+	log := logger.FromContext(ctx).With("executor", m.name)
+	socketPath := m.socketPath()
 
 	// Never adopt state from a previous process. Unlink any stale socket;
 	// Linux parent-death signaling handles daemons spawned by this API.
@@ -276,11 +333,14 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 	replID := cuid2.Generate()
 
 	cmd := exec.Command("node", "--experimental-vm-modules", "--max-old-space-size="+browserReplHeapMB(), browserReplScriptPath())
-	cmd.Stdout = os.Stderr // protocol lives on the socket; child diagnostics only
-	cmd.Stderr = os.Stderr
+	// The protocol lives on the socket; child output is diagnostics only.
+	output := newHeapLimitWatcher(os.Stderr, log, m.name, browserReplHeapMB())
+	cmd.Stdout = output
+	cmd.Stderr = output
 	cmd.Env = append(os.Environ(),
 		"BROWSER_REPL_SOCKET="+socketPath,
 		"BROWSER_REPL_ID="+replID,
+		"BROWSER_REPL_EXECUTOR="+m.name,
 	)
 	configureChildProcessCmd(cmd)
 
@@ -300,7 +360,9 @@ func (m *browserReplManager) startLocked(ctx context.Context) error {
 		conn, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond)
 		if err == nil {
 			conn.Close()
-			m.setCustomToolsReplID(replID)
+			if m.isDefault() {
+				m.setCustomToolsReplID(replID)
+			}
 			log.Info("browser REPL ready", "repl_id", replID)
 			return nil
 		}
@@ -396,9 +458,10 @@ func (m *browserReplManager) killLocked(ctx context.Context, reason string) {
 
 // browserReplDaemonRequest is the wire format sent to the REPL daemon.
 type browserReplDaemonRequest struct {
-	ID        string `json:"id"`
-	Code      string `json:"code"`
-	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	ID           string `json:"id"`
+	Code         string `json:"code"`
+	TimeoutMs    int    `json:"timeout_ms,omitempty"`
+	HomeTargetID string `json:"home_target_id,omitempty"`
 }
 
 // browserReplDaemonResponse is the wire format returned by the REPL daemon.
@@ -420,7 +483,13 @@ type browserReplDaemonResponse struct {
 	// exception details and is exiting non-zero. The API treats it like a
 	// timeout — terminate the handle and report repl_terminated — so the
 	// state loss is explicit to the caller.
-	Exiting    bool `json:"exiting,omitempty"`
+	Exiting bool `json:"exiting,omitempty"`
+	// TargetID is the tab the runtime is attached to after the execution.
+	TargetID string `json:"target_id,omitempty"`
+	// TabMissing reports that a named executor's tab is closed and nothing
+	// is attached. The code was not run, so it is safe to send it again with
+	// a new tab.
+	TabMissing bool `json:"tab_missing,omitempty"`
 	DurationMs int  `json:"duration_ms"`
 }
 
@@ -435,15 +504,16 @@ type browserReplRequest struct {
 // prepareBrowserReplRequest encodes the daemon request with HTML escaping
 // disabled. The daemon's limit applies to the line without its trailing
 // newline, so the encoded request must fit before it is sent.
-func prepareBrowserReplRequest(code string, timeout time.Duration) (*browserReplRequest, error) {
+func prepareBrowserReplRequest(code string, timeout time.Duration, homeTargetID string) (*browserReplRequest, error) {
 	id := uuid.New().String()
 	var buf bytes.Buffer
 	encoder := json.NewEncoder(&buf)
 	encoder.SetEscapeHTML(false)
 	if err := encoder.Encode(browserReplDaemonRequest{
-		ID:        id,
-		Code:      code,
-		TimeoutMs: int(timeout.Milliseconds()),
+		ID:           id,
+		Code:         code,
+		TimeoutMs:    int(timeout.Milliseconds()),
+		HomeTargetID: homeTargetID,
 	}); err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -472,7 +542,7 @@ func (m *browserReplManager) executeLocked(ctx context.Context, request *browser
 		return nil, errors.New("no browser REPL child")
 	}
 
-	conn, err := net.DialTimeout("unix", browserReplSocketPath(), 2*time.Second)
+	conn, err := net.DialTimeout("unix", m.socketPath(), 2*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to browser REPL: %w", err)
 	}
@@ -510,7 +580,7 @@ func (m *browserReplManager) executeLocked(ctx context.Context, request *browser
 	var line []byte
 	select {
 	case <-ctx.Done():
-		return nil, fmt.Errorf("request context cancelled: %w", ctx.Err())
+		return nil, fmt.Errorf("request context cancelled: %w", context.Cause(ctx))
 	case res := <-readCh:
 		if res.err != nil {
 			if len(res.line) > browserReplMaxResponseBytes {
@@ -564,14 +634,16 @@ func isTimeoutErr(err error) bool {
 // the same optional fields as other failure paths (duration_ms and the
 // content truncation flag) so clients can read them unconditionally; partial
 // content is never available here because the child died without answering.
-func browserReplTerminatedResponse(replID string, err error, durationMs int) oapi.ExecuteBrowserRepl200JSONResponse {
+func browserReplTerminatedResponse(replID string, newState bool, err error, durationMs int) oapi.ExecuteBrowserRepl200JSONResponse {
 	errMsg := err.Error()
 	terminated := true
 	notTruncated := false
 	return oapi.ExecuteBrowserRepl200JSONResponse{
 		Success:          false,
 		ReplId:           replID,
+		NewState:         newState,
 		Error:            &errMsg,
+		Terminated:       &terminated,
 		ReplTerminated:   &terminated,
 		DurationMs:       &durationMs,
 		ContentTruncated: &notTruncated,
@@ -634,11 +706,6 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// ExecuteBrowserRepl implements POST /repl through the REPL subsystem.
-func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {
-	return s.browserRepl.Execute(ctx, request)
-}
-
 func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {
 	if err := m.acquire(ctx); err != nil {
 		return nil, err
@@ -646,15 +713,13 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 	defer m.release()
 
 	operationCtx, cancelOperation, stopPropagation := m.operationContext(ctx)
-	defer func() {
-		stopPropagation()
-		cancelOperation(nil)
-	}()
+	defer stopPropagation()
+	defer m.beginOperation(ctx, cancelOperation)()
 	if err := context.Cause(operationCtx); err != nil {
 		return nil, err
 	}
 	ctx = operationCtx
-	log := logger.FromContext(ctx)
+	log := logger.FromContext(ctx).With("executor", m.name)
 
 	if request.Body == nil {
 		return oapi.ExecuteBrowserRepl400JSONResponse{
@@ -689,7 +754,7 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 	var preparedRequest *browserReplRequest
 	if code != "" {
 		var err error
-		preparedRequest, err = prepareBrowserReplRequest(code, timeout)
+		preparedRequest, err = prepareBrowserReplRequest(code, timeout, "")
 		if err != nil {
 			return oapi.ExecuteBrowserRepl400JSONResponse{
 				BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
@@ -706,7 +771,11 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 		m.terminateLocked(ctx, "explicit reset")
 	}
 
-	if err := m.ensureLocked(ctx); err != nil {
+	newState, err := m.ensureLocked(ctx)
+	if err != nil {
+		if cause := browserReplInterruption(ctx); cause != nil {
+			return nil, cause
+		}
 		log.Error("failed to start browser REPL", "error", err)
 		return oapi.ExecuteBrowserRepl500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
@@ -714,23 +783,65 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 			},
 		}, nil
 	}
-
 	replID := m.child.id
 
-	// Reset with no code: just start a fresh REPL.
-	if code == "" {
-		return oapi.ExecuteBrowserRepl200JSONResponse{
-			Success: true,
-			ReplId:  replID,
+	homeTargetID, tabCreated, err := m.ensureTab(ctx)
+	if cause := browserReplInterruption(ctx); cause != nil {
+		return nil, cause
+	}
+	if err != nil {
+		log.Error("failed to open executor tab", "error", err)
+		return oapi.ExecuteBrowserRepl500JSONResponse{
+			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+				Message: err.Error(),
+			},
 		}, nil
 	}
 
+	// Reset with no code: just start a fresh REPL.
+	if code == "" {
+		out := oapi.ExecuteBrowserRepl200JSONResponse{
+			Success:  true,
+			ReplId:   replID,
+			NewState: newState,
+		}
+		if homeTargetID != "" {
+			out.Tab = &oapi.BrowserReplTab{TargetId: homeTargetID, Created: tabCreated}
+		}
+		return out, nil
+	}
+
 	execStart := time.Now()
-	resp, err := m.executeLocked(ctx, preparedRequest, timeout)
+	resp, err := m.executeTabLocked(ctx, code, timeout, preparedRequest, homeTargetID)
+	if err == nil && resp.TabMissing {
+		// The executor's tab was closed and nothing is attached. The child
+		// answered without running the code, so send it again with a new tab.
+		if homeTargetID, err = m.openTab(ctx); err != nil {
+			if cause := browserReplInterruption(ctx); cause != nil {
+				return nil, cause
+			}
+			log.Error("failed to reopen executor tab", "error", err)
+			return oapi.ExecuteBrowserRepl500JSONResponse{
+				InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
+					Message: err.Error(),
+				},
+			}, nil
+		}
+		tabCreated = true
+		resp, err = m.executeTabLocked(ctx, code, timeout, preparedRequest, homeTargetID)
+	}
 	if err != nil {
 		var notDispatched *browserReplNotDispatchedError
 		if errors.As(err, &notDispatched) {
 			return nil, notDispatched.cause
+		}
+		var tooLarge *browserReplRequestTooLargeError
+		if errors.As(err, &tooLarge) {
+			return oapi.ExecuteBrowserRepl400JSONResponse{
+				BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
+					Message: err.Error(),
+				},
+			}, nil
 		}
 		// Any transport or protocol failure is fatal to the child: kill the
 		// process group, wait for exit, remove the stale socket, and clear the
@@ -746,7 +857,7 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 			// killer near the heap cap) instead of a bare transport error.
 			err = fmt.Errorf("browser REPL process terminated during execution (%v): %w", waitErr, err)
 		}
-		return browserReplTerminatedResponse(replID, err, int(time.Since(execStart).Milliseconds())), nil
+		return browserReplTerminatedResponse(replID, newState, err, int(time.Since(execStart).Milliseconds())), nil
 	}
 
 	mapped, err := browserReplMapResponse(resp)
@@ -755,7 +866,15 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 		// corruption; do not risk state from this child.
 		log.Error("browser REPL returned an undecodable response; terminating child", "repl_id", replID, "error", err)
 		m.terminateLocked(ctx, "protocol corruption")
-		return browserReplTerminatedResponse(replID, err, int(time.Since(execStart).Milliseconds())), nil
+		return browserReplTerminatedResponse(replID, newState, err, int(time.Since(execStart).Milliseconds())), nil
+	}
+	mapped.NewState = newState
+	attached := resp.TargetID
+	if attached == "" && tabCreated {
+		attached = homeTargetID
+	}
+	if attached != "" {
+		mapped.Tab = &oapi.BrowserReplTab{TargetId: attached, Created: tabCreated}
 	}
 
 	if resp.TimedOut || resp.Exiting {
@@ -763,7 +882,7 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 			// The daemon hit an uncaught exception, answered this execution
 			// with the exception details, and is exiting non-zero (resuming
 			// after an uncaught exception is unsafe per Node semantics).
-			// Reap the child and report repl_terminated so the state loss is
+			// Reap the child and report termination so the state loss is
 			// explicit; the next request lazily starts a fresh REPL.
 			log.Warn("browser REPL reported an uncaught exception and is exiting; terminating child", "repl_id", replID)
 			m.terminateLocked(ctx, "uncaught exception in REPL process")
@@ -772,15 +891,155 @@ func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBr
 			// execution, so its code is still running inside the child. Kill
 			// the process group, wait for exit, and clear the handle; the next
 			// request lazily starts a fresh REPL with a new CUID2. The
-			// response carries the terminated ID, repl_terminated: true, and
-			// the partial content the execution produced before the deadline.
+			// response carries the terminated ID, terminated: true, and the
+			// partial content the execution produced before the deadline.
 			log.Warn("browser REPL execution timed out; terminating child", "repl_id", replID)
 			m.terminateLocked(ctx, "execution timeout")
 		}
 		terminated := true
+		mapped.Terminated = &terminated
 		mapped.ReplTerminated = &terminated
 	}
 	return mapped, nil
+}
+
+// beginOperation marks an admitted operation as the executor's current one,
+// so restart can interrupt it, and returns the function that ends it. A
+// restart that arrived before the operation registered, or while it ran,
+// replaces the child. The caller must hold admission until the returned
+// function has run.
+func (m *browserReplManager) beginOperation(ctx context.Context, cancel context.CancelCauseFunc) func() {
+	m.infoMu.Lock()
+	m.busy = true
+	m.lastUsedAt = time.Now()
+	m.cancelCurrent = cancel
+	// restart sets restartPending and reads cancelCurrent under infoMu, so it
+	// either cancels this operation or leaves the restart for it to apply.
+	restartPending := m.restartPending.Swap(false)
+	m.infoMu.Unlock()
+	if restartPending {
+		m.terminateLocked(ctx, "restart")
+	}
+	return func() {
+		m.infoMu.Lock()
+		m.busy = false
+		m.cancelCurrent = nil
+		m.infoMu.Unlock()
+		cancel(nil)
+		// A removed executor's retire may have stopped waiting for this
+		// operation, so the operation ends the child itself.
+		if m.restartPending.Swap(false) || m.lifecycle.Err() != nil {
+			m.terminateLocked(context.WithoutCancel(ctx), "restart or removal")
+		}
+	}
+}
+
+// browserReplInterruption returns the delete or restart that ended a call, if
+// one did. Such calls fail like calls interrupted while queued, not as REPL
+// start failures.
+func browserReplInterruption(ctx context.Context) error {
+	cause := context.Cause(ctx)
+	if errors.Is(cause, errBrowserReplDeleted) || errors.Is(cause, errBrowserReplRestarted) {
+		return cause
+	}
+	return nil
+}
+
+type browserReplRequestTooLargeError struct {
+	err error
+}
+
+func (e *browserReplRequestTooLargeError) Error() string { return e.err.Error() }
+
+// executeTabLocked runs code bound to a named executor's tab. The default
+// executor sends the request prepared during validation. The caller must hold
+// admission.
+func (m *browserReplManager) executeTabLocked(ctx context.Context, code string, timeout time.Duration, prepared *browserReplRequest, homeTargetID string) (*browserReplDaemonResponse, error) {
+	if homeTargetID != "" {
+		var err error
+		if prepared, err = prepareBrowserReplRequest(code, timeout, homeTargetID); err != nil {
+			return nil, &browserReplRequestTooLargeError{err: err}
+		}
+	}
+	return m.executeLocked(ctx, prepared, timeout)
+}
+
+// ensureTab returns a named executor's tab, opening one the first time, and
+// reports whether it opened one. The default executor has no tab. The caller
+// must hold admission.
+func (m *browserReplManager) ensureTab(ctx context.Context) (string, bool, error) {
+	if m.tabs == nil {
+		return "", false, nil
+	}
+	m.infoMu.Lock()
+	targetID := m.homeTargetID
+	m.infoMu.Unlock()
+	if targetID != "" {
+		return targetID, false, nil
+	}
+	targetID, err := m.openTab(ctx)
+	return targetID, true, err
+}
+
+// openTab opens a new tab for a named executor and records it before any
+// child uses it, so DELETE and shutdown can always close it. A delete or
+// restart does not cancel the open, so a tab Chromium creates is always
+// recorded. The caller must hold admission.
+func (m *browserReplManager) openTab(ctx context.Context) (string, error) {
+	targetID, err := m.tabs.Open(context.WithoutCancel(ctx))
+	if err != nil {
+		return "", fmt.Errorf("failed to open executor tab: %w", err)
+	}
+	if cause := context.Cause(m.lifecycle); cause != nil {
+		// The executor was removed while the tab opened, and its retire may
+		// already have stopped waiting for this call; close the tab here.
+		if err := m.tabs.Close(context.WithoutCancel(ctx), targetID); err != nil {
+			logger.FromContext(ctx).Warn("failed to close executor tab", "executor", m.name, "target_id", targetID, "error", err)
+		}
+		return "", cause
+	}
+	m.infoMu.Lock()
+	m.homeTargetID = targetID
+	m.infoMu.Unlock()
+	return targetID, nil
+}
+
+// restart replaces the default executor's child without waiting for queued
+// calls: the call running on it fails, and the next admitted call starts a
+// fresh child.
+func (m *browserReplManager) restart(ctx context.Context) {
+	m.infoMu.Lock()
+	m.restartPending.Store(true)
+	cancel := m.cancelCurrent
+	m.infoMu.Unlock()
+	if cancel != nil {
+		cancel(errBrowserReplRestarted)
+		return
+	}
+	// Idle: replace the child now. If a call is admitted but not yet
+	// registered, restartPending makes it start from a fresh child.
+	select {
+	case <-m.admission:
+		if m.restartPending.Swap(false) {
+			m.terminateLocked(ctx, "restart")
+		}
+		m.release()
+	default:
+	}
+}
+
+// retire stops a removed named executor for good: the call running on it and
+// queued calls fail with cause, and the child is terminated. It returns the
+// executor's tab, which was recorded before any child used it.
+func (m *browserReplManager) retire(ctx context.Context, cause error) string {
+	m.stop(cause)
+	if err := m.acquireForShutdown(ctx); err == nil {
+		m.terminateLocked(ctx, "executor removed")
+		m.release()
+	}
+	m.infoMu.Lock()
+	defer m.infoMu.Unlock()
+	return m.homeTargetID
 }
 
 // browserReplMapResponse converts a daemon response into the public API

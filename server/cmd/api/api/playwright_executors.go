@@ -10,13 +10,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/oapi"
 )
@@ -40,8 +38,6 @@ const (
 )
 
 var (
-	playwrightExecutorNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-
 	errPlaywrightExecutorDeleted   = errors.New("executor was deleted")
 	errPlaywrightExecutorRestarted = errors.New("executor was restarted")
 	errPlaywrightExecutorsShutDown = errors.New("playwright executors are shutting down")
@@ -55,39 +51,6 @@ type playwrightExecutorLimitError struct {
 
 func (e *playwrightExecutorLimitError) Error() string {
 	return fmt.Sprintf("named executor limit (%d) reached; delete one with DELETE /playwright/executors/{name}", maxPlaywrightExecutors)
-}
-
-// playwrightExecutorTabs opens and closes executor tabs. The manager owns
-// every executor tab, so a tab's ID is recorded before any daemon process can
-// use it and DELETE or shutdown can always find it.
-type playwrightExecutorTabs interface {
-	Open(ctx context.Context) (string, error)
-	Close(ctx context.Context, targetID string) error
-}
-
-// cdpPlaywrightExecutorTabs manages executor tabs over the browser's DevTools
-// connection.
-type cdpPlaywrightExecutorTabs struct {
-	withCDP func(context.Context, func(context.Context, *cdpclient.Client) error) error
-}
-
-// Open creates a background tab in the default browser context, so it does
-// not take focus from the live view or change the active tab that the default
-// executor binds to.
-func (t cdpPlaywrightExecutorTabs) Open(ctx context.Context) (string, error) {
-	var targetID string
-	err := t.withCDP(ctx, func(ctx context.Context, c *cdpclient.Client) error {
-		var err error
-		targetID, err = c.CreateTarget(ctx, "about:blank", true)
-		return err
-	})
-	return targetID, err
-}
-
-func (t cdpPlaywrightExecutorTabs) Close(ctx context.Context, targetID string) error {
-	return t.withCDP(ctx, func(ctx context.Context, c *cdpclient.Client) error {
-		return c.CloseTarget(ctx, targetID)
-	})
 }
 
 // playwrightExecutorChild is one executor's daemon process.
@@ -168,14 +131,14 @@ type playwrightExecutorManager struct {
 	script        string
 	socketDir     string
 	responseGrace time.Duration
-	tabs          playwrightExecutorTabs
+	tabs          executorTabs
 
 	mu        sync.Mutex
 	executors map[string]*playwrightExecutor
 	closed    bool
 }
 
-func newPlaywrightExecutorManager(tabs playwrightExecutorTabs) *playwrightExecutorManager {
+func newPlaywrightExecutorManager(tabs executorTabs) *playwrightExecutorManager {
 	m := &playwrightExecutorManager{
 		tabs:          tabs,
 		script:        playwrightDaemonScript,
@@ -573,14 +536,7 @@ func (m *playwrightExecutorManager) Shutdown(ctx context.Context) {
 func (s *ApiService) playwrightExecutorsJSON(ctx context.Context, executors []playwrightExecutorInfo) []oapi.PlaywrightExecutor {
 	var urls map[string]string
 	if slices.ContainsFunc(executors, func(e playwrightExecutorInfo) bool { return e.targetID != "" }) {
-		err := s.withCDPClient(ctx, func(ctx context.Context, c *cdpclient.Client) error {
-			var err error
-			urls, err = c.TargetURLs(ctx)
-			return err
-		})
-		if err != nil {
-			logger.FromContext(ctx).Warn("failed to read playwright executor tab URLs", "error", err)
-		}
+		urls = s.tabURLs(ctx)
 	}
 
 	out := make([]oapi.PlaywrightExecutor, 0, len(executors))
@@ -612,10 +568,10 @@ func (s *ApiService) ListPlaywrightExecutors(ctx context.Context, _ oapi.ListPla
 func (s *ApiService) DeletePlaywrightExecutor(ctx context.Context, request oapi.DeletePlaywrightExecutorRequestObject) (oapi.DeletePlaywrightExecutorResponseObject, error) {
 	log := logger.FromContext(ctx)
 
-	if !playwrightExecutorNamePattern.MatchString(request.Name) {
+	if !executorNamePattern.MatchString(request.Name) {
 		return oapi.DeletePlaywrightExecutor400JSONResponse{
 			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{
-				Message: "executor name must match " + playwrightExecutorNamePattern.String(),
+				Message: "executor name must match " + executorNamePattern.String(),
 			},
 		}, nil
 	}

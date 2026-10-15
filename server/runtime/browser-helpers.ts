@@ -614,8 +614,13 @@ export class BrowserHelpers {
   };
 
   newTab = async (url = 'about:blank'): Promise<string> => {
-    if (url !== 'about:blank') {
-      const current = await this.currentTab();
+    // A named executor whose tab was closed has no current tab; open a new
+    // one instead of failing.
+    const current = url === 'about:blank' ? null : await this.currentTab().catch((err) => {
+      if (this.client.homeTargetId === null) throw err;
+      return null;
+    });
+    if (current) {
       const currentUrl = String(current.url ?? '');
       if (
         currentUrl === '' ||
@@ -631,6 +636,7 @@ export class BrowserHelpers {
     await this.client.ensureConnected();
     const created = await this.client.browserCommand<{ targetId: string }>('Target.createTarget', {
       url: 'about:blank',
+      background: this.client.homeTargetId !== null,
     });
     await this.client.attach(created.targetId);
     if (url !== 'about:blank') {
@@ -658,6 +664,10 @@ export class BrowserHelpers {
   };
 
   ensureRealTab = async (): Promise<Record<string, unknown> | null> => {
+    if (this.client.homeTargetId !== null) {
+      const tab = await this.client.ensureRealTab();
+      return { targetId: tab.targetId, url: tab.url, title: tab.title };
+    }
     const tabs = await this.listTabs(false);
     if (tabs.length === 0) return null;
     try {

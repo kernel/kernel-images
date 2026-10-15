@@ -128,7 +128,7 @@ export const browserReplHelpRegistry = {
     ensureRealTab: {
       signature: 'ensureRealTab()',
       description:
-        'Keep or attach to an existing non-internal page and return its tab metadata; return `null` if none exists.',
+        'Keep or attach to an existing non-internal page and return its tab metadata; return `null` if none exists. In a named executor, keep the attached page or return to the executor\'s own tab, even while it is blank.',
     },
     iframeTarget: {
       signature: 'iframeTarget(urlSubstring)',

@@ -119,6 +119,10 @@ const INTERNAL_URL_PREFIXES = [
   'about:',
 ];
 
+function homeTabClosedError(): Error {
+  return new Error("this executor's tab was closed; the next call opens a new one, or use switchTab() or newTab()");
+}
+
 export function isInternalUrl(url: string): boolean {
   return INTERNAL_URL_PREFIXES.some((p) => url.startsWith(p));
 }
@@ -142,6 +146,12 @@ export class BrowserReplCdpClient {
 
   sessionId: string | null = null;
   targetId: string | null = null;
+  // A named executor's own tab, opened by the API. When set, the client only
+  // falls back to that tab, never to another page, and neither attaching nor
+  // creating a tab makes it active, so the executor never takes the
+  // foreground tab from the live view or the default executor. Explicit
+  // switchTab() and newTab() can still move to other tabs.
+  homeTargetId: string | null = null;
 
   // Modal JavaScript dialogs need explicit state because they can freeze
   // renderer-routed commands while their Page.javascriptDialogOpening/Closed
@@ -507,7 +517,7 @@ export class BrowserReplCdpClient {
     }));
   }
 
-  async attach(targetId: string, {activate = true}: {activate?: boolean} = {}): Promise<string> {
+  async attach(targetId: string, {activate = this.homeTargetId === null}: {activate?: boolean} = {}): Promise<string> {
     await this.ensureConnected();
     if (this.targetId === targetId && this.sessionId) {
       return this.sessionId;
@@ -617,9 +627,11 @@ export class BrowserReplCdpClient {
       const pages = targets.filter((t) => t.type === 'page');
       const pick =
         pages.find((t) => t.targetId === this.targetId) ??
-        pages.find((t) => !isInternalUrl(t.url)) ??
-        pages[0];
+        (this.homeTargetId !== null
+          ? pages.find((t) => t.targetId === this.homeTargetId)
+          : pages.find((t) => !isInternalUrl(t.url)) ?? pages[0]);
       if (!pick) {
+        if (this.homeTargetId !== null) throw homeTabClosedError();
         break;
       }
       try {
@@ -691,8 +703,14 @@ export class BrowserReplCdpClient {
     await this.ensureAttached();
     const targets = await this.listTargets();
     const current = targets.find((t) => t.targetId === this.targetId);
-    if (current && current.type === 'page' && !isInternalUrl(current.url)) {
+    if (current && current.type === 'page' && (!isInternalUrl(current.url) || current.targetId === this.homeTargetId)) {
       return current;
+    }
+    if (this.homeTargetId !== null) {
+      const home = targets.find((t) => t.type === 'page' && t.targetId === this.homeTargetId);
+      if (!home) throw homeTabClosedError();
+      await this.attach(home.targetId);
+      return home;
     }
     const real = targets.find((t) => t.type === 'page' && !isInternalUrl(t.url));
     if (real) {
@@ -713,6 +731,20 @@ export class BrowserReplCdpClient {
         attached: true,
       }
     );
+  }
+
+  // Reports whether a target exists. Only Chromium's "no such target" answer
+  // means it does not; any other failure is thrown, so a transient error is
+  // never mistaken for a closed tab.
+  async targetExists(targetId: string): Promise<boolean> {
+    await this.ensureConnected();
+    try {
+      await this.browserCommand('Target.getTargetInfo', { targetId });
+      return true;
+    } catch (err: any) {
+      if (String(err?.message ?? err).includes('No target with given id')) return false;
+      throw err;
+    }
   }
 
   async evaluateOnTarget<T = any>(targetId: string, expression: string): Promise<T> {

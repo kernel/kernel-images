@@ -500,7 +500,7 @@ func TestBrowserReplRequestWireLimitIsNonDestructive(t *testing.T) {
 	htmlCode := `"` + strings.Repeat("<", 1_300_000) + `"`
 	htmlBody := []byte(`{"code":` + strconv.Quote(htmlCode) + `}`)
 	require.LessOrEqual(t, len(htmlBody), maxBrowserReplBodyBytes)
-	prepared, err := prepareBrowserReplRequest(htmlCode, 60*time.Second)
+	prepared, err := prepareBrowserReplRequest(htmlCode, 60*time.Second, "")
 	require.NoError(t, err)
 	require.LessOrEqual(t, len(prepared.bytes)-1, maxBrowserReplRequestLineBytes)
 	htmlResult := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Code: htmlCode})

@@ -94,7 +94,10 @@ type ApiService struct {
 	// default one) in its own daemon process.
 	playwrightExecutors *playwrightExecutorManager
 
-	browserRepl *browserReplManager
+	// browserRepl is the default Browser REPL executor, which also owns the
+	// custom WebMCP tools.
+	browserRepl          *browserReplManager
+	browserReplExecutors *browserReplExecutors
 
 	webmcp webMCPClient
 
@@ -213,7 +216,9 @@ func New(
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}
-	s.playwrightExecutors = newPlaywrightExecutorManager(cdpPlaywrightExecutorTabs{withCDP: s.withCDPClient})
+	tabs := cdpExecutorTabs{withCDP: s.withCDPClient}
+	s.playwrightExecutors = newPlaywrightExecutorManager(tabs)
+	s.browserReplExecutors = newBrowserReplExecutors(s.browserRepl, tabs)
 	return s, nil
 }
 
@@ -487,6 +492,7 @@ func (s *ApiService) NetworkMetrics() (resets, completed uint64, up bool) {
 
 func (s *ApiService) Shutdown(ctx context.Context) error {
 	s.lifecycleCancel()
+	s.browserReplExecutors.Shutdown(ctx)
 	replErr := s.browserRepl.Shutdown(ctx)
 	s.playwrightExecutors.Shutdown(ctx)
 

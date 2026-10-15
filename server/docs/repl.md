@@ -15,11 +15,12 @@ Content-Type: application/json
 {
   "code": "const title = (await pageInfo()).title; repl.write(title)",
   "timeout_sec": 60,
-  "reset": false
+  "reset": false,
+  "executor": "task-1"
 }
 ```
 
-`code` is required, but may be empty when `reset` is `true`. `timeout_sec` is an integer from 1 through 300 and defaults to 60. `reset` defaults to `false`. Unknown request fields are rejected.
+`code` is required, but may be empty when `reset` is `true`. `timeout_sec` is an integer from 1 through 300 and defaults to 60. `reset` defaults to `false`. `executor` is optional; see [Executors](#executors). Unknown request fields are rejected.
 
 Execution success and JavaScript failures both return HTTP 200:
 
@@ -27,6 +28,8 @@ Execution success and JavaScript failures both return HTTP 200:
 {
   "success": true,
   "repl_id": "tz4a98xxat96iws9zmbrgj3a",
+  "new_state": false,
+  "tab": {"target_id": "7889A4F6DA9948E0EE6AAB5849C03924", "created": false},
   "content": [
     {"type": "text", "channel": "write", "text": "Example Domain"}
   ],
@@ -35,7 +38,7 @@ Execution success and JavaScript failures both return HTTP 200:
 }
 ```
 
-`success` and `repl_id` are always present in an execution result. `content`, `content_truncated`, `duration_ms`, `error`, `stack`, and `repl_terminated` are included when applicable. Content items are ordered and are either text items like the example or image items shaped as `{type: "image", mime_type: "image/png", data_b64: "..."}`.
+`success`, `new_state`, and `repl_id` are always present in an execution result. `new_state` is `true` when the call started from empty state: the executor's first call, or the first call after a reset, timeout, crash, restart, or API restart. `tab` reports the tab the executor is attached to after the call; `tab.created` is `true` when the API opened the executor's tab for this call. `content`, `content_truncated`, `duration_ms`, `error`, `stack`, `tab`, and `terminated` are included when applicable. `repl_id` and `repl_terminated` are deprecated in favor of `new_state` and `terminated`. Content items are ordered and are either text items like the example or image items shaped as `{type: "image", mime_type: "image/png", data_b64: "..."}`.
 
 Invalid requests return HTTP 400, request bodies over 8 MiB return HTTP 413, and failure to start the REPL returns HTTP 500. These errors use the API's standard `{message}` error body.
 
@@ -48,12 +51,26 @@ Invalid requests return HTTP 400, request bodies over 8 MiB return HTTP 413, and
 - Normal JavaScript redeclaration rules apply across cells. `var` and function declarations may redeclare one another, while lexical declarations conflict with every prior declaration.
 - Persistent declarations cannot reuse a browser helper name (such as `pageInfo`, `click`, or `js`), `browser`, `webmcp`, or `repl`. A cell such as `var pageInfo = await pageInfo();` fails with `success: false` before it runs and leaves REPL state unchanged; choose another name, such as `info`.
 - Persistent names are live bindings: closures and timers observe assignments made by later cells. Declared function names are preserved, although `Function.prototype.toString()` may expose an internal generated alias.
-- Calls are serialized. Concurrent requests never execute at the same time, but callers that require a particular order should await each call because admission order is not a public FIFO guarantee.
+- Calls on one executor are serialized. Concurrent requests to the same executor never execute at the same time, but callers that require a particular order should await each call because admission order is not a public FIFO guarantee. Calls on different executors run concurrently.
 - Canceling a request while it is waiting for admission does not execute its code or replace healthy state. Cancellation after dispatch terminates the REPL because the execution outcome may be unknown. API shutdown rejects queued work, cancels active work, and terminates the child.
 - Syntax errors and ordinary exceptions return `success: false` with `error` and, when available, `stack`; they do not terminate the REPL. A failed lexical initializer reserves its name in the temporal dead zone until reset. Earlier declarators that initialized before the failure remain initialized.
-- A settled unhandled promise rejection does not terminate the REPL; it is emitted on `stderr`, immediately or with the next execution when it occurs between cells. An uncaught exception, timeout, crash, OOM, or protocol failure does terminate it. Such responses set `repl_terminated: true` when the API can return the terminated process's result; the next request starts a fresh REPL with a new `repl_id`.
+- A settled unhandled promise rejection does not terminate the REPL; it is emitted on `stderr`, immediately or with the next execution when it occurs between cells. An uncaught exception, timeout, crash, OOM, or protocol failure does terminate it. Such responses set `terminated: true` when the API can return the terminated process's result; the next request starts a fresh REPL and reports `new_state: true`.
 
 Use `{ "code": "", "reset": true }` to explicitly replace the REPL and clear all state.
+
+## Executors
+
+Every call runs in an executor: a separate runtime process with its own bindings, imported modules, and browser connection. Calls without `executor` run in the executor named `default`, which always exists. Any other name matching `^[A-Za-z0-9_-]{1,64}$` selects a named executor, created by its first call. Executors share nothing but the browser, so a timeout, crash, OOM, or reset in one does not affect the others. A timeout always ends the executor's process: a cell that kept running after its deadline would keep changing state the next cell reads.
+
+A browser can have at most 8 named executors; `default` does not count. A call that would create another returns 409 with `{message, executors}`. `GET /repl/executors` lists the executors, `default` first. Named executors are not removed automatically while the API runs; when it shuts down, they are removed and their tabs closed.
+
+`DELETE /repl/executors/{name}` stops a named executor: the call running on it and calls queued behind it fail with "executor was deleted", and the tab the API opened for it is closed unless `close_tab=false`. The name can be reused. Deleting `default` restarts it instead: the call running on it fails with "executor was restarted", its process stops without waiting for queued calls, and queued and later calls start from empty state. Use `reset: true` to clear state in order, after queued calls.
+
+The default executor attaches to an existing page. A named executor owns a background tab that the API opens on its first call; its helpers attach to that tab without making it the active tab, so it does not take focus from the live view or the default executor. `ensureRealTab()` returns to that tab even while it is blank. A new process attaches to the same tab while it stays open; if it is closed and nothing else is attached, the next call opens a new tab and reports `tab.created: true` without losing state. `switchTab()`, `newTab()`, and `cdp()` can still reach other tabs, so ownership is a starting point rather than isolation. Because a named executor's tab is not the active tab, Chromium may auto-dismiss JavaScript dialogs it opens in headless mode.
+
+Custom WebMCP tools can be added, listed, and removed only in the default executor. Every executor can discover and invoke them with `webmcp.listTools()` and `webmcp.invokeTool()`.
+
+`repl.executor` holds the executor's name. Each runtime keeps the 512 MiB heap limit; the API logs a warning when a runtime passes 90% of it and an error when one hits it.
 
 ## Runtime globals
 
@@ -119,7 +136,7 @@ The reference below is generated from `runtime/browser-repl-help.ts`; edit that 
 - **`switchTab(target)`** — Attach to a target ID or an object with `targetId`, including results from `listTabs()`, `currentTab()`, or `iframeTarget()`, and return the DevTools session ID. Selector and backend-node helpers subsequently operate on this target.
 - **`newTab(url?)`** — Reuse the attached blank/new-tab page when possible; otherwise create and attach a blank tab. Navigate when `url` is supplied and return the target ID.
 - **`closeTab(target?)`** — Close a target ID, an object with `targetId`, or the attached target when omitted. Wait up to five seconds, best effort, for the target to disappear.
-- **`ensureRealTab()`** — Keep or attach to an existing non-internal page and return its tab metadata; return `null` if none exists.
+- **`ensureRealTab()`** — Keep or attach to an existing non-internal page and return its tab metadata; return `null` if none exists. In a named executor, keep the attached page or return to the executor's own tab, even while it is blank.
 - **`iframeTarget(urlSubstring)`** — Find an out-of-process iframe target and return `{targetId, url, title, type}`, or `null`. Use its target ID with `js(..., {targetId})` or `switchTab()`.
 - **`waitMs(milliseconds?)`** — Sleep for milliseconds, defaulting to `1000`. Prefer rendered state or authoritative events for synchronization.
 - **`waitForLoad(timeoutSec?)`** — Poll until `document.readyState === "complete"`; return `true` when loaded or `false` after `timeoutSec` (default `15`).
