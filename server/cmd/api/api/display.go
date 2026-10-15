@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -594,17 +595,33 @@ func (s *ApiService) applyResolutionAndConverge(ctx context.Context, width, heig
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
-// Emulation.setDeviceMetricsOverride command. This is near-instant and does
-// not require restarting Chromium or Xvfb.
+// Browser.setContentsSize command. This is near-instant and does not require
+// restarting Chromium or Xvfb. When Chromium refuses to resize the window (a
+// fullscreen window, or a CDP error), it falls back to
+// Emulation.setDeviceMetricsOverride, which Chromium 154+ clears as soon as
+// this client detaches, so on those versions the viewport stays as it was.
 func (s *ApiService) setViewportViaCDP(ctx context.Context, width, height int) error {
 	log := logger.FromContext(ctx)
 	if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		err := client.SetContentsSize(cdpCtx, width, height)
+		if !contentsSizeRefused(err) {
+			return err
+		}
+		log.Warn("CDP setContentsSize refused, falling back to setDeviceMetricsOverride", "error", err)
 		return client.SetDeviceMetricsOverride(cdpCtx, width, height)
 	}); err != nil {
-		return fmt.Errorf("CDP setDeviceMetricsOverride: %w", err)
+		return fmt.Errorf("CDP viewport resize: %w", err)
 	}
 	log.Info("viewport resized via CDP", "width", width, "height", height)
 	return nil
+}
+
+// contentsSizeRefused reports whether SetContentsSize failed because Chromium
+// declined to resize the window, as opposed to the page target or the
+// connection being unavailable, where the fallback would fail the same way.
+func contentsSizeRefused(err error) bool {
+	var cdpErr *cdpclient.Error
+	return errors.Is(err, cdpclient.ErrWindowFullscreen) || errors.As(err, &cdpErr)
 }
 
 // anyRecordingActive returns true if any registered recorder is currently recording.

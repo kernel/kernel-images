@@ -326,7 +326,10 @@ class CDPClient {
       await this.page.goto('chrome://extensions');
 
       console.log('[cdp] enabling developer mode');
-      const devMode = this.page.getByRole('button', { name: 'Developer mode' });
+      // Chromium 154 changed cr-toggle from role=button to role=switch.
+      const devMode = this.page
+        .getByRole('switch', { name: 'Developer mode' })
+        .or(this.page.getByRole('button', { name: 'Developer mode' }));
       await devMode.click();
 
       console.log('[cdp] checking for MV3 Service Worker Test extension');
