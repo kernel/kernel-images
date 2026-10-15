@@ -103,12 +103,12 @@ func TestNetworkWireCapture(t *testing.T) {
 	})
 	t.Run("wire_status", func(t *testing.T) {
 		responses := snapshot(EventNetworkResponse, stub.URL+"/api")
-		require.ElementsMatch(t, []any{float64(200), float64(304)}, []any{responses[0]["status"], responses[1]["status"]})
+		require.ElementsMatch(t, []any{float64(200), float64(304)}, []any{responses[0]["wire_status"], responses[1]["wire_status"]})
 		for _, response := range responses {
-			if response["status"] == float64(304) {
-				require.Equal(t, float64(200), response["effective_status"])
-				require.Equal(t, "Not Modified", response["status_text"])
-			}
+			require.Equal(t, float64(200), response["status"])
+			require.Equal(t, "OK", response["status_text"])
+			require.JSONEq(t, `{"ok":true}`, response["body"].(string))
+			require.NotContains(t, response, "effective_status")
 		}
 	})
 }
