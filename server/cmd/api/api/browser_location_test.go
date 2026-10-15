@@ -451,8 +451,8 @@ func TestBrowserLocationMovesAboveChromiumGeneration(t *testing.T) {
 }
 
 // fakeLocationChromium holds the last location set on it and reports it with
-// the renderer acknowledgements in renderers.
-func fakeLocationChromium(t *testing.T, service *ApiService, renderers map[string]any) *atomic.Int32 {
+// the acknowledgements acks returns.
+func fakeLocationChromium(t *testing.T, service *ApiService, acks func() map[string]any) *atomic.Int32 {
 	t.Helper()
 	var mu sync.Mutex
 	var sets atomic.Int32
@@ -469,7 +469,7 @@ func fakeLocationChromium(t *testing.T, service *ApiService, renderers map[strin
 		for key, value := range held {
 			result[key] = value
 		}
-		for key, value := range renderers {
+		for key, value := range acks() {
 			result[key] = value
 		}
 		return map[string]any{"result": result}
@@ -483,7 +483,9 @@ func fakeLocationChromium(t *testing.T, service *ApiService, renderers map[strin
 func TestSetBrowserLocationAllowsPendingRenderers(t *testing.T) {
 	stubLocaltime(t)
 	service := newBrowserLocationStateService(t)
-	fakeLocationChromium(t, service, map[string]any{"renderersConverged": false, "renderersPending": 1})
+	fakeLocationChromium(t, service, func() map[string]any {
+		return map[string]any{"renderersConverged": false, "renderersPending": 1}
+	})
 	bundle := testLocationBundle(1)
 
 	started := time.Now()
@@ -520,9 +522,11 @@ func TestBrowserLocationConfirmed(t *testing.T) {
 func TestReapplyBrowserLocationAfterRestart(t *testing.T) {
 	stubLocaltime(t)
 	service := newBrowserLocationStateService(t)
-	sets := fakeLocationChromium(t, service, map[string]any{"renderersConverged": true, "renderersPending": 0})
+	sets := fakeLocationChromium(t, service, func() map[string]any {
+		return map[string]any{"renderersConverged": true, "renderersPending": 0}
+	})
 
-	service.reapplyBrowserLocation(context.Background())
+	require.NoError(t, service.reapplyBrowserLocation(context.Background()))
 	assert.Zero(t, sets.Load(), "nothing to apply before a location is accepted")
 
 	bundle := testLocationBundle(1)
@@ -534,7 +538,7 @@ func TestReapplyBrowserLocationAfterRestart(t *testing.T) {
 	service.browserLocationMu.Unlock()
 	sent := sets.Load()
 
-	service.reapplyBrowserLocation(context.Background())
+	require.NoError(t, service.reapplyBrowserLocation(context.Background()))
 
 	assert.Greater(t, sets.Load(), sent, "the new Chromium must be sent the location")
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Applied)
@@ -544,6 +548,74 @@ func TestReapplyBrowserLocationAfterRestart(t *testing.T) {
 	assert.Equal(t, &bundle, service.browserLocationSnapshot().Applied, "a re-applied location must stay applied")
 	service.observeChromiumUpstream("ws://127.0.0.1:1/devtools/browser/other")
 	assert.Nil(t, service.browserLocationSnapshot().Applied, "another Chromium has not confirmed it")
+}
+
+// A restarted Chromium that doesn't confirm the accepted location fails the
+// restart, so the operation that restarted it doesn't report success or
+// navigate: Chromium alone starts with the region's Intl locale.
+func TestReapplyBrowserLocationReportsFailure(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	require.NoError(t, service.acceptBrowserLocation(testLocationBundle(1)))
+	service.browserLocationReconcile = func(context.Context, oapi.BrowserLocationBundle) {
+		service.browserLocationMu.Lock()
+		defer service.browserLocationMu.Unlock()
+		service.browserLocation.lastError = "browser location components have not converged"
+	}
+
+	require.ErrorIs(t, service.reapplyBrowserLocation(context.Background()), errBrowserLocationNotRestored)
+}
+
+// A renderer pending when the location applied that then reports it didn't
+// converge makes the location unapplied and sends it again.
+func TestBrowserLocationRetriesRendererThatFailsAfterApplying(t *testing.T) {
+	stubLocaltime(t)
+	service := newBrowserLocationStateService(t)
+	var mu sync.Mutex
+	acks := map[string]any{"renderersConverged": false, "renderersPending": 1}
+	setAcks := func(next map[string]any) {
+		mu.Lock()
+		defer mu.Unlock()
+		acks = next
+	}
+	sets := fakeLocationChromium(t, service, func() map[string]any {
+		mu.Lock()
+		defer mu.Unlock()
+		return acks
+	})
+	bundle := testLocationBundle(1)
+	require.IsType(t, oapi.SetBrowserLocation200JSONResponse{}, service.applyBrowserLocation(context.Background(), bundle))
+	sent := sets.Load()
+
+	// The pending renderer resumes but doesn't observe the timezone.
+	setAcks(map[string]any{"renderersConverged": true, "renderersPending": 0, "timezoneConverged": false})
+	require.Eventually(t, func() bool { return sets.Load() > sent }, 3*time.Second, 25*time.Millisecond, "the location must be sent again")
+	assert.Nil(t, service.browserLocationSnapshot().Applied)
+
+	setAcks(map[string]any{"renderersConverged": true, "renderersPending": 0})
+	require.Eventually(t, func() bool { return service.browserLocationSnapshot().Applied != nil }, 6*time.Second, 25*time.Millisecond)
+}
+
+// Once the pending renderers acknowledge, the watch records it and stops.
+func TestBrowserLocationRecordsPendingRenderersAcknowledging(t *testing.T) {
+	stubLocaltime(t)
+	service := newBrowserLocationStateService(t)
+	var pending atomic.Bool
+	pending.Store(true)
+	sets := fakeLocationChromium(t, service, func() map[string]any {
+		if pending.Load() {
+			return map[string]any{"renderersConverged": false, "renderersPending": 1}
+		}
+		return map[string]any{"renderersConverged": true, "renderersPending": 0}
+	})
+	require.IsType(t, oapi.SetBrowserLocation200JSONResponse{}, service.applyBrowserLocation(context.Background(), testLocationBundle(1)))
+	sent := sets.Load()
+
+	pending.Store(false)
+	require.Eventually(t, func() bool {
+		snapshot := service.browserLocationSnapshot()
+		return snapshot.Applied != nil && snapshot.Components.Renderers && snapshot.Components.RenderersPending == 0
+	}, 3*time.Second, 25*time.Millisecond)
+	assert.Equal(t, sent, sets.Load(), "acknowledging renderers need no resend")
 }
 
 func TestValidateBrowserLocationBundleCapsGeneration(t *testing.T) {

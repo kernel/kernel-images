@@ -19,7 +19,6 @@ func StatePath() string {
 // AcceptedLocation is the location of the persisted accepted bundle.
 type AcceptedLocation struct {
 	TimeZone  string   `json:"timezone"`
-	Locale    string   `json:"locale"`
 	Languages []string `json:"languages"`
 }
 

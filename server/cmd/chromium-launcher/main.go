@@ -272,19 +272,21 @@ func startupTimezone(getenv func(string) string, accepted *browserlocation.Accep
 	return getenv("TZ")
 }
 
-// withAcceptedLanguages replaces the locale and languages flags with the
-// accepted location's, so a restarted Chromium starts with the session's
-// languages rather than the VM's.
+// withAcceptedLanguages replaces the languages flag with the accepted
+// location's, so a restarted Chromium sends the session's Accept-Language and
+// navigator.languages from its first request. Its Intl locale isn't set here:
+// on Linux Chromium ignores --lang and resolves its locale from the
+// environment to one it ships translations for, so the image applies the
+// locale once Chromium is up.
 func withAcceptedLanguages(flags []string, accepted *browserlocation.AcceptedLocation) []string {
-	if accepted == nil || accepted.Locale == "" || len(accepted.Languages) == 0 {
+	if accepted == nil || len(accepted.Languages) == 0 {
 		return flags
 	}
-	out := make([]string, 0, len(flags)+2)
+	out := make([]string, 0, len(flags)+1)
 	for _, flag := range flags {
-		if strings.HasPrefix(flag, "--lang=") || strings.HasPrefix(flag, "--accept-lang=") {
-			continue
+		if !strings.HasPrefix(flag, "--accept-lang=") {
+			out = append(out, flag)
 		}
-		out = append(out, flag)
 	}
-	return append(out, "--lang="+accepted.Locale, "--accept-lang="+strings.Join(accepted.Languages, ","))
+	return append(out, "--accept-lang="+strings.Join(accepted.Languages, ","))
 }

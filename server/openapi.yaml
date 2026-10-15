@@ -1747,8 +1747,9 @@ paths:
       description: >
         Applies a location to the running browser without restarting it and
         returns once the browser confirms it, within about five seconds. The
-        image keeps the accepted location across Chromium restarts and applies
-        it again before a restart it performs completes.
+        image keeps the accepted location across Chromium restarts: a restart
+        it performs applies the location again before completing, and fails if
+        the browser doesn't confirm it.
 
 
         Set by the control plane, which persists the session's location; a

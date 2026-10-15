@@ -120,11 +120,18 @@ func (s *ApiService) uploadExtensions(ctx context.Context, mr *multipart.Reader,
 	var loadErr error
 	if restarted {
 		if err := s.restartChromiumAndWait(ctx, "extension upload"); err != nil {
+			// Chromium came up with the extensions, so they stay.
+			if errors.Is(err, errBrowserLocationNotRestored) {
+				return internalExtensionUpload(err.Error())
+			}
 			return s.rollbackFailedExtensionActivation(ctx, transaction, err)
 		}
 	} else if loadErr = s.loadUnpackedExtensions(ctx, prepared.extensions); loadErr != nil {
 		log.Warn("CDP extension load failed, restarting Chromium", "error", loadErr)
 		if restartErr := s.restartChromiumAndWait(ctx, "extension upload fallback"); restartErr != nil {
+			if errors.Is(restartErr, errBrowserLocationNotRestored) {
+				return internalExtensionUpload(restartErr.Error())
+			}
 			return s.rollbackFailedExtensionActivation(ctx, transaction, errors.Join(loadErr, restartErr))
 		}
 		restarted = true
@@ -767,6 +774,9 @@ func (s *ApiService) stopChromium(ctx context.Context) error {
 // We intentionally do NOT short-circuit on the supervisorctl start command
 // returning ("doneCh") -- that command returns as soon as supervisord ack's
 // the fork, long before the new Chromium has bound any ports.
+//
+// Once Chromium is ready it applies the accepted browser location, and returns
+// errBrowserLocationNotRestored, with Chromium running, if that fails.
 func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string) error {
 	log := logger.FromContext(ctx)
 	start := time.Now()
@@ -817,8 +827,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case upstream, ok := <-updates:
 			if ok && tryReady(upstream) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-				s.reapplyBrowserLocation(ctx)
-				return nil
+				return s.reapplyBrowserLocation(ctx)
 			}
 		case err := <-errCh:
 			return err
@@ -832,8 +841,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case <-ticker.C:
 			if tryReady(s.upstreamMgr.Current()) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-				s.reapplyBrowserLocation(ctx)
-				return nil
+				return s.reapplyBrowserLocation(ctx)
 			}
 		case <-timeout.C:
 			status, statusOut, _ := chromiumSupervisorStatus(ctx)

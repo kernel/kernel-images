@@ -128,10 +128,10 @@ func TestStartupTimezone(t *testing.T) {
 
 func TestWithAcceptedLanguages(t *testing.T) {
 	flags := []string{"--lang=en-GB", "--accept-lang=en-GB,en", "--hide-scrollbars"}
-	accepted := &browserlocation.AcceptedLocation{TimeZone: "Europe/Berlin", Locale: "de-DE", Languages: []string{"de-DE", "de"}}
+	accepted := &browserlocation.AcceptedLocation{TimeZone: "Europe/Berlin", Languages: []string{"de-DE", "de"}}
 
 	got := withAcceptedLanguages(flags, accepted)
-	want := []string{"--hide-scrollbars", "--lang=de-DE", "--accept-lang=de-DE,de"}
+	want := []string{"--lang=en-GB", "--hide-scrollbars", "--accept-lang=de-DE,de"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("restart must start with the accepted languages, got %v", got)
 	}
