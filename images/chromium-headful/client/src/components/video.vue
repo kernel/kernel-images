@@ -322,7 +322,7 @@
   import { Clock, TapKeyboard, TapKeyboardMode } from '~/utils/tap-keyboard'
   import { FocusKeyboard } from '~/utils/focus-keyboard'
   import { RemoteField, RemoteFocus, focusUrls } from '~/utils/remote-focus'
-  import { SoftKeyboard } from '~/utils/soft-keyboard'
+  import { SoftKeyboard, isPhone } from '~/utils/soft-keyboard'
   import { DEFAULT_KEYBOARD, applyKeyboard, keyboardFor, setInputMode } from '~/utils/field-keyboard'
   import { TypedText, isModifier, typesIntoOverlay } from '~/utils/typed-text'
   import { keyboardPan, keyboardShrink } from '~/utils/keyboard-pan'
@@ -594,11 +594,12 @@
     }
 
     // Whether the soft keyboard is on screen, which the keys row, the keyboard
-    // control's Hide and the control's action all follow. Once the viewport
-    // has shown a keyboard, it is a focused overlay with the keyboard measured
-    // up, however the focus came about; a focused overlay with no keyboard, after
-    // iOS dismissed it or refused it, does not count. Until then, as with a
-    // hardware keyboard, the focus for typing is all there is to go by.
+    // control's Hide and the control's action all follow. On a phone, or once
+    // the viewport has shown a keyboard, it is a focused overlay with the
+    // keyboard measured up, however the focus came about; a focused overlay
+    // with no keyboard, after iOS dismissed it or refused it, does not count.
+    // Otherwise, as with a tablet's hardware keyboard, the focus for typing is
+    // all there is to go by.
     get keyboardShown() {
       if (!this.keyboardMeasurable) return this.keyboardOpen
       return this.overlayFocused && this.softKeyboardUp
@@ -858,7 +859,8 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
-      this.softKeyboard = new SoftKeyboard()
+      this.softKeyboard = new SoftKeyboard(isPhone(navigator.userAgent))
+      this.keyboardMeasurable = this.softKeyboard.measurable
       this.measureSoftKeyboard()
       // measured first, so the pan and the extra keys row see the keyboard
       window.visualViewport?.addEventListener('resize', this.measureSoftKeyboard)
@@ -1788,8 +1790,12 @@
       this.overlayFocused = true
       if (this.tapKeyboard.holding || this.focusKeyboard.holding) return
       this.keyboardOpen = true
-      if (this.hosting) {
-        if (this.is_touch_device) this.$accessor.remote.releaseCapsLock()
+      if (!this.hosting) return
+      // Reading the clipboard makes iOS show its Paste callout, and hold back
+      // the keyboard while it does; on touch devices the Paste control reads it.
+      if (this.is_touch_device) {
+        this.$accessor.remote.releaseCapsLock()
+      } else {
         this.syncClipboard()
       }
     }

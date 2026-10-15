@@ -246,7 +246,8 @@ describe('touch keyboard opening', () => {
   test('turns the remote Caps Lock off when the soft keyboard opens', () => {
     const { ctx, calls } = focus(true)
     expect(ctx.keyboardOpen).toBe(true)
-    expect(calls).toEqual(['release caps lock', 'sync clipboard'])
+    // reading the clipboard would make iOS show its Paste callout
+    expect(calls).toEqual(['release caps lock'])
   })
 
   test('leaves the remote Caps Lock alone on desktop', () => {
