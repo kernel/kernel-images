@@ -120,14 +120,14 @@ paths:
             format: uuid
         - name: offset
           in: query
-          description: Resume cursor from a prior output event, or 0 to replay all retained output. Overrides Last-Event-ID.
+          description: Resume cursor from a prior output event, or 0 to replay all retained output. Used when Last-Event-ID is absent.
           schema:
             type: integer
             format: int64
             minimum: 0
         - name: Last-Event-ID
           in: header
-          description: Resume cursor from a prior SSE data event.
+          description: Resume cursor from a prior SSE data event. Takes precedence over offset so automatic reconnects resume after the last received event.
           schema:
             type: string
       responses:

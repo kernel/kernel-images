@@ -385,10 +385,10 @@ func (s *ApiService) ProcessStdoutStream(ctx context.Context, request oapi.Proce
 	}
 	var offset int64
 	var err error
-	if request.Params.Offset != nil {
-		offset = *request.Params.Offset
-	} else if request.Params.LastEventID != nil {
+	if request.Params.LastEventID != nil {
 		offset, err = strconv.ParseInt(*request.Params.LastEventID, 10, 64)
+	} else if request.Params.Offset != nil {
+		offset = *request.Params.Offset
 	}
 	if err != nil || h.output.validateOffset(offset) != nil {
 		return oapi.ProcessStdoutStream400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid output offset"}}, nil
