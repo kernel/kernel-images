@@ -52,7 +52,8 @@ const WITH_KEYBOARD = 500
 // goes away on a blur. The remote browser keeps or drops focus on its fields.
 // zoomOnFirstFocus: iOS zooms the page in as the first field takes focus.
 // ignoreHeld: iOS shows the keyboard for a focus with inputmode="none".
-function phone(options: { zoomOnFirstFocus?: boolean; ignoreHeld?: boolean } = {}) {
+// hardwareKeyboard: no soft keyboard ever shows.
+function phone(options: { zoomOnFirstFocus?: boolean; ignoreHeld?: boolean; hardwareKeyboard?: boolean } = {}) {
   let now = 0
   let timers: { fn: () => void; at: number; id: number }[] = []
   let nextTimer = 1
@@ -93,6 +94,7 @@ function phone(options: { zoomOnFirstFocus?: boolean; ignoreHeld?: boolean } = {
   let zoomed = false
   const attrs = new Map<string, string>()
   const setKeyboard = (up: boolean) => {
+    if (options.hardwareKeyboard) return
     if (up && options.zoomOnFirstFocus && !zoomed) {
       // the zoom comes in the same viewport change as the keyboard; iOS reports
       // the zoomed viewport through the window's size too
@@ -146,11 +148,11 @@ function phone(options: { zoomOnFirstFocus?: boolean; ignoreHeld?: boolean } = {
     overlayFocused: false,
     ownBlur: false,
     softKeyboardUp: false,
-    keyboardMeasurable: true,
+    keyboardMeasurable: false,
     keyboardChangedAt: -Infinity,
     keyboardAnchor: null,
     blurUrl: 'https://p/browser/kernel/live-view/focus/blur?jwt=x',
-    softKeyboard: new SoftKeyboard(true),
+    softKeyboard: new SoftKeyboard(),
     _overlay: el,
     _player: { getBoundingClientRect: () => ({ top: 0 }) },
     $accessor: { video: { resolution: { w: 390, h: 844 } }, remote: { releaseCapsLock: () => {} } },
@@ -376,6 +378,18 @@ describe('the first keyboard after loading the live view', () => {
     t.toggle()
     expect(t.keyboard()).toBe(false)
     expect(t.row()).toBe(false)
+  })
+})
+
+describe('with a hardware keyboard', () => {
+  test('Hide and the control follow the focus', () => {
+    const t = phone({ hardwareKeyboard: true })
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    expect(t.ctx.keyboardShown).toBe(true)
+    t.toggle()
+    expect(t.document.activeElement).toBe(null)
+    expect(t.ctx.keyboardShown).toBe(false)
   })
 })
 

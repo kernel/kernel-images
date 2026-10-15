@@ -594,11 +594,11 @@
     }
 
     // Whether the soft keyboard is on screen, which the keys row, the keyboard
-    // control's Hide and the control's action all follow. Where the viewport
-    // shows the keyboard, it is a focused overlay with the keyboard measured
+    // control's Hide and the control's action all follow. Once the viewport
+    // has shown a keyboard, it is a focused overlay with the keyboard measured
     // up, however the focus came about; a focused overlay with no keyboard, after
-    // iOS dismissed it or refused it, does not count. Where the viewport cannot
-    // show it, the focus for typing is all there is to go by.
+    // iOS dismissed it or refused it, does not count. Until then, as with a
+    // hardware keyboard, the focus for typing is all there is to go by.
     get keyboardShown() {
       if (!this.keyboardMeasurable) return this.keyboardOpen
       return this.overlayFocused && this.softKeyboardUp
@@ -858,8 +858,7 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
-      this.softKeyboard = new SoftKeyboard(window.self === window.top)
-      this.keyboardMeasurable = this.softKeyboard.measurable
+      this.softKeyboard = new SoftKeyboard()
       this.measureSoftKeyboard()
       // measured first, so the pan and the extra keys row see the keyboard
       window.visualViewport?.addEventListener('resize', this.measureSoftKeyboard)

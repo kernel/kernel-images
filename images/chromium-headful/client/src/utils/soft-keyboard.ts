@@ -15,16 +15,13 @@ export interface VisualViewport {
 
 export class SoftKeyboard {
   up = false
-  // The viewport shows the keyboard here. A top-level page's does; a live view
-  // embedded in a frame may never see it, and then nothing is known.
-  measurable: boolean
+  // A keyboard has been seen in the viewport. Until then nothing is known: a
+  // live view embedded in a frame, or one typed into with a hardware keyboard,
+  // may never see one.
+  measurable = false
   private width = -1
   // the tallest viewport seen at this width, the height with nothing covering it
   private fullHeight = 0
-
-  constructor(topLevel: boolean) {
-    this.measurable = topLevel
-  }
 
   // Sizes are taken in screen pixels, which a zoom does not change: iOS can
   // zoom the page when a field first takes focus, which changes the viewport's
