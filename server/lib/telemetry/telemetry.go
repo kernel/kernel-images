@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"maps"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -8,6 +9,13 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
+)
+
+// Source.Metadata keys stamped onto every published event.
+const (
+	MetadataKeyTelemetrySessionID = "telemetry_session_id"
+	MetadataKeySessionID          = "session_id"
+	MetadataKeySessionName        = "session_name"
 )
 
 // TelemetryConfig holds caller-supplied telemetry preferences. All fields are
@@ -29,12 +37,19 @@ type TelemetryConfig struct {
 	// cdp_command stream. Empty reports every supported method. Telemetry only:
 	// an excluded command still reaches the browser.
 	ExcludedCdpMethods []oapi.BrowserCdpCommandMethod
+	// BrowserSessionID and BrowserSessionName identify the browser session
+	// that owns the capture. Each non-empty value is stamped onto every event,
+	// so exported and stored records can be joined to that browser. They are
+	// per-event rather than resource-level because a pooled instance serves
+	// more than one browser session over its life.
+	BrowserSessionID   string
+	BrowserSessionName string
 }
 
 // TelemetrySession manages a telemetry session against a shared EventStream.
 // It category-filters Publish calls, tracks session-scoped metadata (ID,
-// config, timestamps), and embeds telemetry_session_id into
-// Event.Source.Metadata before forwarding to the bus.
+// config, timestamps), and embeds telemetry_session_id and the browser session
+// identity into Event.Source.Metadata before forwarding to the bus.
 //
 // A *TelemetrySession is required to be non-nil: NewTelemetrySession panics
 // on a nil EventStream and ApiService construction rejects a nil session.
@@ -53,6 +68,9 @@ type TelemetrySession struct {
 	storeS2After uint64
 	appliedAt    time.Time
 	excludedCdp  map[string]struct{}
+	// browserSessionID and browserSessionName are stamped onto every event.
+	browserSessionID   string
+	browserSessionName string
 	// active mirrors "a session is running with these categories" for callers
 	// on a hot path, who must decide whether to do any work at all before they
 	// reach Publish and its mutex. nil means no session. Written under mu;
@@ -127,20 +145,35 @@ func (s *TelemetrySession) Start(telemetrySessionID string, cfg TelemetryConfig)
 	s.storeS2 = cfg.StoreS2
 	s.storeS2After = s.sessionStartSeq
 	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
+	s.browserSessionID = cfg.BrowserSessionID
+	s.browserSessionName = cfg.BrowserSessionName
 	s.setActiveLocked()
 }
 
-// publishLocked stamps telemetry_session_id into ev.Source.Metadata and forwards to the bus.
+// publishLocked stamps telemetry_session_id and the browser session identity
+// into ev.Source.Metadata and forwards to the bus. The stamps go on a copy:
+// producers reuse one metadata map across events, and an envelope already on
+// the bus must keep the identity it was published under after a reconfigure.
 // Requires s.mu to be held.
 func (s *TelemetrySession) publishLocked(ev events.Event) events.Envelope {
 	if ev.Ts == 0 {
 		ev.Ts = time.Now().UnixMicro()
 	}
-	if ev.Source.Metadata == nil {
-		m := make(map[string]string)
-		ev.Source.Metadata = &m
+	var m map[string]string
+	if ev.Source.Metadata != nil {
+		m = maps.Clone(*ev.Source.Metadata)
 	}
-	(*ev.Source.Metadata)["telemetry_session_id"] = s.id
+	if m == nil {
+		m = make(map[string]string, 3)
+	}
+	m[MetadataKeyTelemetrySessionID] = s.id
+	if s.browserSessionID != "" {
+		m[MetadataKeySessionID] = s.browserSessionID
+	}
+	if s.browserSessionName != "" {
+		m[MetadataKeySessionName] = s.browserSessionName
+	}
+	ev.Source.Metadata = &m
 	return s.es.Publish(events.Envelope{Event: ev})
 }
 
@@ -208,7 +241,14 @@ func (s *TelemetrySession) Config() TelemetryConfig {
 		excluded = append(excluded, oapi.BrowserCdpCommandMethod(m))
 	}
 	sort.Slice(excluded, func(i, j int) bool { return excluded[i] < excluded[j] })
-	return TelemetryConfig{Categories: cats, ExportOTLP: s.exportOTLP, StoreS2: s.storeS2, ExcludedCdpMethods: excluded}
+	return TelemetryConfig{
+		Categories:         cats,
+		ExportOTLP:         s.exportOTLP,
+		StoreS2:            s.storeS2,
+		ExcludedCdpMethods: excluded,
+		BrowserSessionID:   s.browserSessionID,
+		BrowserSessionName: s.browserSessionName,
+	}
 }
 
 // AppliedAt returns when the current configuration was applied, or the zero
@@ -232,6 +272,8 @@ func (s *TelemetrySession) UpdateConfig(cfg TelemetryConfig) {
 	}
 	s.storeS2 = cfg.StoreS2
 	s.excludedCdp = excludedSet(cfg.ExcludedCdpMethods)
+	s.browserSessionID = cfg.BrowserSessionID
+	s.browserSessionName = cfg.BrowserSessionName
 	s.setActiveLocked()
 }
 
@@ -286,5 +328,7 @@ func (s *TelemetrySession) Stop() {
 	// authoritative for the desired sink state after a clear.
 	s.exportOTLP = false
 	s.storeS2 = false
+	s.browserSessionID = ""
+	s.browserSessionName = ""
 	s.setActiveLocked()
 }

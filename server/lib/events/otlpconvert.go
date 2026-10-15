@@ -68,9 +68,9 @@ func toLogRecord(env Envelope) log.Record {
 	if ev.Truncated {
 		attrs = append(attrs, log.Bool("kernel.truncated", true))
 	}
-	// Producer metadata keys (telemetry_session_id, cdp ids) pass through under
-	// the kernel. prefix as-is: they are producer snake_case, unlike the dotted
-	// converter-owned keys above.
+	// Producer metadata keys (telemetry_session_id, the browser session_id and
+	// session_name, cdp ids) pass through under the kernel. prefix as-is: they
+	// are producer snake_case, unlike the dotted converter-owned keys above.
 	if ev.Source.Metadata != nil {
 		for k, v := range *ev.Source.Metadata {
 			attrs = append(attrs, log.String("kernel."+k, v))
