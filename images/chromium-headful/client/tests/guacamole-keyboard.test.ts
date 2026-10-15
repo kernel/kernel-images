@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
 import createKeyboard from '../src/utils/guacamole-keyboard'
 
@@ -11,7 +11,7 @@ class KeyboardTarget {
     this.listeners.set(type, listeners)
   }
 
-  dispatch(type: string, key: string, keyCode: number, repeat = false) {
+  dispatch(type: string, key: string, keyCode: number, repeat = false, capsLock = false) {
     const event = {
       key,
       keyCode,
@@ -23,8 +23,8 @@ class KeyboardTarget {
       altKey: false,
       metaKey: false,
       preventDefault() {},
-      getModifierState() {
-        return false
+      getModifierState(name: string) {
+        return name === 'CapsLock' && capsLock
       },
     } as KeyboardEvent
 
@@ -68,5 +68,48 @@ describe('GuacamoleKeyboard repeat handling', () => {
     target.dispatch('keyup', 'o', 79)
 
     expect(events).toEqual(['down:111', 'up:111', 'down:111', 'up:111'])
+  })
+})
+
+describe('GuacamoleKeyboard Caps Lock handling', () => {
+  const platform = Object.getOwnPropertyDescriptor(navigator, 'platform')!
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'platform', platform)
+  })
+
+  function keyboardOn(platformName: string) {
+    Object.defineProperty(navigator, 'platform', { value: platformName, configurable: true })
+    const target = new KeyboardTarget()
+    const keyboard = createKeyboard(target as unknown as Element)
+    const events: string[] = []
+    keyboard.onkeydown = (key) => {
+      events.push(`down:${key}`)
+      return false
+    }
+    keyboard.onkeyup = (key) => events.push(`up:${key}`)
+    keyboard.oncapslock = (capsLock) => events.push(`caps:${capsLock}`)
+    return { target, events }
+  }
+
+  test('reports macOS Caps Lock keydown and keyup as lock state', () => {
+    const { target, events } = keyboardOn('MacIntel')
+
+    target.dispatch('keydown', 'CapsLock', 20, false, true)
+    target.dispatch('keydown', 'a', 65, false, true)
+    target.dispatch('keypress', 'A', 65, false, true)
+    target.dispatch('keyup', 'a', 65, false, true)
+    target.dispatch('keyup', 'CapsLock', 20, false, false)
+
+    expect(events).toEqual(['caps:true', 'down:65', 'up:65', 'caps:false'])
+  })
+
+  test('keeps Caps Lock as a key press on other platforms', () => {
+    const { target, events } = keyboardOn('Win32')
+
+    target.dispatch('keydown', 'CapsLock', 20, false, true)
+    target.dispatch('keyup', 'CapsLock', 20, false, true)
+
+    expect(events).toEqual(['down:65509', 'up:65509'])
   })
 })

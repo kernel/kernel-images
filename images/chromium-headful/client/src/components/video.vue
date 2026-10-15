@@ -584,6 +584,7 @@
 
         this.$client.sendData('keyup', { key: this.keyMap(key) })
       }
+      this.keyboard.oncapslock = this.onCapsLock
       this.keyboard.listenTo(this._overlay)
     }
 
@@ -911,6 +912,20 @@
 
       this.resetKeyboard()
       this.focused = false
+    }
+
+    onCapsLock(capsLock: boolean) {
+      this.unmuteOnInteraction()
+
+      if (!this.hosting || this.locked || this.$accessor.remote.capsLock === capsLock) {
+        return
+      }
+
+      // Toggle with a keystroke so it stays ordered with the keys typed after it.
+      this.$accessor.remote.setCapsLock(capsLock)
+      const key = this.keyMap(0xffe5)
+      this.$client.sendData('keydown', { key })
+      this.$client.sendData('keyup', { key })
     }
 
     releaseInput() {
