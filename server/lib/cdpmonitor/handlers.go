@@ -419,8 +419,9 @@ func (m *Monitor) handleTimelineEvent(p cdpPerformanceTimelineEventAddedParams, 
 	}
 }
 
-// handleNetworkRequest publishes network_request events. Request bodies and
-// credential headers are left out, since they carry passwords and session tokens.
+// handleNetworkRequest publishes network_request events. Credential headers are
+// left out: the telemetry reader may not own them. Request bodies are left out
+// until a scrubber can remove the credentials in them.
 func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sessionID string) {
 	// Extract only the initiator type; the stack trace is too verbose and dominates event size.
 	var initiatorType string
