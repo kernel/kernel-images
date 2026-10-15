@@ -20,25 +20,35 @@ export class SoftKeyboard {
   // may never see one.
   measurable = false
   private width = -1
-  // the tallest viewport seen at this width, the height with nothing covering it
+  // the tallest viewport seen at this width, the height with nothing covering
+  // it; 0 while that is not known yet
   private fullHeight = 0
+  // the shortest viewport seen since a rotation with the keyboard up
+  private coveredHeight = 0
 
   // Sizes are taken in screen pixels, which a zoom does not change: iOS can
   // zoom the page when a field first takes focus, which changes the viewport's
   // size in CSS pixels as the keyboard comes up. Returns 'up' or 'down' when
-  // the keyboard came or went at the same width.
+  // the keyboard came or went.
   measure(viewport: VisualViewport): 'up' | 'down' | null {
     const width = viewport.width * viewport.scale
     const height = viewport.height * viewport.scale
     // rounding in the reported sizes is not a rotation
     if (Math.abs(width - this.width) > 2) {
-      // After a rotation the height with nothing covering it is not known yet,
-      // so a keyboard that stays up is only seen once it has been closed. That
-      // is reported as neither coming nor going.
+      // A rotation keeps the keyboard as it was. With it up, the height with
+      // nothing covering it is learned when it goes, which grows the viewport
+      // by at least a keyboard's height.
       this.width = width
+      this.fullHeight = this.up ? 0 : height
+      this.coveredHeight = height
+      return null
+    }
+    if (!this.fullHeight) {
+      this.coveredHeight = Math.min(this.coveredHeight, height)
+      if (height - this.coveredHeight < KEYBOARD_MIN_HEIGHT) return null
       this.fullHeight = height
       this.up = false
-      return null
+      return 'down'
     }
     this.fullHeight = Math.max(this.fullHeight, height)
     const up = this.fullHeight - height >= KEYBOARD_MIN_HEIGHT

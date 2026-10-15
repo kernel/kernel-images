@@ -40,13 +40,21 @@ describe('soft keyboard', () => {
     expect(k.up).toBe(false)
   })
 
-  test('a rotation is neither the keyboard coming nor going', () => {
+  test('a rotation keeps the keyboard as it was', () => {
     const k = new SoftKeyboard()
     k.measure(view(390, 844))
     k.measure(view(390, 500))
+    // rotated with the keyboard up: still up, and its going is seen
     expect(k.measure(view(844, 200))).toBe(null)
-    expect(k.measure(view(844, 390))).toBe(null)
+    expect(k.up).toBe(true)
+    expect(k.measure(view(844, 210))).toBe(null)
+    expect(k.measure(view(844, 390))).toBe('down')
     expect(k.measure(view(844, 200))).toBe('up')
+    // rotated back with the keyboard down
+    k.measure(view(844, 390))
+    expect(k.measure(view(390, 844))).toBe(null)
+    expect(k.up).toBe(false)
+    expect(k.measure(view(390, 500))).toBe('up')
   })
 
   test('is not known until a keyboard shows', () => {

@@ -248,6 +248,18 @@ function phone(options: { zoomOnFirstFocus?: boolean; ignoreHeld?: boolean; hard
     blurs,
     document,
     setKeyboard,
+    // to landscape, the keyboard staying as it is; the overlay keeps focus
+    rotate: () => {
+      viewport.width = 844
+      viewport.height = keyboardUp ? 200 : 390
+      ctx.measureSoftKeyboard()
+    },
+    // iOS dismisses the keyboard in landscape without a blur
+    dismissLandscape: () => {
+      keyboardUp = false
+      viewport.height = 390
+      ctx.measureSoftKeyboard()
+    },
     keyboard: () => keyboardUp,
     row: () => ctx.showTouchKeys,
     setCursor: (kind: 'text' | 'other') => ctx.tapKeyboard.cursor(kind),
@@ -378,6 +390,21 @@ describe('the first keyboard after loading the live view', () => {
     t.toggle()
     expect(t.keyboard()).toBe(false)
     expect(t.row()).toBe(false)
+  })
+})
+
+describe('rotating with the keyboard up', () => {
+  test('keeps Hide and the keys row, and a dismissal after it is still a Done', () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    t.rotate()
+    expect(t.ctx.keyboardShown).toBe(true)
+    expect(t.row()).toBe(true)
+    t.dismissLandscape()
+    expect(t.document.activeElement).toBe(null)
+    expect(t.row()).toBe(false)
+    expect(t.blurs).toHaveLength(1)
   })
 })
 
