@@ -1,6 +1,7 @@
 import EventEmitter from 'eventemitter3'
 import { OPCODE } from './data'
 import { EVENT, WebSocketEvents } from './events'
+import { CursorImage } from '~/utils/cursor-shape'
 
 import {
   WebSocketMessages,
@@ -47,6 +48,9 @@ export interface BaseEvents {
   warn: (...message: any[]) => void
   debug: (...message: any[]) => void
   error: (error: Error) => void
+  cursor: (image: CursorImage) => void
+  // the remote clipboard changed; sent even when the text is the same
+  clipboard: (text: string) => void
 }
 
 export abstract class BaseClient extends EventEmitter<BaseEvents> {
@@ -350,6 +354,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     this._channel = this._peer.createDataChannel('data')
+    // Safari defaults to blob, whose async conversion can reorder messages
+    this._channel.binaryType = 'arraybuffer'
     this._channel.onerror = this.onError.bind(this)
     this._channel.onmessage = this.onData.bind(this)
     this._channel.onclose = this.onDisconnected.bind(this, new Error('peer data channel closed'))

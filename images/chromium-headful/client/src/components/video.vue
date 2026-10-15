@@ -12,9 +12,12 @@
           ref="overlay"
           class="overlay"
           spellcheck="false"
+          autocapitalize="off"
+          autocorrect="off"
+          :autocomplete="is_touch_device ? 'one-time-code' : 'off'"
           tabindex="0"
           data-gramm="false"
-          :style="{ pointerEvents: hosting ? 'auto' : 'none' }"
+          :style="{ pointerEvents: hosting || is_touch_device ? 'auto' : 'none' }"
           @click.stop.prevent
           @contextmenu.stop.prevent
           @mousemove.stop.prevent="onMouseMove"
@@ -22,12 +25,18 @@
           @mouseup.stop.prevent="onMouseUp"
           @mouseenter.stop.prevent="onMouseEnter"
           @mouseleave.stop.prevent="onMouseLeave"
-          @touchmove.stop.prevent="onTouchHandler"
-          @touchstart.stop.prevent="onTouchHandler"
-          @touchend.stop.prevent="onTouchHandler"
+          @touchstart.stop.prevent="onTouchStart"
+          @touchmove.stop.prevent="onTouchMove"
+          @touchend.stop.prevent="onTouchEnd"
+          @touchcancel.stop.prevent="onTouchCancel"
+          @keydown="onOverlayKey"
+          @keyup="onOverlayKey"
+          @input="onOverlayInput"
+          @compositionstart="onCompositionStart"
+          @compositionend="onCompositionEnd"
           @paste.stop.prevent="onPaste"
           @focus="onOverlayFocus"
-          @blur="resetKeyboard"
+          @blur="onOverlayBlur"
         />
         <!-- KERNEL
         <div v-if="!playing && playable" class="player-overlay" @click.stop.prevent="playAndUnmute">
@@ -44,7 +53,10 @@
         <li><i @click.stop.prevent="requestFullscreen" class="fas fa-expand"></i></li>
         <li v-if="admin"><i @click.stop.prevent="openResolution" class="fas fa-desktop"></i></li>
         -->
-        <li v-if="!controlLocked && !implicitHosting && !readOnly" :class="extraControls || 'extra-control'">
+        <li
+          v-if="!controlLocked && !implicitHosting && !readOnly"
+          :class="extraControls || is_touch_device ? '' : 'extra-control'"
+        >
           <i
             :class="[
               hosted && !hosting ? 'disabled' : '',
@@ -72,16 +84,46 @@
           />
           -->
         </li>
-        <li
-          v-if="hosting && is_touch_device"
-          :class="extraControls || 'extra-control'"
-          @click.stop.prevent="openMobileKeyboard"
-        >
-          <i class="fas fa-keyboard" />
-        </li>
       </ul>
+      <neko-touch-controls
+        v-if="showTouchControls"
+        ref="controls"
+        :mode="touchLayout.mode"
+        :position="controlPosition"
+        :safe-area="safeArea"
+        :keyboard-open="keyboardOpen"
+        :area-width="playerWidth"
+        :area-height="playerHeight"
+        :keyboard-inset="keyboardInset"
+        :copy-offered="copyOffered"
+        @toggle="toggleMobileKeyboard"
+        @move="onControlMove"
+        @copy="copyToClipboard"
+      />
+      <neko-touch-keys
+        v-if="showTouchKeys"
+        :top="touchKeysTop"
+        :ctrl-latched="ctrlLatched"
+        @key="pressTouchKey"
+        @ctrl="latchCtrl"
+        @paste="pasteFromClipboard"
+      />
+      <button
+        v-if="zoomed && !hideControls"
+        class="touch-button zoom-chip"
+        @touchend.stop.prevent="resetZoom"
+        @click.stop.prevent="resetZoom"
+      >
+        {{ zoomScale.toFixed(1) }}× · Reset
+      </button>
+      <div v-if="touchNotice && !hideControls" class="touch-button touch-notice" role="status">{{ touchNotice }}</div>
       <neko-resolution ref="resolution" v-if="admin" />
-      <neko-clipboard ref="clipboard" v-if="hosting && (!clipboard_read_available || !clipboard_write_available)" />
+      <neko-clipboard
+        ref="clipboard"
+        v-if="hosting && (is_touch_device || !clipboard_read_available || !clipboard_write_available)"
+        :touch="is_touch_device"
+        @paste="pasteText"
+      />
     </div>
   </div>
 </template>
@@ -93,10 +135,46 @@
 
     .player {
       position: absolute;
+      box-sizing: border-box;
       display: flex;
       justify-content: center;
       align-items: center;
       background: #000;
+      overflow: hidden;
+      touch-action: none;
+      transition: transform 150ms ease-out;
+
+      .touch-button {
+        position: absolute;
+        z-index: 2;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 44px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 22px;
+        background: rgba($color: #000, $alpha: 0.7);
+        color: #fff;
+        font-size: 15px;
+        font-weight: 600;
+        white-space: nowrap;
+        cursor: pointer;
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .zoom-chip {
+        left: calc(12px + env(safe-area-inset-left));
+        top: calc(12px + env(safe-area-inset-top));
+      }
+
+      .touch-notice {
+        left: 50%;
+        top: calc(12px + env(safe-area-inset-top));
+        transform: translateX(-50%);
+        pointer-events: none;
+      }
 
       .video-menu {
         position: absolute;
@@ -153,6 +231,7 @@
         position: relative;
         width: 100%;
         max-width: calc(16 / 9 * 100vh);
+        transform-origin: 0 0;
 
         video {
           position: absolute;
@@ -205,8 +284,12 @@
           outline: 0;
           border: 0;
           color: transparent;
+          caret-color: transparent;
           background: transparent;
           resize: none;
+          touch-action: none;
+          // iOS zooms the page when focusing a field with a smaller font
+          font-size: 16px;
         }
 
         .player-aspect {
@@ -223,10 +306,27 @@
   import ResizeObserver from 'resize-observer-polyfill'
   import { elementRequestFullscreen, onFullscreenChange, isFullscreen, lockKeyboard, unlockKeyboard } from '~/utils'
   import { isClipboardReadGranted } from '~/utils/clipboard'
+  import { TouchGestures, Point } from '~/utils/touch-gestures'
+  import { ZoomPan, Box } from '~/utils/zoom-pan'
+  import {
+    ControlLayout,
+    ControlPosition,
+    SafeArea,
+    controlLayout,
+    decodePosition,
+    encodePosition,
+  } from '~/utils/touch-controls'
+  import { get, set } from '~/utils/localstorage'
+  import { CursorImage, CursorKind, cachedCursorKind, classifyCursor } from '~/utils/cursor-shape'
+  import { TextInput, XK_RETURN, focusNeedsGesture } from '~/utils/text-input'
+  import { TapKeyboard, TapKeyboardMode } from '~/utils/tap-keyboard'
+  import { keyboardPan, keyboardShrink } from '~/utils/keyboard-pan'
 
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
   import Clipboard from './clipboard.vue'
+  import TouchControls from './touch-controls.vue'
+  import TouchKeys, { TOUCH_KEYS_HEIGHT } from './touch-keys.vue'
 
   // @ts-ignore
   import GuacamoleKeyboard from '~/utils/guacamole-keyboard.ts'
@@ -235,12 +335,28 @@
   const SCROLL_SENSITIVITY_BASE = 10
   const INT16_MAX = 32767
 
+  // wheel units per remote pixel of finger travel, so content tracks the finger
+  const TOUCH_SCROLL_UNITS_PER_PX = 1.1
+  const TOUCH_NOTICE_MS = 3000
+  // how long Copy waits for the remote clipboard to change after Ctrl+C
+  const COPY_WAIT_MS = 2000
+  // how long Copy stays on the controls after a selection
+  const COPY_OFFER_MS = 8000
+  // pasted text up to this length is typed instead of pasted
+  const TYPED_PASTE_MAX = 32
+  // kept in the overlay so soft keyboards that only emit input events still report backspace
+  const INPUT_SENTINEL = ' '
+
+  const CONTROL_POSITION_KEY = 'touch_control_position'
+
   @Component({
     name: 'neko-video',
     components: {
       'neko-emote': Emote,
       'neko-resolution': Resolution,
       'neko-clipboard': Clipboard,
+      'neko-touch-controls': TouchControls,
+      'neko-touch-keys': TouchKeys,
     },
   })
   export default class extends Vue {
@@ -254,6 +370,7 @@
 
     private _wheelHandler: ((e: WheelEvent) => void) | null = null
     @Ref('clipboard') readonly _clipboard!: Clipboard
+    @Ref('controls') readonly _controls?: TouchControls
 
     // all controls are hidden (e.g. for cast mode)
     @Prop(Boolean) readonly hideControls!: boolean
@@ -270,6 +387,35 @@
     private fullscreen = false
     private mutedOverlay = true
     private isVideoSyncing = false
+
+    private gestures!: TouchGestures
+    private tapKeyboard!: TapKeyboard
+    private textInput!: TextInput
+    private zoom!: ZoomPan
+    private zoomScale = 1
+    private keyboardOpen = false
+    private touchNotice: string | null = null
+    private touchNoticeTimer = 0
+    // Copy control clipboard writes still waiting for their text
+    private copyWrites = 0
+    private cursorSeq = 0
+    private keyboardInset = 0
+    // how far the video is moved up above the soft keyboard, and the last tap
+    // measured from the player's top, which the move keeps visible
+    private keyboardPan = 0
+    private keyboardAnchor: number | null = null
+    // the extra keys row's top, in the player's coordinates
+    private touchKeysTop = 0
+    private ctrlLatched = false
+    private copyOffered = false
+    private copyOfferTimer = 0
+    private touchLayout: ControlLayout = { mode: 'overlay', band: 0 }
+    private controlPosition: ControlPosition = decodePosition(get<string>(CONTROL_POSITION_KEY, ''))
+    private playerWidth = 0
+    private playerHeight = 0
+    private safeAreaProbe: HTMLElement | null = null
+    private safeArea: SafeArea = { top: 0, bottom: 0, left: 0, right: 0 }
+    private scrollRemainder = { x: 0, y: 0 }
 
     get admin() {
       return this.$accessor.user.admin
@@ -399,13 +545,47 @@
       )
     }
 
+    get showTouchControls() {
+      return this.hosting && this.is_touch_device && !this.hideControls && !this.fullscreen
+    }
+
+    get zoomed() {
+      return this.zoomScale > 1.01
+    }
+
+    // ?tapKeyboard=auto (default) raises the keyboard when a tap lands on text,
+    // always raises it on every tap, off leaves it to the keyboard button
+    get tapKeyboardMode(): TapKeyboardMode {
+      const value = new URL(location.href).searchParams.get('tapKeyboard')
+      return value === 'always' || value === 'off' ? value : 'auto'
+    }
+
+    get showTouchKeys() {
+      return this.keyboardOpen && this.showTouchControls
+    }
+
+    get inputEnabled() {
+      return this.hosting && !this.locked
+    }
+
+    // Losing input ends the page's part of a touch instead of each handler
+    // checking for it.
+    @Watch('inputEnabled')
+    onInputEnabledChanged(enabled: boolean) {
+      if (enabled || !this.gestures) return
+      this.gestures.cancel()
+      this.tapKeyboard.cancel()
+    }
+
     @Watch('width')
     onWidthChanged() {
+      this.resetZoom()
       this.onResize()
     }
 
     @Watch('height')
     onHeightChanged() {
+      this.resetZoom()
       this.onResize()
     }
 
@@ -480,7 +660,8 @@
 
     @Watch('clipboard')
     async onClipboardChanged(clipboard: string) {
-      if (this.clipboard_write_available) {
+      // a second write would replace the Copy control's pending one
+      if (this.clipboard_write_available && this.copyWrites === 0) {
         try {
           await navigator.clipboard.writeText(clipboard)
           this.$accessor.remote.setClipboard(clipboard)
@@ -491,6 +672,46 @@
     }
 
     mounted() {
+      this.zoom = new ZoomPan(this.containerBox, this.playerBox, this.maxZoom)
+      this.gestures = new TouchGestures({
+        onTouchBegin: this.onGestureBegin,
+        onTap: this.onGestureTap,
+        onLongPress: this.onGestureLongPress,
+        onLongPressRelease: this.onGestureLongPressRelease,
+        onDragStart: this.onGestureDragStart,
+        onDragMove: this.onGestureDragMove,
+        onDragEnd: this.onGestureDragEnd,
+        onScroll: this.onGestureScroll,
+        onPinchStart: this.onGesturePinchStart,
+        onPinchMove: this.onGesturePinchMove,
+        onPinchEnd: this.onGesturePinchEnd,
+      })
+      this.tapKeyboard = new TapKeyboard(
+        this.tapKeyboardMode,
+        focusNeedsGesture(navigator),
+        {
+          keyboardOpen: () => this.keyboardOpen,
+          focus: this.focusForTyping,
+          hold: this.holdFocus,
+          release: () => this._overlay.blur(),
+        },
+        {
+          now: () => performance.now(),
+          setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+          clearTimeout: (id) => window.clearTimeout(id),
+        },
+      )
+      this.textInput = new TextInput(
+        (event, key) => {
+          this.$client.sendData(event, { key })
+          if (event === 'keydown' && key === XK_RETURN && this.is_touch_device) this.tapKeyboard.submit()
+        },
+        () => this.is_touch_device,
+      )
+      this.textInput.onCtrlLatch = (latched) => (this.ctrlLatched = latched)
+      // only touch input reads the cursor shape
+      if (this.is_touch_device) this.$client.on('cursor', this.onCursorImage)
+
       this._container.addEventListener('resize', this.onResize)
       this.onVolumeChanged(this.volume)
       this.onMutedChanged(this.muted)
@@ -548,6 +769,8 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
+      window.visualViewport?.addEventListener('resize', this.updateKeyboardView)
+      window.visualViewport?.addEventListener('scroll', this.updateKeyboardView)
       window.addEventListener('pagehide', this.resetKeyboard)
       document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
 
@@ -570,7 +793,7 @@
           return true
         }
 
-        this.$client.sendData('keydown', { key: this.keyMap(key) })
+        this.textInput.keyDown(key, this.keyMap(key))
       }
       this.keyboard.onkeyup = (key: number) => {
         if (!this.hosting || this.locked) {
@@ -582,17 +805,25 @@
           return
         }
 
-        this.$client.sendData('keyup', { key: this.keyMap(key) })
+        this.textInput.keyUp(key, this.keyMap(key))
       }
       this.keyboard.listenTo(this._overlay)
     }
 
     beforeDestroy() {
+      this.gestures.destroy()
+      this.tapKeyboard.cancel()
+      this.$client.off('cursor', this.onCursorImage)
+      window.clearTimeout(this.touchNoticeTimer)
+      window.clearTimeout(this.copyOfferTimer)
+      if (this.safeAreaProbe) this.safeAreaProbe.remove()
       if (this._wheelHandler) {
         document.removeEventListener('wheel', this._wheelHandler, { capture: true })
         this._wheelHandler = null
       }
       window.removeEventListener('blur', this.resetKeyboard)
+      window.visualViewport?.removeEventListener('resize', this.updateKeyboardView)
+      window.visualViewport?.removeEventListener('scroll', this.updateKeyboardView)
       window.removeEventListener('pagehide', this.resetKeyboard)
       document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
       this.observer.disconnect()
@@ -735,8 +966,11 @@
       this._resolution.open(event)
     }
 
-    openClipboard() {
-      this._clipboard.open()
+    openClipboard(hint?: string) {
+      if (!this._clipboard) return
+      // the panel sits at the top of the player, which the keyboard moves up
+      if (this.is_touch_device && this.keyboardOpen) this._overlay.blur()
+      this._clipboard.open(hint)
     }
 
     async syncClipboard() {
@@ -797,43 +1031,417 @@
       }
     }
 
-    onTouchHandler(e: TouchEvent) {
-      let first = e.changedTouches[0]
-      let type = ''
-      switch (e.type) {
-        case 'touchstart':
-          type = 'mousedown'
-          break
-        case 'touchmove':
-          type = 'mousemove'
-          break
-        case 'touchend':
-          type = 'mouseup'
-          break
-        default:
-          return
-      }
-
-      const simulatedEvent = new MouseEvent(type, {
-        bubbles: true,
-        cancelable: true,
-        view: window,
-        screenX: first.screenX,
-        screenY: first.screenY,
-        clientX: first.clientX,
-        clientY: first.clientY,
-      })
-      first.target.dispatchEvent(simulatedEvent)
+    onTouchStart(e: TouchEvent) {
+      this.gestures.touchStart(e)
     }
 
-    focusOverlay(e: MouseEvent) {
-      // Touch input is translated into an untrusted mouse event above. Keep the
-      // existing mobile-keyboard behavior while allowing a real mouse to focus
-      // the overlay on touch-capable devices.
-      if (this.is_touch_device && !e.isTrusted) {
+    onTouchMove(e: TouchEvent) {
+      this.gestures.touchMove(e)
+    }
+
+    onTouchEnd(e: TouchEvent) {
+      this.gestures.touchEnd(e)
+    }
+
+    onTouchCancel() {
+      this.gestures.touchCancel()
+    }
+
+    // maps a client point on the (possibly zoomed) video to remote screen pixels
+    remotePoint(p: Point) {
+      const { w, h } = this.$accessor.video.resolution
+      const rect = this._overlay.getBoundingClientRect()
+      return {
+        x: Math.max(0, Math.min(w - 1, Math.round((w / rect.width) * (p.x - rect.left)))),
+        y: Math.max(0, Math.min(h - 1, Math.round((h / rect.height) * (p.y - rect.top)))),
+      }
+    }
+
+    // remote pixels per client pixel at the current zoom
+    remotePerClient() {
+      return this.width / this._overlay.getBoundingClientRect().width
+    }
+
+    clickAt(here: Point, button: number) {
+      this.$client.sendData('mousemove', here)
+      this.$client.sendData('mousedown', { key: button })
+      this.$client.sendData('mouseup', { key: button })
+    }
+
+    onGestureBegin(p: Point) {
+      this.unmuteOnInteraction()
+      this.tapKeyboard.touchBegin()
+      if (this._controls) this._controls.wake()
+
+      if (!this.controlling && this.implicitHosting && !this.locked) {
+        this.$accessor.remote.request()
+      }
+      if (!this.hosting) {
+        this.$emit('control-attempt')
+      }
+      // without input the touch stays local, where only a pinch zooms
+      if (!this.inputEnabled) return false
+      this.$client.sendData('mousemove', this.remotePoint(p))
+      return true
+    }
+
+    onGestureTap(p: Point) {
+      const here = this.remotePoint(p)
+      this.clickAt(here, 1)
+      this.keyboardAnchor = p.y - this._player.getBoundingClientRect().top
+      // the click clears the remote selection
+      this.withdrawCopy()
+      this.tapKeyboard.tap(here, this.remotePerClient())
+      if (this.keyboardOpen) this.updateKeyboardView()
+    }
+
+    onGestureLongPress() {
+      if (navigator.vibrate) navigator.vibrate(15)
+    }
+
+    onGestureLongPressRelease(p: Point) {
+      this.clickAt(this.remotePoint(p), 3)
+    }
+
+    onGestureDragStart(p: Point) {
+      this.$client.sendData('mousemove', this.remotePoint(p))
+      this.pressedMouseButtons.add(1)
+      this.$client.sendData('mousedown', { key: 1 })
+    }
+
+    onGestureDragMove(p: Point) {
+      this.$client.sendData('mousemove', this.remotePoint(p))
+    }
+
+    onGestureDragEnd(p: Point) {
+      if (!this.pressedMouseButtons.has(1)) return
+      this.$client.sendData('mousemove', this.remotePoint(p))
+      this.pressedMouseButtons.delete(1)
+      this.$client.sendData('mouseup', { key: 1 })
+      this.offerCopy()
+    }
+
+    // a long-press drag usually selects text, so Copy shows on the controls for a while
+    offerCopy() {
+      this.copyOffered = true
+      window.clearTimeout(this.copyOfferTimer)
+      this.copyOfferTimer = window.setTimeout(this.withdrawCopy, COPY_OFFER_MS)
+    }
+
+    withdrawCopy() {
+      window.clearTimeout(this.copyOfferTimer)
+      this.copyOffered = false
+    }
+
+    onGestureScroll(dx: number, dy: number) {
+      // finger travel in remote pixels; content follows the finger, so scroll the opposite way
+      const units = TOUCH_SCROLL_UNITS_PER_PX * this.remotePerClient()
+      this.scrollRemainder.x -= dx * units
+      this.scrollRemainder.y -= dy * units
+
+      const x = Math.trunc(this.scrollRemainder.x)
+      const y = Math.trunc(this.scrollRemainder.y)
+      if (x === 0 && y === 0) return
+      this.scrollRemainder.x -= x
+      this.scrollRemainder.y -= y
+      this.$client.sendData('wheel', {
+        x: Math.max(-INT16_MAX, Math.min(INT16_MAX, x)),
+        y: Math.max(-INT16_MAX, Math.min(INT16_MAX, y)),
+      })
+    }
+
+    onGesturePinchStart(mid: Point, distance: number) {
+      this.tapKeyboard.touchBegin()
+      this.zoom.pinchStart(mid, distance)
+    }
+
+    onGesturePinchMove(mid: Point, distance: number) {
+      this.zoom.pinchMove(mid, distance)
+      this.applyZoom(false)
+    }
+
+    onGesturePinchEnd() {
+      if (!this.zoom.zoomed) this.resetZoom()
+    }
+
+    // the container box before the zoom transform, in client coordinates
+    containerBox(): Box {
+      const player = this._player.getBoundingClientRect()
+      return {
+        left: player.left + this._container.offsetLeft,
+        top: player.top + this._container.offsetTop,
+        width: this._container.offsetWidth,
+        height: this._container.offsetHeight,
+      }
+    }
+
+    // the area the zoomed video may fill: the player minus the control band
+    // and the part an overlaid soft keyboard covers
+    playerBox(): Box {
+      const player = this._player.getBoundingClientRect()
+      const { left, top, width } = player
+      const height = player.height - this.keyboardInset
+      const { mode, band } = this.touchLayout
+      if (mode === 'bottom') return { left, top, width, height: player.height - Math.max(band, this.keyboardInset) }
+      if (mode === 'left') return { left: left + band, top, width: width - band, height }
+      if (mode === 'right') return { left, top, width: width - band, height }
+      return { left, top, width, height }
+    }
+
+    maxZoom() {
+      const fit = this.width / Math.max(this._container.offsetWidth, 1)
+      return Math.min(8, Math.max(3, fit * 1.5))
+    }
+
+    applyZoom(animate: boolean) {
+      this._container.style.transition = animate ? 'transform 150ms ease-out' : ''
+      this._container.style.transform = this.zoom.transform
+      this.zoomScale = this.zoom.scale
+    }
+
+    resetZoom() {
+      if (!this.zoom) return
+      this.zoom.reset()
+      this.applyZoom(true)
+    }
+
+    onCursorImage(image: CursorImage) {
+      // classification is async; only the newest cursor image may apply
+      const seq = ++this.cursorSeq
+      const apply = (kind: CursorKind) => {
+        if (seq === this.cursorSeq) this.tapKeyboard.cursor(kind)
+      }
+
+      const cached = cachedCursorKind(image)
+      if (cached) {
+        apply(cached)
+      } else {
+        classifyCursor(image).then(apply)
+      }
+    }
+
+    // The Paste key reads the phone's clipboard inside the tap, where Safari
+    // allows it after the user confirms. Where it cannot, the clipboard panel
+    // takes the text instead.
+    pasteFromClipboard() {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        this.openClipboard('Paste here, then tap Paste into page')
+        return
+      }
+      navigator.clipboard.readText().then(
+        (text) => {
+          if (text) {
+            this.pasteText(text)
+          } else {
+            this.showTouchNotice('The clipboard is empty')
+          }
+        },
+        () => this.openClipboard('Clipboard access was not allowed. Paste here, then tap Paste into page'),
+      )
+    }
+
+    // Short text is typed, which also works in fields that block pasting and in
+    // code fields with one box per character. Longer text goes through the
+    // remote clipboard and Ctrl+V, as a desktop paste does, once the remote
+    // confirms the clipboard; without that it is typed.
+    pasteText(text: string) {
+      text = text.replace(/[\r\n]+$/, '')
+      if (!text || !this.inputEnabled) return
+      if (text.length <= TYPED_PASTE_MAX && !/[\r\n]/.test(text)) {
+        this.textInput.paste(text)
+        return
+      }
+      this.nextRemoteClipboard()
+        .then((remote) => {
+          if (remote !== text) throw new Error('the remote clipboard holds other text')
+          if (this.inputEnabled) this.pressShortcut(0x0076)
+        })
+        .catch(() => {
+          if (this.inputEnabled) this.textInput.paste(text)
+        })
+      this.$accessor.remote.setClipboard(text)
+      this.$accessor.remote.sendClipboard(text)
+    }
+
+    // Ctrl and a letter key, mapped for the remote keyboard
+    pressShortcut(keysym: number) {
+      const ctrl = this.keyMap(0xffe3)
+      const key = this.keyMap(keysym)
+      this.$client.sendData('keydown', { key: ctrl })
+      this.$client.sendData('keydown', { key })
+      this.$client.sendData('keyup', { key })
+      this.$client.sendData('keyup', { key: ctrl })
+    }
+
+    pressTouchKey(keysym: number) {
+      if (this.inputEnabled) this.textInput.key(keysym)
+    }
+
+    latchCtrl(latched: boolean) {
+      this.textInput.latchCtrl(latched)
+    }
+
+    // The Copy control copies the remote selection to the phone. Safari only
+    // lets a page write the clipboard inside the tap, so the write starts here
+    // with its text pending, and the text arrives when the remote clipboard
+    // changes after Ctrl+C.
+    copyToClipboard() {
+      if (!this.inputEnabled) return
+      if (typeof ClipboardItem === 'undefined' || !navigator.clipboard || !navigator.clipboard.write) {
+        // the panel shows the remote clipboard once Ctrl+C updates it
+        this.pressShortcut(0x0063)
+        this.openClipboard('Select the text and copy it')
         return
       }
 
+      let copied = false
+      const text = this.nextRemoteClipboard().then((t) => {
+        copied = true
+        return new Blob([t], { type: 'text/plain' })
+      })
+      this.copyWrites++
+      navigator.clipboard
+        .write([new ClipboardItem({ 'text/plain': text })])
+        .then(
+          () => this.showTouchNotice('Copied'),
+          () => {
+            if (copied) {
+              this.openClipboard('Copying to this device was not allowed. Select the text and copy it')
+            } else {
+              this.showTouchNotice('Nothing was copied')
+            }
+          },
+        )
+        .then(() => this.copyWrites--)
+
+      this.pressShortcut(0x0063)
+    }
+
+    // the remote clipboard text from the next update, rejected if none comes in time
+    nextRemoteClipboard() {
+      return new Promise<string>((resolve, reject) => {
+        const onClipboard = (text: string) => {
+          window.clearTimeout(timer)
+          this.$client.off('clipboard', onClipboard)
+          if (text) {
+            resolve(text)
+          } else {
+            reject(new Error('the remote clipboard is empty'))
+          }
+        }
+        const timer = window.setTimeout(() => {
+          this.$client.off('clipboard', onClipboard)
+          reject(new Error('the remote clipboard did not change'))
+        }, COPY_WAIT_MS)
+        this.$client.on('clipboard', onClipboard)
+      })
+    }
+
+    showTouchNotice(text: string) {
+      this.touchNotice = text
+      window.clearTimeout(this.touchNoticeTimer)
+      this.touchNoticeTimer = window.setTimeout(() => (this.touchNotice = null), TOUCH_NOTICE_MS)
+    }
+
+    focusForTyping() {
+      this.resetInputSentinel()
+      this._overlay.removeAttribute('inputmode')
+      if (document.activeElement !== this._overlay) {
+        this._overlay.focus({ preventScroll: true })
+      } else if (!this.keyboardOpen) {
+        // removing inputmode from a held focus raised the keyboard
+        this.onOverlayFocus()
+      }
+    }
+
+    // Focuses the overlay inside the tap without showing the keyboard. iOS
+    // raises the keyboard when inputmode="none" is removed from an element that
+    // was focused inside a gesture, so a text cursor that arrives after the
+    // finger lifts can still open it.
+    holdFocus() {
+      this._overlay.setAttribute('inputmode', 'none')
+      this._overlay.focus({ preventScroll: true })
+      if (document.activeElement === this._overlay) return true
+      this._overlay.removeAttribute('inputmode')
+      return false
+    }
+
+    // iOS overlays the soft keyboard on the layout viewport, and some pages
+    // shrink instead. Either way the video keeps its size while the keyboard is
+    // open and moves up to keep the last tap visible, and the keyboard button
+    // is lifted by the part of the player still covered.
+    updateKeyboardView() {
+      const area = (!this.fullscreen ? this._component : document.body).getBoundingClientRect()
+      const viewport = window.visualViewport
+      const visibleTop = viewport ? Math.max(area.top, viewport.offsetTop) : area.top
+      // the extra keys row sits on the keyboard, so the video stays above both
+      const visibleBottom =
+        (viewport ? Math.min(area.bottom, viewport.offsetTop + viewport.height) : area.bottom) -
+        (this.showTouchKeys ? TOUCH_KEYS_HEIGHT : 0)
+      // the layout position, which the pan transform (mid-transition, too) does not move
+      const parent = this._player.offsetParent
+      const top = (parent ? parent.getBoundingClientRect().top : 0) + this._player.offsetTop
+      const height = this._player.offsetHeight
+      const pan =
+        this.keyboardOpen && this.is_touch_device
+          ? keyboardPan({
+              top,
+              height,
+              anchor: this.keyboardAnchor,
+              current: this.keyboardPan,
+              visibleTop,
+              visibleBottom,
+            })
+          : 0
+      if (pan !== this.keyboardPan) {
+        this.keyboardPan = pan
+        this._player.style.transform = pan ? `translateY(${-pan}px)` : ''
+      }
+      this.keyboardInset = Math.max(0, Math.round(top + height - pan - visibleBottom))
+      this.touchKeysTop = Math.round(visibleBottom - (top - pan))
+    }
+
+    toggleMobileKeyboard() {
+      if (this.keyboardOpen) {
+        this._overlay.blur()
+      } else {
+        this.focusForTyping()
+      }
+    }
+
+    resetInputSentinel() {
+      if (!this.is_touch_device) return
+      this._overlay.value = INPUT_SENTINEL
+      this._overlay.setSelectionRange(INPUT_SENTINEL.length, INPUT_SENTINEL.length)
+    }
+
+    // Soft keyboards that report keyCode 229 (Android) deliver text only through
+    // input events, which the Guacamole keyboard does not handle.
+    onOverlayInput(e: Event) {
+      if (!this.is_touch_device) return
+      if (this.inputEnabled) {
+        const event = e as InputEvent
+        // AutoFill can put the text in dataTransfer instead of data
+        const data = event.data ?? (event.dataTransfer ? event.dataTransfer.getData('text/plain') : null)
+        this.textInput.input(event.inputType, data)
+      }
+      if (!this.textInput.composing) this.resetInputSentinel()
+    }
+
+    onOverlayKey(e: KeyboardEvent) {
+      this.textInput.keyEvent(e.type === 'keyup')
+    }
+
+    onCompositionStart() {
+      this.textInput.compositionStart()
+    }
+
+    onCompositionEnd(e: CompositionEvent) {
+      this.textInput.compositionEnd(e.data || '', this.inputEnabled)
+      this.resetInputSentinel()
+    }
+
+    focusOverlay() {
       const focus = () => {
         if (this.hosting && !this.locked) {
           this._overlay.focus()
@@ -859,7 +1467,7 @@
         return
       }
 
-      this.focusOverlay(e)
+      this.focusOverlay()
 
       this.sendMousePos(e)
       this.pressedMouseButtons.add(e.button + 1)
@@ -871,7 +1479,7 @@
         return
       }
 
-      this.focusOverlay(e)
+      this.focusOverlay()
       this.sendMousePos(e)
       this.pressedMouseButtons.delete(e.button + 1)
       this.$client.sendData('mouseup', { key: e.button + 1 })
@@ -942,6 +1550,13 @@
       if (!this.hosting || this.locked) return
 
       try {
+        // on touch devices a native paste goes the same way as the Paste key
+        if (this.is_touch_device) {
+          const text = event.clipboardData?.getData('text/plain')
+          if (text) this.pasteText(text)
+          return
+        }
+
         // Read clipboard text directly from the paste event. This is
         // synchronous and works in every browser — including Safari
         // cross-origin iframes that block navigator.clipboard.readText()
@@ -978,20 +1593,104 @@
     }
 
     onOverlayFocus() {
+      if (this.tapKeyboard.holding) return
+      this.keyboardOpen = true
       if (this.hosting) {
+        if (this.is_touch_device) this.$accessor.remote.releaseCapsLock()
         this.syncClipboard()
       }
     }
 
+    onOverlayBlur() {
+      if (this.ctrlLatched) this.textInput.latchCtrl(false)
+      this.tapKeyboard.blur()
+      this._overlay.removeAttribute('inputmode')
+      this.keyboardOpen = false
+      this.resetKeyboard()
+    }
+
     onResize() {
       const { offsetWidth, offsetHeight } = !this.fullscreen ? this._component : document.body
+      const size = { width: offsetWidth, height: offsetHeight }
+      if (
+        this.is_touch_device &&
+        keyboardShrink(this.keyboardOpen, { width: this.playerWidth, height: this.playerHeight }, size)
+      ) {
+        this.updateKeyboardView()
+        return
+      }
+      if (`${offsetWidth}px` !== this._player.style.width || `${offsetHeight}px` !== this._player.style.height) {
+        this.resetZoom()
+      }
       this._player.style.width = `${offsetWidth}px`
       this._player.style.height = `${offsetHeight}px`
-      const aspectPreservingMaxWidth = (this.horizontal / this.vertical) * offsetHeight
-      this._container.style.maxWidth = `${
-        !this.fullscreen ? Math.min(this.width, aspectPreservingMaxWidth) : aspectPreservingMaxWidth
-      }px`
+      this.playerWidth = offsetWidth
+      this.playerHeight = offsetHeight
+
+      const aspect = this.horizontal / this.vertical
+      const maxWidth = (height: number) => (!this.fullscreen ? Math.min(this.width, aspect * height) : aspect * height)
+
+      // Reserve a band outside the video for the touch controls, shrinking the
+      // video slightly if needed; with no room they overlay the stream instead.
+      const videoWidth = Math.min(offsetWidth, maxWidth(offsetHeight))
+      this.safeArea = this.safeAreaInsets()
+      this.touchLayout = this.showTouchControls
+        ? controlLayout(
+            offsetWidth,
+            offsetHeight,
+            videoWidth,
+            videoWidth / aspect,
+            this.safeArea,
+            this.controlPosition.side,
+          )
+        : { mode: 'overlay', band: 0 }
+      const { mode, band } = this.touchLayout
+      this._player.style.paddingBottom = mode === 'bottom' ? `${band}px` : ''
+      this._player.style.paddingLeft = mode === 'left' ? `${band}px` : ''
+      this._player.style.paddingRight = mode === 'right' ? `${band}px` : ''
+
+      this._container.style.maxWidth = `${maxWidth(offsetHeight - (mode === 'bottom' ? band : 0))}px`
       this._aspect.style.paddingBottom = `${(this.vertical / this.horizontal) * 100}%`
+      this.updateKeyboardView()
+    }
+
+    safeAreaInsets(): SafeArea {
+      if (!this.safeAreaProbe) {
+        this.safeAreaProbe = document.createElement('div')
+        this.safeAreaProbe.style.cssText =
+          'position:fixed;visibility:hidden;pointer-events:none;' +
+          'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)'
+        document.body.appendChild(this.safeAreaProbe)
+      }
+      const style = getComputedStyle(this.safeAreaProbe)
+      return {
+        top: parseFloat(style.paddingTop) || 0,
+        bottom: parseFloat(style.paddingBottom) || 0,
+        left: parseFloat(style.paddingLeft) || 0,
+        right: parseFloat(style.paddingRight) || 0,
+      }
+    }
+
+    onControlMove(position: ControlPosition) {
+      this.controlPosition = position
+      set(CONTROL_POSITION_KEY, encodePosition(position))
+      this.onResize()
+    }
+
+    @Watch('showTouchControls')
+    onShowTouchControls() {
+      this.$nextTick(this.onResize)
+    }
+
+    // the size kept while the keyboard was open is refitted once it closes
+    @Watch('keyboardOpen')
+    onKeyboardOpenChanged(open: boolean) {
+      if (!this.is_touch_device) return
+      if (open) {
+        this.updateKeyboardView()
+      } else {
+        this.onResize()
+      }
     }
 
     @Watch('focused')
@@ -1007,11 +1706,6 @@
       if (this.focused && this.hosting && !this.locked) {
         this._overlay.focus()
       }
-    }
-
-    openMobileKeyboard() {
-      // focus opens the keyboard on mobile
-      this._overlay.focus()
     }
   }
 </script>
