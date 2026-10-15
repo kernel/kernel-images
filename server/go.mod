@@ -1,6 +1,6 @@
 module github.com/kernel/kernel-images/server
 
-go 1.25.0
+go 1.27.2
 
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
