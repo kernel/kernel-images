@@ -179,6 +179,14 @@ func (s *ApiService) ProcessExec(ctx context.Context, request oapi.ProcessExecRe
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
 	cmd.Stderr = &stderrBuf
+	// Run the command in its own process group so a timeout stops every
+	// process still in that group. Its children inherit stdout and stderr, and
+	// cmd.Wait waits for them to close, so killing only the direct child does
+	// not end the call.
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
 
 	// Handle timeout if provided
 	start := time.Now()
@@ -199,7 +207,7 @@ func (s *ApiService) ProcessExec(ctx context.Context, request oapi.ProcessExecRe
 	go func() { done <- cmd.Wait() }()
 	select {
 	case <-ctx.Done():
-		_ = cmd.Process.Kill()
+		_ = signalChildProcessGroup(cmd, killSignal)
 		<-done // ensure wait returns
 		return oapi.ProcessExec500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "process timed out"}}, nil
 	case err := <-done:

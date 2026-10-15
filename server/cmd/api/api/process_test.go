@@ -6,7 +6,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"os"
 	"os/user"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -39,6 +42,37 @@ func TestProcessExec(t *testing.T) {
 	errB, _ := base64.StdEncoding.DecodeString(*r200.StderrB64)
 	require.Equal(t, "out", string(out), "stdout mismatch")
 	require.Equal(t, "err", string(errB), "stderr mismatch")
+}
+
+func TestProcessExec_TimeoutKillsDescendants(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("process-group lifecycle is only enforced on Linux")
+	}
+	t.Parallel()
+	ctx := context.Background()
+	svc := &ApiService{procs: make(map[string]*processHandle)}
+
+	// The shell waits on a background child that inherited its stdout and
+	// stderr, so the call can only end once that child is gone too.
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	args := []string{"-c", `sleep 30 & echo $! > "$1"; wait`, "sh", pidFile}
+	timeout := 1
+	body := &oapi.ProcessExecRequest{Command: "sh", Args: &args, TimeoutSec: &timeout}
+	start := time.Now()
+	resp, err := svc.ProcessExec(ctx, oapi.ProcessExecRequestObject{Body: body})
+	elapsed := time.Since(start)
+	require.NoError(t, err, "ProcessExec error")
+	r500, ok := resp.(oapi.ProcessExec500JSONResponse)
+	require.True(t, ok, "unexpected resp type: %T", resp)
+	require.Equal(t, "process timed out", r500.Message)
+	require.Less(t, elapsed, 10*time.Second, "exec with timeout_sec=1 returned after %v", elapsed)
+
+	raw, err := os.ReadFile(pidFile)
+	require.NoError(t, err, "read background pid")
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	require.NoError(t, err, "parse background pid %q", raw)
+	require.Eventually(t, func() bool { return !processAlive(pid) }, 3*time.Second, 20*time.Millisecond,
+		"timeout must kill the command's background child")
 }
 
 func TestProcessSpawnStatusAndStream(t *testing.T) {
