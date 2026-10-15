@@ -187,6 +187,8 @@ describe('video touch input', () => {
     remotePerClient: () => 1,
     $client: { sendData: (event: string, data: unknown) => sent.push(`${event} ${JSON.stringify(data)}`) },
     tapKeyboard: { tap: () => {}, cancel: () => sent.push('keyboard cancel') },
+    focusKeyboard: { cursorTap: () => {}, cancel: () => sent.push('focus keyboard cancel') },
+    $accessor: { video: { resolution: { w: 1920, h: 1080 } } },
     gestures: { cancel: () => sent.push('gestures cancel') },
     resetZoom: () => sent.push('reset zoom'),
     withdrawCopy: () => {},
@@ -220,7 +222,7 @@ describe('video touch input', () => {
     methods.onInputEnabledChanged.call(ctx, true)
     expect(sent).toEqual([])
     methods.onInputEnabledChanged.call(ctx, false)
-    expect(sent).toEqual(['gestures cancel', 'keyboard cancel'])
+    expect(sent).toEqual(['gestures cancel', 'keyboard cancel', 'focus keyboard cancel'])
   })
 })
 
@@ -233,6 +235,7 @@ describe('touch keyboard opening', () => {
       is_touch_device: touch,
       keyboardOpen: false,
       tapKeyboard: { holding: false },
+      focusKeyboard: { holding: false },
       $accessor: { remote: { releaseCapsLock: () => calls.push('release caps lock') } },
       syncClipboard: () => calls.push('sync clipboard'),
     }
@@ -243,7 +246,8 @@ describe('touch keyboard opening', () => {
   test('turns the remote Caps Lock off when the soft keyboard opens', () => {
     const { ctx, calls } = focus(true)
     expect(ctx.keyboardOpen).toBe(true)
-    expect(calls).toEqual(['release caps lock', 'sync clipboard'])
+    // reading the clipboard would make iOS show its Paste callout
+    expect(calls).toEqual(['release caps lock'])
   })
 
   test('leaves the remote Caps Lock alone on desktop', () => {
@@ -445,7 +449,7 @@ describe('clipboard panel', () => {
     const ctx = {
       is_touch_device: true,
       keyboardOpen: true,
-      _overlay: { blur: () => calls.push('blur') },
+      blurOverlay: () => calls.push('blur'),
       _clipboard: { open: (hint: string) => calls.push(`open ${hint}`) },
     }
     methods.openClipboard.call(ctx, 'Paste here')

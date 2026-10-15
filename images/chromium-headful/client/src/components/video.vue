@@ -91,7 +91,7 @@
         :mode="touchLayout.mode"
         :position="controlPosition"
         :safe-area="safeArea"
-        :keyboard-open="keyboardOpen"
+        :keyboard-open="keyboardShown"
         :area-width="playerWidth"
         :area-height="playerHeight"
         :keyboard-inset="keyboardInset"
@@ -318,8 +318,13 @@
   } from '~/utils/touch-controls'
   import { get, set } from '~/utils/localstorage'
   import { CursorImage, CursorKind, cachedCursorKind, classifyCursor } from '~/utils/cursor-shape'
-  import { TextInput, XK_RETURN, focusNeedsGesture } from '~/utils/text-input'
-  import { TapKeyboard, TapKeyboardMode } from '~/utils/tap-keyboard'
+  import { TextInput, XK_BACKSPACE, XK_RETURN, focusNeedsGesture } from '~/utils/text-input'
+  import { Clock, TapKeyboard, TapKeyboardMode } from '~/utils/tap-keyboard'
+  import { FocusKeyboard } from '~/utils/focus-keyboard'
+  import { RemoteField, RemoteFocus, focusUrls } from '~/utils/remote-focus'
+  import { SoftKeyboard, isPhone } from '~/utils/soft-keyboard'
+  import { DEFAULT_KEYBOARD, applyKeyboard, keyboardFor, setInputMode } from '~/utils/field-keyboard'
+  import { TypedText, isModifier, typesIntoOverlay } from '~/utils/typed-text'
   import { keyboardPan, keyboardShrink } from '~/utils/keyboard-pan'
 
   import Emote from './emote.vue'
@@ -346,6 +351,10 @@
   const TYPED_PASTE_MAX = 32
   // kept in the overlay so soft keyboards that only emit input events still report backspace
   const INPUT_SENTINEL = ' '
+
+  // a keyboard that goes down this soon after the overlay took focus or changed
+  // keyboards is iOS swapping it, not the user dismissing it
+  const KEYBOARD_SETTLE_MS = 600
 
   const CONTROL_POSITION_KEY = 'touch_control_position'
 
@@ -390,6 +399,25 @@
 
     private gestures!: TouchGestures
     private tapKeyboard!: TapKeyboard
+    private focusKeyboard!: FocusKeyboard
+    private remoteFocus?: RemoteFocus
+    private blurUrl?: string
+    private softKeyboard!: SoftKeyboard
+    // the soft keyboard is up, as far as the viewport shows
+    private softKeyboardUp = false
+    private keyboardMeasurable = false
+    // the overlay has focus, held or not
+    private overlayFocused = false
+    private keyboardChangedAt = -Infinity
+    // the overlay is focused with inputmode="none", waiting to raise the keyboard
+    private overlayHeld = false
+    // the overlay is being blurred by this client, not dismissed by the user
+    private ownBlur = false
+    private typedText!: TypedText
+    // the overlay keeps the typed text, for autocorrect in a plain text field
+    private keepText = false
+    // keys typed into the overlay instead of sent, whose keyup is not sent either
+    private overlayKeys = new Set<number>()
     private textInput!: TextInput
     private zoom!: ZoomPan
     private zoomScale = 1
@@ -553,15 +581,28 @@
       return this.zoomScale > 1.01
     }
 
-    // ?tapKeyboard=auto (default) raises the keyboard when a tap lands on text,
-    // always raises it on every tap, off leaves it to the keyboard button
+    // ?tapKeyboard=auto (default) raises the keyboard when a tap focuses a text
+    // field, always raises it on every tap, off leaves it to the keyboard button
     get tapKeyboardMode(): TapKeyboardMode {
       const value = new URL(location.href).searchParams.get('tapKeyboard')
       return value === 'always' || value === 'off' ? value : 'auto'
     }
 
+    // the extra keys row sits on the soft keyboard, so it shows only with one
     get showTouchKeys() {
-      return this.keyboardOpen && this.showTouchControls
+      return this.keyboardShown && this.showTouchControls
+    }
+
+    // Whether the soft keyboard is on screen, which the keys row, the keyboard
+    // control's Hide and the control's action all follow. On a phone, or once
+    // the viewport has shown a keyboard, it is a focused overlay with the
+    // keyboard measured up, however the focus came about; a focused overlay
+    // with no keyboard, after iOS dismissed it or refused it, does not count.
+    // Otherwise, as with a tablet's hardware keyboard, the focus for typing is
+    // all there is to go by.
+    get keyboardShown() {
+      if (!this.keyboardMeasurable) return this.keyboardOpen
+      return this.overlayFocused && this.softKeyboardUp
     }
 
     get inputEnabled() {
@@ -575,6 +616,20 @@
       if (enabled || !this.gestures) return
       this.gestures.cancel()
       this.tapKeyboard.cancel()
+      this.focusKeyboard.cancel()
+    }
+
+    // The focus stream runs while this client can type and is shown, so a
+    // phone that is put away does not keep it open.
+    @Watch('inputEnabled')
+    @Watch('connected')
+    updateFocusStream() {
+      if (!this.remoteFocus) return
+      if (this.inputEnabled && this.connected && !document.hidden) {
+        this.remoteFocus.start()
+      } else {
+        this.remoteFocus.stop()
+      }
     }
 
     @Watch('width')
@@ -686,28 +741,63 @@
         onPinchMove: this.onGesturePinchMove,
         onPinchEnd: this.onGesturePinchEnd,
       })
+      const clock: Clock = {
+        now: () => performance.now(),
+        setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+        clearTimeout: (id) => window.clearTimeout(id),
+      }
       this.tapKeyboard = new TapKeyboard(
         this.tapKeyboardMode,
         focusNeedsGesture(navigator),
         {
           keyboardOpen: () => this.keyboardOpen,
-          focus: this.focusForTyping,
+          focus: () => this.focusForTyping(null),
           hold: this.holdFocus,
-          release: () => this._overlay.blur(),
+          release: this.blurOverlay,
         },
-        {
-          now: () => performance.now(),
-          setTimeout: (fn, ms) => window.setTimeout(fn, ms),
-          clearTimeout: (id) => window.clearTimeout(id),
-        },
+        clock,
       )
+      this.focusKeyboard = new FocusKeyboard(
+        this.tapKeyboardMode,
+        focusNeedsGesture(navigator),
+        {
+          keyboardOpen: () => this.keyboardOpen,
+          focus: this.focusForTyping,
+          update: (field) => {
+            this.keyboardChangedAt = performance.now()
+            setInputMode(this._overlay, keyboardFor(field).inputmode)
+          },
+          hold: this.holdFocus,
+          release: this.blurOverlay,
+        },
+        clock,
+      )
+      const urls = this.is_touch_device ? focusUrls(location) : null
+      if (urls) {
+        this.blurUrl = urls.blur
+        this.remoteFocus = new RemoteFocus(
+          urls.stream,
+          (url) => new EventSource(url),
+          () => performance.now(),
+          (state) => this.focusKeyboard.focus(state.focus, state.pageFocused),
+        )
+        this.updateFocusStream()
+      }
       this.textInput = new TextInput(
         (event, key) => {
           this.$client.sendData(event, { key })
-          if (event === 'keydown' && key === XK_RETURN && this.is_touch_device) this.tapKeyboard.submit()
+          if (event !== 'keydown' || !this.is_touch_device) return
+          // the focus stream sees a submit as a blur
+          if (key === XK_RETURN && !this.focusLive) this.tapKeyboard.submit()
+          // a key from anywhere but the overlay's own edits moved the remote caret or changed its text
+          if (this.keepText && !this.typedText.editing && !isModifier(key)) this.resetInputSentinel()
         },
         () => this.is_touch_device,
       )
+      this.typedText = new TypedText(INPUT_SENTINEL, {
+        type: (text) => this.textInput.type(text),
+        backspace: () => this.textInput.key(XK_BACKSPACE),
+      })
       this.textInput.onCtrlLatch = (latched) => (this.ctrlLatched = latched)
       // only touch input reads the cursor shape
       if (this.is_touch_device) this.$client.on('cursor', this.onCursorImage)
@@ -769,10 +859,16 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
+      this.softKeyboard = new SoftKeyboard(isPhone(navigator.userAgent))
+      this.keyboardMeasurable = this.softKeyboard.measurable
+      this.measureSoftKeyboard()
+      // measured first, so the pan and the extra keys row see the keyboard
+      window.visualViewport?.addEventListener('resize', this.measureSoftKeyboard)
       window.visualViewport?.addEventListener('resize', this.updateKeyboardView)
       window.visualViewport?.addEventListener('scroll', this.updateKeyboardView)
       window.addEventListener('pagehide', this.resetKeyboard)
       document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
+      document.addEventListener('visibilitychange', this.updateFocusStream)
 
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
@@ -793,6 +889,14 @@
           return true
         }
 
+        // Text and Backspace go into the overlay, where autocorrect sees them,
+        // and reach the remote through its edits.
+        const modified = ctrl || meta || this.keyboard.modifiers.alt || this.ctrlLatched
+        if (this.keepText && !modified && typesIntoOverlay(key)) {
+          this.overlayKeys.add(key)
+          return true
+        }
+
         this.textInput.keyDown(key, this.keyMap(key))
       }
       this.keyboard.onkeyup = (key: number) => {
@@ -805,6 +909,8 @@
           return
         }
 
+        if (this.overlayKeys.delete(key)) return
+
         this.textInput.keyUp(key, this.keyMap(key))
       }
       this.keyboard.listenTo(this._overlay)
@@ -813,6 +919,7 @@
     beforeDestroy() {
       this.gestures.destroy()
       this.tapKeyboard.cancel()
+      this.focusKeyboard.cancel()
       this.$client.off('cursor', this.onCursorImage)
       window.clearTimeout(this.touchNoticeTimer)
       window.clearTimeout(this.copyOfferTimer)
@@ -823,9 +930,12 @@
       }
       window.removeEventListener('blur', this.resetKeyboard)
       window.visualViewport?.removeEventListener('resize', this.updateKeyboardView)
+      window.visualViewport?.removeEventListener('resize', this.measureSoftKeyboard)
       window.visualViewport?.removeEventListener('scroll', this.updateKeyboardView)
       window.removeEventListener('pagehide', this.resetKeyboard)
       document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
+      document.removeEventListener('visibilitychange', this.updateFocusStream)
+      if (this.remoteFocus) this.remoteFocus.stop()
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
       /* Guacamole Keyboard does not provide destroy functions */
@@ -969,7 +1079,7 @@
     openClipboard(hint?: string) {
       if (!this._clipboard) return
       // the panel sits at the top of the player, which the keyboard moves up
-      if (this.is_touch_device && this.keyboardOpen) this._overlay.blur()
+      if (this.is_touch_device && this.keyboardOpen) this.blurOverlay()
       this._clipboard.open(hint)
     }
 
@@ -1071,6 +1181,7 @@
     onGestureBegin(p: Point) {
       this.unmuteOnInteraction()
       this.tapKeyboard.touchBegin()
+      this.focusKeyboard.touchBegin()
       if (this._controls) this._controls.wake()
 
       if (!this.controlling && this.implicitHosting && !this.locked) {
@@ -1091,7 +1202,20 @@
       this.keyboardAnchor = p.y - this._player.getBoundingClientRect().top
       // the click clears the remote selection
       this.withdrawCopy()
-      this.tapKeyboard.tap(here, this.remotePerClient())
+      // the click can move the remote caret, which autocorrect must not reach back past
+      if (this.keepText && !this.textInput.composing) this.resetInputSentinel()
+      // Taps on the page follow the remote focus. The browser's own UI, such
+      // as the address bar, and a live view without the focus stream use the
+      // cursor shape.
+      const stream = this.$accessor.video.resolution
+      const focus = this.focusLive ? this.remoteFocus : undefined
+      if (focus && focus.inViewport(here, stream)) {
+        this.tapKeyboard.cancel()
+        this.focusKeyboard.tap(focus.fieldAt(here, stream))
+      } else {
+        this.focusKeyboard.cursorTap(!!focus)
+        this.tapKeyboard.tap(here, this.remotePerClient())
+      }
       if (this.keyboardOpen) this.updateKeyboardView()
     }
 
@@ -1144,6 +1268,7 @@
       if (x === 0 && y === 0) return
       this.scrollRemainder.x -= x
       this.scrollRemainder.y -= y
+      if (this.remoteFocus) this.remoteFocus.scrolled()
       this.$client.sendData('wheel', {
         x: Math.max(-INT16_MAX, Math.min(INT16_MAX, x)),
         y: Math.max(-INT16_MAX, Math.min(INT16_MAX, y)),
@@ -1152,6 +1277,7 @@
 
     onGesturePinchStart(mid: Point, distance: number) {
       this.tapKeyboard.touchBegin()
+      this.focusKeyboard.touchBegin()
       this.zoom.pinchStart(mid, distance)
     }
 
@@ -1265,6 +1391,7 @@
 
     // Ctrl and a letter key, mapped for the remote keyboard
     pressShortcut(keysym: number) {
+      if (this.keepText) this.resetInputSentinel()
       const ctrl = this.keyMap(0xffe3)
       const key = this.keyMap(keysym)
       this.$client.sendData('keydown', { key: ctrl })
@@ -1343,15 +1470,33 @@
       this.touchNoticeTimer = window.setTimeout(() => (this.touchNotice = null), TOUCH_NOTICE_MS)
     }
 
-    focusForTyping() {
-      this.resetInputSentinel()
-      this._overlay.removeAttribute('inputmode')
-      if (document.activeElement !== this._overlay) {
-        this._overlay.focus({ preventScroll: true })
-      } else if (!this.keyboardOpen) {
-        // removing inputmode from a held focus raised the keyboard
+    // Raises the keyboard set up for a remote field, or the default keyboard
+    // for null. inGesture: inside a tap, where the overlay can be refocused.
+    focusForTyping(field: RemoteField | null, inGesture = true) {
+      const keyboard = keyboardFor(field)
+      this.keyboardChangedAt = performance.now()
+      const focused = document.activeElement === this._overlay
+      if (focused && this.overlayHeld) {
+        // A held focus keeps the attributes it was focused with, and replacing
+        // inputmode="none" raises the keyboard.
+        this.overlayHeld = false
+        setInputMode(this._overlay, keyboard.inputmode)
+        this.keepText = false
+        this.resetInputSentinel()
         this.onOverlayFocus()
+        return
       }
+      // Inside a tap the overlay is focused afresh when the keyboard needs other
+      // attributes, which it reads on focus, or when the overlay kept its focus
+      // without a keyboard on screen, which a focus it already has would not raise.
+      const changed = applyKeyboard(this._overlay, keyboard)
+      if (focused && inGesture && (changed || !this.keyboardShown)) {
+        this.blurOverlay()
+        applyKeyboard(this._overlay, keyboard)
+      }
+      this.keepText = keyboard.keepText
+      this.resetInputSentinel()
+      if (document.activeElement !== this._overlay) this._overlay.focus({ preventScroll: true })
     }
 
     // Focuses the overlay inside the tap without showing the keyboard. iOS
@@ -1359,11 +1504,48 @@
     // was focused inside a gesture, so a text cursor that arrives after the
     // finger lifts can still open it.
     holdFocus() {
+      applyKeyboard(this._overlay, DEFAULT_KEYBOARD)
       this._overlay.setAttribute('inputmode', 'none')
       this._overlay.focus({ preventScroll: true })
-      if (document.activeElement === this._overlay) return true
+      this.overlayHeld = document.activeElement === this._overlay
+      if (this.overlayHeld) return true
       this._overlay.removeAttribute('inputmode')
       return false
+    }
+
+    blurOverlay() {
+      this.ownBlur = true
+      this._overlay.blur()
+      this.ownBlur = false
+    }
+
+    // Closes the keyboard and blurs the remote's focused field too, as
+    // Safari's Done does, so the next tap on the field is a new focus.
+    hideKeyboard() {
+      this.blurOverlay()
+      this.blurRemote()
+    }
+
+    // The field's seq lets the remote drop the blur if the page was tapped
+    // again before it arrived.
+    blurRemote() {
+      const focus = this.focusLive && this.remoteFocus!.state!.focus
+      if (!this.blurUrl || !focus || !this.inputEnabled) return
+      fetch(`${this.blurUrl}&seq=${focus.seq || 0}`, { method: 'POST', keepalive: true }).catch(() => {})
+    }
+
+    // iOS can dismiss its keyboard and leave the overlay focused. That is a
+    // Done for the remote too, and the overlay is blurred to match.
+    measureSoftKeyboard() {
+      const viewport = window.visualViewport
+      if (!viewport || !this.is_touch_device) return
+      const change = this.softKeyboard.measure(viewport, window.innerHeight)
+      this.softKeyboardUp = this.softKeyboard.up
+      this.keyboardMeasurable = this.softKeyboard.measurable
+      const settled = performance.now() - this.keyboardChangedAt > KEYBOARD_SETTLE_MS
+      if (change === 'down' && this.keyboardOpen && document.activeElement === this._overlay && settled) {
+        this.hideKeyboard()
+      }
     }
 
     // iOS overlays the soft keyboard on the layout viewport, and some pages
@@ -1402,15 +1584,21 @@
     }
 
     toggleMobileKeyboard() {
-      if (this.keyboardOpen) {
-        this._overlay.blur()
+      if (this.keyboardShown) {
+        this.hideKeyboard()
       } else {
-        this.focusForTyping()
+        this.focusForTyping(this.focusLive ? this.focusKeyboard.field : null)
+        this.focusKeyboard.opened()
       }
+    }
+
+    get focusLive() {
+      return !!this.remoteFocus && this.remoteFocus.live
     }
 
     resetInputSentinel() {
       if (!this.is_touch_device) return
+      this.typedText.reset()
       this._overlay.value = INPUT_SENTINEL
       this._overlay.setSelectionRange(INPUT_SENTINEL.length, INPUT_SENTINEL.length)
     }
@@ -1419,6 +1607,11 @@
     // input events, which the Guacamole keyboard does not handle.
     onOverlayInput(e: Event) {
       if (!this.is_touch_device) return
+      if (this.keepText) {
+        const kept = this.inputEnabled && this.typedText.edit(this._overlay.value)
+        if (!kept && !this.textInput.composing) this.resetInputSentinel()
+        return
+      }
       if (this.inputEnabled) {
         const event = e as InputEvent
         // AutoFill can put the text in dataTransfer instead of data
@@ -1437,8 +1630,9 @@
     }
 
     onCompositionEnd(e: CompositionEvent) {
-      this.textInput.compositionEnd(e.data || '', this.inputEnabled)
-      this.resetInputSentinel()
+      // the overlay's edits already sent a composition it keeps
+      this.textInput.compositionEnd(e.data || '', this.inputEnabled && !this.keepText)
+      if (!this.keepText || !this.inputEnabled || !this.typedText.edit(this._overlay.value)) this.resetInputSentinel()
     }
 
     focusOverlay() {
@@ -1593,17 +1787,28 @@
     }
 
     onOverlayFocus() {
-      if (this.tapKeyboard.holding) return
+      this.overlayFocused = true
+      if (this.tapKeyboard.holding || this.focusKeyboard.holding) return
       this.keyboardOpen = true
-      if (this.hosting) {
-        if (this.is_touch_device) this.$accessor.remote.releaseCapsLock()
+      if (!this.hosting) return
+      // Reading the clipboard makes iOS show its Paste callout, and hold back
+      // the keyboard while it does; on touch devices the Paste control reads it.
+      if (this.is_touch_device) {
+        this.$accessor.remote.releaseCapsLock()
+      } else {
         this.syncClipboard()
       }
     }
 
     onOverlayBlur() {
+      // the keyboard's own Done, or another dismissal by the user; leaving the
+      // page for another app or tab keeps the remote's focus
+      if (!this.ownBlur && this.keyboardOpen && document.hasFocus()) this.blurRemote()
+      this.overlayHeld = false
+      this.overlayFocused = false
       if (this.ctrlLatched) this.textInput.latchCtrl(false)
       this.tapKeyboard.blur()
+      this.focusKeyboard.blur()
       this._overlay.removeAttribute('inputmode')
       this.keyboardOpen = false
       this.resetKeyboard()

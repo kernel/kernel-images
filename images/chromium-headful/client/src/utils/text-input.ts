@@ -160,7 +160,8 @@ export class TextInput {
     this.composed = text
   }
 
-  private type(text: string) {
+  // types text as given, line breaks included
+  type(text: string) {
     for (const ch of Array.from(text)) this.press(charToKeysym(ch))
   }
 
