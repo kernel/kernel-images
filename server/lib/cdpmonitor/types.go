@@ -116,7 +116,6 @@ type networkReqState struct {
 	method       string
 	url          string
 	headers      json.RawMessage
-	postData     string
 	resourceType string
 	loaderID     string
 	frameID      string
