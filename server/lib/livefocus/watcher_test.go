@@ -121,3 +121,11 @@ func TestServeHTTPStreamsStates(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, `data: {"focus":{"type":"password"},"fields":[],"viewport":null,"pageFocused":false,"screen":null}`, strings.TrimSpace(line))
 }
+
+func TestHandleBlurWithoutABrowser(t *testing.T) {
+	w := New(noBrowser{}, slog.Default())
+	defer w.Close()
+	rec := httptest.NewRecorder()
+	w.HandleBlur(rec, httptest.NewRequest(http.MethodPost, "/live-view/focus/blur", nil))
+	require.Equal(t, http.StatusNoContent, rec.Code)
+}

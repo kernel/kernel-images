@@ -1,6 +1,7 @@
 package livefocus
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -23,8 +24,10 @@ type fakeBrowser struct {
 	failWorlds int
 	frameGone  bool
 	oopif      bool
-	methods    map[string]int
-	worlds     map[string]int
+	// the first report has a focused text field
+	focused bool
+	methods map[string]int
+	worlds  map[string]int
 }
 
 func (f *fakeBrowser) serve(t *testing.T) string {
@@ -54,6 +57,7 @@ func (f *fakeBrowser) serve(t *testing.T) string {
 				Params    struct {
 					TargetID string `json:"targetId"`
 					FrameID  string `json:"frameId"`
+					ObjectID string `json:"objectId"`
 				} `json:"params"`
 			}
 			require.NoError(t, json.Unmarshal(data, &request))
@@ -113,13 +117,24 @@ func (f *fakeBrowser) serve(t *testing.T) string {
 			case "Runtime.evaluate":
 				respond(map[string]any{"result": map[string]any{"type": "object", "objectId": "watcher"}})
 			case "Runtime.callFunctionOn":
+				switch {
+				case strings.Contains(string(data), "this.blur()"):
+					f.mu.Lock()
+					f.methods["blur"]++
+					f.methods["blur "+request.SessionID+" "+request.Params.ObjectID]++
+					f.mu.Unlock()
+					respond(map[string]any{"result": map[string]any{"type": "boolean", "value": true}})
 				// the first poll reports; later ones wait for a change that never comes
-				if strings.Contains(string(data), `"value":0`) {
-					respond(map[string]any{"result": map[string]any{"type": "object", "value": map[string]any{
+				case strings.Contains(string(data), `"value":0`):
+					report := map[string]any{
 						"v": 1, "top": true, "visible": true, "focused": true, "frames": 0,
 						"viewport": map[string]any{"w": 390, "h": 757, "dpr": 1, "screenW": 390, "screenH": 844},
 						"fields":   []any{},
-					}}})
+					}
+					if f.focused {
+						report["focus"] = map[string]any{"type": "text"}
+					}
+					respond(map[string]any{"result": map[string]any{"type": "object", "value": report}})
 				}
 			case "Browser.getWindowForTarget":
 				respond(map[string]any{"windowId": 1, "bounds": map[string]any{"left": 0, "top": 0, "width": 390, "height": 844}})
@@ -189,4 +204,29 @@ func TestAnOutOfProcessFrameIsWatchedThroughItsOwnSession(t *testing.T) {
 	require.Eventually(t, func() bool { return browser.worldsFor("oopif-session", "oopif") > 0 }, 5*time.Second, 10*time.Millisecond)
 	time.Sleep(10 * retryDelay)
 	require.LessOrEqual(t, browser.worldsFor("session", "oopif"), injectAttempts)
+}
+
+func TestBlurGoesToTheFocusedFramesWatcher(t *testing.T) {
+	browser := newFakeBrowser()
+	browser.focused = true
+	w := New(&staticUpstream{url: browser.serve(t)}, slog.Default())
+	defer w.Close()
+	states, unsubscribe := w.Subscribe()
+	defer unsubscribe()
+	waitFor(t, states, "the focused field", func(s State) bool { return s.Focus != nil })
+
+	require.NoError(t, w.Blur(context.Background()))
+	require.Equal(t, 1, browser.count("blur session watcher"))
+}
+
+func TestBlurWithNothingFocusedSendsNothing(t *testing.T) {
+	browser := newFakeBrowser()
+	w := New(&staticUpstream{url: browser.serve(t)}, slog.Default())
+	defer w.Close()
+	states, unsubscribe := w.Subscribe()
+	defer unsubscribe()
+	waitFor(t, states, "the page", func(s State) bool { return s.Viewport != nil })
+
+	require.NoError(t, w.Blur(context.Background()))
+	require.Zero(t, browser.count("blur"))
 }

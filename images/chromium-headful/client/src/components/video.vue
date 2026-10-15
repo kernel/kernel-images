@@ -321,7 +321,8 @@
   import { TextInput, XK_BACKSPACE, XK_RETURN, focusNeedsGesture } from '~/utils/text-input'
   import { Clock, TapKeyboard, TapKeyboardMode } from '~/utils/tap-keyboard'
   import { FocusKeyboard } from '~/utils/focus-keyboard'
-  import { RemoteField, RemoteFocus, focusStreamUrl } from '~/utils/remote-focus'
+  import { RemoteField, RemoteFocus, focusUrls } from '~/utils/remote-focus'
+  import { SoftKeyboard } from '~/utils/soft-keyboard'
   import { DEFAULT_KEYBOARD, applyKeyboard, keyboardFor, setInputMode } from '~/utils/field-keyboard'
   import { TypedText, isModifier, typesIntoOverlay } from '~/utils/typed-text'
   import { keyboardPan, keyboardShrink } from '~/utils/keyboard-pan'
@@ -350,6 +351,10 @@
   const TYPED_PASTE_MAX = 32
   // kept in the overlay so soft keyboards that only emit input events still report backspace
   const INPUT_SENTINEL = ' '
+
+  // a keyboard that goes down this soon after the overlay took focus or changed
+  // keyboards is iOS swapping it, not the user dismissing it
+  const KEYBOARD_SETTLE_MS = 600
 
   const CONTROL_POSITION_KEY = 'touch_control_position'
 
@@ -396,6 +401,16 @@
     private tapKeyboard!: TapKeyboard
     private focusKeyboard!: FocusKeyboard
     private remoteFocus?: RemoteFocus
+    private blurUrl?: string
+    private softKeyboard!: SoftKeyboard
+    // the soft keyboard is up, as far as the viewport shows
+    private softKeyboardUp = false
+    private keyboardMeasurable = false
+    private keyboardChangedAt = -Infinity
+    // the overlay is focused with inputmode="none", waiting to raise the keyboard
+    private overlayHeld = false
+    // the overlay is being blurred by this client, not dismissed by the user
+    private ownBlur = false
     private typedText!: TypedText
     // the overlay keeps the typed text, for autocorrect in a plain text field
     private keepText = false
@@ -571,8 +586,16 @@
       return value === 'always' || value === 'off' ? value : 'auto'
     }
 
+    // the extra keys row sits on the soft keyboard, so it shows only with one
     get showTouchKeys() {
-      return this.keyboardOpen && this.showTouchControls
+      return this.keyboardShown && this.showTouchControls
+    }
+
+    // A focused overlay with no keyboard on screen, after iOS dismissed it or
+    // refused it, does not count. Where the viewport cannot show the keyboard,
+    // the focus is all there is to go by.
+    get keyboardShown() {
+      return this.keyboardOpen && (this.softKeyboardUp || !this.keyboardMeasurable)
     }
 
     get inputEnabled() {
@@ -723,7 +746,7 @@
           keyboardOpen: () => this.keyboardOpen,
           focus: () => this.focusForTyping(null),
           hold: this.holdFocus,
-          release: () => this._overlay.blur(),
+          release: this.blurOverlay,
         },
         clock,
       )
@@ -733,16 +756,20 @@
         {
           keyboardOpen: () => this.keyboardOpen,
           focus: this.focusForTyping,
-          update: (field) => setInputMode(this._overlay, keyboardFor(field).inputmode),
+          update: (field) => {
+            this.keyboardChangedAt = performance.now()
+            setInputMode(this._overlay, keyboardFor(field).inputmode)
+          },
           hold: this.holdFocus,
-          release: () => this._overlay.blur(),
+          release: this.blurOverlay,
         },
         clock,
       )
-      const streamUrl = this.is_touch_device ? focusStreamUrl(location) : null
-      if (streamUrl) {
+      const urls = this.is_touch_device ? focusUrls(location) : null
+      if (urls) {
+        this.blurUrl = urls.blur
         this.remoteFocus = new RemoteFocus(
-          streamUrl,
+          urls.stream,
           (url) => new EventSource(url),
           () => performance.now(),
           (state) => this.focusKeyboard.focus(state.focus, state.pageFocused),
@@ -825,7 +852,11 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
+      this.softKeyboard = new SoftKeyboard(window.self === window.top)
+      this.keyboardMeasurable = this.softKeyboard.measurable
+      this.measureSoftKeyboard()
       window.visualViewport?.addEventListener('resize', this.updateKeyboardView)
+      window.visualViewport?.addEventListener('resize', this.measureSoftKeyboard)
       window.visualViewport?.addEventListener('scroll', this.updateKeyboardView)
       window.addEventListener('pagehide', this.resetKeyboard)
       document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
@@ -891,6 +922,7 @@
       }
       window.removeEventListener('blur', this.resetKeyboard)
       window.visualViewport?.removeEventListener('resize', this.updateKeyboardView)
+      window.visualViewport?.removeEventListener('resize', this.measureSoftKeyboard)
       window.visualViewport?.removeEventListener('scroll', this.updateKeyboardView)
       window.removeEventListener('pagehide', this.resetKeyboard)
       document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
@@ -1039,7 +1071,7 @@
     openClipboard(hint?: string) {
       if (!this._clipboard) return
       // the panel sits at the top of the player, which the keyboard moves up
-      if (this.is_touch_device && this.keyboardOpen) this._overlay.blur()
+      if (this.is_touch_device && this.keyboardOpen) this.blurOverlay()
       this._clipboard.open(hint)
     }
 
@@ -1434,18 +1466,24 @@
     // for null. inGesture: inside a tap, where the overlay can be refocused.
     focusForTyping(field: RemoteField | null, inGesture = true) {
       const keyboard = keyboardFor(field)
-      if (document.activeElement === this._overlay && !this.keyboardOpen) {
+      this.keyboardChangedAt = performance.now()
+      const focused = document.activeElement === this._overlay
+      if (focused && this.overlayHeld) {
         // A held focus keeps the attributes it was focused with, and replacing
         // inputmode="none" raises the keyboard.
+        this.overlayHeld = false
         setInputMode(this._overlay, keyboard.inputmode)
         this.keepText = false
         this.resetInputSentinel()
         this.onOverlayFocus()
         return
       }
-      if (applyKeyboard(this._overlay, keyboard) && this.keyboardOpen && inGesture) {
-        // the keyboard reads everything but inputmode when the overlay gains focus
-        this._overlay.blur()
+      // Inside a tap the overlay is focused afresh when the keyboard needs other
+      // attributes, which it reads on focus, or when the overlay kept its focus
+      // without a keyboard on screen, which a focus it already has would not raise.
+      const changed = applyKeyboard(this._overlay, keyboard)
+      if (focused && inGesture && (changed || !this.keyboardShown)) {
+        this.blurOverlay()
         applyKeyboard(this._overlay, keyboard)
       }
       this.keepText = keyboard.keepText
@@ -1461,9 +1499,42 @@
       applyKeyboard(this._overlay, DEFAULT_KEYBOARD)
       this._overlay.setAttribute('inputmode', 'none')
       this._overlay.focus({ preventScroll: true })
-      if (document.activeElement === this._overlay) return true
+      this.overlayHeld = document.activeElement === this._overlay
+      if (this.overlayHeld) return true
       this._overlay.removeAttribute('inputmode')
       return false
+    }
+
+    blurOverlay() {
+      this.ownBlur = true
+      this._overlay.blur()
+      this.ownBlur = false
+    }
+
+    // Closes the keyboard and blurs the remote's focused field too, as
+    // Safari's Done does, so the next tap on the field is a new focus.
+    hideKeyboard() {
+      this.blurOverlay()
+      this.blurRemote()
+    }
+
+    blurRemote() {
+      if (!this.blurUrl || !this.focusLive || !this.inputEnabled) return
+      fetch(this.blurUrl, { method: 'POST', keepalive: true }).catch(() => {})
+    }
+
+    // iOS can dismiss its keyboard and leave the overlay focused. That is a
+    // Done for the remote too, and the overlay is blurred to match.
+    measureSoftKeyboard() {
+      const viewport = window.visualViewport
+      if (!viewport || !this.is_touch_device) return
+      const change = this.softKeyboard.measure(window.innerWidth, viewport.height, window.innerHeight)
+      this.softKeyboardUp = this.softKeyboard.up
+      this.keyboardMeasurable = this.softKeyboard.measurable
+      const settled = performance.now() - this.keyboardChangedAt > KEYBOARD_SETTLE_MS
+      if (change === 'down' && this.keyboardOpen && document.activeElement === this._overlay && settled) {
+        this.hideKeyboard()
+      }
     }
 
     // iOS overlays the soft keyboard on the layout viewport, and some pages
@@ -1503,7 +1574,7 @@
 
     toggleMobileKeyboard() {
       if (this.keyboardOpen) {
-        this._overlay.blur()
+        this.hideKeyboard()
       } else {
         this.focusForTyping(this.focusLive ? this.focusKeyboard.field : null)
         this.focusKeyboard.opened()
@@ -1714,6 +1785,10 @@
     }
 
     onOverlayBlur() {
+      // the keyboard's own Done, or another dismissal by the user; leaving the
+      // page for another app or tab keeps the remote's focus
+      if (!this.ownBlur && this.keyboardOpen && document.hasFocus()) this.blurRemote()
+      this.overlayHeld = false
       if (this.ctrlLatched) this.textInput.latchCtrl(false)
       this.tapKeyboard.blur()
       this.focusKeyboard.blur()

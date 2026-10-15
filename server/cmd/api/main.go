@@ -276,9 +276,11 @@ func main() {
 	})
 
 	// Live view focus stream (server-sent events) - not part of OpenAPI spec.
-	// The live view reads it to raise its soft keyboard for focused text fields.
+	// The live view reads it to raise its soft keyboard for focused text
+	// fields, and blurs the field when its keyboard is dismissed.
 	focusWatcher := livefocus.New(upstreamMgr, slogger)
 	r.Get("/live-view/focus", focusWatcher.ServeHTTP)
+	r.Post("/live-view/focus/blur", focusWatcher.HandleBlur)
 
 	// Serve extension files for Chrome policy-installed extensions
 	// This allows Chrome to download .crx and update.xml files via HTTP

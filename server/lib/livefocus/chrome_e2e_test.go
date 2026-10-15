@@ -108,6 +108,15 @@ func TestWatcherReportsFocusAndFields(t *testing.T) {
 	require.Equal(t, "username", state.Focus.Autocomplete)
 	require.Equal(t, at(10, 50, 200, 30), *state.Focus.Rect)
 
+	// a blur asked for right after the field took focus is older than the focus
+	require.NoError(t, watcher.Blur(ctx))
+	require.Equal(t, "email", page.eval(t, ctx, "document.activeElement.id"))
+	// the keyboard's Done blurs the field from the watcher's world
+	time.Sleep(300 * time.Millisecond)
+	require.NoError(t, watcher.Blur(ctx))
+	waitFor(t, states, "no focus after the blur", func(s State) bool { return s.Focus == nil && s.PageFocused })
+	require.Equal(t, "BODY", page.eval(t, ctx, "document.activeElement.tagName"))
+
 	page.click(t, ctx, 110, 235)
 	state = waitFor(t, states, "focus on the textarea", func(s State) bool { return s.Focus != nil && s.Focus.Type == "textarea" })
 	require.Equal(t, "send", state.Focus.EnterKeyHint)

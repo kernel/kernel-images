@@ -1,23 +1,24 @@
 import { describe, expect, test } from 'bun:test'
-import { FocusState, RemoteFocus, STREAM_STALE_MS, focusStreamUrl } from '../src/utils/remote-focus'
+import { FocusState, RemoteFocus, STREAM_STALE_MS, focusUrls } from '../src/utils/remote-focus'
 
-describe('focus stream url', () => {
+describe('focus urls', () => {
   test('sits next to the live view on the browser proxy, with its token', () => {
     expect(
-      focusStreamUrl({
+      focusUrls({
         origin: 'https://proxy.example:8443',
         pathname: '/browser/live',
         search: '?jwt=a.b%2Bc&readOnly=false',
       }),
-    ).toBe('https://proxy.example:8443/browser/kernel/live-view/focus?jwt=a.b%2Bc')
+    ).toEqual({
+      stream: 'https://proxy.example:8443/browser/kernel/live-view/focus?jwt=a.b%2Bc',
+      blur: 'https://proxy.example:8443/browser/kernel/live-view/focus/blur?jwt=a.b%2Bc',
+    })
   })
 
   test('is not used outside the proxy, without a token, or when turned off', () => {
-    expect(focusStreamUrl({ origin: 'http://localhost:8080', pathname: '/', search: '' })).toBe(null)
-    expect(focusStreamUrl({ origin: 'https://p', pathname: '/browser/live', search: '' })).toBe(null)
-    expect(focusStreamUrl({ origin: 'https://p', pathname: '/browser/live', search: '?jwt=x&focusSignal=off' })).toBe(
-      null,
-    )
+    expect(focusUrls({ origin: 'http://localhost:8080', pathname: '/', search: '' })).toBe(null)
+    expect(focusUrls({ origin: 'https://p', pathname: '/browser/live', search: '' })).toBe(null)
+    expect(focusUrls({ origin: 'https://p', pathname: '/browser/live', search: '?jwt=x&focusSignal=off' })).toBe(null)
   })
 })
 
@@ -107,6 +108,17 @@ describe('remote focus', () => {
     // a little outside the edge still counts
     expect(t.focus.fieldAt({ x: 222, y: 230 }, stream)).not.toBe(null)
     expect(t.focus.fieldAt({ x: 240, y: 230 }, stream)).toBe(null)
+  })
+
+  test('the focused field counts even when it is not among the fields a tap reaches', () => {
+    const t = setup()
+    t.focus.start()
+    // a site's own suggestion list covers the focused box's center
+    t.source().send(state({ fields: [], focus: { type: 'search', rect: { x: 10, y: 107, w: 100, h: 30 } } }))
+    expect(t.focus.fieldAt({ x: 40, y: 230 }, stream)).toEqual({
+      type: 'search',
+      rect: { x: 10, y: 107, w: 100, h: 30 },
+    })
   })
 
   test('ignores rects from before a scroll until new ones arrive or the scroll has settled', () => {

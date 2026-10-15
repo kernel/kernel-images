@@ -53,14 +53,17 @@ const FIELD_SLOP = 4
 // are still right.
 const SCROLL_SETTLE_MS = 1000
 
-// The stream's URL next to the live view's own: the browser proxy serves the
-// live view at /browser/live and the kernel-images API at /browser/kernel,
-// both with the session token.
-export function focusStreamUrl(loc: { origin: string; pathname: string; search: string }): string | null {
+// The stream's URL, and the one that blurs the remote's focused field, next
+// to the live view's own: the browser proxy serves the live view at
+// /browser/live and the kernel-images API at /browser/kernel, both with the
+// session token.
+export function focusUrls(loc: { origin: string; pathname: string; search: string }) {
   const params = new URLSearchParams(loc.search)
   const jwt = params.get('jwt')
   if (!jwt || params.get('focusSignal') === 'off' || loc.pathname.replace(/\/$/, '') !== '/browser/live') return null
-  return `${loc.origin}/browser/kernel/live-view/focus?jwt=${encodeURIComponent(jwt)}`
+  const base = `${loc.origin}/browser/kernel/live-view/focus`
+  const token = `?jwt=${encodeURIComponent(jwt)}`
+  return { stream: base + token, blur: `${base}/blur${token}` }
 }
 
 export class RemoteFocus {
@@ -117,13 +120,15 @@ export class RemoteFocus {
     return contains(this.toStream(state.viewport, stream), p, 0)
   }
 
-  // the field a tap at p lands on, by the last rects sent
+  // The field a tap at p lands on, by the last rects sent. The focused field
+  // counts wherever it is, even when something covers its center.
   fieldAt(p: Point, stream: StreamSize): RemoteField | null {
     const state = this.state
     if (!this.live || !state) return null
     const settled = this.fieldsAt > this.scrolledAt || this.now() - this.scrolledAt > SCROLL_SETTLE_MS
     if (!settled) return null
-    for (const field of state.fields) {
+    const fields = state.focus ? [state.focus, ...state.fields] : state.fields
+    for (const field of fields) {
       if (field.rect && contains(this.toStream(field.rect, stream), p, FIELD_SLOP)) return field
     }
     return null

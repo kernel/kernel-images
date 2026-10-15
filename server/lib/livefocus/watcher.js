@@ -10,6 +10,8 @@
   const TICK_MS = 1000
   const MAX_FIELDS = 64
   const MAX_FRAME_DEPTH = 3
+  // a blur asked for this soon after a focus is older than the focus
+  const REFOCUS_MS = 250
   const TEXT_TYPES = new Set(['text', 'search', 'email', 'url', 'tel', 'password', 'number'])
   const CODE_HINT = /one.?time|otp|2fa|mfa|totp|verif|passcode|security.?code|auth\w*.?code|sms.?code|\bcode\b|\bpin\b/i
   const NOT_CODE_HINT = /zip|postal|post.?code|promo|coupon|gift|discount|voucher|country|area|referral/i
@@ -24,6 +26,7 @@
   let timer = 0
   let timerAt = 0
   let stopped = false
+  let focusedAt = 0
 
   const isInput = (el) => el.localName === 'input'
 
@@ -219,11 +222,15 @@
   // or refocused right away does not report a blur in between. Scrolling
   // reports fields sooner than other page changes, which can be constant.
   const onFocusIn = () => schedule(0)
+  const onFieldFocus = () => {
+    focusedAt = Date.now()
+    schedule(0)
+  }
   const onFocusOut = () => schedule(100)
   const onScroll = () => schedule(100)
   const onChange = () => schedule(200)
   const listeners = [
-    [document, 'focusin', onFocusIn],
+    [document, 'focusin', onFieldFocus],
     [document, 'focusout', onFocusOut],
     [window, 'focus', onFocusIn],
     [window, 'blur', onFocusOut],
@@ -279,6 +286,14 @@
       return new Promise((resolve) => {
         waiter = resolve
       })
+    },
+    // Blurs the focused field, as Safari's Done does, unless it was focused
+    // after the live view asked.
+    blur() {
+      const el = deepActive(document)
+      if (!editable(el) || Date.now() - focusedAt < REFOCUS_MS) return false
+      el.blur()
+      return true
     },
     stop,
   }

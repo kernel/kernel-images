@@ -4,6 +4,10 @@ import { runInNewContext } from 'node:vm'
 import ts from 'typescript'
 import { parseComponent } from 'vue-template-compiler'
 import * as fieldKeyboard from '../src/utils/field-keyboard'
+import { FocusKeyboard } from '../src/utils/focus-keyboard'
+import { RemoteField } from '../src/utils/remote-focus'
+import { SoftKeyboard } from '../src/utils/soft-keyboard'
+import { TapKeyboard } from '../src/utils/tap-keyboard'
 import { TypedText } from '../src/utils/typed-text'
 
 // Load the real component methods without mounting its media player or child components.
@@ -13,8 +17,8 @@ const compiled = ts.transpileModule(script, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, experimentalDecorators: true },
 }).outputText
 
-function videoMethods(document: { activeElement: unknown }) {
-  const exports: { default?: { prototype: Record<string, Function> } } = {}
+function videoComponent(globals: Record<string, unknown>) {
+  const exports: { default?: { prototype: Record<string, any> } } = {}
   const noDecorator = () => () => undefined
   runInNewContext(compiled, {
     exports,
@@ -31,118 +35,392 @@ function videoMethods(document: { activeElement: unknown }) {
       if (name === '~/utils/field-keyboard') return fieldKeyboard
       return {}
     },
-    document,
+    ...globals,
   })
   return exports.default!.prototype
 }
 
-// the overlay textarea, focused or not, with its attributes
-function overlay(document: { activeElement: unknown }, events: string[]) {
+const email: RemoteField = { type: 'email', rect: { x: 10, y: 120, w: 300, h: 40 } }
+const notes: RemoteField = { type: 'text', rect: { x: 10, y: 200, w: 300, h: 40 } }
+// a 390x844 phone; the keyboard leaves 500px of it
+const FULL = 844
+const WITH_KEYBOARD = 500
+
+// The live view on iOS Safari, as far as the soft keyboard goes: the keyboard
+// shows for a focus inside a tap, or when inputmode="none" is removed from an
+// overlay focused inside one, covers the visual viewport while it is up, and
+// goes away on a blur. The remote browser keeps or drops focus on its fields.
+function phone() {
+  let now = 0
+  let timers: { fn: () => void; at: number; id: number }[] = []
+  let nextTimer = 1
+  const clock = {
+    now: () => now,
+    setTimeout: (fn: () => void, ms: number) => {
+      timers.push({ fn, at: now + ms, id: nextTimer })
+      return nextTimer++
+    },
+    clearTimeout: (id: number) => {
+      timers = timers.filter((t) => t.id !== id)
+    },
+  }
+  const advance = (ms: number) => {
+    const until = now + ms
+    for (;;) {
+      const due = timers.filter((t) => t.at <= until).sort((a, b) => a.at - b.at)[0]
+      if (!due) break
+      timers = timers.filter((t) => t !== due)
+      now = due.at
+      due.fn()
+    }
+    now = until
+  }
+
+  const document = { activeElement: null as unknown, hasFocus: () => true }
+  const viewport = { height: FULL }
+  const window = { visualViewport: viewport, innerWidth: 390, innerHeight: FULL, self: 1, top: 1 }
+  const blurs: string[] = []
+  const fetch = (url: string) => {
+    blurs.push(url)
+    return Promise.resolve()
+  }
+  const proto = videoComponent({ document, window, fetch, performance: { now: () => now } })
+
+  let inTap = false
+  let keyboardUp = false
   const attrs = new Map<string, string>()
+  const setKeyboard = (up: boolean) => {
+    keyboardUp = up
+    viewport.height = up ? WITH_KEYBOARD : FULL
+    ctx.measureSoftKeyboard()
+  }
   const el: Record<string, any> = {
     attrs,
     value: '',
     getAttribute: (name: string) => (attrs.has(name) ? attrs.get(name) : null),
-    setAttribute: (name: string, value: string) => attrs.set(name, value),
-    removeAttribute: (name: string) => attrs.delete(name),
+    setAttribute: (name: string, value: string) => {
+      attrs.set(name, value)
+    },
+    removeAttribute: (name: string) => {
+      const held = name === 'inputmode' && attrs.get(name) === 'none' && document.activeElement === el
+      attrs.delete(name)
+      if (held) setKeyboard(true)
+    },
     setSelectionRange: () => {},
     focus: () => {
-      events.push('focus')
+      if (document.activeElement === el) return
       document.activeElement = el
+      ctx.onOverlayFocus()
+      if (inTap && attrs.get('inputmode') !== 'none') setKeyboard(true)
     },
     blur: () => {
-      events.push('blur')
+      if (document.activeElement !== el) return
       document.activeElement = null
+      ctx.onOverlayBlur()
+      setKeyboard(false)
     },
   }
-  return el
-}
 
-function setup() {
-  const document: { activeElement: unknown } = { activeElement: null }
-  const events: string[] = []
-  const methods = videoMethods(document)
-  const sent: string[] = []
+  // the remote page: which field has focus, and where the fields are
+  const remote = { focused: null as RemoteField | null, live: true, cursor: 'other' as 'text' | 'other' }
   const ctx: Record<string, any> = {
     is_touch_device: true,
+    hosting: true,
     inputEnabled: true,
+    showTouchControls: true,
     keyboardOpen: false,
     keepText: false,
-    _overlay: overlay(document, events),
-    textInput: { composing: false },
-    typedText: new TypedText(' ', { type: (t) => sent.push(`type ${t}`), backspace: () => sent.push('backspace') }),
-    onOverlayFocus: () => {
-      events.push('keyboard')
-      ctx.keyboardOpen = true
+    overlayHeld: false,
+    ownBlur: false,
+    softKeyboardUp: false,
+    keyboardMeasurable: true,
+    keyboardChangedAt: -Infinity,
+    keyboardAnchor: null,
+    blurUrl: 'https://p/browser/kernel/live-view/focus/blur?jwt=x',
+    softKeyboard: new SoftKeyboard(true),
+    _overlay: el,
+    _player: { getBoundingClientRect: () => ({ top: 0 }) },
+    $accessor: { video: { resolution: { w: 390, h: 844 } }, remote: { releaseCapsLock: () => {} } },
+    $client: { sendData: () => {} },
+    textInput: { composing: false, latchCtrl: () => {} },
+    typedText: new TypedText(' ', { type: () => {}, backspace: () => {} }),
+    remoteFocus: {
+      get live() {
+        return remote.live
+      },
+      // the address bar is above y=87
+      inViewport: (p: { y: number }) => p.y >= 87,
+      fieldAt: (p: { x: number; y: number }) =>
+        [email, notes].find((f) => p.y >= f.rect!.y && p.y <= f.rect!.y + f.rect!.h) || null,
     },
+    syncClipboard: () => {},
+    resetKeyboard: () => {},
+    withdrawCopy: () => {},
+    updateKeyboardView: () => {},
+    clickAt: () => {},
+    remotePoint: (p: unknown) => p,
+    remotePerClient: () => 1,
   }
-  for (const name of ['resetInputSentinel', 'focusForTyping', 'onOverlayInput']) {
-    ctx[name] = (...args: unknown[]) => methods[name].apply(ctx, args)
+  for (const name of ['keyboardShown', 'showTouchKeys', 'focusLive']) {
+    Object.defineProperty(ctx, name, { get: () => Object.getOwnPropertyDescriptor(proto, name)!.get!.call(ctx) })
   }
-  return { ctx, methods, events, sent, document }
+  for (const name of Object.getOwnPropertyNames(proto)) {
+    const descriptor = Object.getOwnPropertyDescriptor(proto, name)!
+    if (typeof descriptor.value === 'function' && name !== 'constructor' && !(name in ctx)) {
+      ctx[name] = descriptor.value.bind(ctx)
+    }
+  }
+  ctx.tapKeyboard = new TapKeyboard(
+    'auto',
+    true,
+    {
+      keyboardOpen: () => ctx.keyboardOpen,
+      focus: () => ctx.focusForTyping(null),
+      hold: ctx.holdFocus,
+      release: ctx.blurOverlay,
+    },
+    clock,
+  )
+  ctx.focusKeyboard = new FocusKeyboard(
+    'auto',
+    true,
+    {
+      keyboardOpen: () => ctx.keyboardOpen,
+      focus: ctx.focusForTyping,
+      update: () => {},
+      hold: ctx.holdFocus,
+      release: ctx.blurOverlay,
+    },
+    clock,
+  )
+  ctx.measureSoftKeyboard()
+
+  // a tap at a remote point; the click focuses the field under it
+  const tap = (p: { x: number; y: number }) => {
+    ctx.tapKeyboard.touchBegin()
+    ctx.focusKeyboard.touchBegin()
+    advance(80)
+    inTap = true
+    ctx.onGestureTap(p)
+    inTap = false
+    advance(30)
+    const field = ctx.remoteFocus.fieldAt(p)
+    if (p.y >= 87 && field && remote.focused !== field) report(field)
+  }
+  const report = (field: RemoteField | null, pageFocused = true) => {
+    remote.focused = field
+    ctx.focusKeyboard.focus(field, pageFocused)
+  }
+  // the Keyboard / Hide control, which runs inside its own tap
+  const toggle = () => {
+    inTap = true
+    ctx.toggleMobileKeyboard()
+    inTap = false
+  }
+
+  return {
+    ctx,
+    el,
+    tap,
+    toggle,
+    report,
+    advance,
+    blurs,
+    document,
+    setKeyboard,
+    keyboard: () => keyboardUp,
+    row: () => ctx.showTouchKeys,
+    setCursor: (kind: 'text' | 'other') => ctx.tapKeyboard.cursor(kind),
+  }
 }
+
+describe('hiding and raising the keyboard again', () => {
+  test('tap a field, Hide, tap it again: the keyboard comes back and the remote field was blurred', () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    expect(t.keyboard()).toBe(true)
+    expect(t.row()).toBe(true)
+
+    t.toggle()
+    expect(t.keyboard()).toBe(false)
+    expect(t.row()).toBe(false)
+    expect(t.blurs).toEqual(['https://p/browser/kernel/live-view/focus/blur?jwt=x'])
+    t.report(null)
+    t.advance(1000)
+
+    t.tap({ x: 50, y: 140 })
+    expect(t.keyboard()).toBe(true)
+    t.advance(1000)
+    expect(t.keyboard()).toBe(true)
+    expect(t.row()).toBe(true)
+  })
+
+  test('a tap on a field that kept its focus raises the keyboard inside the tap, without a new focus report', () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    t.toggle()
+    // the remote blur did not happen: the field still has focus
+    t.tap({ x: 50, y: 140 })
+    expect(t.keyboard()).toBe(true)
+    t.advance(1000)
+    expect(t.keyboard()).toBe(true)
+  })
+
+  test('iOS dismissing the keyboard and leaving the overlay focused is a Done', () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    // the keyboard goes down; the overlay keeps its focus
+    t.setKeyboard(false)
+    expect(t.document.activeElement).toBe(null)
+    expect(t.row()).toBe(false)
+    expect(t.blurs).toHaveLength(1)
+    t.report(null)
+
+    t.tap({ x: 50, y: 140 })
+    expect(t.keyboard()).toBe(true)
+  })
+
+  test("the keyboard's own Done blurs the remote field; leaving the page does not", () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    t.el.blur()
+    expect(t.blurs).toHaveLength(1)
+
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    t.document.hasFocus = () => false
+    t.el.blur()
+    expect(t.blurs).toHaveLength(1)
+  })
+
+  test('closing the keyboard for the page is not a Done', () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    // a submit that navigates
+    t.report(null)
+    t.advance(1000)
+    expect(t.keyboard()).toBe(false)
+    expect(t.blurs).toEqual([])
+  })
+
+  test('a focus that iOS shows no keyboard for leaves the extra keys hidden, and a tap focuses afresh', () => {
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    t.toggle()
+    t.report(null)
+    // the keyboard button focuses the overlay, but no keyboard comes up
+    t.ctx._overlay.focus()
+    expect(t.ctx.keyboardOpen).toBe(true)
+    expect(t.row()).toBe(false)
+
+    t.tap({ x: 50, y: 140 })
+    expect(t.keyboard()).toBe(true)
+    expect(t.row()).toBe(true)
+  })
+})
+
+describe('the address bar', () => {
+  test('tap the address bar, Hide, tap it again: the keyboard comes back', () => {
+    const t = phone()
+    t.tap({ x: 160, y: 63 })
+    // the pointer moved over the address bar
+    t.setCursor('text')
+    expect(t.keyboard()).toBe(true)
+    expect(t.row()).toBe(true)
+
+    t.toggle()
+    expect(t.keyboard()).toBe(false)
+    expect(t.row()).toBe(false)
+
+    // where a text cursor was seen, the keyboard comes up inside the tap
+    t.tap({ x: 160, y: 63 })
+    expect(t.keyboard()).toBe(true)
+    t.advance(1000)
+    expect(t.keyboard()).toBe(true)
+    expect(t.row()).toBe(true)
+  })
+})
 
 describe('raising the keyboard for a remote field', () => {
   test('copies the field onto the overlay before focusing it', () => {
-    const { ctx, events } = setup()
-    ctx.focusForTyping({ type: 'text', autocomplete: 'one-time-code', inputMode: 'numeric' })
-    expect(events).toEqual(['focus'])
-    expect(Object.fromEntries(ctx._overlay.attrs)).toEqual({
-      autocomplete: 'one-time-code',
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    expect(Object.fromEntries(t.el.attrs)).toEqual({
+      autocomplete: 'email',
       autocorrect: 'off',
       autocapitalize: 'off',
       spellcheck: 'false',
-      inputmode: 'numeric',
+      inputmode: 'email',
     })
-    expect(ctx.keepText).toBe(false)
+    expect(t.ctx.keepText).toBe(false)
   })
 
   test('refocuses an open keyboard inside the tap when more than its layout changes', () => {
-    const { ctx, events } = setup()
-    ctx.focusForTyping({ type: 'url' })
-    ctx.keyboardOpen = true
-    ctx.focusForTyping({ type: 'number' })
-    expect(events).toEqual(['focus'])
-    expect(ctx._overlay.attrs.get('inputmode')).toBe('decimal')
-    ctx.focusForTyping({ type: 'textarea' })
-    expect(events).toEqual(['focus', 'blur', 'focus'])
-    expect(ctx._overlay.attrs.get('autocorrect')).toBe('on')
-    expect(ctx.keepText).toBe(true)
+    const t = phone()
+    t.tap({ x: 50, y: 140 })
+    t.advance(1000)
+    const blur = t.el.blur
+    let blurred = 0
+    t.el.blur = () => {
+      blurred++
+      blur()
+    }
+    t.tap({ x: 50, y: 220 })
+    expect(blurred).toBe(1)
+    expect(t.keyboard()).toBe(true)
+    expect(t.el.attrs.get('autocorrect')).toBe('on')
+    expect(t.ctx.keepText).toBe(true)
+    // refocusing is not a Done
+    expect(t.blurs).toEqual([])
   })
 
   test('a held focus only changes its layout, which raises the keyboard', () => {
-    const { ctx, events } = setup()
-    ctx._overlay.focus()
-    ctx._overlay.attrs.set('inputmode', 'none')
-    ctx._overlay.attrs.set('autocorrect', 'off')
-    ctx.focusForTyping({ type: 'textarea' }, false)
-    expect(events).toEqual(['focus', 'keyboard'])
-    expect(ctx._overlay.attrs.has('inputmode')).toBe(false)
+    const t = phone()
+    // a tap with no field under it holds the overlay
+    t.tap({ x: 50, y: 400 })
+    expect(t.el.attrs.get('inputmode')).toBe('none')
+    t.report(notes)
+    expect(t.keyboard()).toBe(true)
     // iOS keeps the attributes it was focused with
-    expect(ctx._overlay.attrs.get('autocorrect')).toBe('off')
-    expect(ctx.keepText).toBe(false)
+    expect(t.el.attrs.get('autocorrect')).toBe('off')
+    expect(t.ctx.keepText).toBe(false)
   })
 })
 
 describe('overlay text for autocorrect', () => {
+  const textSetup = () => {
+    const t = phone()
+    const sent: string[] = []
+    t.ctx.typedText = new TypedText(' ', {
+      type: (s) => sent.push(`type ${s}`),
+      backspace: () => sent.push('backspace'),
+    })
+    t.tap({ x: 50, y: 220 })
+    return { t, sent }
+  }
+
   test('sends the edits of a field that keeps its text', () => {
-    const { ctx, methods, sent } = setup()
-    ctx.focusForTyping({ type: 'textarea' })
+    const { t, sent } = textSetup()
     for (const value of [' t', ' te', ' teh', ' the', ' the ']) {
-      ctx._overlay.value = value
-      methods.onOverlayInput.call(ctx, { inputType: 'insertText', data: null })
+      t.el.value = value
+      t.ctx.onOverlayInput({ inputType: 'insertText', data: null })
     }
     expect(sent).toEqual(['type t', 'type e', 'type h', 'backspace', 'backspace', 'type he', 'type  '])
-    expect(ctx._overlay.value).toBe(' the ')
+    expect(t.el.value).toBe(' the ')
   })
 
   test('starts over when the sentinel is deleted', () => {
-    const { ctx, methods, sent } = setup()
-    ctx.focusForTyping({ type: 'textarea' })
-    ctx._overlay.value = ''
-    methods.onOverlayInput.call(ctx, { inputType: 'deleteContentBackward', data: null })
+    const { t, sent } = textSetup()
+    t.el.value = ''
+    t.ctx.onOverlayInput({ inputType: 'deleteContentBackward', data: null })
     expect(sent).toEqual(['backspace'])
-    expect(ctx._overlay.value).toBe(' ')
+    expect(t.el.value).toBe(' ')
   })
 })
 
@@ -171,23 +449,21 @@ describe('taps with the focus stream', () => {
     }
     return { ctx, calls }
   }
+  const methods = videoComponent({})
 
   test('a tap on the page follows the remote focus, with the field under it', () => {
-    const methods = videoMethods({ activeElement: null })
     const { ctx, calls } = tapContext({ live: true, inViewport: true, field: { type: 'email' } })
     methods.onGestureTap.call(ctx, { x: 10, y: 200 })
     expect(calls).toEqual(['click', 'cursor cancel', 'focus tap email'])
   })
 
   test("a tap on the browser's UI uses the cursor shape", () => {
-    const methods = videoMethods({ activeElement: null })
     const { ctx, calls } = tapContext({ live: true, inViewport: false, field: null })
     methods.onGestureTap.call(ctx, { x: 10, y: 40 })
     expect(calls).toEqual(['click', 'browser tap', 'cursor tap'])
   })
 
   test('without the focus stream every tap uses the cursor shape', () => {
-    const methods = videoMethods({ activeElement: null })
     for (const live of [null, { live: false, inViewport: true, field: null }]) {
       const { ctx, calls } = tapContext(live)
       methods.onGestureTap.call(ctx, { x: 10, y: 200 })

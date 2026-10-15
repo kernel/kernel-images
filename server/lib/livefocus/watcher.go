@@ -61,6 +61,8 @@ type Watcher struct {
 	cancel      context.CancelFunc
 	lingerTimer *time.Timer
 	closed      chan struct{}
+	// the current browser connection, nil while there is none
+	conn *connection
 }
 
 func New(upstream UpstreamManager, log *slog.Logger) *Watcher {
@@ -197,7 +199,30 @@ func (w *Watcher) watch(ctx context.Context, url string) error {
 	}
 	defer protocol.Close()
 	c := newConnection(ctx, protocol, func(state State) { w.publish(ctx, state) })
+	w.mu.Lock()
+	w.conn = c
+	w.mu.Unlock()
+	defer func() {
+		w.mu.Lock()
+		if w.conn == c {
+			w.conn = nil
+		}
+		w.mu.Unlock()
+	}()
 	return c.run()
+}
+
+// Blur blurs the browser's focused text field, the way Safari's Done button
+// does when the live view's keyboard is dismissed. It does nothing when no
+// field has focus.
+func (w *Watcher) Blur(ctx context.Context) error {
+	w.mu.Lock()
+	c := w.conn
+	w.mu.Unlock()
+	if c == nil {
+		return nil
+	}
+	return c.blur(ctx)
 }
 
 type frameKey struct {
@@ -219,6 +244,8 @@ type watchedSession struct {
 type watchedFrame struct {
 	state frameState
 	top   bool
+	// the watcher in the frame's current document, empty between documents
+	objectID string
 }
 
 // connection watches every page and out-of-process iframe on one DevTools
@@ -476,6 +503,7 @@ func (c *connection) pollFrame(ctx context.Context, key frameKey, frame *watched
 			sleep(ctx, retryDelay)
 			continue
 		}
+		c.setWatcher(key, frame, objectID)
 		// counts as a failure until the watcher reports
 		failures++
 		frames := -1
@@ -495,8 +523,49 @@ func (c *connection) pollFrame(ctx context.Context, key frameKey, frame *watched
 				c.scan(key.session)
 			}
 		}
+		c.setWatcher(key, frame, "")
 		c.update(key, frame, nil)
 	}
+}
+
+func (c *connection) setWatcher(key frameKey, frame *watchedFrame, objectID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.frames[key] == frame {
+		frame.objectID = objectID
+	}
+}
+
+// blur asks the watcher of the frame holding the focused field to blur it.
+func (c *connection) blur(ctx context.Context) error {
+	var target *watchedFrame
+	var key frameKey
+	c.mu.Lock()
+	for k, frame := range c.frames {
+		r := frame.state.report
+		if r == nil || r.Focus == nil || !r.Focused || frame.objectID == "" {
+			continue
+		}
+		if target == nil || frame.state.seq > target.state.seq {
+			target, key = frame, k
+		}
+	}
+	var objectID string
+	if target != nil {
+		objectID = target.objectID
+	}
+	c.mu.Unlock()
+	if target == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
+	defer cancel()
+	_, err := c.protocol.Send(ctx, "Runtime.callFunctionOn", map[string]any{
+		"objectId":            objectID,
+		"functionDeclaration": "function() { return this.blur() }",
+		"returnByValue":       true,
+	}, key.session)
+	return err
 }
 
 func (c *connection) inject(ctx context.Context, key frameKey) (string, error) {

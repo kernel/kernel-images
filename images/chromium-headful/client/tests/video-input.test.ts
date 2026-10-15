@@ -448,7 +448,7 @@ describe('clipboard panel', () => {
     const ctx = {
       is_touch_device: true,
       keyboardOpen: true,
-      _overlay: { blur: () => calls.push('blur') },
+      blurOverlay: () => calls.push('blur'),
       _clipboard: { open: (hint: string) => calls.push(`open ${hint}`) },
     }
     methods.openClipboard.call(ctx, 'Paste here')

@@ -42,3 +42,13 @@ func (w *Watcher) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
+
+// HandleBlur blurs the browser's focused text field, for a live view whose
+// soft keyboard was dismissed.
+func (w *Watcher) HandleBlur(rw http.ResponseWriter, r *http.Request) {
+	if err := w.Blur(r.Context()); err != nil {
+		http.Error(rw, "the focused field could not be blurred", http.StatusBadGateway)
+		return
+	}
+	rw.WriteHeader(http.StatusNoContent)
+}
