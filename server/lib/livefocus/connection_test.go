@@ -118,7 +118,7 @@ func (f *fakeBrowser) serve(t *testing.T) string {
 				respond(map[string]any{"result": map[string]any{"type": "object", "objectId": "watcher"}})
 			case "Runtime.callFunctionOn":
 				switch {
-				case strings.Contains(string(data), "this.blur()"):
+				case strings.Contains(string(data), "this.blur("):
 					f.mu.Lock()
 					f.methods["blur"]++
 					f.methods["blur "+request.SessionID+" "+request.Params.ObjectID]++
@@ -215,7 +215,7 @@ func TestBlurGoesToTheFocusedFramesWatcher(t *testing.T) {
 	defer unsubscribe()
 	waitFor(t, states, "the focused field", func(s State) bool { return s.Focus != nil })
 
-	require.NoError(t, w.Blur(context.Background()))
+	require.NoError(t, w.Blur(context.Background(), 0))
 	require.Equal(t, 1, browser.count("blur session watcher"))
 }
 
@@ -227,6 +227,6 @@ func TestBlurWithNothingFocusedSendsNothing(t *testing.T) {
 	defer unsubscribe()
 	waitFor(t, states, "the page", func(s State) bool { return s.Viewport != nil })
 
-	require.NoError(t, w.Blur(context.Background()))
+	require.NoError(t, w.Blur(context.Background(), 0))
 	require.Zero(t, browser.count("blur"))
 }

@@ -32,6 +32,9 @@ type Field struct {
 	// a one-time code, by autocomplete="one-time-code" or by its name and size
 	Code bool  `json:"code,omitempty"`
 	Rect *Rect `json:"rect,omitempty"`
+	// For the focused field: its frame's count of focus changes and presses,
+	// which a blur request sends back so a blur from before a later tap is dropped.
+	Seq int64 `json:"seq,omitempty"`
 }
 
 // State is what the live view receives on every change.

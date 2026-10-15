@@ -855,8 +855,9 @@
       this.softKeyboard = new SoftKeyboard(window.self === window.top)
       this.keyboardMeasurable = this.softKeyboard.measurable
       this.measureSoftKeyboard()
-      window.visualViewport?.addEventListener('resize', this.updateKeyboardView)
+      // measured first, so the pan and the extra keys row see the keyboard
       window.visualViewport?.addEventListener('resize', this.measureSoftKeyboard)
+      window.visualViewport?.addEventListener('resize', this.updateKeyboardView)
       window.visualViewport?.addEventListener('scroll', this.updateKeyboardView)
       window.addEventListener('pagehide', this.resetKeyboard)
       document.addEventListener('visibilitychange', this.resetKeyboardWhenHidden)
@@ -1518,9 +1519,12 @@
       this.blurRemote()
     }
 
+    // The field's seq lets the remote drop the blur if the page was tapped
+    // again before it arrived.
     blurRemote() {
-      if (!this.blurUrl || !this.focusLive || !this.inputEnabled) return
-      fetch(this.blurUrl, { method: 'POST', keepalive: true }).catch(() => {})
+      const focus = this.focusLive && this.remoteFocus!.state!.focus
+      if (!this.blurUrl || !focus || !this.inputEnabled) return
+      fetch(`${this.blurUrl}&seq=${focus.seq || 0}`, { method: 'POST', keepalive: true }).catch(() => {})
     }
 
     // iOS can dismiss its keyboard and leave the overlay focused. That is a

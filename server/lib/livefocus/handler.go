@@ -3,6 +3,7 @@ package livefocus
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -44,9 +45,15 @@ func (w *Watcher) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 }
 
 // HandleBlur blurs the browser's focused text field, for a live view whose
-// soft keyboard was dismissed.
+// soft keyboard was dismissed. The seq query parameter is the focused field's
+// Seq from the last state the live view saw.
 func (w *Watcher) HandleBlur(rw http.ResponseWriter, r *http.Request) {
-	if err := w.Blur(r.Context()); err != nil {
+	seq, err := strconv.ParseInt(r.URL.Query().Get("seq"), 10, 64)
+	if err != nil {
+		http.Error(rw, "seq is required", http.StatusBadRequest)
+		return
+	}
+	if err := w.Blur(r.Context(), seq); err != nil {
 		http.Error(rw, "the focused field could not be blurred", http.StatusBadGateway)
 		return
 	}

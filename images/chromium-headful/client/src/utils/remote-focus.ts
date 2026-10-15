@@ -25,6 +25,8 @@ export interface RemoteField {
   // a one-time code field
   code?: boolean
   rect?: FieldRect
+  // the focused field's count of focus changes and taps, sent back with a blur
+  seq?: number
 }
 
 export interface FocusState {

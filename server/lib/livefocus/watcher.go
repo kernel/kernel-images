@@ -213,16 +213,17 @@ func (w *Watcher) watch(ctx context.Context, url string) error {
 }
 
 // Blur blurs the browser's focused text field, the way Safari's Done button
-// does when the live view's keyboard is dismissed. It does nothing when no
-// field has focus.
-func (w *Watcher) Blur(ctx context.Context) error {
+// does when the live view's keyboard is dismissed. seq is the focused field's
+// Seq the live view last saw; the blur does nothing once the page was tapped or
+// focus moved since, or when no field has focus.
+func (w *Watcher) Blur(ctx context.Context, seq int64) error {
 	w.mu.Lock()
 	c := w.conn
 	w.mu.Unlock()
 	if c == nil {
 		return nil
 	}
-	return c.blur(ctx)
+	return c.blur(ctx, seq)
 }
 
 type frameKey struct {
@@ -537,7 +538,7 @@ func (c *connection) setWatcher(key frameKey, frame *watchedFrame, objectID stri
 }
 
 // blur asks the watcher of the frame holding the focused field to blur it.
-func (c *connection) blur(ctx context.Context) error {
+func (c *connection) blur(ctx context.Context, seq int64) error {
 	var target *watchedFrame
 	var key frameKey
 	c.mu.Lock()
@@ -562,7 +563,8 @@ func (c *connection) blur(ctx context.Context) error {
 	defer cancel()
 	_, err := c.protocol.Send(ctx, "Runtime.callFunctionOn", map[string]any{
 		"objectId":            objectID,
-		"functionDeclaration": "function() { return this.blur() }",
+		"functionDeclaration": "function(seq) { return this.blur(seq) }",
+		"arguments":           []map[string]any{{"value": seq}},
 		"returnByValue":       true,
 	}, key.session)
 	return err

@@ -122,7 +122,7 @@ function phone() {
   }
 
   // the remote page: which field has focus, and where the fields are
-  const remote = { focused: null as RemoteField | null, live: true, cursor: 'other' as 'text' | 'other' }
+  const remote = { focused: null as RemoteField | null, live: true, seq: 0 }
   const ctx: Record<string, any> = {
     is_touch_device: true,
     hosting: true,
@@ -147,6 +147,9 @@ function phone() {
     remoteFocus: {
       get live() {
         return remote.live
+      },
+      get state() {
+        return { focus: remote.focused && { ...remote.focused, seq: remote.seq } }
       },
       // the address bar is above y=87
       inViewport: (p: { y: number }) => p.y >= 87,
@@ -204,6 +207,8 @@ function phone() {
     ctx.onGestureTap(p)
     inTap = false
     advance(30)
+    // the click is a press for the remote's count, and focuses the field under it
+    remote.seq++
     const field = ctx.remoteFocus.fieldAt(p)
     if (p.y >= 87 && field && remote.focused !== field) report(field)
   }
@@ -245,7 +250,7 @@ describe('hiding and raising the keyboard again', () => {
     t.toggle()
     expect(t.keyboard()).toBe(false)
     expect(t.row()).toBe(false)
-    expect(t.blurs).toEqual(['https://p/browser/kernel/live-view/focus/blur?jwt=x'])
+    expect(t.blurs).toEqual(['https://p/browser/kernel/live-view/focus/blur?jwt=x&seq=1'])
     t.report(null)
     t.advance(1000)
 
@@ -337,6 +342,8 @@ describe('the address bar', () => {
     t.toggle()
     expect(t.keyboard()).toBe(false)
     expect(t.row()).toBe(false)
+    // no page field has focus to blur
+    expect(t.blurs).toEqual([])
 
     // where a text cursor was seen, the keyboard comes up inside the tap
     t.tap({ x: 160, y: 63 })
