@@ -88,6 +88,29 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 
 	t.Log("playwright execute API test passed")
 
+	t.Log("verifying @playwright/test assertions in the Playwright execution scope")
+	expectRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+		Code: `
+			const { expect } = await import('@playwright/test');
+			await page.setContent('<h1>hello kernel</h1><button>Click me</button>');
+			await expect(page.locator('h1')).toHaveText('hello kernel');
+			await expect(page.locator('button')).toBeVisible();
+			let attempts = 0;
+			await expect.poll(() => ++attempts).toBeGreaterThan(2);
+			return attempts;
+		`,
+	})
+	require.NoError(t, err, "@playwright/test execute request error: %v", err)
+	require.Equal(t, http.StatusOK, expectRsp.StatusCode(), "unexpected status for @playwright/test execute: %s body=%s", expectRsp.Status(), string(expectRsp.Body))
+	require.NotNil(t, expectRsp.JSON200, "expected JSON200 response, got nil")
+	require.True(t, expectRsp.JSON200.Success, "expected @playwright/test execution to succeed, got error: %s", func() string {
+		if expectRsp.JSON200.Error != nil {
+			return *expectRsp.JSON200.Error
+		}
+		return "nil"
+	}())
+	require.EqualValues(t, 3, expectRsp.JSON200.Result, "expected expect.poll to run until the condition passed")
+
 	t.Log("verifying WebMCP helpers in the Playwright execution scope")
 	webmcpRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
