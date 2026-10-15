@@ -1,6 +1,7 @@
 package browsersurface
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -343,6 +344,30 @@ func (t *Tracker) SessionFrames() []SessionFrame {
 		return frames[i].FrameID < frames[j].FrameID
 	})
 	return frames
+}
+
+// PageSession returns the session attached to the page that contains
+// sessionID's target, and that page's main frame: the session itself for a
+// page, the embedding page for an out-of-process iframe at any depth.
+func (t *Tracker) PageSession(sessionID string) (pageSessionID, mainFrameID string, ok bool) {
+	t.stateMu.RLock()
+	defer t.stateMu.RUnlock()
+	sess := t.sessions[sessionID]
+	if sess == nil {
+		return "", "", false
+	}
+	tab := t.tabs[sess.tabID]
+	if tab == nil {
+		return "", "", false
+	}
+	// A page's main frame ID is its target ID until initialization reports it.
+	mainFrameID = cmp.Or(tab.rootFrameID, tab.targetID)
+	for id, candidate := range t.sessions {
+		if candidate.target.Type == "page" && candidate.target.TargetID == tab.targetID {
+			return id, mainFrameID, true
+		}
+	}
+	return "", "", false
 }
 
 func (t *Tracker) SessionExists(sessionID string) bool {

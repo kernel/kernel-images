@@ -409,7 +409,7 @@ func (m *mockRecordManager) StopAll(_ context.Context) error                    
 func newTestService(t *testing.T, mgr recorder.RecordManager) *ApiService {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t))
+	svc, err := New(mgr, newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t), testWebAuthn(t))
 	require.NoError(t, err)
 	svc.cdpMonitor = &stubCdpMonitor{}
 	return svc
@@ -700,6 +700,101 @@ func TestCdpExcludedMethodsRoundTrip(t *testing.T) {
 		}})
 		require.NoError(t, err)
 		assert.Empty(t, svc.telemetrySession.ExcludedCdpMethods())
+	})
+}
+
+func TestTelemetryBrowserSession(t *testing.T) {
+	ctx := context.Background()
+	withSession := func(id, name string) *oapi.BrowserTelemetryConfig {
+		return &oapi.BrowserTelemetryConfig{
+			Browser:        &oapi.BrowserTelemetryCategoriesConfig{Console: &oapi.BrowserTelemetryCategoryConfig{Enabled: lo.ToPtr(true)}},
+			BrowserSession: &oapi.BrowserTelemetrySessionConfig{Id: lo.EmptyableToPtr(id), Name: lo.EmptyableToPtr(name)},
+		}
+	}
+	// publishMetadata publishes one console event and returns the metadata it
+	// was stamped with.
+	publishMetadata := func(t *testing.T, svc *ApiService) map[string]string {
+		t.Helper()
+		env, ok := svc.telemetrySession.Publish(events.Event{
+			Type:     "console_log",
+			Category: events.Console,
+			Source:   oapi.BrowserEventSource{Kind: oapi.Cdp},
+		})
+		require.True(t, ok)
+		require.NotNil(t, env.Event.Source.Metadata)
+		return *env.Event.Source.Metadata
+	}
+
+	t.Run("put stamps and echoes the browser session", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withSession("browser-1", "checkout")})
+		require.NoError(t, err)
+		created := resp.(oapi.PutTelemetry201JSONResponse)
+		require.NotNil(t, created.Config.BrowserSession)
+		assert.Equal(t, "browser-1", *created.Config.BrowserSession.Id)
+		assert.Equal(t, "checkout", *created.Config.BrowserSession.Name)
+
+		meta := publishMetadata(t, svc)
+		assert.Equal(t, "browser-1", meta[telemetry.MetadataKeySessionID])
+		assert.Equal(t, "checkout", meta[telemetry.MetadataKeySessionName])
+	})
+
+	t.Run("put on a running session switches to the new browser session", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withSession("browser-1", "first")})
+		require.NoError(t, err)
+		telemetrySessionID := publishMetadata(t, svc)[telemetry.MetadataKeyTelemetrySessionID]
+
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withSession("browser-2", "")})
+		require.NoError(t, err)
+		require.IsType(t, oapi.PutTelemetry200JSONResponse{}, resp)
+
+		meta := publishMetadata(t, svc)
+		assert.Equal(t, "browser-2", meta[telemetry.MetadataKeySessionID])
+		assert.NotContains(t, meta, telemetry.MetadataKeySessionName, "a PUT replaces the identity wholesale")
+		assert.Equal(t, telemetrySessionID, meta[telemetry.MetadataKeyTelemetrySessionID])
+	})
+
+	t.Run("put without the block clears it", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withSession("browser-1", "first")})
+		require.NoError(t, err)
+
+		resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withSession("", "")})
+		require.NoError(t, err)
+		assert.Nil(t, resp.(oapi.PutTelemetry200JSONResponse).Config.BrowserSession)
+
+		meta := publishMetadata(t, svc)
+		assert.NotContains(t, meta, telemetry.MetadataKeySessionID)
+		assert.NotContains(t, meta, telemetry.MetadataKeySessionName)
+	})
+
+	t.Run("patch merges per field and leaves capture alone", func(t *testing.T) {
+		svc := newTestService(t, newMockRecordManager())
+		_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: withSession("browser-1", "first")})
+		require.NoError(t, err)
+		before := svc.telemetrySession.Config()
+
+		resp, err := svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			BrowserSession: &oapi.BrowserTelemetrySessionConfig{Name: lo.ToPtr("renamed")},
+		}})
+		require.NoError(t, err)
+		patched := resp.(oapi.PatchTelemetry200JSONResponse)
+		assert.Equal(t, "browser-1", *patched.Config.BrowserSession.Id)
+		assert.Equal(t, "renamed", *patched.Config.BrowserSession.Name)
+		assert.ElementsMatch(t, before.Categories, svc.telemetrySession.Config().Categories)
+
+		meta := publishMetadata(t, svc)
+		assert.Equal(t, "browser-1", meta[telemetry.MetadataKeySessionID])
+		assert.Equal(t, "renamed", meta[telemetry.MetadataKeySessionName])
+
+		_, err = svc.PatchTelemetry(ctx, oapi.PatchTelemetryRequestObject{Body: &oapi.BrowserTelemetryConfig{
+			BrowserSession: &oapi.BrowserTelemetrySessionConfig{Name: lo.ToPtr("")},
+		}})
+		require.NoError(t, err)
+		meta = publishMetadata(t, svc)
+		assert.Equal(t, "browser-1", meta[telemetry.MetadataKeySessionID])
+		assert.NotContains(t, meta, telemetry.MetadataKeySessionName, "an empty name clears it")
 	})
 }
 

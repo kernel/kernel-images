@@ -112,9 +112,10 @@ func (s *ApiService) PatchTelemetry(ctx context.Context, req oapi.PatchTelemetry
 		return oapi.PatchTelemetry404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "telemetry is not configured"}}, nil
 	}
 
-	// Nothing to merge when neither the category block nor a sink toggle is
-	// present; skip the reconcile and echo current state, as before.
-	if req.Body == nil || (req.Body.Browser == nil && req.Body.Export == nil && req.Body.Storage == nil) {
+	// Nothing to merge when neither the category block, a sink toggle, nor the
+	// browser session identity is present; skip the reconcile and echo current
+	// state, as before.
+	if req.Body == nil || (req.Body.Browser == nil && req.Body.Export == nil && req.Body.Storage == nil && req.Body.BrowserSession == nil) {
 		return oapi.PatchTelemetry200JSONResponse(s.buildTelemetryResponse()), nil
 	}
 
@@ -343,11 +344,18 @@ func containsCategory(cats []oapi.TelemetryEventCategory, target oapi.TelemetryE
 func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.TelemetryConfig, bool, error) {
 	exportOTLP := exportOTLPFromOAPI(cfg)
 	storeS2 := storeS2FromOAPI(cfg)
+	sessionID, sessionName := browserSessionFromOAPI(cfg)
 	if cfg == nil || cfg.Browser == nil {
 		// No per-category settings: resolve to the explicit default set so the
 		// effective categories are known before the collector is reconciled.
 		cats := append([]oapi.TelemetryEventCategory(nil), events.DefaultCategories...)
-		return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP, StoreS2: storeS2}, false, nil
+		return telemetry.TelemetryConfig{
+			Categories:         cats,
+			ExportOTLP:         exportOTLP,
+			StoreS2:            storeS2,
+			BrowserSessionID:   sessionID,
+			BrowserSessionName: sessionName,
+		}, false, nil
 	}
 
 	cats := make([]oapi.TelemetryEventCategory, 0, len(events.UserCategories))
@@ -366,7 +374,18 @@ func telemetryConfigFromOAPI(cfg *oapi.BrowserTelemetryConfig) (telemetry.Teleme
 		ExportOTLP:         exportOTLP,
 		StoreS2:            storeS2,
 		ExcludedCdpMethods: excludedCdpMethodsFromOAPI(cfg),
+		BrowserSessionID:   sessionID,
+		BrowserSessionName: sessionName,
 	}, false, nil
+}
+
+// browserSessionFromOAPI reads the browser session identity from a config. An
+// omitted block or field is empty, so a PUT without it clears the identity.
+func browserSessionFromOAPI(cfg *oapi.BrowserTelemetryConfig) (id, name string) {
+	if cfg == nil || cfg.BrowserSession == nil {
+		return "", ""
+	}
+	return lo.FromPtr(cfg.BrowserSession.Id), lo.FromPtr(cfg.BrowserSession.Name)
 }
 
 // exportOTLPFromOAPI reads the OTLP export toggle from a config, defaulting to
@@ -431,6 +450,18 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 		excluded = patched
 	}
 
+	// The browser session identity merges per field: an omitted field is
+	// unchanged, an empty one clears it.
+	sessionID, sessionName := current.BrowserSessionID, current.BrowserSessionName
+	if patch.BrowserSession != nil {
+		if patch.BrowserSession.Id != nil {
+			sessionID = *patch.BrowserSession.Id
+		}
+		if patch.BrowserSession.Name != nil {
+			sessionName = *patch.BrowserSession.Name
+		}
+	}
+
 	if len(active) == 0 {
 		return telemetry.TelemetryConfig{StoreS2: storeS2}, true
 	}
@@ -438,7 +469,14 @@ func mergeTelemetryConfig(current telemetry.TelemetryConfig, patch *oapi.Browser
 	for c := range active {
 		cats = append(cats, c)
 	}
-	return telemetry.TelemetryConfig{Categories: cats, ExportOTLP: exportOTLP, StoreS2: storeS2, ExcludedCdpMethods: excluded}, false
+	return telemetry.TelemetryConfig{
+		Categories:         cats,
+		ExportOTLP:         exportOTLP,
+		StoreS2:            storeS2,
+		ExcludedCdpMethods: excluded,
+		BrowserSessionID:   sessionID,
+		BrowserSessionName: sessionName,
+	}, false
 }
 
 // disabledConfig returns a BrowserTelemetryConfig with every configurable
@@ -502,7 +540,17 @@ func telemetryConfigToOAPI(cfg telemetry.TelemetryConfig) oapi.BrowserTelemetryC
 			Screenshot:  enabled(events.Screenshot),
 			Captcha:     enabled(events.Captcha),
 		},
-		Export:  exportConfigToOAPI(cfg.ExportOTLP),
-		Storage: storageConfigToOAPI(cfg.StoreS2),
+		Export:         exportConfigToOAPI(cfg.ExportOTLP),
+		Storage:        storageConfigToOAPI(cfg.StoreS2),
+		BrowserSession: browserSessionToOAPI(cfg.BrowserSessionID, cfg.BrowserSessionName),
 	}
+}
+
+// browserSessionToOAPI renders the browser session identity for API responses,
+// omitting the block when neither field is set.
+func browserSessionToOAPI(id, name string) *oapi.BrowserTelemetrySessionConfig {
+	if id == "" && name == "" {
+		return nil
+	}
+	return &oapi.BrowserTelemetrySessionConfig{Id: lo.EmptyableToPtr(id), Name: lo.EmptyableToPtr(name)}
 }

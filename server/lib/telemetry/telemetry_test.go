@@ -233,6 +233,86 @@ func TestTelemetrySession(t *testing.T) {
 	})
 }
 
+func TestTelemetrySessionBrowserSessionIdentity(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	t.Run("stamps the browser session onto every event", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("tsess-1", TelemetryConfig{Categories: events.UserCategories, BrowserSessionID: "browser-1", BrowserSessionName: "checkout"})
+		reader := ts.NewReader(0)
+
+		ts.Publish(cdpEvent("console.log", events.Console))
+		ts.Publish(cdpEvent("oom_kill", events.System))
+
+		for range 2 {
+			meta := *readEnvelope(t, reader, ctx).Event.Source.Metadata
+			assert.Equal(t, "tsess-1", meta[MetadataKeyTelemetrySessionID])
+			assert.Equal(t, "browser-1", meta[MetadataKeySessionID])
+			assert.Equal(t, "checkout", meta[MetadataKeySessionName])
+		}
+	})
+
+	t.Run("omits unset fields", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("tsess-1", TelemetryConfig{Categories: events.UserCategories, BrowserSessionID: "browser-1"})
+		reader := ts.NewReader(0)
+
+		ts.Publish(cdpEvent("console.log", events.Console))
+
+		meta := *readEnvelope(t, reader, ctx).Event.Source.Metadata
+		assert.Equal(t, "browser-1", meta[MetadataKeySessionID])
+		assert.NotContains(t, meta, MetadataKeySessionName)
+	})
+
+	t.Run("reconfigure for a new browser session stamps the new identity", func(t *testing.T) {
+		// A pooled instance keeps its telemetry session running across leases
+		// and is reconfigured with the next browser session's identity.
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		cfg := TelemetryConfig{Categories: events.UserCategories, BrowserSessionID: "browser-1", BrowserSessionName: "first"}
+		ts.Start("tsess-1", cfg)
+		reader := ts.NewReader(0)
+
+		// Producers reuse one metadata map across events; the first envelope
+		// must keep its identity after the map is published again.
+		shared := map[string]string{"target_id": "t1"}
+		ev := cdpEvent("page.navigation", events.Page)
+		ev.Source.Metadata = &shared
+		ts.Publish(ev)
+
+		cfg.BrowserSessionID = "browser-2"
+		cfg.BrowserSessionName = ""
+		ts.UpdateConfig(cfg)
+		ts.Publish(ev)
+
+		first := *readEnvelope(t, reader, ctx).Event.Source.Metadata
+		second := *readEnvelope(t, reader, ctx).Event.Source.Metadata
+		assert.Equal(t, "browser-1", first[MetadataKeySessionID])
+		assert.Equal(t, "first", first[MetadataKeySessionName])
+		assert.Equal(t, "browser-2", second[MetadataKeySessionID])
+		assert.NotContains(t, second, MetadataKeySessionName)
+		assert.Equal(t, "tsess-1", second[MetadataKeyTelemetrySessionID], "the telemetry session is unchanged by a reconfigure")
+		assert.Equal(t, "t1", second["target_id"])
+		assert.Equal(t, map[string]string{"target_id": "t1"}, shared, "the producer's map must not be mutated")
+	})
+
+	t.Run("a new session after a stop carries only its own identity", func(t *testing.T) {
+		ts := NewTelemetrySession(newTestEventStream(t, 10))
+		ts.Start("tsess-1", TelemetryConfig{Categories: events.UserCategories, BrowserSessionID: "browser-1", BrowserSessionName: "first"})
+		ts.Stop()
+		assert.Empty(t, ts.Config().BrowserSessionID)
+
+		ts.Start("tsess-2", TelemetryConfig{Categories: events.UserCategories, BrowserSessionID: "browser-2"})
+		reader := ts.NewReader(ts.SessionStartSeq())
+		ts.Publish(cdpEvent("console.log", events.Console))
+
+		meta := *readEnvelope(t, reader, ctx).Event.Source.Metadata
+		assert.Equal(t, "tsess-2", meta[MetadataKeyTelemetrySessionID])
+		assert.Equal(t, "browser-2", meta[MetadataKeySessionID])
+		assert.NotContains(t, meta, MetadataKeySessionName)
+	})
+}
+
 func TestTelemetrySessionStoreS2(t *testing.T) {
 	ts := newTestTelemetrySession(t)
 	assert.False(t, ts.Config().StoreS2, "nothing is stored before a session")
