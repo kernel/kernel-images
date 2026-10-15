@@ -44,6 +44,12 @@ paths:
                 $ref: "#/components/schemas/ProcessExecResult"
         "400":
           $ref: "#/components/responses/BadRequestError"
+        "422":
+          description: Execution stopped. The response includes captured output and must not be retried automatically.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProcessExecFailure"
         "500":
           $ref: "#/components/responses/InternalError"
   /process/spawn:
@@ -95,7 +101,14 @@ paths:
           $ref: "#/components/responses/InternalError"
   /process/{process_id}/stdout/stream:
     get:
-      summary: Stream process stdout over SSE
+      summary: Stream retained process stdout and stderr over SSE
+      description: |
+        Output is retained until 10 seconds after completion. Without a cursor,
+        connections share consumption: reconnects continue unread output and do not
+        repeat a consumed exit event. Supply offset=0 to replay from the beginning,
+        or an offset or Last-Event-ID from a previous data event to resume independently.
+        Exit follows the retained output. Active streams also end when retention
+        expires. PTY output is available through attach.
       operationId: processStdoutStream
       x-telemetry-category: platform
       parameters:
@@ -105,6 +118,18 @@ paths:
           schema:
             type: string
             format: uuid
+        - name: offset
+          in: query
+          description: Resume cursor from a prior output event, or 0 to replay all retained output. Used when Last-Event-ID is absent.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: Last-Event-ID
+          in: header
+          description: Resume cursor from a prior SSE data event. Takes precedence over offset so automatic reconnects resume after the last received event.
+          schema:
+            type: string
       responses:
         "200":
           description: SSE stream of process output and lifecycle events
@@ -7445,11 +7470,13 @@ components:
           default: false
         timeout_sec:
           type: [integer, "null"]
-          description: Maximum execution time in seconds.
+          description: Maximum execution time in seconds, for exec and spawn. Null or zero disables the deadline. Cancellation stops the process group; detached descendants may survive.
+          minimum: 0
+          maximum: 9223372036
       additionalProperties: false
     ProcessExecResult:
       type: object
-      description: Result of a synchronous command execution.
+      description: Result of a synchronous command execution. Output is bounded by the configured process output quotas.
       properties:
         exit_code:
           type: integer
@@ -7463,6 +7490,36 @@ components:
         duration_ms:
           type: integer
           description: Execution duration in milliseconds.
+        output_truncated:
+          type: boolean
+          description: Output could not be fully captured due to a quota, storage error, or a descendant holding a pipe open past the drain deadline.
+      additionalProperties: false
+    ProcessTerminationReason:
+      type: string
+      enum: [process_timeout, output_limit, process_canceled, output_error]
+    ProcessExecFailure:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: "#/components/schemas/ProcessTerminationReason"
+        message:
+          type: string
+        exit_code:
+          type: integer
+          description: Process exit code.
+        stdout_b64:
+          type: string
+          description: Base64-encoded stdout buffer.
+        stderr_b64:
+          type: string
+          description: Base64-encoded stderr buffer.
+        duration_ms:
+          type: integer
+          description: Execution duration in milliseconds.
+        output_truncated:
+          type: boolean
+          description: Output could not be fully captured due to a quota, storage error, or a descendant holding a pipe open past the drain deadline.
       additionalProperties: false
     ProcessSpawnRequest:
       allOf:
@@ -7528,6 +7585,11 @@ components:
         mem_bytes:
           type: integer
           description: Estimated resident memory usage in bytes.
+        termination_reason:
+          $ref: "#/components/schemas/ProcessTerminationReason"
+        output_truncated:
+          type: boolean
+          description: Some output was not captured.
       additionalProperties: false
     ProcessStdinRequest:
       type: object
@@ -7561,6 +7623,10 @@ components:
       type: object
       description: SSE payload representing process output or lifecycle events.
       properties:
+        offset:
+          type: integer
+          format: int64
+          description: Opaque resume cursor after this data event. Also sent as the SSE id.
         stream:
           type: string
           description: Source stream of the data chunk.
@@ -7575,6 +7641,11 @@ components:
         exit_code:
           type: integer
           description: Exit code when the event is "exit".
+        termination_reason:
+          $ref: "#/components/schemas/ProcessTerminationReason"
+        output_truncated:
+          type: boolean
+          description: Some output was not captured.
       additionalProperties: false
     PatchDisplayRequest:
       type: object

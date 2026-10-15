@@ -33,6 +33,7 @@ type drainConn struct {
 	closing         bool
 	hijackedConn    bool
 	writeTimeout    time.Duration
+	writeDeadline   time.Time
 	setDeadline     func(*net.TCPConn, time.Time) error
 	abortConnection func(*net.TCPConn) error
 }
@@ -77,7 +78,7 @@ func (c *drainConn) Write(p []byte) (int, error) {
 			return total + n, err
 		}
 		if timeout > 0 {
-			if err := setDeadline(c.TCPConn, time.Now().Add(timeout)); err != nil {
+			if err := c.refreshWriteDeadline(timeout, setDeadline); err != nil {
 				c.abortNowWithOutcome(abort, responseDrainWriteError, err)
 				return total, err
 			}
@@ -113,7 +114,7 @@ func (c *drainConn) ReadFrom(r io.Reader) (int64, error) {
 			return total + n, err
 		}
 		if timeout > 0 {
-			if err := setDeadline(c.TCPConn, time.Now().Add(timeout)); err != nil {
+			if err := c.refreshWriteDeadline(timeout, setDeadline); err != nil {
 				c.abortNowWithOutcome(abort, responseDrainWriteError, err)
 				return total, err
 			}
@@ -143,6 +144,24 @@ func (c *drainConn) ReadFrom(r io.Reader) (int64, error) {
 			return total, nil
 		}
 	}
+}
+
+func (c *drainConn) SetWriteDeadline(deadline time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.writeDeadline = deadline
+	return c.TCPConn.SetWriteDeadline(deadline)
+}
+
+func (c *drainConn) refreshWriteDeadline(timeout time.Duration, setDeadline func(*net.TCPConn, time.Time) error) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	deadline := time.Now().Add(timeout)
+	// ResponseController deadlines must survive the per-write timeout refresh.
+	if !c.writeDeadline.IsZero() && c.writeDeadline.Before(deadline) {
+		deadline = c.writeDeadline
+	}
+	return setDeadline(c.TCPConn, deadline)
 }
 
 func (c *drainConn) writeConfig() (time.Duration, func(*net.TCPConn, time.Time) error, func(*net.TCPConn) error, bool, error) {

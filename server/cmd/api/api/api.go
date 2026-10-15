@@ -73,8 +73,9 @@ type ApiService struct {
 	watches map[string]*fsWatch
 
 	// Process management
-	procMu sync.RWMutex
-	procs  map[string]*processHandle
+	procMu        sync.RWMutex
+	procs         map[string]*processHandle
+	processOutput *processOutputBudget
 
 	// Neko authenticated client
 	nekoAuthClient *nekoclient.AuthClient
@@ -166,6 +167,7 @@ func New(
 	s2Storage S2Storage,
 	egressPolicy *egresspolicy.State,
 	webauthnHook *webauthnhook.Hook,
+	processOutputConfig ProcessOutputConfig,
 ) (*ApiService, error) {
 	switch {
 	case recordManager == nil:
@@ -186,6 +188,10 @@ func New(
 		return nil, fmt.Errorf("webauthnHook cannot be nil")
 	}
 
+	outputBudget, err := newProcessOutputBudget(processOutputConfig)
+	if err != nil {
+		return nil, err
+	}
 	screenshotEnabled := func() bool { return telemetrySession.CategoryEnabled(events.Screenshot) }
 	mon := cdpmonitor.New(upstreamMgr, telemetrySession.Publish, displayNum, slog.Default(), screenshotEnabled)
 	_ = mon.SetTelemetry(false)
@@ -197,6 +203,7 @@ func New(
 		defaultRecorderID: "default",
 		watches:           make(map[string]*fsWatch),
 		procs:             make(map[string]*processHandle),
+		processOutput:     outputBudget,
 		upstreamMgr:       upstreamMgr,
 		stz:               stz,
 		nekoAuthClient:    nekoAuthClient,
