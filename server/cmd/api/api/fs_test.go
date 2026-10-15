@@ -192,6 +192,14 @@ func TestFileDirOperations(t *testing.T) {
 		t.Fatalf("ListFiles unexpected content: %+v", lf200)
 	}
 
+	listFileResp, err := svc.ListFiles(ctx, oapi.ListFilesRequestObject{Params: oapi.ListFilesParams{Path: filePath}})
+	if err != nil {
+		t.Fatalf("ListFiles on file error: %v", err)
+	}
+	if _, ok := listFileResp.(oapi.ListFiles400JSONResponse); !ok {
+		t.Fatalf("expected 400 when listing a file, got %T", listFileResp)
+	}
+
 	// FileInfo
 	fiResp, err := svc.FileInfo(ctx, oapi.FileInfoRequestObject{Params: oapi.FileInfoParams{Path: filePath}})
 	if err != nil {

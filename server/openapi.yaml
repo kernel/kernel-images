@@ -79,7 +79,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       responses:
         "200":
           description: Status
@@ -104,7 +103,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       responses:
         "200":
           description: SSE stream of process output and lifecycle events
@@ -135,7 +133,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       requestBody:
         required: true
         content:
@@ -166,7 +163,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       requestBody:
         required: true
         content:
@@ -197,7 +193,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       requestBody:
         required: true
         content:

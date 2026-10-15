@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"sync"
 
@@ -204,6 +205,9 @@ func (s *ApiService) ListFiles(ctx context.Context, req oapi.ListFilesRequestObj
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return oapi.ListFiles404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "directory not found"}}, nil
+		}
+		if errors.Is(err, syscall.ENOTDIR) {
+			return oapi.ListFiles400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "path is not a directory"}}, nil
 		}
 		log.Error("failed to read directory", "err", err, "path", path)
 		return oapi.ListFiles500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to read directory"}}, nil
