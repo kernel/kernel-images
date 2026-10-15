@@ -169,6 +169,12 @@ curl http://localhost:10001/recording/download --output recording.mp4
 
 Note: the recording file is encoded into a H.264/MPEG-4 AVC video file. [QuickTime has known issues with playback](https://discussions.apple.com/thread/254851789?sortBy=rank) so please make sure to use a compatible media player!
 
+## Systems diagram
+
+Read about the decisions we made implementing WebRTC and X11 in our [blog post](https://blog.onkernel.com/).
+
+![Systems diagram](./static/images/kernel-x11-webrtc-ffmpeg.png)
+
 ## Documentation
 
 This repo powers our managed [browser infrastructure](https://kernel.sh/docs).
