@@ -213,6 +213,14 @@ func TestProcessNotFoundRoutes(t *testing.T) {
 	require.NoError(t, err)
 	_, ok = killResp.(oapi.ProcessKill404JSONResponse)
 	require.True(t, ok, "expected 404, got %T", killResp)
+
+	resizeResp, err := svc.ProcessResize(ctx, oapi.ProcessResizeRequestObject{
+		ProcessId: id,
+		Body:      &oapi.ProcessResizeRequest{Rows: 1, Cols: 1},
+	})
+	require.NoError(t, err)
+	_, ok = resizeResp.(oapi.ProcessResize404JSONResponse)
+	require.True(t, ok, "expected 404, got %T", resizeResp)
 }
 
 func TestProcessExec_CommandNotFound(t *testing.T) {

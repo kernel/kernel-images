@@ -615,7 +615,7 @@ func ptrOf[T any](v T) *T { return &v }
 // Resize PTY-backed process
 // (POST /process/{process_id}/resize)
 func (s *ApiService) ProcessResize(ctx context.Context, request oapi.ProcessResizeRequestObject) (oapi.ProcessResizeResponseObject, error) {
-	id := request.ProcessId.String()
+	id := request.ProcessId
 	if request.Body == nil {
 		return oapi.ProcessResize400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body required"}}, nil
 	}
