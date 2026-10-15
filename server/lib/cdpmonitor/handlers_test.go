@@ -193,6 +193,53 @@ func TestNetworkEvents(t *testing.T) {
 		assert.Equal(t, "net::ERR_CONNECTION_REFUSED", data["error_text"])
 	})
 
+	t.Run("credentials_left_out", func(t *testing.T) {
+		cp := ec.checkpoint()
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.requestWillBeSent",
+			"params": map[string]any{
+				"requestId": "req-creds",
+				"type":      "XHR",
+				"request": map[string]any{
+					"method":   "POST",
+					"url":      "https://login.example.com/session",
+					"postData": `{"password":"canary-password"}`,
+					"headers": map[string]any{
+						"Content-Type":        "application/json",
+						"authorization":       "Bearer canary-token",
+						"Proxy-Authorization": "Basic canary-proxy",
+						"COOKIE":              "sid=canary-cookie",
+					},
+				},
+			},
+		})
+		ev := ec.waitForNew(t, "network_request", cp, 2*time.Second)
+		var data map[string]any
+		require.NoError(t, json.Unmarshal(ev.Data, &data))
+		assert.NotContains(t, data, "post_data")
+		assert.Equal(t, map[string]any{"Content-Type": "application/json"}, data["headers"])
+
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.responseReceived",
+			"params": map[string]any{
+				"requestId": "req-creds",
+				"response": map[string]any{
+					"status": 200, "statusText": "OK", "mimeType": "application/json",
+					"headers": map[string]any{"Content-Type": "application/json", "Set-Cookie": "sid=canary-cookie"},
+				},
+			},
+		})
+		srv.sendToMonitor(t, map[string]any{
+			"method": "Network.loadingFinished",
+			"params": map[string]any{"requestId": "req-creds"},
+		})
+		ev2 := ec.waitForNew(t, "network_response", cp, 3*time.Second)
+		assert.NotContains(t, string(ev2.Data), "canary")
+		var data2 map[string]any
+		require.NoError(t, json.Unmarshal(ev2.Data, &data2))
+		assert.Equal(t, map[string]any{"Content-Type": "application/json"}, data2["headers"])
+	})
+
 	t.Run("binary_resource_skips_body", func(t *testing.T) {
 		getBodyCalled.Store(false)
 		cp := ec.checkpoint()

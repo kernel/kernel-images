@@ -114,8 +114,7 @@ func TestNetworkCaptureFromWorkers(t *testing.T) {
 			require.NoError(t, json.Unmarshal(requestEvent.Data, &request))
 			require.Equal(t, worker.targetType, string(request.TargetType))
 			require.True(t, request.TargetType.Valid())
-			require.NotNil(t, request.PostData)
-			require.JSONEq(t, body, *request.PostData)
+			require.Nil(t, request.PostData, "request bodies are not published")
 			responseEvent := waitForNetworkURL(t, ec, EventNetworkResponse, url)
 			var response oapi.BrowserNetworkResponseEventData
 			require.NoError(t, json.Unmarshal(responseEvent.Data, &response))

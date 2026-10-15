@@ -2363,8 +2363,9 @@ components:
     BrowserHttpHeaders:
       type: object
       description: >
-        HTTP headers map forwarded as-is from CDP without normalization.
-        Values are typically strings but may be any JSON type.
+        HTTP headers map forwarded from CDP without normalization, except that
+        credential headers (Authorization, Proxy-Authorization, Cookie, Set-Cookie)
+        are left out. Values are typically strings but may be any JSON type.
       additionalProperties: true
     BrowserTargetType:
       type: string
@@ -2521,7 +2522,7 @@ components:
               description: URL of the document that initiated the request.
             headers:
               $ref: "#/components/schemas/BrowserHttpHeaders"
-              description: Request headers.
+              description: Request headers, without Authorization, Proxy-Authorization and Cookie.
             resource_type:
               type: string
               description: CDP Network.ResourceType for the request, passed through as-is from Chrome. Known values include Document, Fetch, XHR, Script, Stylesheet, Image, Media, Font, TextTrack, EventSource, WebSocket, Manifest, Prefetch, Other, and more.
@@ -2530,7 +2531,7 @@ components:
               description: CDP Initiator.type indicating what caused the request, passed through as-is from Chrome. Known values include script, parser, preload, and other.
             post_data:
               type: string
-              description: Request body for POST/PUT requests, if available.
+              description: Not captured. Request bodies can carry passwords, so they are left out.
             is_redirect:
               type: boolean
               description: True if this request is the result of a redirect.
@@ -2579,7 +2580,7 @@ components:
               description: HTTP response status text (e.g. OK, Not Found).
             headers:
               $ref: "#/components/schemas/BrowserHttpHeaders"
-              description: Response headers.
+              description: Response headers, without Set-Cookie.
             mime_type:
               type: string
               description: MIME type of the response (e.g. text/html, application/json).
