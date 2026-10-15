@@ -606,23 +606,3 @@ describe('taps with the focus stream', () => {
     }
   })
 })
-
-describe('desktop', () => {
-  test('a desktop IME composition is left to the Guacamole keyboard, as before', () => {
-    const methods = videoComponent({})
-    const calls: string[] = []
-    const ctx = {
-      is_touch_device: false,
-      inputEnabled: true,
-      keepText: false,
-      textInput: {
-        compositionStart: () => calls.push('start'),
-        compositionEnd: (data: string) => calls.push(`end ${data}`),
-      },
-      resetInputSentinel: () => calls.push('reset'),
-    }
-    methods.onCompositionStart.call(ctx)
-    methods.onCompositionEnd.call(ctx, { data: 'é' })
-    expect(calls).toEqual([])
-  })
-})

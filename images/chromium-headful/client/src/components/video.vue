@@ -1625,15 +1625,11 @@
       this.textInput.keyEvent(e.type === 'keyup')
     }
 
-    // Composition is how touch keyboards deliver text; a desktop IME's text
-    // is left to the Guacamole keyboard, as it always was.
     onCompositionStart() {
-      if (!this.is_touch_device) return
       this.textInput.compositionStart()
     }
 
     onCompositionEnd(e: CompositionEvent) {
-      if (!this.is_touch_device) return
       // the overlay's edits already sent a composition it keeps
       this.textInput.compositionEnd(e.data || '', this.inputEnabled && !this.keepText)
       if (!this.keepText || !this.inputEnabled || !this.typedText.edit(this._overlay.value)) this.resetInputSentinel()
