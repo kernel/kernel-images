@@ -50,7 +50,9 @@ const WITH_KEYBOARD = 500
 // shows for a focus inside a tap, or when inputmode="none" is removed from an
 // overlay focused inside one, covers the visual viewport while it is up, and
 // goes away on a blur. The remote browser keeps or drops focus on its fields.
-function phone() {
+// zoomOnFirstFocus: iOS zooms the page in as the first field takes focus.
+// ignoreHeld: iOS shows the keyboard for a focus with inputmode="none".
+function phone(options: { zoomOnFirstFocus?: boolean; ignoreHeld?: boolean } = {}) {
   let now = 0
   let timers: { fn: () => void; at: number; id: number }[] = []
   let nextTimer = 1
@@ -77,7 +79,7 @@ function phone() {
   }
 
   const document = { activeElement: null as unknown, hasFocus: () => true }
-  const viewport = { height: FULL }
+  const viewport = { width: 390, height: FULL, scale: 1 }
   const window = { visualViewport: viewport, innerWidth: 390, innerHeight: FULL, self: 1, top: 1 }
   const blurs: string[] = []
   const fetch = (url: string) => {
@@ -88,10 +90,20 @@ function phone() {
 
   let inTap = false
   let keyboardUp = false
+  let zoomed = false
   const attrs = new Map<string, string>()
   const setKeyboard = (up: boolean) => {
+    if (up && options.zoomOnFirstFocus && !zoomed) {
+      // the zoom comes in the same viewport change as the keyboard; iOS reports
+      // the zoomed viewport through the window's size too
+      zoomed = true
+      viewport.scale = 1.2
+      viewport.width = 390 / 1.2
+      window.innerWidth = 390 / 1.2
+      window.innerHeight = FULL / 1.2
+    }
     keyboardUp = up
-    viewport.height = up ? WITH_KEYBOARD : FULL
+    viewport.height = (up ? WITH_KEYBOARD : FULL) / viewport.scale
     ctx.measureSoftKeyboard()
   }
   const el: Record<string, any> = {
@@ -111,7 +123,7 @@ function phone() {
       if (document.activeElement === el) return
       document.activeElement = el
       ctx.onOverlayFocus()
-      if (inTap && attrs.get('inputmode') !== 'none') setKeyboard(true)
+      if (inTap && (attrs.get('inputmode') !== 'none' || options.ignoreHeld)) setKeyboard(true)
     },
     blur: () => {
       if (document.activeElement !== el) return
@@ -131,6 +143,7 @@ function phone() {
     keyboardOpen: false,
     keepText: false,
     overlayHeld: false,
+    overlayFocused: false,
     ownBlur: false,
     softKeyboardUp: false,
     keyboardMeasurable: true,
@@ -327,6 +340,42 @@ describe('hiding and raising the keyboard again', () => {
     t.tap({ x: 50, y: 140 })
     expect(t.keyboard()).toBe(true)
     expect(t.row()).toBe(true)
+  })
+})
+
+describe('the first keyboard after loading the live view', () => {
+  test('a first tap on a field shows the keyboard state, Hide and the keys row', () => {
+    for (const options of [{}, { zoomOnFirstFocus: true }]) {
+      const t = phone(options)
+      t.tap({ x: 50, y: 140 })
+      expect(t.keyboard()).toBe(true)
+      expect(t.ctx.keyboardShown).toBe(true)
+      expect(t.row()).toBe(true)
+      t.advance(1000)
+      expect(t.ctx.keyboardShown).toBe(true)
+
+      // the control says Hide, and does
+      t.toggle()
+      expect(t.keyboard()).toBe(false)
+      expect(t.ctx.keyboardShown).toBe(false)
+      t.report(null)
+      t.tap({ x: 50, y: 140 })
+      expect(t.ctx.keyboardShown).toBe(true)
+      expect(t.row()).toBe(true)
+    }
+  })
+
+  test('a keyboard iOS shows for the held focus counts as shown', () => {
+    const t = phone({ ignoreHeld: true })
+    // no field under the tap: the overlay is held, and iOS shows the keyboard anyway
+    t.tap({ x: 50, y: 400 })
+    expect(t.keyboard()).toBe(true)
+    expect(t.ctx.keyboardShown).toBe(true)
+    expect(t.row()).toBe(true)
+    // the control hides it
+    t.toggle()
+    expect(t.keyboard()).toBe(false)
+    expect(t.row()).toBe(false)
   })
 })
 

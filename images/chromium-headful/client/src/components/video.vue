@@ -91,7 +91,7 @@
         :mode="touchLayout.mode"
         :position="controlPosition"
         :safe-area="safeArea"
-        :keyboard-open="keyboardOpen"
+        :keyboard-open="keyboardShown"
         :area-width="playerWidth"
         :area-height="playerHeight"
         :keyboard-inset="keyboardInset"
@@ -406,6 +406,8 @@
     // the soft keyboard is up, as far as the viewport shows
     private softKeyboardUp = false
     private keyboardMeasurable = false
+    // the overlay has focus, held or not
+    private overlayFocused = false
     private keyboardChangedAt = -Infinity
     // the overlay is focused with inputmode="none", waiting to raise the keyboard
     private overlayHeld = false
@@ -591,11 +593,15 @@
       return this.keyboardShown && this.showTouchControls
     }
 
-    // A focused overlay with no keyboard on screen, after iOS dismissed it or
-    // refused it, does not count. Where the viewport cannot show the keyboard,
-    // the focus is all there is to go by.
+    // Whether the soft keyboard is on screen, which the keys row, the keyboard
+    // control's Hide and the control's action all follow. Where the viewport
+    // shows the keyboard, it is a focused overlay with the keyboard measured
+    // up, however the focus came about; a focused overlay with no keyboard, after
+    // iOS dismissed it or refused it, does not count. Where the viewport cannot
+    // show it, the focus for typing is all there is to go by.
     get keyboardShown() {
-      return this.keyboardOpen && (this.softKeyboardUp || !this.keyboardMeasurable)
+      if (!this.keyboardMeasurable) return this.keyboardOpen
+      return this.overlayFocused && this.softKeyboardUp
     }
 
     get inputEnabled() {
@@ -1532,7 +1538,7 @@
     measureSoftKeyboard() {
       const viewport = window.visualViewport
       if (!viewport || !this.is_touch_device) return
-      const change = this.softKeyboard.measure(window.innerWidth, viewport.height, window.innerHeight)
+      const change = this.softKeyboard.measure(viewport)
       this.softKeyboardUp = this.softKeyboard.up
       this.keyboardMeasurable = this.softKeyboard.measurable
       const settled = performance.now() - this.keyboardChangedAt > KEYBOARD_SETTLE_MS
@@ -1577,7 +1583,7 @@
     }
 
     toggleMobileKeyboard() {
-      if (this.keyboardOpen) {
+      if (this.keyboardShown) {
         this.hideKeyboard()
       } else {
         this.focusForTyping(this.focusLive ? this.focusKeyboard.field : null)
@@ -1780,6 +1786,7 @@
     }
 
     onOverlayFocus() {
+      this.overlayFocused = true
       if (this.tapKeyboard.holding || this.focusKeyboard.holding) return
       this.keyboardOpen = true
       if (this.hosting) {
@@ -1793,6 +1800,7 @@
       // page for another app or tab keeps the remote's focus
       if (!this.ownBlur && this.keyboardOpen && document.hasFocus()) this.blurRemote()
       this.overlayHeld = false
+      this.overlayFocused = false
       if (this.ctrlLatched) this.textInput.latchCtrl(false)
       this.tapKeyboard.blur()
       this.focusKeyboard.blur()
