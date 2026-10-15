@@ -16,12 +16,15 @@ import (
 
 // fakeBrowser answers the commands the watcher sends for one tab. Creating
 // the isolated world fails while failWorlds is above zero. With frameGone, the
-// main frame is gone from the frame tree after the first scan.
+// main frame is gone from the frame tree after the first scan. With oopif, the
+// tab has an out-of-process iframe that its frame tree lists too.
 type fakeBrowser struct {
 	mu         sync.Mutex
 	failWorlds int
 	frameGone  bool
+	oopif      bool
 	methods    map[string]int
+	worlds     map[string]int
 }
 
 func (f *fakeBrowser) serve(t *testing.T) string {
@@ -48,6 +51,10 @@ func (f *fakeBrowser) serve(t *testing.T) string {
 				ID        int64  `json:"id"`
 				Method    string `json:"method"`
 				SessionID string `json:"sessionId"`
+				Params    struct {
+					TargetID string `json:"targetId"`
+					FrameID  string `json:"frameId"`
+				} `json:"params"`
 			}
 			require.NoError(t, json.Unmarshal(data, &request))
 			respond := func(result any) { write(map[string]any{"id": request.ID, "result": result}) }
@@ -60,6 +67,12 @@ func (f *fakeBrowser) serve(t *testing.T) string {
 			if failWorld {
 				f.failWorlds--
 			}
+			if request.Method == "Page.createIsolatedWorld" {
+				f.worlds[request.SessionID+"/"+request.Params.FrameID]++
+			}
+			// the parent's session cannot reach a frame in another process
+			remoteFrame := request.SessionID == "session" && request.Params.FrameID == "oopif"
+			oopif := f.oopif
 			frameGone := f.frameGone && f.methods["Page.getFrameTree"] > 1
 			f.mu.Unlock()
 
@@ -67,17 +80,32 @@ func (f *fakeBrowser) serve(t *testing.T) string {
 			case "Target.setDiscoverTargets":
 				respond(map[string]any{})
 			case "Target.getTargets":
-				respond(map[string]any{"targetInfos": []map[string]any{{"targetId": "tab", "type": "page", "url": "https://example.com/"}}})
+				targets := []map[string]any{{"targetId": "tab", "type": "page", "url": "https://example.com/"}}
+				if oopif {
+					targets = append(targets, map[string]any{"targetId": "oopif", "type": "iframe", "url": "https://other.example/"})
+				}
+				respond(map[string]any{"targetInfos": targets})
 			case "Target.attachToTarget":
-				respond(map[string]any{"sessionId": "session"})
-			case "Page.getFrameTree":
-				if frameGone {
-					respond(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "replacement"}}})
+				if request.Params.TargetID == "oopif" {
+					respond(map[string]any{"sessionId": "oopif-session"})
 				} else {
+					respond(map[string]any{"sessionId": "session"})
+				}
+			case "Page.getFrameTree":
+				switch {
+				case request.SessionID == "oopif-session":
+					respond(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "oopif"}}})
+				case frameGone:
+					respond(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "replacement"}}})
+				case oopif:
+					respond(map[string]any{"frameTree": map[string]any{
+						"frame": map[string]any{"id": "main"}, "childFrames": []any{map[string]any{"frame": map[string]any{"id": "oopif"}}},
+					}})
+				default:
 					respond(map[string]any{"frameTree": map[string]any{"frame": map[string]any{"id": "main"}}})
 				}
 			case "Page.createIsolatedWorld":
-				if failWorld {
+				if failWorld || remoteFrame {
 					fail("Cannot create isolated world")
 				} else {
 					respond(map[string]any{"executionContextId": 7})
@@ -104,6 +132,16 @@ func (f *fakeBrowser) serve(t *testing.T) string {
 	return "ws" + strings.TrimPrefix(server.URL, "http")
 }
 
+func newFakeBrowser() *fakeBrowser {
+	return &fakeBrowser{methods: make(map[string]int), worlds: make(map[string]int)}
+}
+
+func (f *fakeBrowser) worldsFor(session, frame string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.worlds[session+"/"+frame]
+}
+
 func (f *fakeBrowser) count(method string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -111,7 +149,8 @@ func (f *fakeBrowser) count(method string) int {
 }
 
 func TestAFrameThatFailsForAWhileIsWatchedOnceItWorks(t *testing.T) {
-	browser := &fakeBrowser{failWorlds: 2*injectAttempts + 1, methods: make(map[string]int)}
+	browser := newFakeBrowser()
+	browser.failWorlds = 2*injectAttempts + 1
 	w := New(&staticUpstream{url: browser.serve(t)}, slog.Default())
 	defer w.Close()
 	states, unsubscribe := w.Subscribe()
@@ -126,7 +165,9 @@ func TestAFrameThatFailsForAWhileIsWatchedOnceItWorks(t *testing.T) {
 }
 
 func TestAFrameThatIsGoneIsDropped(t *testing.T) {
-	browser := &fakeBrowser{failWorlds: 1 << 20, frameGone: true, methods: make(map[string]int)}
+	browser := newFakeBrowser()
+	browser.failWorlds = 1 << 20
+	browser.frameGone = true
 	w := New(&staticUpstream{url: browser.serve(t)}, slog.Default())
 	defer w.Close()
 	_, unsubscribe := w.Subscribe()
@@ -135,4 +176,17 @@ func TestAFrameThatIsGoneIsDropped(t *testing.T) {
 	require.Eventually(t, func() bool { return browser.count("Page.createIsolatedWorld") == injectAttempts }, 5*time.Second, 10*time.Millisecond)
 	time.Sleep(4 * retryDelay)
 	require.Equal(t, injectAttempts, browser.count("Page.createIsolatedWorld"))
+}
+
+func TestAnOutOfProcessFrameIsWatchedThroughItsOwnSession(t *testing.T) {
+	browser := newFakeBrowser()
+	browser.oopif = true
+	w := New(&staticUpstream{url: browser.serve(t)}, slog.Default())
+	defer w.Close()
+	_, unsubscribe := w.Subscribe()
+	defer unsubscribe()
+
+	require.Eventually(t, func() bool { return browser.worldsFor("oopif-session", "oopif") > 0 }, 5*time.Second, 10*time.Millisecond)
+	time.Sleep(10 * retryDelay)
+	require.LessOrEqual(t, browser.worldsFor("session", "oopif"), injectAttempts)
 }

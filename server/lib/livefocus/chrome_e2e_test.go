@@ -134,6 +134,11 @@ func TestWatcherReportsFocusAndFields(t *testing.T) {
 	state = waitFor(t, states, "focus in the cross-origin frame", func(s State) bool { return s.Focus != nil })
 	require.Equal(t, "tel", state.Focus.Type)
 	require.Nil(t, state.Focus.Rect, "a cross-origin frame's position is unknown")
+	// The cross-origin frame is watched through its own session. Its parent's
+	// frame tree does not list it, so nothing retries it there.
+	worlds := recorder.count("Page.createIsolatedWorld")
+	time.Sleep(2 * time.Second)
+	require.Equal(t, worlds, recorder.count("Page.createIsolatedWorld"))
 
 	page.navigate(t, ctx, site.URL+"/form")
 	waitFor(t, states, "the form again", func(s State) bool { return len(s.Fields) >= 7 })

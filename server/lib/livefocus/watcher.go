@@ -375,9 +375,12 @@ func (c *connection) scanOnce(sessionID string, session *watchedSession) {
 	walk(result.FrameTree, true)
 }
 
-// frameExists reports whether the frame is still in its session's frame tree,
-// and true when that cannot be told.
+// frameExists reports whether the frame is still in its session's frame tree
+// and has no session of its own, and true when that cannot be told.
 func (c *connection) frameExists(ctx context.Context, key frameKey) bool {
+	if c.ownSession(key) {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	raw, err := c.protocol.Send(ctx, "Page.getFrameTree", nil, key.session)
@@ -409,8 +412,25 @@ func (t frameTree) contains(frameID string) bool {
 	return false
 }
 
+// ownSession reports whether the frame is an out-of-process iframe with its
+// own session, through which it is watched instead. An iframe target's ID is
+// its frame's ID.
+func (c *connection) ownSession(key frameKey) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id, session := range c.sessions {
+		if id != key.session && !session.page && session.targetID == key.frame {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *connection) watchFrame(sessionID string, session *watchedSession, frameID string, top bool) {
 	key := frameKey{session: sessionID, frame: frameID}
+	if c.ownSession(key) {
+		return
+	}
 	tab := ""
 	if session.page {
 		tab = session.targetID
