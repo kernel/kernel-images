@@ -420,4 +420,15 @@ describe('live view connect failures', () => {
 
     expect(posted).toHaveLength(1)
   })
+
+  // The stages run in sequence, so their bounds are a budget: an embedder that
+  // gives up before the last one expires never sees the reason for the stage that
+  // stalled. The watchdog in browsers/live-view.mdx is set above this sum, which
+  // is why raising a bound to 30s broke it — an embedder following that snippet
+  // remounted first and the media reason never arrived. Change one, change both.
+  test('the stage bounds fit inside the watchdog the live-view docs set', () => {
+    const budget = Object.values(CONNECT_STAGE_TIMEOUT_MS).reduce((sum, ms) => sum + ms, 0)
+
+    expect(budget).toBeLessThanOrEqual(23000)
+  })
 })

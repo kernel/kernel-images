@@ -17,6 +17,10 @@ import {
 // only "timeout", so each stage fails on its own bound with its own reason. A
 // bound expiring is terminal rather than retried: a second attempt against the
 // same peer costs the viewer time an embedder can spend on a new session.
+//
+// The bounds are sequential, so they are also a budget: an embedder that gives
+// up on a viewer before the last one expires never sees the reason. The three
+// sum to 23s, and the watchdog in the live-view docs is set above that.
 export type ConnectStage = 'transport' | 'signaling' | 'media'
 
 export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
@@ -32,11 +36,13 @@ export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
   // the remote candidates arrive in the offer — measured 1-16ms direct, ~90ms
   // relay-only. The bound covers through ICE `connected` rather than stopping at
   // `checking`, and the timings above only recorded `checking`: 44 of 130 runs
-  // have no `connected` timestamp, all 30 ap-southeast runs among them. Nothing
-  // measured the stretch the bound now waits on, so 30s is an interim ceiling for
-  // it rather than a calibrated one, to be replaced once per-region timings
-  // through a successful connect exist.
-  media: 30000,
+  // have no `connected` timestamp, all 30 ap-southeast runs among them, so the
+  // stretch this waits on is only partly measured. 5s is a ceiling on that
+  // stretch rather than a calibrated value, and is to be replaced by per-region
+  // timings through a successful connect. It is not 30s: an embedder that
+  // remounts 15s after mount — the example the live-view docs ship — throws the
+  // frame away before a 30s bound could report which stage stalled.
+  media: 5000,
 }
 
 // Sent to the parent frame so an embedder can pick a recovery without parsing
