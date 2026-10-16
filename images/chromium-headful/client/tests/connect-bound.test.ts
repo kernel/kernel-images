@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { BaseClient, CONNECT_STAGE_TIMEOUT_MS } from '../src/neko/base'
+import { BaseClient, CONNECT_STAGE_TIMEOUT_MS, resolveConnectStageTimeoutMs } from '../src/neko/base'
 
 const posted: Record<string, any>[] = []
 const timers: { id: number; delay: number; run: () => void }[] = []
@@ -419,5 +419,38 @@ describe('live view connect failures', () => {
     runTimers(CONNECT_STAGE_TIMEOUT_MS.signaling)
 
     expect(posted).toHaveLength(1)
+  })
+
+  // The stages run in sequence, so their bounds are a budget: an embedder that
+  // gives up before the last one expires never sees the reason for the stage that
+  // stalled. These are the values the live-view docs quote, and the proxy can
+  // override any of them per region, so a change here has to move the docs too.
+  test('the shipped defaults are the bounds the live-view docs quote', () => {
+    expect(CONNECT_STAGE_TIMEOUT_MS).toEqual({ transport: 15000, signaling: 3000, media: 30000 })
+  })
+
+  // The live-view proxy injects window.KERNEL_LIVE_VIEW_CONNECT_TIMEOUTS_MS
+  // with the page, so a region can retune a stage without a browser image
+  // release.
+  describe('injected connect bounds', () => {
+    test('a stage the override names is used, and unnamed stages keep their default', () => {
+      expect(resolveConnectStageTimeoutMs({ media: 9000 })).toEqual({ ...CONNECT_STAGE_TIMEOUT_MS, media: 9000 })
+    })
+
+    test('values that are not a positive number of milliseconds are ignored', () => {
+      const overrides = { transport: 0, signaling: -1, media: '5000' }
+
+      expect(resolveConnectStageTimeoutMs(overrides)).toEqual(CONNECT_STAGE_TIMEOUT_MS)
+    })
+
+    test('a stage that is not a bound is ignored', () => {
+      expect(resolveConnectStageTimeoutMs({ connect: 9000 })).toEqual(CONNECT_STAGE_TIMEOUT_MS)
+    })
+
+    test('no injected override leaves every stage at its default', () => {
+      expect(resolveConnectStageTimeoutMs()).toEqual(CONNECT_STAGE_TIMEOUT_MS)
+      expect(resolveConnectStageTimeoutMs(null)).toEqual(CONNECT_STAGE_TIMEOUT_MS)
+      expect(resolveConnectStageTimeoutMs('30000')).toEqual(CONNECT_STAGE_TIMEOUT_MS)
+    })
   })
 })
