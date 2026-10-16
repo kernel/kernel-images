@@ -1,0 +1,48 @@
+# kernel-light — light openbox theme for the headful browser image.
+# Only chromium popup windows are decorated (the main window draws its own CSD
+# and requests no frame), so this only has to look right on a small dialog.
+# Palette per the kernel design system: beige #f2f0e7, charcoal #212225,
+# grey-light-11 #60646c, grey-light-07 #d0d2d9 (borders), kernel green #81b300.
+# Closest match to mutter's default beige titlebar, so the WM swap is nearly
+# invisible on decorated popups.
+
+border.width                              : 1
+padding.width                             : 6
+padding.height                             : 10
+window.client.padding.width               : 0
+window.client.padding.height              : 0
+window.handle.width                       : 0
+
+*.justify                                 : center
+*.font                                    : shadow=n:font=DejaVu Sans:size=11
+
+# frame border
+window.active.border.color                : #d0d2d9
+window.inactive.border.color              : #e0e1e6
+window.*.client.color                     : #f2f0e7
+
+# titlebar: flat kernel beige, charcoal text
+window.*.title.bg                         : flat solid
+window.active.title.bg.color              : #f2f0e7
+window.inactive.title.bg.color            : #e1dccf
+window.active.label.bg                    : parentrelative
+window.inactive.label.bg                  : parentrelative
+window.active.label.text.color            : #212225
+window.inactive.label.text.color          : #60646c
+
+# buttons: charcoal controls on beige
+window.*.button.*.bg                      : parentrelative
+window.active.button.unpressed.image.color   : #212225
+window.active.button.hover.image.color       : #60646c
+window.active.button.pressed.image.color     : #81b300
+window.active.button.disabled.image.color    : #d0d2d9
+window.inactive.button.unpressed.image.color : #60646c
+window.inactive.button.hover.image.color     : #212225
+window.active.button.toggled.unpressed.image.color : #81b300
+
+
+osd.border.color                          : #d0d2d9
+osd.bg.color                              : #f2f0e7
+osd.label.text.color                      : #212225
+osd.hilight.bg.color                      : #81b300
+osd.unhilight.bg.color                    : #d0d2d9
