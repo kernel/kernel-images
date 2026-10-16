@@ -702,9 +702,9 @@ func (c *Client) findPageTargetID(ctx context.Context) (string, error) {
 // into the maximized state via Browser.setWindowBounds. It is idempotent —
 // invoking it on a window already in maximized state is a no-op.
 //
-// A mutter-managed window in maximized state auto-tracks RANDR resizes
+// A WM-managed window in maximized state auto-tracks RANDR resizes
 // (the WM reflows it to fill the new root). So after a display resize the
-// server only has to make sure the window is in maximized state; mutter
+// server only has to make sure the window is in maximized state; the WM
 // does the rest. This replaces the prior approach of restarting chromium
 // so it could re-apply --start-maximized.
 //
@@ -716,7 +716,7 @@ func (c *Client) SetWindowBoundsMaximized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Both "maximized" and "fullscreen" cause mutter to reflow the window
+	// Both "maximized" and "fullscreen" cause the WM to reflow the window
 	// to fill the new X root on RANDR — that's the only invariant we
 	// need. Demoting a kiosk fullscreen window to maximized would break
 	// kiosk mode, so leave fullscreen alone.

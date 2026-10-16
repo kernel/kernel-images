@@ -6093,7 +6093,7 @@ type BrowserServiceCrashedEventData struct {
 	// Pid PID of the crashed process. Absent when the process manager gave up after exhausting restart attempts and is no longer tracking a live PID.
 	Pid *int `json:"pid,omitempty"`
 
-	// ServiceName Program name of the crashed service (e.g. `chromium`, `mutter`, `kernel-images-api`).
+	// ServiceName Program name of the crashed service (e.g. `chromium`, `openbox`, `kernel-images-api`).
 	ServiceName string `json:"service_name"`
 }
 

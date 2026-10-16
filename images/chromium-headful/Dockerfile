@@ -192,13 +192,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     scrot \
     imagemagick \
     sudo \
-    mutter \
+    openbox \
     curl \
     # Network tools
     net-tools \
     netcat \
     # Userland apps
     x11-apps \
+    # xprop, used to detect when the window manager has taken the display
+    x11-utils \
     tint2 \
     wget \
     xdg-utils \
@@ -407,6 +409,12 @@ COPY shared/pulseaudio-daemon.conf /etc/pulse/daemon.conf.d/10-kernel-sample-rat
 RUN chmod +x /usr/local/bin/start-pulseaudio.sh
 COPY images/chromium-headful/supervisord.conf /etc/supervisor/supervisord.conf
 COPY images/chromium-headful/supervisor/services/ /etc/supervisor/conf.d/services/
+# Openbox reads /etc/xdg/openbox/rc.xml when the running user has no
+# ~/.config/openbox, which keeps this working whether the WM runs as root or
+# as the kernel user.
+COPY images/chromium-headful/openbox/rc.xml /etc/xdg/openbox/rc.xml
+COPY images/chromium-headful/openbox/themes/kernel-light /usr/share/themes/kernel-light
+COPY shared/set-desktop-background.sh /usr/local/bin/set-desktop-background.sh
 COPY shared/envoy/supervisor-envoy.conf /etc/supervisor/conf.d/services/envoy.conf
 
 # Install Envoy proxy

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Openbox configuration for the headful browser image.
+
+  Decoration is left entirely to chromium, which asks per window through
+  _MOTIF_WM_HINTS: the main browser window requests no frame (it draws its own
+  client-side decoration) and openbox honours that, while popups — OIDC and
+  other login windows — request one and get it. Do not add an <applications>
+  rule forcing <decor>no</decor> on role "browser": it is redundant for the
+  main window, and devtools windows also carry that role, so the rule strips
+  their titlebar and leaves them with no way to close.
+
+  This file sets the titlebar layout and the input bindings needed by the
+  remote-control API. Minimize would hide a window with no taskbar in the image
+  to restore it from, and maximize is meaningless on a fixed-size display.
+
+  No <keyboard> section is set on purpose: openbox keeps its compiled-in
+  defaults (Alt-Tab window switching, Alt-F4 close, ...) and mutter's bare-WM
+  setup exposes the same ones, so keyboard behavior matches the mutter image.
+  Verified head-to-head on 2026-09-08. If you ever add a <keyboard> section,
+  remember it REPLACES the defaults wholesale — re-add Alt-Tab/Alt-F4 or
+  keyboard shortcuts silently stop working.
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <theme>
+    <name>kernel-light</name>
+    <titleLayout>LC</titleLayout>
+    <animateIconify>no</animateIconify>
+  </theme>
+
+  <!-- This file replaces the distro rc.xml, so keep the input bindings needed
+       for focus, titlebar movement, resizing, and popup close actions here. -->
+  <mouse>
+    <context name="Frame">
+      <mousebind button="A-Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="A-Left" action="Drag">
+        <action name="Move"/>
+      </mousebind>
+      <mousebind button="A-Right" action="Drag">
+        <action name="Resize"/>
+      </mousebind>
+    </context>
+
+    <context name="Titlebar Close">
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+    </context>
+
+    <context name="Titlebar">
+      <mousebind button="Left" action="Drag">
+        <action name="Move"/>
+      </mousebind>
+    </context>
+
+    <context name="Top Left Right Bottom TLCorner TRCorner BRCorner BLCorner">
+      <mousebind button="Left" action="Drag">
+        <action name="Resize"/>
+      </mousebind>
+    </context>
+
+    <context name="Client">
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Middle" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Right" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+    </context>
+
+    <context name="Close">
+      <mousebind button="Left" action="Click">
+        <action name="Close"/>
+      </mousebind>
+    </context>
+
+    <!-- The root window is deliberately unbound: clicks on the desktop are a
+         no-op, matching mutter, and there is no desktop-management window in
+         this image for the Desktop context to apply to. -->
+  </mouse>
+</openbox_config>
