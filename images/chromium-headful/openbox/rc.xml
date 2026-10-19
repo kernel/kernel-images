@@ -11,15 +11,13 @@
   their titlebar and leaves them with no way to close.
 
   This file sets the titlebar layout and the input bindings needed by the
-  remote-control API. Minimize would hide a window with no taskbar in the image
-  to restore it from, and maximize is meaningless on a fixed-size display.
+  remote-control API. The titlebar has no minimize button: the image has no
+  taskbar, and maximize is meaningless on a fixed-size display. Minimize is not
+  reachable from the UI, and Alt-Tab restores a window minimized through X.
 
-  No <keyboard> section is set on purpose: openbox keeps its compiled-in
-  defaults (Alt-Tab window switching, Alt-F4 close, ...) and mutter's bare-WM
-  setup exposes the same ones, so keyboard behavior matches the mutter image.
-  Verified head-to-head on 2026-09-08. If you ever add a <keyboard> section,
-  remember it REPLACES the defaults wholesale — re-add Alt-Tab/Alt-F4 or
-  keyboard shortcuts silently stop working.
+  No <keyboard> section is set on purpose. Alt-Tab and Alt-F4 work with this
+  file as shipped. Whether a <keyboard> section replaces openbox's built-in
+  bindings has not been tested, so if you add one, re-check Alt-Tab and Alt-F4.
 -->
 <openbox_config xmlns="http://openbox.org/3.4/rc">
   <theme>
