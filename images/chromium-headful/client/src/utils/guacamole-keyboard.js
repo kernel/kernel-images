@@ -86,17 +86,6 @@ Guacamole.Keyboard = function Keyboard(element) {
     this.onkeyup = null;
 
     /**
-     * Fired instead of onkeydown/onkeyup for Caps Lock on platforms where
-     * Caps Lock key events report a change in lock state rather than a
-     * physical press and release.
-     *
-     * @event
-     * @param {!boolean} capsLock
-     *     Whether Caps Lock is locally enabled after the event.
-     */
-    this.oncapslock = null;
-
-    /**
      * Set of known platform-specific or browser-specific quirks which must be
      * accounted for to properly interpret key events, even if the only way to
      * reliably detect that quirk is to platform/browser-sniff.
@@ -221,13 +210,6 @@ Guacamole.Keyboard = function Keyboard(element) {
         this.modifiers = orig ? Guacamole.Keyboard.ModifierState.fromKeyboardEvent(orig) : new Guacamole.Keyboard.ModifierState();
 
         /**
-         * Whether Caps Lock was enabled at the time this event was received.
-         *
-         * @type {!boolean}
-         */
-        this.capsLock = !!(orig && orig.getModifierState && orig.getModifierState('CapsLock'));
-
-        /**
          * An arbitrary timestamp in milliseconds, indicating this event's
          * position in time relative to other events.
          *
@@ -314,10 +296,6 @@ Guacamole.Keyboard = function Keyboard(element) {
         // If a key is pressed while meta is held down, the keyup will
         // never be sent in Chrome (bug #108404)
         if (this.modifiers.meta && this.keysym !== 0xFFE7 && this.keysym !== 0xFFE8)
-            this.keyupReliable = false;
-
-        // We cannot rely on receiving keyup for Caps Lock on certain platforms
-        else if (this.keysym === 0xFFE5 && quirks.capsLockKeyupUnreliable)
             this.keyupReliable = false;
 
         // Determine whether default action for Alt+combinations must be prevented
@@ -1153,11 +1131,11 @@ Guacamole.Keyboard = function Keyboard(element) {
         if (!first)
             return null;
 
-        // Caps Lock keydown/keyup only signal lock state changes on macOS
-        // (keydown when enabling, keyup when disabling), so report the state
-        if (first.keysym === 0xFFE5 && quirks.capsLockKeyupUnreliable && guac_keyboard.oncapslock) {
-            guac_keyboard.oncapslock(first.capsLock);
-            first.defaultPrevented = true;
+        // macOS sends Caps Lock keydown only when enabling it and keyup only
+        // when disabling it, so each event is one full press of the key
+        if (first.keysym === 0xFFE5 && quirks.capsLockKeyupUnreliable) {
+            first.defaultPrevented = !guac_keyboard.press(0xFFE5);
+            guac_keyboard.release(0xFFE5);
             return eventLog.shift();
         }
 

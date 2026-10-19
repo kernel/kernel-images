@@ -11,7 +11,7 @@ class KeyboardTarget {
     this.listeners.set(type, listeners)
   }
 
-  dispatch(type: string, key: string, keyCode: number, repeat = false, capsLock = false) {
+  dispatch(type: string, key: string, keyCode: number, repeat = false) {
     const event = {
       key,
       keyCode,
@@ -23,8 +23,8 @@ class KeyboardTarget {
       altKey: false,
       metaKey: false,
       preventDefault() {},
-      getModifierState(name: string) {
-        return name === 'CapsLock' && capsLock
+      getModifierState() {
+        return false
       },
     } as KeyboardEvent
 
@@ -88,27 +88,26 @@ describe('GuacamoleKeyboard Caps Lock handling', () => {
       return false
     }
     keyboard.onkeyup = (key) => events.push(`up:${key}`)
-    keyboard.oncapslock = (capsLock) => events.push(`caps:${capsLock}`)
     return { target, events }
   }
 
-  test('reports macOS Caps Lock keydown and keyup as lock state', () => {
+  test('forwards each macOS Caps Lock keydown and keyup as a full press', () => {
     const { target, events } = keyboardOn('MacIntel')
 
-    target.dispatch('keydown', 'CapsLock', 20, false, true)
-    target.dispatch('keydown', 'a', 65, false, true)
-    target.dispatch('keypress', 'A', 65, false, true)
-    target.dispatch('keyup', 'a', 65, false, true)
-    target.dispatch('keyup', 'CapsLock', 20, false, false)
+    target.dispatch('keydown', 'CapsLock', 20)
+    target.dispatch('keydown', 'a', 65)
+    target.dispatch('keypress', 'A', 65)
+    target.dispatch('keyup', 'a', 65)
+    target.dispatch('keyup', 'CapsLock', 20)
 
-    expect(events).toEqual(['caps:true', 'down:65', 'up:65', 'caps:false'])
+    expect(events).toEqual(['down:65509', 'up:65509', 'down:65', 'up:65', 'down:65509', 'up:65509'])
   })
 
   test('keeps Caps Lock as a key press on other platforms', () => {
     const { target, events } = keyboardOn('Win32')
 
-    target.dispatch('keydown', 'CapsLock', 20, false, true)
-    target.dispatch('keyup', 'CapsLock', 20, false, true)
+    target.dispatch('keydown', 'CapsLock', 20)
+    target.dispatch('keyup', 'CapsLock', 20)
 
     expect(events).toEqual(['down:65509', 'up:65509'])
   })
