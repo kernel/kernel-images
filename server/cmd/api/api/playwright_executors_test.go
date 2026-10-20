@@ -109,7 +109,7 @@ func newTestPlaywrightExecutorManager(t *testing.T) (*playwrightExecutorManager,
 	tabs := &fakeExecutorTabs{dir: t.TempDir()}
 	t.Setenv("FAKE_TABS_DIR", tabs.dir)
 
-	m := newPlaywrightExecutorManager(tabs)
+	m := newPlaywrightExecutorManager(tabs, maxPlaywrightExecutors)
 	m.script = script
 	m.socketDir = dir
 	m.responseGrace = 500 * time.Millisecond
@@ -346,6 +346,79 @@ func TestPlaywrightExecutorLimit(t *testing.T) {
 	require.NoError(t, err)
 	_, err = m.Execute(ctx, "one-too-many", "sleep:0", 10*time.Second)
 	require.NoError(t, err)
+}
+
+func TestPlaywrightExecutorLimitBelowMax(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	m.limit = 2
+	ctx := context.Background()
+
+	for _, name := range []string{"e0", "e1"} {
+		_, err := m.Execute(ctx, name, "sleep:0", 10*time.Second)
+		require.NoError(t, err)
+	}
+	_, err := m.Execute(ctx, "e2", "sleep:0", 10*time.Second)
+	var limitErr *playwrightExecutorLimitError
+	require.ErrorAs(t, err, &limitErr)
+	assert.Contains(t, limitErr.Error(), "named executor limit (2) reached")
+	assert.Len(t, namedExecutors(limitErr.executors), 2)
+
+	_, err = m.Execute(ctx, defaultPlaywrightExecutor, "sleep:0", 10*time.Second)
+	assert.NoError(t, err, "the default executor works at the named executor limit")
+}
+
+func TestPlaywrightExecutorLimitFromMemory(t *testing.T) {
+	const mib = 1 << 20
+	for _, tc := range []struct {
+		name string
+		mem  uint64
+		want int
+	}{
+		{"no memory", 0, minPlaywrightExecutors},
+		{"only the reserve", 512 * mib, minPlaywrightExecutors},
+		{"just over the reserve", 512*mib + 1, minPlaywrightExecutors},
+		{"headless VM", 975 * mib, 2},
+		{"1 GiB VM", 1024 * mib, 2},
+		{"1.5 GiB VM", 1536 * mib, 5},
+		{"just under 2 GiB", 2048*mib - 1, 7},
+		{"2 GiB VM", 2048 * mib, maxPlaywrightExecutors},
+		{"headful VM", 8192 * mib, maxPlaywrightExecutors},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, playwrightExecutorLimit(tc.mem))
+		})
+	}
+}
+
+func TestVMMemoryBytes(t *testing.T) {
+	dir := t.TempDir()
+	meminfo := filepath.Join(dir, "meminfo")
+	cgroupMax := filepath.Join(dir, "memory.max")
+	require.NoError(t, os.WriteFile(meminfo, []byte("MemTotal:         998400 kB\nMemFree:          375808 kB\nMemAvailable:     375808 kB\n"), 0o644))
+	const total = 998400 << 10
+
+	mem, err := vmMemoryBytes(meminfo, cgroupMax)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(total), mem, "no cgroup limit file")
+
+	require.NoError(t, os.WriteFile(cgroupMax, []byte("max\n"), 0o644))
+	mem, err = vmMemoryBytes(meminfo, cgroupMax)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(total), mem, "unlimited cgroup")
+
+	require.NoError(t, os.WriteFile(cgroupMax, []byte("536870912\n"), 0o644))
+	mem, err = vmMemoryBytes(meminfo, cgroupMax)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(512<<20), mem, "a cgroup limit below MemTotal applies")
+
+	require.NoError(t, os.WriteFile(cgroupMax, []byte("17179869184\n"), 0o644))
+	mem, err = vmMemoryBytes(meminfo, cgroupMax)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(total), mem, "a cgroup limit above MemTotal does not apply")
+
+	require.NoError(t, os.WriteFile(meminfo, []byte("MemFree:          375808 kB\n"), 0o644))
+	_, err = vmMemoryBytes(meminfo, cgroupMax)
+	assert.Error(t, err)
 }
 
 func TestPlaywrightExecutorDelete(t *testing.T) {

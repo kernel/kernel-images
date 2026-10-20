@@ -1571,8 +1571,10 @@ paths:
         one and reports 'tab.created: true'. Executor code can still reach other tabs through
         'context' and 'browser'; ownership only decides what 'page' is bound to.
 
-        A browser can have at most 8 named executors; the default executor does not count. A call
-        that would create another returns 409 with the executors; delete one with
+        The number of named executors a browser can have is set from its memory when the API
+        starts, from 1 up to 8; the default executor does not count. A browser with 1 GiB of
+        memory allows 2, and one with 2 GiB or more allows 8. A call that would create another
+        returns 409 with the limit in its message and the executors; delete one with
         DELETE /playwright/executors/{name}. Named executors are not removed automatically while
         the API runs; when it shuts down, they are removed and their tabs closed.
       operationId: executePlaywrightCode
