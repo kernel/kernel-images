@@ -656,7 +656,17 @@
     @Watch('muted')
     onMutedChanged(muted: boolean) {
       if (this._video && this._video.muted != muted) {
+        const playing = !this._video.paused
         this._video.muted = muted
+
+        // Chrome pauses a muted autoplay that it does not allow to unmute, and
+        // nothing resumes it, so stay muted and keep the video playing instead.
+        if (!muted && playing && this._video.paused) {
+          this._video.muted = true
+          this.$accessor.video.setMuted(true)
+          this._video.play().catch((err: any) => this.$log.error(err))
+          return
+        }
 
         if (!muted) {
           this.mutedOverlay = false
@@ -1150,6 +1160,9 @@
     }
 
     onTouchEnd(e: TouchEvent) {
+      // touchend is a user activation and touchstart is not, so only an unmute
+      // here is allowed on Android Chrome
+      this.unmuteOnInteraction()
       this.gestures.touchEnd(e)
     }
 
@@ -1179,7 +1192,6 @@
     }
 
     onGestureBegin(p: Point) {
-      this.unmuteOnInteraction()
       this.tapKeyboard.touchBegin()
       this.focusKeyboard.touchBegin()
       if (this._controls) this._controls.wake()

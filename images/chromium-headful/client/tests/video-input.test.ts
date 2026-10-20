@@ -226,6 +226,78 @@ describe('video touch input', () => {
   })
 })
 
+describe('unmuting a muted autoplay', () => {
+  // A video element that, like Chrome, pauses instead of unmuting a muted
+  // autoplay before the page has had a user activation.
+  const player = (activated: boolean) => {
+    const calls: string[] = []
+    const video = {
+      paused: false,
+      _muted: true,
+      get muted() {
+        return this._muted
+      },
+      set muted(muted: boolean) {
+        this._muted = muted
+        if (!muted && !activated) this.paused = true
+      },
+      play() {
+        calls.push('play')
+        this.paused = false
+        return Promise.resolve()
+      },
+    }
+    const ctx = {
+      _video: video,
+      mutedOverlay: true,
+      $accessor: { video: { setMuted: (muted: boolean) => calls.push(`store muted ${muted}`) } },
+      $log: { error: () => {} },
+    }
+    return { ctx, video, calls }
+  }
+
+  test('keeps playing muted when the browser refuses to unmute', () => {
+    const { ctx, video, calls } = player(false)
+    videoMethods(async () => '').onMutedChanged.call(ctx, false)
+    expect(video).toMatchObject({ paused: false, muted: true })
+    expect(calls).toEqual(['store muted true', 'play'])
+    expect(ctx.mutedOverlay).toBe(true)
+  })
+
+  test('unmutes after a user activation', () => {
+    const { ctx, video, calls } = player(true)
+    videoMethods(async () => '').onMutedChanged.call(ctx, false)
+    expect(video).toMatchObject({ paused: false, muted: false })
+    expect(calls).toEqual([])
+    expect(ctx.mutedOverlay).toBe(false)
+  })
+
+  // touchstart is not a user activation on Android Chrome; touchend is
+  test('a touch unmutes when it ends, not when it starts', () => {
+    const methods = videoMethods(async () => '')
+    const calls: string[] = []
+    const ctx = {
+      muted: true,
+      unmuteOnInteraction: () => calls.push('unmute'),
+      gestures: {
+        touchStart: () => calls.push('touch start'),
+        touchEnd: () => calls.push('touch end'),
+      },
+      tapKeyboard: { touchBegin: () => {} },
+      focusKeyboard: { touchBegin: () => {} },
+      controlling: true,
+      hosting: true,
+      inputEnabled: false,
+    }
+    const touch = {} as TouchEvent
+    methods.onTouchStart.call(ctx, touch)
+    methods.onGestureBegin.call(ctx, { x: 1, y: 1 })
+    expect(calls).toEqual(['touch start'])
+    methods.onTouchEnd.call(ctx, touch)
+    expect(calls).toEqual(['touch start', 'unmute', 'touch end'])
+  })
+})
+
 describe('touch keyboard opening', () => {
   const focus = (touch: boolean) => {
     const methods = videoMethods(async () => '')
@@ -563,7 +635,11 @@ describe('remote pointer after touch', () => {
     const methods = videoMethods(async () => '')
     const sent: string[] = []
     methods.onTouchEnd.call(
-      { gestures: { touchEnd: () => {} }, $client: { sendData: (event: string) => sent.push(event) } },
+      {
+        unmuteOnInteraction: () => {},
+        gestures: { touchEnd: () => {} },
+        $client: { sendData: (event: string) => sent.push(event) },
+      },
       { touches: [] },
     )
     expect(sent).toEqual([])
