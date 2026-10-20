@@ -277,8 +277,8 @@ describe('unmuting a muted autoplay', () => {
     const methods = videoMethods(async () => '')
     const calls: string[] = []
     const ctx = {
-      muted: true,
       unmuteOnInteraction: () => calls.push('unmute'),
+      resumeVideo: () => calls.push('resume'),
       gestures: {
         touchStart: () => calls.push('touch start'),
         touchEnd: () => calls.push('touch end'),
@@ -294,7 +294,50 @@ describe('unmuting a muted autoplay', () => {
     methods.onGestureBegin.call(ctx, { x: 1, y: 1 })
     expect(calls).toEqual(['touch start'])
     methods.onTouchEnd.call(ctx, touch)
-    expect(calls).toEqual(['touch start', 'unmute', 'touch end'])
+    expect(calls).toEqual(['touch start', 'unmute', 'resume', 'touch end'])
+  })
+})
+
+describe('resuming the video', () => {
+  const player = (touch: boolean, hidden = false) => {
+    const calls: string[] = []
+    const methods = videoMethods(async () => '', undefined, { document: { hidden } })
+    const ctx: Record<string, unknown> = {
+      is_touch_device: touch,
+      playable: true,
+      videoResume: { resume: () => calls.push('resume') },
+    }
+    ctx.resumeVideo = () => methods.resumeVideo.call(ctx)
+    return { methods, ctx, calls }
+  }
+
+  test('each touch checks the video', () => {
+    const { methods, ctx, calls } = player(true)
+    methods.resumeVideo.call(ctx)
+    expect(calls).toEqual(['resume'])
+  })
+
+  test('leaves desktop alone', () => {
+    const { methods, ctx, calls } = player(false)
+    methods.resumeVideo.call(ctx)
+    methods.resumeVideoWhenVisible.call(ctx)
+    expect(calls).toEqual([])
+  })
+
+  test('waits for the stream to be playable', () => {
+    const { methods, ctx, calls } = player(true)
+    ctx.playable = false
+    methods.resumeVideo.call(ctx)
+    expect(calls).toEqual([])
+  })
+
+  test('resumes when the tab is shown again, not when it is hidden', () => {
+    const hidden = player(true, true)
+    hidden.methods.resumeVideoWhenVisible.call(hidden.ctx)
+    expect(hidden.calls).toEqual([])
+    const shown = player(true, false)
+    shown.methods.resumeVideoWhenVisible.call(shown.ctx)
+    expect(shown.calls).toEqual(['resume'])
   })
 })
 
@@ -637,6 +680,7 @@ describe('remote pointer after touch', () => {
     methods.onTouchEnd.call(
       {
         unmuteOnInteraction: () => {},
+        resumeVideo: () => {},
         gestures: { touchEnd: () => {} },
         $client: { sendData: (event: string) => sent.push(event) },
       },
