@@ -519,6 +519,12 @@ func (s *ApiService) StreamFsEvents(ctx context.Context, req oapi.StreamFsEvents
 	pr, pw := io.Pipe()
 	go func() {
 		defer pw.Close()
+		// An SSE comment is ignored by clients. Writing it first sends the
+		// response headers now, so a client sees the stream is open before any
+		// file changes.
+		if _, err := pw.Write([]byte(": watching\n\n")); err != nil {
+			return
+		}
 		for ev := range w.events {
 			// Build SSE formatted event: data: <json>\n\n using a buffer and write in a single call
 			data, err := json.Marshal(ev)
