@@ -117,6 +117,14 @@
         {{ zoomScale.toFixed(1) }}× · Reset
       </button>
       <div v-if="touchNotice && !hideControls" class="touch-button touch-notice" role="status">{{ touchNotice }}</div>
+      <button
+        v-if="videoBlocked"
+        class="touch-button video-resume"
+        @touchend.stop.prevent="resumeVideo"
+        @click.stop.prevent="resumeVideo"
+      >
+        Tap to resume video
+      </button>
       <neko-resolution ref="resolution" v-if="admin" />
       <neko-clipboard
         ref="clipboard"
@@ -174,6 +182,12 @@
         top: calc(12px + env(safe-area-inset-top));
         transform: translateX(-50%);
         pointer-events: none;
+      }
+
+      .video-resume {
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
       }
 
       .video-menu {
@@ -326,6 +340,7 @@
   import { DEFAULT_KEYBOARD, applyKeyboard, keyboardFor, setInputMode } from '~/utils/field-keyboard'
   import { TypedText, isModifier, typesIntoOverlay } from '~/utils/typed-text'
   import { keyboardPan, keyboardShrink } from '~/utils/keyboard-pan'
+  import { VideoResume } from '~/utils/video-resume'
 
   import Emote from './emote.vue'
   import Resolution from './resolution.vue'
@@ -423,6 +438,8 @@
     private zoomScale = 1
     private keyboardOpen = false
     private touchNotice: string | null = null
+    private videoResume!: VideoResume
+    private videoBlocked = false
     private touchNoticeTimer = 0
     // Copy control clipboard writes still waiting for their text
     private copyWrites = 0
@@ -656,7 +673,17 @@
     @Watch('muted')
     onMutedChanged(muted: boolean) {
       if (this._video && this._video.muted != muted) {
+        const playing = !this._video.paused
         this._video.muted = muted
+
+        // Chrome pauses a muted autoplay that it does not allow to unmute, and
+        // nothing resumes it, so stay muted and keep the video playing instead.
+        if (!muted && playing && this._video.paused) {
+          this._video.muted = true
+          this.$accessor.video.setMuted(true)
+          this._video.play().catch((err: any) => this.$log.error(err))
+          return
+        }
 
         if (!muted) {
           this.mutedOverlay = false
@@ -840,6 +867,7 @@
       })
 
       this._video.addEventListener('playing', () => {
+        this.videoBlocked = false
         this.isVideoSyncing = true
         this.$accessor.video.play()
         this.$nextTick(() => { this.isVideoSyncing = false })
@@ -859,6 +887,13 @@
       }
       document.addEventListener('wheel', this._wheelHandler, { passive: false, capture: true })
       window.addEventListener('blur', this.resetKeyboard)
+      this.videoResume = new VideoResume(
+        this._video,
+        () => performance.now(),
+        () => this.$accessor.video.setMuted(true),
+        (blocked) => (this.videoBlocked = blocked),
+      )
+      document.addEventListener('visibilitychange', this.resumeVideoWhenVisible)
       this.softKeyboard = new SoftKeyboard(isPhone(navigator.userAgent))
       this.keyboardMeasurable = this.softKeyboard.measurable
       this.measureSoftKeyboard()
@@ -873,6 +908,7 @@
       /* Initialize Guacamole Keyboard */
       this.keyboard.onkeydown = (key: number) => {
         this.unmuteOnInteraction()
+        this.resumeVideo()
 
         if (!this.hosting || this.locked) {
           return true
@@ -935,6 +971,7 @@
       window.removeEventListener('pagehide', this.resetKeyboard)
       document.removeEventListener('visibilitychange', this.resetKeyboardWhenHidden)
       document.removeEventListener('visibilitychange', this.updateFocusStream)
+      document.removeEventListener('visibilitychange', this.resumeVideoWhenVisible)
       if (this.remoteFocus) this.remoteFocus.stop()
       this.observer.disconnect()
       this.$accessor.video.setPlayable(false)
@@ -1150,7 +1187,21 @@
     }
 
     onTouchEnd(e: TouchEvent) {
+      // touchend is a user activation and touchstart is not, so only an unmute
+      // here is allowed on Android Chrome
+      this.unmuteOnInteraction()
+      this.resumeVideo()
       this.gestures.touchEnd(e)
+    }
+
+    // A phone browser can stop the video with nothing left to restart it while
+    // input still reaches the remote, so touch input checks it each time.
+    resumeVideo() {
+      if (this.is_touch_device && this.playable) this.videoResume.resume()
+    }
+
+    resumeVideoWhenVisible() {
+      if (!document.hidden) this.resumeVideo()
     }
 
     onTouchCancel() {
@@ -1179,7 +1230,6 @@
     }
 
     onGestureBegin(p: Point) {
-      this.unmuteOnInteraction()
       this.tapKeyboard.touchBegin()
       this.focusKeyboard.touchBegin()
       if (this._controls) this._controls.wake()
