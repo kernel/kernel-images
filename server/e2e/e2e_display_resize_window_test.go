@@ -193,7 +193,7 @@ func getChromiumWindowBoundsCDP(ctx context.Context, c *TestContainer) (chromium
 // to the requested size. The headless and headful paths use different
 // predicates because --headless=new uses Chrome's internal window size
 // (screen.width/height) while headful renders into a real OS window owned by
-// Mutter (outerWidth/outerHeight equal to the X root).
+// the window manager (outerWidth/outerHeight equal to the X root).
 type viewportPredicate func(v rendererViewport, wantW, wantH int) bool
 
 // waitForRendererViewport polls the renderer until the given predicate
@@ -236,9 +236,9 @@ func headlessViewportPredicate(v rendererViewport, wantW, wantH int) bool {
 
 // makeHeadfulMaximizedPredicate is the strict headful check: screen.*
 // matches AND outerWidth/outerHeight is within tolerance of the request.
-// Tolerance absorbs mutter chrome (borders/titlebar) — kiosk fullscreen has
-// none, so tolerance 0 is correct there; --start-maximized passes through
-// mutter SSDs so a small slack is kinder.
+// Tolerance absorbs window-manager chrome (borders/titlebar) — kiosk fullscreen
+// has none, so tolerance 0 is correct there; --start-maximized passes through
+// the WM's decorations so a small slack is kinder.
 func makeHeadfulMaximizedPredicate(tolerance int) viewportPredicate {
 	return func(v rendererViewport, wantW, wantH int) bool {
 		if v.ScreenWidth != wantW || v.ScreenHght != wantH {
@@ -343,7 +343,7 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			// request), exercising the server's new behaviour: skip the
 			// chromium restart and instead re-assert windowState=maximized
 			// via Browser.setWindowBounds. The strict outer-matches-screen
-			// predicate proves mutter reflows the maximized window on RANDR
+			// predicate proves the window manager reflows the maximized window on RANDR
 			// without any chromium restart.
 			name:  "headful_start_maximized",
 			image: headfulImage,
@@ -354,15 +354,15 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 				// mirrors images/chromium-headful/run-docker.sh:17.
 				"CHROMIUM_FLAGS": "--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*",
 			},
-			predicate:            makeHeadfulMaximizedPredicate(20), // mutter borders/titlebar
+			predicate:            makeHeadfulMaximizedPredicate(20), // WM borders/titlebar
 			assertXRoot:          true,
 			up:                   [2]int{2560, 1440},
 			down:                 [2]int{1280, 720},
 			requireBaselineState: "maximized",
 		},
 		{
-			// --kiosk runs the window in fullscreen state. mutter reflows
-			// the window to fill the new screen on every RANDR — verified
+			// --kiosk runs the window in fullscreen state. The window manager
+			// reflows the window to fill the new screen on every RANDR — verified
 			// here on both up- and down-resize.
 			name:                 "headful_kiosk",
 			image:                headfulImage,
@@ -395,7 +395,7 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 	}
 
 	// Subtests run serially: two of the three boot the heavy headful image
-	// (neko + mutter + chromium) which races on startup mode under
+	// (neko + openbox + chromium) which races on startup mode under
 	// concurrent load — observed: neko's `desktop.screen=1920x1080@25`
 	// initialization fails to take effect when three privileged containers
 	// boot at once, leaving the root at the dummy DDX's 3840x2160 default.

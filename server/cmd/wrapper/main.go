@@ -162,14 +162,14 @@ func main() {
 	// (baked into the image at build time, see shared/envoy/bake-certs.sh)
 	// so it trusts the forward proxy on first start with no runtime cert
 	// work to wait on. chromium-launcher internally waits for the X server
-	// and (headful) for mutter before exec'ing chromium, so we start it in
-	// parallel with the X server to overlap chromium-launcher's preamble
-	// with display startup. chromedriver listens on 9225 immediately and
-	// only attaches to chromium on session creation, so it can come up
-	// alongside everything. mutter has no internal X-wait, so it's started
+	// and (headful) for the window manager before exec'ing chromium, so we
+	// start it in parallel with the X server to overlap chromium-launcher's
+	// preamble with display startup. chromedriver listens on 9225 immediately
+	// and only attaches to chromium on session creation, so it can come up
+	// alongside everything. openbox has no internal X-wait, so it's started
 	// as soon as the X server is confirmed up — chromium-launcher gates on
 	// it so chrome can negotiate CSD with the WM before mapping its window
-	// (without it, mutter reparents the existing window with default SSD
+	// (without it, the WM reparents the existing window with default SSD
 	// and a titlebar appears). neko reads the active display mode at start,
 	// so it's deferred until after the dbus wait on the WebRTC path.
 	xServer := "xorg"
@@ -187,7 +187,8 @@ func main() {
 	startAll(xServer, "dbus", "chromedriver", "pulseaudio")
 	waitForX(defaultDisplay, 20*time.Second)
 	if prof == profileHeadful {
-		startAll("mutter")
+		setDesktopBackground()
+		startAll("openbox")
 	}
 	waitForSocket(pulseSocket, 10*time.Second)
 	startAll("chromium")
@@ -373,4 +374,15 @@ func since(t time.Time) time.Duration {
 func fatalf(format string, args ...any) {
 	logf(format, args...)
 	os.Exit(1)
+}
+
+// setDesktopBackground paints the X root window before the WM starts.
+// Best-effort: a failed paint only leaves the root at its fallback color.
+func setDesktopBackground() {
+	if !isExecutable("/usr/local/bin/set-desktop-background.sh") {
+		return
+	}
+	if err := runStream("set-desktop-background", "/usr/local/bin/set-desktop-background.sh"); err != nil {
+		logf("WARNING: desktop background: %v", err)
+	}
 }
