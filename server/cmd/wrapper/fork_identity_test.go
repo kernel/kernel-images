@@ -45,7 +45,7 @@ func TestForkIdentityAppliedMarkerRequiresEveryReadinessProbe(t *testing.T) {
 	forkidentity.AppliedFile = filepath.Join(dir, "fork-identity-applied")
 	t.Cleanup(func() { forkidentity.AppliedFile = oldAppliedFile })
 
-	probeNames := []string{"cdp", "chromedriver", "envoy"}
+	probeNames := []string{"cdp", "chromedriver", "neko"}
 	for _, failedProbe := range probeNames {
 		t.Run(failedProbe, func(t *testing.T) {
 			probes := make([]probe, 0, len(probeNames))
@@ -78,7 +78,7 @@ func TestForkIdentityAppliedMarkerWrittenAfterReadiness(t *testing.T) {
 	_, allReady := waitProbesReady(time.Now(), []probe{
 		{name: "cdp", fn: func() bool { return true }},
 		{name: "chromedriver", fn: func() bool { return true }},
-		{name: "envoy", fn: func() bool { return true }},
+		{name: "neko", fn: func() bool { return true }},
 	}, time.Second)
 	require.True(t, allReady)
 	require.NoError(t, writeForkIdentityAppliedMarker("browser-1", allReady))
@@ -102,7 +102,6 @@ func TestApplyForkIdentityPayloadSetsAndClearsEnv(t *testing.T) {
 	err := applyForkIdentityPayload(forkidentity.Payload{
 		"instance_name":               "browser-1",
 		"metro_name":                  "iad",
-		"xds_server":                  "xds.example.test",
 		"kernel_instance_jwt":         "jwt",
 		"metro_api_url":               "https://metro.example.test/browser/kernel",
 		"session_intel_url":           "https://intel.example.test",
@@ -114,7 +113,6 @@ func TestApplyForkIdentityPayloadSetsAndClearsEnv(t *testing.T) {
 	assert.Equal(t, "browser-1", os.Getenv("INSTANCE_NAME"))
 	assert.Equal(t, "browser-1", os.Getenv("INST_NAME"))
 	assert.Equal(t, "iad", os.Getenv("METRO_NAME"))
-	assert.Equal(t, "xds.example.test", os.Getenv("XDS_SERVER"))
 	assert.Equal(t, "jwt", os.Getenv("KERNEL_INSTANCE_JWT"))
 	assert.Equal(t, "https://metro.example.test/browser/kernel", os.Getenv("KERNEL_METRO_API_BASE_URL"))
 	assert.Equal(t, "https://intel.example.test", os.Getenv("SESSION_INTEL_URL"))

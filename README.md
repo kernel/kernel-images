@@ -50,6 +50,12 @@ IMAGE=kernel-docker ./build-docker.sh
 IMAGE=kernel-docker ENABLE_WEBRTC=true ./run-docker.sh
 ```
 
+### Outbound proxies
+
+The images do not include an in-container Envoy proxy or its localhost certificate. Set `CHROMIUM_FLAGS` with `--proxy-server=<external-proxy-url>` to route Chromium through an external proxy, or omit the proxy flag for direct connections. Configure `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` separately for other tools that honor them.
+
+Before upgrading older deployments, remove any dependency on `https://127.0.0.1:3128`, including fallback configurations and snapshot templates. Setting `XDS_SERVER` no longer starts a proxy. Instance identity fields remain available for telemetry and authenticated API requests.
+
 ## Running on a Unikernel
 
 Alternatively, you can run the browser on a Unikraft unikernel.

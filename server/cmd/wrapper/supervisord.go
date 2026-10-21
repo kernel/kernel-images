@@ -24,10 +24,6 @@ func startAll(progs ...string) {
 	supervisorctl("start", progs...)
 }
 
-func stopAll(progs ...string) {
-	supervisorctl("stop", progs...)
-}
-
 // restartAll is the start-or-stop+start variant. It's used for services
 // that need to pick up refreshed envs cleanly. supervisorctl `restart` is
 // a no-op stop on cold programs followed by a normal start.
@@ -115,15 +111,6 @@ func runStream(label, name string, args ...string) error {
 	cmd.Stdout = prefixWriter{label: label, w: os.Stdout}
 	cmd.Stderr = prefixWriter{label: label, w: os.Stderr}
 	return cmd.Run()
-}
-
-// runStreamFatal is runStream + fatalf on non-zero exit. Use for scripts the
-// boot path cannot proceed without (init-envoy). The old wrapper.sh ran under
-// `set -o errexit`, so these were already fatal there.
-func runStreamFatal(label, name string, args ...string) {
-	if err := runStream(label, name, args...); err != nil {
-		fatalf("%s failed: %v", label, err)
-	}
 }
 
 type prefixWriter struct {
