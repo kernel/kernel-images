@@ -198,5 +198,21 @@ export const actions = actionTree(
       accessor.remote.setKeyboardModifierState({ capsLock, numLock, scrollLock })
       $client.sendMessage(EVENT.CONTROL.KEYBOARD, { capsLock, numLock, scrollLock })
     },
+
+    // Touch input types each letter's case with Shift and never sends Caps
+    // Lock, so it needs the remote's Caps Lock off; the other locks stay as they are.
+    releaseCapsLock({ state }) {
+      if (state.readOnly) return
+
+      const current = state.keyboardModifierState
+      if (current !== -1) {
+        accessor.remote.setKeyboardModifierState({
+          capsLock: false,
+          numLock: !!(current & 2),
+          scrollLock: !!(current & 4),
+        })
+      }
+      $client.sendMessage(EVENT.CONTROL.KEYBOARD, { capsLock: false })
+    },
   },
 )

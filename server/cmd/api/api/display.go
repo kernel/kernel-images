@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -131,9 +132,9 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 			}
 			width, height = realizedW, realizedH
 		}
-		// Re-assert the maximized window state via CDP so mutter reflows the
-		// window onto the new root; applyResolutionAndConverge already verified
-		// the root size, which is the authoritative post-condition. Fatal on
+		// Re-assert the maximized window state via CDP so the window manager
+		// reflows the window onto the new root; applyResolutionAndConverge already
+		// verified the root size, which is the authoritative post-condition. Fatal on
 		// failure — returning 200 with the window stuck in its old state would
 		// leave the caller with no signal of the mismatch. The previous approach
 		// of restarting chromium so it could re-apply --start-maximized had the
@@ -421,15 +422,15 @@ func (s *ApiService) withCDPClientTimeout(ctx context.Context, timeout time.Dura
 
 // setWindowMaximizedViaCDP re-asserts that the chromium OS window is in
 // the "maximized" state via Browser.setWindowBounds. After a successful
-// xrandr/Neko resize, mutter reflows a maximized (or fullscreen) window
-// to fill the new root automatically — this call ensures the window is
+// xrandr/Neko resize, the window manager reflows a maximized (or fullscreen)
+// window to fill the new root automatically — this call ensures the window is
 // in the state that triggers the reflow. The CDP call is idempotent: it
 // no-ops on a window already in maximized or fullscreen state.
 //
 // The PATCH /display handler reads the X root separately (via
 // getCurrentResolutionFromXrandr) to capture the realized size for the
 // response, rather than reading the chromium window's own bounds. That
-// keeps the contract panel-robust: if mutter ever gained a taskbar/dock,
+// keeps the contract panel-robust: if the WM ever gained a taskbar/dock,
 // a maximized window would be smaller than the root by the panel's
 // reserved space, and any window-bounds-based check would diverge from
 // the X root.
@@ -536,11 +537,10 @@ func abs(x int) int {
 // otherwise xrandr — and waits for the X root to actually reach the requested
 // size, returning the realized dimensions.
 //
-// The poll absorbs transient X root states: chromium running in --kiosk briefly
-// pushes the root to the dummy DDX's max mode (3840x2160) while mutter settles
-// on the new screen, and a single immediate read would catch that transient. It
-// also captures libxcvt's rounded size on requests the driver can't honour
-// exactly (CVT 8-pixel grid + FWXGA bump for 1360x768 -> 1366x768).
+// The poll absorbs transient X root states while Xorg/Neko applies the new
+// mode and the WM settles; a single immediate read can catch an intermediate
+// size. It also captures libxcvt's rounded size on requests the driver can't
+// honour exactly (CVT 8-pixel grid + FWXGA bump for 1360x768 -> 1366x768).
 //
 // On the Neko path it re-issues the reconfig when the root never converges.
 // Neko applies screen configuration asynchronously and can drop/clobber a
@@ -594,17 +594,33 @@ func (s *ApiService) applyResolutionAndConverge(ctx context.Context, width, heig
 }
 
 // setViewportViaCDP resizes the browser viewport using the CDP
-// Emulation.setDeviceMetricsOverride command. This is near-instant and does
-// not require restarting Chromium or Xvfb.
+// Browser.setContentsSize command. This is near-instant and does not require
+// restarting Chromium or Xvfb. When Chromium refuses to resize the window (a
+// fullscreen window, or a CDP error), it falls back to
+// Emulation.setDeviceMetricsOverride, which Chromium 154+ clears as soon as
+// this client detaches, so on those versions the viewport stays as it was.
 func (s *ApiService) setViewportViaCDP(ctx context.Context, width, height int) error {
 	log := logger.FromContext(ctx)
 	if err := s.withCDPClient(ctx, func(cdpCtx context.Context, client *cdpclient.Client) error {
+		err := client.SetContentsSize(cdpCtx, width, height)
+		if !contentsSizeRefused(err) {
+			return err
+		}
+		log.Warn("CDP setContentsSize refused, falling back to setDeviceMetricsOverride", "error", err)
 		return client.SetDeviceMetricsOverride(cdpCtx, width, height)
 	}); err != nil {
-		return fmt.Errorf("CDP setDeviceMetricsOverride: %w", err)
+		return fmt.Errorf("CDP viewport resize: %w", err)
 	}
 	log.Info("viewport resized via CDP", "width", width, "height", height)
 	return nil
+}
+
+// contentsSizeRefused reports whether SetContentsSize failed because Chromium
+// declined to resize the window, as opposed to the page target or the
+// connection being unavailable, where the fallback would fail the same way.
+func contentsSizeRefused(err error) bool {
+	var cdpErr *cdpclient.Error
+	return errors.Is(err, cdpclient.ErrWindowFullscreen) || errors.As(err, &cdpErr)
 }
 
 // anyRecordingActive returns true if any registered recorder is currently recording.

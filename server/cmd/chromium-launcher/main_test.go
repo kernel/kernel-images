@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/kernel/kernel-images/server/lib/browserlocation"
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
 
@@ -92,5 +93,49 @@ func TestExecLookPath(t *testing.T) {
 	// execLookPath should resolve by PATH for bare names
 	if p, err := execLookPath("mybin"); err != nil || p != bin {
 		t.Fatalf("execLookPath PATH search failed: p=%q err=%v", p, err)
+	}
+}
+
+func TestWithoutEnvironmentVariable(t *testing.T) {
+	got := withoutEnvironmentVariable([]string{"A=1", "TZ=", "B=2"}, "TZ")
+	if !reflect.DeepEqual(got, []string{"A=1", "B=2"}) {
+		t.Fatalf("unexpected env: %v", got)
+	}
+}
+
+func TestStartupTimezone(t *testing.T) {
+	values := map[string]string{"TZ": "America/Chicago", "KERNEL_BROWSER_TIMEZONE": "Europe/Berlin"}
+	getenv := func(key string) string { return values[key] }
+	state := []byte(`{"accepted":{"generation":2,"timezone":"Asia/Singapore"}}`)
+	accepted := acceptedLocation(func(string) ([]byte, error) { return state, nil })
+	noState := acceptedLocation(func(string) ([]byte, error) { return nil, os.ErrNotExist })
+
+	if got := startupTimezone(getenv, accepted); got != "Asia/Singapore" {
+		t.Fatalf("restart must keep the accepted timezone, got %s", got)
+	}
+	if got := startupTimezone(getenv, noState); got != "Europe/Berlin" {
+		t.Fatalf("unexpected timezone: %s", got)
+	}
+	delete(values, "KERNEL_BROWSER_TIMEZONE")
+	if got := startupTimezone(getenv, noState); got != "America/Chicago" {
+		t.Fatalf("unexpected fallback timezone: %s", got)
+	}
+	delete(values, "TZ")
+	if got := startupTimezone(getenv, noState); got != "" {
+		t.Fatalf("unexpected empty timezone: %s", got)
+	}
+}
+
+func TestWithAcceptedLanguages(t *testing.T) {
+	flags := []string{"--lang=en-GB", "--accept-lang=en-GB,en", "--hide-scrollbars"}
+	accepted := &browserlocation.AcceptedLocation{TimeZone: "Europe/Berlin", Languages: []string{"de-DE", "de"}}
+
+	got := withAcceptedLanguages(flags, accepted)
+	want := []string{"--lang=en-GB", "--hide-scrollbars", "--accept-lang=de-DE,de"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("restart must start with the accepted languages, got %v", got)
+	}
+	if got := withAcceptedLanguages(flags, nil); !reflect.DeepEqual(got, flags) {
+		t.Fatalf("flags must be unchanged before a location is accepted, got %v", got)
 	}
 }

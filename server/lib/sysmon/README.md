@@ -42,7 +42,7 @@ Mapped from supervisord `PROCESS_STATE_EXITED` (with `expected=0`) or `PROCESS_S
 
 | Field | Meaning |
 | --- | --- |
-| `service_name` | supervisord program name (e.g. `chromium`, `mutter`, `kernel-images-api`) |
+| `service_name` | supervisord program name (e.g. `chromium`, `openbox`, `kernel-images-api`) |
 | `pid` | live PID at exit (omitted for `gave_up` since supervisord no longer tracks one) |
 | `phase` | `startup` (died during STARTING) / `running` (crashed after reaching RUNNING) / `gave_up` (FATAL via exhausted startretries) |
 

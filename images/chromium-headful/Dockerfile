@@ -1,10 +1,10 @@
-FROM docker.io/golang:1.25.0 AS server-builder
+FROM docker.io/golang:1.26.10 AS server-builder
 WORKDIR /workspace/server
 
 # Allow cross-compilation when building with BuildKit platforms
 ARG TARGETARCH
 ARG TARGETOS
-ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-golang1250
+ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-golang12610
 ENV CGO_ENABLED=0
 
 COPY server/go.mod ./
@@ -105,7 +105,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     rm -f /etc/apt/apt.conf.d/docker-clean; \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache; \
     apt-get -yqq update; \
-    apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils;
+    apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1;
 
 # Download a pinned FFmpeg static build for the recording server
 RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX-ffmpeg \
@@ -161,7 +162,7 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
-FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.2 AS neko
+FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.3 AS neko
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/library/docker:29.8.2-dind AS docker
 ARG TARGETARCH
@@ -192,13 +193,15 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     scrot \
     imagemagick \
     sudo \
-    mutter \
+    openbox \
     curl \
     # Network tools
     net-tools \
     netcat \
     # Userland apps
     x11-apps \
+    # xprop, used to detect when the window manager has taken the display
+    x11-utils \
     tint2 \
     wget \
     xdg-utils \
@@ -269,6 +272,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
     gstreamer1.0-pulseaudio gstreamer1.0-omx; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1; \
     #
     # install libxcvt0 (not available in debian:bullseye)
     ARCH=$(dpkg --print-architecture); \
@@ -336,8 +340,23 @@ RUN set -eux; \
     ln -sf /usr/local/lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack; \
     fi
 
-# Install TypeScript, Playwright, Patchright, esbuild globally
-RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm npm install -g typescript playwright-core patchright esbuild
+# Install TypeScript, Playwright, Patchright, esbuild globally.
+# The playwright daemon is bundled with the engine marked external, so it
+# resolves patchright/playwright-core from this global install at runtime, and
+# user code in an execute call resolves @playwright/test the same way. Read
+# the versions from server/runtime/package.json — the same pins the Browser
+# REPL bundles — so both engines in the image agree and neither moves on a
+# rebuild without a lockfile change. @playwright/test releases in lockstep
+# with playwright-core, so it takes the playwright-core pin.
+COPY server/runtime/package.json /tmp/runtime-package.json
+RUN --mount=type=cache,target=/root/.npm,id=$CACHEIDPREFIX-npm set -eux; \
+    patchright_version="$(node -p "require('/tmp/runtime-package.json').dependencies.patchright")"; \
+    playwright_core_version="$(node -p "require('/tmp/runtime-package.json').dependencies['playwright-core']")"; \
+    npm install -g typescript esbuild \
+        "patchright@${patchright_version}" \
+        "playwright-core@${playwright_core_version}" \
+        "@playwright/test@${playwright_core_version}"; \
+    rm -f /tmp/runtime-package.json
 
 # Pre-install openssh-server and websocat for faster SSH setup via kernel CLI.
 # Only installed, NOT configured: no host keys, no custom config, service not enabled.
@@ -392,6 +411,12 @@ COPY shared/pulseaudio-daemon.conf /etc/pulse/daemon.conf.d/10-kernel-sample-rat
 RUN chmod +x /usr/local/bin/start-pulseaudio.sh
 COPY images/chromium-headful/supervisord.conf /etc/supervisor/supervisord.conf
 COPY images/chromium-headful/supervisor/services/ /etc/supervisor/conf.d/services/
+# Openbox reads /etc/xdg/openbox/rc.xml when the running user has no
+# ~/.config/openbox, which keeps this working whether the WM runs as root or
+# as the kernel user.
+COPY images/chromium-headful/openbox/rc.xml /etc/xdg/openbox/rc.xml
+COPY images/chromium-headful/openbox/themes/kernel-light /usr/share/themes/kernel-light
+COPY shared/set-desktop-background.sh /usr/local/bin/set-desktop-background.sh
 COPY shared/envoy/supervisor-envoy.conf /etc/supervisor/conf.d/services/envoy.conf
 
 # Install Envoy proxy

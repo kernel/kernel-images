@@ -91,7 +91,7 @@ Deployed successfully!
 - The image requires at least 8gb of memory.
 - To deploy the implementation with WebRTC desktop streaming enabled instead of noVNC: `ENABLE_WEBRTC=true NEKO_ICESERVERS=xxx ./run-unikernel.sh`
 - Deploying to Unikraft Cloud requires the usage of a [TURN server](https://webrtc.org/getting-started/turn-server) when `ENABLE_WEBRTC=true`, as direct exposure of UDP ports is not currently supported. `NEKO_ICESERVERS`: Describes multiple STUN and TURN server that can be used by the ICEAgent to establish a connection with a peer. e.g. `[{"urls": ["turn:turn.example.com:19302", "stun:stun.example.com:19302"], "username": "name", "credential": "password"}, {"urls": ["stun:stun.example2.com:19302"]}]`.
-- Various services (mutter, tint) take a few seconds to start-up. Once they do, the standby and restart time is extremely fast.
+- Various services (openbox, tint) take a few seconds to start-up. Once they do, the standby and restart time is extremely fast.
 - The Unikraft deployment generates a url. This url is public, meaning _anyone_ can access the remote GUI if they have the url. Only use this for non-sensitive browser interactions, and delete the unikernel instance when you're done.
 - You can call `browser.close()` to disconnect to the browser, and the unikernel will go into standby after network activity ends. You can then reconnect to the instance using CDP. `browser.close()` ends the websocket connection but doesn't actually close the browser.
 - VCPUS value can be adjusted using the variable: `VCPUS=8`
