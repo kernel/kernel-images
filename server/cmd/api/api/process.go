@@ -461,7 +461,7 @@ func (s *ApiService) ProcessSpawn(ctx context.Context, request oapi.ProcessSpawn
 // (POST /process/{process_id}/kill)
 func (s *ApiService) ProcessKill(ctx context.Context, request oapi.ProcessKillRequestObject) (oapi.ProcessKillResponseObject, error) {
 	log := logger.FromContext(ctx)
-	id := request.ProcessId.String()
+	id := request.ProcessId
 	s.procMu.RLock()
 	h, ok := s.procs[id]
 	s.procMu.RUnlock()
@@ -498,7 +498,7 @@ func (s *ApiService) ProcessKill(ctx context.Context, request oapi.ProcessKillRe
 // Get process status
 // (GET /process/{process_id}/status)
 func (s *ApiService) ProcessStatus(ctx context.Context, request oapi.ProcessStatusRequestObject) (oapi.ProcessStatusResponseObject, error) {
-	id := request.ProcessId.String()
+	id := request.ProcessId
 	s.procMu.RLock()
 	h, ok := s.procs[id]
 	s.procMu.RUnlock()
@@ -545,7 +545,7 @@ func (s *ApiService) ProcessStatus(ctx context.Context, request oapi.ProcessStat
 // Write to process stdin
 // (POST /process/{process_id}/stdin)
 func (s *ApiService) ProcessStdin(ctx context.Context, request oapi.ProcessStdinRequestObject) (oapi.ProcessStdinResponseObject, error) {
-	id := request.ProcessId.String()
+	id := request.ProcessId
 	s.procMu.RLock()
 	h, ok := s.procs[id]
 	s.procMu.RUnlock()
@@ -570,7 +570,7 @@ func (s *ApiService) ProcessStdin(ctx context.Context, request oapi.ProcessStdin
 // (GET /process/{process_id}/stdout/stream)
 func (s *ApiService) ProcessStdoutStream(ctx context.Context, request oapi.ProcessStdoutStreamRequestObject) (oapi.ProcessStdoutStreamResponseObject, error) {
 	log := logger.FromContext(ctx)
-	id := request.ProcessId.String()
+	id := request.ProcessId
 	s.procMu.RLock()
 	h, ok := s.procs[id]
 	s.procMu.RUnlock()
@@ -615,7 +615,7 @@ func ptrOf[T any](v T) *T { return &v }
 // Resize PTY-backed process
 // (POST /process/{process_id}/resize)
 func (s *ApiService) ProcessResize(ctx context.Context, request oapi.ProcessResizeRequestObject) (oapi.ProcessResizeResponseObject, error) {
-	id := request.ProcessId.String()
+	id := request.ProcessId
 	if request.Body == nil {
 		return oapi.ProcessResize400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body required"}}, nil
 	}

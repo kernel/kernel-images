@@ -10102,25 +10102,25 @@ type ClientInterface interface {
 	ProcessSpawn(ctx context.Context, body ProcessSpawnJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ProcessKillWithBody request with any body
-	ProcessKillWithBody(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessKillWithBody(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	ProcessKill(ctx context.Context, processId openapi_types.UUID, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessKill(ctx context.Context, processId string, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ProcessResizeWithBody request with any body
-	ProcessResizeWithBody(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessResizeWithBody(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	ProcessResize(ctx context.Context, processId openapi_types.UUID, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessResize(ctx context.Context, processId string, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ProcessStatus request
-	ProcessStatus(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessStatus(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ProcessStdinWithBody request with any body
-	ProcessStdinWithBody(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessStdinWithBody(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	ProcessStdin(ctx context.Context, processId openapi_types.UUID, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessStdin(ctx context.Context, processId string, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ProcessStdoutStream request
-	ProcessStdoutStream(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+	ProcessStdoutStream(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteRecordingWithBody request with any body
 	DeleteRecordingWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -11033,7 +11033,7 @@ func (c *Client) ProcessSpawn(ctx context.Context, body ProcessSpawnJSONRequestB
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessKillWithBody(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessKillWithBody(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessKillRequestWithBody(c.Server, processId, contentType, body)
 	if err != nil {
 		return nil, err
@@ -11045,7 +11045,7 @@ func (c *Client) ProcessKillWithBody(ctx context.Context, processId openapi_type
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessKill(ctx context.Context, processId openapi_types.UUID, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessKill(ctx context.Context, processId string, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessKillRequest(c.Server, processId, body)
 	if err != nil {
 		return nil, err
@@ -11057,7 +11057,7 @@ func (c *Client) ProcessKill(ctx context.Context, processId openapi_types.UUID, 
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessResizeWithBody(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessResizeWithBody(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessResizeRequestWithBody(c.Server, processId, contentType, body)
 	if err != nil {
 		return nil, err
@@ -11069,7 +11069,7 @@ func (c *Client) ProcessResizeWithBody(ctx context.Context, processId openapi_ty
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessResize(ctx context.Context, processId openapi_types.UUID, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessResize(ctx context.Context, processId string, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessResizeRequest(c.Server, processId, body)
 	if err != nil {
 		return nil, err
@@ -11081,7 +11081,7 @@ func (c *Client) ProcessResize(ctx context.Context, processId openapi_types.UUID
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessStatus(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessStatus(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessStatusRequest(c.Server, processId)
 	if err != nil {
 		return nil, err
@@ -11093,7 +11093,7 @@ func (c *Client) ProcessStatus(ctx context.Context, processId openapi_types.UUID
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessStdinWithBody(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessStdinWithBody(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessStdinRequestWithBody(c.Server, processId, contentType, body)
 	if err != nil {
 		return nil, err
@@ -11105,7 +11105,7 @@ func (c *Client) ProcessStdinWithBody(ctx context.Context, processId openapi_typ
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessStdin(ctx context.Context, processId openapi_types.UUID, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessStdin(ctx context.Context, processId string, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessStdinRequest(c.Server, processId, body)
 	if err != nil {
 		return nil, err
@@ -11117,7 +11117,7 @@ func (c *Client) ProcessStdin(ctx context.Context, processId openapi_types.UUID,
 	return c.Client.Do(req)
 }
 
-func (c *Client) ProcessStdoutStream(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+func (c *Client) ProcessStdoutStream(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewProcessStdoutStreamRequest(c.Server, processId)
 	if err != nil {
 		return nil, err
@@ -13314,7 +13314,7 @@ func NewProcessSpawnRequestWithBody(server string, contentType string, body io.R
 }
 
 // NewProcessKillRequest calls the generic ProcessKill builder with application/json body
-func NewProcessKillRequest(server string, processId openapi_types.UUID, body ProcessKillJSONRequestBody) (*http.Request, error) {
+func NewProcessKillRequest(server string, processId string, body ProcessKillJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
@@ -13325,12 +13325,12 @@ func NewProcessKillRequest(server string, processId openapi_types.UUID, body Pro
 }
 
 // NewProcessKillRequestWithBody generates requests for ProcessKill with any type of body
-func NewProcessKillRequestWithBody(server string, processId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+func NewProcessKillRequestWithBody(server string, processId string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
 
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
 	if err != nil {
 		return nil, err
 	}
@@ -13361,7 +13361,7 @@ func NewProcessKillRequestWithBody(server string, processId openapi_types.UUID, 
 }
 
 // NewProcessResizeRequest calls the generic ProcessResize builder with application/json body
-func NewProcessResizeRequest(server string, processId openapi_types.UUID, body ProcessResizeJSONRequestBody) (*http.Request, error) {
+func NewProcessResizeRequest(server string, processId string, body ProcessResizeJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
@@ -13372,12 +13372,12 @@ func NewProcessResizeRequest(server string, processId openapi_types.UUID, body P
 }
 
 // NewProcessResizeRequestWithBody generates requests for ProcessResize with any type of body
-func NewProcessResizeRequestWithBody(server string, processId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+func NewProcessResizeRequestWithBody(server string, processId string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
 
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
 	if err != nil {
 		return nil, err
 	}
@@ -13408,12 +13408,12 @@ func NewProcessResizeRequestWithBody(server string, processId openapi_types.UUID
 }
 
 // NewProcessStatusRequest generates requests for ProcessStatus
-func NewProcessStatusRequest(server string, processId openapi_types.UUID) (*http.Request, error) {
+func NewProcessStatusRequest(server string, processId string) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
 
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
 	if err != nil {
 		return nil, err
 	}
@@ -13442,7 +13442,7 @@ func NewProcessStatusRequest(server string, processId openapi_types.UUID) (*http
 }
 
 // NewProcessStdinRequest calls the generic ProcessStdin builder with application/json body
-func NewProcessStdinRequest(server string, processId openapi_types.UUID, body ProcessStdinJSONRequestBody) (*http.Request, error) {
+func NewProcessStdinRequest(server string, processId string, body ProcessStdinJSONRequestBody) (*http.Request, error) {
 	var bodyReader io.Reader
 	buf, err := json.Marshal(body)
 	if err != nil {
@@ -13453,12 +13453,12 @@ func NewProcessStdinRequest(server string, processId openapi_types.UUID, body Pr
 }
 
 // NewProcessStdinRequestWithBody generates requests for ProcessStdin with any type of body
-func NewProcessStdinRequestWithBody(server string, processId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+func NewProcessStdinRequestWithBody(server string, processId string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
 
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
 	if err != nil {
 		return nil, err
 	}
@@ -13489,12 +13489,12 @@ func NewProcessStdinRequestWithBody(server string, processId openapi_types.UUID,
 }
 
 // NewProcessStdoutStreamRequest generates requests for ProcessStdoutStream
-func NewProcessStdoutStreamRequest(server string, processId openapi_types.UUID) (*http.Request, error) {
+func NewProcessStdoutStreamRequest(server string, processId string) (*http.Request, error) {
 	var err error
 
 	var pathParam0 string
 
-	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "process_id", processId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
 	if err != nil {
 		return nil, err
 	}
@@ -14520,25 +14520,25 @@ type ClientWithResponsesInterface interface {
 	ProcessSpawnWithResponse(ctx context.Context, body ProcessSpawnJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessSpawnResponse, error)
 
 	// ProcessKillWithBodyWithResponse request with any body
-	ProcessKillWithBodyWithResponse(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error)
+	ProcessKillWithBodyWithResponse(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error)
 
-	ProcessKillWithResponse(ctx context.Context, processId openapi_types.UUID, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error)
+	ProcessKillWithResponse(ctx context.Context, processId string, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error)
 
 	// ProcessResizeWithBodyWithResponse request with any body
-	ProcessResizeWithBodyWithResponse(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error)
+	ProcessResizeWithBodyWithResponse(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error)
 
-	ProcessResizeWithResponse(ctx context.Context, processId openapi_types.UUID, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error)
+	ProcessResizeWithResponse(ctx context.Context, processId string, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error)
 
 	// ProcessStatusWithResponse request
-	ProcessStatusWithResponse(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ProcessStatusResponse, error)
+	ProcessStatusWithResponse(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*ProcessStatusResponse, error)
 
 	// ProcessStdinWithBodyWithResponse request with any body
-	ProcessStdinWithBodyWithResponse(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error)
+	ProcessStdinWithBodyWithResponse(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error)
 
-	ProcessStdinWithResponse(ctx context.Context, processId openapi_types.UUID, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error)
+	ProcessStdinWithResponse(ctx context.Context, processId string, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error)
 
 	// ProcessStdoutStreamWithResponse request
-	ProcessStdoutStreamWithResponse(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ProcessStdoutStreamResponse, error)
+	ProcessStdoutStreamWithResponse(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*ProcessStdoutStreamResponse, error)
 
 	// DeleteRecordingWithBodyWithResponse request with any body
 	DeleteRecordingWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeleteRecordingResponse, error)
@@ -16891,7 +16891,7 @@ func (c *ClientWithResponses) ProcessSpawnWithResponse(ctx context.Context, body
 }
 
 // ProcessKillWithBodyWithResponse request with arbitrary body returning *ProcessKillResponse
-func (c *ClientWithResponses) ProcessKillWithBodyWithResponse(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error) {
+func (c *ClientWithResponses) ProcessKillWithBodyWithResponse(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error) {
 	rsp, err := c.ProcessKillWithBody(ctx, processId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -16899,7 +16899,7 @@ func (c *ClientWithResponses) ProcessKillWithBodyWithResponse(ctx context.Contex
 	return ParseProcessKillResponse(rsp)
 }
 
-func (c *ClientWithResponses) ProcessKillWithResponse(ctx context.Context, processId openapi_types.UUID, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error) {
+func (c *ClientWithResponses) ProcessKillWithResponse(ctx context.Context, processId string, body ProcessKillJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessKillResponse, error) {
 	rsp, err := c.ProcessKill(ctx, processId, body, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -16908,7 +16908,7 @@ func (c *ClientWithResponses) ProcessKillWithResponse(ctx context.Context, proce
 }
 
 // ProcessResizeWithBodyWithResponse request with arbitrary body returning *ProcessResizeResponse
-func (c *ClientWithResponses) ProcessResizeWithBodyWithResponse(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error) {
+func (c *ClientWithResponses) ProcessResizeWithBodyWithResponse(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error) {
 	rsp, err := c.ProcessResizeWithBody(ctx, processId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -16916,7 +16916,7 @@ func (c *ClientWithResponses) ProcessResizeWithBodyWithResponse(ctx context.Cont
 	return ParseProcessResizeResponse(rsp)
 }
 
-func (c *ClientWithResponses) ProcessResizeWithResponse(ctx context.Context, processId openapi_types.UUID, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error) {
+func (c *ClientWithResponses) ProcessResizeWithResponse(ctx context.Context, processId string, body ProcessResizeJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessResizeResponse, error) {
 	rsp, err := c.ProcessResize(ctx, processId, body, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -16925,7 +16925,7 @@ func (c *ClientWithResponses) ProcessResizeWithResponse(ctx context.Context, pro
 }
 
 // ProcessStatusWithResponse request returning *ProcessStatusResponse
-func (c *ClientWithResponses) ProcessStatusWithResponse(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ProcessStatusResponse, error) {
+func (c *ClientWithResponses) ProcessStatusWithResponse(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*ProcessStatusResponse, error) {
 	rsp, err := c.ProcessStatus(ctx, processId, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -16934,7 +16934,7 @@ func (c *ClientWithResponses) ProcessStatusWithResponse(ctx context.Context, pro
 }
 
 // ProcessStdinWithBodyWithResponse request with arbitrary body returning *ProcessStdinResponse
-func (c *ClientWithResponses) ProcessStdinWithBodyWithResponse(ctx context.Context, processId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error) {
+func (c *ClientWithResponses) ProcessStdinWithBodyWithResponse(ctx context.Context, processId string, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error) {
 	rsp, err := c.ProcessStdinWithBody(ctx, processId, contentType, body, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -16942,7 +16942,7 @@ func (c *ClientWithResponses) ProcessStdinWithBodyWithResponse(ctx context.Conte
 	return ParseProcessStdinResponse(rsp)
 }
 
-func (c *ClientWithResponses) ProcessStdinWithResponse(ctx context.Context, processId openapi_types.UUID, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error) {
+func (c *ClientWithResponses) ProcessStdinWithResponse(ctx context.Context, processId string, body ProcessStdinJSONRequestBody, reqEditors ...RequestEditorFn) (*ProcessStdinResponse, error) {
 	rsp, err := c.ProcessStdin(ctx, processId, body, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -16951,7 +16951,7 @@ func (c *ClientWithResponses) ProcessStdinWithResponse(ctx context.Context, proc
 }
 
 // ProcessStdoutStreamWithResponse request returning *ProcessStdoutStreamResponse
-func (c *ClientWithResponses) ProcessStdoutStreamWithResponse(ctx context.Context, processId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ProcessStdoutStreamResponse, error) {
+func (c *ClientWithResponses) ProcessStdoutStreamWithResponse(ctx context.Context, processId string, reqEditors ...RequestEditorFn) (*ProcessStdoutStreamResponse, error) {
 	rsp, err := c.ProcessStdoutStream(ctx, processId, reqEditors...)
 	if err != nil {
 		return nil, err
@@ -20072,19 +20072,19 @@ type ServerInterface interface {
 	ProcessSpawn(w http.ResponseWriter, r *http.Request)
 	// Send signal to process
 	// (POST /process/{process_id}/kill)
-	ProcessKill(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID)
+	ProcessKill(w http.ResponseWriter, r *http.Request, processId string)
 	// Resize a PTY-backed process
 	// (POST /process/{process_id}/resize)
-	ProcessResize(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID)
+	ProcessResize(w http.ResponseWriter, r *http.Request, processId string)
 	// Get process status
 	// (GET /process/{process_id}/status)
-	ProcessStatus(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID)
+	ProcessStatus(w http.ResponseWriter, r *http.Request, processId string)
 	// Write to process stdin
 	// (POST /process/{process_id}/stdin)
-	ProcessStdin(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID)
+	ProcessStdin(w http.ResponseWriter, r *http.Request, processId string)
 	// Stream process stdout over SSE
 	// (GET /process/{process_id}/stdout/stream)
-	ProcessStdoutStream(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID)
+	ProcessStdoutStream(w http.ResponseWriter, r *http.Request, processId string)
 	// Delete a previously recorded video file
 	// (POST /recording/delete)
 	DeleteRecording(w http.ResponseWriter, r *http.Request)
@@ -20423,31 +20423,31 @@ func (_ Unimplemented) ProcessSpawn(w http.ResponseWriter, r *http.Request) {
 
 // Send signal to process
 // (POST /process/{process_id}/kill)
-func (_ Unimplemented) ProcessKill(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (_ Unimplemented) ProcessKill(w http.ResponseWriter, r *http.Request, processId string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // Resize a PTY-backed process
 // (POST /process/{process_id}/resize)
-func (_ Unimplemented) ProcessResize(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (_ Unimplemented) ProcessResize(w http.ResponseWriter, r *http.Request, processId string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // Get process status
 // (GET /process/{process_id}/status)
-func (_ Unimplemented) ProcessStatus(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (_ Unimplemented) ProcessStatus(w http.ResponseWriter, r *http.Request, processId string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // Write to process stdin
 // (POST /process/{process_id}/stdin)
-func (_ Unimplemented) ProcessStdin(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (_ Unimplemented) ProcessStdin(w http.ResponseWriter, r *http.Request, processId string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
 // Stream process stdout over SSE
 // (GET /process/{process_id}/stdout/stream)
-func (_ Unimplemented) ProcessStdoutStream(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (_ Unimplemented) ProcessStdoutStream(w http.ResponseWriter, r *http.Request, processId string) {
 	w.WriteHeader(http.StatusNotImplemented)
 }
 
@@ -21453,9 +21453,9 @@ func (siw *ServerInterfaceWrapper) ProcessKill(w http.ResponseWriter, r *http.Re
 	var err error
 
 	// ------------- Path parameter "process_id" -------------
-	var processId openapi_types.UUID
+	var processId string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "process_id", Err: err})
 		return
@@ -21478,9 +21478,9 @@ func (siw *ServerInterfaceWrapper) ProcessResize(w http.ResponseWriter, r *http.
 	var err error
 
 	// ------------- Path parameter "process_id" -------------
-	var processId openapi_types.UUID
+	var processId string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "process_id", Err: err})
 		return
@@ -21503,9 +21503,9 @@ func (siw *ServerInterfaceWrapper) ProcessStatus(w http.ResponseWriter, r *http.
 	var err error
 
 	// ------------- Path parameter "process_id" -------------
-	var processId openapi_types.UUID
+	var processId string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "process_id", Err: err})
 		return
@@ -21528,9 +21528,9 @@ func (siw *ServerInterfaceWrapper) ProcessStdin(w http.ResponseWriter, r *http.R
 	var err error
 
 	// ------------- Path parameter "process_id" -------------
-	var processId openapi_types.UUID
+	var processId string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "process_id", Err: err})
 		return
@@ -21553,9 +21553,9 @@ func (siw *ServerInterfaceWrapper) ProcessStdoutStream(w http.ResponseWriter, r 
 	var err error
 
 	// ------------- Path parameter "process_id" -------------
-	var processId openapi_types.UUID
+	var processId string
 
-	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid"})
+	err = runtime.BindStyledParameterWithOptions("simple", "process_id", chi.URLParam(r, "process_id"), &processId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: ""})
 	if err != nil {
 		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "process_id", Err: err})
 		return
@@ -24058,7 +24058,7 @@ func (response ProcessSpawn500JSONResponse) VisitProcessSpawnResponse(w http.Res
 }
 
 type ProcessKillRequestObject struct {
-	ProcessId openapi_types.UUID `json:"process_id"`
+	ProcessId string `json:"process_id"`
 	Body      *ProcessKillJSONRequestBody
 }
 
@@ -24103,7 +24103,7 @@ func (response ProcessKill500JSONResponse) VisitProcessKillResponse(w http.Respo
 }
 
 type ProcessResizeRequestObject struct {
-	ProcessId openapi_types.UUID `json:"process_id"`
+	ProcessId string `json:"process_id"`
 	Body      *ProcessResizeJSONRequestBody
 }
 
@@ -24148,7 +24148,7 @@ func (response ProcessResize500JSONResponse) VisitProcessResizeResponse(w http.R
 }
 
 type ProcessStatusRequestObject struct {
-	ProcessId openapi_types.UUID `json:"process_id"`
+	ProcessId string `json:"process_id"`
 }
 
 type ProcessStatusResponseObject interface {
@@ -24192,7 +24192,7 @@ func (response ProcessStatus500JSONResponse) VisitProcessStatusResponse(w http.R
 }
 
 type ProcessStdinRequestObject struct {
-	ProcessId openapi_types.UUID `json:"process_id"`
+	ProcessId string `json:"process_id"`
 	Body      *ProcessStdinJSONRequestBody
 }
 
@@ -24237,7 +24237,7 @@ func (response ProcessStdin500JSONResponse) VisitProcessStdinResponse(w http.Res
 }
 
 type ProcessStdoutStreamRequestObject struct {
-	ProcessId openapi_types.UUID `json:"process_id"`
+	ProcessId string `json:"process_id"`
 }
 
 type ProcessStdoutStreamResponseObject interface {
@@ -26705,7 +26705,7 @@ func (sh *strictHandler) ProcessSpawn(w http.ResponseWriter, r *http.Request) {
 }
 
 // ProcessKill operation middleware
-func (sh *strictHandler) ProcessKill(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (sh *strictHandler) ProcessKill(w http.ResponseWriter, r *http.Request, processId string) {
 	var request ProcessKillRequestObject
 
 	request.ProcessId = processId
@@ -26738,7 +26738,7 @@ func (sh *strictHandler) ProcessKill(w http.ResponseWriter, r *http.Request, pro
 }
 
 // ProcessResize operation middleware
-func (sh *strictHandler) ProcessResize(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (sh *strictHandler) ProcessResize(w http.ResponseWriter, r *http.Request, processId string) {
 	var request ProcessResizeRequestObject
 
 	request.ProcessId = processId
@@ -26771,7 +26771,7 @@ func (sh *strictHandler) ProcessResize(w http.ResponseWriter, r *http.Request, p
 }
 
 // ProcessStatus operation middleware
-func (sh *strictHandler) ProcessStatus(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (sh *strictHandler) ProcessStatus(w http.ResponseWriter, r *http.Request, processId string) {
 	var request ProcessStatusRequestObject
 
 	request.ProcessId = processId
@@ -26797,7 +26797,7 @@ func (sh *strictHandler) ProcessStatus(w http.ResponseWriter, r *http.Request, p
 }
 
 // ProcessStdin operation middleware
-func (sh *strictHandler) ProcessStdin(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (sh *strictHandler) ProcessStdin(w http.ResponseWriter, r *http.Request, processId string) {
 	var request ProcessStdinRequestObject
 
 	request.ProcessId = processId
@@ -26830,7 +26830,7 @@ func (sh *strictHandler) ProcessStdin(w http.ResponseWriter, r *http.Request, pr
 }
 
 // ProcessStdoutStream operation middleware
-func (sh *strictHandler) ProcessStdoutStream(w http.ResponseWriter, r *http.Request, processId openapi_types.UUID) {
+func (sh *strictHandler) ProcessStdoutStream(w http.ResponseWriter, r *http.Request, processId string) {
 	var request ProcessStdoutStreamRequestObject
 
 	request.ProcessId = processId
@@ -28081,96 +28081,96 @@ var swaggerSpec = []string{
 	"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",
-	"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",
-	"eWZV5x5eTtqx0NTHj///AQBnnlvl8vIDAA==",
+	"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",
+	"1MeP//8BAL76igKi8gMA",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

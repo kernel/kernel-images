@@ -135,6 +135,16 @@ func TestWriteFileAndWatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read SSE line: %v", err)
 	}
+	// Skip the opening comment. It is an SSE comment, not an event.
+	if strings.HasPrefix(line, ":") {
+		if _, err := reader.ReadString('\n'); err != nil {
+			t.Fatalf("failed to read SSE blank line: %v", err)
+		}
+		line, err = reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("failed to read SSE line: %v", err)
+		}
+	}
 	if !strings.HasPrefix(line, "data: ") {
 		t.Fatalf("unexpected SSE format: %s", line)
 	}
@@ -190,6 +200,14 @@ func TestFileDirOperations(t *testing.T) {
 	}
 	if len(lf200) != 1 || lf200[0].Name != "file.txt" {
 		t.Fatalf("ListFiles unexpected content: %+v", lf200)
+	}
+
+	listFileResp, err := svc.ListFiles(ctx, oapi.ListFilesRequestObject{Params: oapi.ListFilesParams{Path: filePath}})
+	if err != nil {
+		t.Fatalf("ListFiles on file error: %v", err)
+	}
+	if _, ok := listFileResp.(oapi.ListFiles400JSONResponse); !ok {
+		t.Fatalf("expected 400 when listing a file, got %T", listFileResp)
 	}
 
 	// FileInfo
@@ -588,5 +606,43 @@ func TestDownloadDirZipErrors(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	} else if _, ok := resp.(oapi.DownloadDirZip400JSONResponse); !ok {
 		t.Fatalf("expected 400 for file path, got %T", resp)
+	}
+}
+
+// The stream opens with an SSE comment, so the response reaches the client
+// before any file change happens.
+func TestStreamFsEventsSendsOpeningCommentBeforeEvents(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc := &ApiService{defaultRecorderID: "default", watches: make(map[string]*fsWatch)}
+
+	dir := t.TempDir()
+	recursive := false
+	startResp, err := svc.StartFsWatch(ctx, oapi.StartFsWatchRequestObject{Body: &oapi.StartFsWatchRequest{Path: dir, Recursive: &recursive}})
+	if err != nil {
+		t.Fatalf("StartFsWatch error: %v", err)
+	}
+	sr201, ok := startResp.(oapi.StartFsWatch201JSONResponse)
+	if !ok || sr201.WatchId == nil {
+		t.Fatalf("unexpected StartFsWatch response: %T", startResp)
+	}
+
+	resp, err := svc.StreamFsEvents(ctx, oapi.StreamFsEventsRequestObject{WatchId: *sr201.WatchId})
+	if err != nil {
+		t.Fatalf("StreamFsEvents error: %v", err)
+	}
+	r200, ok := resp.(oapi.StreamFsEvents200TexteventStreamResponse)
+	if !ok {
+		t.Fatalf("unexpected StreamFsEvents response: %T", resp)
+	}
+	defer r200.Body.(io.Closer).Close()
+
+	first := make([]byte, len(": watching\n\n"))
+	if _, err := io.ReadFull(r200.Body, first); err != nil {
+		t.Fatalf("reading opening comment: %v", err)
+	}
+	if string(first) != ": watching\n\n" {
+		t.Fatalf("first bytes = %q, want the opening comment", first)
 	}
 }
