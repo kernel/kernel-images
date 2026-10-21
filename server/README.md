@@ -6,7 +6,7 @@ A REST API server to start, stop, and download screen recordings.
 
 ### Required Software
 
-- **Go 1.24.3+** - Programming language runtime
+- **Go 1.27.2+** - Programming language runtime
 - **ffmpeg** - Video recording engine
   - macOS: `brew install ffmpeg`
   - Linux: `sudo apt install ffmpeg` or `sudo yum install ffmpeg`
