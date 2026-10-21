@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,10 +26,19 @@ import (
 const (
 	// defaultPlaywrightExecutor runs calls that name no executor. It always
 	// exists, binds `page` to the active tab instead of owning one, and does
-	// not count toward maxPlaywrightExecutors.
+	// not count toward the named executor limit.
 	defaultPlaywrightExecutor = "default"
 
-	maxPlaywrightExecutors = 8
+	// The named executor limit is set from the VM's memory: what is left after
+	// playwrightExecutorMemoryReserve, divided by playwrightExecutorMemoryBudget,
+	// clamped to [minPlaywrightExecutors, maxPlaywrightExecutors]. The reserve
+	// covers Chromium, the default executor and the API; the budget covers one
+	// executor's daemon process (90-130 MiB RSS) and its tab. A 1 GiB VM gets
+	// 2 named executors; a VM with 2 GiB or more gets the maximum.
+	playwrightExecutorMemoryReserve = 512 << 20
+	playwrightExecutorMemoryBudget  = 192 << 20
+	minPlaywrightExecutors          = 1
+	maxPlaywrightExecutors          = 8
 
 	// playwrightExecutorResponseGrace is added to the execution timeout when
 	// setting the socket deadline, giving the daemon time to report its own
@@ -50,11 +61,52 @@ var (
 )
 
 type playwrightExecutorLimitError struct {
+	limit     int
 	executors []playwrightExecutorInfo
 }
 
 func (e *playwrightExecutorLimitError) Error() string {
-	return fmt.Sprintf("named executor limit (%d) reached; delete one with DELETE /playwright/executors/{name}", maxPlaywrightExecutors)
+	return fmt.Sprintf("named executor limit (%d) reached; delete one with DELETE /playwright/executors/{name}", e.limit)
+}
+
+// playwrightExecutorLimit returns how many named executors fit in memBytes of
+// memory.
+func playwrightExecutorLimit(memBytes uint64) int {
+	if memBytes <= playwrightExecutorMemoryReserve {
+		return minPlaywrightExecutors
+	}
+	n := (memBytes - playwrightExecutorMemoryReserve) / playwrightExecutorMemoryBudget
+	return int(min(max(n, minPlaywrightExecutors), maxPlaywrightExecutors))
+}
+
+// vmMemoryBytes returns the memory available to this VM or container: MemTotal
+// from /proc/meminfo, lowered to the cgroup v2 memory limit when one is set.
+func vmMemoryBytes(meminfoPath, cgroupMaxPath string) (uint64, error) {
+	data, err := os.ReadFile(meminfoPath)
+	if err != nil {
+		return 0, err
+	}
+	var total uint64
+	for line := range strings.Lines(string(data)) {
+		if kb, ok := strings.CutPrefix(line, "MemTotal:"); ok {
+			v, err := strconv.ParseUint(strings.TrimSuffix(strings.TrimSpace(kb), " kB"), 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parse MemTotal: %w", err)
+			}
+			total = v << 10
+			break
+		}
+	}
+	if total == 0 {
+		return 0, errors.New("no MemTotal in " + meminfoPath)
+	}
+	// memory.max is "max" when the cgroup has no limit.
+	if data, err := os.ReadFile(cgroupMaxPath); err == nil {
+		if v, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 64); err == nil {
+			total = min(total, v)
+		}
+	}
+	return total, nil
 }
 
 // playwrightExecutorTabs opens and closes executor tabs. The manager owns
@@ -169,18 +221,21 @@ type playwrightExecutorManager struct {
 	socketDir     string
 	responseGrace time.Duration
 	tabs          playwrightExecutorTabs
+	// limit is how many named executors can exist at once.
+	limit int
 
 	mu        sync.Mutex
 	executors map[string]*playwrightExecutor
 	closed    bool
 }
 
-func newPlaywrightExecutorManager(tabs playwrightExecutorTabs) *playwrightExecutorManager {
+func newPlaywrightExecutorManager(tabs playwrightExecutorTabs, limit int) *playwrightExecutorManager {
 	m := &playwrightExecutorManager{
 		tabs:          tabs,
 		script:        playwrightDaemonScript,
 		socketDir:     os.TempDir(),
 		responseGrace: playwrightExecutorResponseGrace,
+		limit:         limit,
 		executors:     make(map[string]*playwrightExecutor),
 	}
 	e := newPlaywrightExecutor(defaultPlaywrightExecutor)
@@ -212,8 +267,8 @@ func (m *playwrightExecutorManager) executorFor(name string) (*playwrightExecuto
 	if e, ok := m.executors[name]; ok {
 		return e, nil
 	}
-	if m.namedCountLocked() >= maxPlaywrightExecutors {
-		return nil, &playwrightExecutorLimitError{executors: m.snapshotLocked()}
+	if m.namedCountLocked() >= m.limit {
+		return nil, &playwrightExecutorLimitError{limit: m.limit, executors: m.snapshotLocked()}
 	}
 	e := newPlaywrightExecutor(name)
 	m.executors[name] = e

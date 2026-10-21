@@ -242,7 +242,14 @@ func New(
 		lifecycleCtx:      ctx,
 		lifecycleCancel:   cancel,
 	}
-	s.playwrightExecutors = newPlaywrightExecutorManager(cdpPlaywrightExecutorTabs{withCDP: s.withCDPClient})
+	executorLimit := maxPlaywrightExecutors
+	if mem, err := vmMemoryBytes("/proc/meminfo", "/sys/fs/cgroup/memory.max"); err != nil {
+		slog.Warn("failed to read VM memory; using the maximum playwright executor limit", "error", err, "limit", executorLimit)
+	} else {
+		executorLimit = playwrightExecutorLimit(mem)
+		slog.Info("set playwright executor limit from VM memory", "memory_bytes", mem, "limit", executorLimit)
+	}
+	s.playwrightExecutors = newPlaywrightExecutorManager(cdpPlaywrightExecutorTabs{withCDP: s.withCDPClient}, executorLimit)
 	if err := s.initializeBrowserLocation(); err != nil {
 		cancel()
 		return nil, err
