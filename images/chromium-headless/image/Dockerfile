@@ -1,10 +1,10 @@
-FROM docker.io/golang:1.25.0 AS server-builder
+FROM docker.io/golang:1.26.10 AS server-builder
 WORKDIR /workspace/server
 
 # Allow cross-compilation when building with BuildKit platforms
 ARG TARGETARCH
 ARG TARGETOS
-ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-golang1250
+ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-golang12610
 ENV CGO_ENABLED=0
 
 # Go module dependencies first for better layer caching
@@ -53,7 +53,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     rm -f /etc/apt/apt.conf.d/docker-clean; \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache; \
     apt-get -yqq update; \
-    apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils;
+    apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1;
 
 # Download a pinned FFmpeg static build for the recording server
 RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX-ffmpeg \
@@ -167,6 +168,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     fonts-noto-mono \
     fonts-nanum \
     supervisor; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1; \
     locale-gen en_US.UTF-8 en_GB.UTF-8 en_CA.UTF-8 en_IE.UTF-8 en_SG.UTF-8; \
     fc-cache -f
 

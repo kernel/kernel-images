@@ -1,10 +1,10 @@
-FROM docker.io/golang:1.25.0 AS server-builder
+FROM docker.io/golang:1.26.10 AS server-builder
 WORKDIR /workspace/server
 
 # Allow cross-compilation when building with BuildKit platforms
 ARG TARGETARCH
 ARG TARGETOS
-ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-golang1250
+ARG CACHEIDPREFIX=${TARGETOS:-linux}-${TARGETARCH:-amd64}-golang12610
 ENV CGO_ENABLED=0
 
 COPY server/go.mod ./
@@ -105,7 +105,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     rm -f /etc/apt/apt.conf.d/docker-clean; \
     echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache; \
     apt-get -yqq update; \
-    apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils;
+    apt-get -yqq --no-install-recommends install ca-certificates curl xz-utils; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1;
 
 # Download a pinned FFmpeg static build for the recording server
 RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX-ffmpeg \
@@ -161,7 +162,7 @@ RUN --mount=type=cache,target=/tmp/cache/ffmpeg,sharing=locked,id=$CACHEIDPREFIX
     rm -rf /tmp/ffmpeg*
 EOT
 
-FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.2 AS neko
+FROM ghcr.io/kernel/neko/base:3.0.8-v1.6.3 AS neko
 FROM node:22-bullseye-slim AS node-22
 FROM docker.io/library/docker:29.8.2-dind AS docker
 ARG TARGETARCH
@@ -269,6 +270,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
     gstreamer1.0-pulseaudio gstreamer1.0-omx; \
+    dpkg --compare-versions "$(dpkg-query -W -f='${Version}' ca-certificates)" ge 20260816ubuntu0.22.04.1; \
     #
     # install libxcvt0 (not available in debian:bullseye)
     ARCH=$(dpkg --print-architecture); \
