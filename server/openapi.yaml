@@ -85,7 +85,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       responses:
         "200":
           description: Status
@@ -117,7 +116,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
         - name: offset
           in: query
           description: Resume cursor from a prior output event, or 0 to replay all retained output. Used when Last-Event-ID is absent.
@@ -160,7 +158,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       requestBody:
         required: true
         content:
@@ -191,7 +188,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       requestBody:
         required: true
         content:
@@ -222,7 +218,6 @@ paths:
           required: true
           schema:
             type: string
-            format: uuid
       requestBody:
         required: true
         content:
@@ -1743,6 +1738,82 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "500":
           $ref: "#/components/responses/InternalError"
+  /browser/location:
+    get:
+      summary: Get the browser's location state
+      description: >
+        Reports the location the image last accepted through `PUT
+        /browser/location`, the one the running browser has confirmed, and
+        which of the browser's components have acknowledged it. `applied` and
+        `components` are read from the running browser, so a restarted or
+        unreachable browser never reports `applied`.
+      operationId: getBrowserLocation
+      x-telemetry-category: platform
+      responses:
+        "200":
+          description: Current browser location state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserLocationStatus"
+        "501":
+          description: The running browser cannot change location.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      summary: Set the browser's location
+      description: >
+        Applies a location to the running browser without restarting it and
+        returns once the browser confirms it, within about five seconds. The
+        image keeps the accepted location across Chromium restarts: a restart
+        it performs applies the location again before completing, and fails if
+        the browser doesn't confirm it.
+
+
+        Set by the control plane, which persists the session's location; a
+        customer write would leave the two disagreeing.
+      operationId: setBrowserLocation
+      x-telemetry-category: platform
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserLocationBundle"
+      responses:
+        "200":
+          description: The running browser applied the location.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserLocationStatus"
+        "400":
+          $ref: "#/components/responses/BadRequestError"
+        "409":
+          description: >-
+            The generation is lower than the accepted one, or equal with a
+            different location, or a newer location replaced this one before
+            it applied.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: >-
+            The browser didn't confirm the location. It stays accepted, and
+            resending the same bundle retries it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: The running browser cannot change location. Nothing was accepted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /network/egress-policy:
     get:
       summary: Get the session's egress policy
@@ -6543,7 +6614,7 @@ components:
       properties:
         service_name:
           type: string
-          description: Program name of the crashed service (e.g. `chromium`, `mutter`, `kernel-images-api`).
+          description: Program name of the crashed service (e.g. `chromium`, `openbox`, `kernel-images-api`).
         pid:
           type: integer
           description: PID of the crashed process. Absent when the process manager gave up after exhausting restart attempts and is no longer tracking a live PID.
@@ -6671,6 +6742,85 @@ components:
           captcha_challenge_result: "#/components/schemas/BrowserCaptchaChallengeResultEvent"
           system_oom_kill: "#/components/schemas/BrowserSystemOomKillEvent"
           service_crashed: "#/components/schemas/BrowserServiceCrashedEvent"
+    BrowserLocationBundle:
+      type: object
+      description: >-
+        A complete browser location. The image orders locations by generation:
+        it accepts a generation above the one it holds, treats a resend of the
+        location it holds as a retry, and rejects a lower generation, or a
+        different location under the same generation, with 409.
+      required: [generation, timezone, locale, languages]
+      additionalProperties: false
+      properties:
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 9007199254740991
+          description: Orders locations. At most 2^53-1, the largest integer a CDP number holds exactly.
+        timezone:
+          type: string
+          description: IANA timezone identifier from the image's capabilities, applied exactly as given.
+          example: Europe/Berlin
+        locale:
+          type: string
+          description: Canonical BCP 47 locale from the image's capabilities.
+          example: de-DE
+        languages:
+          type: array
+          minItems: 1
+          description: >-
+            Canonical BCP 47 tags for navigator.languages and Accept-Language,
+            starting with locale.
+          items:
+            type: string
+          example: [de-DE, de]
+    BrowserLocationComponents:
+      type: object
+      description: Acknowledgements the running browser returned for the accepted location.
+      required: [timezone, browser, renderers, renderers_pending, network_contexts]
+      properties:
+        timezone:
+          type: boolean
+          description: /etc/localtime names the timezone and every renderer that acknowledged the location observed it.
+        browser:
+          type: boolean
+          description: The browser holds the location's locale and languages.
+        renderers:
+          type: boolean
+          description: Every renderer applied them to its pages and its workers that aren't frozen or paused.
+        renderers_pending:
+          type: integer
+          minimum: 0
+          description: >-
+            Renderers that have the location queued but haven't acknowledged
+            it, such as one blocked by a dialog or a long task. They apply it
+            when they resume.
+        network_contexts:
+          type: boolean
+          description: Every network context sends the languages as Accept-Language.
+    BrowserLocationStatus:
+      type: object
+      description: >-
+        `accepted` is the location the image last accepted, absent before the
+        first. `applied` is the same location once the running browser has
+        confirmed it, absent otherwise: the browser, timezone and network
+        contexts, and every renderer except those counted in
+        `components.renderers_pending`.
+      required: [components, capabilities_version]
+      properties:
+        accepted:
+          $ref: "#/components/schemas/BrowserLocationBundle"
+        applied:
+          $ref: "#/components/schemas/BrowserLocationBundle"
+        components:
+          $ref: "#/components/schemas/BrowserLocationComponents"
+        error:
+          type: string
+          description: Why the accepted location didn't apply, when it didn't.
+        capabilities_version:
+          type: string
+          description: Version of the browser and tzdata capabilities the image validates locations against.
     NetworkEgressPolicy:
       type: object
       description: >-

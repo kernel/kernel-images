@@ -56,11 +56,12 @@
     bottom: 0;
     max-width: 100vw;
     max-height: 100vh;
+    max-height: 100dvh;
     flex-direction: row;
     display: flex;
 
     .neko-main {
-      min-width: 360px;
+      min-width: 0;
       max-width: 100%;
       flex-grow: 1;
       flex-direction: column;
@@ -144,10 +145,12 @@
 
       .neko-main {
         height: 100vh;
+        height: 100dvh;
       }
 
       .neko-menu {
         height: 100vh;
+        height: 100dvh;
         width: 100% !important;
       }
     }

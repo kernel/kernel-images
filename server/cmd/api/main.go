@@ -32,6 +32,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/events"
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
+	"github.com/kernel/kernel-images/server/lib/livefocus"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/metrics"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
@@ -275,6 +276,13 @@ func main() {
 		apiService.HandleProcessAttachWS(w, r, id, wsRegistry)
 	})
 
+	// Live view focus stream (server-sent events) - not part of OpenAPI spec.
+	// The live view reads it to raise its soft keyboard for focused text
+	// fields, and blurs the field when its keyboard is dismissed.
+	focusWatcher := livefocus.New(upstreamMgr, slogger)
+	r.Get("/live-view/focus", focusWatcher.ServeHTTP)
+	r.Post("/live-view/focus/blur", focusWatcher.HandleBlur)
+
 	// Serve extension files for Chrome policy-installed extensions
 	// This allows Chrome to download .crx and update.xml files via HTTP
 	extensionsDir := "/home/kernel/extensions"
@@ -365,6 +373,7 @@ func main() {
 	rMetrics.Use(chiMiddleware.Recoverer)
 	metricsCollectors := []metrics.Collector{
 		metrics.NewNetworkCollector(apiService.NetworkMetrics),
+		metrics.NewBrowserLocationCollector(apiService.BrowserLocationMetrics),
 		metrics.NewChromeCollector(upstreamMgr),
 		metrics.NewGPUCollector(),
 		metrics.NewSystemCollector(),
@@ -419,6 +428,7 @@ func main() {
 	g, _ := errgroup.WithContext(shutdownCtx)
 
 	g.Go(func() error {
+		focusWatcher.Close()
 		return srv.Shutdown(shutdownCtx)
 	})
 	g.Go(func() error {

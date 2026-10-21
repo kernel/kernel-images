@@ -70,7 +70,7 @@ func processStream(t *testing.T, svc *ApiService, spawn oapi.ProcessSpawn200JSON
 	if len(params) > 0 {
 		p = params[0]
 	}
-	resp, err := client.ProcessStdoutStream(context.Background(), *spawn.ProcessId, &p)
+	resp, err := client.ProcessStdoutStream(context.Background(), spawn.ProcessId.String(), &p)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	t.Cleanup(func() { _ = resp.Body.Close() })
@@ -103,7 +103,7 @@ func collectProcessStream(t *testing.T, body io.Reader) (string, []oapi.ProcessS
 func waitProcessExit(t *testing.T, svc *ApiService, spawn oapi.ProcessSpawn200JSONResponse) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: *spawn.ProcessId})
+		resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: spawn.ProcessId.String()})
 		if err != nil {
 			return false
 		}
@@ -202,12 +202,12 @@ func TestProcessSlowReaderAndResume(t *testing.T) {
 		requireProcessExitEvent(t, events, 0)
 	}
 	for _, offset := range []int64{-1, 1, 1 << 40} {
-		resp, err := svc.ProcessStdoutStream(context.Background(), oapi.ProcessStdoutStreamRequestObject{ProcessId: *spawn.ProcessId, Params: oapi.ProcessStdoutStreamParams{Offset: &offset}})
+		resp, err := svc.ProcessStdoutStream(context.Background(), oapi.ProcessStdoutStreamRequestObject{ProcessId: spawn.ProcessId.String(), Params: oapi.ProcessStdoutStreamParams{Offset: &offset}})
 		require.NoError(t, err)
 		require.IsType(t, oapi.ProcessStdoutStream400JSONResponse{}, resp)
 	}
 	resp, err := svc.ProcessStdoutStream(context.Background(), oapi.ProcessStdoutStreamRequestObject{
-		ProcessId: *spawn.ProcessId, Params: oapi.ProcessStdoutStreamParams{Offset: ptrOf(int64(0)), LastEventID: ptrOf("invalid")},
+		ProcessId: spawn.ProcessId.String(), Params: oapi.ProcessStdoutStreamParams{Offset: ptrOf(int64(0)), LastEventID: ptrOf("invalid")},
 	})
 	require.NoError(t, err)
 	require.IsType(t, oapi.ProcessStdoutStream400JSONResponse{}, resp)
@@ -269,7 +269,7 @@ func TestProcessSpawnShutdownStopsChildren(t *testing.T) {
 			requireProcessStopped(t, *spawn.Pid)
 			requireProcessStopped(t, childPID)
 			require.Eventually(t, func() bool {
-				status, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: *spawn.ProcessId})
+				status, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: spawn.ProcessId.String()})
 				require.NoError(t, err)
 				_, released := status.(oapi.ProcessStatus404JSONResponse)
 				return released
@@ -315,7 +315,7 @@ func TestProcessSpawnTimeoutSurvivesRequestCancellation(t *testing.T) {
 			_, events := collectProcessStream(t, processStream(t, svc, spawn))
 			requireProcessExitEvent(t, events, -1)
 			require.Equal(t, oapi.ProcessTimeout, *events[len(events)-1].TerminationReason)
-			status, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: *spawn.ProcessId})
+			status, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: spawn.ProcessId.String()})
 			require.NoError(t, err)
 			require.Equal(t, oapi.ProcessTimeout, *status.(oapi.ProcessStatus200JSONResponse).TerminationReason)
 		})
@@ -391,7 +391,7 @@ func TestProcessRetentionReclaimsOutputQuota(t *testing.T) {
 	spawn := spawnProcess(t, svc, "head", "-c", "65536", "/dev/zero")
 	waitProcessExit(t, svc, spawn)
 	require.Eventually(t, func() bool {
-		resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: *spawn.ProcessId})
+		resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: spawn.ProcessId.String()})
 		_, expired := resp.(oapi.ProcessStatus404JSONResponse)
 		return err == nil && expired
 	}, 12*time.Second, 20*time.Millisecond)
@@ -490,7 +490,7 @@ func TestProcessRetentionStopsBlockedHTTPStream(t *testing.T) {
 	case <-time.After(12 * time.Second):
 		t.Fatal("HTTP stream stayed blocked after output retention expired")
 	}
-	resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: *spawn.ProcessId})
+	resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: spawn.ProcessId.String()})
 	require.NoError(t, err)
 	require.IsType(t, oapi.ProcessStatus404JSONResponse{}, resp)
 }
@@ -522,7 +522,7 @@ func TestProcessExitedStatusIncludesCaptureFailure(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		spawn := spawnProcess(t, svc, "head", "-c", "8192", "/dev/zero")
 		require.Eventually(t, func() bool {
-			resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: *spawn.ProcessId})
+			resp, err := svc.ProcessStatus(context.Background(), oapi.ProcessStatusRequestObject{ProcessId: spawn.ProcessId.String()})
 			require.NoError(t, err)
 			status := resp.(oapi.ProcessStatus200JSONResponse)
 			if *status.State != "exited" {
@@ -567,7 +567,7 @@ func TestProcessCursorlessReconnectContinuesUnreadOutput(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("disconnected stream did not stop")
 	}
-	_, err = svc.ProcessStdin(context.Background(), oapi.ProcessStdinRequestObject{ProcessId: *spawn.ProcessId, Body: &oapi.ProcessStdinRequest{DataB64: base64.StdEncoding.EncodeToString([]byte("go\n"))}})
+	_, err = svc.ProcessStdin(context.Background(), oapi.ProcessStdinRequestObject{ProcessId: spawn.ProcessId.String(), Body: &oapi.ProcessStdinRequest{DataB64: base64.StdEncoding.EncodeToString([]byte("go\n"))}})
 	require.NoError(t, err)
 	output, events := collectProcessStream(t, processStream(t, svc, spawn))
 	require.Equal(t, "second", output)
@@ -593,7 +593,7 @@ wait`)
 		}
 	}
 	require.NoError(t, scanner.Err())
-	response, err := svc.ProcessKill(context.Background(), oapi.ProcessKillRequestObject{ProcessId: *spawn.ProcessId, Body: &oapi.ProcessKillRequest{Signal: "HUP"}})
+	response, err := svc.ProcessKill(context.Background(), oapi.ProcessKillRequestObject{ProcessId: spawn.ProcessId.String(), Body: &oapi.ProcessKillRequest{Signal: "HUP"}})
 	require.NoError(t, err)
 	require.IsType(t, oapi.ProcessKill200JSONResponse{}, response)
 	var output strings.Builder

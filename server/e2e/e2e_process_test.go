@@ -51,28 +51,28 @@ func TestProcessLifecycle(t *testing.T) {
 				status := waitImageProcessExit(t, ctx, client, *spawn.JSON200)
 				require.Equal(t, 0, *status.ExitCode)
 				require.False(t, *status.OutputTruncated)
-				response, err := client.ProcessStdoutStream(ctx, *id, &oapi.ProcessStdoutStreamParams{})
+				response, err := client.ProcessStdoutStream(ctx, id.String(), &oapi.ProcessStdoutStreamParams{})
 				require.NoError(t, err)
 				out, errOut, events := readImageProcessStream(t, response)
 				require.Equal(t, strings.Repeat("\x00", 4<<20)+"tail", out)
 				require.Equal(t, "stderr", errOut)
 				requireImageExitEvent(t, events, 0)
 
-				response, err = client.ProcessStdoutStream(ctx, *id, &oapi.ProcessStdoutStreamParams{})
+				response, err = client.ProcessStdoutStream(ctx, id.String(), &oapi.ProcessStdoutStreamParams{})
 				require.NoError(t, err)
 				out, errOut, events = readImageProcessStream(t, response)
 				require.Empty(t, out)
 				require.Empty(t, errOut)
 				require.Empty(t, events)
 
-				response, err = client.ProcessStdoutStream(ctx, *id, &oapi.ProcessStdoutStreamParams{Offset: lo.ToPtr(int64(0))})
+				response, err = client.ProcessStdoutStream(ctx, id.String(), &oapi.ProcessStdoutStreamParams{Offset: lo.ToPtr(int64(0))})
 				require.NoError(t, err)
 				out, errOut, events = readImageProcessStream(t, response)
 				require.Equal(t, strings.Repeat("\x00", 4<<20)+"tail", out)
 				require.Equal(t, "stderr", errOut)
 				requireImageExitEvent(t, events, 0)
 				// Resume just after the first event and compare the remaining records.
-				response, err = client.ProcessStdoutStream(ctx, *id, &oapi.ProcessStdoutStreamParams{
+				response, err = client.ProcessStdoutStream(ctx, id.String(), &oapi.ProcessStdoutStreamParams{
 					Offset: lo.ToPtr(int64(0)), LastEventID: lo.ToPtr(strconv.FormatInt(*events[0].Offset, 10)),
 				})
 				require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestProcessLifecycle(t *testing.T) {
 					require.NotNil(t, spawn.JSON200, "%s", spawn.Body)
 					status := waitImageProcessExit(t, ctx, client, *spawn.JSON200)
 					require.Equal(t, oapi.ProcessTimeout, *status.TerminationReason)
-					response, err := client.ProcessStdoutStream(ctx, *spawn.JSON200.ProcessId, &oapi.ProcessStdoutStreamParams{})
+					response, err := client.ProcessStdoutStream(ctx, spawn.JSON200.ProcessId.String(), &oapi.ProcessStdoutStreamParams{})
 					require.NoError(t, err)
 					_, _, events := readImageProcessStream(t, response)
 					requireImageExitEvent(t, events, -1)
@@ -120,7 +120,7 @@ func TestProcessLifecycle(t *testing.T) {
 				require.NotNil(t, status.TerminationReason)
 				require.Equal(t, oapi.OutputLimit, *status.TerminationReason)
 				require.True(t, *status.OutputTruncated)
-				response, err := client.ProcessStdoutStream(ctx, *spawn.JSON200.ProcessId, &oapi.ProcessStdoutStreamParams{})
+				response, err := client.ProcessStdoutStream(ctx, spawn.JSON200.ProcessId.String(), &oapi.ProcessStdoutStreamParams{})
 				require.NoError(t, err)
 				out, _, events := readImageProcessStream(t, response)
 				require.NotEmpty(t, out)
@@ -147,12 +147,12 @@ func TestProcessTTYWithoutOutputStorage(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, spawn.JSON200, "%s", spawn.Body)
-	defer client.ProcessKillWithResponse(context.Background(), *spawn.JSON200.ProcessId, oapi.ProcessKillRequest{Signal: "KILL"})
+	defer client.ProcessKillWithResponse(context.Background(), spawn.JSON200.ProcessId.String(), oapi.ProcessKillRequest{Signal: "KILL"})
 	url := strings.Replace(c.APIBaseURL(), "http", "ws", 1) + "/process/" + spawn.JSON200.ProcessId.String() + "/attach"
 	conn, _, err := websocket.Dial(ctx, url, nil)
 	require.NoError(t, err)
 	defer conn.CloseNow()
-	resized, err := client.ProcessResizeWithResponse(ctx, *spawn.JSON200.ProcessId, oapi.ProcessResizeRequest{Rows: 30, Cols: 100})
+	resized, err := client.ProcessResizeWithResponse(ctx, spawn.JSON200.ProcessId.String(), oapi.ProcessResizeRequest{Rows: 30, Cols: 100})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resized.StatusCode())
 	require.NoError(t, conn.Write(ctx, websocket.MessageBinary, []byte("hello\n")))
@@ -174,7 +174,7 @@ func waitImageProcessExit(t *testing.T, ctx context.Context, client *oapi.Client
 	t.Helper()
 	var status *oapi.ProcessStatus
 	require.Eventually(t, func() bool {
-		response, err := client.ProcessStatusWithResponse(ctx, *spawn.ProcessId)
+		response, err := client.ProcessStatusWithResponse(ctx, spawn.ProcessId.String())
 		require.NoError(t, err)
 		require.NotNil(t, response.JSON200, "%s", response.Body)
 		status = response.JSON200

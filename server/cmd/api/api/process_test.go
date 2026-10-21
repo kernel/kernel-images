@@ -12,10 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,7 +56,7 @@ func TestProcessSpawnStatusAndStream(t *testing.T) {
 	require.NotNil(t, s200.Pid, "missing Pid in spawn resp")
 
 	// Status should be running initially (may race to exited; tolerate both by not asserting)
-	statusResp, err := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: *s200.ProcessId})
+	statusResp, err := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: s200.ProcessId.String()})
 	require.NoError(t, err, "ProcessStatus error")
 	_, ok = statusResp.(oapi.ProcessStatus200JSONResponse)
 	require.True(t, ok, "unexpected status resp: %T", statusResp)
@@ -121,7 +119,7 @@ func TestProcessStdinAndExit(t *testing.T) {
 
 	// Write 3 bytes
 	data := base64.StdEncoding.EncodeToString([]byte("xyz"))
-	stdinResp, err := svc.ProcessStdin(ctx, oapi.ProcessStdinRequestObject{ProcessId: *s200.ProcessId, Body: &oapi.ProcessStdinRequest{DataB64: data}})
+	stdinResp, err := svc.ProcessStdin(ctx, oapi.ProcessStdinRequestObject{ProcessId: s200.ProcessId.String(), Body: &oapi.ProcessStdinRequest{DataB64: data}})
 	require.NoError(t, err, "ProcessStdin error")
 	st200, ok := stdinResp.(oapi.ProcessStdin200JSONResponse)
 	require.True(t, ok, "unexpected stdin resp type: %T", stdinResp)
@@ -131,7 +129,7 @@ func TestProcessStdinAndExit(t *testing.T) {
 	// Wait for exit via status polling
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: *s200.ProcessId})
+		resp, err := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: s200.ProcessId.String()})
 		require.NoError(t, err, "ProcessStatus error")
 		sr, ok := resp.(oapi.ProcessStatus200JSONResponse)
 		require.True(t, ok, "unexpected status resp: %T", resp)
@@ -159,7 +157,7 @@ func TestProcessKill(t *testing.T) {
 
 	// Send KILL
 	killBody := &oapi.ProcessKillRequest{Signal: "KILL"}
-	killResp, err := svc.ProcessKill(ctx, oapi.ProcessKillRequestObject{ProcessId: *s200.ProcessId, Body: killBody})
+	killResp, err := svc.ProcessKill(ctx, oapi.ProcessKillRequestObject{ProcessId: s200.ProcessId.String(), Body: killBody})
 	require.NoError(t, err, "ProcessKill error")
 	_, ok = killResp.(oapi.ProcessKill200JSONResponse)
 	require.True(t, ok, "unexpected kill resp: %T", killResp)
@@ -167,7 +165,7 @@ func TestProcessKill(t *testing.T) {
 	// Verify exited
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		resp, err := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: *s200.ProcessId})
+		resp, err := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: s200.ProcessId.String()})
 		require.NoError(t, err, "ProcessStatus error")
 		sr, ok := resp.(oapi.ProcessStatus200JSONResponse)
 		require.True(t, ok, "unexpected status resp: %T", resp)
@@ -183,19 +181,41 @@ func TestProcessNotFoundRoutes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	svc := &ApiService{procs: make(map[string]*processHandle)}
+	id := "no-such-id"
 
-	// random id that will not exist
-	id := openapi_types.UUID(uuid.New())
-	if resp, _ := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: id}); true {
-		require.NotNil(t, resp, "expected a response")
-		_, ok := resp.(oapi.ProcessStatus404JSONResponse)
-		require.True(t, ok, "expected 404, got %T", resp)
-	}
-	if resp, _ := svc.ProcessStdoutStream(ctx, oapi.ProcessStdoutStreamRequestObject{ProcessId: id}); true {
-		require.NotNil(t, resp, "expected a response")
-		_, ok := resp.(oapi.ProcessStdoutStream404JSONResponse)
-		require.True(t, ok, "expected 404, got %T", resp)
-	}
+	statusResp, err := svc.ProcessStatus(ctx, oapi.ProcessStatusRequestObject{ProcessId: id})
+	require.NoError(t, err)
+	_, ok := statusResp.(oapi.ProcessStatus404JSONResponse)
+	require.True(t, ok, "expected 404, got %T", statusResp)
+
+	streamResp, err := svc.ProcessStdoutStream(ctx, oapi.ProcessStdoutStreamRequestObject{ProcessId: id})
+	require.NoError(t, err)
+	_, ok = streamResp.(oapi.ProcessStdoutStream404JSONResponse)
+	require.True(t, ok, "expected 404, got %T", streamResp)
+
+	stdinResp, err := svc.ProcessStdin(ctx, oapi.ProcessStdinRequestObject{
+		ProcessId: id,
+		Body:      &oapi.ProcessStdinRequest{DataB64: base64.StdEncoding.EncodeToString(nil)},
+	})
+	require.NoError(t, err)
+	_, ok = stdinResp.(oapi.ProcessStdin404JSONResponse)
+	require.True(t, ok, "expected 404, got %T", stdinResp)
+
+	killResp, err := svc.ProcessKill(ctx, oapi.ProcessKillRequestObject{
+		ProcessId: id,
+		Body:      &oapi.ProcessKillRequest{Signal: "TERM"},
+	})
+	require.NoError(t, err)
+	_, ok = killResp.(oapi.ProcessKill404JSONResponse)
+	require.True(t, ok, "expected 404, got %T", killResp)
+
+	resizeResp, err := svc.ProcessResize(ctx, oapi.ProcessResizeRequestObject{
+		ProcessId: id,
+		Body:      &oapi.ProcessResizeRequest{Rows: 1, Cols: 1},
+	})
+	require.NoError(t, err)
+	_, ok = resizeResp.(oapi.ProcessResize404JSONResponse)
+	require.True(t, ok, "expected 404, got %T", resizeResp)
 }
 
 func TestProcessExec_CommandNotFound(t *testing.T) {

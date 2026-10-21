@@ -193,7 +193,7 @@ func getChromiumWindowBoundsCDP(ctx context.Context, c *TestContainer) (chromium
 // to the requested size. The headless and headful paths use different
 // predicates because --headless=new uses Chrome's internal window size
 // (screen.width/height) while headful renders into a real OS window owned by
-// Mutter (outerWidth/outerHeight equal to the X root).
+// the window manager (outerWidth/outerHeight equal to the X root).
 type viewportPredicate func(v rendererViewport, wantW, wantH int) bool
 
 // waitForRendererViewport polls the renderer until the given predicate
@@ -226,19 +226,19 @@ func waitForRendererViewport(t *testing.T, ctx context.Context, c *TestContainer
 }
 
 // headlessViewportPredicate asserts innerWidth/innerHeight match the request.
-// In --headless=new the renderer uses Chrome's internal window
-// (Emulation.setDeviceMetricsOverride drives inner*) — screen.* and outer*
-// stay at Chrome's startup defaults and do not move on resize, so they are
-// intentionally not asserted.
+// In --headless=new the renderer uses Chrome's internal window, which the
+// server sizes around the page (Browser.setContentsSize drives inner*) —
+// screen.* stays at Chrome's startup default and outer* includes the window
+// frame, so they are intentionally not asserted.
 func headlessViewportPredicate(v rendererViewport, wantW, wantH int) bool {
 	return v.InnerWidth == wantW && v.InnerHeight == wantH
 }
 
 // makeHeadfulMaximizedPredicate is the strict headful check: screen.*
 // matches AND outerWidth/outerHeight is within tolerance of the request.
-// Tolerance absorbs mutter chrome (borders/titlebar) — kiosk fullscreen has
-// none, so tolerance 0 is correct there; --start-maximized passes through
-// mutter SSDs so a small slack is kinder.
+// Tolerance absorbs window-manager chrome (borders/titlebar) — kiosk fullscreen
+// has none, so tolerance 0 is correct there; --start-maximized passes through
+// the WM's decorations so a small slack is kinder.
 func makeHeadfulMaximizedPredicate(tolerance int) viewportPredicate {
 	return func(v rendererViewport, wantW, wantH int) bool {
 		if v.ScreenWidth != wantW || v.ScreenHght != wantH {
@@ -260,9 +260,10 @@ func abs(x int) int {
 // inject --kiosk into the default CHROMIUM_FLAGS). predicate decides when a
 // renderer viewport reading is acceptable for this scenario.
 type resizeScenario struct {
-	name       string
-	image      string
-	extraEnv   map[string]string
+	name     string
+	image    string
+	extraEnv map[string]string
+	// predicate is nil when the renderer viewport is not asserted.
 	predicate  viewportPredicate
 	skipReason string
 	// assertXRoot toggles X-root convergence checks.
@@ -275,6 +276,9 @@ type resizeScenario struct {
 	// requireBaselineState asserts the window's CDP windowState at startup
 	// equals this value before any resize. Empty = no assertion.
 	requireBaselineState string
+	// resizedState is the windowState expected after each resize. Empty =
+	// unchanged from the baseline.
+	resizedState string
 }
 
 func (sc resizeScenario) upSize() (int, int) {
@@ -309,13 +313,37 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			assertXRoot: true, // background Xvfb resize must converge
 		},
 		{
+			// Production headless launches maximized. Chromium refuses
+			// Browser.setContentsSize on a maximized window, so the server
+			// restores it to normal before resizing.
+			name:                 "headless_start_maximized",
+			image:                headlessImage,
+			extraEnv:             map[string]string{"CHROMIUM_FLAGS": "--start-maximized --disable-infobars --test-type"},
+			predicate:            headlessViewportPredicate,
+			assertXRoot:          true,
+			requireBaselineState: "maximized",
+			resizedState:         "normal",
+		},
+		{
+			// A fullscreen window is not resized: leaving fullscreen would
+			// exit kiosk mode. The server falls back to the device metrics
+			// override, which Chromium 154+ clears when the server's CDP
+			// session detaches, so the viewport is not asserted. The request
+			// must still succeed and the window must stay fullscreen.
+			name:                 "headless_kiosk",
+			image:                headlessImage,
+			extraEnv:             map[string]string{"CHROMIUM_FLAGS": "--kiosk --disable-infobars --test-type"},
+			assertXRoot:          true,
+			requireBaselineState: "fullscreen",
+		},
+		{
 			// Production-equivalent scenario: --start-maximized + neko +
 			// the CHROMIUM_FLAGS_DEFAULT mirror from run-docker.sh:17.
 			// Uses the default restart_chromium (omitted from the
 			// request), exercising the server's new behaviour: skip the
 			// chromium restart and instead re-assert windowState=maximized
 			// via Browser.setWindowBounds. The strict outer-matches-screen
-			// predicate proves mutter reflows the maximized window on RANDR
+			// predicate proves the window manager reflows the maximized window on RANDR
 			// without any chromium restart.
 			name:  "headful_start_maximized",
 			image: headfulImage,
@@ -326,15 +354,15 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 				// mirrors images/chromium-headful/run-docker.sh:17.
 				"CHROMIUM_FLAGS": "--user-data-dir=/home/kernel/user-data --disable-dev-shm-usage --disable-gpu --start-maximized --disable-software-rasterizer --remote-allow-origins=*",
 			},
-			predicate:            makeHeadfulMaximizedPredicate(20), // mutter borders/titlebar
+			predicate:            makeHeadfulMaximizedPredicate(20), // WM borders/titlebar
 			assertXRoot:          true,
 			up:                   [2]int{2560, 1440},
 			down:                 [2]int{1280, 720},
 			requireBaselineState: "maximized",
 		},
 		{
-			// --kiosk runs the window in fullscreen state. mutter reflows
-			// the window to fill the new screen on every RANDR — verified
+			// --kiosk runs the window in fullscreen state. The window manager
+			// reflows the window to fill the new screen on every RANDR — verified
 			// here on both up- and down-resize.
 			name:                 "headful_kiosk",
 			image:                headfulImage,
@@ -367,7 +395,7 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 	}
 
 	// Subtests run serially: two of the three boot the heavy headful image
-	// (neko + mutter + chromium) which races on startup mode under
+	// (neko + openbox + chromium) which races on startup mode under
 	// concurrent load — observed: neko's `desktop.screen=1920x1080@25`
 	// initialization fails to take effect when three privileged containers
 	// boot at once, leaving the root at the dummy DDX's 3840x2160 default.
@@ -423,6 +451,10 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 				require.Equal(t, sc.requireBaselineState, baseCDP.WindowState,
 					"baseline windowState mismatch: chromium did not come up in the expected state — production behaviour relies on this invariant")
 			}
+			wantState := baseCDP.WindowState
+			if sc.resizedState != "" {
+				wantState = sc.resizedState
+			}
 
 			// Resize up: must be a real delta from the baseline so the X root
 			// actually changes. Headful starts at Neko's default 1920x1080;
@@ -432,15 +464,17 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			if sc.assertXRoot {
 				waitForXRootResolution(t, ctx, c, upW, upH, 30*time.Second)
 			}
-			waitForRendererViewport(t, ctx, c, upW, upH, sc.predicate, sc.name+":up", 60*time.Second)
+			if sc.predicate != nil {
+				waitForRendererViewport(t, ctx, c, upW, upH, sc.predicate, sc.name+":up", 60*time.Second)
+			}
 
 			cdpAfterUp, err := getChromiumWindowBoundsCDP(ctx, c)
 			require.NoError(t, err, "cdp window after up-resize")
 			t.Logf("[%s] after-up cdp=%+v", sc.name, cdpAfterUp)
 			require.Equal(t, baseCDP.WindowID, cdpAfterUp.WindowID,
 				"windowID changed after up-resize — chromium was restarted (windowID is monotonic per-process; a new one signals a relaunch)")
-			require.Equal(t, baseCDP.WindowState, cdpAfterUp.WindowState,
-				"windowState changed after up-resize — the WM-tracking invariant the no-restart path relies on was broken")
+			require.Equal(t, wantState, cdpAfterUp.WindowState,
+				"unexpected windowState after up-resize — the WM-tracking invariant the no-restart path relies on was broken")
 
 			// Resize back down to a smaller size, also a real delta.
 			dnW, dnH := sc.downSize()
@@ -448,15 +482,17 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			if sc.assertXRoot {
 				waitForXRootResolution(t, ctx, c, dnW, dnH, 30*time.Second)
 			}
-			waitForRendererViewport(t, ctx, c, dnW, dnH, sc.predicate, sc.name+":down", 60*time.Second)
+			if sc.predicate != nil {
+				waitForRendererViewport(t, ctx, c, dnW, dnH, sc.predicate, sc.name+":down", 60*time.Second)
+			}
 
 			cdpAfterDown, err := getChromiumWindowBoundsCDP(ctx, c)
 			require.NoError(t, err, "cdp window after down-resize")
 			t.Logf("[%s] after-down cdp=%+v", sc.name, cdpAfterDown)
 			require.Equal(t, baseCDP.WindowID, cdpAfterDown.WindowID,
 				"windowID changed after down-resize — chromium was restarted between resizes")
-			require.Equal(t, baseCDP.WindowState, cdpAfterDown.WindowState,
-				"windowState changed after down-resize")
+			require.Equal(t, wantState, cdpAfterDown.WindowState,
+				"unexpected windowState after down-resize")
 		})
 	}
 }

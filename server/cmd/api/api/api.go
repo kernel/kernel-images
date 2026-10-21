@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpmonitor"
@@ -87,6 +88,34 @@ type ApiService struct {
 	// chromiumConfigMu serializes configuration changes that may restart Chromium
 	// or mutate its runtime flags and policies.
 	chromiumConfigMu sync.Mutex
+
+	browserLocationMu        sync.Mutex
+	browserLocationApplyMu   sync.Mutex
+	browserLocationReconcile func(context.Context, oapi.BrowserLocationBundle)
+	browserLocation          struct {
+		accepted      *oapi.BrowserLocationBundle
+		applied       *oapi.BrowserLocationBundle
+		components    oapi.BrowserLocationComponents
+		lastError     string
+		cancel        context.CancelFunc
+		acceptedCount atomic.Uint64
+		appliedCount  atomic.Uint64
+		retries       atomic.Uint64
+		stale         atomic.Uint64
+		conflicts     atomic.Uint64
+		failures      atomic.Uint64
+		convergenceMs atomic.Uint64
+		lastAttempt   time.Time
+
+		// chromiumGeneration is the generation Chromium holds accepted under.
+		chromiumGeneration uint64
+		// probedUpstream is the Chromium process supported describes.
+		probedUpstream string
+		supported      bool
+		// upstream is the Chromium process the accepted location was last
+		// applied to.
+		upstream string
+	}
 
 	// inputMu serializes input-related operations (mouse, keyboard, screenshot)
 	inputMu sync.Mutex
@@ -221,6 +250,10 @@ func New(
 		lifecycleCancel:   cancel,
 	}
 	s.playwrightExecutors = newPlaywrightExecutorManager(cdpPlaywrightExecutorTabs{withCDP: s.withCDPClient})
+	if err := s.initializeBrowserLocation(); err != nil {
+		cancel()
+		return nil, err
+	}
 	return s, nil
 }
 

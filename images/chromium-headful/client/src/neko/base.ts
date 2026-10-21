@@ -1,6 +1,7 @@
 import EventEmitter from 'eventemitter3'
 import { OPCODE } from './data'
 import { EVENT, WebSocketEvents } from './events'
+import { CursorImage } from '~/utils/cursor-shape'
 
 import {
   WebSocketMessages,
@@ -16,9 +17,18 @@ import {
 // only "timeout", so each stage fails on its own bound with its own reason. A
 // bound expiring is terminal rather than retried: a second attempt against the
 // same peer costs the viewer time an embedder can spend on a new session.
+//
+// The bounds are sequential, so they are also a budget: an embedder that gives
+// up on a viewer before the last one expires never sees the reason. The defaults
+// below are an interim ceiling on that budget rather than a value tuned per
+// region; the live-view proxy can supply its own, in milliseconds, through
+// window.KERNEL_LIVE_VIEW_CONNECT_TIMEOUTS_MS.
 export type ConnectStage = 'transport' | 'signaling' | 'media'
 
-export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
+// The shipped defaults. A region with measured timings for its own network can
+// lower these without a browser image release, which is what the injected
+// override above is for.
+const DEFAULT_CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
   // Network-bound (socket open + TLS), and the stage the live-view proxy's own
   // wake path shows up in — it can spend ~12s waking a browser before the socket
   // opens. Left at the watchdog it replaced rather than the measured p99, so a
@@ -27,16 +37,46 @@ export const CONNECT_STAGE_TIMEOUT_MS: Record<ConnectStage, number> = {
   // One server round trip on an already-open socket, plus the offer. Measured
   // p99 under 200ms, including a cold session.
   signaling: 3000,
-  // Local: ICE reaches `checking` as soon as the local description is set, since
-  // the remote candidates arrive in the offer — measured 1-16ms direct, ~90ms
-  // relay-only. The bound covers through ICE `connected` rather than stopping at
-  // `checking`, and the timings above only recorded `checking`: 44 of 130 runs
-  // have no `connected` timestamp, all 30 ap-southeast runs among them. Nothing
-  // measured the stretch the bound now waits on, so 30s is an interim ceiling for
-  // it rather than a calibrated one, to be replaced once per-region timings
-  // through a successful connect exist.
+  // Covers the connect through ICE `connected`, not just `checking`: the remote
+  // candidates arrive in the offer, so `checking` lands in 1-16ms direct and
+  // ~90ms relay-only. The stretch through `connected` is not measured in every
+  // region — 44 of 130 probe runs stopped at `checking`, all 30 ap-southeast runs
+  // among them — so this stays at the interim ceiling rather than a shorter value
+  // the measured paths would justify. A region that has the timings can lower it.
   media: 30000,
 }
+
+declare global {
+  interface Window {
+    // Injected by the live-view proxy with the page, in milliseconds per stage.
+    KERNEL_LIVE_VIEW_CONNECT_TIMEOUTS_MS?: unknown
+  }
+}
+
+// The live-view proxy serves the bounds with the page rather than compiling them
+// into the bundle, so a region can retune a stage without a browser image
+// release. A stage the override does not name, or names with a value that is not
+// a positive number of milliseconds, keeps its default.
+export function resolveConnectStageTimeoutMs(overrides?: unknown): Record<ConnectStage, number> {
+  const bounds = { ...DEFAULT_CONNECT_STAGE_TIMEOUT_MS }
+
+  if (typeof overrides !== 'object' || overrides === null) {
+    return bounds
+  }
+
+  for (const stage of Object.keys(bounds) as ConnectStage[]) {
+    const value = (overrides as Record<string, unknown>)[stage]
+    if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+      bounds[stage] = value
+    }
+  }
+
+  return bounds
+}
+
+export const CONNECT_STAGE_TIMEOUT_MS = resolveConnectStageTimeoutMs(
+  typeof window === 'undefined' ? undefined : window.KERNEL_LIVE_VIEW_CONNECT_TIMEOUTS_MS,
+)
 
 // Sent to the parent frame so an embedder can pick a recovery without parsing
 // prose. The three stages mean a bound expired; the rest never reached one.
@@ -47,6 +87,9 @@ export interface BaseEvents {
   warn: (...message: any[]) => void
   debug: (...message: any[]) => void
   error: (error: Error) => void
+  cursor: (image: CursorImage) => void
+  // the remote clipboard changed; sent even when the text is the same
+  clipboard: (text: string) => void
 }
 
 export abstract class BaseClient extends EventEmitter<BaseEvents> {
@@ -350,6 +393,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     this._channel = this._peer.createDataChannel('data')
+    // Safari defaults to blob, whose async conversion can reorder messages
+    this._channel.binaryType = 'arraybuffer'
     this._channel.onerror = this.onError.bind(this)
     this._channel.onmessage = this.onData.bind(this)
     this._channel.onclose = this.onDisconnected.bind(this, new Error('peer data channel closed'))
