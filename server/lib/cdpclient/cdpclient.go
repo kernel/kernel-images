@@ -776,6 +776,45 @@ func (c *Client) GetWindowBounds(ctx context.Context) (WindowBounds, error) {
 	}, nil
 }
 
+// ErrWindowFullscreen is returned by SetContentsSize when the window is
+// fullscreen. Leaving fullscreen would exit kiosk mode or a page's HTML5
+// fullscreen, so the window is left as it is.
+var ErrWindowFullscreen = errors.New("window is fullscreen")
+
+// SetContentsSize resizes the OS window backing the first page target so its
+// web contents are width x height, via Browser.setContentsSize. Chromium
+// rejects that for a maximized or minimized window, so such a window is first
+// restored to normal. The size belongs to the window and outlives this client,
+// unlike Emulation.setDeviceMetricsOverride, which Chromium 154+ clears when
+// the session that set it detaches.
+func (c *Client) SetContentsSize(ctx context.Context, width, height int) error {
+	bounds, err := c.GetWindowBounds(ctx)
+	if err != nil {
+		return err
+	}
+
+	switch bounds.WindowState {
+	case "fullscreen":
+		return ErrWindowFullscreen
+	case "maximized", "minimized":
+		if _, err := c.Send(ctx, "Browser.setWindowBounds", map[string]any{
+			"windowId": bounds.WindowID,
+			"bounds":   map[string]any{"windowState": "normal"},
+		}, ""); err != nil {
+			return fmt.Errorf("Browser.setWindowBounds normal: %w", err)
+		}
+	}
+
+	if _, err := c.Send(ctx, "Browser.setContentsSize", map[string]any{
+		"windowId": bounds.WindowID,
+		"width":    width,
+		"height":   height,
+	}, ""); err != nil {
+		return fmt.Errorf("Browser.setContentsSize: %w", err)
+	}
+	return nil
+}
+
 // SetDeviceMetricsOverride sets the viewport dimensions on the first page
 // target found in the browser. It attaches to the target with a flattened
 // session, sends Emulation.setDeviceMetricsOverride, then detaches.
