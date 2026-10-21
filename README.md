@@ -192,3 +192,79 @@ For issues, questions, or feedback, please [open an issue](https://github.com/ke
 - Thank you to the [Unikraft Cloud](https://unikraft.cloud/) team for your help with unikernels.
 
 Made with ❤️ by the [Kernel team](https://www.kernel.sh).
+
+## FAQ
+
+### What is Kernel?
+
+**Kernel provides sandboxed, ready-to-use Chrome browsers for browser automations and web agents.** Run headful Chromium in Docker containers or Unikraft unikernels with remote GUI access, video replays, and Chrome DevTools Protocol (CDP) connectivity. Perfect for Playwright/Puppeteer-based workflows, AI agents that use browsers, and custom tools requiring controlled browser environments.
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Sandboxed Chrome** | Isolated browser instance accessible via Chrome DevTools Protocol (CDP) by Playwright, Puppeteer, and other frameworks |
+| **Remote GUI Access** | Live view streaming for visual monitoring and remote control (WebRTC or noVNC) |
+| **Video Replays** | Controllable recordings of browser sessions for debugging and audits |
+| **Configurable Dimensions** | Adjustable browser window size and live view settings (read-only mode) |
+| **Unikernel Benefits** | Standby/sleep mode (negligible resources), state snapshot/restore, <20ms cold restarts |
+
+### Installation
+
+**Docker (quick start):**
+
+```bash
+cd images/chromium-headful
+IMAGE=kernel-docker ./build-docker.sh
+IMAGE=kernel-docker ENABLE_WEBRTC=true ./run-docker.sh
+```
+
+**Unikraft Unikernel:**
+
+```bash
+# Install Kraft CLI
+curl -sSfL https://get.kraftkit.sh | sh
+
+# Set secrets
+export UKC_METRO=<region>
+export UKC_TOKEN=<secret>
+
+# Build
+IMAGE=YOUR_UKC_USERNAME/chromium-headless-test:latest images/chromium-headless/build-unikernel.sh
+
+# Run
+IMAGE=YOUR_UKC_USERNAME/chromium-headful-test:latest VOLIMPORT_PREFIX=official images/chromium-headful/run-unikernel.sh
+```
+
+### Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| **Memory** | 8GB minimum (unikernel requirement) |
+| **WebRTC** | TURN server required for unikernel deployment with WebRTC enabled (`NEKO_ICESERVERS`) |
+| **Kraft CLI** | Required for unikernel builds (`curl -sSfL https://get.kraftkit.sh | sh`) |
+| **UKC Secrets** | `UKC_METRO` and `UKC_TOKEN` for Unikraft Cloud |
+| **VCPUS** | Adjustable via `VCPUS=8` variable |
+
+### Use Cases
+
+| Use Case | Description |
+|----------|-------------|
+| **Browser Automations** | Run automated browser-based workflows in sandboxed environments |
+| **AI Web Agents** | Develop and test AI agents that use browsers with CDP connectivity |
+| **Custom Browser Tools** | Build tools requiring controlled, isolated browser environments |
+| **Session State Reuse** | Unikernel standby mode preserves browser auth cookies, local files, settings |
+
+### License
+
+Kernel is open source. Check the [LICENSE](./LICENSE) file for details.
+
+### Help & Resources
+
+| Resource | Link |
+|----------|------|
+| **Hosted Services** | [kernel.sh/docs/introduction](https://kernel.sh/docs/introduction) |
+| **Sign Up** | [www.kernel.sh](https://www.kernel.sh/) |
+| **Discord** | [discord.gg/FBrveQRcud](https://discord.gg/FBrveQRcud) |
+| **Twitter** | [@juecd__](https://x.com/juecd__), [@rfgarcia](https://x.com/rfgarcia) |
+| **Issues** | [GitHub Issues](https://github.com/kernel/kernel-images/issues) |
