@@ -13,7 +13,9 @@ KERNEL_SINK=KernelOutput
 KERNEL_SOURCE=KernelInput
 
 mkdir -p /tmp/pulse /tmp/runtime-kernel /home/kernel/.config/pulse
-chown -R kernel:kernel /tmp/pulse /tmp/runtime-kernel /home/kernel/.config/pulse
+if [[ "$EUID" -eq 0 ]]; then
+  chown -R kernel:kernel /tmp/pulse /tmp/runtime-kernel /home/kernel/.config/pulse
+fi
 chmod 1777 /tmp/pulse
 chmod 700 /tmp/runtime-kernel
 
@@ -24,7 +26,11 @@ rm -f "$PULSE_SOCKET"
 
 # Constants are passed into the inner (single-quoted) script via env so the
 # topology is defined once at the top of this file.
-exec runuser -u kernel -- env \
+runner=()
+if [[ "$EUID" -eq 0 ]]; then
+  runner=(runuser -u kernel --)
+fi
+exec "${runner[@]}" env \
   -u DBUS_SESSION_BUS_ADDRESS \
   -u DBUS_SYSTEM_BUS_ADDRESS \
   HOME=/home/kernel \

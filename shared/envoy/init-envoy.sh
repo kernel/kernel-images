@@ -42,10 +42,14 @@ echo "[envoy-init] Starting Envoy via supervisord"
 # on the current state so cold boots only `start`, while re-renders (e.g.
 # post-fork env refresh) `restart` to force a clean re-read of the
 # rendered bootstrap.
-if supervisorctl -c /etc/supervisor/supervisord.conf status envoy | grep -q RUNNING; then
-  supervisorctl -c /etc/supervisor/supervisord.conf restart envoy
+supervisor_config=/etc/supervisor/supervisord.conf
+if [[ -f /etc/supervisor/root.conf ]]; then
+  supervisor_config=/etc/supervisor/root.conf
+fi
+if supervisorctl -c "$supervisor_config" status envoy | grep -q RUNNING; then
+  supervisorctl -c "$supervisor_config" restart envoy
 else
-  supervisorctl -c /etc/supervisor/supervisord.conf start envoy
+  supervisorctl -c "$supervisor_config" start envoy
 fi
 
 # Readiness (port 3128 reachable) is probed by the Go wrapper's
