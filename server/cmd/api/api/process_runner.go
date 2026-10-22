@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 	"syscall"
 	"time"
 
@@ -133,21 +132,16 @@ func (h *processHandle) outputFailed(err error) {
 
 func (h *processHandle) run(ctx, lifecycle context.Context, timeoutSec *int, release func()) {
 	defer release()
-	failures := make(chan error, 2)
-	var readers sync.WaitGroup
+	captureResults := make(chan error, 2)
+	pendingCaptures := 0
 	if !h.isTTY {
 		for stream, pipe := range []io.ReadCloser{h.stdout, h.stderr} {
-			readers.Add(1)
+			pendingCaptures++
 			go func(stream byte, pipe io.Reader) {
-				defer readers.Done()
-				if err := h.captureOutput(stream, pipe); err != nil {
-					failures <- err
-				}
+				captureResults <- h.captureOutput(stream, pipe)
 			}(byte(stream), pipe)
 		}
 	}
-	readersDone := make(chan struct{})
-	go func() { readers.Wait(); close(readersDone) }()
 	waited := make(chan error, 1)
 	go func() { waited <- waitForProcessExit(h.cmd) }()
 	var deadline, drain <-chan time.Time
@@ -159,22 +153,22 @@ func (h *processHandle) run(ctx, lifecycle context.Context, timeoutSec *int, rel
 		deadline = timer.C
 	}
 	canceled, shutdown := ctx.Done(), lifecycle.Done()
-	leaderExited, outputComplete := false, false
-	for !leaderExited || !outputComplete {
+	for waited != nil || pendingCaptures > 0 {
 		select {
 		case err := <-waited:
 			if err != nil {
 				h.terminate("process_canceled", false)
 				logger.FromContext(ctx).Error("failed to wait for process exit", "err", err)
 			}
-			leaderExited = true
 			waited = nil
 			timer := time.NewTimer(processOutputDrainTimeout)
 			defer timer.Stop()
 			drain = timer.C
-		case <-readersDone:
-			outputComplete = true
-			readersDone = nil
+		case err := <-captureResults:
+			pendingCaptures--
+			if err != nil {
+				h.outputFailed(err)
+			}
 		case <-deadline:
 			h.terminate("process_timeout", false)
 			deadline = nil
@@ -184,8 +178,6 @@ func (h *processHandle) run(ctx, lifecycle context.Context, timeoutSec *int, rel
 		case <-shutdown:
 			h.terminate("process_canceled", false)
 			shutdown = nil
-		case err := <-failures:
-			h.outputFailed(err)
 		case <-drain:
 			if !deadlineAt.IsZero() && !time.Now().Before(deadlineAt) {
 				h.terminate("process_timeout", false)
@@ -197,10 +189,6 @@ func (h *processHandle) run(ctx, lifecycle context.Context, timeoutSec *int, rel
 			h.closeOutputPipes()
 			drain = nil
 		}
-	}
-	close(failures)
-	for err := range failures {
-		h.outputFailed(err)
 	}
 	h.closeOutputPipes()
 	if h.stdin != nil {
