@@ -21,6 +21,11 @@ import (
 
 const (
 	browserLocationApplyTimeout = 5 * time.Second
+	// browserLocationStartupTimeout bounds how long after its DevTools endpoint
+	// comes up Chromium may take to notice /etc/localtime being replaced. Until
+	// then it ignores the replacement, and one restoring a slow saved tab can
+	// take longer than browserLocationApplyTimeout.
+	browserLocationStartupTimeout = 10 * time.Second
 	// browserLocationRoundTimeout bounds how long one attempt waits for
 	// Chromium's acknowledgements before it sends the location again.
 	browserLocationRoundTimeout = 1500 * time.Millisecond
@@ -143,7 +148,7 @@ func (s *ApiService) startBrowserLocationReconcileLocked(bundle oapi.BrowserLoca
 
 func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle oapi.BrowserLocationBundle) {
 	started := time.Now()
-	deadline := started.Add(browserLocationApplyTimeout)
+	deadline := browserLocationDeadline(started, s.chromiumSince())
 	for {
 		if ctx.Err() != nil || !s.browserLocationCurrent(bundle) {
 			return
@@ -183,8 +188,9 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle oapi.B
 				s.browserLocation.lastError = err.Error()
 				s.browserLocation.failures.Add(1)
 			}
+			components := s.browserLocation.components
 			s.browserLocationMu.Unlock()
-			logger.FromContext(ctx).Error("browser location did not converge", "error", err, "generation", bundle.Generation)
+			logger.FromContext(ctx).Error("browser location did not converge", "error", err, "generation", bundle.Generation, "components", components)
 			return
 		}
 		s.browserLocation.retries.Add(1)
@@ -194,6 +200,27 @@ func (s *ApiService) reconcileBrowserLocation(ctx context.Context, bundle oapi.B
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
+}
+
+// browserLocationDeadline is when an attempt that started at started stops
+// retrying: browserLocationApplyTimeout after it started, or
+// browserLocationStartupTimeout after Chromium's DevTools endpoint came up at
+// chromiumSince, whichever is later.
+func browserLocationDeadline(started, chromiumSince time.Time) time.Time {
+	deadline := started.Add(browserLocationApplyTimeout)
+	if startup := chromiumSince.Add(browserLocationStartupTimeout); startup.After(deadline) {
+		return startup
+	}
+	return deadline
+}
+
+// chromiumSince is when the running Chromium's DevTools endpoint came up, or
+// the zero time if it is unknown.
+func (s *ApiService) chromiumSince() time.Time {
+	if s.upstreamMgr == nil {
+		return time.Time{}
+	}
+	return s.upstreamMgr.Since()
 }
 
 // watchPendingRenderers follows the renderers that were pending when bundle
@@ -597,7 +624,7 @@ func browserLocationError(message string) *string {
 // waitBrowserLocationApplied waits until the running browser confirms bundle,
 // or reports why it didn't.
 func (s *ApiService) waitBrowserLocationApplied(ctx context.Context, bundle oapi.BrowserLocationBundle) error {
-	ctx, cancel := context.WithTimeout(ctx, browserLocationApplyTimeout+time.Second)
+	ctx, cancel := context.WithDeadline(ctx, browserLocationDeadline(time.Now(), s.chromiumSince()).Add(time.Second))
 	defer cancel()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()

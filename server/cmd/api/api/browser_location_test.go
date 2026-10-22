@@ -499,6 +499,42 @@ func TestSetBrowserLocationAllowsPendingRenderers(t *testing.T) {
 	assert.Equal(t, 1, status.Components.RenderersPending)
 }
 
+// Chromium ignores /etc/localtime being replaced until it has finished
+// starting, which restoring a slow saved tab delays past
+// browserLocationApplyTimeout. A location sent to a Chromium that just started
+// keeps replacing it until Chromium observes it.
+func TestSetBrowserLocationWaitsForStartingChromiumToObserveTimezone(t *testing.T) {
+	service := newBrowserLocationStateService(t)
+	observesFrom := time.Now().Add(browserLocationApplyTimeout + 500*time.Millisecond)
+	var observed atomic.Bool
+	previous := setBrowserLocaltime
+	setBrowserLocaltime = func(string) error {
+		if time.Now().After(observesFrom) {
+			observed.Store(true)
+		}
+		return nil
+	}
+	t.Cleanup(func() { setBrowserLocaltime = previous })
+	fakeLocationChromium(t, service, func() map[string]any {
+		return map[string]any{"renderersConverged": true, "renderersPending": 0, "timezoneConverged": observed.Load()}
+	})
+
+	resp := service.applyBrowserLocation(context.Background(), testLocationBundle(1))
+
+	require.IsType(t, oapi.SetBrowserLocation200JSONResponse{}, resp, "error: %s", snapshotError(service))
+	assert.True(t, observed.Load())
+}
+
+func TestBrowserLocationDeadline(t *testing.T) {
+	started := time.Now()
+
+	assert.Equal(t, started.Add(browserLocationApplyTimeout), browserLocationDeadline(started, time.Time{}), "an unknown Chromium gets the apply timeout")
+	settled := started.Add(-time.Minute)
+	assert.Equal(t, started.Add(browserLocationApplyTimeout), browserLocationDeadline(started, settled), "a Chromium past startup gets the apply timeout")
+	starting := started.Add(-time.Second)
+	assert.Equal(t, starting.Add(browserLocationStartupTimeout), browserLocationDeadline(started, starting), "a starting Chromium gets until it is past startup")
+}
+
 func TestBrowserLocationConfirmed(t *testing.T) {
 	converged := oapi.BrowserLocationComponents{Browser: true, Timezone: true, Renderers: true, NetworkContexts: true}
 	pending := converged

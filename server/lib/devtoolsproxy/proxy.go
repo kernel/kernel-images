@@ -101,6 +101,9 @@ type UpstreamManager struct {
 	logger      *slog.Logger
 
 	currentURL atomic.Value // string
+	// currentSince is when currentURL last changed, in wall-clock Unix
+	// nanoseconds.
+	currentSince atomic.Int64
 
 	startOnce  sync.Once
 	stopOnce   sync.Once
@@ -154,10 +157,21 @@ func (u *UpstreamManager) Current() string {
 	return val
 }
 
+// Since returns when the current upstream URL was discovered, or the zero
+// time if none has been.
+func (u *UpstreamManager) Since() time.Time {
+	since := u.currentSince.Load()
+	if since == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, since)
+}
+
 func (u *UpstreamManager) setCurrent(url string) {
 	prev := u.Current()
 	if url != "" && url != prev {
 		u.logger.Info("devtools upstream updated", slog.String("url", url))
+		u.currentSince.Store(time.Now().UnixNano())
 		u.currentURL.Store(url)
 		// Broadcast update to subscribers without blocking. If a subscriber's
 		// channel buffer (size 1) is full, replace the buffered value with the
