@@ -410,8 +410,8 @@ func TestNetworkEvents(t *testing.T) {
 func TestProxyErrorUnknownCodesShareRateLimit(t *testing.T) {
 	collector := newEventCollector()
 	monitor := New(newTestUpstream(""), collector.publishFn(), 0, discardLogger, nil)
-	monitor.publishProxyError(time.Now(), oapi.BrowserEventSource{Kind: oapi.Cdp}, "sess", "req-a", "future_a", 502, 0, "GET", "Document", nil, nil, nil)
-	monitor.publishProxyError(time.Now(), oapi.BrowserEventSource{Kind: oapi.Cdp}, "sess", "req-b", "future_b", 502, 0, "GET", "Document", nil, nil, nil)
+	monitor.publishProxyError(time.Now(), oapi.BrowserEventSource{Kind: oapi.Cdp}, targetInfo{}, "sess", "req-a", "future_a", 502, 0, "GET", "Document", nil, nil, nil)
+	monitor.publishProxyError(time.Now(), oapi.BrowserEventSource{Kind: oapi.Cdp}, targetInfo{}, "sess", "req-b", "future_b", 502, 0, "GET", "Document", nil, nil, nil)
 
 	collector.mu.Lock()
 	defer collector.mu.Unlock()

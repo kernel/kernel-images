@@ -597,8 +597,12 @@ func (m *Monitor) handleResponseReceived(p cdpNetworkResponseReceivedParams, ses
 	if state.hop != nil {
 		source = state.hop.source
 	}
+	// Detaching a target removes its session while publication may still be waiting.
+	m.sessionsMu.RLock()
+	info := m.sessions[sessionID]
+	m.sessionsMu.RUnlock()
 	m.publishAfterNetworkRequest(state.hop, func() {
-		m.publishProxyError(observedAt, source, sessionID, p.RequestID, code, p.Response.Status, navSeq, method, resType, url, frame, loader)
+		m.publishProxyError(observedAt, source, info, sessionID, p.RequestID, code, p.Response.Status, navSeq, method, resType, url, frame, loader)
 	})
 }
 
@@ -760,7 +764,7 @@ func (m *Monitor) proxyErrorRateLimited(sessionID, code, resourceType string) bo
 // the published enum lists it. The metro egress proxy gains codes on its own
 // release cadence, so a value this image does not know is reported as unknown
 // with the sanitized header value in raw_code rather than dropped.
-func (m *Monitor) publishProxyError(observedAt time.Time, source oapi.BrowserEventSource, sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
+func (m *Monitor) publishProxyError(observedAt time.Time, source oapi.BrowserEventSource, info targetInfo, sessionID, requestID, code string, status int, navSeq int64, method, resourceType string, url, frameID, loaderID *string) {
 	var rawCode *string
 	if code == proxyErrorUnknownCode || !oapi.BrowserProxyErrorEventDataCode(code).Valid() {
 		raw := sanitizeProxyErrorRawCode(code)
@@ -771,9 +775,6 @@ func (m *Monitor) publishProxyError(observedAt time.Time, source oapi.BrowserEve
 	if m.proxyErrorRateLimited(sessionID, code, resourceType) {
 		return
 	}
-	m.sessionsMu.RLock()
-	info := m.sessions[sessionID]
-	m.sessionsMu.RUnlock()
 	data, _ := json.Marshal(oapi.BrowserProxyErrorEventData{
 		SessionId:    sessionID,
 		TargetId:     info.targetID,
