@@ -307,7 +307,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
 
 # Install Chrome + ChromeDriver as a matched pair from chrome-for-testing so they cannot drift apart.
 # Regional pack filenames preserve each locale identifier while reusing en-GB UI strings.
-ARG CHROME_VERSION=152.0.7977.42
+ARG CHROME_VERSION=155.0.8059.79
 RUN set -eux; \
     curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chrome-linux64.zip" -o /tmp/chrome.zip; \
     curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -o /tmp/cd.zip; \

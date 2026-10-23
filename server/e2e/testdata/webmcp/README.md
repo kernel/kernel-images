@@ -13,7 +13,7 @@ E2E_CHROMIUM_HEADLESS_IMAGE=kernel-headless-test \
   GOFLAGS='-run=TestPlaywrightExecuteAPI/WebMCPDeclarative -count=1' make test-e2e
 ```
 
-Chromium 152.0.7977.42 with the image's default WebMCP flags exposes `reserve_table` with string name/date fields, a numeric party size with bounds, and a seating enum. It adds a date format hint to the field description. Both top-level and embedded invocations return `completed` and the submitted values; the tests also read the DOM through `/playwright/execute` to verify native agent submission occurred exactly once. Discovery and invocation responses are logged by the test. Missing declarative tools fail the test rather than silently skipping supported behavior.
+Chromium 155.0.8059.79 with the image's default WebMCP flags exposes `reserve_table` with string name/date fields, a numeric party size with bounds, and a seating enum. It adds a date format hint to the field description. Both top-level and embedded invocations return `completed` and the submitted values; the tests also read the DOM through `/playwright/execute` to verify native agent submission occurred exactly once. Discovery and invocation responses are logged by the test. Missing declarative tools fail the test rather than silently skipping supported behavior.
 
 # Polyfill WebMCP fixture
 
