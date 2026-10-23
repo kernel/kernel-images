@@ -83,7 +83,7 @@ func TestInitialAcquisitionIsNotReconnection(t *testing.T) {
 				require.Eventually(t, func() bool { return probes.Load() > probed }, 6*time.Second, time.Millisecond)
 				require.Never(t, func() bool { return len(lifecycle(checkpoint)) != 0 }, 300*time.Millisecond, time.Millisecond, "startup retries must not emit restart events")
 				before := m.NetworkSnapshot()
-				m.network.terminal("s", "r", "net::ERR_CONNECTION_RESET")
+				m.network.terminal("s", "r", networkFailed, "net::ERR_CONNECTION_RESET", false)
 				require.Equal(t, before.Resets+1, m.NetworkSnapshot().Resets)
 				// Lose a real connection and keep recovery failing across several retries.
 				u.mu.Lock()

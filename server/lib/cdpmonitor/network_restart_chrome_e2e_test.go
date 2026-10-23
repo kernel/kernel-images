@@ -81,7 +81,11 @@ func TestNetworkMetricsActualChromeRestart(t *testing.T) {
 	upstream.notifyRestart(ws)
 	require.Eventually(t, func() bool { return m.NetworkSnapshot().Up }, 10*time.Second, 20*time.Millisecond)
 	require.Equal(t, before.Resets, m.NetworkSnapshot().Resets)
+	require.Equal(t, before.Failures["ERR_CONNECTION_RESET"], m.NetworkSnapshot().Failures["ERR_CONNECTION_RESET"])
 	require.GreaterOrEqual(t, m.NetworkSnapshot().Completed, before.Completed)
 	reset(ws)
-	require.Equal(t, uint64(2), m.NetworkSnapshot().Resets)
+	after := m.NetworkSnapshot()
+	require.Equal(t, uint64(2), after.Resets)
+	require.Equal(t, [2]uint64{2, 0}, after.Failures["ERR_CONNECTION_RESET"])
+	assertNetworkTotals(t, after, failureTotal(after), after.Completed)
 }
