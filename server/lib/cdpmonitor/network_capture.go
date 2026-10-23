@@ -43,6 +43,16 @@ type networkHop struct {
 func (m *Monitor) exchangeLocked(key networkRequestKey) *networkExchange {
 	e := m.networkExchanges[key]
 	if e == nil {
+		if m.networkHeadersSaturated {
+			return nil
+		}
+		if len(m.networkExchanges) >= maxNetworkExchanges {
+			// ExtraInfo may precede its request. Once an event is dropped, new
+			// chains cannot safely resume correlation mid-capture: a later hop's
+			// headers could otherwise be mistaken for the missing first hop.
+			m.networkHeadersSaturated = true
+			return nil
+		}
 		e = &networkExchange{addedAt: time.Now()}
 		m.networkExchanges[key] = e
 	}
@@ -51,6 +61,9 @@ func (m *Monitor) exchangeLocked(key networkRequestKey) *networkExchange {
 
 func (m *Monitor) queueNetworkRequestLocked(key networkRequestKey, request oapi.BrowserNetworkRequestEventData, info targetInfo, observedAt time.Time) *networkHop {
 	e := m.exchangeLocked(key)
+	if e == nil {
+		e = &networkExchange{}
+	}
 	metadata := targetMetadata(info)
 	h := &networkHop{
 		exchange:         e,
@@ -60,7 +73,12 @@ func (m *Monitor) queueNetworkRequestLocked(key networkRequestKey, request oapi.
 		requestReady:     make(chan struct{}),
 		requestPublished: make(chan struct{}),
 	}
-	e.hops = append(e.hops, h)
+	if m.networkExchanges[key] == e {
+		e.hops = append(e.hops, h)
+	} else {
+		// Keep publication ordering even when header enrichment is unavailable.
+		close(h.requestReady)
+	}
 	e.publications++
 	return h
 }
@@ -69,11 +87,8 @@ func (m *Monitor) handleRequestExtraInfo(p cdpNetworkRequestWillBeSentExtraInfoP
 	key := networkRequestKey{sessionID, p.RequestID}
 	m.pendReqMu.Lock()
 	defer m.pendReqMu.Unlock()
-	if m.networkExchanges[key] == nil && len(m.networkExchanges) >= maxNetworkExchanges {
-		return
-	}
 	e := m.exchangeLocked(key)
-	if len(e.requests) >= maxExtraInfoPerExchange {
+	if e == nil || len(e.requests) >= maxExtraInfoPerExchange {
 		return
 	}
 	e.requests = append(e.requests, p.Headers)
@@ -253,7 +268,7 @@ func (m *Monitor) emitNetworkResponse(ctx context.Context, observedAt time.Time,
 }
 
 func (m *Monitor) finishNetworkRequest(state networkReqState) {
-	if cs := m.computedFor(state.sessionID); cs != nil {
+	if cs := state.countedState; cs != nil {
 		m.pendReqMu.Lock()
 		defer m.pendReqMu.Unlock()
 		cs.mu.Lock()

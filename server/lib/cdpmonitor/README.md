@@ -111,10 +111,14 @@ targets, not requests issued before their capture domains finish initializing.
 
 ## Network capture fidelity
 
-Top-level navigation retains requests until their terminal events. Only requests
-belonging to the new loader seed its pending count; completions from the previous
+Top-level navigation retains requests until their terminal events or expiry. The
+collector sweeps once per minute and evicts requests older than five minutes,
+measured from the initial request even across redirects. A completion after
+eviction cannot emit a response. Only requests belonging to the new loader seed
+its pending count; completions from the previous
 navigation cannot make the new navigation idle. Same-process frame requests still
-participate in their page's network-idle accounting.
+participate in their page's network-idle accounting. Expiry updates the capture
+that counted the request, so delayed cleanup cannot make a replacement capture idle.
 
 The collector joins `requestWillBeSentExtraInfo` to requests
 by session, request ID, and redirect hop. Cached hops without ExtraInfo do not
@@ -127,6 +131,16 @@ headers on the request event and are omitted from the response. Capture remains
 best-effort when Chrome omits events or a target disconnects. Redirects emit a
 response for each hop, without a body. Request IDs remain the same across a
 redirect chain.
+
+The request-header correlation registry holds at most 8,192 exchanges. If admitting
+a new exchange would exceed that limit, new chains use base request headers and
+omit response `request_headers` until capture restarts (telemetry off/on or CDP
+reconnect). Resuming sooner could attach a later redirect hop's headers to a hop
+whose earlier header event was dropped. Request, response, and failure events
+still publish in order; already admitted chains continue collecting headers.
+Entries are released after terminal publications drain, on expiry, or when capture
+is cleared. This bounds the header registry, not the number of in-flight requests
+or publishers.
 
 Network event timestamps record wall-clock time when the CDP event is observed,
 before header collection, body retrieval, or publication waits. Response events

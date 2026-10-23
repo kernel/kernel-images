@@ -95,6 +95,7 @@ func (m *Monitor) applyTelemetry(state uint64) error {
 	m.pendReqMu.Lock()
 	clear(m.pendingRequests)
 	clear(m.networkExchanges)
+	m.networkHeadersSaturated = false
 	m.pendReqMu.Unlock()
 	m.mainSessionID.Store(mainSessionUnset)
 	m.bindingRateMu.Lock()

@@ -68,9 +68,10 @@ type Monitor struct {
 	sessions      map[string]targetInfo // sessionID → targetInfo
 	mainSessionID atomic.Value          // string; set on first top-level frameNavigated, cleared on reconnect
 
-	pendReqMu        sync.Mutex
-	pendingRequests  map[networkRequestKey]networkReqState
-	networkExchanges map[networkRequestKey]*networkExchange
+	pendReqMu               sync.Mutex
+	pendingRequests         map[networkRequestKey]networkReqState
+	networkExchanges        map[networkRequestKey]*networkExchange
+	networkHeadersSaturated bool // pendReqMu; reset with capture
 
 	computedStates map[string]*computedState // sessionID → state machine; guarded by sessionsMu
 
@@ -363,6 +364,7 @@ func (m *Monitor) clearState() {
 	m.pendReqMu.Lock()
 	m.pendingRequests = make(map[networkRequestKey]networkReqState)
 	clear(m.networkExchanges)
+	m.networkHeadersSaturated = false
 	m.pendReqMu.Unlock()
 	m.bindingRateMu.Lock()
 	m.bindingLastSeen = make(map[string]time.Time)
@@ -384,25 +386,32 @@ func (m *Monitor) sweepPendingRequests(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			var toSweep []networkReqState
-			m.pendReqMu.Lock()
-			for id, state := range m.pendingRequests {
-				if now.Sub(state.addedAt) > pendingRequestTTL {
-					delete(m.pendingRequests, id)
-					toSweep = append(toSweep, state)
-				}
-			}
-			for key, exchange := range m.networkExchanges {
-				if now.Sub(exchange.addedAt) > pendingRequestTTL {
-					delete(m.networkExchanges, key)
-				}
-			}
-			m.pendReqMu.Unlock()
+			toSweep := m.takeExpiredNetworkRequests(now)
 			for _, state := range toSweep {
 				m.finishNetworkRequest(state)
 			}
 		}
 	}
+}
+
+// takeExpiredNetworkRequests transfers accounting to the sweeper before releasing
+// the registry lock. The capture can be replaced before that accounting runs.
+func (m *Monitor) takeExpiredNetworkRequests(now time.Time) []networkReqState {
+	m.pendReqMu.Lock()
+	defer m.pendReqMu.Unlock()
+	var expired []networkReqState
+	for key, state := range m.pendingRequests {
+		if now.Sub(state.addedAt) > pendingRequestTTL {
+			delete(m.pendingRequests, key)
+			expired = append(expired, state)
+		}
+	}
+	for key, exchange := range m.networkExchanges {
+		if now.Sub(exchange.addedAt) > pendingRequestTTL {
+			delete(m.networkExchanges, key)
+		}
+	}
+	return expired
 }
 
 func (m *Monitor) computedFor(sessionID string) *computedState {
