@@ -93,7 +93,7 @@ func TestMapEventExitedUnexpectedFromStarting(t *testing.T) {
 	body, ok := mapEvent(
 		map[string]string{"eventname": "PROCESS_STATE_EXITED"},
 		map[string]string{
-			"processname": "envoy",
+			"processname": "dbus",
 			"from_state":  "STARTING",
 			"expected":    "0",
 			"pid":         "55",

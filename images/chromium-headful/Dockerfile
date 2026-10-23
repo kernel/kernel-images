@@ -417,16 +417,6 @@ COPY images/chromium-headful/supervisor/services/ /etc/supervisor/conf.d/service
 COPY images/chromium-headful/openbox/rc.xml /etc/xdg/openbox/rc.xml
 COPY images/chromium-headful/openbox/themes/kernel-light /usr/share/themes/kernel-light
 COPY shared/set-desktop-background.sh /usr/local/bin/set-desktop-background.sh
-COPY shared/envoy/supervisor-envoy.conf /etc/supervisor/conf.d/services/envoy.conf
-
-# Install Envoy proxy
-COPY shared/envoy/install-proxy.sh /usr/local/bin/install-proxy.sh
-RUN chmod +x /usr/local/bin/install-proxy.sh && /usr/local/bin/install-proxy.sh && rm /usr/local/bin/install-proxy.sh
-
-# Copy Envoy configuration files
-COPY shared/envoy/bootstrap.yaml /etc/envoy/templates/bootstrap.yaml
-COPY shared/envoy/init-envoy.sh /usr/local/bin/init-envoy.sh
-RUN chmod +x /usr/local/bin/init-envoy.sh
 
 # copy the kernel-images API binary built in the builder stage
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
@@ -463,11 +453,5 @@ RUN npm ci --ignore-scripts --no-audit --no-fund --omit=dev --prefix /tmp/browse
     && rm -rf /tmp/browser-repl
 
 RUN useradd -m -s /bin/bash kernel
-
-# Bake the envoy forward-proxy CA cert into the image (system trust store +
-# NSS DB for both root and kernel users). See bake-certs.sh for the security
-# rationale on sharing the cert across containers built from this image.
-COPY shared/envoy/bake-certs.sh /usr/local/bin/bake-certs.sh
-RUN chmod +x /usr/local/bin/bake-certs.sh && /usr/local/bin/bake-certs.sh && rm /usr/local/bin/bake-certs.sh
 
 ENTRYPOINT [ "/wrapper" ]

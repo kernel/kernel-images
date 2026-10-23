@@ -18,8 +18,6 @@ func armForkIdentityWait(enabled bool) {
 	if !enabled {
 		return
 	}
-	stopAll("envoy")
-
 	for _, path := range []string{forkidentity.AppliedFile, forkidentity.PayloadFile} {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			fatalf("fork identity reset %s: %v", path, err)
