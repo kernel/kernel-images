@@ -122,6 +122,7 @@ type networkReqState struct {
 	frameID       string
 	navSeq        int64
 	countedNavSeq int
+	countedState  *computedState // accounting owner, retained across asynchronous expiry
 	status        int
 	statusText    string
 	resHeaders    json.RawMessage

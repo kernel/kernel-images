@@ -384,25 +384,32 @@ func (m *Monitor) sweepPendingRequests(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			var toSweep []networkReqState
-			m.pendReqMu.Lock()
-			for id, state := range m.pendingRequests {
-				if now.Sub(state.addedAt) > pendingRequestTTL {
-					delete(m.pendingRequests, id)
-					toSweep = append(toSweep, state)
-				}
-			}
-			for key, exchange := range m.networkExchanges {
-				if now.Sub(exchange.addedAt) > pendingRequestTTL {
-					delete(m.networkExchanges, key)
-				}
-			}
-			m.pendReqMu.Unlock()
+			toSweep := m.takeExpiredNetworkRequests(now)
 			for _, state := range toSweep {
 				m.finishNetworkRequest(state)
 			}
 		}
 	}
+}
+
+// takeExpiredNetworkRequests transfers accounting to the sweeper before releasing
+// the registry lock. The capture can be replaced before that accounting runs.
+func (m *Monitor) takeExpiredNetworkRequests(now time.Time) []networkReqState {
+	m.pendReqMu.Lock()
+	defer m.pendReqMu.Unlock()
+	var expired []networkReqState
+	for key, state := range m.pendingRequests {
+		if now.Sub(state.addedAt) > pendingRequestTTL {
+			delete(m.pendingRequests, key)
+			expired = append(expired, state)
+		}
+	}
+	for key, exchange := range m.networkExchanges {
+		if now.Sub(exchange.addedAt) > pendingRequestTTL {
+			delete(m.networkExchanges, key)
+		}
+	}
+	return expired
 }
 
 func (m *Monitor) computedFor(sessionID string) *computedState {

@@ -472,6 +472,7 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 	} else {
 		navSeq = existing.navSeq
 		countedNavSeq = existing.countedNavSeq
+		cs = existing.countedState
 		m.resolveNetworkHeadersLocked(existing.hop, p.RedirectHasExtraInfo)
 	}
 	m.pendingRequests[key] = networkReqState{
@@ -485,6 +486,7 @@ func (m *Monitor) handleNetworkRequest(p cdpNetworkRequestWillBeSentParams, sess
 		frameID:       p.FrameID,
 		navSeq:        navSeq,
 		countedNavSeq: countedNavSeq,
+		countedState:  cs,
 		addedAt:       addedAt,
 	}
 	m.pendReqMu.Unlock()
@@ -848,6 +850,7 @@ func (m *Monitor) handleFrameNavigated(p cdpPageFrameNavigatedParams, sessionID 
 			req.countedNavSeq = -1
 			if cs != nil && req.loaderID == p.Frame.LoaderID {
 				req.countedNavSeq = nextSeq
+				req.countedState = cs
 				inflight++
 			}
 			m.pendingRequests[key] = req

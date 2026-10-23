@@ -253,7 +253,7 @@ func (m *Monitor) emitNetworkResponse(ctx context.Context, observedAt time.Time,
 }
 
 func (m *Monitor) finishNetworkRequest(state networkReqState) {
-	if cs := m.computedFor(state.sessionID); cs != nil {
+	if cs := state.countedState; cs != nil {
 		m.pendReqMu.Lock()
 		defer m.pendReqMu.Unlock()
 		cs.mu.Lock()
