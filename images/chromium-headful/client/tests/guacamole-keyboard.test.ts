@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
 import createKeyboard from '../src/utils/guacamole-keyboard'
 
@@ -68,5 +68,47 @@ describe('GuacamoleKeyboard repeat handling', () => {
     target.dispatch('keyup', 'o', 79)
 
     expect(events).toEqual(['down:111', 'up:111', 'down:111', 'up:111'])
+  })
+})
+
+describe('GuacamoleKeyboard Caps Lock handling', () => {
+  const platform = Object.getOwnPropertyDescriptor(navigator, 'platform')!
+
+  afterEach(() => {
+    Object.defineProperty(navigator, 'platform', platform)
+  })
+
+  function keyboardOn(platformName: string) {
+    Object.defineProperty(navigator, 'platform', { value: platformName, configurable: true })
+    const target = new KeyboardTarget()
+    const keyboard = createKeyboard(target as unknown as Element)
+    const events: string[] = []
+    keyboard.onkeydown = (key) => {
+      events.push(`down:${key}`)
+      return false
+    }
+    keyboard.onkeyup = (key) => events.push(`up:${key}`)
+    return { target, events }
+  }
+
+  test('forwards each macOS Caps Lock keydown and keyup as a full press', () => {
+    const { target, events } = keyboardOn('MacIntel')
+
+    target.dispatch('keydown', 'CapsLock', 20)
+    target.dispatch('keydown', 'a', 65)
+    target.dispatch('keypress', 'A', 65)
+    target.dispatch('keyup', 'a', 65)
+    target.dispatch('keyup', 'CapsLock', 20)
+
+    expect(events).toEqual(['down:65509', 'up:65509', 'down:65', 'up:65', 'down:65509', 'up:65509'])
+  })
+
+  test('keeps Caps Lock as a key press on other platforms', () => {
+    const { target, events } = keyboardOn('Win32')
+
+    target.dispatch('keydown', 'CapsLock', 20)
+    target.dispatch('keyup', 'CapsLock', 20)
+
+    expect(events).toEqual(['down:65509', 'up:65509'])
   })
 })

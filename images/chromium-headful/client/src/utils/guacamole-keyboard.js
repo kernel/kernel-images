@@ -298,10 +298,6 @@ Guacamole.Keyboard = function Keyboard(element) {
         if (this.modifiers.meta && this.keysym !== 0xFFE7 && this.keysym !== 0xFFE8)
             this.keyupReliable = false;
 
-        // We cannot rely on receiving keyup for Caps Lock on certain platforms
-        else if (this.keysym === 0xFFE5 && quirks.capsLockKeyupUnreliable)
-            this.keyupReliable = false;
-
         // Determine whether default action for Alt+combinations must be prevented
         var prevent_alt = !this.modifiers.ctrl && !quirks.altIsTypableOnly;
 
@@ -1134,6 +1130,14 @@ Guacamole.Keyboard = function Keyboard(element) {
         var first = eventLog[0];
         if (!first)
             return null;
+
+        // macOS sends Caps Lock keydown only when enabling it and keyup only
+        // when disabling it, so each event is one full press of the key
+        if (first.keysym === 0xFFE5 && quirks.capsLockKeyupUnreliable) {
+            first.defaultPrevented = !guac_keyboard.press(0xFFE5);
+            guac_keyboard.release(0xFFE5);
+            return eventLog.shift();
+        }
 
         // Keydown event
         if (first instanceof KeydownEvent) {
