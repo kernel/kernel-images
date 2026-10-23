@@ -17,13 +17,12 @@ const (
 )
 
 // Chrome emits base events and ExtraInfo on independent streams. Redirects reuse
-// request IDs; only hops whose response advertises ExtraInfo consume those queues.
+// request IDs; only hops whose response advertises ExtraInfo consume the header queue.
 // All exchange and hop fields are protected by pendReqMu.
 type networkExchange struct {
 	addedAt      time.Time
 	hops         []*networkHop
 	requests     []json.RawMessage
-	responses    []cdpNetworkResponseReceivedExtraInfoParams
 	terminal     bool
 	publications int // request/response publishers still using this exchange
 }
@@ -36,11 +35,8 @@ type networkHop struct {
 	known            bool
 	hasExtra         bool
 	requestHeaders   json.RawMessage
-	responseExtra    *cdpNetworkResponseReceivedExtraInfoParams
 	requestReady     chan struct{}
-	responseReady    chan struct{}
 	requestMatched   bool
-	responseMatched  bool
 	requestPublished chan struct{}
 }
 
@@ -62,7 +58,6 @@ func (m *Monitor) queueNetworkRequestLocked(key networkRequestKey, request oapi.
 		source:           oapi.BrowserEventSource{Kind: oapi.Cdp, Metadata: &metadata},
 		observedAt:       observedAt,
 		requestReady:     make(chan struct{}),
-		responseReady:    make(chan struct{}),
 		requestPublished: make(chan struct{}),
 	}
 	e.hops = append(e.hops, h)
@@ -82,21 +77,6 @@ func (m *Monitor) handleRequestExtraInfo(p cdpNetworkRequestWillBeSentExtraInfoP
 		return
 	}
 	e.requests = append(e.requests, p.Headers)
-	e.matchHeaders()
-}
-
-func (m *Monitor) handleResponseExtraInfo(p cdpNetworkResponseReceivedExtraInfoParams, sessionID string) {
-	key := networkRequestKey{sessionID, p.RequestID}
-	m.pendReqMu.Lock()
-	defer m.pendReqMu.Unlock()
-	if m.networkExchanges[key] == nil && len(m.networkExchanges) >= maxNetworkExchanges {
-		return
-	}
-	e := m.exchangeLocked(key)
-	if len(e.responses) >= maxExtraInfoPerExchange {
-		return
-	}
-	e.responses = append(e.responses, p)
 	e.matchHeaders()
 }
 
@@ -151,36 +131,15 @@ func (e *networkExchange) matchHeaders() {
 		h.requestMatched = true
 		close(h.requestReady)
 	}
-	for _, h := range e.hops {
-		if !h.known {
-			break
-		}
-		if h.responseMatched {
-			continue
-		}
-		if h.hasExtra {
-			if len(e.responses) == 0 {
-				break
-			}
-			extra := e.responses[0]
-			h.responseExtra, e.responses = &extra, e.responses[1:]
-		}
-		h.responseMatched = true
-		close(h.responseReady)
-	}
 }
 
-func waitNetworkHeaders(ctx context.Context, ready ...<-chan struct{}) {
+func waitNetworkHeaders(ctx context.Context, ready <-chan struct{}) {
 	timer := time.NewTimer(networkHeaderWait)
 	defer timer.Stop()
-	for _, ch := range ready {
-		select {
-		case <-ch:
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			return
-		}
+	select {
+	case <-ready:
+	case <-ctx.Done():
+	case <-timer.C:
 	}
 }
 
@@ -242,11 +201,14 @@ func (m *Monitor) emitNetworkResponse(ctx context.Context, observedAt time.Time,
 			body, bodyErr = m.fetchResponseBody(ctx, key.requestID, key.sessionID, state)
 		}
 		if h != nil {
-			waitNetworkHeaders(ctx, h.requestReady, h.responseReady)
+			waitNetworkHeaders(ctx, h.requestReady)
 			<-h.requestPublished
 		}
 		var headers oapi.BrowserHttpHeaders
 		_ = json.Unmarshal(state.resHeaders, &headers)
+		// Use Chrome's effective status and headers with its captured body. A wire
+		// 304 can omit cached headers; a separate wire response view is intentionally
+		// not exposed by browser telemetry.
 		payload := oapi.BrowserNetworkResponseEventData{
 			SessionId:    key.sessionID,
 			TargetId:     info.targetID,
@@ -277,13 +239,6 @@ func (m *Monitor) emitNetworkResponse(ctx context.Context, observedAt time.Time,
 				if json.Unmarshal(h.requestHeaders, &requestHeaders) == nil && requestHeaders != nil {
 					payload.RequestHeaders = &requestHeaders
 				}
-			}
-			if h.responseExtra != nil {
-				var responseHeaders oapi.BrowserHttpHeaders
-				if json.Unmarshal(h.responseExtra.Headers, &responseHeaders) == nil && responseHeaders != nil {
-					payload.Headers = responseHeaders
-				}
-				payload.WireStatus = ptrOf(h.responseExtra.StatusCode)
 			}
 			m.pendReqMu.Unlock()
 		}

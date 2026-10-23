@@ -173,19 +173,6 @@ type cdpNetworkRequestWillBeSentExtraInfoParams struct {
 	AppliedNetworkConditionsID    string          `json:"appliedNetworkConditionsId,omitempty"`
 }
 
-// cdpNetworkResponseReceivedExtraInfoParams mirrors Network.responseReceivedExtraInfo.
-type cdpNetworkResponseReceivedExtraInfoParams struct {
-	RequestID                string          `json:"requestId"`
-	BlockedCookies           json.RawMessage `json:"blockedCookies"`
-	Headers                  json.RawMessage `json:"headers"`
-	ResourceIPAddressSpace   string          `json:"resourceIPAddressSpace"`
-	StatusCode               int             `json:"statusCode"`
-	HeadersText              string          `json:"headersText,omitempty"`
-	CookiePartitionKey       json.RawMessage `json:"cookiePartitionKey,omitempty"`
-	CookiePartitionKeyOpaque bool            `json:"cookiePartitionKeyOpaque,omitempty"`
-	ExemptedCookies          json.RawMessage `json:"exemptedCookies,omitempty"`
-}
-
 // cdpNetworkResponseReceivedParams mirrors Network.responseReceived params.
 type cdpNetworkResponseReceivedParams struct {
 	RequestID    string             `json:"requestId"`

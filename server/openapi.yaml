@@ -2617,7 +2617,7 @@ components:
               description: URL of the document that initiated the request.
             headers:
               $ref: "#/components/schemas/BrowserHttpHeaders"
-              description: Request headers, enriched with wire headers when available before publication.
+              description: Request headers reported by Chrome, including browser-added headers available before publication.
             resource_type:
               type: string
               description: CDP Network.ResourceType for the request, passed through as-is from Chrome. Known values include Document, Fetch, XHR, Script, Stylesheet, Image, Media, Font, TextTrack, EventSource, WebSocket, Manifest, Prefetch, Other, and more.
@@ -2669,13 +2669,13 @@ components:
               description: HTTP method of the original request.
             status:
               type: integer
-              description: Effective HTTP response status reported by Chrome, including 200 for a cached response revalidated with a wire 304.
+              description: Effective HTTP response status reported by Chrome, including 200 after successful cache revalidation.
             status_text:
               type: string
               description: HTTP response status text (e.g. OK, Not Found).
             headers:
               $ref: "#/components/schemas/BrowserHttpHeaders"
-              description: Response headers.
+              description: Effective response headers reported by Chrome, including retained cache headers after revalidation.
             mime_type:
               type: string
               description: MIME type of the response (e.g. text/html, application/json).
@@ -2684,10 +2684,7 @@ components:
               description: CDP Network.ResourceType for the request, passed through as-is from Chrome. Known values include Document, Fetch, XHR, Script, Stylesheet, Image, Media, Font, TextTrack, EventSource, WebSocket, Manifest, Prefetch, Other, and more.
             request_headers:
               $ref: "#/components/schemas/BrowserHttpHeaders"
-              description: Wire request headers when available, including headers that arrived after network_request was published.
-            wire_status:
-              type: integer
-              description: HTTP status received on the wire when available, such as 304 for a revalidated cached response whose effective status is 200. Does not change the meaning of status or the cached body.
+              description: Captured request headers when available, including browser-added headers that arrived after network_request was published.
             body:
               type: string
               description: Truncated response body, present only for text MIME types.

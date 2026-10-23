@@ -116,14 +116,14 @@ belonging to the new loader seed its pending count; completions from the previou
 navigation cannot make the new navigation idle. Same-process frame requests still
 participate in their page's network-idle accounting.
 
-The collector joins `requestWillBeSentExtraInfo` and `responseReceivedExtraInfo`
+The collector joins `requestWillBeSentExtraInfo` to requests
 by session, request ID, and redirect hop. Cached hops without ExtraInfo do not
 consume the next hop's headers. A `network_request` waits at most one second for
 wire headers, then uses the base headers so a hanging request remains visible.
 `network_response.request_headers` retains wire request headers that arrive after
 that initial event. After body retrieval, response capture waits up to one second
-total for both request and response headers, sharing one deadline. It then falls
-back to the base headers for anything still missing or invalid. Capture remains
+for request headers. Missing or invalid request headers fall back to the base
+headers on the request event and are omitted from the response. Capture remains
 best-effort when Chrome omits events or a target disconnects. Redirects emit a
 response for each hop, without a body. Request IDs remain the same across a
 redirect chain.
@@ -142,12 +142,11 @@ publication dependencies drain in order even when capture is canceled.
 Header correlation stays active for pending redirect responses after the final
 request completes or fails, until their capture finishes.
 
-`network_response.status` and `status_text` retain Chrome's effective response,
-including custom reason phrases. `wire_status` adds the wire status when available:
-a revalidated cached response has `status: 200`, `wire_status: 304`, and may carry
-Chrome's cached body. Existing success checks can continue using `status`.
-`headers` contains the wire response headers when available rather than Chrome's
-merged cache headers.
+`network_response.status`, `status_text`, and `headers` retain Chrome's effective
+response, including custom reason phrases and retained cache headers. A
+revalidated cached response has `status: 200` and may carry Chrome's cached body.
+Body capture is limited to selected textual resources and remains subject to
+truncation and retrieval errors.
 
 While optional telemetry is enabled, `Network.enable` requests durable body
 storage with `maxTotalBufferSize` set to 10 MiB on each attached session. Disabling
@@ -438,7 +437,7 @@ Unless otherwise noted, events also include the nav context fields described abo
 | Event | Fields |
 | --- | --- |
 | `network_request` | `request_id`, `loader_id`, `frame_id`, `document_url`, `method`, `url`, `headers`, `initiator_type`. Optional: `post_data`, `resource_type`, `is_redirect` + `redirect_url`. |
-| `network_response` | `request_id`, `loader_id`, `frame_id`, `method`, `url`, `status`, `headers`. Optional: `status_text`, `mime_type`, `resource_type`, `body` (truncated text body for textual MIME types), `body_error`, `request_headers`, `wire_status`. |
+| `network_response` | `request_id`, `loader_id`, `frame_id`, `method`, `url`, `status`, `headers`. Optional: `status_text`, `mime_type`, `resource_type`, `body` (truncated text body for textual MIME types), `body_error`, `request_headers`. |
 | `network_loading_failed` | `request_id`, `error_text`, `canceled`. Optional (absent when the request record was not found): `url`, `loader_id`, `frame_id`, `resource_type`. |
 | `proxy_error` | `request_id`, `code` (typed enum matching the metro header values), `status` (502, or 403 when the session's network policy blocks the destination). Optional: `raw_code` (sanitized original value when `code` is `unknown`), `url`, `loader_id`, `frame_id`, `method`, `resource_type`. Emitted when a 502 or 403 response carries the `X-Kernel-Proxy-Error` header. Unrecognized values are reported as `unknown`; all such values share one rate-limit slot. Emission is sampled to at most one per session+code+resource_type per second. WebSocket handshakes are not classified (documented non-goal). A CONNECT the proxy refuses outright, such as a `network_policy_denied` CONNECT to a port other than 443, is not classified either: Chromium does not expose the refusal, so it appears only as `network_loading_failed` with `net::ERR_TUNNEL_CONNECTION_FAILED`. |
 

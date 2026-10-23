@@ -157,11 +157,6 @@ func (m *Monitor) dispatchEvent(msg cdpMessage) {
 		if m.decodeParams(msg.Method, msg.Params, &p) {
 			m.handleRequestExtraInfo(p, msg.SessionID)
 		}
-	case "Network.responseReceivedExtraInfo":
-		var p cdpNetworkResponseReceivedExtraInfoParams
-		if m.decodeParams(msg.Method, msg.Params, &p) {
-			m.handleResponseExtraInfo(p, msg.SessionID)
-		}
 	case "Network.responseReceived":
 		var p cdpNetworkResponseReceivedParams
 		if m.decodeParams(msg.Method, msg.Params, &p) {
