@@ -456,6 +456,51 @@ func TestExtensionSourceTracksOOPIFRootNavigation(t *testing.T) {
 	require.Equal(t, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", (*event.Source.Metadata)["extension_id"])
 }
 
+func TestProxyErrorIdentitySurvivesTargetDetach(t *testing.T) {
+	for _, targetType := range []string{targetTypePage, "service_worker"} {
+		t.Run(targetType, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				m, ec := newComputedMonitor(t)
+				defer m.Stop()
+				m.sessions["s1"] = targetInfo{targetID: "test-target", targetType: targetType}
+				requestAt := time.Now().UnixMicro()
+				m.handleNetworkRequest(cdpNetworkRequestWillBeSentParams{
+					RequestID: "r", Request: cdpNetworkRequest{Method: "GET", URL: "https://example.com/api"},
+				}, "s1")
+				time.Sleep(400 * time.Millisecond)
+				responseAt := time.Now().UnixMicro()
+				m.handleResponseReceived(cdpNetworkResponseReceivedParams{
+					RequestID: "r", HasExtraInfo: true,
+					Response: cdpNetworkResponse{Status: 502, Headers: json.RawMessage(`{"x-kernel-proxy-error":"proxy_connect_failed"}`)},
+				}, "s1")
+				synctest.Wait()
+				require.Zero(t, ec.checkpoint(), "publication must still be waiting for request headers")
+				m.handleDetachedFromTarget(cdpTargetDetachedFromTargetParams{SessionID: "s1"})
+				time.Sleep(time.Second)
+				synctest.Wait()
+
+				ec.mu.Lock()
+				defer ec.mu.Unlock()
+				require.Len(t, ec.events, 2)
+				require.Equal(t, EventNetworkRequest, ec.events[0].Type)
+				require.Equal(t, requestAt, ec.events[0].Ts)
+				event := ec.events[1]
+				require.Equal(t, EventProxyError, event.Type)
+				require.Equal(t, responseAt, event.Ts)
+				var payload oapi.BrowserProxyErrorEventData
+				require.NoError(t, json.Unmarshal(event.Data, &payload))
+				require.Equal(t, "s1", payload.SessionId)
+				require.Equal(t, "r", payload.RequestId)
+				require.Equal(t, "test-target", payload.TargetId)
+				require.Equal(t, oapi.BrowserTargetType(targetType), payload.TargetType)
+				require.NotNil(t, event.Source.Metadata)
+				require.Equal(t, payload.TargetId, (*event.Source.Metadata)[MetadataKeyTargetID])
+				require.Equal(t, targetType, (*event.Source.Metadata)[MetadataKeyTargetType])
+			})
+		})
+	}
+}
+
 func TestProxyErrorSourceSurvivesOriginChanges(t *testing.T) {
 	extension := "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/page.html"
 	for _, document := range []string{extension, "https://example.com/"} {
