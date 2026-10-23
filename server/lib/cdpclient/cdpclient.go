@@ -702,9 +702,9 @@ func (c *Client) findPageTargetID(ctx context.Context) (string, error) {
 // into the maximized state via Browser.setWindowBounds. It is idempotent —
 // invoking it on a window already in maximized state is a no-op.
 //
-// A mutter-managed window in maximized state auto-tracks RANDR resizes
+// A WM-managed window in maximized state auto-tracks RANDR resizes
 // (the WM reflows it to fill the new root). So after a display resize the
-// server only has to make sure the window is in maximized state; mutter
+// server only has to make sure the window is in maximized state; the WM
 // does the rest. This replaces the prior approach of restarting chromium
 // so it could re-apply --start-maximized.
 //
@@ -716,7 +716,7 @@ func (c *Client) SetWindowBoundsMaximized(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// Both "maximized" and "fullscreen" cause mutter to reflow the window
+	// Both "maximized" and "fullscreen" cause the WM to reflow the window
 	// to fill the new X root on RANDR — that's the only invariant we
 	// need. Demoting a kiosk fullscreen window to maximized would break
 	// kiosk mode, so leave fullscreen alone.
@@ -776,6 +776,45 @@ func (c *Client) GetWindowBounds(ctx context.Context) (WindowBounds, error) {
 	}, nil
 }
 
+// ErrWindowFullscreen is returned by SetContentsSize when the window is
+// fullscreen. Leaving fullscreen would exit kiosk mode or a page's HTML5
+// fullscreen, so the window is left as it is.
+var ErrWindowFullscreen = errors.New("window is fullscreen")
+
+// SetContentsSize resizes the OS window backing the first page target so its
+// web contents are width x height, via Browser.setContentsSize. Chromium
+// rejects that for a maximized or minimized window, so such a window is first
+// restored to normal. The size belongs to the window and outlives this client,
+// unlike Emulation.setDeviceMetricsOverride, which Chromium 154+ clears when
+// the session that set it detaches.
+func (c *Client) SetContentsSize(ctx context.Context, width, height int) error {
+	bounds, err := c.GetWindowBounds(ctx)
+	if err != nil {
+		return err
+	}
+
+	switch bounds.WindowState {
+	case "fullscreen":
+		return ErrWindowFullscreen
+	case "maximized", "minimized":
+		if _, err := c.Send(ctx, "Browser.setWindowBounds", map[string]any{
+			"windowId": bounds.WindowID,
+			"bounds":   map[string]any{"windowState": "normal"},
+		}, ""); err != nil {
+			return fmt.Errorf("Browser.setWindowBounds normal: %w", err)
+		}
+	}
+
+	if _, err := c.Send(ctx, "Browser.setContentsSize", map[string]any{
+		"windowId": bounds.WindowID,
+		"width":    width,
+		"height":   height,
+	}, ""); err != nil {
+		return fmt.Errorf("Browser.setContentsSize: %w", err)
+	}
+	return nil
+}
+
 // SetDeviceMetricsOverride sets the viewport dimensions on the first page
 // target found in the browser. It attaches to the target with a flattened
 // session, sends Emulation.setDeviceMetricsOverride, then detaches.
@@ -815,4 +854,43 @@ func (c *Client) SetDeviceMetricsOverride(ctx context.Context, width, height int
 	}, "")
 
 	return nil
+}
+
+// BrowserLocation is Chromium's browser-owned location state and the
+// acknowledgements every component has returned for Generation.
+type BrowserLocation struct {
+	Generation               uint64 `json:"generation"`
+	Locale                   string `json:"locale"`
+	AcceptLanguages          string `json:"acceptLanguages"`
+	TimeZone                 string `json:"timezone"`
+	RenderersConverged       bool   `json:"renderersConverged"`
+	RenderersPending         int    `json:"renderersPending"`
+	TimeZoneConverged        bool   `json:"timezoneConverged"`
+	NetworkContextsConverged bool   `json:"networkContextsConverged"`
+}
+
+// SetBrowserLocation updates Chromium's session-only locale and language
+// defaults. Generations must increase; repeating the current generation with
+// the same values retries renderers whose host timezone has not converged.
+func (c *Client) SetBrowserLocation(ctx context.Context, generation uint64, locale, acceptLanguages, timezone string) error {
+	_, err := c.Send(ctx, "Browser.setKernelBrowserLocation", map[string]any{
+		"generation": generation, "locale": locale, "acceptLanguages": acceptLanguages, "timezone": timezone,
+	}, "")
+	if err != nil {
+		return fmt.Errorf("Browser.setKernelBrowserLocation: %w", err)
+	}
+	return nil
+}
+
+// GetBrowserLocation reads Chromium's location state and acknowledgements.
+func (c *Client) GetBrowserLocation(ctx context.Context) (BrowserLocation, error) {
+	raw, err := c.Send(ctx, "Browser.getKernelBrowserLocation", nil, "")
+	if err != nil {
+		return BrowserLocation{}, fmt.Errorf("Browser.getKernelBrowserLocation: %w", err)
+	}
+	var location BrowserLocation
+	if err := json.Unmarshal(raw, &location); err != nil {
+		return BrowserLocation{}, fmt.Errorf("decode browser location: %w", err)
+	}
+	return location, nil
 }

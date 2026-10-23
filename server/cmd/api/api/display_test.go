@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
@@ -36,7 +39,7 @@ func testFFmpegFactory(t *testing.T, tempDir string) recorder.FFmpegRecorderFact
 func newTestServiceWithFactory(t *testing.T, mgr recorder.RecordManager, factory recorder.FFmpegRecorderFactory) *ApiService {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t), testWebAuthn(t))
+	svc, err := New(mgr, factory, newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t), testWebAuthn(t), ProcessOutputConfig{})
 	require.NoError(t, err)
 	return svc
 }
@@ -252,6 +255,26 @@ func TestStopAndStartNewSegment_RoundTrip(t *testing.T) {
 	assert.True(t, newRec.IsRecording(ctx))
 
 	_ = newRec.Stop(ctx)
+}
+
+func TestContentsSizeRefused(t *testing.T) {
+	cdpErr := &cdpclient.Error{Code: -32000, Message: "Restore window to normal state before setting content size"}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "success", err: nil, want: false},
+		{name: "fullscreen", err: cdpclient.ErrWindowFullscreen, want: true},
+		{name: "cdp error", err: fmt.Errorf("Browser.setContentsSize: %w", cdpErr), want: true},
+		{name: "no page target", err: errors.New("no page target found"), want: false},
+		{name: "context", err: fmt.Errorf("read: %w", context.DeadlineExceeded), want: false},
+		{name: "connection", err: fmt.Errorf("read: %w", cdpclient.ErrOutcomeUnknown), want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, contentsSizeRefused(tc.err))
+		})
+	}
 }
 
 func TestResolveDisplayParams(t *testing.T) {

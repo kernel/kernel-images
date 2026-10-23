@@ -686,3 +686,34 @@ func (c *signalController) Enable(context.Context) error {
 	c.once.Do(func() { c.enabled <- time.Now() })
 	return nil
 }
+
+func TestMiddlewarePreservesHandlerWriteDeadline(t *testing.T) {
+	handlerDone := make(chan error, 1)
+	handler := middleware(NewNoopController(), testDrainConfig(5*time.Minute, outboundQueue))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Now()); err != nil {
+			handlerDone <- err
+			return
+		}
+		_, err := io.Copy(w, bytes.NewReader(make([]byte, 32<<20)))
+		handlerDone <- err
+	}))
+	listener, serverDone, server := serveTestHandler(t, handler)
+	defer func() {
+		require.NoError(t, server.Close())
+		assert.ErrorIs(t, <-serverDone, http.ErrServerClosed)
+	}()
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.(*net.TCPConn).SetReadBuffer(1024))
+	_, err = fmt.Fprint(conn, "GET /stream HTTP/1.1\r\nHost: test\r\n\r\n")
+	require.NoError(t, err)
+	select {
+	case err := <-handlerDone:
+		var timeout net.Error
+		require.ErrorAs(t, err, &timeout)
+		require.True(t, timeout.Timeout())
+	case <-time.After(time.Second):
+		t.Fatal("connection overwrote the handler's expired write deadline")
+	}
+}

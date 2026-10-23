@@ -16,9 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
-	openapi_types "github.com/oapi-codegen/runtime/types"
 	"golang.org/x/term"
 )
 
@@ -156,8 +154,7 @@ func main() {
 					go func() {
 						ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 						defer cancel()
-						uid, _ := uuid.Parse(procID)
-						_, _ = client.ProcessResizeWithResponse(ctx, openapi_types.UUID(uid), oapi.ProcessResizeJSONRequestBody{
+						_, _ = client.ProcessResizeWithResponse(ctx, procID, oapi.ProcessResizeJSONRequestBody{
 							Rows: rows,
 							Cols: cols,
 						})

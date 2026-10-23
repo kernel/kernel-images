@@ -33,6 +33,10 @@ type fakeCDP struct {
 	getVersionCalled    bool
 	failGetVersion      bool
 	productResponse     string
+	browserGeneration   uint64
+	browserLocale       string
+	browserLanguages    string
+	browserTimezone     string
 	loadUnpackedCalled  bool
 	loadUnpackedPath    string
 	loadUnpackedID      string
@@ -49,6 +53,12 @@ type fakeCDP struct {
 	createParams        map[string]any
 	closedTargetID      string
 	closeTargetMissing  bool
+	windowID            int
+	windowState         string
+	browserCalls        []string
+	setWindowBoundsArgs map[string]any
+	setContentsArgs     map[string]any
+	failSetContents     bool
 }
 
 func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
@@ -115,6 +125,24 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 				f.setMetricsHeight = int(params["height"].(float64))
 				result = map[string]any{}
 			}
+		case "Browser.getWindowForTarget":
+			f.browserCalls = append(f.browserCalls, req.Method)
+			result = map[string]any{
+				"windowId": f.windowID,
+				"bounds":   map[string]any{"width": 800, "height": 600, "windowState": f.windowState},
+			}
+		case "Browser.setWindowBounds":
+			f.browserCalls = append(f.browserCalls, req.Method)
+			_ = json.Unmarshal(req.Params, &f.setWindowBoundsArgs)
+			result = map[string]any{}
+		case "Browser.setContentsSize":
+			f.browserCalls = append(f.browserCalls, req.Method)
+			if f.failSetContents {
+				cdpErr = &Error{Code: -32000, Message: "Restore window to normal state before setting content size"}
+			} else {
+				_ = json.Unmarshal(req.Params, &f.setContentsArgs)
+				result = map[string]any{}
+			}
 		case "Target.detachFromTarget":
 			f.detachCalled = true
 			result = map[string]any{}
@@ -135,6 +163,21 @@ func (f *fakeCDP) handler(w http.ResponseWriter, r *http.Request) {
 					"jsVersion":       "1.2.3",
 				}
 			}
+		case "Browser.setKernelBrowserLocation":
+			var params struct {
+				Generation      uint64 `json:"generation"`
+				Locale          string `json:"locale"`
+				AcceptLanguages string `json:"acceptLanguages"`
+				TimeZone        string `json:"timezone"`
+			}
+			_ = json.Unmarshal(req.Params, &params)
+			f.browserGeneration = params.Generation
+			f.browserLocale = params.Locale
+			f.browserLanguages = params.AcceptLanguages
+			f.browserTimezone = params.TimeZone
+			result = map[string]any{}
+		case "Browser.getKernelBrowserLocation":
+			result = map[string]any{"generation": f.browserGeneration, "locale": f.browserLocale, "acceptLanguages": f.browserLanguages, "timezone": f.browserTimezone, "renderersConverged": true, "timezoneConverged": true, "networkContextsConverged": true}
 		case "Extensions.loadUnpacked":
 			f.loadUnpackedCalled = true
 			var params map[string]string
@@ -329,6 +372,64 @@ func TestSetDeviceMetricsOverride(t *testing.T) {
 
 		_, err := Dial(ctx, url)
 		require.Error(t, err)
+	})
+}
+
+func TestSetContentsSize(t *testing.T) {
+	dial := func(t *testing.T, f *fakeCDP) *Client {
+		t.Helper()
+		client, err := Dial(context.Background(), startFakeCDP(t, f))
+		require.NoError(t, err)
+		t.Cleanup(func() { client.Close() })
+		return client
+	}
+
+	t.Run("normal window", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", windowID: 7, windowState: "normal"}
+		require.NoError(t, dial(t, f).SetContentsSize(context.Background(), 1920, 1080))
+
+		assert.Equal(t, []string{"Browser.getWindowForTarget", "Browser.setContentsSize"}, f.browserCalls)
+		assert.Equal(t, map[string]any{"windowId": 7.0, "width": 1920.0, "height": 1080.0}, f.setContentsArgs)
+	})
+
+	for _, state := range []string{"maximized", "minimized"} {
+		t.Run(state+" window is restored first", func(t *testing.T) {
+			f := &fakeCDP{pageTargetID: "target-123", windowID: 7, windowState: state}
+			require.NoError(t, dial(t, f).SetContentsSize(context.Background(), 1280, 720))
+
+			assert.Equal(t, []string{"Browser.getWindowForTarget", "Browser.setWindowBounds", "Browser.setContentsSize"}, f.browserCalls)
+			assert.Equal(t, map[string]any{"windowId": 7.0, "bounds": map[string]any{"windowState": "normal"}}, f.setWindowBoundsArgs)
+			assert.Equal(t, map[string]any{"windowId": 7.0, "width": 1280.0, "height": 720.0}, f.setContentsArgs)
+		})
+	}
+
+	t.Run("fullscreen window is left alone", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", windowID: 7, windowState: "fullscreen"}
+		err := dial(t, f).SetContentsSize(context.Background(), 1280, 720)
+
+		assert.ErrorIs(t, err, ErrWindowFullscreen)
+		assert.Equal(t, []string{"Browser.getWindowForTarget"}, f.browserCalls)
+	})
+
+	t.Run("setContentsSize failure", func(t *testing.T) {
+		f := &fakeCDP{pageTargetID: "target-123", windowID: 7, windowState: "normal", failSetContents: true}
+		err := dial(t, f).SetContentsSize(context.Background(), 1280, 720)
+
+		var cdpErr *Error
+		require.ErrorAs(t, err, &cdpErr)
+		assert.Contains(t, err.Error(), "Browser.setContentsSize")
+	})
+
+	t.Run("no page target", func(t *testing.T) {
+		defer func(d time.Duration) { pageTargetWaitTimeout = d }(pageTargetWaitTimeout)
+		pageTargetWaitTimeout = 100 * time.Millisecond
+
+		f := &fakeCDP{returnNoPageTargets: true}
+		err := dial(t, f).SetContentsSize(context.Background(), 1280, 720)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no page target found")
+		assert.Empty(t, f.browserCalls)
 	})
 }
 
@@ -824,4 +925,17 @@ func TestTargetURLs(t *testing.T) {
 	urls, err := client.TargetURLs(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"tab-1": "https://example.com/"}, urls)
+}
+
+func TestBrowserLocation(t *testing.T) {
+	f := &fakeCDP{}
+	url := startFakeCDP(t, f)
+	client, err := Dial(context.Background(), url)
+	require.NoError(t, err)
+	defer client.Close()
+
+	require.NoError(t, client.SetBrowserLocation(context.Background(), 7, "de-DE", "de-DE,de", "Europe/Berlin"))
+	location, err := client.GetBrowserLocation(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, BrowserLocation{Generation: 7, Locale: "de-DE", AcceptLanguages: "de-DE,de", TimeZone: "Europe/Berlin", RenderersConverged: true, TimeZoneConverged: true, NetworkContextsConverged: true}, location)
 }
