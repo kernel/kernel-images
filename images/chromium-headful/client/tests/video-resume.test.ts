@@ -109,6 +109,19 @@ describe('video resume', () => {
     expect(calls).toEqual(['blocked false'])
   })
 
+  test('leaves a video alone whose browser counts no frames', async () => {
+    // Safari reports no frames for a MediaStream
+    const video = chromeVideo()
+    video.frames = 0
+    const { resume, calls, tick } = resumer(video)
+    for (let i = 0; i < 3; i++) {
+      await resume.resume()
+      tick(STALL_MS)
+    }
+    expect(video.loads).toBe(0)
+    expect(calls).toEqual([])
+  })
+
   test('does nothing without a stream', async () => {
     const video = chromeVideo()
     video.srcObject = null
