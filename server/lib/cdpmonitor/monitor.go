@@ -68,9 +68,10 @@ type Monitor struct {
 	sessions      map[string]targetInfo // sessionID → targetInfo
 	mainSessionID atomic.Value          // string; set on first top-level frameNavigated, cleared on reconnect
 
-	pendReqMu        sync.Mutex
-	pendingRequests  map[networkRequestKey]networkReqState
-	networkExchanges map[networkRequestKey]*networkExchange
+	pendReqMu               sync.Mutex
+	pendingRequests         map[networkRequestKey]networkReqState
+	networkExchanges        map[networkRequestKey]*networkExchange
+	networkHeadersSaturated bool // pendReqMu; reset with capture
 
 	computedStates map[string]*computedState // sessionID → state machine; guarded by sessionsMu
 
@@ -363,6 +364,7 @@ func (m *Monitor) clearState() {
 	m.pendReqMu.Lock()
 	m.pendingRequests = make(map[networkRequestKey]networkReqState)
 	clear(m.networkExchanges)
+	m.networkHeadersSaturated = false
 	m.pendReqMu.Unlock()
 	m.bindingRateMu.Lock()
 	m.bindingLastSeen = make(map[string]time.Time)
