@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdio.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/un.h>
 #include <misc.h>
 #include <xf86.h>
@@ -419,6 +420,13 @@ PreInit(__attribute__ ((unused)) InputDriverPtr drv,
     if (ret == -1)
     {
         xf86IDrvMsg(pInfo, X_ERROR, "unable to bind socket\n");
+        return BadValue;
+    }
+
+    /* Allow Neko in Xorg's group to connect without running as root. */
+    if (chmod(priv->socket_name, 0660) == -1)
+    {
+        xf86IDrvMsg(pInfo, X_ERROR, "unable to set socket permissions\n");
         return BadValue;
     }
 

@@ -243,7 +243,7 @@ func TestProcessSpawn_CommandNotFound(t *testing.T) {
 }
 
 func TestBuildCmd_AsRootSetsCredential(t *testing.T) {
-	t.Parallel()
+	t.Setenv("RUN_AS_ROOT", "true")
 	asRoot := true
 	body := &oapi.ProcessExecRequest{Command: "true", AsRoot: &asRoot}
 	cmd, err := buildCmd(body)
@@ -255,7 +255,7 @@ func TestBuildCmd_AsRootSetsCredential(t *testing.T) {
 }
 
 func TestBuildCmd_AsUserUidAndGidOverride(t *testing.T) {
-	t.Parallel()
+	t.Setenv("RUN_AS_ROOT", "true")
 	cur, err := user.Current()
 	if err != nil {
 		t.Skipf("skipping: failed to determine current user: %v", err)
@@ -279,7 +279,7 @@ func TestBuildCmd_AsUserUidAndGidOverride(t *testing.T) {
 }
 
 func TestBuildCmd_AsRootAndAsUserConflict(t *testing.T) {
-	t.Parallel()
+	t.Setenv("RUN_AS_ROOT", "true")
 	asRoot := true
 	asUser := "0"
 	body := &oapi.ProcessExecRequest{Command: "true", AsRoot: &asRoot, AsUser: &asUser}

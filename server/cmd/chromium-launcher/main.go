@@ -13,6 +13,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/browserlocation"
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/runasroot"
 	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
@@ -111,7 +112,7 @@ func main() {
 	}
 	chromiumArgs = append(chromiumArgs, final...)
 
-	runAsRoot := strings.EqualFold(strings.TrimSpace(os.Getenv("RUN_AS_ROOT")), "true")
+	runAsRoot := runasroot.Enabled()
 
 	// Prepare environment. PULSE_SERVER/PULSE_SINK route chromium's audio into the
 	// recorder's sink; the root path below relies on this inherited env, while the
@@ -124,7 +125,7 @@ func main() {
 		"PULSE_SINK="+pulseSink,
 	)
 
-	if runAsRoot {
+	if runAsRoot || os.Geteuid() != 0 {
 		// Replace current process with Chromium
 		if p, err := execLookPath(*chromiumPath); err == nil {
 			if err := syscall.Exec(p, append([]string{filepath.Base(p)}, chromiumArgs...), env); err != nil {

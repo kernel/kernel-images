@@ -38,6 +38,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
+	"github.com/kernel/kernel-images/server/lib/runasroot"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
 	"github.com/kernel/kernel-images/server/lib/sysmon"
 	"github.com/kernel/kernel-images/server/lib/telemetry"
@@ -47,6 +48,10 @@ import (
 
 func main() {
 	slogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	if !runasroot.Enabled() && os.Geteuid() == 0 {
+		slogger.Error("RUN_AS_ROOT is false but the API was started as root")
+		os.Exit(1)
+	}
 
 	// Load configuration from environment variables
 	config, err := config.Load()

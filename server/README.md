@@ -48,6 +48,10 @@ curl http://localhost:10001/recording/download --output recording.mp4
 
 Configure the server using environment variables:
 
+`RUN_AS_ROOT=false` runs customer-facing image services as the `kernel` user;
+`true` preserves root access. See [non-root mode](docs/non-root-mode.md) for the
+privilege boundary, compatibility changes and validation steps.
+
 | Variable       | Default   | Description                                 |
 | -------------- | --------- | ------------------------------------------- |
 | `PORT`         | `10001`   | HTTP server port                            |
