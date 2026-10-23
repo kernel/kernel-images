@@ -2,12 +2,45 @@ package cdpmonitor
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDurableBodyDisableFailureReplacesConnection(t *testing.T) {
+	srv := newTestServer(t)
+	defer srv.close()
+	var failed atomic.Bool
+	m, _, cleanup := startMonitor(t, srv, func(msg cdpMessage) any {
+		var params struct {
+			EnableDurableMessages *bool `json:"enableDurableMessages"`
+		}
+		if msg.Method == "Network.enable" && json.Unmarshal(msg.Params, &params) == nil && params.EnableDurableMessages != nil && !*params.EnableDurableMessages {
+			failed.Store(true)
+			return map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "fixture disable failure"}}
+		}
+		return nil
+	})
+	defer cleanup()
+	srv.sendToMonitor(t, map[string]any{"method": "Target.attachedToTarget", "params": map[string]any{"sessionId": "s", "targetInfo": map[string]any{"targetId": "t", "type": "page"}}})
+	require.Eventually(t, func() bool {
+		m.sessionsMu.RLock()
+		defer m.sessionsMu.RUnlock()
+		return m.optionalSessions["s"] == "test-script"
+	}, time.Second, time.Millisecond)
+	m.lifeMu.Lock()
+	old := m.conn
+	m.lifeMu.Unlock()
+	require.NoError(t, m.SetTelemetry(false))
+	require.Eventually(t, func() bool { return failed.Load() && old.ctx.Err() != nil }, time.Second, time.Millisecond)
+	waitForTelemetryReconcile(t, m, false)
+	// A replacement connection releases session-owned body storage.
+	require.False(t, m.captureEnabled())
+}
 
 func TestTelemetryCleanupAttemptsAllSessionsAfterError(t *testing.T) {
 	srv := newTestServer(t)

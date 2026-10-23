@@ -133,9 +133,10 @@ func (m *Monitor) disableOptionalDomains(ctx context.Context, sessionID, scriptI
 	if !exists {
 		return nil
 	}
-	var cleanupErr error
+	cleanupErr := m.configureBodyCapture(ctx, sessionID, false)
 	if scriptID != "" {
-		_, cleanupErr = m.send(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{"identifier": scriptID}, sessionID)
+		_, err := m.send(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{"identifier": scriptID}, sessionID)
+		cleanupErr = errors.Join(cleanupErr, err)
 	}
 	if isPageLikeTarget(info.targetType) {
 		if dirty {

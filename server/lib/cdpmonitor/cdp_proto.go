@@ -162,6 +162,17 @@ type cdpNetworkRequestWillBeSentParams struct {
 	RenderBlockingBehavior string            `json:"renderBlockingBehavior,omitempty"`
 }
 
+// cdpNetworkRequestWillBeSentExtraInfoParams mirrors Network.requestWillBeSentExtraInfo.
+type cdpNetworkRequestWillBeSentExtraInfoParams struct {
+	RequestID                     string          `json:"requestId"`
+	AssociatedCookies             json.RawMessage `json:"associatedCookies"`
+	Headers                       json.RawMessage `json:"headers"`
+	ConnectTiming                 json.RawMessage `json:"connectTiming"`
+	ClientSecurityState           json.RawMessage `json:"clientSecurityState,omitempty"`
+	SiteHasCookieInOtherPartition bool            `json:"siteHasCookieInOtherPartition,omitempty"`
+	AppliedNetworkConditionsID    string          `json:"appliedNetworkConditionsId,omitempty"`
+}
+
 // cdpNetworkResponseReceivedParams mirrors Network.responseReceived params.
 type cdpNetworkResponseReceivedParams struct {
 	RequestID    string             `json:"requestId"`

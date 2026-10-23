@@ -68,8 +68,9 @@ type Monitor struct {
 	sessions      map[string]targetInfo // sessionID → targetInfo
 	mainSessionID atomic.Value          // string; set on first top-level frameNavigated, cleared on reconnect
 
-	pendReqMu       sync.Mutex
-	pendingRequests map[networkRequestKey]networkReqState
+	pendReqMu        sync.Mutex
+	pendingRequests  map[networkRequestKey]networkReqState
+	networkExchanges map[networkRequestKey]*networkExchange
 
 	computedStates map[string]*computedState // sessionID → state machine; guarded by sessionsMu
 
@@ -114,6 +115,7 @@ func New(upstreamMgr UpstreamProvider, publish PublishFunc, displayNum int, log 
 		sessions:           make(map[string]targetInfo),
 		computedStates:     make(map[string]*computedState),
 		pendingRequests:    make(map[networkRequestKey]networkReqState),
+		networkExchanges:   make(map[networkRequestKey]*networkExchange),
 		bindingLastSeen:    make(map[string]time.Time),
 		proxyLastEmit:      make(map[string]time.Time),
 		lifecycleCtx:       context.Background(),
@@ -292,6 +294,21 @@ func (m *Monitor) handleSurfaceEvent(conn *monitorConnection, event browsersurfa
 	case browsersurface.EventSessionRemoved:
 		m.handleDetachedFromTarget(cdpTargetDetachedFromTargetParams{SessionID: event.SessionID})
 	case browsersurface.EventProtocol:
+		if event.Message.Method == "Target.targetInfoChanged" {
+			var p struct {
+				TargetInfo cdpTargetTargetInfo `json:"targetInfo"`
+			}
+			if json.Unmarshal(event.Message.Params, &p) == nil {
+				m.sessionsMu.Lock()
+				for id, info := range m.sessions {
+					if info.targetID == p.TargetInfo.TargetID {
+						info.url, info.title = p.TargetInfo.URL, p.TargetInfo.Title
+						m.sessions[id] = info
+					}
+				}
+				m.sessionsMu.Unlock()
+			}
+		}
 		if event.Message.Method == "Target.targetDestroyed" {
 			var p struct {
 				TargetID string `json:"targetId"`
@@ -345,6 +362,7 @@ func (m *Monitor) clearState() {
 	m.mainSessionID.Store(mainSessionUnset)
 	m.pendReqMu.Lock()
 	m.pendingRequests = make(map[networkRequestKey]networkReqState)
+	clear(m.networkExchanges)
 	m.pendReqMu.Unlock()
 	m.bindingRateMu.Lock()
 	m.bindingLastSeen = make(map[string]time.Time)
@@ -374,11 +392,14 @@ func (m *Monitor) sweepPendingRequests(ctx context.Context) {
 					toSweep = append(toSweep, state)
 				}
 			}
+			for key, exchange := range m.networkExchanges {
+				if now.Sub(exchange.addedAt) > pendingRequestTTL {
+					delete(m.networkExchanges, key)
+				}
+			}
 			m.pendReqMu.Unlock()
 			for _, state := range toSweep {
-				if cs := m.computedFor(state.sessionID); cs != nil {
-					cs.onLoadingFinished()
-				}
+				m.finishNetworkRequest(state)
 			}
 		}
 	}

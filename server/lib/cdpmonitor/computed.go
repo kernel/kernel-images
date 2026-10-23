@@ -138,8 +138,7 @@ func (s *computedState) stop() {
 
 // resetOnNavigation resets all state machines. Called on Page.frameNavigated.
 // Increments navSeq so any AfterFunc callbacks already running will discard their results.
-// inflight seeds netPending; callers pass 0 because each session only tracks its
-// own requests and starts fresh on navigation.
+// inflight seeds netPending with requests already observed for the new loader.
 func (s *computedState) resetOnNavigation(inflight int, ctx navContext) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -159,11 +158,8 @@ func (s *computedState) resetOnNavigation(inflight int, ctx navContext) error {
 		return err
 	}
 	s.navData = navData
-	s.navMeta = map[string]string{
-		MetadataKeyCDPSessionID: ctx.sessionID,
-		MetadataKeyTargetID:     ctx.targetID,
-		MetadataKeyTargetType:   ctx.targetType,
-	}
+	s.navMeta = targetMetadata(targetInfo{targetID: ctx.targetID, targetType: ctx.targetType, url: ctx.url})
+	s.navMeta[MetadataKeyCDPSessionID] = ctx.sessionID
 
 	stopTimer(s.netTimer)
 	s.netTimer = nil

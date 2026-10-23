@@ -94,6 +94,7 @@ func (m *Monitor) applyTelemetry(state uint64) error {
 	m.computedPublishMu.Unlock()
 	m.pendReqMu.Lock()
 	clear(m.pendingRequests)
+	clear(m.networkExchanges)
 	m.pendReqMu.Unlock()
 	m.mainSessionID.Store(mainSessionUnset)
 	m.bindingRateMu.Lock()
@@ -176,6 +177,9 @@ func (m *Monitor) enableOptionalCapture(ctx context.Context, sessionID string, i
 	m.preparePageCapture(sessionID, info)
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
+	if err := m.configureBodyCapture(ctx, sessionID, true); err != nil && ctx.Err() == nil {
+		m.log.Warn("cdpmonitor: durable body capture unavailable", "session", sessionID, "err", err)
+	}
 	m.enableDomains(ctx, sessionID, info.targetType)
 	if isPageLikeTarget(info.targetType) {
 		var rejection *cdpclient.Error

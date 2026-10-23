@@ -112,20 +112,22 @@ type networkRequestKey struct {
 
 // networkReqState holds request + response metadata until loadingFinished.
 type networkReqState struct {
-	sessionID    string
-	method       string
-	url          string
-	headers      json.RawMessage
-	postData     string
-	resourceType string
-	loaderID     string
-	frameID      string
-	navSeq       int64
-	status       int
-	statusText   string
-	resHeaders   json.RawMessage
-	mimeType     string
-	addedAt      time.Time // for TTL eviction
+	sessionID     string
+	method        string
+	url           string
+	headers       json.RawMessage
+	postData      string
+	resourceType  string
+	loaderID      string
+	frameID       string
+	navSeq        int64
+	countedNavSeq int
+	status        int
+	statusText    string
+	resHeaders    json.RawMessage
+	mimeType      string
+	addedAt       time.Time // for TTL eviction
+	hop           *networkHop
 }
 
 // navContext carries the identity of the navigation that owns a computedState.
