@@ -3,7 +3,9 @@
 // tab can come back from the background paused. Input still reaches the remote
 // over the data channel meanwhile, so the picture just stays on its last frame.
 // A video that is not paused but has decoded no frame since a check at least
-// STALL_MS earlier is reloaded from its stream.
+// STALL_MS earlier is reloaded from its stream. Safari reports no frames for a
+// MediaStream (totalVideoFrames stays 0), so a counter that has never reported
+// a frame says nothing about a stall.
 
 export const STALL_MS = 1000
 
@@ -19,6 +21,7 @@ export interface ResumableVideo {
 export class VideoResume {
   private progress = NaN
   private progressAt = -Infinity
+  private counting = false
 
   constructor(
     private video: ResumableVideo,
@@ -59,6 +62,8 @@ export class VideoResume {
       ? video.getVideoPlaybackQuality().totalVideoFrames
       : video.currentTime
     const at = this.now()
+    if (progress > 0) this.counting = true
+    if (!this.counting) return false
     if (video.paused || progress !== this.progress) {
       this.progress = progress
       this.progressAt = at
