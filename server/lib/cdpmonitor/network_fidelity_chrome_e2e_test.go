@@ -27,6 +27,7 @@ func TestNetworkWireCapture(t *testing.T) {
 	var mu sync.Mutex
 	var wireHeaders http.Header
 	var statuses []int
+	var cachedRequests int
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api":
@@ -39,13 +40,24 @@ func TestNetworkWireCapture(t *testing.T) {
 			}
 			statuses = append(statuses, status)
 			mu.Unlock()
-			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("ETag", `"v1"`)
 			w.Header().Set("Cache-Control", "no-cache")
+			if status == 200 {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("X-Cached", "retained")
+			}
 			w.WriteHeader(status)
 			if status == 200 {
 				fmt.Fprint(w, `{"ok":true}`)
 			}
+		case "/cached":
+			mu.Lock()
+			cachedRequests++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Cache-Control", "max-age=3600")
+			w.Header().Set("X-Cached", "fresh")
+			fmt.Fprint(w, `{"cached":true}`)
 		default:
 			w.Header().Set("Content-Type", "text/html")
 			fmt.Fprint(w, "<html>local reproduction</html>")
@@ -101,14 +113,38 @@ func TestNetworkWireCapture(t *testing.T) {
 		headers := requests[0]["headers"].(map[string]any)
 		require.Contains(t, headers, "Cookie", "server received Cookie, telemetry must capture it")
 	})
-	t.Run("wire_status", func(t *testing.T) {
+	t.Run("effective_response", func(t *testing.T) {
 		responses := snapshot(EventNetworkResponse, stub.URL+"/api")
-		require.ElementsMatch(t, []any{float64(200), float64(304)}, []any{responses[0]["wire_status"], responses[1]["wire_status"]})
 		for _, response := range responses {
 			require.Equal(t, float64(200), response["status"])
 			require.Equal(t, "OK", response["status_text"])
+			headers := response["headers"].(map[string]any)
+			require.Equal(t, "application/json", headers["Content-Type"])
+			require.Equal(t, "retained", headers["X-Cached"])
 			require.JSONEq(t, `{"ok":true}`, response["body"].(string))
 			require.NotContains(t, response, "effective_status")
+			require.NotContains(t, response, "wire_status")
+			require.NotContains(t, response, "wire_headers")
+		}
+	})
+	t.Run("fresh_cache", func(t *testing.T) {
+		for range 2 {
+			result := driver.call(t, ctx, session, "Runtime.evaluate", map[string]any{"expression": `fetch("/cached").then(r => r.text())`, "awaitPromise": true, "returnByValue": true})
+			require.NotContains(t, string(result.raw), "exceptionDetails")
+		}
+		require.Eventually(t, func() bool { return len(snapshot(EventNetworkResponse, stub.URL+"/cached")) == 2 }, 5*time.Second, 20*time.Millisecond)
+		mu.Lock()
+		count := cachedRequests
+		mu.Unlock()
+		require.Equal(t, 1, count, "the second fetch must use the cache without contacting the server")
+		for _, response := range snapshot(EventNetworkResponse, stub.URL+"/cached") {
+			require.Equal(t, float64(200), response["status"])
+			headers := response["headers"].(map[string]any)
+			require.Equal(t, "application/json", headers["Content-Type"])
+			require.Equal(t, "fresh", headers["X-Cached"])
+			require.JSONEq(t, `{"cached":true}`, response["body"].(string))
+			require.NotContains(t, response, "wire_status")
+			require.NotContains(t, response, "wire_headers")
 		}
 	})
 }

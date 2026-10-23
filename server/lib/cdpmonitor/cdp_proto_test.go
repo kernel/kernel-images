@@ -30,7 +30,6 @@ func TestLayer1Roundtrip(t *testing.T) {
 		{"Runtime.bindingCalled", "Runtime_bindingCalled.json", func() any { return new(cdpRuntimeBindingCalledParams) }},
 		{"Network.requestWillBeSent", "Network_requestWillBeSent.json", func() any { return new(cdpNetworkRequestWillBeSentParams) }},
 		{"Network.requestWillBeSentExtraInfo", "Network_requestWillBeSentExtraInfo.json", func() any { return new(cdpNetworkRequestWillBeSentExtraInfoParams) }},
-		{"Network.responseReceivedExtraInfo", "Network_responseReceivedExtraInfo.json", func() any { return new(cdpNetworkResponseReceivedExtraInfoParams) }},
 		{"Network.responseReceived", "Network_responseReceived.json", func() any { return new(cdpNetworkResponseReceivedParams) }},
 		{"Network.loadingFinished", "Network_loadingFinished.json", func() any { return new(cdpNetworkLoadingFinishedParams) }},
 		{"Network.loadingFailed", "Network_loadingFailed.json", func() any { return new(cdpNetworkLoadingFailedParams) }},

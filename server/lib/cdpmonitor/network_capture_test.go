@@ -65,7 +65,6 @@ func TestNetworkRedirectHopsPublishInOrder(t *testing.T) {
 				time.Sleep(200 * time.Millisecond)
 				if mode == "late_headers" {
 					m.handleRequestExtraInfo(cdpNetworkRequestWillBeSentExtraInfoParams{RequestID: "r", Headers: json.RawMessage(`{}`)}, "s")
-					m.handleResponseExtraInfo(cdpNetworkResponseReceivedExtraInfoParams{RequestID: "r", StatusCode: 302, Headers: json.RawMessage(`{}`)}, "s")
 				} else if mode == "canceled" {
 					cancel()
 				}
@@ -118,7 +117,7 @@ func TestNetworkHeadersFollowRedirectHops(t *testing.T) {
 			if order == "interleaved" {
 				extra(1)
 			}
-			send("Network.responseReceived", cdpNetworkResponseReceivedParams{RequestID: "r", HasExtraInfo: true, Response: cdpNetworkResponse{Status: 200}})
+			send("Network.responseReceived", cdpNetworkResponseReceivedParams{RequestID: "r", HasExtraInfo: true, Response: cdpNetworkResponse{Status: 200, Headers: json.RawMessage(`{"Base":"final"}`)}})
 			send("Network.loadingFinished", cdpNetworkLoadingFinishedParams{RequestID: "r"})
 			if order == "extras_last" {
 				extra(0)
@@ -127,7 +126,7 @@ func TestNetworkHeadersFollowRedirectHops(t *testing.T) {
 			for _, tc := range []struct {
 				path, cookie, header string
 				status               int
-			}{{"start", "hop=0", "0", 302}, {"cached", "", "", 301}, {"final", "hop=1", "1", 200}} {
+			}{{"start", "hop=0", "redirect", 302}, {"cached", "", "cached", 301}, {"final", "hop=1", "final", 200}} {
 				req := waitForNetworkURL(t, ec, EventNetworkRequest, "https://example.com/"+tc.path)
 				var request oapi.BrowserNetworkRequestEventData
 				require.NoError(t, json.Unmarshal(req.Data, &request))
@@ -135,15 +134,15 @@ func TestNetworkHeadersFollowRedirectHops(t *testing.T) {
 				var response oapi.BrowserNetworkResponseEventData
 				require.NoError(t, json.Unmarshal(res.Data, &response))
 				require.Equal(t, tc.status, response.Status)
+				require.Equal(t, tc.header, response.Headers["Base"])
+				require.NotContains(t, response.Headers, "X-Hop")
 				if tc.cookie != "" {
 					require.Equal(t, tc.cookie, request.Headers["Cookie"])
 					require.NotNil(t, response.RequestHeaders)
 					require.Equal(t, tc.cookie, (*response.RequestHeaders)["Cookie"])
-					require.Equal(t, tc.header, response.Headers["X-Hop"])
 				} else {
 					require.NotContains(t, request.Headers, "Cookie")
 					require.Nil(t, response.RequestHeaders)
-					require.Equal(t, "cached", response.Headers["Base"])
 				}
 			}
 		})
@@ -157,23 +156,25 @@ func TestTerminalRequestPreservesPendingRedirectHeaders(t *testing.T) {
 				m, ec := newComputedMonitor(t)
 				defer m.Stop()
 				m.handleNetworkRequest(cdpNetworkRequestWillBeSentParams{RequestID: "r", Request: cdpNetworkRequest{Method: "GET", URL: "https://example.com/start"}}, "s")
-				m.handleRequestExtraInfo(cdpNetworkRequestWillBeSentExtraInfoParams{RequestID: "r", Headers: json.RawMessage(`{"Cookie":"hop=0"}`)}, "s")
 				m.handleNetworkRequest(cdpNetworkRequestWillBeSentParams{RequestID: "r", RedirectHasExtraInfo: true, RedirectResponse: json.RawMessage(`{"status":302,"headers":{"Base":"redirect"}}`), Request: cdpNetworkRequest{Method: "GET", URL: "https://example.com/final"}}, "s")
 				if terminal == EventNetworkLoadingFailed {
-					m.handleRequestExtraInfo(cdpNetworkRequestWillBeSentExtraInfoParams{RequestID: "r", Headers: json.RawMessage(`{"Cookie":"hop=1"}`)}, "s")
 					m.handleLoadingFailed(cdpNetworkLoadingFailedParams{RequestID: "r", ErrorText: "net::ERR_ABORTED", Canceled: true}, "s")
 				} else {
 					m.handleResponseReceived(cdpNetworkResponseReceivedParams{RequestID: "r", Response: cdpNetworkResponse{Status: 200}}, "s")
 					m.handleLoadingFinished(context.Background(), cdpNetworkLoadingFinishedParams{RequestID: "r"}, "s")
 				}
 				time.Sleep(200 * time.Millisecond)
-				m.handleResponseExtraInfo(cdpNetworkResponseReceivedExtraInfoParams{RequestID: "r", StatusCode: 302, Headers: json.RawMessage(`{"Set-Cookie":"redirect=true","X-Wire":"yes"}`)}, "s")
+				m.handleRequestExtraInfo(cdpNetworkRequestWillBeSentExtraInfoParams{RequestID: "r", Headers: json.RawMessage(`{"Cookie":"hop=0"}`)}, "s")
+				if terminal == EventNetworkLoadingFailed {
+					m.handleRequestExtraInfo(cdpNetworkRequestWillBeSentExtraInfoParams{RequestID: "r", Headers: json.RawMessage(`{"Cookie":"hop=1"}`)}, "s")
+				}
 				synctest.Wait()
 				event := waitForNetworkURL(t, ec, EventNetworkResponse, "https://example.com/start")
 				var response oapi.BrowserNetworkResponseEventData
 				require.NoError(t, json.Unmarshal(event.Data, &response))
-				require.Equal(t, "redirect=true", response.Headers["Set-Cookie"])
-				require.Equal(t, "yes", response.Headers["X-Wire"])
+				require.Equal(t, "redirect", response.Headers["Base"])
+				require.NotNil(t, response.RequestHeaders)
+				require.Equal(t, "hop=0", (*response.RequestHeaders)["Cookie"])
 				waitForNetworkURL(t, ec, terminal, "https://example.com/final")
 				require.Empty(t, m.networkExchanges, "completed captures must release their header state")
 			})
@@ -255,7 +256,7 @@ func TestNetworkLateHeadersRemainOnResponse(t *testing.T) {
 	require.NoError(t, json.Unmarshal(response.Data, &payload))
 	require.NotNil(t, payload.RequestHeaders)
 	require.Equal(t, "late=true", (*payload.RequestHeaders)["Cookie"])
-	require.Equal(t, "yes", payload.Headers["X-Wire"])
+	require.NotContains(t, payload.Headers, "X-Wire")
 	ec.mu.Lock()
 	defer ec.mu.Unlock()
 	count := 0
@@ -277,7 +278,7 @@ func TestNetworkMalformedWireHeadersPreserveBaseHeaders(t *testing.T) {
 			sendNetworkFixture(t, srv, "Network.requestWillBeSent", cdpNetworkRequestWillBeSentParams{RequestID: "r", Request: cdpNetworkRequest{Method: "GET", URL: "https://example.com/", Headers: json.RawMessage(`{"X-Request":"base"}`)}})
 			sendNetworkFixture(t, srv, "Network.requestWillBeSentExtraInfo", cdpNetworkRequestWillBeSentExtraInfoParams{RequestID: "r", Headers: json.RawMessage(wire)})
 			sendNetworkFixture(t, srv, "Network.responseReceived", cdpNetworkResponseReceivedParams{RequestID: "r", HasExtraInfo: true, Response: cdpNetworkResponse{Status: 200, Headers: json.RawMessage(`{"X-Response":"base"}`)}})
-			sendNetworkFixture(t, srv, "Network.responseReceivedExtraInfo", cdpNetworkResponseReceivedExtraInfoParams{RequestID: "r", StatusCode: 200, Headers: json.RawMessage(wire)})
+			sendNetworkFixture(t, srv, "Network.responseReceivedExtraInfo", map[string]any{"requestId": "r", "statusCode": 200, "headers": json.RawMessage(wire)})
 			sendNetworkFixture(t, srv, "Network.loadingFinished", cdpNetworkLoadingFinishedParams{RequestID: "r"})
 			var request oapi.BrowserNetworkRequestEventData
 			require.NoError(t, json.Unmarshal(ec.waitFor(t, EventNetworkRequest, time.Second).Data, &request))
@@ -290,7 +291,7 @@ func TestNetworkMalformedWireHeadersPreserveBaseHeaders(t *testing.T) {
 	}
 }
 
-func TestNetworkStatusRemainsCompatible(t *testing.T) {
+func TestNetworkResponseUsesEffectiveValues(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		wireStatus *int
@@ -305,22 +306,20 @@ func TestNetworkStatusRemainsCompatible(t *testing.T) {
 			_, ec, cleanup := startMonitor(t, srv, nil)
 			defer cleanup()
 			sendNetworkFixture(t, srv, "Network.requestWillBeSent", cdpNetworkRequestWillBeSentParams{RequestID: "r", Request: cdpNetworkRequest{Method: "GET", URL: "https://example.com/"}})
-			sendNetworkFixture(t, srv, "Network.responseReceived", cdpNetworkResponseReceivedParams{RequestID: "r", HasExtraInfo: tc.wireStatus != nil, Response: cdpNetworkResponse{Status: 200, StatusText: "Custom OK", Headers: json.RawMessage(`{"ETag":"v1"}`)}})
+			sendNetworkFixture(t, srv, "Network.responseReceived", cdpNetworkResponseReceivedParams{RequestID: "r", HasExtraInfo: tc.wireStatus != nil, Response: cdpNetworkResponse{Status: 200, StatusText: "Custom OK", Headers: json.RawMessage(`{"ETag":"v1","Content-Type":"application/json","X-Cached":"retained"}`)}})
 			if tc.wireStatus != nil {
 				sendNetworkFixture(t, srv, "Network.requestWillBeSentExtraInfo", cdpNetworkRequestWillBeSentExtraInfoParams{RequestID: "r", Headers: json.RawMessage(`{}`)})
-				sendNetworkFixture(t, srv, "Network.responseReceivedExtraInfo", cdpNetworkResponseReceivedExtraInfoParams{RequestID: "r", StatusCode: *tc.wireStatus, Headers: json.RawMessage(`{"ETag":"v1"}`)})
+				sendNetworkFixture(t, srv, "Network.responseReceivedExtraInfo", map[string]any{"requestId": "r", "statusCode": *tc.wireStatus, "headers": map[string]string{"ETag": "v1"}})
 			}
 			sendNetworkFixture(t, srv, "Network.loadingFinished", cdpNetworkLoadingFinishedParams{RequestID: "r"})
 			var response map[string]any
 			require.NoError(t, json.Unmarshal(ec.waitFor(t, EventNetworkResponse, time.Second).Data, &response))
 			require.Equal(t, float64(200), response["status"])
 			require.Equal(t, "Custom OK", response["status_text"])
+			require.Equal(t, map[string]any{"ETag": "v1", "Content-Type": "application/json", "X-Cached": "retained"}, response["headers"])
 			require.NotContains(t, response, "effective_status")
-			if tc.wireStatus != nil {
-				require.Equal(t, float64(*tc.wireStatus), response["wire_status"])
-			} else {
-				require.NotContains(t, response, "wire_status")
-			}
+			require.NotContains(t, response, "wire_status")
+			require.NotContains(t, response, "wire_headers")
 		})
 	}
 }
