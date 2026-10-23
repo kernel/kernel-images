@@ -12,7 +12,7 @@ import (
 func newWebAuthnSvc(t *testing.T, metroURL string) *ApiService {
 	t.Helper()
 	ts, es := newTelemetrySession(t)
-	svc, err := New(newMockRecordManager(), newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t), testWebAuthnWithMetro(t, metroURL))
+	svc, err := New(newMockRecordManager(), newMockFactory(), newTestUpstreamManager(), scaletozero.NewNoopController(), newMockNekoClient(t), ts, es, 0, nil, nil, testEgressPolicy(t), testWebAuthnWithMetro(t, metroURL), ProcessOutputConfig{})
 	require.NoError(t, err)
 	return svc
 }

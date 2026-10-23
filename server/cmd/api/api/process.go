@@ -1,7 +1,6 @@
 package api
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -22,7 +21,6 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
-	"github.com/google/uuid"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/ptyio"
@@ -31,38 +29,24 @@ import (
 )
 
 type processHandle struct {
-	id       openapi_types.UUID
-	pid      int
-	cmd      *exec.Cmd
-	started  time.Time
-	exitCode *int
-	stdin    io.WriteCloser
-	stdout   io.ReadCloser
-	stderr   io.ReadCloser
-	ptyFile  *os.File
-	isTTY    bool
-	outCh    chan oapi.ProcessStreamEvent
-	doneCh   chan struct{}
-	mu       sync.RWMutex
+	id         openapi_types.UUID
+	pid        int
+	cmd        *exec.Cmd
+	started    time.Time
+	exitCode   *int
+	stdin      io.WriteCloser
+	stdout     io.ReadCloser
+	stderr     io.ReadCloser
+	ptyFile    *os.File
+	isTTY      bool
+	output     *processOutput
+	reason     string
+	truncated  bool
+	durationMs int
+	doneCh     chan struct{}
+	mu         sync.RWMutex
 	// attachActive guards PTY attach sessions; only one client may be attached at a time.
 	attachActive bool
-}
-
-func (h *processHandle) state() string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	if h.exitCode != nil {
-		return "exited"
-	}
-	return "running"
-}
-
-func (h *processHandle) setExited(code int) {
-	h.mu.Lock()
-	if h.exitCode == nil {
-		h.exitCode = &code
-	}
-	h.mu.Unlock()
 }
 
 func isUserCmdError(err error) bool {
@@ -82,6 +66,9 @@ func buildCmd(body *oapi.ProcessExecRequest) (*exec.Cmd, error) {
 	var args []string
 	if body.Args != nil {
 		args = append(args, (*body.Args)...)
+	}
+	if body.TimeoutSec != nil && (*body.TimeoutSec < 0 || int64(*body.TimeoutSec) > int64((1<<63-1)/time.Second)) {
+		return nil, errors.New("timeout_sec must be a nonnegative duration in seconds")
 	}
 	cmd := exec.Command(body.Command, args...)
 	if body.Cwd != nil && *body.Cwd != "" {
@@ -166,106 +153,89 @@ func buildCmd(body *oapi.ProcessExecRequest) (*exec.Cmd, error) {
 // Execute a command synchronously
 // (POST /process/exec)
 func (s *ApiService) ProcessExec(ctx context.Context, request oapi.ProcessExecRequestObject) (oapi.ProcessExecResponseObject, error) {
-	log := logger.FromContext(ctx)
-	if request.Body == nil {
-		return oapi.ProcessExec400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body required"}}, nil
-	}
-
-	cmd, err := buildCmd((*oapi.ProcessExecRequest)(request.Body))
+	cmd, err := buildCmd(request.Body)
 	if err != nil {
 		return oapi.ProcessExec400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 	}
-
-	var stdoutBuf, stderrBuf bytes.Buffer
-	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
-
-	// Handle timeout if provided
-	start := time.Now()
-	var cancel context.CancelFunc
-	if request.Body.TimeoutSec != nil && *request.Body.TimeoutSec > 0 {
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(*request.Body.TimeoutSec)*time.Second)
-		defer cancel()
-	}
-	if err := cmd.Start(); err != nil {
+	h, err := s.startProcess(ctx, cmd, false, false, request.Body.TimeoutSec)
+	if err != nil {
 		if isUserCmdError(err) {
 			return oapi.ProcessExec400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 		}
-		log.Error("failed to start process", "err", err)
+		logger.FromContext(ctx).Error("failed to start process", "err", err)
 		return oapi.ProcessExec500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start process"}}, nil
 	}
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case <-ctx.Done():
-		_ = cmd.Process.Kill()
-		<-done // ensure wait returns
-		return oapi.ProcessExec500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "process timed out"}}, nil
-	case err := <-done:
-		// proceed
-		_ = err
-	}
-	durationMs := int(time.Since(start) / time.Millisecond)
-	exitCode := 0
-	if cmd.ProcessState != nil {
-		if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
-			exitCode = status.ExitStatus()
+	defer s.releaseProcess(h)
+	<-h.doneCh
+	var stdout, stderr bytes.Buffer
+	var offset int64
+	for {
+		stream, data, next, err := h.output.next(context.Background(), offset)
+		if errors.Is(err, io.EOF) {
+			break
 		}
+		if err != nil {
+			h.outputFailed(err)
+			break
+		}
+		if stream == 0 {
+			stdout.Write(data)
+		} else {
+			stderr.Write(data)
+		}
+		offset = next
 	}
-
-	resp := oapi.ProcessExec200JSONResponse{
-		ExitCode:   &exitCode,
-		StdoutB64:  ptrOf(base64.StdEncoding.EncodeToString(stdoutBuf.Bytes())),
-		StderrB64:  ptrOf(base64.StdEncoding.EncodeToString(stderrBuf.Bytes())),
-		DurationMs: &durationMs,
+	h.mu.RLock()
+	code, reason, truncated, duration := *h.exitCode, h.reason, h.truncated, h.durationMs
+	h.mu.RUnlock()
+	out, errOut := base64.StdEncoding.EncodeToString(stdout.Bytes()), base64.StdEncoding.EncodeToString(stderr.Bytes())
+	if reason != "" {
+		return oapi.ProcessExec422JSONResponse{
+			Code: oapi.ProcessTerminationReason(reason), Message: processTerminationMessage(reason),
+			ExitCode: &code, StdoutB64: &out, StderrB64: &errOut, DurationMs: &duration, OutputTruncated: &truncated,
+		}, nil
 	}
-	return resp, nil
+	return oapi.ProcessExec200JSONResponse{ExitCode: &code, StdoutB64: &out, StderrB64: &errOut, DurationMs: &duration, OutputTruncated: &truncated}, nil
 }
 
-// Execute a command asynchronously
-// (POST /process/spawn)
+func processTerminationMessage(reason string) string {
+	switch reason {
+	case "process_timeout":
+		return "process timed out"
+	case "output_limit":
+		return "process output limit exceeded"
+	case "process_canceled":
+		return "process canceled"
+	default:
+		return "failed to capture process output"
+	}
+}
+
+// Execute a command asynchronously.
 func (s *ApiService) ProcessSpawn(ctx context.Context, request oapi.ProcessSpawnRequestObject) (oapi.ProcessSpawnResponseObject, error) {
-	log := logger.FromContext(ctx)
 	if request.Body == nil {
 		return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "request body required"}}, nil
 	}
-	// Build from ProcessExecRequest shape
+	body := request.Body
 	execReq := oapi.ProcessExecRequest{
-		Command:    request.Body.Command,
-		Args:       request.Body.Args,
-		Cwd:        request.Body.Cwd,
-		Env:        request.Body.Env,
-		AsUser:     request.Body.AsUser,
-		AsRoot:     request.Body.AsRoot,
-		TimeoutSec: request.Body.TimeoutSec,
+		Command: body.Command, Args: body.Args, Cwd: body.Cwd, Env: body.Env,
+		AsRoot: body.AsRoot, AsUser: body.AsUser, TimeoutSec: body.TimeoutSec,
 	}
 	cmd, err := buildCmd(&execReq)
 	if err != nil {
 		return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 	}
-
-	var (
-		stdout  io.ReadCloser
-		stderr  io.ReadCloser
-		stdin   io.WriteCloser
-		ptyFile *os.File
-		isTTY   bool
-	)
-	// PTY mode when requested
-	if request.Body.AllocateTty != nil && *request.Body.AllocateTty {
-		// Validate rows/cols before starting the process
-		const maxUint16 = 65535
-		if request.Body.Rows != nil && *request.Body.Rows > maxUint16 {
+	tty := body.AllocateTty != nil && *body.AllocateTty
+	if tty {
+		if body.Rows != nil && *body.Rows > 65535 {
 			return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "rows must be <= 65535"}}, nil
 		}
-		if request.Body.Cols != nil && *request.Body.Cols > maxUint16 {
+		if body.Cols != nil && *body.Cols > 65535 {
 			return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "cols must be <= 65535"}}, nil
 		}
-		// Ensure TERM and initial size env
 		hasTerm := false
-		for _, kv := range cmd.Env {
-			if strings.HasPrefix(kv, "TERM=") {
+		for _, env := range cmd.Env {
+			if strings.HasPrefix(env, "TERM=") {
 				hasTerm = true
 				break
 			}
@@ -273,188 +243,20 @@ func (s *ApiService) ProcessSpawn(ctx context.Context, request oapi.ProcessSpawn
 		if !hasTerm {
 			cmd.Env = append(cmd.Env, "TERM=xterm-256color")
 		}
-		// Start with PTY
-		var errStart error
-		ptyFile, errStart = pty.Start(cmd)
-		if errStart != nil {
-			if isUserCmdError(errStart) {
-				return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: errStart.Error()}}, nil
-			}
-			log.Error("failed to start PTY process", "err", errStart)
-			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start process"}}, nil
-		}
-		// Set initial size if provided
-		var rows, cols uint16
-		if request.Body.Rows != nil && *request.Body.Rows > 0 {
-			rows = uint16(*request.Body.Rows)
-		}
-		if request.Body.Cols != nil && *request.Body.Cols > 0 {
-			cols = uint16(*request.Body.Cols)
-		}
-		if rows > 0 && cols > 0 {
-			_ = pty.Setsize(ptyFile, &pty.Winsize{Rows: rows, Cols: cols})
-		}
-		stdout = ptyFile
-		stdin = ptyFile
-		isTTY = true
-	} else {
-		stdout, err = cmd.StdoutPipe()
-		if err != nil {
-			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to open stdout"}}, nil
-		}
-		stderr, err = cmd.StderrPipe()
-		if err != nil {
-			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to open stderr"}}, nil
-		}
-		stdin, err = cmd.StdinPipe()
-		if err != nil {
-			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to open stdin"}}, nil
-		}
-		if err := cmd.Start(); err != nil {
-			if isUserCmdError(err) {
-				return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
-			}
-			log.Error("failed to start process", "err", err)
-			return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start process"}}, nil
-		}
 	}
-
-	// Disable scale-to-zero while the process is running.
-	// Track success so we only re-enable if disable succeeded.
-	stzDisabled := false
-	if err := s.stz.Disable(ctx); err != nil {
-		log.Error("failed to disable scale-to-zero", "err", err)
-	} else {
-		stzDisabled = true
-	}
-
-	id := openapi_types.UUID(uuid.New())
-	h := &processHandle{
-		id:      id,
-		pid:     cmd.Process.Pid,
-		cmd:     cmd,
-		started: time.Now(),
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
-		ptyFile: ptyFile,
-		isTTY:   isTTY,
-		outCh:   make(chan oapi.ProcessStreamEvent, 256),
-		doneCh:  make(chan struct{}),
-	}
-
-	// Store handle
-	s.procMu.Lock()
-	if s.procs == nil {
-		s.procs = make(map[string]*processHandle)
-	}
-	s.procs[id.String()] = h
-	s.procMu.Unlock()
-
-	// Reader goroutines
-	// In PTY mode, do NOT read from the PTY here to avoid competing with the /attach endpoint.
-	// In non‑PTY mode, stdout and stderr are separate pipes, so we run two readers and tag chunks accordingly.
-	if !isTTY {
-		go func() {
-			reader := bufio.NewReader(stdout)
-			buf := make([]byte, 4096)
-			for {
-				n, err := reader.Read(buf)
-				if n > 0 {
-					data := base64.StdEncoding.EncodeToString(buf[:n])
-					stream := oapi.ProcessStreamEventStream("stdout")
-					h.outCh <- oapi.ProcessStreamEvent{Stream: &stream, DataB64: &data}
-				}
-				if err != nil {
-					break
-				}
-			}
-		}()
-		go func() {
-			reader := bufio.NewReader(stderr)
-			buf := make([]byte, 4096)
-			for {
-				n, err := reader.Read(buf)
-				if n > 0 {
-					data := base64.StdEncoding.EncodeToString(buf[:n])
-					stream := oapi.ProcessStreamEventStream("stderr")
-					h.outCh <- oapi.ProcessStreamEvent{Stream: &stream, DataB64: &data}
-				}
-				if err != nil {
-					break
-				}
-			}
-		}()
-	}
-
-	// Waiter goroutine - use context without cancel since HTTP request may complete
-	// before the process exits
-	stzCtx := context.WithoutCancel(ctx)
-	go func(stzWasDisabled bool) {
-		err := cmd.Wait()
-		code := 0
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-					code = status.ExitStatus()
-				}
-			}
-		} else if cmd.ProcessState != nil {
-			if status, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
-				code = status.ExitStatus()
-			}
+	h, err := s.startProcess(context.WithoutCancel(ctx), cmd, tty, true, body.TimeoutSec)
+	if err != nil {
+		if isUserCmdError(err) {
+			return oapi.ProcessSpawn400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()}}, nil
 		}
-		h.setExited(code)
-		// Ensure all related FDs are closed to avoid leaking descriptors.
-		// In PTY mode, close the PTY master; in non-PTY mode, close individual pipes.
-		if h.isTTY {
-			if h.ptyFile != nil {
-				_ = h.ptyFile.Close()
-			}
-		} else {
-			if h.stdin != nil {
-				_ = h.stdin.Close()
-			}
-			if h.stdout != nil {
-				_ = h.stdout.Close()
-			}
-			if h.stderr != nil {
-				_ = h.stderr.Close()
-			}
-		}
-
-		// Re-enable scale-to-zero now that the process has exited,
-		// but only if we successfully disabled it earlier
-		if stzWasDisabled {
-			if err := s.stz.Enable(stzCtx); err != nil {
-				log.Error("failed to enable scale-to-zero", "err", err)
-			}
-		}
-
-		// Send exit event
-		evt := oapi.ProcessStreamEventEvent("exit")
-		h.outCh <- oapi.ProcessStreamEvent{Event: &evt, ExitCode: &code}
-		close(h.doneCh)
-		// Retain the handle for a short period so clients can observe the
-		// final "exited" status via ProcessStatus before it disappears.
-		// This avoids races where the process exits immediately after spawn
-		// and status polling returns 404.
-		retention := 10 * time.Second
-		go func(procID string) {
-			time.Sleep(retention)
-			s.procMu.Lock()
-			delete(s.procs, procID)
-			s.procMu.Unlock()
-		}(id.String())
-	}(stzDisabled)
-
-	startedAt := h.started
-	pid := h.pid
-	return oapi.ProcessSpawn200JSONResponse{
-		ProcessId: &id,
-		Pid:       &pid,
-		StartedAt: &startedAt,
-	}, nil
+		logger.FromContext(ctx).Error("failed to start process", "err", err)
+		return oapi.ProcessSpawn500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to start process"}}, nil
+	}
+	if tty && body.Rows != nil && *body.Rows > 0 && body.Cols != nil && *body.Cols > 0 {
+		_ = pty.Setsize(h.ptyFile, &pty.Winsize{Rows: uint16(*body.Rows), Cols: uint16(*body.Cols)})
+	}
+	go s.retainProcess(h)
+	return oapi.ProcessSpawn200JSONResponse{ProcessId: &h.id, Pid: &h.pid, StartedAt: &h.started}, nil
 }
 
 // Send signal to process
@@ -485,7 +287,9 @@ func (s *ApiService) ProcessKill(ctx context.Context, request oapi.ProcessKillRe
 	default:
 		return oapi.ProcessKill400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid signal"}}, nil
 	}
-	if h.cmd.Process == nil {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.exitCode != nil {
 		return oapi.ProcessKill404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "process not running"}}, nil
 	}
 	if err := h.cmd.Process.Signal(sig); err != nil {
@@ -505,19 +309,20 @@ func (s *ApiService) ProcessStatus(ctx context.Context, request oapi.ProcessStat
 	if !ok {
 		return oapi.ProcessStatus404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "process not found"}}, nil
 	}
-	stateStr := h.state()
-	state := oapi.ProcessStatusState(stateStr)
+	state := oapi.ProcessStatusState("running")
 	var exitCode *int
 	h.mu.RLock()
 	if h.exitCode != nil {
+		state = "exited"
 		v := *h.exitCode
 		exitCode = &v
 	}
 	pid := h.pid
+	reason, truncated := h.reason, h.truncated
 	h.mu.RUnlock()
 	// Best-effort memory stats via /proc
 	var memBytes int
-	if stateStr == "running" && pid > 0 {
+	if state == "running" && pid > 0 {
 		if b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/status"); err == nil {
 			// Parse VmRSS:   123 kB
 			for _, line := range strings.Split(string(b), "\n") {
@@ -535,7 +340,10 @@ func (s *ApiService) ProcessStatus(ctx context.Context, request oapi.ProcessStat
 		}
 	}
 	cpuPct := float32(0)
-	resp := oapi.ProcessStatus200JSONResponse{State: &state, ExitCode: exitCode, CpuPct: &cpuPct}
+	resp := oapi.ProcessStatus200JSONResponse{State: &state, ExitCode: exitCode, CpuPct: &cpuPct, OutputTruncated: &truncated}
+	if reason != "" {
+		resp.TerminationReason = ptrOf(oapi.ProcessTerminationReason(reason))
+	}
 	if memBytes > 0 {
 		resp.MemBytes = ptrOf(memBytes)
 	}
@@ -569,45 +377,117 @@ func (s *ApiService) ProcessStdin(ctx context.Context, request oapi.ProcessStdin
 // Stream process stdout/stderr (SSE)
 // (GET /process/{process_id}/stdout/stream)
 func (s *ApiService) ProcessStdoutStream(ctx context.Context, request oapi.ProcessStdoutStreamRequestObject) (oapi.ProcessStdoutStreamResponseObject, error) {
-	log := logger.FromContext(ctx)
-	id := request.ProcessId
 	s.procMu.RLock()
-	h, ok := s.procs[id]
+	h, ok := s.procs[request.ProcessId]
 	s.procMu.RUnlock()
 	if !ok {
 		return oapi.ProcessStdoutStream404JSONResponse{NotFoundErrorJSONResponse: oapi.NotFoundErrorJSONResponse{Message: "process not found"}}, nil
 	}
+	var offset int64
+	var err error
+	if request.Params.LastEventID != nil {
+		offset, err = strconv.ParseInt(*request.Params.LastEventID, 10, 64)
+	} else if request.Params.Offset != nil {
+		offset = *request.Params.Offset
+	}
+	if err != nil || h.output.validateOffset(offset) != nil {
+		return oapi.ProcessStdoutStream400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "invalid output offset"}}, nil
+	}
+	return processStreamResponse{
+		ctx: ctx, process: h, offset: offset,
+		replay: request.Params.Offset != nil || request.Params.LastEventID != nil,
+	}, nil
+}
 
-	pr, pw := io.Pipe()
+type processStreamResponse struct {
+	ctx     context.Context
+	process *processHandle
+	offset  int64
+	replay  bool
+}
+
+func (r processStreamResponse) VisitProcessStdoutStreamResponse(w http.ResponseWriter) error {
+	finished, stopped := make(chan struct{}), make(chan struct{})
+	controller := http.NewResponseController(w)
 	go func() {
-		defer pw.Close()
-		for {
-			select {
-			case evt := <-h.outCh:
-				// Write SSE: data: <json>\n\n
-				var buf bytes.Buffer
-				if err := json.NewEncoder(&buf).Encode(evt); err != nil {
-					log.Error("failed to marshal event", "err", err)
-					return
-				}
-				line := bytes.TrimRight(buf.Bytes(), "\n")
-				if _, err := pw.Write([]byte("data: ")); err != nil {
-					return
-				}
-				if _, err := pw.Write(line); err != nil {
-					return
-				}
-				if _, err := pw.Write([]byte("\n\n")); err != nil {
-					return
-				}
-			case <-h.doneCh:
-				return
-			}
+		defer close(stopped)
+		select {
+		case <-r.process.output.closed:
+		case <-r.ctx.Done():
+		case <-finished:
+			return
 		}
+		// Interrupt a network write already in progress on expiry or disconnect.
+		_ = controller.SetWriteDeadline(time.Now())
 	}()
+	defer func() {
+		close(finished)
+		<-stopped
+	}()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("X-SSE-Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if err := controller.Flush(); err != nil {
+		return err
+	}
+	for {
+		var stream byte
+		var data []byte
+		var next int64
+		var err error
+		if r.replay {
+			stream, data, next, err = r.process.output.next(r.ctx, r.offset)
+		} else {
+			stream, data, next, err = r.process.output.nextUnread(r.ctx)
+		}
+		if errors.Is(err, errProcessOutputConsumed) {
+			return nil
+		}
+		var event oapi.ProcessStreamEvent
+		if errors.Is(err, io.EOF) {
+			h := r.process
+			<-h.doneCh
+			h.mu.RLock()
+			code, reason, truncated := *h.exitCode, h.reason, h.truncated
+			h.mu.RUnlock()
+			event = oapi.ProcessStreamEvent{Event: ptrOf(oapi.Exit), ExitCode: &code, OutputTruncated: &truncated}
+			if reason != "" {
+				event.TerminationReason = ptrOf(oapi.ProcessTerminationReason(reason))
+			}
+		} else if err != nil {
+			return err
+		} else {
+			source := oapi.ProcessStreamEventStream("stdout")
+			if stream == 1 {
+				source = "stderr"
+			}
+			event = oapi.ProcessStreamEvent{Stream: &source, DataB64: ptrOf(base64.StdEncoding.EncodeToString(data)), Offset: &next}
+		}
+		if err := writeProcessEvent(w, event); err != nil {
+			return err
+		}
+		if err := controller.Flush(); err != nil {
+			return err
+		}
+		if event.Event != nil {
+			return nil
+		}
+		r.offset = next
+	}
+}
 
-	headers := oapi.ProcessStdoutStream200ResponseHeaders{XSSEContentType: "application/json"}
-	return oapi.ProcessStdoutStream200TexteventStreamResponse{Body: pr, Headers: headers, ContentLength: 0}, nil
+func writeProcessEvent(w io.Writer, event oapi.ProcessStreamEvent) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	if event.Offset != nil {
+		if _, err := fmt.Fprintf(w, "id: %d\n", *event.Offset); err != nil {
+			return err
+		}
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", data)
+	return err
 }
 
 func ptrOf[T any](v T) *T { return &v }

@@ -20,6 +20,10 @@ type Config struct {
 	// external API surface.
 	MetricsPort int `envconfig:"METRICS_PORT" default:"10002"`
 
+	ProcessOutputDir           string `envconfig:"PROCESS_OUTPUT_DIR" default:""`
+	ProcessOutputMaxBytes      int64  `envconfig:"PROCESS_OUTPUT_MAX_BYTES" default:"67108864"`
+	ProcessOutputTotalMaxBytes int64  `envconfig:"PROCESS_OUTPUT_TOTAL_MAX_BYTES" default:"268435456"`
+
 	// Recording configuration
 	FrameRate   int    `envconfig:"FRAME_RATE" default:"10"`
 	DisplayNum  int    `envconfig:"DISPLAY_NUM" default:"1"`
@@ -93,6 +97,9 @@ func (c *Config) LogValue() slog.Value {
 	return slog.GroupValue(
 		slog.Int("port", c.Port),
 		slog.Int("metrics_port", c.MetricsPort),
+		slog.String("process_output_dir", c.ProcessOutputDir),
+		slog.Int64("process_output_max_bytes", c.ProcessOutputMaxBytes),
+		slog.Int64("process_output_total_max_bytes", c.ProcessOutputTotalMaxBytes),
 		slog.Int("frame_rate", c.FrameRate),
 		slog.Int("display_num", c.DisplayNum),
 		slog.Int("max_size_mb", c.MaxSizeInMB),
