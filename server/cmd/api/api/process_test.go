@@ -286,3 +286,30 @@ func TestBuildCmd_AsRootAndAsUserConflict(t *testing.T) {
 	_, err := buildCmd(body)
 	require.Error(t, err, "expected error when both as_root and as_user are set")
 }
+
+func TestProcessTTYExitWithBackgroundChildHoldingPTYDoesNotBlock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	svc := &ApiService{procs: make(map[string]*processHandle), stz: scaletozero.NewNoopController()}
+
+	// The background sleep ignores SIGHUP, so it keeps the PTY slave open after the
+	// shell exits and the reader never sees EOF.
+	args := []string{"-c", "trap \"\" HUP; sleep 30 & exit 0"}
+	allocateTTY := true
+	body := &oapi.ProcessSpawnRequest{Command: "sh", Args: &args, AllocateTty: &allocateTTY}
+	spawnResp, err := svc.ProcessSpawn(ctx, oapi.ProcessSpawnRequestObject{Body: body})
+	require.NoError(t, err)
+	s200, ok := spawnResp.(oapi.ProcessSpawn200JSONResponse)
+	require.True(t, ok, "unexpected spawn resp: %T", spawnResp)
+
+	svc.procMu.Lock()
+	h := svc.procs[s200.ProcessId.String()]
+	svc.procMu.Unlock()
+	require.NotNil(t, h)
+
+	select {
+	case <-h.doneCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("process waiter did not finish after the PTY drain deadline")
+	}
+}

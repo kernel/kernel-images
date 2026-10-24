@@ -13,6 +13,7 @@ import (
 	"github.com/creack/pty"
 	"github.com/google/uuid"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/ptyio"
 )
 
 const processOutputDrainTimeout = time.Second
@@ -57,6 +58,18 @@ func (s *ApiService) startProcess(ctx context.Context, cmd *exec.Cmd, tty, stdin
 		return nil, err
 	}
 	h.pid = cmd.Process.Pid
+	if tty {
+		h.ptyDrained = make(chan struct{})
+		h.ptyStop = make(chan struct{})
+		// PTY output is drained for the process lifetime so output remains available
+		// when a client attaches after the process has written it.
+		go func() {
+			defer close(h.ptyDrained)
+			if err := ptyio.ReadPTYToWriter(h.ptyFile, h.ptyOut.write, h.ptyStop); err != nil {
+				logger.FromContext(ctx).Error("pty read error", "err", err)
+			}
+		}()
+	}
 	s.procMu.Lock()
 	if s.procs == nil {
 		s.procs = make(map[string]*processHandle)
@@ -188,6 +201,17 @@ func (h *processHandle) run(ctx, lifecycle context.Context, timeoutSec *int, rel
 			h.mu.Unlock()
 			h.closeOutputPipes()
 			drain = nil
+		}
+	}
+	if h.isTTY {
+		// The reader polls the raw fd, so stop it before closing the master.
+		// Closing first leaves it polling a dead descriptor forever. A background
+		// child can hold the slave open after the shell exits, so the wait is bounded.
+		select {
+		case <-h.ptyDrained:
+		case <-time.After(ptyDrainWait):
+			close(h.ptyStop)
+			<-h.ptyDrained
 		}
 	}
 	h.closeOutputPipes()
