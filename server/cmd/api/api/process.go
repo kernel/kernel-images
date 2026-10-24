@@ -38,6 +38,9 @@ type processHandle struct {
 	stdout     io.ReadCloser
 	stderr     io.ReadCloser
 	ptyFile    *os.File
+	ptyOut     ptyOutput
+	ptyDrained chan struct{}
+	ptyStop    chan struct{}
 	isTTY      bool
 	output     *processOutput
 	reason     string
@@ -710,32 +713,28 @@ func (s *ApiService) HandleProcessAttachWS(w http.ResponseWriter, r *http.Reques
 		}
 	}()
 
-	// Goroutine: read from PTY (stdout), write to WebSocket
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		err := ptyio.ReadPTYToWriter(h.ptyFile, func(data []byte) error {
-			select {
-			case writeCh <- wsWriteOp{msgType: websocket.MessageBinary, data: data}:
-				return nil
-			case <-done:
-				return io.EOF // Signal to stop reading
-			}
-		}, done)
-		if err != nil {
-			log.Error("pty read error", "err", err)
+	// Replay output already drained from the PTY, then forward live output. The
+	// ptyOutput lock keeps replay ahead of any writes that arrive concurrently.
+	h.ptyOut.attach(func(data []byte) error {
+		select {
+		case writeCh <- wsWriteOp{msgType: websocket.MessageBinary, data: data}:
+			return nil
+		case <-done:
+			return io.EOF
 		}
-		shutdown()
-	}()
+	})
 
-	// Goroutine: watch for process exit and send exit code.
+	// Goroutine: watch for process exit and send exit code after PTY output drains.
 	// This must send the exit code BEFORE triggering shutdown so the writer can deliver it.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		select {
 		case <-h.doneCh:
-			// Process exited - send exit code before shutdown
+			// The process waiter closes doneCh only after PTY output has drained.
+			// Flush the attached sink before enqueueing the exit event so replayed
+			// and live output stay ahead of it even when the socket was backpressured.
+			h.ptyOut.flush()
 			h.mu.RLock()
 			exitCode := h.exitCode
 			h.mu.RUnlock()
@@ -759,6 +758,8 @@ func (s *ApiService) HandleProcessAttachWS(w http.ResponseWriter, r *http.Reques
 
 	// Wait for shutdown signal
 	<-done
+
+	h.ptyOut.detach()
 
 	// Wait for all goroutines to complete before clearing attachActive.
 	// This prevents a race where a new client attaches while goroutines are still running.
