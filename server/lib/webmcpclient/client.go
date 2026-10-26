@@ -191,6 +191,7 @@ func (c *connection) handleProtocolEvent(message cdpclient.Message) {
 			if response.ErrorText == "" && response.Exception != nil {
 				response.ErrorText = exceptionText(response.Exception)
 			}
+			response.Output = decodeLatin1Output(response.Output)
 			key := invocationKey{sessionID: message.SessionID, invocationID: response.InvocationID}
 			c.stateMu.Lock()
 			c.pruneAbandonedInvocationsLocked()
@@ -229,6 +230,35 @@ func exceptionText(exception *exceptionDetails) string {
 		text = strings.ToValidUTF8(text[:maxExceptionTextBytes], "")
 	}
 	return text
+}
+
+// decodeLatin1Output parses JSON output that Chromium left as a string.
+// Before Chromium 158, a result whose characters all fit in Latin-1, with at
+// least one in U+0080-U+00FF, was handed to a UTF-8 JSON parser as raw Latin-1
+// bytes; the parse failed and toolResponded carried the JSON text instead of
+// the value. Later versions parse the same text, so this matches them.
+func decodeLatin1Output(output any) any {
+	text, ok := output.(string)
+	if !ok {
+		return output
+	}
+	latin1 := false
+	for _, r := range text {
+		if r > 0xFF {
+			return output
+		}
+		if r >= 0x80 {
+			latin1 = true
+		}
+	}
+	if !latin1 {
+		return output
+	}
+	var decoded any
+	if json.Unmarshal([]byte(text), &decoded) != nil {
+		return output
+	}
+	return decoded
 }
 
 // customToolIdentity decodes the hidden name used for a custom registration.
