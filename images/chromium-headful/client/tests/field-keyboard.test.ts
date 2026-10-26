@@ -58,8 +58,27 @@ describe('field keyboard', () => {
         autocorrect: 'off',
         autocapitalize: 'off',
         spellcheck: false,
-        keepText: false,
       })
+    }
+  })
+
+  test('fields with AutoFill keep their text, so a fill that takes several edits is sent once', () => {
+    for (const field of [
+      { type: 'email' },
+      { type: 'tel' },
+      { type: 'text', autocomplete: 'one-time-code' },
+      { type: 'text', autocomplete: 'given-name', autocorrect: 'off' },
+    ]) {
+      expect(keyboardFor(field).keepText).toBe(true)
+    }
+    for (const field of [
+      { type: 'password' },
+      { type: 'text', autocomplete: 'username' },
+      { type: 'url' },
+      { type: 'number' },
+      { type: 'text', autocorrect: 'off' },
+    ]) {
+      expect(keyboardFor(field).keepText).toBe(false)
     }
   })
 

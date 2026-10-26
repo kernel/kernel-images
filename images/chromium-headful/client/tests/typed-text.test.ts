@@ -77,6 +77,29 @@ describe('typed text', () => {
     expect(t.remote()).toBe('a')
   })
 
+  test('AutoFill replacing the sentinel with its text sends the text once', () => {
+    const t = setup()
+    expect(t.typed.edit('me@example.com')).toBe(true)
+    // iOS fills again after the caller puts the sentinel back
+    expect(t.typed.edit('me@example.com')).toBe(true)
+    expect(t.typed.edit(SENTINEL + 'me@example.com')).toBe(true)
+    expect(t.remote()).toBe('me@example.com')
+  })
+
+  test('AutoFill completing typed text replaces it', () => {
+    const t = setup()
+    t.edit('m', 'me')
+    t.typed.edit('me@example.com')
+    expect(t.remote()).toBe('me@example.com')
+  })
+
+  test('AutoFill that inserts a space before replacing the text sends the text once', () => {
+    const t = setup()
+    t.edit(' ')
+    t.typed.edit('me@example.com')
+    expect(t.remote()).toBe('me@example.com')
+  })
+
   test('backspace removes what was typed', () => {
     const t = setup()
     t.edit('abc', 'ab')
