@@ -107,6 +107,8 @@ describe('field keyboard', () => {
 
   test('without a field the keyboard is the default one', () => {
     expect(keyboardFor(null)).toBe(DEFAULT_KEYBOARD)
+    // it offers codes from Messages, so it keeps its text too
+    expect(DEFAULT_KEYBOARD.keepText).toBe(true)
   })
 })
 

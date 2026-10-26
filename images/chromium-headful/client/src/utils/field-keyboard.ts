@@ -57,7 +57,7 @@ export const DEFAULT_KEYBOARD: KeyboardAttributes = {
   autocapitalize: 'off',
   spellcheck: false,
   enterkeyhint: null,
-  keepText: false,
+  keepText: true,
 }
 
 function tokens(field: RemoteField) {

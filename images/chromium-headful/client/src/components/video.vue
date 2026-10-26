@@ -1531,7 +1531,7 @@
         // inputmode="none" raises the keyboard.
         this.overlayHeld = false
         setInputMode(this._overlay, keyboard.inputmode)
-        this.keepText = false
+        this.keepText = DEFAULT_KEYBOARD.keepText
         this.resetInputSentinel()
         this.onOverlayFocus()
         return

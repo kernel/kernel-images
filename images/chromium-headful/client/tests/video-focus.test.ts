@@ -523,9 +523,10 @@ describe('raising the keyboard for a remote field', () => {
     expect(t.el.attrs.get('inputmode')).toBe('none')
     t.report(notes)
     expect(t.keyboard()).toBe(true)
-    // iOS keeps the attributes it was focused with
+    // iOS keeps the attributes it was focused with: the default keyboard's,
+    // which offer codes from Messages
     expect(t.el.attrs.get('autocorrect')).toBe('off')
-    expect(t.ctx.keepText).toBe(false)
+    expect(t.ctx.keepText).toBe(true)
   })
 })
 
@@ -560,9 +561,9 @@ describe('overlay text for autocorrect', () => {
   })
 })
 
-describe('AutoFill into an email field', () => {
+describe('AutoFill', () => {
   // the remote field's text, typed through the real key path
-  const emailSetup = () => {
+  const emailSetup = (open = (t: ReturnType<typeof phone>) => t.tap({ x: 50, y: 140 })) => {
     const t = phone()
     let remote = ''
     const textInput = new TextInput(
@@ -577,7 +578,7 @@ describe('AutoFill into an email field', () => {
       type: (s) => textInput.type(s),
       backspace: () => textInput.key(XK_BACKSPACE),
     })
-    t.tap({ x: 50, y: 140 })
+    open(t)
     // iOS changes the overlay's value, then fires input
     const fill = (inputType: string, value: string, data: string | null) => {
       t.el.value = value
@@ -605,6 +606,13 @@ describe('AutoFill into an email field', () => {
     fill('insertText', '  ', ' ')
     fill('insertText', EMAIL, EMAIL)
     expect(remote()).toBe(EMAIL)
+  })
+
+  test('a code from Messages on the keyboard opened without a field is typed once', () => {
+    const { t, fill, remote } = emailSetup((t) => t.ctx.focusForTyping(null))
+    expect(t.el.attrs.get('autocomplete')).toBe('one-time-code')
+    for (let i = 0; i < 2; i++) fill('insertReplacementText', '123456', '123456')
+    expect(remote()).toBe('123456')
   })
 
   test('a fill after the first typed letters completes them', () => {
