@@ -212,7 +212,7 @@ func populateUserData(ctx context.Context, client *instanceoapi.ClientWithRespon
 		return result;
 	`
 	req := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
-	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, req)
+	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, req)
 	if err != nil {
 		return fmt.Errorf("playwright execute failed: %w", err)
 	}

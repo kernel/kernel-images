@@ -56,7 +56,36 @@ func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.Exe
 	if request.Body.Executor != nil {
 		name = *request.Body.Executor
 	}
-	return s.executePlaywrightOnExecutor(ctx, name, request.Body.Code, timeout)
+	if request.Params.IdempotencyKey == nil {
+		return s.executePlaywrightOnExecutor(ctx, name, request.Body.Code, timeout)
+	}
+
+	key := *request.Params.IdempotencyKey
+	if err := validateIdempotencyKey(key); err != nil {
+		return oapi.ExecutePlaywrightCode400JSONResponse{
+			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()},
+		}, nil
+	}
+	fingerprint := idempotencyFingerprint(struct {
+		Executor string
+		Code     string
+		Timeout  time.Duration
+	}{name, request.Body.Code, timeout})
+	resp, err := s.playwrightExecutors.idempotent.Do(ctx, key, fingerprint,
+		func(ctx context.Context) (oapi.ExecutePlaywrightCodeResponseObject, error) {
+			return s.executePlaywrightOnExecutor(ctx, name, request.Body.Code, timeout)
+		},
+		func(resp oapi.ExecutePlaywrightCodeResponseObject) bool {
+			// Every other response is returned before the code reaches an executor.
+			_, ran := resp.(oapi.ExecutePlaywrightCode200JSONResponse)
+			return ran
+		})
+	if errors.Is(err, errIdempotencyKeyReused) {
+		return oapi.ExecutePlaywrightCode422JSONResponse{
+			IdempotencyKeyReusedErrorJSONResponse: oapi.IdempotencyKeyReusedErrorJSONResponse{Message: err.Error()},
+		}, nil
+	}
+	return resp, err
 }
 
 func playwrightResult(resp *playwrightDaemonResponse) oapi.ExecutePlaywrightResult {

@@ -41,7 +41,7 @@ func TestBrowserAudioSampleRate(t *testing.T) {
 			client, err := c.APIClient()
 			require.NoError(t, err)
 
-			rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+			rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 				Code: fmt.Sprintf(`
 					await page.goto(%q);
 					await context.grantPermissions(['microphone']);

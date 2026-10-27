@@ -61,6 +61,11 @@ const (
 	// and metadata, so 48 MiB leaves ample headroom while still bounding
 	// memory on protocol corruption.
 	browserReplMaxResponseBytes = 48 << 20
+
+	// maxBrowserReplIdempotentResults caps the responses kept for retries.
+	// Executions are serialized, so a retry targets one of the latest, and a
+	// response can be up to browserReplMaxResponseBytes.
+	maxBrowserReplIdempotentResults = 4
 )
 
 // browserReplChild tracks the owned REPL child process. The API process is
@@ -81,6 +86,8 @@ type browserReplManager struct {
 	child             *browserReplChild // guarded by admission
 	customToolsMu     sync.RWMutex
 	customToolsReplID string
+
+	idempotent *idempotentCalls[oapi.ExecuteBrowserReplResponseObject]
 }
 
 func newBrowserReplManager() *browserReplManager {
@@ -88,9 +95,10 @@ func newBrowserReplManager() *browserReplManager {
 	admission := make(chan struct{}, 1)
 	admission <- struct{}{}
 	return &browserReplManager{
-		admission: admission,
-		lifecycle: lifecycle,
-		stop:      stop,
+		admission:  admission,
+		lifecycle:  lifecycle,
+		stop:       stop,
+		idempotent: newIdempotentCalls[oapi.ExecuteBrowserReplResponseObject](maxBrowserReplIdempotentResults),
 	}
 }
 
@@ -636,7 +644,40 @@ func StrictBrowserReplBodyMiddleware(next http.Handler) http.Handler {
 
 // ExecuteBrowserRepl implements POST /repl through the REPL subsystem.
 func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {
-	return s.browserRepl.Execute(ctx, request)
+	if request.Params.IdempotencyKey == nil || request.Body == nil {
+		return s.browserRepl.Execute(ctx, request)
+	}
+
+	key := *request.Params.IdempotencyKey
+	if err := validateIdempotencyKey(key); err != nil {
+		return oapi.ExecuteBrowserRepl400JSONResponse{
+			BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: err.Error()},
+		}, nil
+	}
+	timeoutSec := 60
+	if request.Body.TimeoutSec != nil {
+		timeoutSec = *request.Body.TimeoutSec
+	}
+	fingerprint := idempotencyFingerprint(struct {
+		Code       string
+		Reset      bool
+		TimeoutSec int
+	}{request.Body.Code, request.Body.Reset != nil && *request.Body.Reset, timeoutSec})
+	resp, err := s.browserRepl.idempotent.Do(ctx, key, fingerprint,
+		func(ctx context.Context) (oapi.ExecuteBrowserReplResponseObject, error) {
+			return s.browserRepl.Execute(ctx, request)
+		},
+		func(resp oapi.ExecuteBrowserReplResponseObject) bool {
+			// Every other response is returned before the code reaches the REPL.
+			_, ran := resp.(oapi.ExecuteBrowserRepl200JSONResponse)
+			return ran
+		})
+	if errors.Is(err, errIdempotencyKeyReused) {
+		return oapi.ExecuteBrowserRepl422JSONResponse{
+			IdempotencyKeyReusedErrorJSONResponse: oapi.IdempotencyKeyReusedErrorJSONResponse{Message: err.Error()},
+		}, nil
+	}
+	return resp, err
 }
 
 func (m *browserReplManager) Execute(ctx context.Context, request oapi.ExecuteBrowserReplRequestObject) (oapi.ExecuteBrowserReplResponseObject, error) {

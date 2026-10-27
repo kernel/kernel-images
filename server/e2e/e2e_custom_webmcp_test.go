@@ -59,7 +59,7 @@ func testCustomWebMCPTargetBinding(t *testing.T, ctx context.Context, client *in
 		assert.Fail(collect, "tool not registered on owner tab")
 	}, 10*time.Second, 200*time.Millisecond)
 
-	selected, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	selected, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `const unrelated = (await listTabs()).find(tab => tab.url.endsWith('/target-binding/other'));
 			if (!unrelated) throw new Error('unrelated tab not found');
 			await switchTab(unrelated.targetId);
@@ -80,7 +80,7 @@ func testCustomWebMCPTargetBinding(t *testing.T, ctx context.Context, client *in
 	require.Equal(t, instanceoapi.WebMCPInvocationResultStatusCompleted, result.JSON200.Status)
 	require.Equal(t, map[string]any{"marker": "owner", "url": urls[0]}, result.JSON200.Output)
 
-	attached, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	attached, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `const current = await currentTab();
 			if (!current.url.endsWith('/target-binding/other'))
 				throw new Error('custom tool changed attached tab to ' + current.url);`,
@@ -107,7 +107,7 @@ func testCustomWebMCPTargetBinding(t *testing.T, ctx context.Context, client *in
 
 func testCustomWebMCPSlowPage(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses) {
 	t.Helper()
-	patched, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	patched, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `const owner = (await listTabs()).find(tab => tab.url.endsWith('/target-binding/owner'));
 			await switchTab(owner.targetId);
 			const tree = await cdp('Page.getFrameTree');
@@ -177,7 +177,7 @@ func testCustomWebMCPSlowPage(t *testing.T, ctx context.Context, client *instanc
 		`, new(bool))
 	}()
 
-	before, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	before, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `repl.write('before page invocation');`,
 	})
 	require.NoError(t, err)
@@ -204,7 +204,7 @@ func testCustomWebMCPSlowPage(t *testing.T, ctx context.Context, client *instanc
 	`, new(string))
 
 	short := 1
-	cell, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	cell, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `repl.write('should not run on the wrong tab');`, TimeoutSec: &short,
 	})
 	require.NoError(t, err)
@@ -233,7 +233,7 @@ func testCustomWebMCPSlowPage(t *testing.T, ctx context.Context, client *instanc
 		return owner.evaluate(() => document.body.dataset.slowDone);
 	`, &done)
 	require.Equal(t, "true", done)
-	after, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: `repl.write('still alive');`})
+	after, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{Code: `repl.write('still alive');`})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, after.StatusCode(), "%s", after.Body)
 	require.Equal(t, before.JSON200.ReplId, after.JSON200.ReplId)
@@ -306,7 +306,7 @@ func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, 
 	require.Contains(t, *invalid.JSON200.ErrorText, "input failed JSON Schema validation")
 
 	replTimeout := 20
-	replResult, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	replResult, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`const result = await webmcp.invokeTool(%q, {origin: 'SFO'}, {timeoutSec: 10});
 			if (result.status !== 'completed' || result.output.url !== 'http://127.0.0.1:10001/fixture/results')
 				throw new Error(JSON.stringify(result));
@@ -351,7 +351,7 @@ func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, 
 
 	require.NotNil(t, tools.JSON200.Tools[0].Source.TargetId)
 	targetID := *tools.JSON200.Tools[0].Source.TargetId
-	patched, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	patched, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`await js(() => {
 			const prototype = Object.getPrototypeOf(document.modelContext);
 			const original = prototype.registerTool;
@@ -378,7 +378,7 @@ func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, 
 	for _, tool := range beforeRecovery.JSON200.Tools {
 		require.NotEqual(t, "recover_registration", tool.Tool.Name)
 	}
-	restored, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	restored, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`await js(() => { window.__allowCustomRegistration = true; }, {targetId: %q});`, targetID),
 	})
 	require.NoError(t, err)
@@ -405,7 +405,7 @@ func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, 
 	require.Equal(t, http.StatusOK, recovered.StatusCode(), "%s", recovered.Body)
 	require.Equal(t, map[string]any{"origin": "SFO"}, recovered.JSON200.Output)
 
-	pageResult, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	pageResult, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: `const pageTool = (await webmcp.listTools()).find(tool => tool.tool.name === 'recover_registration');
 			const nativeResult = await webmcp.invokeTool(pageTool.tool_ref, {origin: 'SFO'});
 			if (nativeResult.status !== 'completed' || nativeResult.output.origin !== 'SFO') throw new Error(JSON.stringify(nativeResult));`,
@@ -438,7 +438,7 @@ func testCustomWebMCPInvokesAcrossNavigation(t *testing.T, ctx context.Context, 
 	}, 10*time.Second, 200*time.Millisecond)
 
 	shortTimeout := 3
-	deadline, err := client.ExecuteBrowserReplWithResponse(ctx, instanceoapi.ExecuteBrowserReplJSONRequestBody{
+	deadline, err := client.ExecuteBrowserReplWithResponse(ctx, nil, instanceoapi.ExecuteBrowserReplJSONRequestBody{
 		Code: fmt.Sprintf(`try {
 			await webmcp.invokeTool(%q, {}, {timeoutSec:30});
 			throw new Error('expected a deadline error');
