@@ -180,7 +180,7 @@
   import { Vue, Component, Ref, Watch } from 'vue-property-decorator'
 
   import Connect from '~/components/connect.vue'
-  import { isReadOnlyMessage } from '~/utils/read-only'
+  import { isReadOnlyMessage, resolveReadOnly } from '~/utils/read-only'
   import Disconnected from '~/components/disconnected.vue'
   import Video from '~/components/video.vue'
   import Menu from '~/components/menu.vue'
@@ -234,7 +234,8 @@
     created() {
       const params = new URL(location.href).searchParams
       const value = params.get('readOnly') || params.get('readonly') || params.get('ro')
-      this.$accessor.remote.setReadOnly(typeof value === 'string' && ['1', 'true', 'yes'].includes(value.toLowerCase()))
+      const requested = typeof value === 'string' && ['1', 'true', 'yes'].includes(value.toLowerCase())
+      this.$accessor.remote.setReadOnly(resolveReadOnly(requested, window.KERNEL_LIVE_VIEW_READ_ONLY))
       window.addEventListener('message', this.onParentMessage)
     }
 
@@ -245,11 +246,12 @@
     onParentMessage(event: MessageEvent) {
       if (window.parent === window || !isReadOnlyMessage(event, window.parent, this.parentOrigin)) return
 
-      if (event.data.readOnly && !this.isReadOnlyMode) {
+      const readOnly = resolveReadOnly(event.data.readOnly, window.KERNEL_LIVE_VIEW_READ_ONLY)
+      if (readOnly && !this.isReadOnlyMode) {
         if (this.video) this.video.releaseInput()
         this.$accessor.remote.release()
       }
-      this.$accessor.remote.setReadOnly(event.data.readOnly)
+      this.$accessor.remote.setReadOnly(readOnly)
       window.parent.postMessage(
         { type: 'KERNEL_READ_ONLY_CHANGED', readOnly: this.isReadOnlyMode, requestId: event.data.requestId },
         this.parentOrigin,
