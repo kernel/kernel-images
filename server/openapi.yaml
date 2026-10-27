@@ -1622,6 +1622,8 @@ paths:
                 $ref: "#/components/schemas/PlaywrightExecutorLimitError"
         "422":
           $ref: "#/components/responses/IdempotencyKeyReusedError"
+        "429":
+          $ref: "#/components/responses/IdempotentCallsBusyError"
         "500":
           $ref: "#/components/responses/InternalError"
   /playwright/executors:
@@ -1744,6 +1746,8 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "422":
           $ref: "#/components/responses/IdempotencyKeyReusedError"
+        "429":
+          $ref: "#/components/responses/IdempotentCallsBusyError"
         "500":
           $ref: "#/components/responses/InternalError"
   /browser/location:
@@ -2128,7 +2132,7 @@ components:
         response instead of running the code again, waiting for it if it is still running. A call
         with a key runs to completion even if the connection drops. A response is kept for 10 minutes
         once the call finishes, and only the most recent responses are kept. A call that did not run,
-        such as one rejected with 400 or 409, does not use up its key. Keys are scoped to this
+        such as one rejected with 400, 409 or 429, does not use up its key. Keys are scoped to this
         endpoint and are lost when the API process restarts.
       schema:
         type: string
@@ -8171,6 +8175,12 @@ components:
             $ref: "#/components/schemas/Error"
     ConflictError:
       description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    IdempotentCallsBusyError:
+      description: Too many calls with a new Idempotency-Key are waiting or running. The call did not run; retry it.
       content:
         application/json:
           schema:

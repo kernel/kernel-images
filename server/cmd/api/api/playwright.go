@@ -73,6 +73,7 @@ func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.Exe
 	}{name, request.Body.Code, timeout})
 	resp, err := s.playwrightExecutors.idempotent.Do(ctx, key, fingerprint,
 		func(ctx context.Context) (oapi.ExecutePlaywrightCodeResponseObject, error) {
+			defer s.holdScaleToZero(ctx)()
 			return s.executePlaywrightOnExecutor(ctx, name, request.Body.Code, timeout)
 		},
 		func(resp oapi.ExecutePlaywrightCodeResponseObject) bool {
@@ -80,9 +81,14 @@ func (s *ApiService) ExecutePlaywrightCode(ctx context.Context, request oapi.Exe
 			_, ran := resp.(oapi.ExecutePlaywrightCode200JSONResponse)
 			return ran
 		})
-	if errors.Is(err, errIdempotencyKeyReused) {
+	switch {
+	case errors.Is(err, errIdempotencyKeyReused):
 		return oapi.ExecutePlaywrightCode422JSONResponse{
 			IdempotencyKeyReusedErrorJSONResponse: oapi.IdempotencyKeyReusedErrorJSONResponse{Message: err.Error()},
+		}, nil
+	case errors.Is(err, errIdempotentCallsBusy):
+		return oapi.ExecutePlaywrightCode429JSONResponse{
+			IdempotentCallsBusyErrorJSONResponse: oapi.IdempotentCallsBusyErrorJSONResponse{Message: err.Error()},
 		}, nil
 	}
 	return resp, err

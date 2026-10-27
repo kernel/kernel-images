@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -714,8 +715,12 @@ func TestPlaywrightExecuteIdempotencyKey(t *testing.T) {
 		return result.Calls
 	}
 
+	stz := &countingScaleToZero{}
+	svc.stz = stz
+
 	// The first caller disconnects while its call runs; the retry gets that
-	// call's result instead of running the code again.
+	// call's result instead of running the code again. The call keeps the VM
+	// awake without its caller.
 	ctx, cancel := context.WithCancel(context.Background())
 	firstDone := make(chan error, 1)
 	go func() {
@@ -725,10 +730,12 @@ func TestPlaywrightExecuteIdempotencyKey(t *testing.T) {
 	require.Eventually(t, func() bool { return m.List()[0].busy }, 2*time.Second, 5*time.Millisecond)
 	cancel()
 	require.ErrorIs(t, <-firstDone, context.Canceled)
+	assert.EqualValues(t, 1, stz.holds.Load())
 
 	resp, err := execute(context.Background(), "k1", "sleep:300", nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls(resp))
+	require.Eventually(t, func() bool { return stz.holds.Load() == 0 }, time.Second, 5*time.Millisecond)
 	defaultName := defaultPlaywrightExecutor
 	resp, err = execute(context.Background(), "k1", "sleep:300", &defaultName)
 	require.NoError(t, err)
@@ -762,3 +769,13 @@ func TestPlaywrightExecuteIdempotencyKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, calls(resp))
 }
+
+// countingScaleToZero counts holds taken with Disable and released with Enable.
+type countingScaleToZero struct {
+	holds atomic.Int32
+}
+
+func (c *countingScaleToZero) Disable(context.Context) error { c.holds.Add(1); return nil }
+func (c *countingScaleToZero) Enable(context.Context) error  { c.holds.Add(-1); return nil }
+func (c *countingScaleToZero) Pin(context.Context) error     { return nil }
+func (c *countingScaleToZero) Unpin(context.Context) error   { return nil }

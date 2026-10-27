@@ -66,6 +66,9 @@ const (
 	// Executions are serialized, so a retry targets one of the latest, and a
 	// response can be up to browserReplMaxResponseBytes.
 	maxBrowserReplIdempotentResults = 4
+	// maxBrowserReplIdempotentPending caps the keyed executions waiting or
+	// running, each holding a request of up to maxBrowserReplBodyBytes.
+	maxBrowserReplIdempotentPending = 8
 )
 
 // browserReplChild tracks the owned REPL child process. The API process is
@@ -98,7 +101,7 @@ func newBrowserReplManager() *browserReplManager {
 		admission:  admission,
 		lifecycle:  lifecycle,
 		stop:       stop,
-		idempotent: newIdempotentCalls[oapi.ExecuteBrowserReplResponseObject](maxBrowserReplIdempotentResults),
+		idempotent: newIdempotentCalls[oapi.ExecuteBrowserReplResponseObject](maxBrowserReplIdempotentResults, maxBrowserReplIdempotentPending),
 	}
 }
 
@@ -665,6 +668,7 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 	}{request.Body.Code, request.Body.Reset != nil && *request.Body.Reset, timeoutSec})
 	resp, err := s.browserRepl.idempotent.Do(ctx, key, fingerprint,
 		func(ctx context.Context) (oapi.ExecuteBrowserReplResponseObject, error) {
+			defer s.holdScaleToZero(ctx)()
 			return s.browserRepl.Execute(ctx, request)
 		},
 		func(resp oapi.ExecuteBrowserReplResponseObject) bool {
@@ -672,9 +676,14 @@ func (s *ApiService) ExecuteBrowserRepl(ctx context.Context, request oapi.Execut
 			_, ran := resp.(oapi.ExecuteBrowserRepl200JSONResponse)
 			return ran
 		})
-	if errors.Is(err, errIdempotencyKeyReused) {
+	switch {
+	case errors.Is(err, errIdempotencyKeyReused):
 		return oapi.ExecuteBrowserRepl422JSONResponse{
 			IdempotencyKeyReusedErrorJSONResponse: oapi.IdempotencyKeyReusedErrorJSONResponse{Message: err.Error()},
+		}, nil
+	case errors.Is(err, errIdempotentCallsBusy):
+		return oapi.ExecuteBrowserRepl429JSONResponse{
+			IdempotentCallsBusyErrorJSONResponse: oapi.IdempotentCallsBusyErrorJSONResponse{Message: err.Error()},
 		}, nil
 	}
 	return resp, err

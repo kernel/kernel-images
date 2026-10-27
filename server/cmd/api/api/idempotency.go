@@ -18,7 +18,10 @@ const (
 	idempotencyRetention = 10 * time.Minute
 )
 
-var errIdempotencyKeyReused = errors.New("Idempotency-Key was already used for a different request")
+var (
+	errIdempotencyKeyReused = errors.New("Idempotency-Key was already used for a different request")
+	errIdempotentCallsBusy  = errors.New("too many calls with a new Idempotency-Key are waiting or running; retry later")
+)
 
 // idempotentCalls runs each Idempotency-Key at most once. A call with a key
 // already seen gets the first call's response instead of running again, so a
@@ -30,12 +33,16 @@ type idempotentCalls[R any] struct {
 	// maxFinished caps the remembered results, oldest dropped first. Calls
 	// still running are never dropped.
 	maxFinished int
-	retention   time.Duration
-	now         func() time.Time
+	// maxPending caps calls waiting or running. They outlive their callers,
+	// so nothing else bounds them.
+	maxPending int
+	retention  time.Duration
+	now        func() time.Time
 
 	mu       sync.Mutex
 	calls    map[string]*idempotentCall[R]
 	finished []string // keys of kept results, oldest first
+	pending  int
 }
 
 type idempotentCall[R any] struct {
@@ -46,9 +53,10 @@ type idempotentCall[R any] struct {
 	err         error
 }
 
-func newIdempotentCalls[R any](maxFinished int) *idempotentCalls[R] {
+func newIdempotentCalls[R any](maxFinished, maxPending int) *idempotentCalls[R] {
 	return &idempotentCalls[R]{
 		maxFinished: maxFinished,
+		maxPending:  maxPending,
 		retention:   idempotencyRetention,
 		now:         time.Now,
 		calls:       make(map[string]*idempotentCall[R]),
@@ -82,7 +90,8 @@ func idempotencyFingerprint(request any) [sha256.Size]byte {
 // context detached from ctx's cancellation, so the result is there for a
 // retry even if this caller disconnects. keep reports whether a response
 // shows the call ran; any other response releases the key. Do returns
-// errIdempotencyKeyReused when key was used with a different fingerprint.
+// errIdempotencyKeyReused when key was used with a different fingerprint, and
+// errIdempotentCallsBusy without running call when too many are pending.
 func (c *idempotentCalls[R]) Do(ctx context.Context, key string, fingerprint [sha256.Size]byte, call func(context.Context) (R, error), keep func(R) bool) (R, error) {
 	c.mu.Lock()
 	c.expireLocked()
@@ -99,14 +108,21 @@ func (c *idempotentCalls[R]) Do(ctx context.Context, key string, fingerprint [sh
 			return zero, context.Cause(ctx)
 		}
 	}
+	if c.pending >= c.maxPending {
+		c.mu.Unlock()
+		var zero R
+		return zero, errIdempotentCallsBusy
+	}
 	entry := &idempotentCall[R]{fingerprint: fingerprint, done: make(chan struct{})}
 	c.calls[key] = entry
+	c.pending++
 	c.mu.Unlock()
 
 	go func() {
 		entry.resp, entry.err = runRecovered(context.WithoutCancel(ctx), call)
 		c.mu.Lock()
 		defer c.mu.Unlock()
+		c.pending--
 		if entry.err == nil && keep(entry.resp) {
 			entry.finishedAt = c.now()
 			c.finished = append(c.finished, key)

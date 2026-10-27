@@ -15,7 +15,7 @@ import (
 func keepAll(int) bool { return true }
 
 func TestIdempotentCallsRunOncePerKey(t *testing.T) {
-	c := newIdempotentCalls[int](4)
+	c := newIdempotentCalls[int](4, 4)
 	fp := idempotencyFingerprint("request")
 	var runs atomic.Int32
 	call := func(context.Context) (int, error) { return int(runs.Add(1)), nil }
@@ -33,7 +33,7 @@ func TestIdempotentCallsRunOncePerKey(t *testing.T) {
 }
 
 func TestIdempotentCallsRejectDifferentRequest(t *testing.T) {
-	c := newIdempotentCalls[int](4)
+	c := newIdempotentCalls[int](4, 4)
 	call := func(context.Context) (int, error) { return 1, nil }
 	_, err := c.Do(context.Background(), "k", idempotencyFingerprint("a"), call, keepAll)
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestIdempotentCallsRejectDifferentRequest(t *testing.T) {
 }
 
 func TestIdempotentCallsReleaseKeyWhenNotKept(t *testing.T) {
-	c := newIdempotentCalls[int](4)
+	c := newIdempotentCalls[int](4, 4)
 	fp := idempotencyFingerprint("request")
 	var runs atomic.Int32
 	call := func(context.Context) (int, error) { return int(runs.Add(1)), nil }
@@ -63,7 +63,7 @@ func TestIdempotentCallsReleaseKeyWhenNotKept(t *testing.T) {
 }
 
 func TestIdempotentCallsRecoverPanics(t *testing.T) {
-	c := newIdempotentCalls[int](4)
+	c := newIdempotentCalls[int](4, 4)
 	fp := idempotencyFingerprint("request")
 	_, err := c.Do(context.Background(), "k", fp, func(context.Context) (int, error) { panic("boom") }, keepAll)
 	require.ErrorContains(t, err, "panic: boom")
@@ -74,7 +74,7 @@ func TestIdempotentCallsRecoverPanics(t *testing.T) {
 
 // A caller that disconnects does not stop the call; a retry gets its result.
 func TestIdempotentCallsSurviveCallerCancellation(t *testing.T) {
-	c := newIdempotentCalls[int](4)
+	c := newIdempotentCalls[int](4, 4)
 	fp := idempotencyFingerprint("request")
 	release := make(chan struct{})
 	var runs atomic.Int32
@@ -106,7 +106,7 @@ func TestIdempotentCallsSurviveCallerCancellation(t *testing.T) {
 }
 
 func TestIdempotentCallsForgetOldResults(t *testing.T) {
-	c := newIdempotentCalls[int](2)
+	c := newIdempotentCalls[int](2, 4)
 	now := time.Now()
 	c.now = func() time.Time { return now }
 	fp := idempotencyFingerprint("request")
@@ -127,6 +127,36 @@ func TestIdempotentCallsForgetOldResults(t *testing.T) {
 
 	now = now.Add(idempotencyRetention + time.Second)
 	assert.Equal(t, 5, do("c"), "results expire after the retention period")
+}
+
+// Pending calls outlive their callers, so new keys are refused past the cap.
+// A retry of a pending key still waits for it.
+func TestIdempotentCallsCapPending(t *testing.T) {
+	c := newIdempotentCalls[int](4, 1)
+	fp := idempotencyFingerprint("request")
+	release := make(chan struct{})
+	blocked := func(context.Context) (int, error) { <-release; return 1, nil }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := c.Do(ctx, "running", fp, blocked, keepAll)
+	require.ErrorIs(t, err, context.Canceled)
+
+	_, err = c.Do(context.Background(), "new", fp, blocked, keepAll)
+	require.ErrorIs(t, err, errIdempotentCallsBusy)
+
+	retry := make(chan int, 1)
+	go func() {
+		resp, err := c.Do(context.Background(), "running", fp, blocked, keepAll)
+		assert.NoError(t, err)
+		retry <- resp
+	}()
+	close(release)
+	assert.Equal(t, 1, <-retry)
+
+	resp, err := c.Do(context.Background(), "new", fp, func(context.Context) (int, error) { return 2, nil }, keepAll)
+	require.NoError(t, err)
+	assert.Equal(t, 2, resp, "finishing a call frees its pending slot")
 }
 
 func TestValidateIdempotencyKey(t *testing.T) {

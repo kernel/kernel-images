@@ -30,8 +30,10 @@ const (
 	maxPlaywrightExecutors = 8
 
 	// maxPlaywrightIdempotentResults caps the responses kept for retries across
-	// all executors.
+	// all executors, and maxPlaywrightIdempotentPending the keyed calls waiting
+	// or running.
 	maxPlaywrightIdempotentResults = 16
+	maxPlaywrightIdempotentPending = 32
 
 	// playwrightExecutorResponseGrace is added to the execution timeout when
 	// setting the socket deadline, giving the daemon time to report its own
@@ -188,7 +190,7 @@ func newPlaywrightExecutorManager(tabs playwrightExecutorTabs) *playwrightExecut
 		socketDir:     os.TempDir(),
 		responseGrace: playwrightExecutorResponseGrace,
 		executors:     make(map[string]*playwrightExecutor),
-		idempotent:    newIdempotentCalls[oapi.ExecutePlaywrightCodeResponseObject](maxPlaywrightIdempotentResults),
+		idempotent:    newIdempotentCalls[oapi.ExecutePlaywrightCodeResponseObject](maxPlaywrightIdempotentResults, maxPlaywrightIdempotentPending),
 	}
 	e := newPlaywrightExecutor(defaultPlaywrightExecutor)
 	e.pinned = true
