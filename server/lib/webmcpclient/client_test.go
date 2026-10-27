@@ -669,6 +669,32 @@ func TestToolResponsesAreScopedBySession(t *testing.T) {
 	require.Equal(t, "iframe-session", client.invocations[invocationKey{sessionID: "iframe-session", invocationID: "invocation-1"}].Output)
 }
 
+func TestToolResponseDecodesLatin1JSONOutput(t *testing.T) {
+	client := &connection{
+		invocations:          make(map[invocationKey]invocationResponse),
+		waitingInvocations:   make(map[invocationKey]string),
+		abandonedInvocations: make(map[invocationKey]time.Time),
+		stateChangedCh:       make(chan struct{}, 1),
+	}
+	cases := map[string]struct {
+		output any
+		want   any
+	}{
+		"latin1 json":        {`{"content":[{"type":"text","text":"600×400"}]}`, map[string]any{"content": []any{map[string]any{"type": "text", "text": "600×400"}}}},
+		"latin1 json string": {`"Café"`, "Café"},
+		"latin1 text":        {"Café", "Café"},
+		"ascii json text":    {`{"a":1}`, `{"a":1}`},
+		"wider than latin1":  {`{"text":"Café—"}`, `{"text":"Café—"}`},
+		"object":             {map[string]any{"text": "Café"}, map[string]any{"text": "Café"}},
+	}
+	for name, tc := range cases {
+		params, err := json.Marshal(invocationResponse{InvocationID: name, Status: "Completed", Output: tc.output})
+		require.NoError(t, err)
+		client.handleProtocolEvent(cdpclient.Message{Method: "WebMCP.toolResponded", SessionID: "page-session", Params: params})
+		require.Equal(t, tc.want, client.invocations[invocationKey{sessionID: "page-session", invocationID: name}].Output, name)
+	}
+}
+
 func TestManagerReconnectsWhenChromiumUpstreamChanges(t *testing.T) {
 	first := newFakeCDP(t, false)
 	second := newFakeCDP(t, false)
