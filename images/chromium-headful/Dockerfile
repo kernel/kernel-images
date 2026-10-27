@@ -249,8 +249,7 @@ RUN apt-get update && \
     fonts-crosextra-carlito \
     fonts-crosextra-caladea \
     fonts-lato \
-    fonts-font-awesome \
-    fonts-droid-fallback && \
+    fonts-font-awesome && \
     fc-cache -f && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
