@@ -127,5 +127,7 @@ export const files = {
 }
 
 export const disconnected = {
-  message: 'Browser has been shut down and is no longer available',
+  gone: 'Browser has been shut down and is no longer available',
+  lost: 'Lost connection to the browser',
+  reload: 'Reload',
 }

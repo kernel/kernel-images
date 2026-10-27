@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { BaseClient, CONNECT_STAGE_TIMEOUT_MS, resolveConnectStageTimeoutMs } from '../src/neko/base'
+import {
+  BaseClient,
+  CONNECT_STAGE_TIMEOUT_MS,
+  SESSION_GONE_CLOSE_CODE,
+  resolveConnectStageTimeoutMs,
+} from '../src/neko/base'
 
 const posted: Record<string, any>[] = []
 const timers: { id: number; delay: number; run: () => void }[] = []
@@ -452,5 +457,40 @@ describe('live view connect failures', () => {
       expect(resolveConnectStageTimeoutMs(null)).toEqual(CONNECT_STAGE_TIMEOUT_MS)
       expect(resolveConnectStageTimeoutMs('30000')).toEqual(CONNECT_STAGE_TIMEOUT_MS)
     })
+  })
+})
+
+// A connected viewer that drops is not reconnected: the overlay asks for a reload.
+// Only the proxy's session-gone close means the browser itself is gone.
+describe('live view drops after connecting', () => {
+  async function connectedClient() {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client.provide()
+    client.connectPeer()
+    return client
+  }
+
+  test('a session-gone close marks the session gone and opens no new socket', async () => {
+    const client = await connectedClient()
+
+    client['_ws']!.onclose({ code: SESSION_GONE_CLOSE_CODE, reason: '' } as CloseEvent)
+
+    expect(client.sessionGone).toBe(true)
+    expect(client['_ws']).toBeUndefined()
+    expect(timers).toEqual([])
+    expect(posted).toEqual([])
+  })
+
+  test('any other close leaves the session not known to be gone', async () => {
+    const client = await connectedClient()
+
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    expect(client.sessionGone).toBe(false)
+    expect(client['_ws']).toBeUndefined()
+    expect(timers).toEqual([])
+    expect(client.reasons.map((r) => r?.message)).toEqual(['websocket closed'])
   })
 })
