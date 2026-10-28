@@ -269,7 +269,7 @@ func testChromiumConfigureExtensionLoadStrategies(t *testing.T, image string, te
 			require.NotEqual(t, before, after)
 			require.Equal(t, starts+1, chromiumConfigureStartCount(t, ctx, c))
 			requireConfiguredExtensionActive(t, ctx, c, "configure-partial-one")
-			_, err = execCombinedOutputWithClient(ctx, c, "grep", []string{"-q", "loaded unpacked extension over CDP.*name=configure-partial-one", "/var/log/supervisord/kernel-images-api"})
+			_, err = execCombinedOutputWithClient(ctx, c, "grep", []string{"-q", `"msg":"loaded unpacked extension over CDP".*"name":"configure-partial-one"`, "/var/log/supervisord/kernel-images-api"})
 			require.NoError(t, err)
 		})
 	}
