@@ -16,7 +16,8 @@ def main():
     run('ip', 'link', 'add', 'udp-host', 'type', 'veth', 'peer', 'name', 'udp-browser')
     run('ip', 'link', 'set', 'udp-browser', 'netns', 'browser-udp')
     run('iptables', '-I', 'FORWARD', '1', '-i', 'udp-host', '-j', 'DROP')
-    targets = udp_targets(config())
+    settings = config()
+    targets = udp_targets(settings)
     for index, target in enumerate(targets):
         run('iptables', '-t', 'nat', '-A', 'PREROUTING', '-i', 'udp-host', '-p', 'udp',
             '-d', target['host'], '--dport', str(target['port']), '-j', 'DNAT',
@@ -35,8 +36,18 @@ def main():
     resolv.mkdir(parents=True)
     (resolv / 'resolv.conf').write_text('nameserver 8.8.8.8\n')
 
+    ca = pathlib.Path('/run/udp-egress/mitm-ca.crt')
+    if ca.exists():
+        nssdb = pathlib.Path('/home/kernel/.pki/nssdb')
+        run('runuser', '-u', 'kernel', '--', 'mkdir', '-p', str(nssdb))
+        if not (nssdb / 'cert9.db').exists():
+            run('runuser', '-u', 'kernel', '--', 'certutil', '-N', '-d', f'sql:{nssdb}', '--empty-password')
+        run('runuser', '-u', 'kernel', '--', 'certutil', '-A', '-d', f'sql:{nssdb}',
+            '-t', 'C,,', '-n', 'egress-proxy-mitm', '-i', str(ca))
+
     processes = [
-        subprocess.Popen(['python3', '-u', '/opt/udp-egress/http_proxy.py']),
+        subprocess.Popen(['socat', 'TCP4-LISTEN:18080,bind=192.0.2.1,reuseaddr,fork',
+                          f'TCP4:{settings["egress_host"]}:{settings["egress_port"]}']),
         subprocess.Popen(['socat', 'TCP4-LISTEN:9223,bind=127.0.0.1,reuseaddr,fork',
                           'TCP4:192.0.2.2:9223']),
         subprocess.Popen([*prefix, 'socat',

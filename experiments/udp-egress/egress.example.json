@@ -1,0 +1,8 @@
+{
+  "egress_host": "192.0.2.10",
+  "egress_port": 3129,
+  "udp_targets": [
+    { "host": "8.8.8.8", "port": 53 },
+    { "host": "203.0.113.20", "port": 3478 }
+  ]
+}

@@ -3,62 +3,63 @@ import struct
 import threading
 import unittest
 
-from common import associate, receive, udp_targets
+from common import (datagram_capsule, decode_varint, encode_varint, open_tunnel,
+                    parse_capsules, udp_targets)
 from udp import stun_address
 
 
 class ProtocolTests(unittest.TestCase):
-    def proxy(self, auth_status=0, command_status=0):
+    def egress(self, reply):
         listener = socket.socket()
         listener.bind(('127.0.0.1', 0))
         listener.listen(1)
         self.addCleanup(listener.close)
-        errors = []
+        requests = []
 
         def serve():
-            try:
-                with listener.accept()[0] as connection:
-                    self.assertEqual(receive(connection, 3), b'\x05\x01\x02')
-                    connection.sendall(b'\x05\x02')
-                    self.assertEqual(receive(connection, 1), b'\x01')
-                    self.assertEqual(receive(connection, receive(connection, 1)[0]), b'user')
-                    self.assertEqual(receive(connection, receive(connection, 1)[0]), b'password')
-                    connection.sendall(bytes([1, auth_status]))
-                    if auth_status:
-                        return
-                    self.assertEqual(receive(connection, 10), bytes.fromhex('05030001000000003039'))
-                    connection.sendall(bytes([5, command_status, 0, 1]) + socket.inet_aton('127.0.0.1') + struct.pack('!H', 45678))
-            except Exception as error:
-                errors.append(error)
+            with listener.accept()[0] as connection:
+                request = b''
+                while b'\r\n\r\n' not in request:
+                    request += connection.recv(4096)
+                requests.append(request)
+                connection.sendall(reply)
 
         thread = threading.Thread(target=serve, daemon=True)
         thread.start()
-        settings = {'host': '127.0.0.1', 'socks_port': listener.getsockname()[1],
-                    'user': 'user', 'password': 'password'}
-        return settings, thread, errors
+        settings = {'egress_host': '127.0.0.1', 'egress_port': listener.getsockname()[1]}
+        return settings, thread, requests
 
-    def test_association(self):
-        settings, thread, errors = self.proxy()
-        control, relay = associate(settings, 12345)
-        control.close()
+    def test_tunnel(self):
+        settings, thread, requests = self.egress(
+            b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: connect-udp\r\n\r\n' + datagram_capsule(b'early'))
+        sock, rest = open_tunnel(settings, ('8.8.8.8', 53))
+        sock.close()
         thread.join(2)
-        self.assertFalse(thread.is_alive())
-        self.assertEqual(errors, [])
-        self.assertEqual(relay, ('127.0.0.1', 45678))
+        self.assertTrue(requests[0].startswith(b'GET /.well-known/masque/udp/8.8.8.8/53/ HTTP/1.1\r\n'))
+        self.assertIn(b'Upgrade: connect-udp\r\n', requests[0])
+        self.assertNotIn(b'Proxy-Authorization', requests[0])
+        self.assertEqual(parse_capsules(rest), ([b'early'], b''))
 
-    def test_authentication_failure(self):
-        settings, thread, errors = self.proxy(auth_status=1)
-        with self.assertRaisesRegex(OSError, 'authentication failed'):
-            associate(settings, 12345)
+    def test_tunnel_refused(self):
+        settings, thread, _ = self.egress(b'HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n')
+        with self.assertRaisesRegex(OSError, '403'):
+            open_tunnel(settings, ('8.8.8.8', 443))
         thread.join(2)
-        self.assertEqual(errors, [])
 
-    def test_command_failure(self):
-        settings, thread, errors = self.proxy(command_status=7)
-        with self.assertRaisesRegex(OSError, 'successful IPv4 reply'):
-            associate(settings, 12345)
-        thread.join(2)
-        self.assertEqual(errors, [])
+    def test_varint(self):
+        for value in [0, 63, 64, 16383, 16384, 2**30 - 1, 2**30, 2**62 - 1]:
+            encoded = encode_varint(value)
+            self.assertEqual(decode_varint(encoded), (value, len(encoded)))
+            self.assertIsNone(decode_varint(encoded[:-1]) if len(encoded) > 1 else decode_varint(b''))
+
+    def test_capsules(self):
+        stream = datagram_capsule(b'one') + encode_varint(7) + encode_varint(2) + b'xx'
+        stream += datagram_capsule(b'two')
+        self.assertEqual(parse_capsules(stream), ([b'one', b'two'], b''))
+        partial = datagram_capsule(b'three')
+        self.assertEqual(parse_capsules(stream + partial[:3]), ([b'one', b'two'], partial[:3]))
+        nonzero_context = encode_varint(0) + encode_varint(2) + b'\x01x'
+        self.assertEqual(parse_capsules(nonzero_context), ([], b''))
 
     def test_explicit_targets(self):
         valid = [{'host': '8.8.8.8', 'port': 3478}]

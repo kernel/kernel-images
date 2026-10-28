@@ -1,11 +1,10 @@
 import ipaddress
 import json
 import socket
-import struct
 
 
 def config():
-    with open('/run/udp-egress/upstream.json') as f:
+    with open('/run/udp-egress/egress.json') as f:
         return json.load(f)
 
 
@@ -28,39 +27,72 @@ def udp_targets(settings):
     return targets
 
 
-def receive(sock, count):
-    result = b''
-    while len(result) < count:
-        part = sock.recv(count - len(result))
-        if not part:
-            raise OSError('SOCKS control connection closed')
-        result += part
-    return result
+def encode_varint(value):
+    for size, prefix in ((1, 0), (2, 0x40), (4, 0x80), (8, 0xc0)):
+        if value < 1 << (8 * size - 2):
+            data = bytearray(value.to_bytes(size, 'big'))
+            data[0] |= prefix
+            return bytes(data)
+    raise ValueError('varint too large')
 
 
-def associate(settings, port):
-    sock = socket.create_connection((settings['host'], settings['socks_port']), timeout=8)
+def decode_varint(data, offset=0):
+    """Returns (value, next offset), or None when data is incomplete."""
+    if offset >= len(data):
+        return None
+    size = 1 << (data[offset] >> 6)
+    if offset + size > len(data):
+        return None
+    value = data[offset] & 0x3f
+    for byte in data[offset + 1:offset + size]:
+        value = value << 8 | byte
+    return value, offset + size
+
+
+def datagram_capsule(payload):
+    return encode_varint(0) + encode_varint(len(payload) + 1) + b'\x00' + payload
+
+
+def parse_capsules(buffer):
+    """Splits complete capsules off buffer. Returns (datagram payloads, rest)."""
+    payloads = []
+    offset = 0
+    while True:
+        kind = decode_varint(buffer, offset)
+        if kind is None:
+            break
+        length = decode_varint(buffer, kind[1])
+        if length is None or length[1] + length[0] > len(buffer):
+            break
+        body = buffer[length[1]:length[1] + length[0]]
+        offset = length[1] + length[0]
+        context = decode_varint(body)
+        if kind[0] == 0 and context is not None and context[0] == 0:
+            payloads.append(body[context[1]:])
+    return payloads, buffer[offset:]
+
+
+def open_tunnel(settings, destination):
+    """Opens a connect-udp tunnel to destination through egress-proxy."""
+    sock = socket.create_connection((settings['egress_host'], settings['egress_port']), timeout=10)
     try:
-        sock.sendall(b'\x05\x01\x02')
-        if receive(sock, 2) != b'\x05\x02':
-            raise OSError('SOCKS username/password authentication unavailable')
-        user, password = settings['user'].encode(), settings['password'].encode()
-        if not 0 < len(user) < 256 or not 0 < len(password) < 256:
-            raise ValueError('invalid SOCKS credential length')
-        sock.sendall(b'\x01' + bytes([len(user)]) + user + bytes([len(password)]) + password)
-        if receive(sock, 2) != b'\x01\x00':
-            raise OSError('SOCKS authentication failed')
-        sock.sendall(b'\x05\x03\x00\x01\x00\x00\x00\x00' + struct.pack('!H', port))
-        version, status, reserved, address_type = receive(sock, 4)
-        if version != 5 or status != 0 or reserved != 0 or address_type != 1:
-            raise OSError('SOCKS UDP association requires a successful IPv4 reply')
-        host = socket.inet_ntoa(receive(sock, 4))
-        bound_port = struct.unpack('!H', receive(sock, 2))[0]
-        if host == '0.0.0.0':
-            host = settings['host']
-        if host != settings['host'] or bound_port == 0:
-            raise OSError('unexpected SOCKS relay endpoint')
-        return sock, (host, bound_port)
+        host, port = destination
+        sock.sendall((f'GET /.well-known/masque/udp/{host}/{port}/ HTTP/1.1\r\n'
+                      f'Host: {settings["egress_host"]}:{settings["egress_port"]}\r\n'
+                      'Connection: Upgrade\r\nUpgrade: connect-udp\r\n'
+                      'Capsule-Protocol: ?1\r\n\r\n').encode())
+        response = b''
+        while b'\r\n\r\n' not in response:
+            part = sock.recv(4096)
+            if not part or len(response) > 16384:
+                raise OSError('egress closed during connect-udp')
+            response += part
+        head, rest = response.split(b'\r\n\r\n', 1)
+        status = head.split(b'\r\n', 1)[0]
+        if status.split(b' ')[1:2] != [b'101']:
+            raise OSError(f'connect-udp refused: {status.decode(errors="replace")}')
+        sock.settimeout(None)
+        return sock, rest
     except Exception:
         sock.close()
         raise

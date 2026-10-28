@@ -8,10 +8,11 @@ async function main() {
   try {
     const context = browser.contexts()[0];
     const page = context.pages()[0] || (await context.newPage());
-    await page.goto(httpsURL, {
+    const response = await page.goto(httpsURL, {
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
+    const security = await response.securityDetails();
     const echo = JSON.parse(await page.locator("body").innerText());
     const rtc = await page.evaluate(async (url) => {
       const connection = new RTCPeerConnection({ iceServers: [{ urls: url }] });
@@ -51,6 +52,7 @@ async function main() {
         label,
         browserVersion: browser.version(),
         httpsIP: echo.ip,
+        httpsIssuer: security && security.issuer,
         browserIPsMatchHTTPS:
           serverReflexive.length > 0 &&
           serverReflexive.every((candidate) => candidate.address === echo.ip),

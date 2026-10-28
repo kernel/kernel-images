@@ -5,7 +5,7 @@ import socket
 import struct
 import time
 
-from common import associate, config, udp_targets
+from common import config, datagram_capsule, open_tunnel, parse_capsules, udp_targets
 
 
 def log(**values):
@@ -34,22 +34,30 @@ def main():
         time.sleep(0.1)
     listeners = {}
     for index, target in enumerate(udp_targets(settings)):
-        destination = (target['host'], target['port'])
         listener = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listener.bind(('192.0.2.1', 40000 + index))
-        listeners[listener] = destination
+        listeners[listener] = (target['host'], target['port'])
     flows = {}
-    sockets = {}
+    tunnels = {}
 
     def close(key):
         flow = flows.pop(key)
-        for sock in [flow['udp'], flow['control']]:
-            sockets.pop(sock, None)
-            sock.close()
+        tunnels.pop(flow['tunnel'], None)
+        flow['tunnel'].close()
 
-    log(state='ready')
+    def deliver(key, data):
+        flow = flows[key]
+        payloads, flow['buffer'] = parse_capsules(flow['buffer'] + data)
+        for payload in payloads:
+            flow['listener'].sendto(payload, key[0])
+            observed = stun_address(payload)
+            if observed:
+                log(direction='return', receiver=key[1], transaction=payload[8:20].hex(),
+                    server_observed_ip=observed)
+
+    log(state='ready', egress=f'{settings["egress_host"]}:{settings["egress_port"]}')
     while True:
-        ready, _, _ = select.select(list(listeners) + list(sockets), [], [], 1)
+        ready, _, _ = select.select(list(listeners) + list(tunnels), [], [], 1)
         for sock in ready:
             if sock in listeners:
                 data, source = sock.recvfrom(65535)
@@ -59,55 +67,38 @@ def main():
                     if len(flows) >= 32:
                         log(drop='flow_limit')
                         continue
-                    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    udp.bind(('0.0.0.0', 0))
-                    control = None
                     try:
-                        control, relay = associate(settings, udp.getsockname()[1])
-                        udp.connect(relay)
+                        tunnel, rest = open_tunnel(settings, destination)
                     except OSError as error:
-                        udp.close()
-                        if control is not None:
-                            control.close()
-                        log(drop='association_failed', error=str(error))
+                        log(drop='tunnel_failed', destination=destination, error=str(error))
                         continue
-                    flows[key] = {'udp': udp, 'control': control, 'listener': sock, 'last': time.monotonic()}
-                    sockets[udp] = (key, 'udp')
-                    sockets[control] = (key, 'control')
-                    log(association=relay, source=source, destination=destination)
-                flow = flows[key]
-                flow['last'] = time.monotonic()
-                packet = b'\x00\x00\x00\x01' + socket.inet_aton(destination[0])
-                flow['udp'].send(packet + struct.pack('!H', destination[1]) + data)
-                if len(data) >= 20 and data[:2] == b'\x00\x01' and data[4:8] == bytes.fromhex('2112a442'):
-                    log(direction='out', destination=destination, transaction=data[8:20].hex())
-            else:
-                entry = sockets.get(sock)
-                if entry is None:
-                    continue
-                key, kind = entry
-                if kind == 'control':
-                    sock.recv(1024)
-                    close(key)
-                    continue
+                    flows[key] = {'tunnel': tunnel, 'listener': sock, 'buffer': b'', 'last': time.monotonic()}
+                    tunnels[tunnel] = key
+                    log(tunnel='open', source=source, destination=destination)
+                    if rest:
+                        deliver(key, rest)
+                flows[key]['last'] = time.monotonic()
                 try:
-                    packet = sock.recv(65535)
+                    flows[key]['tunnel'].sendall(datagram_capsule(data))
                 except OSError:
                     close(key)
                     continue
-                if len(packet) < 10 or packet[:4] != b'\x00\x00\x00\x01':
-                    log(drop='unsupported_relay_header')
+                if len(data) >= 20 and data[:2] == b'\x00\x01' and data[4:8] == bytes.fromhex('2112a442'):
+                    log(direction='out', destination=destination, transaction=data[8:20].hex())
+            else:
+                key = tunnels.get(sock)
+                if key is None:
                     continue
-                origin = (socket.inet_ntoa(packet[4:8]), struct.unpack('!H', packet[8:10])[0])
-                if origin != key[1]:
-                    log(drop='unexpected_origin')
+                try:
+                    data = sock.recv(65536)
+                except OSError:
+                    data = b''
+                if not data:
+                    log(tunnel='closed', destination=key[1])
+                    close(key)
                     continue
-                payload = packet[10:]
-                flows[key]['listener'].sendto(payload, key[0])
-                observed = stun_address(payload)
-                if observed:
-                    log(direction='return', receiver=origin, transaction=payload[8:20].hex(),
-                        server_observed_ip=observed)
+                flows[key]['last'] = time.monotonic()
+                deliver(key, data)
         for key, flow in list(flows.items()):
             if time.monotonic() - flow['last'] > 60:
                 close(key)
