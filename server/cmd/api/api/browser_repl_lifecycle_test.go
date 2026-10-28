@@ -1063,3 +1063,32 @@ func TestBrowserReplIdempotencyKey(t *testing.T) {
 	assert.IsType(t, oapi.ExecuteBrowserRepl422JSONResponse{}, resp)
 	requireExec(t, svc, `repl.write(JSON.stringify(keyedRuns))`, float64(1))
 }
+
+// Aborting a hung keyed cell frees the REPL once the abandon grace period
+// passes, instead of after the cell's timeout.
+func TestBrowserReplAbandonedKeyedCellIsTerminated(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	svc.browserRepl.idempotent.abandonGrace = 200 * time.Millisecond
+	initial := requireExec(t, svc, `var before = 1`, nil)
+
+	key := "hung"
+	timeoutSec := 300
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteBrowserRepl(ctx, oapi.ExecuteBrowserReplRequestObject{
+			Params: oapi.ExecuteBrowserReplParams{IdempotencyKey: &key},
+			Body:   &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await new Promise(() => {})`, TimeoutSec: &timeoutSec},
+		})
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return browserReplBusy(svc) }, time.Second, 10*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	start := time.Now()
+	reset := true
+	fresh := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Reset: &reset})
+	assert.Less(t, time.Since(start), 10*time.Second)
+	assert.NotEqual(t, initial.ReplId, fresh.ReplId)
+}

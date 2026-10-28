@@ -129,6 +129,57 @@ func TestIdempotentCallsForgetOldResults(t *testing.T) {
 	assert.Equal(t, 5, do("c"), "results expire after the retention period")
 }
 
+// A call no caller waits on is cancelled after the grace period, unless a
+// retry attaches first.
+func TestIdempotentCallsCancelAbandonedCall(t *testing.T) {
+	c := newIdempotentCalls[int](4, 4)
+	c.abandonGrace = 100 * time.Millisecond
+	fp := idempotencyFingerprint("request")
+	started := make(chan struct{}, 1)
+	stopped := make(chan error, 1)
+	hung := func(ctx context.Context) (int, error) {
+		started <- struct{}{}
+		<-ctx.Done()
+		stopped <- context.Cause(ctx)
+		return 0, context.Cause(ctx)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.Do(ctx, "k", fp, hung, keepAll)
+		done <- err
+	}()
+	<-started
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	// A retry within the grace period keeps the call alive while it waits.
+	retryCtx, cancelRetry := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancelRetry()
+	_, err := c.Do(retryCtx, "k", fp, hung, keepAll)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-stopped:
+		t.Fatal("the call was cancelled while a retry waited on it")
+	default:
+	}
+
+	// With no caller left, the call is cancelled after the grace period.
+	select {
+	case cause := <-stopped:
+		assert.ErrorIs(t, cause, errIdempotentCallAbandoned)
+	case <-time.After(2 * time.Second):
+		t.Fatal("the abandoned call was not cancelled")
+	}
+	require.Eventually(t, func() bool {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		_, ok := c.calls["k"]
+		return !ok
+	}, time.Second, 5*time.Millisecond, "a cancelled call releases its key")
+}
+
 // Pending calls outlive their callers, so new keys are refused past the cap.
 // A retry of a pending key still waits for it.
 func TestIdempotentCallsCapPending(t *testing.T) {
