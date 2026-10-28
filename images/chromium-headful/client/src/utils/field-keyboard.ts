@@ -3,6 +3,8 @@
 // where type="email" or "number" would not), one-time-code AutoFill, and
 // autocorrect for plain text only. iOS reads everything but inputmode when the
 // overlay gains focus, so a change to an open keyboard only switches layouts.
+// Fields with AutoFill keep their text in the overlay too: iOS fills a field
+// by replacing its text, which can take more than one edit.
 
 import { RemoteField } from './remote-focus'
 
@@ -16,7 +18,7 @@ export interface KeyboardAttributes {
   autocapitalize: string
   spellcheck: boolean
   enterkeyhint: string | null
-  // the overlay keeps the typed text, which autocorrect needs to see
+  // the overlay keeps the typed text, which autocorrect and AutoFill replace
   keepText: boolean
 }
 
@@ -55,7 +57,7 @@ export const DEFAULT_KEYBOARD: KeyboardAttributes = {
   autocapitalize: 'off',
   spellcheck: false,
   enterkeyhint: null,
-  keepText: false,
+  keepText: true,
 }
 
 function tokens(field: RemoteField) {
@@ -101,15 +103,16 @@ export function keyboardFor(field: RemoteField | null): KeyboardAttributes {
         ...exact,
         inputmode: pageMode || (field.type === 'number' || field.type === 'tel' ? 'numeric' : null),
         autocomplete: 'one-time-code',
+        keepText: true,
       }
     case 'email':
-      return { ...exact, inputmode: 'email', autocomplete: 'email' }
+      return { ...exact, inputmode: 'email', autocomplete: 'email', keepText: true }
     case 'username':
       return { ...exact, inputmode: pageMode, autocomplete: 'off' }
     case 'url':
       return { ...exact, inputmode: 'url', autocomplete: 'off' }
     case 'tel':
-      return { ...exact, inputmode: 'tel', autocomplete: 'tel' }
+      return { ...exact, inputmode: 'tel', autocomplete: 'tel', keepText: true }
     case 'number':
       return { ...exact, inputmode: pageMode || 'decimal', autocomplete: 'off' }
   }
@@ -128,7 +131,7 @@ export function keyboardFor(field: RemoteField | null): KeyboardAttributes {
     autocapitalize,
     spellcheck: field.spellcheck !== 'false',
     enterkeyhint,
-    keepText: autocorrect === 'on',
+    keepText: autocorrect === 'on' || !!contact,
   }
 }
 

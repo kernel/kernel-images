@@ -8,6 +8,7 @@ import { FocusKeyboard } from '../src/utils/focus-keyboard'
 import { RemoteField } from '../src/utils/remote-focus'
 import { SoftKeyboard } from '../src/utils/soft-keyboard'
 import { TapKeyboard } from '../src/utils/tap-keyboard'
+import { TextInput, XK_BACKSPACE, XK_SHIFT_L } from '../src/utils/text-input'
 import { TypedText } from '../src/utils/typed-text'
 
 // Load the real component methods without mounting its media player or child components.
@@ -493,7 +494,7 @@ describe('raising the keyboard for a remote field', () => {
       spellcheck: 'false',
       inputmode: 'email',
     })
-    expect(t.ctx.keepText).toBe(false)
+    expect(t.ctx.keepText).toBe(true)
   })
 
   test('refocuses an open keyboard inside the tap when more than its layout changes', () => {
@@ -522,9 +523,10 @@ describe('raising the keyboard for a remote field', () => {
     expect(t.el.attrs.get('inputmode')).toBe('none')
     t.report(notes)
     expect(t.keyboard()).toBe(true)
-    // iOS keeps the attributes it was focused with
+    // iOS keeps the attributes it was focused with: the default keyboard's,
+    // which offer codes from Messages
     expect(t.el.attrs.get('autocorrect')).toBe('off')
-    expect(t.ctx.keepText).toBe(false)
+    expect(t.ctx.keepText).toBe(true)
   })
 })
 
@@ -556,6 +558,68 @@ describe('overlay text for autocorrect', () => {
     t.ctx.onOverlayInput({ inputType: 'deleteContentBackward', data: null })
     expect(sent).toEqual(['backspace'])
     expect(t.el.value).toBe(' ')
+  })
+})
+
+describe('AutoFill', () => {
+  // the remote field's text, typed through the real key path
+  const emailSetup = (open = (t: ReturnType<typeof phone>) => t.tap({ x: 50, y: 140 })) => {
+    const t = phone()
+    let remote = ''
+    const textInput = new TextInput(
+      (event, key) => {
+        if (event !== 'keydown' || key === XK_SHIFT_L) return
+        remote = key === XK_BACKSPACE ? remote.slice(0, -1) : remote + String.fromCodePoint(key & 0x00ffffff)
+      },
+      () => true,
+    )
+    t.ctx.textInput = textInput
+    t.ctx.typedText = new TypedText(' ', {
+      type: (s) => textInput.type(s),
+      backspace: () => textInput.key(XK_BACKSPACE),
+    })
+    open(t)
+    // iOS changes the overlay's value, then fires input
+    const fill = (inputType: string, value: string, data: string | null) => {
+      t.el.value = value
+      t.ctx.onOverlayInput({ inputType, data })
+    }
+    return { t, fill, remote: () => remote }
+  }
+  const EMAIL = 'me@example.com'
+
+  test('a fill that replaces the sentinel types the email once', () => {
+    const { t, fill, remote } = emailSetup()
+    fill('insertReplacementText', EMAIL, EMAIL)
+    expect(remote()).toBe(EMAIL)
+    expect(t.el.value).toBe(' ' + EMAIL)
+  })
+
+  test('a fill iOS repeats after the overlay changes under it types the email once', () => {
+    const { fill, remote } = emailSetup()
+    for (let i = 0; i < 3; i++) fill('insertReplacementText', EMAIL, EMAIL)
+    expect(remote()).toBe(EMAIL)
+  })
+
+  test('a fill that inserts a space, then replaces the text, types the email once', () => {
+    const { fill, remote } = emailSetup()
+    fill('insertText', '  ', ' ')
+    fill('insertText', EMAIL, EMAIL)
+    expect(remote()).toBe(EMAIL)
+  })
+
+  test('a code from Messages on the keyboard opened without a field is typed once', () => {
+    const { t, fill, remote } = emailSetup((t) => t.ctx.focusForTyping(null))
+    expect(t.el.attrs.get('autocomplete')).toBe('one-time-code')
+    for (let i = 0; i < 2; i++) fill('insertReplacementText', '123456', '123456')
+    expect(remote()).toBe('123456')
+  })
+
+  test('a fill after the first typed letters completes them', () => {
+    const { fill, remote } = emailSetup()
+    fill('insertText', ' m', 'm')
+    fill('insertReplacementText', ' ' + EMAIL, EMAIL)
+    expect(remote()).toBe(EMAIL)
   })
 })
 

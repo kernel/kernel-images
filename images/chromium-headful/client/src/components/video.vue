@@ -1531,7 +1531,7 @@
         // inputmode="none" raises the keyboard.
         this.overlayHeld = false
         setInputMode(this._overlay, keyboard.inputmode)
-        this.keepText = false
+        this.keepText = DEFAULT_KEYBOARD.keepText
         this.resetInputSentinel()
         this.onOverlayFocus()
         return
@@ -1653,13 +1653,23 @@
       this._overlay.setSelectionRange(INPUT_SENTINEL.length, INPUT_SENTINEL.length)
     }
 
+    // AutoFill replaced the overlay's whole value, sentinel included
+    restoreInputSentinel() {
+      const value = this._overlay.value
+      if (value.startsWith(INPUT_SENTINEL)) return
+      this._overlay.value = INPUT_SENTINEL + value
+      this._overlay.setSelectionRange(this._overlay.value.length, this._overlay.value.length)
+    }
+
     // Soft keyboards that report keyCode 229 (Android) deliver text only through
     // input events, which the Guacamole keyboard does not handle.
     onOverlayInput(e: Event) {
       if (!this.is_touch_device) return
       if (this.keepText) {
         const kept = this.inputEnabled && this.typedText.edit(this._overlay.value)
-        if (!kept && !this.textInput.composing) this.resetInputSentinel()
+        if (this.textInput.composing) return
+        if (kept) this.restoreInputSentinel()
+        else this.resetInputSentinel()
         return
       }
       if (this.inputEnabled) {
@@ -1682,7 +1692,8 @@
     onCompositionEnd(e: CompositionEvent) {
       // the overlay's edits already sent a composition it keeps
       this.textInput.compositionEnd(e.data || '', this.inputEnabled && !this.keepText)
-      if (!this.keepText || !this.inputEnabled || !this.typedText.edit(this._overlay.value)) this.resetInputSentinel()
+      if (this.keepText && this.inputEnabled && this.typedText.edit(this._overlay.value)) this.restoreInputSentinel()
+      else this.resetInputSentinel()
     }
 
     focusOverlay() {

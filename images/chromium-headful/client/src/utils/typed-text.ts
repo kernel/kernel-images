@@ -4,7 +4,8 @@
 // instead of sending keys, and Android keyboards compose a word and rewrite
 // it. Each change to the overlay is diffed against what was sent and goes to
 // the remote as backspaces and text, so the text before the remote caret
-// keeps matching the overlay.
+// keeps matching the overlay. AutoFill replaces the field's text the same
+// way, so text it fills in more than one edit is sent once.
 
 import { XK_BACKSPACE, textDiff } from './text-input'
 
@@ -45,17 +46,20 @@ export class TypedText {
 
   // The overlay's value after an edit. Returns false when the overlay should
   // be reset: its sentinel was deleted, which stands for text typed before
-  // the overlay last started over, or it holds too much.
+  // the overlay last started over, or it holds too much. AutoFill can replace
+  // the whole value, sentinel included, which keeps the text before the
+  // overlay, so the caller puts the sentinel back instead.
   edit(value: string) {
     const kept = value.startsWith(this.sentinel)
+    const replaced = !kept && value !== ''
     const next = kept ? value.slice(this.sentinel.length) : value
     const { deletes, insert } = textDiff(this.text, next)
     this.editing = true
     // the sentinel stands for one character before the overlay's text
-    for (let i = 0; i < deletes + (kept ? 0 : 1); i++) this.out.backspace()
+    for (let i = 0; i < deletes + (kept || replaced ? 0 : 1); i++) this.out.backspace()
     if (insert) this.out.type(insert)
     this.editing = false
     this.text = next
-    return kept && next.length <= MAX_TEXT
+    return (kept || replaced) && next.length <= MAX_TEXT
   }
 }
