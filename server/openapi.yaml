@@ -1597,6 +1597,8 @@ paths:
         the API runs; when it shuts down, they are removed and their tabs closed.
       operationId: executePlaywrightCode
       x-telemetry-category: control
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -1618,6 +1620,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PlaywrightExecutorLimitError"
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReusedError"
+        "429":
+          $ref: "#/components/responses/IdempotentCallsBusyError"
         "500":
           $ref: "#/components/responses/InternalError"
   /playwright/executors:
@@ -1718,6 +1724,8 @@ paths:
         VM, equivalent in trust level to the process and Playwright execution APIs; it is not sandboxed.
       operationId: executeBrowserRepl
       x-telemetry-category: control
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         description: JSON request bodies are limited to 8 MiB before strict decoding. The API rejects a marshaled daemon request over the daemon's 8 MiB newline-delimited request-line limit as a non-destructive 400.
         required: true
@@ -1736,6 +1744,10 @@ paths:
           $ref: "#/components/responses/BadRequestError"
         "413":
           $ref: "#/components/responses/BadRequestError"
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReusedError"
+        "429":
+          $ref: "#/components/responses/IdempotentCallsBusyError"
         "500":
           $ref: "#/components/responses/InternalError"
   /browser/location:
@@ -2110,6 +2122,23 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Makes retrying the call safe. A call with a key already used returns the first call's
+        response instead of running the code again, waiting for it if it is still running. A call
+        with a key keeps running for 10 seconds after its last caller disconnects, so a retry can
+        collect its response; after that it is cancelled like a call without a key. A response is
+        kept for 10 minutes once the call finishes, and only the most recent responses are kept. A call that did not run,
+        such as one rejected with 400, 409 or 429, does not use up its key. Keys are scoped to this
+        endpoint and are lost when the API process restarts.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
   schemas:
     ExtensionUploadMultipart:
       type: object
@@ -8147,6 +8176,18 @@ components:
             $ref: "#/components/schemas/Error"
     ConflictError:
       description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    IdempotentCallsBusyError:
+      description: Too many calls with a new Idempotency-Key are waiting or running. The call did not run; retry it.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    IdempotencyKeyReusedError:
+      description: The Idempotency-Key was already used for a request with different parameters
       content:
         application/json:
           schema:

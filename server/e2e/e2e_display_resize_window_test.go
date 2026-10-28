@@ -49,7 +49,7 @@ func getRendererViewport(ctx context.Context, c *TestContainer) (rendererViewpor
 		}));
 	`
 	timeout := 5
-	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
+	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightRequest{
 		Code:       code,
 		TimeoutSec: &timeout,
 	})
@@ -505,7 +505,7 @@ func navigateBlank(t *testing.T, ctx context.Context, c *TestContainer) {
 	require.NoError(t, err)
 	timeout := 5
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
-		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightRequest{
 			Code:       `await page.goto('about:blank'); return true;`,
 			TimeoutSec: &timeout,
 		})

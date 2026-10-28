@@ -1024,3 +1024,71 @@ func (f *fakeCDPServer) evalExpression(expr string, sessionID string) any {
 		return expr
 	}
 }
+
+func TestBrowserReplIdempotencyKey(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	initial := requireExec(t, svc, `var keyedRuns = 0`, nil)
+
+	execute := func(ctx context.Context, key, code string) (oapi.ExecuteBrowserReplResponseObject, error) {
+		return svc.ExecuteBrowserRepl(ctx, oapi.ExecuteBrowserReplRequestObject{
+			Params: oapi.ExecuteBrowserReplParams{IdempotencyKey: &key},
+			Body:   &oapi.ExecuteBrowserReplJSONRequestBody{Code: code},
+		})
+	}
+	const code = `keyedRuns++; await new Promise(resolve => setTimeout(resolve, 300)); repl.write(JSON.stringify(keyedRuns))`
+
+	// Without a key, a disconnect mid-execution destroys the REPL. With one,
+	// the execution finishes and the retry gets its result.
+	ctx, cancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := execute(ctx, "k1", code)
+		firstDone <- err
+	}()
+	require.Eventually(t, func() bool { return browserReplBusy(svc) }, time.Second, 10*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-firstDone, context.Canceled)
+
+	resp, err := execute(context.Background(), "k1", code)
+	require.NoError(t, err)
+	retried, ok := resp.(oapi.ExecuteBrowserRepl200JSONResponse)
+	require.True(t, ok, "expected 200, got %T", resp)
+	require.True(t, retried.Success, "execution failed: %v", retried.Error)
+	assert.Nil(t, retried.ReplTerminated)
+	assert.Equal(t, initial.ReplId, retried.ReplId)
+	requireExec(t, svc, `repl.write(JSON.stringify(keyedRuns))`, float64(1))
+
+	resp, err = execute(context.Background(), "k1", `keyedRuns++`)
+	require.NoError(t, err)
+	assert.IsType(t, oapi.ExecuteBrowserRepl422JSONResponse{}, resp)
+	requireExec(t, svc, `repl.write(JSON.stringify(keyedRuns))`, float64(1))
+}
+
+// Aborting a hung keyed cell frees the REPL once the abandon grace period
+// passes, instead of after the cell's timeout.
+func TestBrowserReplAbandonedKeyedCellIsTerminated(t *testing.T) {
+	svc := newBrowserReplSvc(t)
+	svc.browserRepl.idempotent.abandonGrace = 200 * time.Millisecond
+	initial := requireExec(t, svc, `var before = 1`, nil)
+
+	key := "hung"
+	timeoutSec := 300
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.ExecuteBrowserRepl(ctx, oapi.ExecuteBrowserReplRequestObject{
+			Params: oapi.ExecuteBrowserReplParams{IdempotencyKey: &key},
+			Body:   &oapi.ExecuteBrowserReplJSONRequestBody{Code: `await new Promise(() => {})`, TimeoutSec: &timeoutSec},
+		})
+		done <- err
+	}()
+	require.Eventually(t, func() bool { return browserReplBusy(svc) }, time.Second, 10*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+
+	start := time.Now()
+	reset := true
+	fresh := executeBrowserRepl(t, svc, &oapi.ExecuteBrowserReplJSONRequestBody{Reset: &reset})
+	assert.Less(t, time.Since(start), 10*time.Second)
+	assert.NotEqual(t, initial.ReplId, fresh.ReplId)
+}

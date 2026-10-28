@@ -52,7 +52,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 		Code: playwrightCode,
 	}
 
-	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, req)
+	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, req)
 	require.NoError(t, err, "playwright execute request error: %v", err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "unexpected status for playwright execute: %s body=%s", rsp.Status(), string(rsp.Body))
 	require.NotNil(t, rsp.JSON200, "expected JSON200 response, got nil")
@@ -89,7 +89,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Log("playwright execute API test passed")
 
 	t.Log("verifying @playwright/test assertions in the Playwright execution scope")
-	expectRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	expectRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const { expect } = await import('@playwright/test');
 			await page.setContent('<h1>hello kernel</h1><button>Click me</button>');
@@ -112,7 +112,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.EqualValues(t, 3, expectRsp.JSON200.Result, "expected expect.poll to run until the condition passed")
 
 	t.Log("verifying WebMCP helpers in the Playwright execution scope")
-	webmcpRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	webmcpRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const tools = await webmcp.listTools();
 			let failure;
@@ -157,7 +157,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.NotEmpty(t, helperResult.Failure.Message)
 
 	t.Log("verifying existing code may declare its own webmcp binding")
-	shadowedWebMCPRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	shadowedWebMCPRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const webmcp = 'user-defined';
 			return webmcp;
@@ -176,7 +176,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	// signal). Uses a `data:` URL for the second tab so the assertion doesn't
 	// depend on a second outbound network request.
 	t.Log("verifying page binds to the foreground tab")
-	openSecondTabRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	openSecondTabRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const second = await context.newPage();
 			await second.goto('data:text/html,second-tab');
@@ -191,7 +191,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 
 	// A fresh execute call must bind `page` to the newest tab, which is also
 	// the foreground one right after opening it.
-	urlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	urlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return page.url();`,
 	})
 	require.NoError(t, err, "url request error: %v", err)
@@ -206,7 +206,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	// assumption this change removes. Tab-creation order alone can't
 	// distinguish this case from the one above -- only the CDP `tabActive`
 	// signal can.
-	bringToFrontRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	bringToFrontRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const first = context.pages().find(candidate =>
 				candidate.url().includes('example.com')
@@ -221,7 +221,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.NotNil(t, bringToFrontRsp.JSON200)
 	require.True(t, bringToFrontRsp.JSON200.Success, "expected bring-to-front success=true")
 
-	refocusedUrlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	refocusedUrlRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return page.url();`,
 	})
 	require.NoError(t, err, "refocused url request error: %v", err)
@@ -235,7 +235,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	t.Log("verifying page resolution across browser contexts")
 	// Keep a newer blank page behind the foreground page so the newest-page
 	// fallback cannot satisfy the active-page assertion.
-	openSecondContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	openSecondContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `
 			const firstContext = browser.contexts()[0];
 			const secondContext = await browser.newContext();
@@ -268,7 +268,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	require.Zero(t, setupResult.FirstContextPageCount, "expected the first context to remain open without pages")
 	require.Equal(t, 2, setupResult.SecondContextPageCount, "expected a foreground page and a newer fallback page in the second context")
 
-	crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	crossContextRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return { url: page.url(), contextPageUrls: page.context().pages().map(candidate => candidate.url()) };`,
 	})
 	require.NoError(t, err, "cross-context request error: %v", err)
@@ -332,7 +332,7 @@ func TestPlaywrightExecuteTimeoutReturnsPromptlyAndRecovers(t *testing.T) {
 	setupReq := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: `return await page.evaluate(() => document.body.dataset.timeoutMutation = "initial");`,
 	}
-	setupRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, setupReq)
+	setupRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, setupReq)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, setupRsp.StatusCode())
 	require.NotNil(t, setupRsp.JSON200)
@@ -349,7 +349,7 @@ await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
 
 	t.Log("executing playwright code expected to exceed timeout")
 	start := time.Now()
-	timeoutRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, timeoutReq)
+	timeoutRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, timeoutReq)
 	elapsed := time.Since(start)
 
 	require.NoError(t, err, "playwright timeout request should return an API response")
@@ -368,7 +368,7 @@ await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
 	}
 
 	t.Log("executing normal playwright code after timed-out request")
-	recoveryRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, recoveryReq)
+	recoveryRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, recoveryReq)
 	require.NoError(t, err, "playwright recovery request error: %v", err)
 	require.Equal(t, http.StatusOK, recoveryRsp.StatusCode(), "unexpected status for playwright recovery execute: %s body=%s", recoveryRsp.Status(), string(recoveryRsp.Body))
 	require.NotNil(t, recoveryRsp.JSON200, "expected JSON200 recovery response, got nil")
@@ -384,7 +384,7 @@ await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
 	// Wait past the abandoned script's delay. A response-only timeout lets that
 	// script wake up and mutate the page after the caller has moved on.
 	time.Sleep(2 * time.Second)
-	lateRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, recoveryReq)
+	lateRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, recoveryReq)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, lateRsp.StatusCode())
 	require.NotNil(t, lateRsp.JSON200)
@@ -400,7 +400,7 @@ await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
 		Code:       `while (true) {}`,
 		TimeoutSec: &timeoutSec,
 	}
-	blockedRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, blockedReq)
+	blockedRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, blockedReq)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, blockedRsp.StatusCode())
 	require.NotNil(t, blockedRsp.JSON200)
@@ -408,7 +408,7 @@ await page.evaluate(() => document.body.dataset.timeoutMutation = "late");
 
 	for i := range 3 {
 		start := time.Now()
-		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, recoveryReq)
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, recoveryReq)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, rsp.StatusCode())
 		require.NotNil(t, rsp.JSON200)
@@ -447,7 +447,7 @@ func TestPlaywrightDaemonRecovery(t *testing.T) {
 		code := `return await page.evaluate(() => navigator.userAgent);`
 		req := instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code}
 
-		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, req)
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, req)
 		if err != nil {
 			return fmt.Errorf("request error: %w", err)
 		}
@@ -561,7 +561,7 @@ func testPlaywrightExecutors(t *testing.T, ctx context.Context, client *instance
 		if executor != "" {
 			body.Executor = &executor
 		}
-		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, body)
+		rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, body)
 		require.NoError(t, err)
 		require.Equal(t, http.StatusOK, rsp.StatusCode(), "body=%s", string(rsp.Body))
 		require.NotNil(t, rsp.JSON200)
@@ -623,7 +623,7 @@ func testPlaywrightExecutors(t *testing.T, ctx context.Context, client *instance
 	t.Log("verifying an executor keeps its process and tab after a timeout")
 	before := execute("a", `return process.pid;`)
 	timeoutSec := 1
-	timedOutRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	timedOutRsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code:       `await page.waitForTimeout(3000);`,
 		Executor:   lo.ToPtr("a"),
 		TimeoutSec: &timeoutSec,

@@ -159,7 +159,7 @@ func testWebMCPDeclarative(t *testing.T, ctx context.Context, client *instanceoa
 
 func executeWebMCPPlaywright(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, code string, result any) {
 	t.Helper()
-	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code})
+	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{Code: code})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "%s", rsp.Body)
 	require.NotNil(t, rsp.JSON200)

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,12 +25,14 @@ import (
 // kills the process. FAKE_START_DELAY_MS delays listening on the socket. A tab
 // exists while its file exists in FAKE_TABS_DIR (see
 // fakeExecutorTabs); a missing tab is answered with tab_missing. Every result
-// carries the process ID so tests can tell when a process is replaced.
+// carries the process ID so tests can tell when a process is replaced, and the
+// number of calls the process has run.
 const fakePlaywrightDaemon = `
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const socketPath = process.env.PLAYWRIGHT_DAEMON_SOCKET;
+let calls = 0;
 const server = net.createServer(socket => {
   let buffer = '';
   socket.on('data', data => {
@@ -50,10 +53,11 @@ const server = net.createServer(socket => {
       if (req.code === 'hang') { for (;;) {} }
       if (req.code === 'exit') { process.exit(1); }
       const ms = Number(req.code.split(':')[1] || 0);
+      const call = ++calls;
       if (ms > req.timeout_ms) {
         setTimeout(() => respond({ success: false, error: 'timed out', timed_out: true }), req.timeout_ms);
       } else {
-        setTimeout(() => respond({ success: true, result: { pid: process.pid } }), ms);
+        setTimeout(() => respond({ success: true, result: { pid: process.pid, calls: call } }), ms);
       }
     }
   });
@@ -681,3 +685,97 @@ func TestPlaywrightExecutorRejectsCallsAfterShutdown(t *testing.T) {
 	assert.Empty(t, entries, "no tab should be opened after shutdown")
 	assert.Empty(t, m.List())
 }
+
+func TestPlaywrightExecuteIdempotencyKey(t *testing.T) {
+	m, _ := newTestPlaywrightExecutorManager(t)
+	svc, err := newSvc(t, recorder.NewFFmpegManager())
+	require.NoError(t, err)
+	svc.playwrightExecutors = m
+
+	execute := func(ctx context.Context, key, code string, executor *string) (oapi.ExecutePlaywrightCodeResponseObject, error) {
+		request := oapi.ExecutePlaywrightCodeRequestObject{
+			Body: &oapi.ExecutePlaywrightCodeJSONRequestBody{Code: code, Executor: executor},
+		}
+		if key != "" {
+			request.Params.IdempotencyKey = &key
+		}
+		return svc.ExecutePlaywrightCode(ctx, request)
+	}
+	calls := func(resp oapi.ExecutePlaywrightCodeResponseObject) int {
+		t.Helper()
+		ok, isOK := resp.(oapi.ExecutePlaywrightCode200JSONResponse)
+		require.True(t, isOK, "expected 200, got %T", resp)
+		require.True(t, ok.Success, "execution failed: %v", ok.Error)
+		raw, err := json.Marshal(ok.Result)
+		require.NoError(t, err)
+		var result struct {
+			Calls int `json:"calls"`
+		}
+		require.NoError(t, json.Unmarshal(raw, &result))
+		return result.Calls
+	}
+
+	stz := &countingScaleToZero{}
+	svc.stz = stz
+
+	// The first caller disconnects while its call runs; the retry gets that
+	// call's result instead of running the code again. The call keeps the VM
+	// awake without its caller.
+	ctx, cancel := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := execute(ctx, "k1", "sleep:300", nil)
+		firstDone <- err
+	}()
+	require.Eventually(t, func() bool { return m.List()[0].busy }, 2*time.Second, 5*time.Millisecond)
+	cancel()
+	require.ErrorIs(t, <-firstDone, context.Canceled)
+	assert.EqualValues(t, 1, stz.holds.Load())
+
+	resp, err := execute(context.Background(), "k1", "sleep:300", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls(resp))
+	require.Eventually(t, func() bool { return stz.holds.Load() == 0 }, time.Second, 5*time.Millisecond)
+	defaultName := defaultPlaywrightExecutor
+	resp, err = execute(context.Background(), "k1", "sleep:300", &defaultName)
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls(resp), "naming the default executor is the same request")
+
+	resp, err = execute(context.Background(), "", "sleep:0", nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, calls(resp), "the retries did not run the code")
+
+	resp, err = execute(context.Background(), "k1", "sleep:0", nil)
+	require.NoError(t, err)
+	assert.IsType(t, oapi.ExecutePlaywrightCode422JSONResponse{}, resp)
+
+	resp, err = execute(context.Background(), "bad\nkey", "sleep:0", nil)
+	require.NoError(t, err)
+	assert.IsType(t, oapi.ExecutePlaywrightCode400JSONResponse{}, resp)
+
+	// A call rejected before it reaches an executor does not use up its key.
+	for i := 1; i <= maxPlaywrightExecutors; i++ {
+		name := fmt.Sprintf("e%d", i)
+		_, err := execute(context.Background(), "", "sleep:0", &name)
+		require.NoError(t, err)
+	}
+	ninth := "ninth"
+	resp, err = execute(context.Background(), "k2", "sleep:0", &ninth)
+	require.NoError(t, err)
+	assert.IsType(t, oapi.ExecutePlaywrightCode409JSONResponse{}, resp)
+	_, err = m.Delete(context.Background(), "e1")
+	require.NoError(t, err)
+	resp, err = execute(context.Background(), "k2", "sleep:0", &ninth)
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls(resp))
+}
+
+// countingScaleToZero counts holds taken with Disable and released with Enable.
+type countingScaleToZero struct {
+	holds atomic.Int32
+}
+
+func (c *countingScaleToZero) Disable(context.Context) error { c.holds.Add(1); return nil }
+func (c *countingScaleToZero) Enable(context.Context) error  { c.holds.Add(-1); return nil }
+func (c *countingScaleToZero) Pin(context.Context) error     { return nil }
+func (c *countingScaleToZero) Unpin(context.Context) error   { return nil }

@@ -38,7 +38,7 @@ func replJSONWrite(t *testing.T, r *instanceoapi.BrowserReplResult) any {
 
 func executeBrowserRepl(t *testing.T, ctx context.Context, client *instanceoapi.ClientWithResponses, body instanceoapi.ExecuteBrowserReplJSONRequestBody) *instanceoapi.BrowserReplResult {
 	t.Helper()
-	rsp, err := client.ExecuteBrowserReplWithResponse(ctx, body)
+	rsp, err := client.ExecuteBrowserReplWithResponse(ctx, nil, body)
 	require.NoError(t, err, "Browser REPL request error: %v", err)
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "unexpected status for Browser REPL: %s body=%s", rsp.Status(), string(rsp.Body))
 	require.NotNil(t, rsp.JSON200, "expected JSON200 response, got nil")

@@ -191,7 +191,7 @@ func recordReplayAudio(t *testing.T, ctx context.Context, c *TestContainer, play
 	}()
 
 	playwrightStart := time.Now()
-	runResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
+	runResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightCodeJSONRequestBody{
 		Code: playwrightCode,
 	})
 	t.Logf("[replay-audio] playwright took %s", time.Since(playwrightStart))

@@ -323,7 +323,7 @@ func TestChromiumConfigureStartURLBare(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		timeoutSec := 3
-		pwResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, instanceoapi.ExecutePlaywrightRequest{
+		pwResp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightRequest{
 			Code:       "return page.url();",
 			TimeoutSec: &timeoutSec,
 		})
