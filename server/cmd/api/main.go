@@ -46,7 +46,11 @@ import (
 )
 
 func main() {
-	slogger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	// JSON, so the host's log pipeline can index fields without parsing text.
+	// Fields meant for indexing go under logger.AttrsKey. SetDefault also
+	// routes slog.Default() and the standard log package through it.
+	slogger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(slogger)
 
 	// Load configuration from environment variables
 	config, err := config.Load()
@@ -67,8 +71,8 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(
 		chiMiddleware.RequestID,
-		chiMiddleware.Logger,
-		chiMiddleware.Recoverer,
+		logger.RequestLogger(slogger),
+		logger.Recoverer(slogger),
 		func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ctxWithLogger := logger.AddToContext(r.Context(), slogger)
@@ -165,7 +169,7 @@ func main() {
 		// would swallow it. Wire it to a handler that admits that level and counts
 		// drops into otlpMetrics, so backpressure is both logged and scrapable.
 		otlpMetrics = &events.OTLPMetrics{}
-		otelDiag := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
+		otelDiag := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo - 1})
 		otel.SetLogger(logr.FromSlogHandler(events.NewDropCountingHandler(otelDiag, otlpMetrics)))
 		otlpExporter = events.NewOTLPExportController(eventStream, events.OTLPConfig{
 			Endpoint:         config.OTLPEndpoint,
@@ -305,8 +309,8 @@ func main() {
 
 	rDevtools := chi.NewRouter()
 	rDevtools.Use(
-		chiMiddleware.Logger,
-		chiMiddleware.Recoverer,
+		logger.RequestLogger(slogger),
+		logger.Recoverer(slogger),
 		func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ctxWithLogger := logger.AddToContext(r.Context(), slogger)
@@ -344,8 +348,8 @@ func main() {
 	// proxies WebSocket (BiDi) and all other HTTP to the internal ChromeDriver.
 	rChromeDriver := chi.NewRouter()
 	rChromeDriver.Use(
-		chiMiddleware.Logger,
-		chiMiddleware.Recoverer,
+		logger.RequestLogger(slogger),
+		logger.Recoverer(slogger),
 		func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				ctxWithLogger := logger.AddToContext(r.Context(), slogger)
@@ -370,7 +374,7 @@ func main() {
 	// scrapes must not count as session activity) and without per-request
 	// logging (scrapes would drown the logs).
 	rMetrics := chi.NewRouter()
-	rMetrics.Use(chiMiddleware.Recoverer)
+	rMetrics.Use(logger.Recoverer(slogger))
 	metricsCollectors := []metrics.Collector{
 		metrics.NewNetworkCollector(apiService.NetworkMetrics),
 		metrics.NewBrowserLocationCollector(apiService.BrowserLocationMetrics),
