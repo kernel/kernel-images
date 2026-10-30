@@ -1,4 +1,4 @@
-FROM docker.io/golang:1.26.10 AS server-builder
+FROM docker.io/golang:1.27.3 AS server-builder
 WORKDIR /workspace/server
 
 # Allow cross-compilation when building with BuildKit platforms
