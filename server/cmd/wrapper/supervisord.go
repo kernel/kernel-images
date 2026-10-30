@@ -3,11 +3,14 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/kernel/kernel-images/server/lib/runasroot"
 )
 
 const (
@@ -17,9 +20,8 @@ const (
 	supervisordLogD = "/var/log/supervisord"
 )
 
-// startAll asks supervisord to start the given programs. We invoke
-// supervisorctl once (it accepts multiple args) so we don't pay python
-// cold-start costs per service.
+// startAll asks each supervisor to start its programs in one call, avoiding
+// Python cold-start costs per service.
 func startAll(progs ...string) {
 	supervisorctl("start", progs...)
 }
@@ -39,22 +41,38 @@ func supervisorctl(verb string, progs ...string) {
 	if len(progs) == 0 {
 		return
 	}
-	args := append([]string{"-c", supervisorConf, verb}, progs...)
-	cmd := exec.Command("supervisorctl", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	_ = cmd.Run() // a service that fails to come up will surface via readiness checks
+	groups := map[string][]string{}
+	for _, prog := range progs {
+		conf := supervisorConfig(prog)
+		groups[conf] = append(groups[conf], prog)
+	}
+	for conf, programs := range groups {
+		args := append([]string{"-c", conf, verb}, programs...)
+		cmd := exec.Command("supervisorctl", args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		_ = cmd.Run() // a service that fails to come up will surface via readiness checks
+	}
 }
 
 func waitForSocket(path string, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if fi, err := os.Stat(path); err == nil && fi.Mode()&os.ModeSocket != 0 {
+		if unixSocketReady(path) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	logf("WARNING: socket %s not ready after %s", path, timeout)
+}
+
+func unixSocketReady(path string) bool {
+	conn, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
 }
 
 // startLogAggregator tails any file under /var/log/supervisord, prefixing
@@ -81,8 +99,18 @@ func startLogAggregator() {
 	}()
 }
 
+func tailCommand(path string) *exec.Cmd {
+	if runasroot.Enabled() {
+		return exec.Command("tail", "-n", "+1", "-F", path)
+	}
+	// Customer logs can be replaced with symlinks. Reading them as root
+	// would turn the log stream into a privileged file-read API.
+	return exec.Command("setpriv", "--reuid=kernel", "--regid=kernel", "--init-groups", "--no-new-privs",
+		"tail", "-n", "+1", "-F", path)
+}
+
 func tailFile(path string) {
-	cmd := exec.Command("tail", "-n", "+1", "-F", path)
+	cmd := tailCommand(path)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return

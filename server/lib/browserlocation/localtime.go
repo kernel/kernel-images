@@ -29,7 +29,11 @@ func ZonePath(timezone string) (string, error) {
 // SetLocaltime points /etc/localtime at timezone so that Chromium, which
 // watches the file, reports HostTimeZone(timezone) as its host timezone.
 func SetLocaltime(timezone string) error {
-	return setLocaltime(zoneinfoDir, localtimeCopyDir, localtimePath, timezone)
+	path := localtimePath
+	if os.Geteuid() != 0 {
+		path = "/run/kernel-location/localtime"
+	}
+	return setLocaltime(zoneinfoDir, localtimeCopyDir, path, timezone)
 }
 
 // HostTimeZone is the identifier the browser reports as its host timezone

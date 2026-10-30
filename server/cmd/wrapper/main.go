@@ -3,9 +3,8 @@
 // where the dependency graph allows, and waits for CDP to be reachable through
 // kernel-images-api.
 //
-// Replaces the legacy /wrapper.sh shipped in both images. Behavior parity is
-// intentional — we still rely on supervisord, sysctl, dbus, etc. The only goal
-// beyond parity is minimizing time-to-CDP-ready by removing serial dead time.
+// Replaces the legacy /wrapper.sh shipped in both images. RUN_AS_ROOT selects
+// whether customer-facing services retain root access or run as kernel.
 //
 // The headful vs headless profile is detected at boot from supervisor's conf.d
 // (xorg.conf → headful, xvfb.conf → headless), which keeps a single binary
@@ -23,6 +22,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kernel/kernel-images/server/lib/runasroot"
 )
 
 const (
@@ -113,7 +114,12 @@ func main() {
 	_ = os.WriteFile("/proc/sys/net/ipv6/conf/default/disable_ipv6", []byte("1"), 0o644)
 
 	// Pre-create per-user dirs so chromium subsystems don't error.
-	prepareUserDirs(os.Getenv("RUN_AS_ROOT") == "true")
+	prepareUserDirs(runasroot.Enabled())
+	if !runasroot.Enabled() {
+		if err := prepareUnprivilegedServices(); err != nil {
+			fatalf("non-root service setup: %v", err)
+		}
+	}
 
 	// Tail aggregator for service logs.
 	startLogAggregator()
@@ -140,6 +146,19 @@ func main() {
 	// drop us out of supCmd.Wait() and the container would stop.
 	logf("starting supervisord")
 	supCmd := exec.Command("supervisord", "-n", "-c", supervisorConf)
+	if !runasroot.Enabled() {
+		rootSup := exec.Command("supervisord", "-n", "-c", rootSupervisorConf)
+		rootSup.Stdout, rootSup.Stderr = os.Stdout, os.Stderr
+		if err := rootSup.Start(); err != nil {
+			fatalf("root supervisord start: %v", err)
+		}
+		defer func() {
+			_ = rootSup.Process.Signal(syscall.SIGTERM)
+			_ = rootSup.Wait()
+		}()
+		waitForSocket(rootSupervisorSock, 10*time.Second)
+		supCmd = userSupervisorCommand()
+	}
 	supCmd.Stdout = os.Stdout
 	supCmd.Stderr = os.Stderr
 	if err := supCmd.Start(); err != nil {
@@ -155,7 +174,11 @@ func main() {
 		_ = exec.Command("supervisorctl", "-c", supervisorConf, "stop", "all").Run()
 		_ = supCmd.Process.Signal(syscall.SIGTERM)
 	}()
-	waitForSocket(supervisorSock, 10*time.Second)
+	if runasroot.Enabled() {
+		waitForSocket(supervisorSock, 10*time.Second)
+	} else {
+		waitForSocket(userSupervisorDir+"/supervisor.sock", 10*time.Second)
+	}
 
 	// Browser phase: identity-free services. Chromium itself doesn't read
 	// any per-instance identity envs — it just needs the envoy CA cert
@@ -181,7 +204,12 @@ func main() {
 	// Pre-touch chromium's supervisord log so kernel-images-api's `tail -f`
 	// doesn't bail out and enter its 250ms retry backoff when started in
 	// parallel with chromium.
-	_ = os.WriteFile(filepath.Join(supervisordLogD, "chromium"), nil, 0o644)
+	chromiumLog := filepath.Join(supervisordLogD, "chromium")
+	if runasroot.Enabled() {
+		_ = os.WriteFile(chromiumLog, nil, 0o644)
+	} else {
+		runStreamFatal("chromium-log", "runuser", "-u", "kernel", "--", "touch", chromiumLog)
+	}
 
 	browserStart := time.Now()
 	startAll(xServer, "dbus", "chromedriver", "pulseaudio")

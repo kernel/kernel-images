@@ -24,6 +24,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/ptyio"
+	"github.com/kernel/kernel-images/server/lib/runasroot"
 	"github.com/kernel/kernel-images/server/lib/wsdrain"
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
@@ -65,6 +66,9 @@ func isUserCmdError(err error) bool {
 func buildCmd(body *oapi.ProcessExecRequest) (*exec.Cmd, error) {
 	if body == nil || body.Command == "" {
 		return nil, errors.New("command required")
+	}
+	if !runasroot.Enabled() && ((body.AsRoot != nil && *body.AsRoot) || (body.AsUser != nil && *body.AsUser != "")) {
+		return nil, errors.New("as_root and as_user are unavailable when RUN_AS_ROOT is false")
 	}
 	var args []string
 	if body.Args != nil {
