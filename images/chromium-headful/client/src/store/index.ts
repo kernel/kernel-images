@@ -20,6 +20,7 @@ export const state = () => ({
   active: false,
   connecting: false,
   connected: false,
+  sessionGone: false,
   locked: {} as Record<string, boolean>,
 })
 
@@ -44,6 +45,10 @@ export const mutations = mutationTree(state, {
   setConnnecting(state) {
     state.connected = false
     state.connecting = true
+  },
+
+  setSessionGone(state, sessionGone: boolean) {
+    state.sessionGone = sessionGone
   },
 
   setConnected(state, connected: boolean) {

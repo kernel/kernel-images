@@ -111,6 +111,7 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
 
   protected [EVENT.DISCONNECTED](reason?: Error) {
     this.cleanup()
+    this.$accessor.setSessionGone(this.sessionGone)
 
     this.$vue.$notify({
       group: 'neko',
@@ -166,6 +167,14 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   protected [EVENT.SYSTEM.DISCONNECT]({ message }: SystemMessagePayload) {
+    // neko sends this as it stops, on a restart and on browser teardown alike,
+    // so it does not say whether the browser is gone. The socket close that
+    // follows does: the live-view proxy closes with the session-gone code once
+    // the session has ended.
+    if (message == 'connection shutdown') {
+      return
+    }
+
     if (message == 'kicked') {
       this.$accessor.logout()
       message = this.$vue.$t('connection.kicked') as string
