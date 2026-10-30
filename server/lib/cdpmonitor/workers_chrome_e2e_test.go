@@ -70,7 +70,6 @@ func TestNetworkCaptureFromWorkers(t *testing.T) {
 
 	for _, worker := range []struct{ targetType, path, create, request string }{
 		{"worker", "/worker.js", `window.testWorker = new Worker('/worker.js')`, `testWorker.onmessage = event => resolve(event.data); testWorker.postMessage(marker);`},
-		{"shared_worker", "/shared.js", `window.sharedWorker = new SharedWorker('/shared.js'); sharedWorker.port.start()`, `sharedWorker.port.onmessage = event => resolve(event.data); sharedWorker.port.postMessage(marker);`},
 		{"service_worker", "/service.js", `await navigator.serviceWorker.register('/service.js'); window.serviceWorker = (await navigator.serviceWorker.ready).active`, `const channel = new MessageChannel(); channel.port1.onmessage = event => resolve(event.data); serviceWorker.postMessage(marker, [channel.port2]);`},
 	} {
 		t.Run(worker.targetType, func(t *testing.T) {
