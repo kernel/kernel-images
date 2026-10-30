@@ -157,11 +157,8 @@ func main() {
 	}()
 	waitForSocket(supervisorSock, 10*time.Second)
 
-	// Browser phase: identity-free services. Chromium itself doesn't read
-	// any per-instance identity envs — it just needs the envoy CA cert
-	// (baked into the image at build time, see shared/envoy/bake-certs.sh)
-	// so it trusts the forward proxy on first start with no runtime cert
-	// work to wait on. chromium-launcher internally waits for the X server
+	// Browser phase: identity-free services.
+	// chromium-launcher internally waits for the X server
 	// and (headful) for the window manager before exec'ing chromium, so we
 	// start it in parallel with the X server to overlap chromium-launcher's
 	// preamble with display startup. chromedriver listens on 9225 immediately
@@ -224,13 +221,9 @@ func main() {
 		return
 	}
 
-	// Identity phase: render envoy bootstrap with INST_NAME/JWT/etc. In fork
-	// identity wait mode, kernel-images-api was started early and is not
-	// restarted here.
+	// In fork identity wait mode, kernel-images-api was started early and
+	// reads the applied identity payload without restarting.
 	identityStart := time.Now()
-	if isExecutable("/usr/local/bin/init-envoy.sh") {
-		runStreamFatal("envoy-init", "/usr/local/bin/init-envoy.sh")
-	}
 	if !forkIdentityWait {
 		restartAll("kernel-images-api")
 	}
@@ -276,7 +269,6 @@ func main() {
 //   - chromedriver : TCP on chromedriver's internal port 9225 (api on 9224 is bound
 //     when api itself is up, which CDP readiness already implies)
 //   - neko         : TCP on neko's HTTP port (8080), only when ENABLE_WEBRTC=true
-//   - envoy        : TCP on envoy's listener (3128), only when envoy is enabled
 func waitAllReady(t0 time.Time, webrtc bool, timeout time.Duration) (map[string]time.Duration, bool) {
 	chromePort := os.Getenv("CHROME_PORT")
 	probes := []probe{
@@ -285,9 +277,6 @@ func waitAllReady(t0 time.Time, webrtc bool, timeout time.Duration) (map[string]
 	}
 	if webrtc {
 		probes = append(probes, probe{"neko", func() bool { return tcpOK("127.0.0.1", "8080") }})
-	}
-	if envoyEnabled() {
-		probes = append(probes, probe{"envoy", func() bool { return tcpOK("127.0.0.1", "3128") }})
 	}
 
 	return waitProbesReady(t0, probes, timeout)
@@ -352,7 +341,7 @@ type probe struct {
 // order so log lines diff cleanly across runs. Probes that never succeeded are
 // omitted (they'd already have logged a WARNING separately).
 func formatProbeDurations(d map[string]time.Duration) string {
-	order := []string{"cdp", "chromedriver", "neko", "envoy"}
+	order := []string{"cdp", "chromedriver", "neko"}
 	parts := make([]string, 0, len(d))
 	for _, name := range order {
 		if v, ok := d[name]; ok {
