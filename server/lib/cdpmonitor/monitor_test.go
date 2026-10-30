@@ -197,7 +197,7 @@ func TestSurfaceDiscovery(t *testing.T) {
 	for _, filter := range params.Filter {
 		types = append(types, filter.Type)
 	}
-	assert.ElementsMatch(t, []string{"page", "iframe", "worker", "shared_worker", "service_worker", "background_page"}, types)
+	assert.ElementsMatch(t, []string{"page", "iframe", "worker", "service_worker", "background_page"}, types)
 
 	stopResponder := make(chan struct{})
 	go listenAndRespond(srv, stopResponder, nil)

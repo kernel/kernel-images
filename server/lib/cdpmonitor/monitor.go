@@ -210,7 +210,9 @@ func (m *Monitor) openConnection(ctx context.Context, devtoolsURL string) error 
 	conn := &monitorConnection{
 		protocol: protocol,
 		surface: browsersurface.New(protocol,
-			browsersurface.WithAdditionalTargets("worker", "shared_worker", "service_worker", "background_page"),
+			// shared_worker is deliberately not tracked: attaching a DevTools session to a
+			// shared worker can crash Chrome when its owning page closes.
+			browsersurface.WithAdditionalTargets("worker", "service_worker", "background_page"),
 			browsersurface.WithoutLocations(),
 		),
 		ctx: ctx, cancel: cancel, done: make(chan struct{}),

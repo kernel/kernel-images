@@ -182,7 +182,6 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 	}
 	for _, worker := range []struct{ kind, create, request string }{
 		{"worker", `window.w=new Worker('/worker.js')`, `w.onmessage=e=>resolve(e.data); w.postMessage('/reset');`},
-		{"shared_worker", `window.sw=new SharedWorker('/shared.js'); sw.port.start()`, `sw.port.onmessage=e=>resolve(e.data); sw.port.postMessage('/reset');`},
 		{"service_worker", `await navigator.serviceWorker.register('/service.js'); window.service=(await navigator.serviceWorker.ready).active`, `const c=new MessageChannel(); c.port1.onmessage=e=>resolve(e.data); service.postMessage('/reset',[c.port2]);`},
 	} {
 		t.Run(worker.kind, func(t *testing.T) {
