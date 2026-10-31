@@ -132,17 +132,32 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 			}
 			width, height = realizedW, realizedH
 		}
-		// Re-assert the maximized window state via CDP so the window manager
-		// reflows the window onto the new root; applyResolutionAndConverge already
-		// verified the root size, which is the authoritative post-condition. Fatal on
-		// failure — returning 200 with the window stuck in its old state would
-		// leave the caller with no signal of the mismatch. The previous approach
-		// of restarting chromium so it could re-apply --start-maximized had the
-		// same effective contract but cost ~9s per resize and wiped browser-side
-		// state (Emulation.* overrides, devtools sessions); restart_chromium is
-		// still accepted for API compatibility but no longer triggers a restart
-		// on this path.
+		var restartForRate bool
 		if err == nil {
+			var optedOut bool
+			restartForRate, optedOut = chromiumRestartForDisplayChange(currentWidth, currentHeight, currentRefreshRate, width, height, refreshRate, req.Body.RestartChromium)
+			if optedOut {
+				log.Warn("refresh rate changed at the same resolution but restart_chromium=false; chromium keeps rendering at its previous rate until it restarts",
+					"from", currentRefreshRate, "to", refreshRate)
+			}
+		}
+		if restartForRate {
+			// Chromium relaunches maximized on the new mode, so the CDP
+			// maximize re-assert below isn't needed.
+			if restartErr := s.restartChromiumAndWait(ctx, "refresh rate change"); restartErr != nil {
+				log.Error("failed to restart chromium after refresh rate change", "error", restartErr)
+				err = fmt.Errorf("restart chromium after refresh rate change: %w", restartErr)
+			}
+		} else if err == nil {
+			// Re-assert the maximized window state via CDP so the window manager
+			// reflows the window onto the new root; applyResolutionAndConverge already
+			// verified the root size, which is the authoritative post-condition. Fatal on
+			// failure — returning 200 with the window stuck in its old state would
+			// leave the caller with no signal of the mismatch. Size changes don't
+			// restart chromium: Chromium picks them up live, and a restart costs
+			// about a second and wipes browser-side state (Emulation.* overrides, devtools
+			// sessions). Only refresh-rate-only changes restart; see
+			// chromiumRestartForDisplayChange.
 			if cdpErr := s.setWindowMaximizedViaCDP(ctx); cdpErr != nil {
 				log.Error("CDP maximize re-assert failed after Xorg resolution change", "error", cdpErr)
 				err = fmt.Errorf("CDP maximize re-assert failed: %w", cdpErr)
@@ -197,6 +212,24 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 		Height:      &height,
 		RefreshRate: &refreshRate,
 	}, nil
+}
+
+// chromiumRestartForDisplayChange reports whether a headful display change
+// needs a Chromium restart. Chromium on Linux re-reads the screen's refresh
+// rate when the X screen size changes, but ignores a mode switch that only
+// changes the refresh rate, so it keeps its old frame interval until it is
+// relaunched. Size-only and size-plus-rate changes are picked up live. The
+// sizes compared are the realized X root sizes, since libxcvt rounding can map
+// a different requested size onto the current one. restartChromium=false opts
+// out of the restart; optedOut reports that case so the caller can log it.
+func chromiumRestartForDisplayChange(fromW, fromH, fromRate, toW, toH, toRate int, restartChromium *bool) (restart, optedOut bool) {
+	if toRate == fromRate || toW != fromW || toH != fromH {
+		return false, false
+	}
+	if restartChromium != nil && !*restartChromium {
+		return false, true
+	}
+	return true, false
 }
 
 // resolveDisplayParams merges the request body with the current display
