@@ -117,6 +117,16 @@ func (c *AuthClient) SessionsGet(ctx context.Context) ([]nekooapi.SessionData, e
 	return *resp.JSON200, nil
 }
 
+// ScreenConfigurationError preserves the HTTP status of a rejected screen change.
+type ScreenConfigurationError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *ScreenConfigurationError) Error() string {
+	return fmt.Sprintf("screen configuration API returned status %d: %s", e.StatusCode, e.Body)
+}
+
 // ScreenConfigurationChange changes the screen resolution via Neko API.
 // The HTTP response body echoes the request, not the realized
 // configuration (neko's screenConfigurationChange handler returns `data`,
@@ -158,7 +168,7 @@ func (c *AuthClient) ScreenConfigurationChange(ctx context.Context, config nekoo
 	}
 
 	if resp.StatusCode() != http.StatusOK && resp.StatusCode() != http.StatusNoContent {
-		return fmt.Errorf("screen configuration API returned status %d: %s", resp.StatusCode(), string(resp.Body))
+		return &ScreenConfigurationError{StatusCode: resp.StatusCode(), Body: string(resp.Body)}
 	}
 
 	return nil
