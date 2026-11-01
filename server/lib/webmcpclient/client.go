@@ -125,7 +125,8 @@ func (c *connection) eventLoop(events <-chan browsersurface.Event) {
 			c.stateMu.Lock()
 			for key, waiting := range c.waitingInvocations {
 				if key.sessionID == event.SessionID && waiting.frameID == event.FrameID {
-					c.waitingInvocations[key] = waitingInvocation{frameID: waiting.frameID, documentReplaced: true}
+					waiting.documentReplaced = true
+					c.waitingInvocations[key] = waiting
 				}
 			}
 			c.removeFrameToolsLocked(event.SessionID, event.FrameID)
