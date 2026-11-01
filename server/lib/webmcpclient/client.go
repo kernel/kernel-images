@@ -25,11 +25,11 @@ const (
 	maxCompletedInvocations = 256
 	maxAbandonedInvocations = 256
 	maxExceptionTextBytes   = 64 << 10
-	// replacedDocumentGrace is how long an invocation keeps waiting after its
-	// frame's replacement document finishes loading. Chromium answers a call
-	// across a navigation the tool started by the time that document loads,
-	// and never answers when the document was replaced by anything else.
-	replacedDocumentGrace = 500 * time.Millisecond
+	// unloadedPageGrace is how long an invocation keeps waiting after its
+	// page is known to be gone. Chromium answers a call across a navigation
+	// the tool started by the time the replacement document loads, and never
+	// answers when the document was replaced by anything else or crashed.
+	unloadedPageGrace = 500 * time.Millisecond
 )
 
 type connection struct {
@@ -203,12 +203,25 @@ func (c *connection) handleProtocolEvent(message cdpclient.Message) {
 			c.stateMu.Lock()
 			for key, waiting := range c.waitingInvocations {
 				if key.sessionID == message.SessionID && waiting.frameID == event.FrameID && waiting.documentReplaced {
-					waiting.replacementLoadedAt = time.Now()
+					waiting.unloadedAt = time.Now()
 					c.waitingInvocations[key] = waiting
 				}
 			}
 			c.stateMu.Unlock()
 		}
+	case "Inspector.targetCrashed":
+		// The crashed renderer took every document in this session with it,
+		// so its tools can never respond. Chromium keeps the crashed tab open.
+		c.stateMu.Lock()
+		for key, waiting := range c.waitingInvocations {
+			if key.sessionID == message.SessionID && waiting.unloadedAt.IsZero() {
+				waiting.unloadedAt = time.Now()
+				c.waitingInvocations[key] = waiting
+			}
+		}
+		c.removeSessionToolsLocked(message.SessionID)
+		c.stateMu.Unlock()
+		c.signalStateChanged()
 	case "WebMCP.toolResponded":
 		var response invocationResponse
 		if json.Unmarshal(message.Params, &response) == nil {
@@ -533,7 +546,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 			c.stateMu.Unlock()
 			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
 		}
-		if loadedAt := c.waitingInvocations[key].replacementLoadedAt; !loadedAt.IsZero() && time.Since(loadedAt) >= replacedDocumentGrace {
+		if unloadedAt := c.waitingInvocations[key].unloadedAt; !unloadedAt.IsZero() && time.Since(unloadedAt) >= unloadedPageGrace {
 			c.forceAbandonInvocationLocked(key)
 			c.stateMu.Unlock()
 			return InvocationResult{InvocationID: started.InvocationID}, ErrToolPageUnloaded
@@ -598,13 +611,17 @@ func (c *connection) removeSession(sessionID string) {
 			c.abandonInvocationLocked(key)
 		}
 	}
+	c.removeSessionToolsLocked(sessionID)
+	c.signalStateChanged()
+}
+
+func (c *connection) removeSessionToolsLocked(sessionID string) {
 	for ref, tool := range c.tools {
 		if tool.sessionID == sessionID {
 			delete(c.toolRefs, toolKey(tool.sessionID, tool.frameID, tool.registeredName))
 			delete(c.tools, ref)
 		}
 	}
-	c.signalStateChanged()
 }
 
 func (c *connection) abandonFrameInvocationsAcrossSessionsLocked(frameID string) {

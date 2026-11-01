@@ -62,6 +62,7 @@ type fakeCDP struct {
 	navigateBeforeResult       bool
 	parentNavigateBeforeResult bool
 	reloadWithoutResult        bool
+	crashBeforeResult          bool
 	nonAutosubmitDeclarative   bool
 	invokeResponseDelay        time.Duration
 	toolCount                  int
@@ -288,6 +289,7 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			navigateBeforeResult := f.navigateBeforeResult
 			parentNavigateBeforeResult := f.parentNavigateBeforeResult
 			reloadWithoutResult := f.reloadWithoutResult
+			crashBeforeResult := f.crashBeforeResult
 			detachAfterResponse := f.detachAfterResponse
 			detachBeforeResponse := f.detachBeforeResponse
 			f.mu.Unlock()
@@ -307,6 +309,10 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 					"method": "Target.detachedFromTarget",
 					"params": map[string]any{"sessionId": request.SessionID},
 				})
+				continue
+			}
+			if crashBeforeResult {
+				write(map[string]any{"method": "Inspector.targetCrashed", "sessionId": request.SessionID, "params": map[string]any{}})
 				continue
 			}
 			if reloadWithoutResult {
@@ -599,6 +605,30 @@ func TestInvocationFailsFastWhenToolDocumentReloadsWithoutResult(t *testing.T) {
 	require.ErrorIs(t, err, ErrToolPageUnloaded)
 	require.Equal(t, "invocation-1", result.InvocationID)
 	require.Less(t, time.Since(started), 2*time.Second)
+}
+
+func TestInvocationFailsFastWhenToolRendererCrashes(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.crashBeforeResult = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	toolRef := paymentToolRef(t, manager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	result, err := manager.Invoke(ctx, toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrToolPageUnloaded)
+	require.Equal(t, "invocation-1", result.InvocationID)
+	require.Less(t, time.Since(started), 2*time.Second)
+
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	for _, tool := range tools {
+		require.NotEqual(t, "payment_tool", tool.Name)
+	}
+	_, err = manager.Invoke(context.Background(), toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrToolNotFound)
 }
 
 func TestInvocationPreservesIframeResponseAfterParentNavigation(t *testing.T) {

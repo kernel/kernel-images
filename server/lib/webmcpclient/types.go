@@ -92,9 +92,11 @@ type exceptionDetails struct {
 }
 
 type waitingInvocation struct {
-	frameID             string
-	documentReplaced    bool
-	replacementLoadedAt time.Time
+	frameID          string
+	documentReplaced bool
+	// unloadedAt is when the tool's page was known to be gone: its
+	// replacement document finished loading or its renderer crashed.
+	unloadedAt time.Time
 }
 
 type invocationKey struct {

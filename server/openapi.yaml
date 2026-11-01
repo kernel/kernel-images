@@ -1422,7 +1422,8 @@ paths:
         240 KiB return an error rather than a truncated result. If the request times out after invocation
         begins, the server reports outcome_unknown. If the tool's document is reloaded or replaced by a
         navigation the tool did not start, and the tool never responds, the server reports
-        tool_page_unloaded once the replacement document loads. The server never retries the tool
+        tool_page_unloaded once the replacement document loads. It also reports tool_page_unloaded
+        when the tool's renderer crashes. The server never retries the tool
         automatically, and both failures set X-Should-Retry to false.
       operationId: invokeWebMCPTool
       x-telemetry-category: control
