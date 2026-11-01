@@ -2,6 +2,7 @@ package webmcpclient
 
 import (
 	"errors"
+	"time"
 )
 
 var (
@@ -85,6 +86,12 @@ type exceptionDetails struct {
 	Type        string `json:"type"`
 	Value       any    `json:"value"`
 	Description string `json:"description"`
+}
+
+type waitingInvocation struct {
+	frameID             string
+	documentReplaced    bool
+	replacementLoadedAt time.Time
 }
 
 type invocationKey struct {
