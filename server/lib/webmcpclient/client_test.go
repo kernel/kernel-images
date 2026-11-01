@@ -596,7 +596,7 @@ func TestInvocationFailsFastWhenToolDocumentReloadsWithoutResult(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	result, err := manager.Invoke(ctx, toolRef, map[string]any{})
-	require.ErrorIs(t, err, ErrOutcomeUnknown)
+	require.ErrorIs(t, err, ErrToolPageUnloaded)
 	require.Equal(t, "invocation-1", result.InvocationID)
 	require.Less(t, time.Since(started), 2*time.Second)
 }

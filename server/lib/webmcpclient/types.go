@@ -9,6 +9,9 @@ var (
 	ErrNoPageTarget   = errors.New("no browser tabs found")
 	ErrToolNotFound   = errors.New("WebMCP tool not found")
 	ErrOutcomeUnknown = errors.New("WebMCP invocation outcome is unknown")
+	// ErrToolPageUnloaded means the document that owned an invocation was
+	// replaced before the tool responded. The tool may have had side effects.
+	ErrToolPageUnloaded = errors.New("WebMCP tool page was unloaded before the tool responded")
 )
 
 type Tool struct {

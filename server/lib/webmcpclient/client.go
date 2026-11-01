@@ -536,7 +536,7 @@ func (c *connection) invoke(ctx context.Context, toolRef string, input map[strin
 		if loadedAt := c.waitingInvocations[key].replacementLoadedAt; !loadedAt.IsZero() && time.Since(loadedAt) >= replacedDocumentGrace {
 			c.forceAbandonInvocationLocked(key)
 			c.stateMu.Unlock()
-			return InvocationResult{InvocationID: started.InvocationID}, ErrOutcomeUnknown
+			return InvocationResult{InvocationID: started.InvocationID}, ErrToolPageUnloaded
 		}
 		c.stateMu.Unlock()
 		if !c.sessionExists(sessionID) || c.executionClosed() {

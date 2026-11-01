@@ -182,7 +182,7 @@ export const browserReplHelpRegistry = {
     invokeTool: {
       signature: 'webmcp.invokeTool(toolRef, input?, options?)',
       description:
-        'Invoke one exact WebMCP registration without changing the attached target. `options.timeoutSec` bounds the request. Results have `invocation_id`, status, and optional output or error text. Do not automatically retry an `outcome_unknown` failure.',
+        'Invoke one exact WebMCP registration without changing the attached target. `options.timeoutSec` bounds the request. Results have `invocation_id`, status, and optional output or error text. Do not automatically retry an `outcome_unknown` or `tool_page_unloaded` failure.',
       example: 'const result = await webmcp.invokeTool(tool.tool_ref, { query: "example" }, { timeoutSec: 30 });',
     },
     addCustomTools: {
