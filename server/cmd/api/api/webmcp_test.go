@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -254,8 +256,34 @@ func TestInvokeWebMCPToolReportsUnknownOutcome(t *testing.T) {
 		Body: &oapi.WebMCPInvokeRequest{ToolRef: "wmcp_test", Input: map[string]any{}},
 	})
 	require.NoError(t, err)
-	body := response.(oapi.InvokeWebMCPTool504JSONResponse)
+	recorder := httptest.NewRecorder()
+	require.NoError(t, response.VisitInvokeWebMCPToolResponse(recorder))
+	require.Equal(t, http.StatusGatewayTimeout, recorder.Code)
+	require.Equal(t, "false", recorder.Header().Get("X-Should-Retry"))
+	var body oapi.WebMCPInvocationFailure
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
 	require.Equal(t, oapi.OutcomeUnknown, body.Code)
+	require.Equal(t, "invocation-1", *body.InvocationId)
+}
+
+func TestInvokeWebMCPToolReportsUnloadedToolPage(t *testing.T) {
+	client := &fakeWebMCPClient{
+		result:    webmcpclient.InvocationResult{InvocationID: "invocation-1"},
+		invokeErr: webmcpclient.ErrToolPageUnloaded,
+	}
+	service := &ApiService{webmcp: client}
+
+	response, err := service.InvokeWebMCPTool(context.Background(), oapi.InvokeWebMCPToolRequestObject{
+		Body: &oapi.WebMCPInvokeRequest{ToolRef: "wmcp_test", Input: map[string]any{}},
+	})
+	require.NoError(t, err)
+	recorder := httptest.NewRecorder()
+	require.NoError(t, response.VisitInvokeWebMCPToolResponse(recorder))
+	require.Equal(t, http.StatusGone, recorder.Code)
+	require.Equal(t, "false", recorder.Header().Get("X-Should-Retry"))
+	var body oapi.WebMCPInvocationFailure
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &body))
+	require.Equal(t, oapi.ToolPageUnloaded, body.Code)
 	require.Equal(t, "invocation-1", *body.InvocationId)
 }
 

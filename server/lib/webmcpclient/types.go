@@ -2,12 +2,16 @@ package webmcpclient
 
 import (
 	"errors"
+	"time"
 )
 
 var (
 	ErrNoPageTarget   = errors.New("no browser tabs found")
 	ErrToolNotFound   = errors.New("WebMCP tool not found")
 	ErrOutcomeUnknown = errors.New("WebMCP invocation outcome is unknown")
+	// ErrToolPageUnloaded means the document that owned an invocation was
+	// replaced before the tool responded. The tool may have had side effects.
+	ErrToolPageUnloaded = errors.New("WebMCP tool page was unloaded before the tool responded")
 )
 
 type Tool struct {
@@ -85,6 +89,14 @@ type exceptionDetails struct {
 	Type        string `json:"type"`
 	Value       any    `json:"value"`
 	Description string `json:"description"`
+}
+
+type waitingInvocation struct {
+	frameID          string
+	documentReplaced bool
+	// unloadedAt is when the tool's page was known to be gone: its
+	// replacement document finished loading or its renderer crashed.
+	unloadedAt time.Time
 }
 
 type invocationKey struct {

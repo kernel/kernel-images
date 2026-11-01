@@ -132,7 +132,7 @@ The reference below is generated from `runtime/browser-repl-help.ts`; edit that 
 ### WebMCP methods
 
 - **`webmcp.listTools(options?)`** — Return tools registered across every open tab and embedded frame. Each result contains `tool_ref`, MCP-compatible `tool` metadata, and source window/tab/frame metadata. Set `options.excludeCustom` to omit custom tools.
-- **`webmcp.invokeTool(toolRef, input?, options?)`** — Invoke one exact WebMCP registration without changing the attached target. `options.timeoutSec` bounds the request. Results have `invocation_id`, status, and optional output or error text. Do not automatically retry an `outcome_unknown` failure.
+- **`webmcp.invokeTool(toolRef, input?, options?)`** — Invoke one exact WebMCP registration without changing the attached target. `options.timeoutSec` bounds the request. Results have `invocation_id`, status, and optional output or error text. Do not automatically retry an `outcome_unknown` or `tool_page_unloaded` failure.
 - **`webmcp.addCustomTools({ namespace, tools, forceOverwriteNamespace? })`** — Atomically add a non-empty batch of custom tools. Every definition requires `kind`, `match.url_patterns`, tool metadata, and an `execute` function; `outputSchema` is optional. Set `forceOverwriteNamespace` to replace every existing tool in that namespace. Returns the added tools with generated IDs.
 - **`webmcp.listCustomTools()`** — Return serializable summaries of every custom tool, including its generated ID and namespace.
 - **`webmcp.removeCustomTool(id)`** — Remove one custom tool by generated ID and return whether it existed. Active invocations continue.
