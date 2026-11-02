@@ -61,6 +61,9 @@ type fakeCDP struct {
 	detachBeforeResponse       bool
 	navigateBeforeResult       bool
 	parentNavigateBeforeResult bool
+	reloadWithoutResult        bool
+	crashBeforeResult          bool
+	reloadAfterCrash           bool
 	nonAutosubmitDeclarative   bool
 	invokeResponseDelay        time.Duration
 	toolCount                  int
@@ -286,6 +289,9 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 			nonAutosubmitDeclarative := f.nonAutosubmitDeclarative
 			navigateBeforeResult := f.navigateBeforeResult
 			parentNavigateBeforeResult := f.parentNavigateBeforeResult
+			reloadWithoutResult := f.reloadWithoutResult
+			crashBeforeResult := f.crashBeforeResult
+			reloadAfterCrash := f.reloadAfterCrash
 			detachAfterResponse := f.detachAfterResponse
 			detachBeforeResponse := f.detachBeforeResponse
 			f.mu.Unlock()
@@ -304,6 +310,44 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 				write(map[string]any{
 					"method": "Target.detachedFromTarget",
 					"params": map[string]any{"sessionId": request.SessionID},
+				})
+				continue
+			}
+			if crashBeforeResult || reloadWithoutResult {
+				// Let the invocation start waiting first. A page that goes
+				// away before that is outside these tests.
+				time.Sleep(100 * time.Millisecond)
+			}
+			if crashBeforeResult {
+				write(map[string]any{"method": "Inspector.targetCrashed", "sessionId": request.SessionID, "params": map[string]any{}})
+				if reloadAfterCrash {
+					// The recovery document commits but never finishes loading.
+					write(map[string]any{
+						"method": "Page.frameNavigated", "sessionId": request.SessionID,
+						"params": map[string]any{"frame": map[string]any{
+							"id": "iframe-frame", "loaderId": "recovery-loader", "url": "https://payments.example/element",
+						}},
+					})
+				}
+				continue
+			}
+			if reloadWithoutResult {
+				// Chromium only answers an invocation across a navigation that the
+				// tool itself started. A reload from anywhere else replaces the
+				// document and never produces WebMCP.toolResponded.
+				write(map[string]any{
+					"method": "Page.frameStartedLoading", "sessionId": request.SessionID,
+					"params": map[string]any{"frameId": "iframe-frame"},
+				})
+				write(map[string]any{
+					"method": "Page.frameNavigated", "sessionId": request.SessionID,
+					"params": map[string]any{"frame": map[string]any{
+						"id": "iframe-frame", "loaderId": "reload-loader", "url": "https://payments.example/element",
+					}},
+				})
+				write(map[string]any{
+					"method": "Page.frameStoppedLoading", "sessionId": request.SessionID,
+					"params": map[string]any{"frameId": "iframe-frame"},
 				})
 				continue
 			}
@@ -336,6 +380,10 @@ func (f *fakeCDP) serve(w http.ResponseWriter, r *http.Request) {
 						"params": map[string]any{"frame": map[string]any{
 							"id": "iframe-frame", "loaderId": "next-loader", "url": "https://payments.example/success",
 						}},
+					})
+					write(map[string]any{
+						"method": "Page.frameStoppedLoading", "sessionId": request.SessionID,
+						"params": map[string]any{"frameId": "iframe-frame"},
 					})
 				}
 				output := any(map[string]any{"content": []map[string]any{{"type": "text", "text": request.SessionID}}})
@@ -559,6 +607,62 @@ func TestInvocationPreservesResponseObservedAfterFrameNavigation(t *testing.T) {
 	require.Equal(t, "iframe-session", result.Output.(map[string]any)["content"].([]any)[0].(map[string]any)["text"])
 }
 
+func TestInvocationFailsFastWhenToolDocumentReloadsWithoutResult(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.reloadWithoutResult = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	toolRef := paymentToolRef(t, manager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	result, err := manager.Invoke(ctx, toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrToolPageUnloaded)
+	require.Equal(t, "invocation-1", result.InvocationID)
+	require.Less(t, time.Since(started), 2*time.Second)
+}
+
+func TestInvocationFailsFastWhenToolRendererCrashes(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.crashBeforeResult = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	toolRef := paymentToolRef(t, manager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	result, err := manager.Invoke(ctx, toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrToolPageUnloaded)
+	require.Equal(t, "invocation-1", result.InvocationID)
+	require.Less(t, time.Since(started), 2*time.Second)
+
+	tools, err := manager.Tools(context.Background())
+	require.NoError(t, err)
+	for _, tool := range tools {
+		require.NotEqual(t, "payment_tool", tool.Name)
+	}
+	_, err = manager.Invoke(context.Background(), toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrToolNotFound)
+}
+
+func TestInvocationFailsFastWhenCrashedToolPageReloads(t *testing.T) {
+	fake := newFakeCDP(t, false)
+	fake.crashBeforeResult = true
+	fake.reloadAfterCrash = true
+	manager := NewManager(staticUpstream{url: fake.url})
+	t.Cleanup(func() { _ = manager.Close() })
+	toolRef := paymentToolRef(t, manager)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	started := time.Now()
+	_, err := manager.Invoke(ctx, toolRef, map[string]any{})
+	require.ErrorIs(t, err, ErrToolPageUnloaded)
+	require.Less(t, time.Since(started), 2*time.Second)
+}
+
 func TestInvocationPreservesIframeResponseAfterParentNavigation(t *testing.T) {
 	fake := newFakeCDP(t, false)
 	fake.parentNavigateBeforeResult = true
@@ -654,7 +758,7 @@ func TestConnectionDeathMidInvokeHasUnknownOutcome(t *testing.T) {
 func TestToolResponsesAreScopedBySession(t *testing.T) {
 	client := &connection{
 		invocations:          make(map[invocationKey]invocationResponse),
-		waitingInvocations:   make(map[invocationKey]string),
+		waitingInvocations:   make(map[invocationKey]waitingInvocation),
 		abandonedInvocations: make(map[invocationKey]time.Time),
 		stateChangedCh:       make(chan struct{}, 1),
 	}
@@ -672,7 +776,7 @@ func TestToolResponsesAreScopedBySession(t *testing.T) {
 func TestToolResponseDecodesLatin1JSONOutput(t *testing.T) {
 	client := &connection{
 		invocations:          make(map[invocationKey]invocationResponse),
-		waitingInvocations:   make(map[invocationKey]string),
+		waitingInvocations:   make(map[invocationKey]waitingInvocation),
 		abandonedInvocations: make(map[invocationKey]time.Time),
 		stateChangedCh:       make(chan struct{}, 1),
 	}

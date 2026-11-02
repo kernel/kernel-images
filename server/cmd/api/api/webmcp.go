@@ -16,7 +16,7 @@ import (
 const (
 	defaultWebMCPInvocationTimeout = 60 * time.Second
 	maxWebMCPInvocationTimeoutSec  = 120
-	maxWebMCPInputBytes            = 1 << 20
+	maxWebMCPInputBytes            = 4 << 20
 	maxWebMCPRequestBytes          = maxWebMCPInputBytes + (4 << 10)
 )
 
@@ -117,7 +117,7 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	}
 	inputJSON, err := json.Marshal(request.Body.Input)
 	if err != nil || len(inputJSON) > maxWebMCPInputBytes {
-		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "input must be valid JSON no larger than 1 MiB"}}, nil
+		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "input must be valid JSON no larger than 4 MiB"}}, nil
 	}
 	timeout := defaultWebMCPInvocationTimeout
 	if request.Body.TimeoutSec != nil {
@@ -169,7 +169,14 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 				Message: "the invocation started, but its final outcome could not be observed; do not retry automatically",
 			}
 			failure.InvocationId = nonEmptyString(result.InvocationID)
-			return oapi.InvokeWebMCPTool504JSONResponse(failure), nil
+			return oapi.InvokeWebMCPTool504JSONResponse{Body: failure, Headers: oapi.InvokeWebMCPTool504ResponseHeaders{XShouldRetry: "false"}}, nil
+		case errors.Is(err, webmcpclient.ErrToolPageUnloaded):
+			failure := oapi.WebMCPInvocationFailure{
+				Code:    oapi.ToolPageUnloaded,
+				Message: "the tool's page was unloaded before the tool responded; it may have had side effects, so do not retry automatically",
+			}
+			failure.InvocationId = nonEmptyString(result.InvocationID)
+			return oapi.InvokeWebMCPTool410JSONResponse{Body: failure, Headers: oapi.InvokeWebMCPTool410ResponseHeaders{XShouldRetry: "false"}}, nil
 		default:
 			logger.FromContext(ctx).Error("failed to invoke WebMCP tool", "err", err)
 			return oapi.InvokeWebMCPTool500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "failed to invoke WebMCP tool"}}, nil
