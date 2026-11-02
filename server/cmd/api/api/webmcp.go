@@ -16,7 +16,7 @@ import (
 const (
 	defaultWebMCPInvocationTimeout = 60 * time.Second
 	maxWebMCPInvocationTimeoutSec  = 120
-	maxWebMCPInputBytes            = 1 << 20
+	maxWebMCPInputBytes            = 4 << 20
 	maxWebMCPRequestBytes          = maxWebMCPInputBytes + (4 << 10)
 )
 
@@ -117,7 +117,7 @@ func (s *ApiService) InvokeWebMCPTool(ctx context.Context, request oapi.InvokeWe
 	}
 	inputJSON, err := json.Marshal(request.Body.Input)
 	if err != nil || len(inputJSON) > maxWebMCPInputBytes {
-		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "input must be valid JSON no larger than 1 MiB"}}, nil
+		return oapi.InvokeWebMCPTool400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "input must be valid JSON no larger than 4 MiB"}}, nil
 	}
 	timeout := defaultWebMCPInvocationTimeout
 	if request.Body.TimeoutSec != nil {
