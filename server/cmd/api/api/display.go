@@ -15,6 +15,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
@@ -184,6 +185,9 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 
 	if err != nil {
 		log.Error("failed to change resolution", "error", err)
+		if errors.Is(err, nekoclient.ErrScreenConfigurationRejected) {
+			return oapi.PatchDisplay400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: unsupportedDisplayMessage(width, height, refreshRate)}}, nil
+		}
 		return oapi.PatchDisplay500JSONResponse{
 			InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{
 				Message: fmt.Sprintf("failed to change resolution: %s", err.Error()),
@@ -945,4 +949,10 @@ func (s *ApiService) setResolutionViaNeko(ctx context.Context, width, height, re
 
 	log.Info("successfully changed resolution via Neko API", "width", width, "height", height, "refresh_rate", refreshRate)
 	return nil
+}
+
+// unsupportedDisplayMessage is the client error for a display configuration
+// the X server refused to set.
+func unsupportedDisplayMessage(width, height, refreshRate int) string {
+	return fmt.Sprintf("the display cannot be set to %dx%d at %d Hz", width, height, refreshRate)
 }
