@@ -352,6 +352,21 @@ func TestInvokeWebMCPToolRejectsOversizedInput(t *testing.T) {
 	require.Empty(t, client.toolRef)
 }
 
+func TestInvokeWebMCPToolAcceptsInputAboveOneMiB(t *testing.T) {
+	client := &fakeWebMCPClient{result: webmcpclient.InvocationResult{InvocationID: "invocation-1", Status: "Completed"}}
+	service := &ApiService{webmcp: client}
+	response, err := service.InvokeWebMCPTool(context.Background(), oapi.InvokeWebMCPToolRequestObject{
+		Body: &oapi.WebMCPInvokeRequest{
+			ToolRef: "wmcp_test",
+			Input:   map[string]any{"value": strings.Repeat("a", 2<<20)},
+		},
+	})
+	require.NoError(t, err)
+	_, ok := response.(oapi.InvokeWebMCPTool200JSONResponse)
+	require.True(t, ok)
+	require.Equal(t, "wmcp_test", client.toolRef)
+}
+
 func TestInvokeWebMCPToolRejectsUnexpectedClientError(t *testing.T) {
 	service := &ApiService{webmcp: &fakeWebMCPClient{invokeErr: errors.New("CDP failed")}}
 	response, err := service.InvokeWebMCPTool(context.Background(), oapi.InvokeWebMCPToolRequestObject{
