@@ -87,18 +87,68 @@ func TestChromiumCfgParseMultipartExtensionRefValidation(t *testing.T) {
 	}
 }
 
-func TestChromiumCfgParseMultipartExtensionRefLimit(t *testing.T) {
-	buf := bytes.NewBuffer(nil)
-	w := multipart.NewWriter(buf)
-	for i := 0; i <= maxExtensionUploadCount; i++ {
-		refPart(t, w, extensionfetch.Ref{Name: fmt.Sprintf("ext%d", i), SHA256: sumOf(nil), Grant: "g"})
+func TestChromiumCfgParseMultipartExtensionLimit(t *testing.T) {
+	zipPair := func(t *testing.T, w *multipart.Writer, name string) {
+		t.Helper()
+		part, err := w.CreateFormFile("extensions.zip_file", name+".zip")
+		require.NoError(t, err)
+		_, err = part.Write([]byte("zip"))
+		require.NoError(t, err)
+		require.NoError(t, w.WriteField("extensions.name", name))
 	}
-	require.NoError(t, w.Close())
+	ref := func(t *testing.T, w *multipart.Writer, name string) {
+		t.Helper()
+		refPart(t, w, extensionfetch.Ref{Name: name, SHA256: sumOf(nil), Grant: "g"})
+	}
+	parse := func(t *testing.T, build func(*multipart.Writer)) error {
+		t.Helper()
+		buf := bytes.NewBuffer(nil)
+		w := multipart.NewWriter(buf)
+		build(w)
+		require.NoError(t, w.Close())
+		st := &chromiumConfigureState{}
+		defer st.cleanup()
+		return chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+	}
 
-	st := &chromiumConfigureState{}
-	err := chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
-	defer st.cleanup()
-	require.ErrorContains(t, err, "too many extensions")
+	// The cap counts uploads and references together, whatever their order.
+	for name, build := range map[string]func(*multipart.Writer){
+		"references": func(w *multipart.Writer) {
+			for i := 0; i <= maxExtensionUploadCount; i++ {
+				ref(t, w, fmt.Sprintf("r%d", i))
+			}
+		},
+		"uploads": func(w *multipart.Writer) {
+			for i := 0; i <= maxExtensionUploadCount; i++ {
+				zipPair(t, w, fmt.Sprintf("u%d", i))
+			}
+		},
+		"references first": func(w *multipart.Writer) {
+			for i := 0; i < maxExtensionUploadCount; i++ {
+				ref(t, w, fmt.Sprintf("r%d", i))
+			}
+			zipPair(t, w, "u")
+		},
+		"uploads first": func(w *multipart.Writer) {
+			for i := 0; i < maxExtensionUploadCount; i++ {
+				zipPair(t, w, fmt.Sprintf("u%d", i))
+			}
+			ref(t, w, "r")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.ErrorContains(t, parse(t, build), "too many extensions")
+		})
+	}
+
+	t.Run("at the cap", func(t *testing.T) {
+		require.NoError(t, parse(t, func(w *multipart.Writer) {
+			for i := 0; i < maxExtensionUploadCount/2; i++ {
+				zipPair(t, w, fmt.Sprintf("u%d", i))
+				ref(t, w, fmt.Sprintf("r%d", i))
+			}
+		}))
+	})
 }
 
 func TestFetchExtensionRefs(t *testing.T) {
