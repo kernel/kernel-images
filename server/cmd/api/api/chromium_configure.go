@@ -13,9 +13,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
+	"github.com/kernel/kernel-images/server/lib/extensionfetch"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/policy"
@@ -25,6 +27,7 @@ import (
 const userDataProfileDir = "/home/kernel/user-data"
 const maxStartURLLen = 2048
 const startURLDispatchTimeout = 3 * time.Second
+const maxExtensionRefBytes = 8 << 10
 
 type chromiumConfigureState struct {
 	displayJSON        *string
@@ -39,6 +42,7 @@ type chromiumConfigureState struct {
 	startURLRaw *string
 
 	extItems []extensionZipItem // zipTemp paths; merged with chromiumCfgParseExtensions
+	extRefs  []extensionfetch.Ref
 
 	allTemps []string
 }
@@ -72,6 +76,10 @@ func (s *ApiService) ChromiumConfigure(ctx context.Context, request oapi.Chromiu
 		return cfg400(parseErr.Error()), nil
 	}
 	defer st.cleanup()
+
+	if err := s.fetchExtensionRefs(ctx, st); err != nil {
+		return cfg500ConfigureStep(chromiumConfigureStepExtensionFetch, err.Error()), nil
+	}
 
 	spec, msgs := chromiumStartURLSpec(st.startURLRaw)
 	if msgs != "" {
@@ -355,6 +363,9 @@ const (
 	chromiumConfigureStepDisplay    chromiumConfigureStep = "display"
 	chromiumConfigureStepFlags      chromiumConfigureStep = "chromium_flags"
 	chromiumConfigureStepProfile    chromiumConfigureStep = "profile"
+	// chromiumConfigureStepExtensionFetch fails before anything is applied,
+	// so the caller can resend the request with the archives uploaded.
+	chromiumConfigureStepExtensionFetch chromiumConfigureStep = "extension_fetch"
 )
 
 func chromiumStartURLSpec(raw *string) (startURLParsed, string) {
@@ -646,6 +657,19 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 			}
 			cur.zipTmp = tmp.Name()
 			cur.gotZip = true
+		case "extensions.ref":
+			b, err := io.ReadAll(io.LimitReader(part, maxExtensionRefBytes+1))
+			if err != nil {
+				return cfgParseInternal("read extensions.ref")
+			}
+			var ref extensionfetch.Ref
+			if len(b) > maxExtensionRefBytes || json.Unmarshal(b, &ref) != nil {
+				return cfgParseBadRequest("invalid extensions.ref")
+			}
+			if err := ref.Validate(); err != nil {
+				return cfgParseBadRequest(fmt.Sprintf("invalid extensions.ref: %v", err))
+			}
+			st.extRefs = append(st.extRefs, ref)
 		case "extensions.name":
 			if cur == nil {
 				cur = &pend{}
@@ -673,6 +697,45 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 	if cur != nil && (!cur.gotZip || cur.name == "") {
 		return cfgParseBadRequest("each extension pair needs extensions.zip_file plus extensions.name")
 	}
+	return nil
+}
+
+// fetchExtensionRefs downloads the extensions the request names from the
+// metro API, in parallel, and adds them to the request's extensions as if
+// they had been uploaded. It runs before anything is applied.
+func (s *ApiService) fetchExtensionRefs(ctx context.Context, st *chromiumConfigureState) error {
+	if len(st.extRefs) == 0 {
+		return nil
+	}
+	if s.extensionFetcher == nil {
+		return errors.New("extension fetch is not configured")
+	}
+	items := make([]extensionZipItem, len(st.extRefs))
+	for i, ref := range st.extRefs {
+		tmp, err := os.CreateTemp("", "bcc-ext-*.zip")
+		if err != nil {
+			return fmt.Errorf("temp file for %s: %w", ref.Name, err)
+		}
+		_ = tmp.Close()
+		st.allTemps = append(st.allTemps, tmp.Name())
+		items[i] = extensionZipItem{zipTemp: tmp.Name(), name: ref.Name}
+	}
+	errs := make([]error, len(st.extRefs))
+	var wg sync.WaitGroup
+	for i, ref := range st.extRefs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.extensionFetcher.Fetch(ctx, ref, items[i].zipTemp); err != nil {
+				errs[i] = fmt.Errorf("fetch %s: %w", ref.Name, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	st.extItems = append(st.extItems, items...)
 	return nil
 }
 
