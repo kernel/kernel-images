@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -84,6 +85,20 @@ func TestChromiumCfgParseMultipartExtensionRefValidation(t *testing.T) {
 			require.ErrorContains(t, err, "invalid extensions.ref")
 		})
 	}
+}
+
+func TestChromiumCfgParseMultipartExtensionRefLimit(t *testing.T) {
+	buf := bytes.NewBuffer(nil)
+	w := multipart.NewWriter(buf)
+	for i := 0; i <= maxExtensionUploadCount; i++ {
+		refPart(t, w, extensionfetch.Ref{Name: fmt.Sprintf("ext%d", i), SHA256: sumOf(nil), Grant: "g"})
+	}
+	require.NoError(t, w.Close())
+
+	st := &chromiumConfigureState{}
+	err := chromiumCfgParseMultipart(multipart.NewReader(buf, w.Boundary()), st)
+	defer st.cleanup()
+	require.ErrorContains(t, err, "too many extensions")
 }
 
 func TestFetchExtensionRefs(t *testing.T) {

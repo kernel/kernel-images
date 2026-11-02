@@ -658,6 +658,9 @@ func chromiumCfgParseMultipart(body interface{}, st *chromiumConfigureState) err
 			cur.zipTmp = tmp.Name()
 			cur.gotZip = true
 		case "extensions.ref":
+			if len(st.extRefs)+len(st.extItems) >= maxExtensionUploadCount {
+				return cfgParseBadRequest(fmt.Sprintf("too many extensions; maximum is %d", maxExtensionUploadCount))
+			}
 			b, err := io.ReadAll(io.LimitReader(part, maxExtensionRefBytes+1))
 			if err != nil {
 				return cfgParseInternal("read extensions.ref")
