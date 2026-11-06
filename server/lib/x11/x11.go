@@ -5,6 +5,7 @@ import (
 	"context"
 	"net"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -35,6 +36,52 @@ func WaitForDisplay(display string, timeout time.Duration) time.Duration {
 		time.Sleep(20 * time.Millisecond)
 	}
 	return time.Since(start)
+}
+
+// RootSize reads the root window geometry from xwininfo. The headful
+// launcher uses it to size chromium's startup bounds to the display (see
+// withSeededRestoreBounds in cmd/chromium-launcher). Bounded by timeout so a
+// wedged X server can't stall the caller.
+func RootSize(display string, timeout time.Duration) (int, int, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xwininfo", "-display", display, "-root").Output()
+	if err != nil {
+		return 0, 0, false
+	}
+	return rootSize(string(out))
+}
+
+// rootSize parses the "  Width:  W" / "  Height: H" lines from xwininfo's
+// root-window dump. Both lines must parse for the size to be reported.
+func rootSize(out string) (int, int, bool) {
+	width, height := 0, 0
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := leadingInt(line, "Width:"); ok {
+			width = v
+		}
+		if v, ok := leadingInt(line, "Height:"); ok {
+			height = v
+		}
+	}
+	if width <= 0 || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+// leadingInt parses the integer after prefix in line, e.g. "Width: 1920".
+func leadingInt(line, prefix string) (int, bool) {
+	rest, ok := strings.CutPrefix(line, prefix)
+	if !ok {
+		return 0, false
+	}
+	v, err := strconv.Atoi(strings.TrimSpace(rest))
+	if err != nil {
+		return 0, false
+	}
+	return v, true
 }
 
 // WaitForWindowManager blocks until an EWMH-compliant window manager has

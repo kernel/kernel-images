@@ -448,8 +448,14 @@ func TestDisplayResizeChromiumWindow(t *testing.T) {
 			t.Logf("[%s] baseline cdp=%+v", sc.name, baseCDP)
 
 			if sc.requireBaselineState != "" {
-				require.Equal(t, sc.requireBaselineState, baseCDP.WindowState,
-					"baseline windowState mismatch: chromium did not come up in the expected state — production behaviour relies on this invariant")
+				// The api promotes a normal-state window to maximized once the
+				// devtools upstream appears (the launcher's seeded bounds ship
+				// the window in normal state first), so the state settles
+					// asynchronously rather than at first map.
+				waitForWindowState(t, ctx, c, sc.requireBaselineState, sc.name+":baseline-state")
+				baseCDP, err = getChromiumWindowBoundsCDP(ctx, c)
+				require.NoError(t, err, "settled baseline cdp window")
+				t.Logf("[%s] settled baseline cdp=%+v", sc.name, baseCDP)
 			}
 			wantState := baseCDP.WindowState
 			if sc.resizedState != "" {
