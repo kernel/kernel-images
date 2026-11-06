@@ -394,6 +394,7 @@ func WebSocketProxyHandler(mgr *UpstreamManager, logger *slog.Logger, logCDPMess
 			}
 			msgCount.Add(1)
 			if direction == "->" && mt == websocket.MessageText {
+				logWindowBoundsCommand(logger, connectionID, msg)
 				return filterInternalCDPMethod(msg)
 			}
 			return msg

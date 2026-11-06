@@ -1,8 +1,10 @@
 package devtoolsproxy
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -249,6 +251,33 @@ const sensitiveParams = `{
 	"clip":{},
 	"touchPoints":[{"x":1,"y":2}]
 }`
+
+func TestLogWindowBoundsCommandIsMethodScopedAndUnconditional(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	logWindowBoundsCommand(logger, "conn-1", []byte(`{"id":1,"method":"Browser.setWindowBounds","params":{"windowId":1,"bounds":{"left":0,"top":0,"width":960,"height":1080,"windowState":"normal"}}}`))
+	for _, want := range []string{"client set window bounds", "conn-1", "960", "1080", "normal"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Fatalf("log line %q is missing %q", buf.String(), want)
+		}
+	}
+
+	// The method resolves the same way it does for an event, so an escaped name
+	// is reported rather than missed.
+	buf.Reset()
+	logWindowBoundsCommand(logger, "conn-1", []byte(`{"id":2,"method":"Browser.setWindow\u0042ounds","params":{"windowId":1,"bounds":{"windowState":"maximized"}}}`))
+	if !strings.Contains(buf.String(), "client set window bounds") {
+		t.Fatalf("no line for an escaped method name: %q", buf.String())
+	}
+
+	// Every other command stays silent, including one too large to copy.
+	buf.Reset()
+	logWindowBoundsCommand(logger, "conn-1", []byte(`{"id":3,"method":"Runtime.callFunctionOn","params":{"functionDeclaration":"`+strings.Repeat("x", 1<<20)+`"}}`))
+	if buf.Len() != 0 {
+		t.Fatalf("unexpected line: %q", buf.String())
+	}
+}
 
 func TestSanitizersNeverEmitSensitiveValues(t *testing.T) {
 	for method := range sanitizers {

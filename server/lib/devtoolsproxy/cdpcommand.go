@@ -2,6 +2,7 @@ package devtoolsproxy
 
 import (
 	"encoding/json"
+	"log/slog"
 
 	"github.com/kernel/kernel-images/server/lib/events"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -97,4 +98,29 @@ func cdpCommandEvent(msg []byte, ts int64, connectionID, method string) (events.
 		Source:   oapi.BrowserEventSource{Kind: oapi.KernelApi},
 		Data:     payload,
 	}, true
+}
+
+// windowBoundsMethod is admitted on every client frame, unlike the rest of the
+// browser-control set, which is admitted only while control telemetry is on.
+// The geometry a client sets here is what the OS window keeps, and it outlives
+// the session through a saved profile, so a session that never turns telemetry
+// on would otherwise leave no record of it.
+const windowBoundsMethod = "Browser.setWindowBounds"
+
+// logWindowBoundsCommand reports a client's Browser.setWindowBounds at info
+// level. It logs the arguments a cdp_command event would carry, so the retained
+// fields keep one definition, and it resolves the method by decoding the frame
+// the same way an event frame is resolved, so an escaped method name is still
+// reported.
+func logWindowBoundsCommand(logger *slog.Logger, connectionID string, msg []byte) {
+	method, ok := supportedMethod(msg)
+	if !ok || method != windowBoundsMethod {
+		return
+	}
+	// Only the sanitized arguments are used; the event itself is not published.
+	event, ok := cdpCommandEvent(msg, 0, connectionID, method)
+	if !ok {
+		return
+	}
+	logger.Info("client set window bounds", slog.String("args", string(event.Data)))
 }
