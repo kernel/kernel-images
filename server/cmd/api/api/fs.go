@@ -76,6 +76,11 @@ func (s *ApiService) ReadFile(ctx context.Context, req oapi.ReadFileRequestObjec
 		log.Error("failed to stat file", "err", err, "path", path)
 		return oapi.ReadFile500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "unable to stat file"}}, nil
 	}
+	// A directory opens fine but fails on the first read, after the 200 headers are sent.
+	if stat.IsDir() {
+		f.Close()
+		return oapi.ReadFile400JSONResponse{BadRequestErrorJSONResponse: oapi.BadRequestErrorJSONResponse{Message: "path is a directory"}}, nil
+	}
 
 	return oapi.ReadFile200ApplicationoctetStreamResponse{
 		Body:          f,
@@ -118,6 +123,15 @@ func (s *ApiService) WriteFile(ctx context.Context, req oapi.WriteFileRequestObj
 		return oapi.WriteFile500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "unable to create file"}}, nil
 	}
 	defer f.Close()
+
+	// OpenFile applies perm only when it creates the file, and through the umask,
+	// so set an explicitly requested mode on the file itself.
+	if req.Params.Mode != nil {
+		if err := f.Chmod(perm); err != nil {
+			log.Error("failed to set file mode", "err", err, "path", path)
+			return oapi.WriteFile500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: "unable to set file mode"}}, nil
+		}
+	}
 
 	if _, err := io.Copy(f, req.Body); err != nil {
 		log.Error("failed to write file", "err", err, "path", path)
