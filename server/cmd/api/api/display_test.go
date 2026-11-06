@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/recorder"
 	"github.com/kernel/kernel-images/server/lib/scaletozero"
@@ -639,4 +642,80 @@ func TestChromiumRunPatchDisplayDoesNotRelockChromiumConfig(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("chromiumRunPatchDisplay tried to reacquire chromiumConfigMu")
 	}
+}
+
+// newRejectingNekoDisplay points the service at a headful display whose Neko
+// answers every screen change with screenStatus, and whose xrandr reports
+// 1920x1080 at 25 Hz.
+func newRejectingNekoDisplay(t *testing.T, screenStatus int) *ApiService {
+	t.Helper()
+
+	neko := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/login":
+			_, _ = w.Write([]byte(`{"token":"t"}`))
+		case "/api/room/screen":
+			w.WriteHeader(screenStatus)
+			_, _ = w.Write([]byte(`{"code":422,"message":"cannot set screen size"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(neko.Close)
+
+	binDir := t.TempDir()
+	xrandr := "#!/bin/sh\necho '   1920x1080_25.00  25.00*'\n"
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "xrandr"), []byte(xrandr), 0o755))
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("ENABLE_WEBRTC", "true")
+
+	origConf := xvfbSupervisorConf
+	xvfbSupervisorConf = filepath.Join(t.TempDir(), "absent.conf")
+	t.Cleanup(func() { xvfbSupervisorConf = origConf })
+
+	client, err := nekoclient.NewAuthClient(neko.URL, "admin", "admin")
+	require.NoError(t, err)
+	svc := newTestServiceWithFactory(t, newMockRecordManager(), newMockFactory())
+	svc.nekoAuthClient = client
+	return svc
+}
+
+func TestPatchDisplayNekoRejection(t *testing.T) {
+	width, height := 1008, 384
+	rate := oapi.PatchDisplayRequestRefreshRate(60)
+	requireIdle := false
+	req := oapi.PatchDisplayRequestObject{Body: &oapi.PatchDisplayJSONRequestBody{Width: &width, Height: &height, RefreshRate: &rate, RequireIdle: &requireIdle}}
+
+	t.Run("422 is a client error", func(t *testing.T) {
+		svc := newRejectingNekoDisplay(t, http.StatusUnprocessableEntity)
+		resp, err := svc.PatchDisplay(context.Background(), req)
+		require.NoError(t, err)
+		require.IsType(t, oapi.PatchDisplay400JSONResponse{}, resp)
+		assert.Equal(t, "the display cannot be set to 1008x384 at 60 Hz", resp.(oapi.PatchDisplay400JSONResponse).Message)
+	})
+
+	t.Run("500 stays a server error", func(t *testing.T) {
+		svc := newRejectingNekoDisplay(t, http.StatusInternalServerError)
+		resp, err := svc.PatchDisplay(context.Background(), req)
+		require.NoError(t, err)
+		require.IsType(t, oapi.PatchDisplay500JSONResponse{}, resp)
+	})
+}
+
+func TestChromiumDisplayApplyWhileStoppedNekoRejection(t *testing.T) {
+	plan := &chromiumDisplayPlan{width: 1008, height: 384, refreshRate: 60}
+
+	t.Run("422 is a client error", func(t *testing.T) {
+		svc := newRejectingNekoDisplay(t, http.StatusUnprocessableEntity)
+		resp := chromiumDisplayApplyWhileStopped(context.Background(), svc, plan)
+		require.IsType(t, oapi.ChromiumConfigure400JSONResponse{}, resp)
+		assert.Equal(t, "the display cannot be set to 1008x384 at 60 Hz", resp.(oapi.ChromiumConfigure400JSONResponse).Message)
+	})
+
+	t.Run("500 stays a server error", func(t *testing.T) {
+		svc := newRejectingNekoDisplay(t, http.StatusInternalServerError)
+		resp := chromiumDisplayApplyWhileStopped(context.Background(), svc, plan)
+		require.IsType(t, oapi.ChromiumConfigure500JSONResponse{}, resp)
+	})
 }
