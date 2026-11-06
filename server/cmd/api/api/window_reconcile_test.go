@@ -73,3 +73,76 @@ func TestReconcileWindowLeavesFullscreenWindow(t *testing.T) {
 	assert.False(t, reconcileWindow(ctx, client, slog.Default()))
 	assert.Zero(t, windowRestoreCalls(f))
 }
+
+// newWindowGuard builds a guard against a fake devtools, the way
+// guardWindowCoverage builds one per browser start.
+func newWindowGuard(t *testing.T, url string, logs *bytes.Buffer) *windowGuard {
+	t.Helper()
+	g := &windowGuard{url: url, budget: windowCorrectionBudget, log: slog.New(slog.NewTextHandler(logs, nil))}
+	t.Cleanup(g.close)
+	return g
+}
+
+func TestWindowGuardCorrectsAnUncoveredWindow(t *testing.T) {
+	f := &fakeDevTools{pageTargetID: "target-1", windowState: "normal"}
+	var logs bytes.Buffer
+	g := newWindowGuard(t, f.start(t), &logs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	assert.True(t, g.onCoverage(ctx, false), "the guard keeps watching while it has budget")
+	assert.Equal(t, 1, windowRestoreCalls(f))
+}
+
+func TestWindowGuardIgnoresACoveredWindow(t *testing.T) {
+	// A maximized window reports a state change of its own when it is restored,
+	// and reconnecting to the browser to confirm what the atoms already say
+	// would double every correction.
+	f := &fakeDevTools{pageTargetID: "target-1", windowState: "normal"}
+	var logs bytes.Buffer
+	g := newWindowGuard(t, f.start(t), &logs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	assert.True(t, g.onCoverage(ctx, true))
+	assert.Zero(t, windowRestoreCalls(f))
+}
+
+func TestWindowGuardStopsAfterTheBudget(t *testing.T) {
+	// A client that keeps taking the window back wants it that size. The guard
+	// stands down rather than fighting it for the life of the session.
+	f := &fakeDevTools{pageTargetID: "target-1", windowState: "normal"}
+	var logs bytes.Buffer
+	g := newWindowGuard(t, f.start(t), &logs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for i := 1; i < windowCorrectionBudget; i++ {
+		require.True(t, g.onCoverage(ctx, false), "correction %d is within budget", i)
+	}
+	assert.False(t, g.onCoverage(ctx, false), "the last correction ends the watch")
+	assert.Equal(t, windowCorrectionBudget, windowRestoreCalls(f))
+	assert.Contains(t, logs.String(), "budget spent")
+
+	// Spent is spent: a later change costs nothing and starts no work.
+	assert.False(t, g.onCoverage(ctx, false))
+	assert.Equal(t, windowCorrectionBudget, windowRestoreCalls(f))
+}
+
+func TestWindowGuardKeepsWatchingWhenTheWindowIsAlreadyMaximized(t *testing.T) {
+	// The atoms can lag a window that CDP already reports as maximized. That
+	// is not a correction, so it does not spend budget.
+	f := &fakeDevTools{pageTargetID: "target-1", windowState: "maximized"}
+	var logs bytes.Buffer
+	g := newWindowGuard(t, f.start(t), &logs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	assert.True(t, g.onCoverage(ctx, false))
+	assert.Zero(t, windowRestoreCalls(f))
+	assert.Equal(t, windowCorrectionBudget, g.budget)
+}

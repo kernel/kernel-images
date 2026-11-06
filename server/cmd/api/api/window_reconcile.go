@@ -7,99 +7,204 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
 const (
-	// windowReconcileInterval spaces reconcile passes. A pass is two small
-	// local CDP round trips, and the interval trades that cost against how long
-	// a demoted window can stay demoted — short enough that someone watching
-	// the live view is unlikely to catch one.
-	windowReconcileInterval = 5 * time.Second
-	// windowReconcileTimeout bounds a single pass, so a stalled chromium cannot
-	// delay the next tick.
-	windowReconcileTimeout = 3 * time.Second
+	// windowCorrectionBudget caps how many times one browser start puts the
+	// window back. One correction covers the case this guard exists for: a
+	// window that leaves maximized once, through a saved geometry surfacing
+	// after a restart or a stray resize, and stays there for the rest of the
+	// session. Repeated demotions are a client that wants a window this size,
+	// and past the budget it keeps it: a guard that always wins turns into a
+	// fight the client cannot see or stop.
+	windowCorrectionBudget = 3
+	// windowCorrectionTimeout bounds one correction, so a stalled chromium
+	// cannot wedge the watch.
+	windowCorrectionTimeout = 3 * time.Second
+	// windowProbeTimeout bounds the lookup of the window to watch.
+	windowProbeTimeout = 2 * time.Second
+	// windowWatchRetryDelay spaces retries while no window is mapped yet.
+	windowWatchRetryDelay = time.Second
 )
 
-// StartWindowReconcile keeps a headful window maximized for the life of the
-// session.
+// StartWindowReconcile keeps a headful window covering the display after the
+// promotion that runs on browser start.
 //
-// Promotion on start restores the maximized contract across a chromium restart.
-// This covers everything that can demote the window while the session runs:
-// a CDP command over the proxy, a CDP command issued inside the playwright
-// executor, a window manager restore, or a geometry a saved profile carries
-// into a restart. None of those are distinguishable from the window state
-// itself, so reasserting the state is what covers all of them — a client that
-// shrinks the window gets a window that fills the desktop again on the next
-// pass.
+// Promotion restores the maximized contract once per chromium start. It cannot
+// cover what happens next: a CDP Browser.setWindowBounds over the proxy, the
+// same command inside the playwright executor, a window manager restore, or a
+// geometry a saved profile carries into the restart and wins with after the
+// promotion has already run. None of those are distinguishable from the window
+// state itself, so the guard watches the state.
 //
 // It is a no-op on the headless image, which has no window manager.
 func (s *ApiService) StartWindowReconcile() {
 	if s.detectDisplayMode(context.Background()) != "xorg" {
 		return
 	}
-	go s.reconcileWindowLoop()
+	ch, unsubscribe := s.upstreamMgr.Subscribe()
+	go s.reconcileWindowLoop(ch, unsubscribe)
 }
 
-// reconcileWindowLoop reconciles on a ticker, holding one devtools connection
-// for the current upstream and redialing when chromium restarts or the
-// transport drops.
-func (s *ApiService) reconcileWindowLoop() {
-	log := logger.FromContext(s.lifecycleCtx)
-	ticker := time.NewTicker(windowReconcileInterval)
-	defer ticker.Stop()
+// reconcileWindowLoop runs one guard per browser start, replacing it when
+// chromium restarts under a new devtools upstream. The initial URL is read
+// through Current before entering the select so an upstream discovered before
+// Subscribe ran is not missed.
+func (s *ApiService) reconcileWindowLoop(ch <-chan string, unsubscribe func()) {
+	defer unsubscribe()
 
-	var client *cdpclient.Client
-	clientURL := ""
+	var cancel context.CancelFunc
 	defer func() {
-		if client != nil {
-			client.Close()
+		if cancel != nil {
+			cancel()
 		}
 	}()
 
+	seen := ""
+	guard := func(url string) {
+		if cancel != nil {
+			cancel()
+		}
+		ctx, c := context.WithCancel(s.lifecycleCtx)
+		cancel = c
+		go s.guardWindowCoverage(ctx, url)
+	}
+
 	for {
+		if url := s.upstreamMgr.Current(); url != "" && url != seen {
+			seen = url
+			guard(url)
+		}
 		select {
 		case <-s.lifecycleCtx.Done():
 			return
-		case <-ticker.C:
-		}
-
-		url := s.upstreamMgr.Current()
-		if url == "" {
-			continue
-		}
-		if client != nil && (clientURL != url || client.IsClosed()) {
-			client.Close()
-			client = nil
-		}
-		if client == nil {
-			c, err := s.dialWindowReconcile(url)
-			if err != nil {
+		case url, ok := <-ch:
+			if !ok {
+				return
+			}
+			if url == "" || url == seen {
 				continue
 			}
-			client, clientURL = c, url
+			seen = url
+			guard(url)
 		}
-
-		ctx, cancel := context.WithTimeout(s.lifecycleCtx, windowReconcileTimeout)
-		reconcileWindow(ctx, client, log)
-		cancel()
 	}
 }
 
-// dialWindowReconcile dials the devtools upstream for one reconcile
-// connection.
-func (s *ApiService) dialWindowReconcile(url string) (*cdpclient.Client, error) {
-	ctx, cancel := context.WithTimeout(s.lifecycleCtx, windowReconcileTimeout)
+// guardWindowCoverage watches the browser window for this chromium start and
+// restores it when it stops covering the display, until the correction budget
+// is spent. The watch ends with the window: xprop exits when it is destroyed,
+// and the next browser start brings its own guard and its own budget.
+func (s *ApiService) guardWindowCoverage(ctx context.Context, url string) {
+	log := logger.FromContext(s.lifecycleCtx)
+	display := s.resolveDisplayFromEnv()
+	g := &windowGuard{url: url, budget: windowCorrectionBudget, log: log}
+	defer g.close()
+
+	for ctx.Err() == nil {
+		windowID, ok := x11.ActiveWindowID(display, windowProbeTimeout)
+		if !ok {
+			if !sleepUntil(ctx, windowWatchRetryDelay) {
+				return
+			}
+			continue
+		}
+
+		watchCtx, stop := context.WithCancel(ctx)
+		err := x11.WatchWindowCoverage(watchCtx, display, windowID, func(covered bool) {
+			if !g.onCoverage(watchCtx, covered) {
+				stop()
+			}
+		})
+		stop()
+		if g.spent() {
+			return
+		}
+		if err != nil {
+			log.Warn("window state watch ended", "error", err)
+		}
+		if !sleepUntil(ctx, windowWatchRetryDelay) {
+			return
+		}
+	}
+}
+
+// windowGuard holds the state one browser start's guard carries between
+// changes: the devtools upstream to correct through, the connection it reuses,
+// and what is left of the correction budget.
+type windowGuard struct {
+	url    string
+	budget int
+	log    *slog.Logger
+	client *cdpclient.Client
+}
+
+// onCoverage handles one reported window state and reports whether the guard
+// keeps watching. A window that covers the display is left alone and costs
+// nothing. One that does not is read over CDP before anything is changed,
+// which is what decides a correction: the X atoms say the window is no longer
+// maximized, the CDP state says whether it is something the guard should leave
+// alone, like the fullscreen window of a kiosk session.
+func (g *windowGuard) onCoverage(ctx context.Context, covered bool) bool {
+	if covered || g.spent() {
+		return !g.spent()
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, windowCorrectionTimeout)
 	defer cancel()
-	return cdpclient.Dial(ctx, url)
+
+	client, err := g.connect(ctx)
+	if err != nil {
+		g.log.Warn("window restore could not reach the browser", "error", err)
+		return true
+	}
+	if !reconcileWindow(ctx, client, g.log) {
+		return true
+	}
+
+	g.budget--
+	if g.spent() {
+		g.log.Info("window correction budget spent, leaving the window as the client sets it")
+		return false
+	}
+	return true
+}
+
+func (g *windowGuard) spent() bool { return g.budget <= 0 }
+
+// connect reuses the guard's devtools connection, redialing once the transport
+// is gone. A dropped connection never recovers on the same client.
+func (g *windowGuard) connect(ctx context.Context) (*cdpclient.Client, error) {
+	if g.client != nil && g.client.IsClosed() {
+		g.client.Close()
+		g.client = nil
+	}
+	if g.client != nil {
+		return g.client, nil
+	}
+	client, err := cdpclient.Dial(ctx, g.url)
+	if err != nil {
+		return nil, err
+	}
+	g.client = client
+	return client, nil
+}
+
+func (g *windowGuard) close() {
+	if g.client != nil {
+		g.client.Close()
+		g.client = nil
+	}
 }
 
 // reconcileWindow restores the maximized state when the window has been taken
 // out of it and reports whether it acted.
 //
-// The line is emitted only on a pass that acts, which paces itself: the next
-// pass sees a maximized window unless someone demoted it again, so one line
-// means one demotion, and its timestamp can be matched against the client's own
-// call timeline to attribute it.
+// The line is emitted only on a pass that acts, so one line means one
+// demotion, and its timestamp can be matched against the client's own call
+// timeline to attribute it — including for a command that comes through the
+// playwright executor, which the devtools proxy does not see.
 //
 // A maximized window and a fullscreen one are both left alone, so a kiosk
 // session is unaffected.
@@ -122,4 +227,15 @@ func reconcileWindow(ctx context.Context, client *cdpclient.Client, log *slog.Lo
 		return false
 	}
 	return true
+}
+
+// sleepUntil waits for d and reports whether the wait finished rather than the
+// context ending.
+func sleepUntil(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
 }

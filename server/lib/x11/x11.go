@@ -2,6 +2,7 @@
 package x11
 
 import (
+	"bufio"
 	"context"
 	"net"
 	"os/exec"
@@ -151,4 +152,87 @@ func supportingWindowID(out string) (string, bool) {
 		return "", false
 	}
 	return id, true
+}
+
+// ActiveWindowID reads the root window's _NET_ACTIVE_WINDOW property, which
+// openbox points at the browser window once chromium maps it. Returns false
+// while no client window is mapped yet.
+func ActiveWindowID(display string, timeout time.Duration) (string, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xprop", "-display", display, "-root", "_NET_ACTIVE_WINDOW").Output()
+	if err != nil {
+		return "", false
+	}
+	return activeWindowID(string(out))
+}
+
+// activeWindowID extracts the window ID from `xprop -root
+// _NET_ACTIVE_WINDOW`, which prints `...: window id # 0x...` when a client
+// window has focus and `0x0` when none does.
+func activeWindowID(out string) (string, bool) {
+	_, id, found := strings.Cut(out, "window id # ")
+	if !found {
+		return "", false
+	}
+	id, _, _ = strings.Cut(strings.TrimSpace(id), ",")
+	if id == "" || id == "0x0" {
+		return "", false
+	}
+	return id, true
+}
+
+// WatchWindowCoverage reports whether the window covers the display, once for
+// the state it is in when the watch starts and again on every later change.
+// It returns when ctx is cancelled, when the window goes away, or when xprop
+// cannot be run.
+//
+// The signal is _NET_WM_STATE, which openbox rewrites the moment the window
+// leaves or re-enters the maximized state. Watching the property costs one
+// long-lived xprop process per browser start and reports a change as it
+// happens, where polling the state over CDP costs a round trip per pass and
+// reports it up to one interval late. A window manager that does not maintain
+// the EWMH atoms would simply never call onCoverage; the promotion on browser
+// start is what guarantees the window starts covered.
+func WatchWindowCoverage(ctx context.Context, display, windowID string, onCoverage func(covered bool)) error {
+	cmd := exec.CommandContext(ctx, "xprop", "-display", display, "-spy", "-id", windowID, "_NET_WM_STATE")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	defer func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}()
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		if covered, ok := windowCovered(scanner.Text()); ok {
+			onCoverage(covered)
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	return scanner.Err()
+}
+
+// windowCovered reads one _NET_WM_STATE line from xprop. A window covers the
+// display when it is fullscreen (kiosk) or maximized in both directions;
+// maximized in one direction leaves desktop visible beside it, so it counts as
+// uncovered. The second return reports whether the line was a state line at
+// all, so unrelated xprop output is ignored rather than read as a demotion.
+func windowCovered(line string) (bool, bool) {
+	_, atoms, found := strings.Cut(line, "_NET_WM_STATE(ATOM) =")
+	if !found {
+		return false, false
+	}
+	if strings.Contains(atoms, "_NET_WM_STATE_FULLSCREEN") {
+		return true, true
+	}
+	return strings.Contains(atoms, "_NET_WM_STATE_MAXIMIZED_VERT") &&
+		strings.Contains(atoms, "_NET_WM_STATE_MAXIMIZED_HORZ"), true
 }
