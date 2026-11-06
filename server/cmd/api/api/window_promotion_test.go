@@ -132,7 +132,13 @@ func newPromotionService(t *testing.T, url string) *ApiService {
 	logPath := filepath.Join(t.TempDir(), "chromium.log")
 	line := "2026-11-05T00:00:00 chromium DevTools listening on " + url + "\n"
 	require.NoError(t, os.WriteFile(logPath, []byte(line), 0o644))
+	return newPromotionServiceForLog(t, logPath, url)
+}
 
+// newPromotionServiceForLog is newPromotionService for a caller that keeps
+// appending to the log, which is how a chromium restart announces itself.
+func newPromotionServiceForLog(t *testing.T, logPath, wantURL string) *ApiService {
+	t.Helper()
 	um := devtoolsproxy.NewUpstreamManager(logPath, slog.Default())
 	ctx, cancel := context.WithCancel(context.Background())
 	um.Start(ctx)
@@ -141,9 +147,46 @@ func newPromotionService(t *testing.T, url string) *ApiService {
 
 	_, err := um.WaitForInitial(10 * time.Second)
 	require.NoError(t, err, "upstream manager never discovered the fake url")
-	require.Equal(t, url, um.Current())
+	require.Equal(t, wantURL, um.Current())
 
 	return &ApiService{lifecycleCtx: ctx, upstreamMgr: um}
+}
+
+// maximizedCalls reports how many times the fake has been asked to maximize.
+func (f *fakeDevTools) maximizedCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.setMaximized
+}
+
+// A chromium restart is a new devtools URL, and chromium opens a --window-size
+// window in normal state, so each start needs its own promotion rather than one
+// at boot. This is the path a profile load and a crash both take.
+func TestPromoteWindowsLoopPromotesOnEveryChromiumStart(t *testing.T) {
+	first := &fakeDevTools{pageTargetID: "target-1", windowState: "normal"}
+	firstURL := first.start(t)
+	second := &fakeDevTools{pageTargetID: "target-2", windowState: "normal"}
+	secondURL := second.start(t)
+
+	logPath := filepath.Join(t.TempDir(), "chromium.log")
+	require.NoError(t, os.WriteFile(logPath, []byte("2026-11-05T00:00:00 chromium DevTools listening on "+firstURL+"\n"), 0o644))
+	s := newPromotionServiceForLog(t, logPath, firstURL)
+
+	ch, unsubscribe := s.upstreamMgr.Subscribe()
+	go s.promoteWindowsLoop(ch, unsubscribe)
+
+	// The URL that is already current when the loop starts is promoted without
+	// waiting for a notification.
+	require.Eventually(t, func() bool { return first.maximizedCalls() == 1 }, 5*time.Second, 10*time.Millisecond)
+
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	require.NoError(t, err)
+	_, err = f.WriteString("2026-11-05T00:05:00 chromium DevTools listening on " + secondURL + "\n")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	require.Eventually(t, func() bool { return second.maximizedCalls() == 1 }, 5*time.Second, 10*time.Millisecond)
+	assert.Equal(t, 1, second.maximizedCalls(), "the restarted browser is promoted once")
 }
 
 func TestPromoteWindowMaximizedHappyPath(t *testing.T) {
