@@ -31,6 +31,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/extensionfetch"
 	"github.com/kernel/kernel-images/server/lib/forkidentity"
 	"github.com/kernel/kernel-images/server/lib/livefocus"
 	"github.com/kernel/kernel-images/server/lib/logger"
@@ -225,6 +226,11 @@ func main() {
 		s2Storage,
 		egressPolicy,
 		webauthnHook,
+		&extensionfetch.Fetcher{
+			BaseURL: identity.MetroAPIURL,
+			Token:   identity.Token,
+			Client:  &http.Client{},
+		},
 		api.ProcessOutputConfig{Dir: config.ProcessOutputDir, MaxBytes: config.ProcessOutputMaxBytes, TotalMaxBytes: config.ProcessOutputTotalMaxBytes},
 	)
 	if err != nil {
