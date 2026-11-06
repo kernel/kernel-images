@@ -346,6 +346,35 @@ func TestResolveDisplayParams(t *testing.T) {
 	}
 }
 
+func TestChromiumRestartForDisplayChange(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+
+	cases := []struct {
+		name                  string
+		fromW, fromH, fromRR  int
+		toW, toH, toRR        int
+		restartChromium       *bool
+		wantRestart, wantSkip bool
+	}{
+		{name: "rate up at same size", fromW: 1920, fromH: 1080, fromRR: 25, toW: 1920, toH: 1080, toRR: 60, wantRestart: true},
+		{name: "rate down at same size", fromW: 1920, fromH: 1080, fromRR: 60, toW: 1920, toH: 1080, toRR: 25, wantRestart: true},
+		{name: "rate change with restart_chromium=true", fromW: 1920, fromH: 1080, fromRR: 25, toW: 1920, toH: 1080, toRR: 60, restartChromium: boolPtr(true), wantRestart: true},
+		{name: "rate change with restart_chromium=false", fromW: 1920, fromH: 1080, fromRR: 25, toW: 1920, toH: 1080, toRR: 60, restartChromium: boolPtr(false), wantSkip: true},
+		{name: "size only", fromW: 1920, fromH: 1080, fromRR: 25, toW: 1280, toH: 800, toRR: 25},
+		{name: "size only with restart_chromium=true", fromW: 1920, fromH: 1080, fromRR: 25, toW: 1280, toH: 800, toRR: 25, restartChromium: boolPtr(true)},
+		{name: "size and rate", fromW: 1920, fromH: 1080, fromRR: 25, toW: 1280, toH: 800, toRR: 60},
+		{name: "no change", fromW: 1920, fromH: 1080, fromRR: 25, toW: 1920, toH: 1080, toRR: 25},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			restart, skipped := chromiumRestartForDisplayChange(tc.fromW, tc.fromH, tc.fromRR, tc.toW, tc.toH, tc.toRR, tc.restartChromium)
+			assert.Equal(t, tc.wantRestart, restart)
+			assert.Equal(t, tc.wantSkip, skipped)
+		})
+	}
+}
+
 func TestHeadlessRefreshRateSticky(t *testing.T) {
 	t.Run("setViewportOverride records sticky rate", func(t *testing.T) {
 		svc := &ApiService{}
