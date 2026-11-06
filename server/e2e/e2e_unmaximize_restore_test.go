@@ -88,11 +88,15 @@ func TestHeadfulUnmaximizeRestoreGeometry(t *testing.T) {
 
 	// The restored window must cover the desktop: no desktop background may
 	// show beside it. The seeded bounds are the root size, and the CSD window
-	// carries no WM decoration, so demand near-exact coverage.
+	// carries no WM decoration, so demand near-exact coverage of every edge —
+	// a large window shifted off-screen (e.g. Left=-500) also exposes the
+	// desktop, so the far edges are checked directly.
 	assert.GreaterOrEqual(t, restored.Width, rootW-40, "restored width leaves desktop background visible")
 	assert.GreaterOrEqual(t, restored.Height, rootH-40, "restored height leaves desktop background visible")
 	assert.LessOrEqual(t, restored.Left, 40, "restored window starts off-screen horizontally")
 	assert.LessOrEqual(t, restored.Top, 40, "restored window starts off-screen vertically")
+	assert.GreaterOrEqual(t, restored.Left+restored.Width, rootW-40, "restored window does not reach the right edge; desktop background visible")
+	assert.GreaterOrEqual(t, restored.Top+restored.Height, rootH-40, "restored window does not reach the bottom edge; desktop background visible")
 
 	// Maximizing again must still work — un-maximize never wedges the
 	// window in normal state.

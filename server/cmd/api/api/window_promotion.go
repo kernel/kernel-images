@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
@@ -70,39 +71,69 @@ func (s *ApiService) promoteWindowsLoop(ch <-chan string, unsubscribe func()) {
 }
 
 // promoteWindowMaximized dials the upstream and re-asserts the maximized
-// window state, retrying while the browser has no page target yet. Failures
-// are logged and abandoned — a window left in normal state still covers the
-// desktop (that is what the seeded bounds are for); only the exact-root
-// geometry and the RANDR auto-reflow are at stake.
+// window state, retrying within the deadline. A fresh browser can take a
+// few seconds to open its first page target (SetWindowBoundsMaximized needs
+// one), the devtools endpoint can refuse an early connection while chromium
+// is still binding its socket, and a connected client can drop mid-attempt —
+// each is retried, redialing once the transport is gone. Past the deadline
+// the attempt is logged and abandoned: a window left in normal state still
+// covers the desktop (that is what the seeded bounds are for); only the
+// exact-root geometry and the RANDR auto-reflow are at stake.
 func (s *ApiService) promoteWindowMaximized(url string) {
 	log := logger.FromContext(s.lifecycleCtx)
 	ctx, cancel := context.WithTimeout(s.lifecycleCtx, promoteTimeout)
 	defer cancel()
 
-	client, err := cdpclient.Dial(ctx, url)
-	if err != nil {
-		log.Warn("window maximize: dial devtools upstream failed", "error", err)
-		return
-	}
-	defer client.Close()
+	var client *cdpclient.Client
+	defer func() {
+		if client != nil {
+			client.Close()
+		}
+	}()
 
 	for {
+		if client == nil {
+			c, err := cdpclient.Dial(ctx, url)
+			if err != nil {
+				if !s.retryWindowPromotion(ctx, url, err, log) {
+					return
+				}
+				continue
+			}
+			client = c
+		}
+
 		err := client.SetWindowBoundsMaximized(ctx)
 		if err == nil {
 			log.Info("window promoted to maximized state")
 			return
 		}
-		// A restart landed while this attempt was running; the newer
-		// upstream gets its own promotion.
-		if s.upstreamMgr.Current() != url || ctx.Err() != nil {
-			log.Warn("window maximize abandoned", "error", err)
+		// A dropped transport never recovers on this client; clear it
+		// so the next pass redials.
+		if client.IsClosed() {
+			client.Close()
+			client = nil
+		}
+		if !s.retryWindowPromotion(ctx, url, err, log) {
 			return
 		}
-		select {
-		case <-ctx.Done():
-			log.Warn("window maximize abandoned", "error", err)
-			return
-		case <-time.After(promoteRetryDelay):
-		}
+	}
+}
+
+// retryWindowPromotion reports whether another promotion pass is worth
+// running, spacing passes with promoteRetryDelay. It returns false once the
+// deadline is up or a newer upstream — a chromium restart — has taken over,
+// abandoning this promotion; the newer URL gets its own.
+func (s *ApiService) retryWindowPromotion(ctx context.Context, url string, cause error, log *slog.Logger) bool {
+	if s.upstreamMgr.Current() != url || ctx.Err() != nil {
+		log.Warn("window maximize abandoned", "error", cause)
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		log.Warn("window maximize abandoned", "error", cause)
+		return false
+	case <-time.After(promoteRetryDelay):
+		return true
 	}
 }
