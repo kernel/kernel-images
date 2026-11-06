@@ -92,6 +92,11 @@ func main() {
 	final = chromiumflags.TranslateKernelDisableFeatures(final)
 	final = withDefaultPrivateNetworkBypass(final)
 	final = withAcceptedLanguages(final, accepted)
+	if !*headless {
+		if w, h, ok := x11.RootSize(":1", 2*time.Second); ok {
+			final = withSeededRestoreBounds(final, w, h)
+		}
+	}
 
 	// Diagnostics for parity with previous scripts
 	fmt.Printf("BASE_FLAGS: %s\n", baseFlags)
@@ -178,6 +183,44 @@ func withDefaultPrivateNetworkBypass(flags []string) []string {
 		}
 	}
 	return append(flags, defaultPrivateNetworkBypassFlag)
+}
+
+// withSeededRestoreBounds appends --window-size/--window-position sized to the
+// X root when the caller asked for --start-maximized. A window that boots
+// maximized never records a normal-state geometry of its own: the first
+// transition out of maximized (CDP Browser.setWindowBounds, a viewport resize
+// that demotes the window, a WM restore) falls back to chromium's tiny default
+// initial bounds, which on a 1920x1080 root is a ~1050x1080 sliver with the
+// desktop background showing beside it. Seeding the startup bounds gives the
+// window manager a sane geometry to restore to — un-maximizing then lands on a
+// root-sized window instead of the default sliver.
+//
+// Explicit --window-size/--window-position in the merged flags keep their own
+// geometry, and --kiosk is left alone: kiosk runs fullscreen and must never
+// receive normal-state bounds.
+func withSeededRestoreBounds(flags []string, width, height int) []string {
+	if width <= 0 || height <= 0 {
+		return flags
+	}
+	maximized, explicitGeometry, kiosk := false, false, false
+	for _, flag := range flags {
+		switch {
+		case flag == "--start-maximized":
+			maximized = true
+		case flag == "--kiosk":
+			kiosk = true
+		case flag == "--window-size" || strings.HasPrefix(flag, "--window-size=") ||
+			flag == "--window-position" || strings.HasPrefix(flag, "--window-position="):
+			explicitGeometry = true
+		}
+	}
+	if !maximized || kiosk || explicitGeometry {
+		return flags
+	}
+	return append(flags,
+		fmt.Sprintf("--window-size=%d,%d", width, height),
+		"--window-position=0,0",
+	)
 }
 
 // execLookPath helps satisfy syscall.Exec's requirement to pass an absolute path.

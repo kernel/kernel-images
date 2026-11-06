@@ -237,6 +237,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Headful: keep the browser window maximized across chromium restarts
+	// (no-op on the headless image).
+	apiService.StartWindowPromotion()
+
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
 	r.Use(api.WebMCPRequestSizeMiddleware)
