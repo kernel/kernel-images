@@ -186,7 +186,7 @@ func TestPromoteWindowsLoopPromotesOnEveryChromiumStart(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	require.Eventually(t, func() bool { return second.maximizedCalls() == 1 }, 5*time.Second, 10*time.Millisecond)
-	assert.Equal(t, 1, second.maximizedCalls(), "the restarted browser is promoted once")
+	assert.Never(t, func() bool { return first.maximizedCalls() != 1 || second.maximizedCalls() != 1 }, 250*time.Millisecond, 10*time.Millisecond, "each start is promoted once and the replaced url is not promoted again")
 }
 
 func TestPromoteWindowMaximizedHappyPath(t *testing.T) {
