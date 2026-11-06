@@ -559,24 +559,17 @@ func waitForNeko(t *testing.T, ctx context.Context, c *TestContainer) {
 	}, time.Minute, 500*time.Millisecond, "neko not ready")
 }
 
-// TestDisplayResizeOddWidthHonoursLibxcvtRounding covers the path where a
-// caller requests dimensions libxcvt cannot honour exactly. libxcvt rounds
-// widths to the CVT 8-pixel grid and then applies a hard-coded FWXGA bump
-// for 1360×768 → 1366×768 (xf86EdidModes.c convention so virtual displays
-// match real "HD ready" laptop panels). For request 1365×768 the realized
-// X root is 1366×768.
+// TestDisplayResizeOddWidthIsExact covers a width off the CVT 8-pixel grid.
+// Neko generates the mode at exactly the requested size, so 1365x768 gives a
+// 1365x768 X root rather than libxcvt's rounded 1360 (which X bumps to 1366
+// for 768-line screens).
 //
-// Before the fix, waitForXRootSize compared the X root against the
-// requested 1365 and returned 500 with "X root verification: x root is
-// 1366x768, want 1365x768". The browser pool treats that 500 as fatal —
-// the production incident that prompted this test recycled the VM on
-// every odd-width /configure call.
-//
-// After the fix (PatchDisplay reads the realized dimensions back from
-// neko's ScreenConfigurationChange response and uses them for both the
-// post-condition and the 200 body), the resize succeeds and the response
-// truthfully reports 1366×768.
-func TestDisplayResizeOddWidthHonoursLibxcvtRounding(t *testing.T) {
+// An odd-width resize used to return 500 ("X root verification: x root is
+// 1366x768, want 1365x768"), which the browser pool treats as fatal, so it
+// recycled the VM on every odd-width /configure call. PatchDisplay reads the
+// realized size back from Neko and reports it, so the resize must succeed
+// and the response must match the X root.
+func TestDisplayResizeOddWidthIsExact(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
 	}
@@ -604,10 +597,7 @@ func TestDisplayResizeOddWidthHonoursLibxcvtRounding(t *testing.T) {
 	navigateBlank(t, ctx, c)
 
 	// Request an odd width — the exact pattern from the production taint.
-	// libxcvt rounds 1365 to 1360 (CVT 8-pixel grid) then bumps to 1366
-	// (FWXGA hack for 1360×768 specifically). The X root lands at 1366×768.
 	const requestedWidth, height, refreshRate = 1365, 768, 60
-	const realizedWidth = 1366
 
 	client, err := c.APIClient()
 	require.NoError(t, err)
@@ -625,21 +615,16 @@ func TestDisplayResizeOddWidthHonoursLibxcvtRounding(t *testing.T) {
 	t.Logf("PATCH /display(width=%d, height=%d) -> status=%d body=%s; x_root=%dx%d",
 		requestedWidth, height, rsp.StatusCode(), strings.TrimSpace(string(rsp.Body)), rootW, rootH)
 
-	// X root reflects libxcvt's realized mode, not the request.
-	require.Equal(t, realizedWidth, rootW,
-		"expected libxcvt FWXGA hack to round %dx%d to %dx%d in X root; got %dx%d. If libxcvt's rounding rule changed, update the expected realized width.",
-		requestedWidth, height, realizedWidth, height, rootW, rootH)
+	require.Equal(t, requestedWidth, rootW,
+		"expected an exact %dx%d X root; got %dx%d", requestedWidth, height, rootW, rootH)
 	require.Equal(t, height, rootH, "height should pass through unchanged")
 
-	// API now succeeds and reports the realized dimensions — the caller
-	// learns the screen is 1366×768 even though they asked for 1365×768.
 	require.Equal(t, http.StatusOK, rsp.StatusCode(),
-		"PATCH /display: expected 200 after fix, got %d body=%s", rsp.StatusCode(), string(rsp.Body))
+		"PATCH /display: expected 200, got %d body=%s", rsp.StatusCode(), string(rsp.Body))
 	require.NotNil(t, rsp.JSON200, "JSON200 response must be present")
 	require.NotNil(t, rsp.JSON200.Width, "response must include realized width")
 	require.NotNil(t, rsp.JSON200.Height, "response must include realized height")
-	require.Equal(t, realizedWidth, *rsp.JSON200.Width,
-		"response width should be the realized %d, not the requested %d", realizedWidth, requestedWidth)
+	require.Equal(t, rootW, *rsp.JSON200.Width, "response width should match the X root")
 	require.Equal(t, height, *rsp.JSON200.Height)
 }
 

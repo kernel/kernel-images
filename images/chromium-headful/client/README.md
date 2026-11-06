@@ -27,6 +27,11 @@ For older images without the capability, change the query parameter and reload.
 If an advertised capability fails to acknowledge a request, fall back to a reload
 with the desired query mode. The dashboard uses a one-second acknowledgement timeout.
 
+Read-only links stay read-only. When the live-view proxy serves a read-only link it
+sets `window.KERNEL_LIVE_VIEW_READ_ONLY = true`; the viewer then ignores the query
+parameter and answers unlock requests with `readOnly: true`. The server refuses that
+viewer's input regardless.
+
 Read-only mode locks local input and disables implicit hosting. Unlocking restores
 the server's configured implicit-hosting setting. Mode changes persist across
 transport reconnects; a full page reload uses the URL's initial mode again.

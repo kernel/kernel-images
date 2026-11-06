@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from 'bun:test'
-import { isReadOnlyMessage } from '../src/utils/read-only'
+import { isReadOnlyMessage, resolveReadOnly } from '../src/utils/read-only'
 
 const accessor = { connected: true, remote: { setKeyboardModifierState: mock() } }
 mock.module('~/store', () => ({ accessor }))
@@ -48,6 +48,20 @@ describe('read-only parent messages', () => {
       { type: 'KERNEL_SET_READ_ONLY', readOnly: true, requestId: 123 },
     ]) {
       expect(isReadOnlyMessage(message({ data }), parent, origin)).toBe(false)
+    }
+  })
+})
+
+describe('read-only links', () => {
+  test('keep read-only regardless of the requested mode', () => {
+    expect(resolveReadOnly(false, true)).toBe(true)
+    expect(resolveReadOnly(true, true)).toBe(true)
+  })
+
+  test('follow the requested mode when the proxy does not force it', () => {
+    for (const forced of [undefined, false, 'true', 1]) {
+      expect(resolveReadOnly(false, forced)).toBe(false)
+      expect(resolveReadOnly(true, forced)).toBe(true)
     }
   })
 })
