@@ -5,13 +5,12 @@ on:
 
 jobs:
   docker:
-    # Fork PRs get no secrets and now must not reach the self-hosted pool
-    # either: skipping here (rather than failing at registry login, as
-    # before) also skips the dependent e2e job via its needs chain.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Credential-bearing builds run on trusted branch pushes, not PR merge refs.
+    if: github.repository == 'kernel/kernel-images' && github.event_name != 'pull_request'
     runs-on: [self-hosted, linux]
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,11 +42,17 @@ jobs:
           # that root-run CI from other repos clobbers to root-owned.
           echo "BUILDX_CONFIG=${HOME}/.docker/buildx-ci" >> "$GITHUB_ENV"
 
+      - name: Read Docker Hub credentials from SSM
+        id: dockerhub
+        uses: ./.github/actions/dockerhub-credentials
+        with:
+          role-arn: arn:aws:iam::613957054632:role/github-actions-kernel-images
+
       - name: Login to Docker Hub
         uses: docker/login-action@v3
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: ${{ steps.dockerhub.outputs.username }}
+          password: ${{ steps.dockerhub.outputs.password }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
