@@ -11,8 +11,10 @@ inputs:
     default: 'false'
 outputs:
   username:
+    description: Docker Hub username.
     value: ${{ steps.read.outputs.username }}
   password:
+    description: Docker Hub access token.
     value: ${{ steps.read.outputs.password }}
   credentials:
     description: JSON username/password pair for Ansible.
