@@ -48,18 +48,19 @@ func TestRequestLogger(t *testing.T) {
 			_, _ = w.Write([]byte("hi"))
 		})
 
-		req := httptest.NewRequest(http.MethodGet, "/process/abc?x=1", nil)
+		req := httptest.NewRequest(http.MethodGet, "http://secret-host.example/process/abc?url=https://user:pass@site.example/x", nil)
 		req.Header.Set(chiMiddleware.RequestIDHeader, "hypeman/abc-1")
 		r.ServeHTTP(httptest.NewRecorder(), req)
 
+		for _, leak := range []string{"secret-host", "user:pass", "site.example", "/process/abc"} {
+			assert.NotContains(t, buf.String(), leak)
+		}
 		lines := decodeLines(t, &buf)
 		require.Len(t, lines, 1)
 		line := lines[0]
 		assert.Equal(t, tc.level, line["level"])
 		assert.Equal(t, "request", line["msg"])
-		assert.Equal(t, "http://example.com/process/abc?x=1", line["url"])
 		assert.Equal(t, "hypeman/abc-1", line["request_id"])
-		assert.EqualValues(t, tc.status, line["status"])
 		if tc.status >= http.StatusOK {
 			assert.EqualValues(t, 2, line["bytes"])
 		}
@@ -68,7 +69,7 @@ func TestRequestLogger(t *testing.T) {
 		assert.EqualValues(t, tc.status, attrs["http.response.status_code"])
 		assert.Equal(t, "/process/{id}", attrs["http.route"])
 		assert.Contains(t, attrs, "duration_ms")
-		assert.NotContains(t, attrs, "url")
+		assert.NotContains(t, attrs, "error.type")
 	}
 }
 
@@ -80,16 +81,35 @@ func TestRequestLoggerDefaultsToOK(t *testing.T) {
 
 	line := decodeLines(t, &buf)[0]
 	assert.Equal(t, "INFO", line["level"])
-	assert.EqualValues(t, http.StatusOK, line["status"])
 	assert.NotContains(t, line, "request_id")
-	assert.NotContains(t, line[AttrsKey], "http.route")
+	attrs := line[AttrsKey].(map[string]any)
+	assert.EqualValues(t, http.StatusOK, attrs["http.response.status_code"])
+	assert.NotContains(t, attrs, "http.route")
+}
+
+func TestRequestLoggerAborted(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	h := RequestLogger(log)(Recoverer(log)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	})))
+	assert.PanicsWithValue(t, http.ErrAbortHandler, func() {
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/", nil))
+	})
+
+	lines := decodeLines(t, &buf)
+	require.Len(t, lines, 1)
+	assert.Equal(t, "ERROR", lines[0]["level"])
+	attrs := lines[0][AttrsKey].(map[string]any)
+	assert.Equal(t, "aborted", attrs["error.type"])
+	assert.NotContains(t, attrs, "http.response.status_code")
 }
 
 func TestRecoverer(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))
 	h := RequestLogger(log)(Recoverer(log)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic("x" + strings.Repeat("é", 300))
+		panic("token=secret " + strings.Repeat("é", 300))
 	})))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -100,14 +120,11 @@ func TestRecoverer(t *testing.T) {
 	panicLine, requestLine := lines[0], lines[1]
 	assert.Equal(t, "ERROR", panicLine["level"])
 	assert.Equal(t, "panic", panicLine["msg"])
-	assert.Equal(t, "x"+strings.Repeat("é", 300), panicLine["panic"])
+	assert.Equal(t, "token=secret "+strings.Repeat("é", 300), panicLine["panic"])
 	assert.Contains(t, panicLine["stack"], "TestRecoverer")
-	attrs := panicLine[AttrsKey].(map[string]any)
-	assert.Equal(t, "panic", attrs["exception.type"])
-	// Cut at 512 bytes, without the half of a rune that falls on the boundary.
-	assert.Equal(t, "x"+strings.Repeat("é", 255), attrs["exception.message"])
+	assert.Equal(t, map[string]any{"exception.type": "string"}, panicLine[AttrsKey])
 	assert.Equal(t, "ERROR", requestLine["level"])
-	assert.EqualValues(t, http.StatusInternalServerError, requestLine["status"])
+	assert.EqualValues(t, http.StatusInternalServerError, requestLine[AttrsKey].(map[string]any)["http.response.status_code"])
 }
 
 func TestRecovererLeavesUpgradesAlone(t *testing.T) {

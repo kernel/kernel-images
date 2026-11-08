@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,51 +17,45 @@ import (
 // text or other free-form values.
 const AttrsKey = "attrs"
 
-// maxPanicMessage bounds the indexed copy of a panic's value. The full value
-// and stack are logged alongside it.
-const maxPanicMessage = 512
-
 // RequestLogger logs one line per request once it completes, at INFO, or WARN
-// for a 4xx and ERROR for a 5xx. It replaces chi's middleware.Logger, which
-// writes free-form text.
+// for a 4xx and ERROR for a 5xx. A request whose handler panics past it, as
+// with http.ErrAbortHandler, is logged at ERROR as aborted. It replaces chi's
+// middleware.Logger, which writes free-form text.
+//
+// Only the matched route pattern is logged, never the URL, host or query:
+// those can carry credentials (e.g. a URL passed as a query parameter).
 func RequestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ww := chiMiddleware.NewWrapResponseWriter(w, r.ProtoMajor)
 			start := time.Now()
+			completed := false
 			defer func() {
 				status := ww.Status()
-				if status == 0 {
+				if status == 0 && completed {
 					status = http.StatusOK
 				}
 				level := slog.LevelInfo
 				switch {
-				case status >= 500:
+				case !completed || status >= 500:
 					level = slog.LevelError
 				case status >= 400:
 					level = slog.LevelWarn
 				}
-				scheme := "http"
-				if r.TLS != nil {
-					scheme = "https"
-				}
 				elapsed := time.Since(start)
-				args := []any{
-					"method", r.Method,
-					"url", scheme + "://" + r.Host + r.RequestURI,
-					"proto", r.Proto,
-					"remote_addr", r.RemoteAddr,
-					"status", status,
-					"bytes", ww.BytesWritten(),
-					"duration", elapsed.String(),
-				}
+				args := []any{"bytes", ww.BytesWritten()}
 				if id := chiMiddleware.GetReqID(r.Context()); id != "" {
 					args = append(args, "request_id", id)
 				}
 				attrs := []any{
 					"http.request.method", r.Method,
-					"http.response.status_code", status,
 					"duration_ms", elapsed.Milliseconds(),
+				}
+				if status != 0 {
+					attrs = append(attrs, "http.response.status_code", status)
+				}
+				if !completed {
+					attrs = append(attrs, "error.type", "aborted")
 				}
 				if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePattern() != "" {
 					attrs = append(attrs, "http.route", rctx.RoutePattern())
@@ -71,6 +64,7 @@ func RequestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 				log.Log(r.Context(), level, "request", args...)
 			}()
 			next.ServeHTTP(ww, r)
+			completed = true
 		})
 	}
 }
@@ -90,13 +84,9 @@ func Recoverer(log *slog.Logger) func(http.Handler) http.Handler {
 				if rvr == http.ErrAbortHandler {
 					panic(rvr)
 				}
-				msg := fmt.Sprint(rvr)
-				indexed := msg
-				if len(indexed) > maxPanicMessage {
-					indexed = strings.ToValidUTF8(indexed[:maxPanicMessage], "")
-				}
-				log.ErrorContext(r.Context(), "panic", "panic", msg, "stack", string(debug.Stack()),
-					slog.Group(AttrsKey, "exception.type", "panic", "exception.message", indexed))
+				// The panic value is free-form, so only its Go type is indexed.
+				log.ErrorContext(r.Context(), "panic", "panic", fmt.Sprint(rvr), "stack", string(debug.Stack()),
+					slog.Group(AttrsKey, "exception.type", fmt.Sprintf("%T", rvr)))
 				if r.Header.Get("Connection") != "Upgrade" {
 					w.WriteHeader(http.StatusInternalServerError)
 				}

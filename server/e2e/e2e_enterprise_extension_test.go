@@ -81,8 +81,6 @@ func runEnterpriseExtensionTest(t *testing.T, image string) {
 	t.Log("[test] uploading kernel-like extension first (to simulate prod)")
 	uploadKernelLikeExtension(t, ctx, c)
 
-	downloadLogBaseline := extensionDownloadLogSnapshot(t, ctx, c)
-
 	// Upload the enterprise test extension through the new endpoint and verify its policy
 	// requirement selects the restart path.
 	versionURL := "http" + strings.TrimPrefix(c.CDPURL(), "ws") + "json/version"
@@ -102,9 +100,6 @@ func runEnterpriseExtensionTest(t *testing.T, image string) {
 	t.Log("[test] verifying enterprise policy configuration")
 	waitForEnterprisePolicy(t, ctx, c, 10*time.Second)
 
-	t.Log("[test] waiting for Chrome to download extension via enterprise policy")
-	waitForExtensionDownload(t, ctx, c, downloadLogBaseline, 30*time.Second)
-
 	// Check Chrome's extension installation logs
 	checkChromiumLogs(t, ctx, c)
 
@@ -116,7 +111,7 @@ func runEnterpriseExtensionTest(t *testing.T, image string) {
 	t.Log("[test] checking chrome://policy via screenshot")
 	takeChromePolicyScreenshot(t, ctx, c)
 
-	// Verify the extension is installed
+	// Verify the policy download and installation through Chrome state, not access-log paths.
 	t.Log("[test] checking if extension is installed in Chrome's user-data")
 	waitForExtensionInstalled(t, ctx, c, 30*time.Second)
 
@@ -332,123 +327,6 @@ func checkExtractedFiles(t *testing.T, ctx context.Context, c *TestContainer) {
 	} else {
 		t.Logf("[files] crx_file_type=%s", fileOutput)
 	}
-}
-
-// checkExtensionDownloadLogs checks the kernel-images-api logs for extension download requests.
-func checkExtensionDownloadLogs(t *testing.T, ctx context.Context, c *TestContainer) {
-	t.Helper()
-
-	apiLog, err := extensionDownloadLog(ctx, c)
-	if err != nil {
-		t.Logf("[logs] error=%v", err)
-		return
-	}
-
-	lines := strings.Split(apiLog, "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "update.xml") || strings.Contains(line, ".crx") || strings.Contains(line, "extension") {
-			t.Logf("[logs] line=%s", line)
-		}
-	}
-
-	// Check specifically for GET requests to our extension
-	if strings.Contains(apiLog, "GET") && strings.Contains(apiLog, "enterprise-test") {
-		t.Log("[logs] Chrome made GET requests to fetch the extension!")
-	} else {
-		t.Log("[logs] No GET requests to enterprise-test extension found")
-	}
-
-	// Log all GET requests
-	for _, line := range lines {
-		if strings.Contains(line, "GET") {
-			t.Logf("[logs] GET_request=%s", line)
-		}
-	}
-}
-
-func extensionDownloadLogSnapshot(t *testing.T, ctx context.Context, c *TestContainer) string {
-	t.Helper()
-	apiLog, err := extensionDownloadLog(ctx, c)
-	if err != nil {
-		t.Logf("[logs] baseline_error=%v", err)
-		return ""
-	}
-	return apiLog
-}
-
-func waitForExtensionDownload(t *testing.T, ctx context.Context, c *TestContainer, baseline string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-	var lastLog string
-	var lastErr error
-	for {
-		apiLog, err := extensionDownloadLog(ctx, c)
-		lastLog, lastErr = extensionDownloadLogSince(apiLog, baseline), err
-		if err == nil && extensionDownloadObserved(lastLog) {
-			t.Log("[logs] Chrome made GET requests to fetch the enterprise extension")
-			checkExtensionDownloadLogs(t, ctx, c)
-			return
-		}
-		if time.Now().After(deadline) {
-			require.NoError(t, lastErr, "extension download was not observed within %s; last_log=%s", timeout, lastLog)
-			require.True(t, extensionDownloadObserved(lastLog), "extension download was not observed within %s", timeout)
-			return
-		}
-		select {
-		case <-ctx.Done():
-			require.NoError(t, ctx.Err(), "context cancelled waiting for extension download")
-			return
-		case <-time.After(1 * time.Second):
-		}
-	}
-}
-
-func extensionDownloadLog(ctx context.Context, c *TestContainer) (string, error) {
-	return execCombinedOutputWithClient(ctx, c, "cat", []string{"/var/log/supervisord/kernel-images-api"})
-}
-
-func extensionDownloadLogSince(apiLog, baseline string) string {
-	if baseline != "" && strings.HasPrefix(apiLog, baseline) {
-		return apiLog[len(baseline):]
-	}
-	return apiLog
-}
-
-func extensionDownloadObserved(apiLog string) bool {
-	var sawUpdateXML, sawCRX bool
-	for _, line := range strings.Split(apiLog, "\n") {
-		if !strings.Contains(line, "GET") || !strings.Contains(line, "enterprise-test") {
-			continue
-		}
-		if strings.Contains(line, "update.xml") {
-			sawUpdateXML = true
-		}
-		if strings.Contains(line, ".crx") {
-			sawCRX = true
-		}
-	}
-	return sawUpdateXML && sawCRX
-}
-
-func TestExtensionDownloadObservedRequiresUpdateXMLAndCRX(t *testing.T) {
-	t.Parallel()
-
-	require.False(t, extensionDownloadObserved(""))
-	require.False(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/enterprise-test/update.xml HTTP/1.1`))
-	require.False(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/enterprise-test/extension.crx HTTP/1.1`))
-	require.False(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/kernel/update.xml HTTP/1.1
-GET http://127.0.0.1/extensions/kernel/extension.crx HTTP/1.1`))
-	require.True(t, extensionDownloadObserved(`GET http://127.0.0.1/extensions/enterprise-test/update.xml HTTP/1.1
-GET http://127.0.0.1/extensions/enterprise-test/extension.crx HTTP/1.1`))
-}
-
-func TestExtensionDownloadLogSince(t *testing.T) {
-	t.Parallel()
-
-	baseline := "line 1\nline 2\n"
-	require.Equal(t, "line 3\n", extensionDownloadLogSince(baseline+"line 3\n", baseline))
-	require.Equal(t, "line 3\n", extensionDownloadLogSince("line 3\n", baseline))
-	require.Equal(t, "line 3\n", extensionDownloadLogSince("line 3\n", ""))
 }
 
 func TestNextExtensionInstallPollDelay(t *testing.T) {
