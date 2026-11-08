@@ -139,7 +139,6 @@ func main() {
 	// for a fork identity is carrying the stream of the instance it was forked
 	// from, so the resolver hands out no stream until that identity arrives.
 	s2Streams := newS2StreamResolver(config, slogger)
-	s2Storage := events.NewS2StorageController(eventStream, config.S2Basin, config.S2AccessToken, s2Streams.Resolve, events.S2Config{}, slogger)
 
 	// Optional OTLP export sink. Independent of S2; both can run together.
 	// Constructed when an endpoint is provisioned, but left stopped: export is
@@ -155,6 +154,25 @@ func main() {
 		metro:        config.MetroName,
 		metroAPIURL:  config.MetroAPIBaseURL,
 	}, slogger)
+
+	// With a relay path the VM holds no S2 credential: storage posts to the
+	// metro-api relay with the instance JWT, and the relay appends to this
+	// instance's stream. The relay wins when direct S2 credentials are also set.
+	s2Storage := events.NewS2StorageController(eventStream, config.S2Basin, config.S2AccessToken, s2Streams.Resolve, events.S2Config{}, slogger)
+	var relayMetrics *events.RelayMetrics
+	if config.StoragePath != "" {
+		relayMetrics = &events.RelayMetrics{}
+		s2Storage = events.NewRelayStorageController(eventStream, events.RelayConfig{
+			BaseURLFunc: func() string { return relayBaseURL(identity.MetroAPIURL(), config) },
+			Path:        config.StoragePath,
+			TokenFunc:   identity.Token,
+			MaxRecords:  config.StorageMaxRecords,
+			MaxBytes:    config.StorageMaxBytes,
+			Linger:      config.StorageLinger,
+			MaxQueue:    config.StorageMaxQueue,
+			Metrics:     relayMetrics,
+		}, s2Streams.Resolve, slogger)
+	}
 
 	var otlpExporter api.OTLPExporter
 	var otlpMetrics *events.OTLPMetrics
@@ -392,6 +410,9 @@ func main() {
 	if otlpMetrics != nil {
 		metricsCollectors = append(metricsCollectors, metrics.NewOTLPCollector(otlpMetrics))
 	}
+	if relayMetrics != nil {
+		metricsCollectors = append(metricsCollectors, metrics.NewRelayCollector(relayMetrics))
+	}
 	rMetrics.Method(http.MethodGet, "/metrics", metrics.Handler(slogger, metricsCollectors...))
 	srvMetrics := &http.Server{
 		Addr:    fmt.Sprintf("0.0.0.0:%d", config.MetricsPort),
@@ -485,6 +506,20 @@ func mustFFmpeg() {
 	if err := cmd.Run(); err != nil {
 		panic(fmt.Errorf("ffmpeg not found or not executable: %w", err))
 	}
+}
+
+// relayBaseURL is the metro-api the storage relay is reached through: the
+// identity's metro-api URL when it has one, else the OTLP relay endpoint, which
+// provisioning points at the same metro-api.
+func relayBaseURL(metroAPIURL string, cfg *config.Config) string {
+	if metroAPIURL != "" {
+		return metroAPIURL
+	}
+	scheme := "https"
+	if cfg.OTLPInsecure {
+		scheme = "http"
+	}
+	return scheme + "://" + cfg.OTLPEndpoint
 }
 
 // s2StreamResolver uses the hook payload once applied and the persisted payload
