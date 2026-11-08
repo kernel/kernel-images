@@ -39,6 +39,10 @@ func TestLoad(t *testing.T) {
 				OTLPMaxQueueSize:           2048,
 				OTLPExportInterval:         time.Second,
 				OTLPExportTimeout:          30 * time.Second,
+				StorageMaxRecords:          200,
+				StorageMaxBytes:            786432,
+				StorageLinger:              100 * time.Millisecond,
+				StorageMaxQueue:            8192,
 			},
 		},
 		{
@@ -84,6 +88,10 @@ func TestLoad(t *testing.T) {
 				OTLPMaxQueueSize:           2048,
 				OTLPExportInterval:         time.Second,
 				OTLPExportTimeout:          30 * time.Second,
+				StorageMaxRecords:          200,
+				StorageMaxBytes:            786432,
+				StorageLinger:              100 * time.Millisecond,
+				StorageMaxQueue:            8192,
 			},
 		},
 		{
@@ -114,6 +122,10 @@ func TestLoad(t *testing.T) {
 				OTLPMaxQueueSize:           2048,
 				OTLPExportInterval:         time.Second,
 				OTLPExportTimeout:          30 * time.Second,
+				StorageMaxRecords:          200,
+				StorageMaxBytes:            786432,
+				StorageLinger:              100 * time.Millisecond,
+				StorageMaxQueue:            8192,
 			},
 		},
 		{
@@ -148,6 +160,30 @@ func TestLoad(t *testing.T) {
 			name: "otlp queue size below the export batch size",
 			env: map[string]string{
 				"BTEL_OTLP_MAX_QUEUE_SIZE": "100",
+			},
+			wantErr: true,
+		},
+		{
+			name: "relay storage batch over the S2 record limit",
+			env: map[string]string{
+				"BTEL_STORAGE_PATH":        "/btel-relay/v1/records",
+				"BTEL_STORAGE_MAX_RECORDS": "1001",
+			},
+			wantErr: true,
+		},
+		{
+			name: "relay storage batch over the S2 byte limit",
+			env: map[string]string{
+				"BTEL_STORAGE_PATH":      "/btel-relay/v1/records",
+				"BTEL_STORAGE_MAX_BYTES": "1048577",
+			},
+			wantErr: true,
+		},
+		{
+			name: "relay storage queue smaller than a batch",
+			env: map[string]string{
+				"BTEL_STORAGE_PATH":      "/btel-relay/v1/records",
+				"BTEL_STORAGE_MAX_QUEUE": "10",
 			},
 			wantErr: true,
 		},
