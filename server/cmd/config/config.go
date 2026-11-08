@@ -197,6 +197,9 @@ func validate(config *Config) error {
 		return fmt.Errorf("BTEL_OTLP_EXPORT_TIMEOUT must be greater than 0")
 	}
 	if config.StoragePath != "" {
+		if config.MetroAPIBaseURL == "" && config.OTLPEndpoint == "" {
+			return fmt.Errorf("BTEL_STORAGE_PATH requires KERNEL_METRO_API_BASE_URL or BTEL_OTLP_ENDPOINT to reach the relay")
+		}
 		// The relay appends each batch as one S2 append: at most 1000 records
 		// and 1 MiB metered.
 		if config.StorageMaxRecords < 1 || config.StorageMaxRecords > 1000 {

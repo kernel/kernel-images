@@ -331,9 +331,9 @@ func TestRelayStorage_CloseDropsWhatItCannotFlush(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	require.ErrorIs(t, s.Close(ctx), context.DeadlineExceeded)
-	assert.Equal(t, uint64(1), cfg.Metrics.Dropped()[relayDropRetriesExhausted])
+	assert.Equal(t, uint64(1), cfg.Metrics.Dropped()[relayDropShutdown], "a batch cut off by Close is a shutdown drop")
 	require.NoError(t, s.Append(context.Background(), relayEnvelope(2, `{}`)))
-	assert.Equal(t, uint64(1), cfg.Metrics.Dropped()[relayDropShutdown], "appends after Close are dropped")
+	assert.Equal(t, uint64(2), cfg.Metrics.Dropped()[relayDropShutdown], "appends after Close are dropped")
 }
 
 func TestRelayURL(t *testing.T) {

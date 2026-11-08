@@ -27,16 +27,18 @@ const (
 
 	relayMeteredOverhead = 8
 	// relayExportTimeout bounds one batch, retries included, like the OTLP
-	// sink's BTEL_OTLP_EXPORT_TIMEOUT default.
+	// sink's BTEL_OTLP_EXPORT_TIMEOUT default. It is shorter than the retry
+	// policy's maxElapsed, so it is what ends a batch's retries in practice.
 	relayExportTimeout = 30 * time.Second
-	// relayDrainGrace bounds the in-flight request Close abandons when its ctx
-	// expires.
-	relayDrainGrace = 2 * time.Second
+	// relayDrainGrace bounds how long Close waits for the cancelled sender to
+	// record its drops once its ctx has expired.
+	relayDrainGrace = 250 * time.Millisecond
 )
 
 // relayRetry mirrors the OTLP exporter's retry policy: exponential backoff
-// from 5s up to 30s with jitter, the greater of the backoff and Retry-After,
-// giving up after a minute.
+// from 5s up to 30s with jitter, waiting the greater of the backoff and
+// Retry-After, and giving up after a minute or relayExportTimeout, whichever
+// comes first.
 type relayRetry struct {
 	initial, max, maxElapsed time.Duration
 }
@@ -313,6 +315,10 @@ func (s *relayStorage) send(batch []relayRecord) {
 		if err != nil {
 			label = "error"
 		}
+		if s.sendCtx.Err() != nil {
+			s.fail(batch, label, relayDropShutdown, err)
+			return
+		}
 		if !relayRetryable(status, err) {
 			s.fail(batch, label, relayDropRejected, err)
 			return
@@ -327,7 +333,11 @@ func (s *relayStorage) send(batch []relayRecord) {
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
-			s.fail(batch, label, relayDropRetriesExhausted, ctx.Err())
+			reason := relayDropRetriesExhausted
+			if s.sendCtx.Err() != nil {
+				reason = relayDropShutdown
+			}
+			s.fail(batch, label, reason, ctx.Err())
 			return
 		}
 		backoff = min(time.Duration(float64(backoff)*1.5), s.cfg.retry.max)
@@ -369,11 +379,11 @@ func (s *relayStorage) post(ctx context.Context, body []byte) (status int, retry
 }
 
 // relayRetryable matches the OTLP exporter: retry 429, 502, 503, and 504, and
-// transport timeouts; everything else is final.
+// temporary transport errors; everything else is final.
 func relayRetryable(status int, err error) bool {
 	if err != nil {
 		var urlErr *url.Error
-		return errors.As(err, &urlErr) && urlErr.Timeout()
+		return errors.As(err, &urlErr) && urlErr.Temporary()
 	}
 	switch status {
 	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:

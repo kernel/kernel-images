@@ -164,8 +164,16 @@ func TestLoad(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "relay storage without a relay host",
+			env: map[string]string{
+				"BTEL_STORAGE_PATH": "/btel-relay/v1/records",
+			},
+			wantErr: true,
+		},
+		{
 			name: "relay storage batch over the S2 record limit",
 			env: map[string]string{
+				"BTEL_OTLP_ENDPOINT":       "169.254.0.1:8443",
 				"BTEL_STORAGE_PATH":        "/btel-relay/v1/records",
 				"BTEL_STORAGE_MAX_RECORDS": "1001",
 			},
@@ -174,6 +182,7 @@ func TestLoad(t *testing.T) {
 		{
 			name: "relay storage batch over the S2 byte limit",
 			env: map[string]string{
+				"BTEL_OTLP_ENDPOINT":     "169.254.0.1:8443",
 				"BTEL_STORAGE_PATH":      "/btel-relay/v1/records",
 				"BTEL_STORAGE_MAX_BYTES": "1048577",
 			},
@@ -182,6 +191,7 @@ func TestLoad(t *testing.T) {
 		{
 			name: "relay storage queue smaller than a batch",
 			env: map[string]string{
+				"BTEL_OTLP_ENDPOINT":     "169.254.0.1:8443",
 				"BTEL_STORAGE_PATH":      "/btel-relay/v1/records",
 				"BTEL_STORAGE_MAX_QUEUE": "10",
 			},
