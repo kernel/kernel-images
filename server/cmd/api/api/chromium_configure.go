@@ -316,13 +316,8 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 		if err != nil {
 			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
 		}
-		if spec.needsNav {
-			if err := stripProfileSessionRestore(preparedProfile); err != nil {
-				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
-			}
-		}
-		if err := stripProfileKernelLocalState(preparedProfile); err != nil {
-			logger.FromContext(ctx).Warn("failed to strip Kernel settings from profile Local State", "error", err)
+		if err := sanitizePreparedProfile(ctx, preparedProfile, spec.needsNav); err != nil {
+			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
 		}
 		if err := chromiumInstallPreparedProfile(preparedProfile); err != nil {
 			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
@@ -710,6 +705,22 @@ func chromiumPrepareProfileArchive(profilePath string, strip int) (preparedDir s
 		return "", nil, fmt.Errorf("chown user-data: %w (%s)", err, string(out))
 	}
 	return preparedDir, cleanup, nil
+}
+
+// sanitizePreparedProfile edits the unpacked profile before it replaces
+// user-data. Session restore is stripped only when a start_url will be
+// navigated; Kernel settings are always stripped from Local State, and a
+// failure there is logged rather than failing the load.
+func sanitizePreparedProfile(ctx context.Context, preparedDir string, stripSessionRestore bool) error {
+	if stripSessionRestore {
+		if err := stripProfileSessionRestore(preparedDir); err != nil {
+			return err
+		}
+	}
+	if err := stripProfileKernelLocalState(preparedDir); err != nil {
+		logger.FromContext(ctx).Warn("failed to strip Kernel settings from profile Local State", "error", err)
+	}
+	return nil
 }
 
 // stripProfileSessionRestore deletes the prepared profile's Default/Sessions so
