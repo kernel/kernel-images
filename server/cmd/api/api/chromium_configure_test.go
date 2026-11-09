@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"mime/multipart"
@@ -192,6 +193,44 @@ func TestStripProfileKernelLocalState(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
 	require.ErrorContains(t, stripProfileKernelLocalState(prepared), "parse Local State")
+}
+
+func TestSanitizePreparedProfile(t *testing.T) {
+	newPrepared := func(t *testing.T, localState string) string {
+		prepared := t.TempDir()
+		sessions := filepath.Join(prepared, "Default", "Sessions")
+		require.NoError(t, os.MkdirAll(sessions, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(sessions, "Session_123"), []byte("tabs"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(prepared, "Local State"), []byte(localState), 0o644))
+		return prepared
+	}
+	const withKernel = `{"kernel":{"fingerprint_config":{"version":1}},"browser":{}}`
+
+	t.Run("strips Kernel settings and session restore before navigation", func(t *testing.T) {
+		prepared := newPrepared(t, withKernel)
+		require.NoError(t, sanitizePreparedProfile(context.Background(), prepared, true))
+
+		require.NoDirExists(t, filepath.Join(prepared, "Default", "Sessions"))
+		got, err := os.ReadFile(filepath.Join(prepared, "Local State"))
+		require.NoError(t, err)
+		require.JSONEq(t, `{"browser":{}}`, string(got))
+	})
+
+	t.Run("strips Kernel settings and keeps session restore without navigation", func(t *testing.T) {
+		prepared := newPrepared(t, withKernel)
+		require.NoError(t, sanitizePreparedProfile(context.Background(), prepared, false))
+
+		require.DirExists(t, filepath.Join(prepared, "Default", "Sessions"))
+		got, err := os.ReadFile(filepath.Join(prepared, "Local State"))
+		require.NoError(t, err)
+		require.JSONEq(t, `{"browser":{}}`, string(got))
+	})
+
+	t.Run("unreadable Local State does not fail the load", func(t *testing.T) {
+		prepared := newPrepared(t, "{not json")
+		require.NoError(t, sanitizePreparedProfile(context.Background(), prepared, true))
+		require.NoDirExists(t, filepath.Join(prepared, "Default", "Sessions"))
+	})
 }
 
 func TestChromiumValidateFlags(t *testing.T) {
