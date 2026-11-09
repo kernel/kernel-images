@@ -52,7 +52,7 @@ func TestRequestLogger(t *testing.T) {
 		req.Header.Set(chiMiddleware.RequestIDHeader, "hypeman/abc-1")
 		r.ServeHTTP(httptest.NewRecorder(), req)
 
-		for _, leak := range []string{"secret-host", "user:pass", "site.example", "/process/abc"} {
+		for _, leak := range []string{"secret-host", "user:pass", "site.example", "url="} {
 			assert.NotContains(t, buf.String(), leak)
 		}
 		lines := decodeLines(t, &buf)
@@ -61,6 +61,7 @@ func TestRequestLogger(t *testing.T) {
 		assert.Equal(t, tc.level, line["level"])
 		assert.Equal(t, "request", line["msg"])
 		assert.Equal(t, "hypeman/abc-1", line["request_id"])
+		assert.Equal(t, "/process/abc", line["path"])
 		if tc.status >= http.StatusOK {
 			assert.EqualValues(t, 2, line["bytes"])
 		}
@@ -70,6 +71,7 @@ func TestRequestLogger(t *testing.T) {
 		assert.Equal(t, "/process/{id}", attrs["http.route"])
 		assert.Contains(t, attrs, "duration_ms")
 		assert.NotContains(t, attrs, "error.type")
+		assert.NotContains(t, attrs, "path")
 	}
 }
 

@@ -22,8 +22,8 @@ const AttrsKey = "attrs"
 // with http.ErrAbortHandler, is logged at ERROR as aborted. It replaces chi's
 // middleware.Logger, which writes free-form text.
 //
-// Only the matched route pattern is logged, never the URL, host or query:
-// those can carry credentials (e.g. a URL passed as a query parameter).
+// The path is logged, but never the host or query: the query can carry
+// credentials (e.g. a URL passed as a query parameter) and customer file paths.
 func RequestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,7 +43,7 @@ func RequestLogger(log *slog.Logger) func(http.Handler) http.Handler {
 					level = slog.LevelWarn
 				}
 				elapsed := time.Since(start)
-				args := []any{"bytes", ww.BytesWritten()}
+				args := []any{"path", r.URL.Path, "bytes", ww.BytesWritten()}
 				if id := chiMiddleware.GetReqID(r.Context()); id != "" {
 					args = append(args, "request_id", id)
 				}
