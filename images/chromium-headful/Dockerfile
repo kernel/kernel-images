@@ -257,6 +257,9 @@ RUN apt-get update && \
 COPY --from=ffmpeg-downloader /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-downloader /usr/local/bin/ffprobe /usr/local/bin/ffprobe
 
+# third-party notices and license texts, readable in the running image
+COPY shared/legal/THIRD-PARTY-NOTICES.txt /usr/share/doc/kernel/THIRD-PARTY-NOTICES.txt
+
 # runtime
 ENV USERNAME=root
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-apt-cache \
