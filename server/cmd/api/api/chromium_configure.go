@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -319,6 +320,9 @@ func (s *ApiService) chromiumConfigureRestart(ctx context.Context, st *chromiumC
 			if err := stripProfileSessionRestore(preparedProfile); err != nil {
 				return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
 			}
+		}
+		if err := stripProfileKernelLocalState(preparedProfile); err != nil {
+			logger.FromContext(ctx).Warn("failed to strip Kernel settings from profile Local State", "error", err)
 		}
 		if err := chromiumInstallPreparedProfile(preparedProfile); err != nil {
 			return cfg500ConfigureStep(chromiumConfigureStepProfile, err.Error())
@@ -714,6 +718,44 @@ func chromiumPrepareProfileArchive(profilePath string, strip int) (preparedDir s
 func stripProfileSessionRestore(preparedDir string) error {
 	if err := os.RemoveAll(filepath.Join(preparedDir, "Default", "Sessions")); err != nil {
 		return fmt.Errorf("strip profile session restore: %w", err)
+	}
+	return nil
+}
+
+// stripProfileKernelLocalState removes the top-level "kernel" object from the
+// prepared profile's Local State. Kernel's Chromium build stores browser-wide
+// settings set over CDP there (fingerprint config, request header rules), and
+// they belong to the browser that set them, not to the profile. Only the live
+// copy is touched; the stored archive is unchanged.
+func stripProfileKernelLocalState(preparedDir string) error {
+	path := filepath.Join(preparedDir, "Local State")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read Local State: %w", err)
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var state map[string]any
+	if err := dec.Decode(&state); err != nil {
+		return fmt.Errorf("parse Local State: %w", err)
+	}
+	if _, ok := state["kernel"]; !ok {
+		return nil
+	}
+	delete(state, "kernel")
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(state); err != nil {
+		return fmt.Errorf("marshal Local State: %w", err)
+	}
+	if err := os.WriteFile(path, bytes.TrimRight(buf.Bytes(), "\n"), 0o644); err != nil {
+		return fmt.Errorf("write Local State: %w", err)
 	}
 	return nil
 }
