@@ -204,7 +204,8 @@ func ReadOptionalFlagFile(path string) ([]string, error) {
 // both lists Chromium disables it — disable wins over enable.
 //
 // Non-feature, non-extension flags from both base and runtime are combined with deduplication
-// (first occurrence preserved).
+// (first occurrence preserved), except the singleton WebRTC policy, whose last
+// occurrence wins as it does in Chromium.
 func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	// Buckets
 	var (
@@ -265,9 +266,14 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 	combined := append(append([]string{}, baseNonExt...), runtimeNonExt...)
 	combined = append(combined, featureFlags...)
 	combined = append(combined, extFlags...)
+	var webRTCPolicy string
 	seen := make(map[string]struct{}, len(combined))
 	final := make([]string, 0, len(combined))
 	for _, tok := range combined {
+		if name, _, _ := strings.Cut(tok, "="); name == "--webrtc-ip-handling-policy" {
+			webRTCPolicy = tok
+			continue
+		}
 		if tok == "" {
 			continue
 		}
@@ -276,6 +282,9 @@ func MergeFlags(baseTokens, runtimeTokens []string) []string {
 		}
 		seen[tok] = struct{}{}
 		final = append(final, tok)
+	}
+	if webRTCPolicy != "" {
+		final = append(final, webRTCPolicy)
 	}
 	return final
 }

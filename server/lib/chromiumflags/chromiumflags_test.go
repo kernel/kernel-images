@@ -494,3 +494,28 @@ func TestMergeFeatureEntries(t *testing.T) {
 		})
 	}
 }
+
+func TestWebRTCPolicyLastValueSurvivesRuntimeMerge(t *testing.T) {
+	const prefix = "--webrtc-ip-handling-policy="
+	for _, tc := range []struct{ base, previous, want string }{
+		{"default", "emulated", "default"},
+		{"disable_non_proxied_udp", "emulated", "disable_non_proxied_udp"},
+		{"emulated", "default", "emulated"},
+		{"default", "disable_non_proxied_udp", "emulated"},
+	} {
+		t.Run(tc.base+"/"+tc.want, func(t *testing.T) {
+			// Persist a policy update, then merge that file with the original launch.
+			overlay := MergeFlags([]string{prefix + tc.base, prefix + tc.previous}, []string{prefix + tc.want})
+			flags := MergeFlagsWithRuntimeTokens(prefix+tc.base, overlay)
+			var policies []string
+			for _, flag := range flags {
+				if strings.HasPrefix(flag, prefix) {
+					policies = append(policies, flag)
+				}
+			}
+			if !reflect.DeepEqual(policies, []string{prefix + tc.want}) {
+				t.Fatalf("merged policies = %#v, want latest %q", policies, tc.want)
+			}
+		})
+	}
+}
