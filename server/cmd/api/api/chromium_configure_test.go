@@ -162,6 +162,38 @@ func TestStripProfileSessionRestore(t *testing.T) {
 	require.NoError(t, stripProfileSessionRestore(prepared))
 }
 
+func TestStripProfileKernelLocalState(t *testing.T) {
+	prepared := t.TempDir()
+	path := filepath.Join(prepared, "Local State")
+	input := `{"kernel":{"fingerprint_config":{"version":1},"request_header_rules":{"generation":2}},"browser":{"last_redirect_origin":"https://a.test/?x=1&y=2"},"variations_seed_date":13350000000000000001}`
+	require.NoError(t, os.WriteFile(path, []byte(input), 0o600))
+
+	require.NoError(t, stripProfileKernelLocalState(prepared))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"browser":{"last_redirect_origin":"https://a.test/?x=1&y=2"},"variations_seed_date":13350000000000000001}`, string(got))
+	require.Contains(t, string(got), "13350000000000000001")
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o600), info.Mode().Perm(), "rewrite keeps the existing file mode")
+
+	// Without Kernel settings the file is left byte-for-byte unchanged.
+	untouched := "{\"browser\": {}}\n"
+	require.NoError(t, os.WriteFile(path, []byte(untouched), 0o600))
+	require.NoError(t, stripProfileKernelLocalState(prepared))
+	got, err = os.ReadFile(path)
+	require.NoError(t, err)
+	require.Equal(t, untouched, string(got))
+
+	// A profile without Local State is a no-op, not an error.
+	require.NoError(t, os.Remove(path))
+	require.NoError(t, stripProfileKernelLocalState(prepared))
+
+	require.NoError(t, os.WriteFile(path, []byte("{not json"), 0o600))
+	require.ErrorContains(t, stripProfileKernelLocalState(prepared), "parse Local State")
+}
+
 func TestChromiumValidateFlags(t *testing.T) {
 	valid := `{"flags":["--kiosk"]}`
 	plan, err := chromiumValidateFlags(&valid)
