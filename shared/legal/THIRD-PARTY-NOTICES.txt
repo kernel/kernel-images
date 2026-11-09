@@ -1,0 +1,98 @@
+KERNEL BROWSER IMAGES - THIRD-PARTY NOTICES
+===========================================
+
+This image contains open source software. This file lists the components whose
+licenses require attribution, and where to obtain the corresponding source.
+
+Full license texts for the software installed from the Ubuntu archive are in
+/usr/share/doc/<package>/copyright inside this image.
+
+
+1. CHROMIUM
+-----------
+This image runs a Chromium build: Chrome for Testing 155.0.8059.84 in the
+public images, and Kernel's build of Chromium at the same upstream version in
+the private images.
+
+Chromium is licensed under the BSD 3-Clause license and incorporates several
+hundred third-party components under their own licenses. The complete list,
+with each component's license text, is available at:
+
+    chrome://credits
+
+inside any running browser, and upstream at:
+
+    https://chromium.googlesource.com/chromium/src/+/refs/tags/155.0.8059.84
+
+A small number of Chromium files are licensed under the GNU Lesser General
+Public License (LGPL-2.0-or-later), and in Kernel's build some of them are
+modified. Those files are:
+
+    third_party/blink/renderer/core/frame/navigator.cc
+    third_party/blink/renderer/core/page/page.cc
+
+The complete source of those files, as they appear in this build, together with
+the changes applied, is published at:
+
+    https://github.com/kernel/oss-source
+
+Chromium's bundled FFmpeg, statically linked into the browser, is licensed under
+LGPL-2.1-or-later. In Kernel's build its configuration files are modified to
+enable the HEVC decoder; the modified source is published at the same location.
+
+Widevine CDM, present in Chromium's distribution, is proprietary software of
+Google LLC and is not open source.
+
+
+2. FFMPEG (STANDALONE)
+----------------------
+This image contains an unmodified FFmpeg binary at /usr/local/bin/ffmpeg, with
+ffprobe alongside it, used by the session recorder. It is a separate program:
+nothing in Kernel's software links against it.
+
+    version:  n7.1.5-12-g1fdbca85aa
+    license:  GPL-3.0-or-later (built with --enable-gpl --enable-version3)
+    source:   https://github.com/kernel/oss-source/releases/tag/ffmpeg-n7.1.5-12-g1fdbca85aa
+
+That release contains the FFmpeg source at the commit this binary was built
+from, and the build scripts used to compile it. The exact configure flags are
+printed by running `ffmpeg -version` inside this image.
+
+
+3. UBUNTU 22.04 PACKAGES
+------------------------
+This image is built from Ubuntu 22.04 and installs packages from the Ubuntu
+archive. Their licenses and copyright notices are at:
+
+    /usr/share/doc/<package>/copyright
+
+Corresponding source for any Ubuntu package is available from
+https://archive.ubuntu.com/ubuntu/ and https://launchpad.net/ubuntu at the
+version installed in this image, which `dpkg-query -W` reports.
+
+One installed package is licensed under the GNU Affero General Public License:
+
+    fonts-urw-base35   AGPL-3.0 with font exception
+
+The font exception applies; the package contains font data and is not offered
+as a network service.
+
+
+4. OTHER COMPONENTS
+-------------------
+    Node.js 22.x                        MIT
+    npm, and packages installed with it permissive (MIT, ISC, Apache-2.0, BSD)
+    Envoy 1.32.x                        Apache-2.0
+    Docker Engine, containerd, runc     Apache-2.0
+    Supervisor (Python)                 BSD-derived
+
+
+5. OBTAINING SOURCE
+-------------------
+If any source referenced in this file is not reachable, contact
+legal@kernel.sh and Kernel will provide it.
+
+
+This file covers open source components. Proprietary third-party components
+bundled in this image are tracked separately in Kernel's third-party vendor
+list.
