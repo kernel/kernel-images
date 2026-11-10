@@ -11,13 +11,17 @@ import (
 )
 
 const (
+	// windowStabilizationWindow reserves the first few seconds after each
+	// browser start for the image and window manager to settle. Deliberate
+	// client resizes after that window are left alone.
+	windowStabilizationWindow = 10 * time.Second
 	// windowCorrectionBudget caps how many times one browser start puts the
 	// window back. One correction covers the case this guard exists for: a
 	// window that leaves maximized once, through a saved geometry surfacing
-	// after a restart or a stray resize, and stays there for the rest of the
-	// session. Repeated demotions are a client that wants a window this size,
-	// and past the budget it keeps it: a guard that always wins turns into a
-	// fight the client cannot see or stop.
+	// after a restart or a stray resize during the stabilization window.
+	// Repeated demotions are a client that wants a window this size, and past
+	// the budget it keeps it: a guard that always wins turns into a fight the
+	// client cannot see or stop.
 	windowCorrectionBudget = 3
 	// windowCorrectionTimeout bounds one correction, so a stalled chromium
 	// cannot wedge the watch.
@@ -28,8 +32,8 @@ const (
 	windowWatchRetryDelay = time.Second
 )
 
-// StartWindowReconcile keeps a headful window covering the display after the
-// promotion that runs on browser start.
+// StartWindowReconcile keeps a headful window covering the display while the
+// browser start settles after the promotion that runs on browser start.
 //
 // Promotion restores the maximized contract once per chromium start. It cannot
 // cover what happens next: a CDP Browser.setWindowBounds over the proxy, the
@@ -92,11 +96,15 @@ func (s *ApiService) reconcileWindowLoop(ch <-chan string, unsubscribe func()) {
 	}
 }
 
-// guardWindowCoverage watches the browser window for this chromium start and
-// restores it when it stops covering the display, until the correction budget
-// is spent. The watch ends with the window: xprop exits when it is destroyed,
-// and the next browser start brings its own guard and its own budget.
+// guardWindowCoverage watches the browser window during the startup
+// stabilization window and restores it when it stops covering the display,
+// until the correction budget is spent. Deliberate client resizes after that
+// window are left alone. The watch ends with the window: xprop exits when it is
+// destroyed, and the next browser start brings its own guard and budget.
 func (s *ApiService) guardWindowCoverage(ctx context.Context, url string) {
+	ctx, stop := context.WithTimeout(ctx, windowStabilizationWindow)
+	defer stop()
+
 	log := logger.FromContext(s.lifecycleCtx)
 	display := s.resolveDisplayFromEnv()
 	g := &windowGuard{url: url, budget: windowCorrectionBudget, log: log}
