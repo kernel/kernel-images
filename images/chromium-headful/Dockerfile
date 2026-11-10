@@ -202,7 +202,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     x11-apps \
     # xprop, used to detect when the window manager has taken the display
     x11-utils \
-    tint2 \
+    # no panel: a tint2 started inside a session declares a strut that can
+    # reserve part of the work area, leaving a maximized window short of the
+    # display with the root background showing beside it
     wget \
     xdg-utils \
     libvulkan1 \
