@@ -202,7 +202,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     x11-apps \
     # xprop, used to detect when the window manager has taken the display
     x11-utils \
-    tint2 \
+    # no panel: a tint2 started inside a session declares a strut that can
+    # reserve part of the work area, leaving a maximized window short of the
+    # display with the root background showing beside it
     wget \
     xdg-utils \
     libvulkan1 \
@@ -256,6 +258,9 @@ RUN apt-get update && \
 # install ffmpeg manually since the version available in apt is from the 4.x branch due to #drama.
 COPY --from=ffmpeg-downloader /usr/local/bin/ffmpeg /usr/local/bin/ffmpeg
 COPY --from=ffmpeg-downloader /usr/local/bin/ffprobe /usr/local/bin/ffprobe
+
+# third-party notices and license texts, readable in the running image
+COPY shared/legal/THIRD-PARTY-NOTICES.txt /usr/share/doc/kernel/THIRD-PARTY-NOTICES.txt
 
 # runtime
 ENV USERNAME=root
