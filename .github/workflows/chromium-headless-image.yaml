@@ -5,9 +5,10 @@ on:
 
 jobs:
   docker:
-    # Credential-bearing builds run on trusted branch pushes, not PR merge refs.
-    if: github.repository == 'kernel/kernel-images' && github.event_name != 'pull_request'
+    # Fork PRs must not reach the self-hosted pool or the publishing identity.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux]
+    environment: dockerhub-publish
     permissions:
       contents: read
       id-token: write
@@ -42,17 +43,12 @@ jobs:
           # that root-run CI from other repos clobbers to root-owned.
           echo "BUILDX_CONFIG=${HOME}/.docker/buildx-ci" >> "$GITHUB_ENV"
 
-      - name: Read Docker Hub credentials from SSM
-        id: dockerhub
-        uses: ./.github/actions/dockerhub-credentials
+      - name: Login to Docker Hub with OIDC
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          role-arn: arn:aws:iam::613957054632:role/github-actions-kernel-images
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ steps.dockerhub.outputs.username }}
-          password: ${{ steps.dockerhub.outputs.password }}
+          username: onkernel
+        env:
+          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PUSH_CONNECTION_ID }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
