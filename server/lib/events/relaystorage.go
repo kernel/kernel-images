@@ -363,6 +363,15 @@ func (s *relayStorage) post(ctx context.Context, body []byte) (status int, retry
 		return 0, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// metro-api closes idle connections when a deploy replaces its process. A
+	// batch written to a kept-alive connection at that moment gets no response,
+	// and net/http will not resend a POST on its own, so the batch would be
+	// dropped on every deploy that catches it. An empty Idempotency-Key marks
+	// the request as safe to resend on a fresh connection and is not sent on
+	// the wire. The relay does not deduplicate: if it appended the batch and
+	// died before answering, the resend stores it twice, which is the same
+	// duplicate a retried 503 can already produce.
+	req.Header["Idempotency-Key"] = []string{}
 	if tok := s.cfg.TokenFunc(); tok != "" {
 		req.Header.Set("Authorization", "Bearer "+tok)
 	}
