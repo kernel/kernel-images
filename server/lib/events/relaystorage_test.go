@@ -21,6 +21,7 @@ const relayTestPath = "/btel-relay/v1/records"
 
 type relayRequest struct {
 	auth    string
+	body    []byte
 	records []relayRecord
 }
 
@@ -46,7 +47,7 @@ func newFakeRelay(t *testing.T) *fakeRelay {
 		}
 		require.NoError(t, json.Unmarshal(raw, &body))
 		f.mu.Lock()
-		f.reqs = append(f.reqs, relayRequest{auth: r.Header.Get("Authorization"), records: body.Records})
+		f.reqs = append(f.reqs, relayRequest{auth: r.Header.Get("Authorization"), body: raw, records: body.Records})
 		n, respond := len(f.reqs), f.respond
 		f.mu.Unlock()
 		if respond != nil && respond(n, w) {
@@ -127,7 +128,15 @@ func TestRelayStorage_SendsEnvelopesInOrderUnchanged(t *testing.T) {
 		want, err := json.Marshal(env)
 		require.NoError(t, err)
 		assert.Equal(t, string(want), string(got[i].Body), "body must match the direct S2 sink's record byte for byte")
-		assert.Equal(t, env.Event.Ts/1000, got[i].TS, "ts is the event time in milliseconds")
+	}
+	for _, req := range relay.requests() {
+		var wire struct {
+			Records []map[string]json.RawMessage `json:"records"`
+		}
+		require.NoError(t, json.Unmarshal(req.body, &wire))
+		for _, rec := range wire.Records {
+			assert.Len(t, rec, 1, "a record is its body alone, S2 stamps the time on arrival")
+		}
 	}
 	assert.Equal(t, "Bearer instance-jwt", relay.requests()[0].auth)
 	assert.Equal(t, uint64(3), s.cfg.Metrics.Exported())

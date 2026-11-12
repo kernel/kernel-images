@@ -33,7 +33,6 @@ type relayMock struct {
 }
 
 type relayMockRecord struct {
-	TS   int64           `json:"ts"`
 	Body json.RawMessage `json:"body"`
 }
 
@@ -103,21 +102,18 @@ func enableControlStorage(t *testing.T, ctx context.Context, client *instanceoap
 	}
 }
 
-// requireEnvelopes checks each stored record is a {seq,event} envelope whose
-// ts is the event time in milliseconds.
+// requireEnvelopes checks each stored record is a {seq,event} envelope.
 func requireEnvelopes(t *testing.T, records []relayMockRecord) {
 	t.Helper()
 	for _, rec := range records {
 		var env struct {
 			Seq   uint64 `json:"seq"`
 			Event struct {
-				Ts   int64  `json:"ts"`
 				Type string `json:"type"`
 			} `json:"event"`
 		}
 		require.NoError(t, json.Unmarshal(rec.Body, &env))
 		require.NotEmpty(t, env.Event.Type)
-		assert.Equal(t, env.Event.Ts/1000, rec.TS)
 	}
 }
 
