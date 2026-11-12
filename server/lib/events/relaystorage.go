@@ -96,8 +96,10 @@ func (c *RelayConfig) withDefaults() {
 	}
 }
 
+// relayRecord carries no timestamp. S2 stamps each record when it arrives, as
+// it does for the direct sink, so the since/until window of a telemetry read
+// means the same thing whichever sink stored the events.
 type relayRecord struct {
-	TS   int64           `json:"ts"`
 	Body json.RawMessage `json:"body"`
 }
 
@@ -145,8 +147,7 @@ func newRelayStorage(ctx context.Context, cfg RelayConfig, log *slog.Logger) (*r
 	return s, nil
 }
 
-// Append marshals env exactly as the direct S2 sink does and queues it with its
-// event time in unix milliseconds.
+// Append marshals env exactly as the direct S2 sink does and queues it.
 func (s *relayStorage) Append(ctx context.Context, env Envelope) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -155,7 +156,7 @@ func (s *relayStorage) Append(ctx context.Context, env Envelope) error {
 	if err != nil {
 		return fmt.Errorf("relay storage: marshal envelope seq=%d: %w", env.Seq, err)
 	}
-	rec := relayRecord{TS: max(env.Event.Ts/1000, 0), Body: data}
+	rec := relayRecord{Body: data}
 
 	s.mu.Lock()
 	if s.closing {
