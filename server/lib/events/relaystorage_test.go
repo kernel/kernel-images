@@ -241,6 +241,35 @@ func TestRelayStorage_DropsOnConnectionFailure(t *testing.T) {
 	assert.Equal(t, map[string]uint64{relayDropRejected: 1}, s.cfg.Metrics.Dropped())
 }
 
+// A deploy replaces the metro-api process, and the old one closes kept-alive
+// connections. A batch already written to one gets no answer.
+func TestRelayStorage_ResendsBatchWhenRelayClosesConnectionUnanswered(t *testing.T) {
+	relay := newFakeRelay(t)
+	relay.respond = func(n int, w http.ResponseWriter) bool {
+		if n != 2 {
+			return false
+		}
+		conn, _, err := w.(http.Hijacker).Hijack()
+		require.NoError(t, err)
+		_ = conn.Close()
+		return true
+	}
+	s := newTestRelayStorage(t, testRelayConfig(relay.srv.URL))
+
+	// The first batch has to finish so the second reuses its connection.
+	require.NoError(t, s.Append(context.Background(), relayEnvelope(1, `{}`)))
+	require.Eventually(t, func() bool { return s.cfg.Metrics.Exported() == 1 }, 5*time.Second, 5*time.Millisecond)
+	require.NoError(t, s.Append(context.Background(), relayEnvelope(2, `{}`)))
+	closeRelay(t, s)
+
+	reqs := relay.requests()
+	require.Len(t, reqs, 3)
+	assert.Equal(t, reqs[1].records, reqs[2].records, "the unanswered batch is resent")
+	assert.Equal(t, uint64(2), s.cfg.Metrics.Exported())
+	assert.Empty(t, s.cfg.Metrics.Failed())
+	assert.Empty(t, s.cfg.Metrics.Dropped())
+}
+
 func TestRelayStorage_DoesNotFollowRedirects(t *testing.T) {
 	var elsewhere atomic.Int32
 	other := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { elsewhere.Add(1) }))
