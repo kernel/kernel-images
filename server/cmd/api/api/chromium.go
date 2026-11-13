@@ -827,7 +827,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case upstream, ok := <-updates:
 			if ok && tryReady(upstream) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-				return s.reapplyBrowserLocation(ctx)
+				return s.afterChromiumStart(ctx)
 			}
 		case err := <-errCh:
 			return err
@@ -841,7 +841,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case <-ticker.C:
 			if tryReady(s.upstreamMgr.Current()) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-				return s.reapplyBrowserLocation(ctx)
+				return s.afterChromiumStart(ctx)
 			}
 		case <-timeout.C:
 			status, statusOut, _ := chromiumSupervisorStatus(ctx)
@@ -849,6 +849,16 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 			return fmt.Errorf("devtools not ready in time (chromium status: %s)", status)
 		}
 	}
+}
+
+// afterChromiumStart restores the browser state a relaunched Chromium does not
+// carry over on its own. A viewport failure is logged rather than returned:
+// Chromium is running, and callers treat a start error as not started.
+func (s *ApiService) afterChromiumStart(ctx context.Context) error {
+	if err := s.restoreHeadlessViewport(ctx); err != nil {
+		logger.FromContext(ctx).Error("failed to restore headless viewport after chromium start", "error", err)
+	}
+	return s.reapplyBrowserLocation(ctx)
 }
 
 // PatchChromiumPolicies applies user-provided Chromium enterprise policy overrides
