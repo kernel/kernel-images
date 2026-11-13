@@ -288,17 +288,28 @@ func normalDist(rng *rand.Rand, mean, stdDev float64) float64 {
 	return mean + stdDev*math.Sqrt(-2*math.Log(u1))*math.Cos(2*math.Pi*u2)
 }
 
-func (t *HumanizeMouseTrajectory) easeOutQuad(n float64) float64 {
-	return -n * (n - 2)
+// easeInOutCubic produces slow-fast-slow movement matching human motor control.
+// t ∈ [0,1] → [0,1] with zero velocity at endpoints and peak velocity at t=0.5.
+func easeInOutCubic(t float64) float64 {
+	if t < 0.5 {
+		return 4 * t * t * t
+	}
+	return 1 - math.Pow(-2*t+2, 3)/2
 }
 
 func (t *HumanizeMouseTrajectory) tweenPoints(points [][2]float64, opts *Options) [][2]float64 {
-	var totalLength float64
+	if len(points) < 2 {
+		return points
+	}
+
+	// Build cumulative arc-length table from source points.
+	cumLen := make([]float64, len(points))
 	for i := 1; i < len(points); i++ {
 		dx := points[i][0] - points[i-1][0]
 		dy := points[i][1] - points[i-1][1]
-		totalLength += math.Sqrt(dx*dx + dy*dy)
+		cumLen[i] = cumLen[i-1] + math.Sqrt(dx*dx+dy*dy)
 	}
+	totalLength := cumLen[len(cumLen)-1]
 
 	targetPoints := int(math.Min(
 		float64(defaultMaxPoints),
@@ -319,18 +330,52 @@ func (t *HumanizeMouseTrajectory) tweenPoints(points [][2]float64, opts *Options
 		targetPoints = 2
 	}
 
+	if totalLength < 1e-9 {
+		res := make([][2]float64, targetPoints)
+		for i := range res {
+			res[i] = points[0]
+		}
+		return res
+	}
+
+	// Sample at non-uniform arc-length positions using ease-in-out.
+	// The previous easeOutQuad sampled by array index, producing
+	// near-constant pixel distances between consecutive output points.
+	// This version samples along the curve's physical arc length with
+	// an ease-in-out profile: small pixel steps at start/end (slow
+	// velocity), large pixel steps in the middle (fast velocity).
+	// This matches the bell-shaped velocity profile of real human
+	// arm movements (Fitts's law / minimum-jerk trajectory model).
 	res := make([][2]float64, targetPoints)
-	for i := 0; i < targetPoints; i++ {
+	res[0] = points[0]
+	res[targetPoints-1] = points[len(points)-1]
+
+	for i := 1; i < targetPoints-1; i++ {
 		tt := float64(i) / float64(targetPoints-1)
-		easedT := t.easeOutQuad(tt)
-		idx := int(easedT * float64(len(points)-1))
-		if idx < 0 {
-			idx = 0
+		easedT := easeInOutCubic(tt)
+		targetLen := easedT * totalLength
+
+		// Binary search for the segment containing targetLen.
+		lo, hi := 0, len(cumLen)-1
+		for lo < hi-1 {
+			mid := (lo + hi) / 2
+			if cumLen[mid] < targetLen {
+				lo = mid
+			} else {
+				hi = mid
+			}
 		}
-		if idx >= len(points) {
-			idx = len(points) - 1
+
+		// Interpolate within the segment [lo, hi].
+		segLen := cumLen[hi] - cumLen[lo]
+		var frac float64
+		if segLen > 1e-9 {
+			frac = (targetLen - cumLen[lo]) / segLen
 		}
-		res[i] = points[idx]
+		res[i] = [2]float64{
+			points[lo][0] + frac*(points[hi][0]-points[lo][0]),
+			points[lo][1] + frac*(points[hi][1]-points[lo][1]),
+		}
 	}
 	return res
 }
