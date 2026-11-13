@@ -236,11 +236,26 @@ async function pageForTabTarget(
 const PAGE_RESOLUTION_ATTEMPTS = 3;
 const PAGE_RESOLUTION_RETRY_DELAY_MS = 150;
 
+// A tab whose renderer was killed keeps its target and still reports
+// `isClosed() === false`, so a crash has to be tracked on its own or page
+// selection keeps binding to a tab that cannot run a CDP command.
+const crashedPages = new WeakSet<Page>();
+const watchedPages = new WeakSet<Page>();
+
+function watchForCrash(page: Page): void {
+  if (watchedPages.has(page)) return;
+  watchedPages.add(page);
+  page.on('crash', () => crashedPages.add(page));
+}
+
+function isCrashed(page: Page): boolean {
+  return crashedPages.has(page);
+}
+
 function openPages(browser: Browser): Page[] {
-  return browser
-    .contexts()
-    .flatMap(context => context.pages())
-    .filter(page => !page.isClosed());
+  const pages = browser.contexts().flatMap(context => context.pages());
+  pages.forEach(watchForCrash);
+  return pages.filter(page => !page.isClosed());
 }
 
 // Runs fn with a browser-level CDP session and detaches it afterwards, which
@@ -326,6 +341,11 @@ async function resolveExecutorPage(browser: Browser, tab: BoundTab, targetId: st
     }
     const page = await findPage(browser, targetId, attempt > 0);
     if (page) {
+      // Answer the same way as a closed tab so the API opens a replacement tab
+      // and resends the call, which is the recovery this executor already has.
+      if (isCrashed(page)) {
+        throw new TabMissingError(`executor tab ${targetId} is crashed`);
+      }
       tab.targetId = targetId;
       tab.created = created;
       return page;
@@ -389,14 +409,17 @@ async function executeCode(
     } else {
       const contexts = browserInstance.contexts();
       const defaultContext = contexts.length > 0 ? contexts[0] : await browserInstance.newContext();
-      const pages = contexts.flatMap(context => context.pages());
+      // openPages also starts crash tracking for every tab it enumerates, which
+      // has to happen before the selection below decides what to bind to.
+      const pages = openPages(browserInstance);
       // Bind `page` to the actual foreground tab (see resolveActivePage). Using
       // pages[0] bound `page` to the oldest tab regardless of which was active, so
       // calls like page.pdf() operated on the wrong tab whenever more than one was
       // open.
+      const active = pages.length > 0 ? await resolveActivePage(browserInstance) : null;
       const existing =
-        (pages.length > 0 ? await resolveActivePage(browserInstance) : null) ??
-        pages.findLast(candidate => !candidate.isClosed());
+        (active && !isCrashed(active) ? active : null) ??
+        pages.findLast(candidate => !candidate.isClosed() && !isCrashed(candidate));
       page = existing ?? (await defaultContext.newPage());
       try {
         tab.targetId = await pageTargetIdCache.get(page);
