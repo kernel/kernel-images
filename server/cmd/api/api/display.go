@@ -57,8 +57,14 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 
 	// Display already matches the requested state. Skip the idle check,
 	// recording stop, resize, and chromium restart — all of which would be
-	// no-ops at the existing resolution.
+	// no-ops at the existing resolution. On headless the page size is held by
+	// Chromium's window, which can drift from the display (a supervisord
+	// crash restart, a failed restore), so size the window again.
 	if !changed {
+		if err := s.restoreHeadlessViewport(ctx); err != nil {
+			log.Error("failed to restore headless viewport", "error", err)
+			return oapi.PatchDisplay500JSONResponse{InternalErrorJSONResponse: oapi.InternalErrorJSONResponse{Message: fmt.Sprintf("failed to restore viewport: %s", err)}}, nil
+		}
 		log.Info("display already at requested resolution, skipping resize", "width", width, "height", height, "refreshRate", refreshRate)
 		return oapi.PatchDisplay200JSONResponse{
 			Width:       &width,

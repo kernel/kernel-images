@@ -13,7 +13,8 @@ import (
 // TestHeadlessViewportSurvivesChromiumRestart covers a headless viewport across
 // configure requests that restart Chromium, such as a profile load. Headless
 // Chromium relaunches maximized on its own 800x600 screen, so the server must
-// apply the viewport again once the new browser is up.
+// apply the viewport again once the new browser is up, and a same-size
+// PATCH /display must repair a viewport that drifted anyway.
 func TestHeadlessViewportSurvivesChromiumRestart(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
@@ -61,4 +62,15 @@ func TestHeadlessViewportSurvivesChromiumRestart(t *testing.T) {
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "configure restart with display: %s", string(rsp.Body))
 	navigateBlank(t, ctx, c)
 	waitForRendererViewport(t, ctx, c, 1440, 900, headlessViewportPredicate, "after restart with display", 30*time.Second)
+
+	// A restart the API doesn't drive (a supervisord crash restart) is not
+	// restored, but a same-size PATCH /display repairs it.
+	out, err := execCombinedOutput(ctx, c, "supervisorctl", []string{"-c", "/etc/supervisor/supervisord.conf", "restart", "chromium"})
+	require.NoError(t, err, "supervisorctl restart chromium: %s", out)
+	navigateBlank(t, ctx, c)
+	drifted, err := getRendererViewport(ctx, c)
+	require.NoError(t, err)
+	require.NotEqual(t, 1440, drifted.InnerWidth, "viewport should drift after a supervisord restart")
+	patchDisplayExpectingOK(t, ctx, c, 1440, 900, 60)
+	waitForRendererViewport(t, ctx, c, 1440, 900, headlessViewportPredicate, "same-size patch after supervisord restart", 30*time.Second)
 }

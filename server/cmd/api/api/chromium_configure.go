@@ -167,6 +167,8 @@ func (s *ApiService) chromiumConfigureLive(ctx context.Context, st *chromiumConf
 			if resp := chromiumRunPatchDisplay(ctx, s, displayPlan.body); resp != nil {
 				return resp
 			}
+		} else if err := s.restoreHeadlessViewport(ctx); err != nil {
+			return cfg500ConfigureStep(chromiumConfigureStepDisplay, fmt.Sprintf("failed to restore viewport: %s", err))
 		}
 	}
 
