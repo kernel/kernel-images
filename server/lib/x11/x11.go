@@ -152,3 +152,48 @@ func supportingWindowID(out string) (string, bool) {
 	}
 	return id, true
 }
+
+// WorkArea reads the work area the window manager publishes in _NET_WORKAREA:
+// the region a maximized window fills, which is the root minus whatever docked
+// windows have reserved through _NET_WM_STRUT. Returns false when no window
+// manager has published the property yet.
+//
+// A work area smaller than the root is normal on a desktop with a panel and
+// surprising on this image, which ships none: it means something in the
+// session reserved the difference, and every maximized window is that much
+// smaller than the display.
+func WorkArea(display string, timeout time.Duration) (x, y, width, height int, ok bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "xprop", "-display", display, "-root", "_NET_WORKAREA").Output()
+	if err != nil {
+		return 0, 0, 0, 0, false
+	}
+	return workArea(string(out))
+}
+
+// workArea parses the first desktop's rectangle from `xprop -root
+// _NET_WORKAREA`, which prints four numbers per desktop: `... = 0, 0, 1920,
+// 1080`. Only the current desktop matters here; this image has one.
+func workArea(out string) (x, y, width, height int, ok bool) {
+	_, values, found := strings.Cut(out, "=")
+	if !found {
+		return 0, 0, 0, 0, false
+	}
+	fields := strings.Split(values, ",")
+	if len(fields) < 4 {
+		return 0, 0, 0, 0, false
+	}
+	parsed := make([]int, 0, 4)
+	for _, field := range fields[:4] {
+		v, err := strconv.Atoi(strings.TrimSpace(field))
+		if err != nil {
+			return 0, 0, 0, 0, false
+		}
+		parsed = append(parsed, v)
+	}
+	if parsed[2] <= 0 || parsed[3] <= 0 {
+		return 0, 0, 0, 0, false
+	}
+	return parsed[0], parsed[1], parsed[2], parsed[3], true
+}

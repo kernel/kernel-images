@@ -7,6 +7,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
 const (
@@ -17,6 +18,10 @@ const (
 	// promoteRetryDelay spaces the retries while the first page target is
 	// still missing.
 	promoteRetryDelay = 500 * time.Millisecond
+	// displayGeometryTimeout bounds each of the two X reads behind the
+	// geometry line, so a wedged X server cannot delay the promotion it runs
+	// in front of.
+	displayGeometryTimeout = 2 * time.Second
 )
 
 // StartWindowPromotion puts the browser window back into the maximized state
@@ -81,6 +86,7 @@ func (s *ApiService) promoteWindowsLoop(ch <-chan string, unsubscribe func()) {
 // exact-root geometry and the RANDR auto-reflow are at stake.
 func (s *ApiService) promoteWindowMaximized(url string) {
 	log := logger.FromContext(s.lifecycleCtx)
+	s.logDisplayGeometry(log)
 	ctx, cancel := context.WithTimeout(s.lifecycleCtx, promoteTimeout)
 	defer cancel()
 
@@ -136,4 +142,42 @@ func (s *ApiService) retryWindowPromotion(ctx context.Context, url string, cause
 	case <-time.After(promoteRetryDelay):
 		return true
 	}
+}
+
+// logDisplayGeometry records what a maximized window will actually cover, once
+// per chromium start.
+//
+// A window maximizes into the work area the window manager publishes, not into
+// the display, and the difference between the two is invisible from inside the
+// browser: chromium reports such a window as maximized at whatever size it was
+// given. This image ships no panel, so the two should match; when they do not,
+// something in the session reserved the difference through _NET_WM_STRUT and
+// every maximized window is smaller than the display by that much. That is a
+// one-line answer to "why is the browser not covering the desktop", which
+// otherwise takes a screen recording to see at all.
+//
+// Read failures are not logged: xwininfo and xprop are both bounded, and a
+// window manager that has not published _NET_WORKAREA yet is an ordinary state
+// during startup rather than a fault.
+func (s *ApiService) logDisplayGeometry(log *slog.Logger) {
+	display := s.resolveDisplayFromEnv()
+	rootWidth, rootHeight, rootOK := x11.RootSize(display, displayGeometryTimeout)
+	workX, workY, workWidth, workHeight, workOK := x11.WorkArea(display, displayGeometryTimeout)
+	if !rootOK || !workOK {
+		return
+	}
+
+	attrs := []any{
+		"root_width", rootWidth,
+		"root_height", rootHeight,
+		"work_area_width", workWidth,
+		"work_area_height", workHeight,
+		"work_area_x", workX,
+		"work_area_y", workY,
+	}
+	if workWidth < rootWidth || workHeight < rootHeight {
+		log.Warn("work area is smaller than the display, so a maximized window will not cover it", attrs...)
+		return
+	}
+	log.Info("display geometry at browser start", attrs...)
 }
