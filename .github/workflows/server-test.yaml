@@ -13,10 +13,16 @@ concurrency:
 
 jobs:
   build-headful:
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/chromium-headful-image.yaml
     secrets: inherit
 
   build-headless:
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/chromium-headless-image.yaml
     secrets: inherit
 
@@ -67,6 +73,7 @@ jobs:
     needs: [build-headful, build-headless]
     permissions:
       contents: read
+      id-token: write
 
     steps:
       - name: Checkout code
@@ -119,11 +126,12 @@ jobs:
         shell: bash
         run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      - name: Login to Docker Hub with OIDC
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: onkernel
+        env:
+          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PULL_CONNECTION_ID }}
 
       - name: Pull e2e images
         shell: bash

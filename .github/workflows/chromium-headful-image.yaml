@@ -5,13 +5,13 @@ on:
 
 jobs:
   docker:
-    # Fork PRs get no secrets and now must not reach the self-hosted pool
-    # either: skipping here (rather than failing at registry login, as
-    # before) also skips the dependent e2e job via its needs chain.
+    # Fork PRs must not reach the self-hosted pool or the publishing identity.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux]
+    environment: dockerhub-publish
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -43,11 +43,12 @@ jobs:
           # that root-run CI from other repos clobbers to root-owned.
           echo "BUILDX_CONFIG=${HOME}/.docker/buildx-ci" >> "$GITHUB_ENV"
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
+      - name: Login to Docker Hub with OIDC
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: onkernel
+        env:
+          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PUSH_CONNECTION_ID }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
