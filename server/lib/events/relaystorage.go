@@ -293,15 +293,15 @@ func (s *relayStorage) send(batch []relayRecord) {
 
 	var status int
 	var retryAfter time.Duration
-	backoff := retry.CombineDelay(retry.BackOffDelay, retry.RandomDelay)
 	opts := append([]retry.Option{
 		retry.Attempts(0),
 		retry.Delay(5 * time.Second),
+		retry.MaxDelay(relayExportTimeout),
 	}, s.cfg.retryOptions...)
 	opts = append(opts,
 		retry.Context(ctx),
 		retry.DelayType(func(n uint, err error, cfg retry.DelayContext) time.Duration {
-			return max(retryAfter, backoff(n, err, cfg))
+			return max(retryAfter, retry.FullJitterBackoffDelay(n, err, cfg))
 		}),
 		retry.OnRetry(func(uint, error) { s.cfg.Metrics.retries.Add(1) }),
 	)
