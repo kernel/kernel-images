@@ -259,6 +259,11 @@ func main() {
 	// (no-op on the headless image).
 	apiService.StartWindowPromotion()
 
+	// Headful: keep it maximized while browser startup settles, so a startup
+	// demotion does not leave a partially covered desktop. Deliberate client
+	// resizes after the stabilization window are left alone.
+	apiService.StartWindowReconcile()
+
 	// api_call event emission. Off until the telemetry handlers flip it on.
 	r.Use(api.TelemetryHTTPMiddleware(telemetrySession.Publish))
 	r.Use(api.WebMCPRequestSizeMiddleware)
