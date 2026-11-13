@@ -8,13 +8,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"slices"
 	"strconv"
 	"sync"
 	"time"
+
+	retry "github.com/avast/retry-go/v5"
 )
 
 // Relay batch defaults. maxBytes is in S2 metered bytes (8 + body length per
@@ -27,23 +28,12 @@ const (
 
 	relayMeteredOverhead = 8
 	// relayExportTimeout bounds one batch, retries included, like the OTLP
-	// sink's BTEL_OTLP_EXPORT_TIMEOUT default. It is shorter than the retry
-	// policy's maxElapsed, so it is what ends a batch's retries in practice.
+	// sink's BTEL_OTLP_EXPORT_TIMEOUT default.
 	relayExportTimeout = 30 * time.Second
 	// relayDrainGrace bounds how long Close waits for the cancelled sender to
 	// record its drops once its ctx has expired.
 	relayDrainGrace = 250 * time.Millisecond
 )
-
-// relayRetry mirrors the OTLP exporter's retry policy: exponential backoff
-// from 5s up to 30s with jitter, waiting the greater of the backoff and
-// Retry-After, and giving up after a minute or relayExportTimeout, whichever
-// comes first.
-type relayRetry struct {
-	initial, max, maxElapsed time.Duration
-}
-
-var defaultRelayRetry = relayRetry{initial: 5 * time.Second, max: 30 * time.Second, maxElapsed: time.Minute}
 
 // RelayConfig configures the metro-api storage relay sink.
 type RelayConfig struct {
@@ -61,9 +51,9 @@ type RelayConfig struct {
 	Linger     time.Duration
 	MaxQueue   int
 
-	Client  *http.Client
-	Metrics *RelayMetrics
-	retry   relayRetry
+	Client       *http.Client
+	Metrics      *RelayMetrics
+	retryOptions []retry.Option
 }
 
 func (c *RelayConfig) withDefaults() {
@@ -91,9 +81,6 @@ func (c *RelayConfig) withDefaults() {
 	if c.Metrics == nil {
 		c.Metrics = &RelayMetrics{}
 	}
-	if c.retry == (relayRetry{}) {
-		c.retry = defaultRelayRetry
-	}
 }
 
 // relayRecord carries no timestamp. S2 stamps each record when it arrives, as
@@ -108,7 +95,7 @@ func (r relayRecord) metered() int { return relayMeteredOverhead + len(r.Body) }
 // relayStorage implements Storage by posting envelopes in batches to the
 // metro-api relay, which appends them to the instance's S2 stream. Append never
 // blocks: the queue is bounded and drops its oldest record when full. One
-// sender goroutine posts one batch at a time, so records arrive in order.
+// sender goroutine posts one batch at a time.
 type relayStorage struct {
 	cfg RelayConfig
 	log *slog.Logger
@@ -304,45 +291,50 @@ func (s *relayStorage) send(batch []relayRecord) {
 	ctx, cancel := context.WithTimeout(s.sendCtx, relayExportTimeout)
 	defer cancel()
 
-	start := time.Now()
-	backoff := s.cfg.retry.initial
-	for {
-		status, retryAfter, err := s.post(ctx, body)
+	var status int
+	var retryAfter time.Duration
+	backoff := retry.CombineDelay(retry.BackOffDelay, retry.RandomDelay)
+	opts := append([]retry.Option{
+		retry.Attempts(0),
+		retry.Delay(5 * time.Second),
+	}, s.cfg.retryOptions...)
+	opts = append(opts,
+		retry.Context(ctx),
+		retry.DelayType(func(n uint, err error, cfg retry.DelayContext) time.Duration {
+			return max(retryAfter, backoff(n, err, cfg))
+		}),
+		retry.OnRetry(func(uint, error) { s.cfg.Metrics.retries.Add(1) }),
+	)
+	err = retry.New(opts...).Do(func() error {
+		var err error
+		status, retryAfter, err = s.post(ctx, body)
 		if err == nil && status >= 200 && status < 300 {
-			s.cfg.Metrics.exported.Add(uint64(len(batch)))
-			return
+			return nil
 		}
-		label := strconv.Itoa(status)
-		if err != nil {
-			label = "error"
+		retryable := relayRetryable(status, err)
+		if err == nil {
+			err = fmt.Errorf("relay returned HTTP %d", status)
 		}
-		if s.sendCtx.Err() != nil {
-			s.fail(batch, label, relayDropShutdown, err)
-			return
+		if !retryable {
+			return retry.Unrecoverable(err)
 		}
-		if !relayRetryable(status, err) {
-			s.fail(batch, label, relayDropRejected, err)
-			return
-		}
-		delay := max(retryAfter, jitter(backoff))
-		if time.Since(start)+delay > s.cfg.retry.maxElapsed {
-			s.fail(batch, label, relayDropRetriesExhausted, err)
-			return
-		}
-		s.cfg.Metrics.retries.Add(1)
-		s.log.Debug("relay storage: retrying batch", "records", len(batch), "status", label, "delay", delay)
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			reason := relayDropRetriesExhausted
-			if s.sendCtx.Err() != nil {
-				reason = relayDropShutdown
-			}
-			s.fail(batch, label, reason, ctx.Err())
-			return
-		}
-		backoff = min(time.Duration(float64(backoff)*1.5), s.cfg.retry.max)
+		return err
+	})
+	if err == nil {
+		s.cfg.Metrics.exported.Add(uint64(len(batch)))
+		return
 	}
+	label := strconv.Itoa(status)
+	if status == 0 {
+		label = "error"
+	}
+	reason := relayDropRejected
+	if s.sendCtx.Err() != nil {
+		reason = relayDropShutdown
+	} else if ctx.Err() != nil {
+		reason = relayDropRetriesExhausted
+	}
+	s.fail(batch, label, reason, err)
 }
 
 func (s *relayStorage) fail(batch []relayRecord, status, reason string, err error) {
@@ -400,10 +392,6 @@ func relayRetryable(status int, err error) bool {
 		return true
 	}
 	return false
-}
-
-func jitter(d time.Duration) time.Duration {
-	return time.Duration(float64(d) * (0.5 + rand.Float64()))
 }
 
 // relayURL is base's scheme and host with path. Provisioning already folds any
