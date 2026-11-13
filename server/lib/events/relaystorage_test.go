@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	retry "github.com/avast/retry-go/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -75,12 +76,12 @@ func (f *fakeRelay) records() []relayRecord {
 
 func testRelayConfig(base string) RelayConfig {
 	return RelayConfig{
-		BaseURLFunc: func() string { return base },
-		Path:        relayTestPath,
-		TokenFunc:   func() string { return "instance-jwt" },
-		Linger:      10 * time.Millisecond,
-		Metrics:     &RelayMetrics{},
-		retry:       relayRetry{initial: 5 * time.Millisecond, max: 20 * time.Millisecond, maxElapsed: 5 * time.Second},
+		BaseURLFunc:  func() string { return base },
+		Path:         relayTestPath,
+		TokenFunc:    func() string { return "instance-jwt" },
+		Linger:       10 * time.Millisecond,
+		Metrics:      &RelayMetrics{},
+		retryOptions: []retry.Option{retry.Delay(5 * time.Millisecond), retry.MaxJitter(0)},
 	}
 }
 
@@ -360,7 +361,7 @@ func TestRelayStorage_CloseDropsWhatItCannotFlush(t *testing.T) {
 		return true
 	}
 	cfg := testRelayConfig(relay.srv.URL)
-	cfg.retry = relayRetry{initial: time.Hour, max: time.Hour, maxElapsed: 2 * time.Hour}
+	cfg.retryOptions = []retry.Option{retry.Delay(time.Hour), retry.MaxJitter(0)}
 	s, err := newRelayStorage(context.Background(), cfg, slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, s.Append(context.Background(), relayEnvelope(1, `{}`)))
