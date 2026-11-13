@@ -36,10 +36,18 @@ func TestHeadlessViewportSurvivesChromiumRestart(t *testing.T) {
 	client, err := c.APIClient()
 	require.NoError(t, err)
 
+	rsp := chromiumConfigureE2E(t, ctx, client, configureE2ERequest{
+		display:       `{"width":1024,"height":768,"refresh_rate":60}`,
+		chromiumFlags: `{"flags":["--disable-background-networking"]}`,
+	})
+	require.Equal(t, http.StatusOK, rsp.StatusCode(), "configure restart at boot size: %s", string(rsp.Body))
+	navigateBlank(t, ctx, c)
+	waitForRendererViewport(t, ctx, c, 1024, 768, headlessViewportPredicate, "after restart at boot size", 30*time.Second)
+
 	patchDisplayExpectingOK(t, ctx, c, 1280, 720, 60)
 	waitForRendererViewport(t, ctx, c, 1280, 720, headlessViewportPredicate, "patched", 30*time.Second)
 
-	rsp := chromiumConfigureE2E(t, ctx, client, configureE2ERequest{
+	rsp = chromiumConfigureE2E(t, ctx, client, configureE2ERequest{
 		chromiumFlags: `{"flags":["--disable-background-networking"]}`,
 	})
 	require.Equal(t, http.StatusOK, rsp.StatusCode(), "configure restart: %s", string(rsp.Body))

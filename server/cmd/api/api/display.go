@@ -175,7 +175,6 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 		if err == nil {
 			s.clearViewportOverride()
 			s.recordHeadlessRefreshRate(refreshRate)
-			s.recordHeadlessViewport(width, height)
 		}
 		s.xvfbResizeMu.Unlock()
 		if err == nil {
@@ -195,7 +194,6 @@ func (s *ApiService) patchDisplayLocked(ctx context.Context, req oapi.PatchDispl
 		err = s.setViewportViaCDP(ctx, width, height)
 		if err == nil {
 			s.setViewportOverride(width, height, refreshRate)
-			s.recordHeadlessViewport(width, height)
 			go s.backgroundResizeXvfb(context.WithoutCancel(ctx), width, height)
 		}
 	}
@@ -747,27 +745,22 @@ func (s *ApiService) recordHeadlessRefreshRate(refreshRate int) {
 	s.viewportMu.Unlock()
 }
 
-// recordHeadlessViewport stores the viewport applied in headless mode so
-// restoreHeadlessViewport can apply it again after Chromium restarts.
-func (s *ApiService) recordHeadlessViewport(width, height int) {
-	s.viewportMu.Lock()
-	s.headlessViewport = &[2]int{width, height}
-	s.viewportMu.Unlock()
-}
-
-// restoreHeadlessViewport applies the recorded headless viewport to a freshly
-// started Chromium. Headless Chromium launches at its own default window size
-// (maximized on its 800x600 screen in production), not the Xvfb size, so
-// without this a restart (profile load, policy or flag change) silently
-// shrinks the page while GET /display still reports the requested size.
+// restoreHeadlessViewport sizes a freshly started headless Chromium to the
+// resolution GET /display reports: the pending viewport override while Xvfb
+// is still resizing, otherwise the Xvfb size. Headless Chromium launches at
+// its own default window size (maximized on its 800x600 screen in
+// production), so without this a restart (profile load, policy or flag
+// change) silently shrinks the page while GET /display still reports the
+// requested size.
 func (s *ApiService) restoreHeadlessViewport(ctx context.Context) error {
-	s.viewportMu.RLock()
-	viewport := s.headlessViewport
-	s.viewportMu.RUnlock()
-	if viewport == nil {
+	if s.detectDisplayMode(ctx) != "xvfb" {
 		return nil
 	}
-	return s.setViewportViaCDP(ctx, viewport[0], viewport[1])
+	width, height, _, err := s.getCurrentResolution(ctx)
+	if err != nil {
+		return err
+	}
+	return s.setViewportViaCDP(ctx, width, height)
 }
 
 // getCurrentResolution returns the current display resolution and refresh

@@ -775,8 +775,9 @@ func (s *ApiService) stopChromium(ctx context.Context) error {
 // returning ("doneCh") -- that command returns as soon as supervisord ack's
 // the fork, long before the new Chromium has bound any ports.
 //
-// Once Chromium is ready it applies the accepted browser location, and returns
-// errBrowserLocationNotRestored, with Chromium running, if that fails.
+// Once Chromium is ready it runs afterChromiumStart, which restores the
+// headless viewport and the accepted browser location, and returns
+// errBrowserLocationNotRestored, with Chromium running, if the location fails.
 func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string) error {
 	log := logger.FromContext(ctx)
 	start := time.Now()

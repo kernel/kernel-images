@@ -140,10 +140,6 @@ type ApiService struct {
 	viewportMu              sync.RWMutex
 	viewportOverride        *[3]int // [width, height, refreshRate] or nil
 	lastHeadlessRefreshRate int
-	// headlessViewport is the last viewport applied in headless mode. It is
-	// held by Chromium's window rather than the display, so a relaunched
-	// Chromium comes back at its default size until it is applied again.
-	headlessViewport *[2]int // [width, height] or nil
 
 	// cachedDisplayMode caches the result of detectDisplayMode since the
 	// display server type (xorg vs xvfb) does not change at runtime.
