@@ -93,6 +93,9 @@ type Config struct {
 
 	// Metro API base URL, which answers the WebAuthn page hook's requests.
 	MetroAPIBaseURL string `envconfig:"KERNEL_METRO_API_BASE_URL" default:""`
+	// Session intel URL, served by the same metro API. Every VM boots with
+	// it, while only some variants boot with KERNEL_METRO_API_BASE_URL.
+	SessionIntelURL string `envconfig:"SESSION_INTEL_URL" default:""`
 }
 
 // LogValue implements slog.LogValuer, redacting secret fields.

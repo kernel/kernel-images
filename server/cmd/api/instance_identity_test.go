@@ -90,3 +90,15 @@ func TestInstanceIdentityProvider(t *testing.T) {
 		}
 	})
 }
+
+func TestExtensionFetchBaseURL(t *testing.T) {
+	metro := ""
+	resolve := extensionFetchBaseURL(func() string { return metro }, "https://intel.example")
+	if got := resolve(); got != "https://intel.example" {
+		t.Errorf("without a metro API URL got %q, want the session intel URL", got)
+	}
+	metro = "https://metro.example"
+	if got := resolve(); got != "https://metro.example" {
+		t.Errorf("with a metro API URL got %q, want it", got)
+	}
+}

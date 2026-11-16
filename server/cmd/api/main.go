@@ -245,7 +245,7 @@ func main() {
 		egressPolicy,
 		webauthnHook,
 		&extensionfetch.Fetcher{
-			BaseURL: identity.MetroAPIURL,
+			BaseURL: extensionFetchBaseURL(identity.MetroAPIURL, config.SessionIntelURL),
 			Token:   identity.Token,
 			Client:  &http.Client{},
 		},
