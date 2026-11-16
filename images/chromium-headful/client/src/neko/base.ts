@@ -294,6 +294,27 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this._ws!.send(JSON.stringify({ event, ...payload }))
   }
 
+  // shareLocalCamera adds a local camera track to the existing peer so it is
+  // delivered upstream to the browser VM (where it becomes a webcam device).
+  // Adding a track fires onnegotiationneeded, which renegotiates over the same
+  // peer. Returns the sender so the caller can stop sharing later. Used by the
+  // camera-passthrough controller (see kernel/camera.ts).
+  public shareLocalCamera(track: MediaStreamTrack, stream: MediaStream): RTCRtpSender | undefined {
+    if (!this._peer) {
+      this.emit('warn', `cannot share camera before the peer is connected`)
+      return undefined
+    }
+    return this._peer.addTrack(track, stream)
+  }
+
+  // unshareLocalCamera removes a previously shared camera sender, renegotiating
+  // the peer so the browser VM stops receiving the track.
+  public unshareLocalCamera(sender: RTCRtpSender): void {
+    if (this._peer) {
+      this._peer.removeTrack(sender)
+    }
+  }
+
   public async createPeer(lite: boolean, servers: RTCIceServer[]) {
     this.emit('debug', `creating peer`)
     if (!this.socketOpen) {
