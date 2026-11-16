@@ -775,8 +775,9 @@ func (s *ApiService) stopChromium(ctx context.Context) error {
 // returning ("doneCh") -- that command returns as soon as supervisord ack's
 // the fork, long before the new Chromium has bound any ports.
 //
-// Once Chromium is ready it applies the accepted browser location, and returns
-// errBrowserLocationNotRestored, with Chromium running, if that fails.
+// Once Chromium is ready it runs afterChromiumStart, which restores the
+// headless viewport and the accepted browser location, and returns
+// errBrowserLocationNotRestored, with Chromium running, if the location fails.
 func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string) error {
 	log := logger.FromContext(ctx)
 	start := time.Now()
@@ -827,7 +828,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case upstream, ok := <-updates:
 			if ok && tryReady(upstream) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-				return s.reapplyBrowserLocation(ctx)
+				return s.afterChromiumStart(ctx)
 			}
 		case err := <-errCh:
 			return err
@@ -841,7 +842,7 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 		case <-ticker.C:
 			if tryReady(s.upstreamMgr.Current()) {
 				log.Info("devtools ready", "operation", operation, "elapsed", time.Since(start).String())
-				return s.reapplyBrowserLocation(ctx)
+				return s.afterChromiumStart(ctx)
 			}
 		case <-timeout.C:
 			status, statusOut, _ := chromiumSupervisorStatus(ctx)
@@ -849,6 +850,16 @@ func (s *ApiService) startChromiumAndWait(ctx context.Context, operation string)
 			return fmt.Errorf("devtools not ready in time (chromium status: %s)", status)
 		}
 	}
+}
+
+// afterChromiumStart restores the browser state a relaunched Chromium does not
+// carry over on its own. A viewport failure is logged rather than returned:
+// Chromium is running, and callers treat a start error as not started.
+func (s *ApiService) afterChromiumStart(ctx context.Context) error {
+	if err := s.restoreHeadlessViewport(ctx); err != nil {
+		logger.FromContext(ctx).Error("failed to restore headless viewport after chromium start", "error", err)
+	}
+	return s.reapplyBrowserLocation(ctx)
 }
 
 // PatchChromiumPolicies applies user-provided Chromium enterprise policy overrides
