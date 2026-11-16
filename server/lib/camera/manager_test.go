@@ -3,8 +3,11 @@ package camera
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"os/exec"
 	"reflect"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestLoopbackModuleArgs(t *testing.T) {
@@ -64,5 +67,39 @@ func TestFrameSize(t *testing.T) {
 	m := New(Config{Width: 1280, Height: 720}, nil)
 	if got := m.frameSize(); got != 1280*720*3/2 {
 		t.Errorf("frameSize = %d", got)
+	}
+}
+
+func TestKillOnStallKillsIdleReader(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skip("sleep unavailable:", err)
+	}
+	done := make(chan struct{})
+	defer close(done)
+	start := time.Now()
+	go killOnStall(cmd, make(chan struct{}), done, 100*time.Millisecond)
+	_ = cmd.Wait()
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("idle reader not killed promptly: %v", d)
+	}
+}
+
+func TestKillOnStallSparesActiveReader(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Skip("sleep unavailable:", err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	frames := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go killOnStall(cmd, frames, done, 150*time.Millisecond)
+	for i := 0; i < 10; i++ {
+		frames <- struct{}{}
+		time.Sleep(50 * time.Millisecond)
+	}
+	close(done)
+	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("active reader was killed: %v", err)
 	}
 }

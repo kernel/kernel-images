@@ -19,10 +19,10 @@ import (
 
 // Config configures a Manager. Zero fields fall back to the package defaults.
 type Config struct {
-	OutputDevice  string // browser-facing device, e.g. /dev/video0
-	IngestDevice  string // neko writes the viewer camera here, e.g. /dev/video1
-	Width, Height int
-	FPS           int
+	OutputDevice   string // browser-facing device, e.g. /dev/video0
+	IngestDevice   string // neko writes the viewer camera here, e.g. /dev/video1
+	Width, Height  int
+	FPS            int
 	PlaceholderPNG string // shown while the viewer is not sharing
 	FFmpegPath     string
 	StateAddr      string // host:port for the on-demand state endpoint (in-VM debugging)
@@ -167,6 +167,11 @@ func (m *Manager) placeholderFrame(ctx context.Context) ([]byte, error) {
 // runIngest continuously decodes the ingest device into raw frames, keeping the
 // latest frame for the mixer. It waits for the device to exist and reconnects
 // whenever neko stops and restarts its webcam capture.
+//
+// A v4l2loopback read blocks forever once the producer goes away, and the
+// blocked reader keeps the device open with the previous session's format,
+// which stops the next neko session from streaming. So the reader is killed and
+// reopened whenever no frame arrives within ingestStallTimeout.
 func (m *Manager) runIngest(ctx context.Context) {
 	vf := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
 		m.cfg.Width, m.cfg.Height, m.cfg.Width, m.cfg.Height)
@@ -178,6 +183,9 @@ func (m *Manager) runIngest(ctx context.Context) {
 		cmd := m.ffmpeg(ctx, "-f", "v4l2", "-i", m.cfg.IngestDevice, "-vf", vf, "-f", "rawvideo", "pipe:1")
 		stdout, err := cmd.StdoutPipe()
 		if err == nil && cmd.Start() == nil {
+			frames := make(chan struct{}, 1)
+			done := make(chan struct{})
+			go killOnStall(cmd, frames, done, ingestStallTimeout)
 			r := bufio.NewReaderSize(stdout, m.frameSize()*2)
 			for ctx.Err() == nil {
 				buf := make([]byte, m.frameSize())
@@ -187,10 +195,43 @@ func (m *Manager) runIngest(ctx context.Context) {
 				m.mu.Lock()
 				m.lastFrame, m.lastAt = buf, time.Now()
 				m.mu.Unlock()
+				select {
+				case frames <- struct{}{}:
+				default:
+				}
 			}
+			close(done)
 			_ = cmd.Wait()
 		}
 		sleep(ctx, 300*time.Millisecond)
+	}
+}
+
+// ingestStallTimeout bounds how long the ingest reader may hold the device
+// without receiving a frame. It covers neko's first keyframe after a share
+// starts, and releases the device soon after a share stops.
+const ingestStallTimeout = 3 * time.Second
+
+// killOnStall kills cmd if no value arrives on frames within timeout of the
+// previous one (or of the start). It returns when done is closed.
+func killOnStall(cmd *exec.Cmd, frames <-chan struct{}, done <-chan struct{}, timeout time.Duration) {
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-frames:
+			if !t.Stop() {
+				<-t.C
+			}
+			t.Reset(timeout)
+		case <-t.C:
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			return
+		}
 	}
 }
 
