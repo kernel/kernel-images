@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -153,16 +154,13 @@ func (s *s2Storage) Close(ctx context.Context) error {
 }
 
 // S2StorageWriter reads from an EventStream and forwards each event after
-// afterSeq to S2. Construct with NewS2StorageWriter, call Start to begin, Stop
-// to drain and shut down.
+// afterSeq to the storage open returns. Construct with NewS2StorageWriter, call
+// Start to begin, Stop to drain and shut down.
 type S2StorageWriter struct {
-	es          *EventStream
-	basin       string
-	accessToken string
-	streamName  string
-	afterSeq    uint64
-	cfg         S2Config
-	log         *slog.Logger
+	es       *EventStream
+	open     func(ctx context.Context) (Storage, error)
+	afterSeq uint64
+	log      *slog.Logger
 
 	mu      sync.Mutex
 	started bool
@@ -173,13 +171,12 @@ type S2StorageWriter struct {
 
 func NewS2StorageWriter(es *EventStream, basin, accessToken, streamName string, afterSeq uint64, cfg S2Config, log *slog.Logger) *S2StorageWriter {
 	return &S2StorageWriter{
-		es:          es,
-		basin:       basin,
-		accessToken: accessToken,
-		streamName:  streamName,
-		afterSeq:    afterSeq,
-		cfg:         cfg,
-		log:         log,
+		es: es,
+		open: func(ctx context.Context) (Storage, error) {
+			return newS2Storage(ctx, basin, accessToken, streamName, cfg, log)
+		},
+		afterSeq: afterSeq,
+		log:      log,
 	}
 }
 
@@ -192,7 +189,7 @@ func (w *S2StorageWriter) Start(ctx context.Context) error {
 	if w.started {
 		return fmt.Errorf("s2storagewriter: Start called more than once")
 	}
-	storage, err := newS2Storage(ctx, w.basin, w.accessToken, w.streamName, w.cfg, w.log)
+	storage, err := w.open(ctx)
 	if err != nil {
 		return err
 	}
@@ -236,14 +233,17 @@ func (w *S2StorageWriter) Stop(ctx context.Context) error {
 }
 
 // S2StorageController opens at most one writer because StorageWriter is
-// single-use and an append session is bound to one stream.
+// single-use and an append session is bound to one stream. The writer appends
+// either straight to S2 or through the metro-api relay, which appends to the
+// same stream on the VM's behalf.
 type S2StorageController struct {
 	es       *EventStream
-	basin    string
-	token    string
 	streamFn func() string
-	cfg      S2Config
-	log      *slog.Logger
+	// open builds the storage for a resolved stream. Nil when the sink is not
+	// configured, which makes Start a no-op.
+	open    func(ctx context.Context, stream string) (Storage, error)
+	logAttr []any
+	log     *slog.Logger
 
 	mu          sync.Mutex
 	writer      *S2StorageWriter
@@ -261,7 +261,13 @@ type s2ControllerStart struct {
 // NewS2StorageController resolves streamFn at Start because a fork learns its
 // stream after construction.
 func NewS2StorageController(es *EventStream, basin, token string, streamFn func() string, cfg S2Config, log *slog.Logger) *S2StorageController {
-	return &S2StorageController{es: es, basin: basin, token: token, streamFn: streamFn, cfg: cfg, log: log}
+	c := &S2StorageController{es: es, streamFn: streamFn, logAttr: []any{"basin", basin}, log: log}
+	if basin != "" && token != "" {
+		c.open = func(ctx context.Context, stream string) (Storage, error) {
+			return newS2Storage(ctx, basin, token, stream, cfg, log)
+		}
+	}
+	return c
 }
 
 // Start opens the writer, which stores only events published after afterSeq:
@@ -282,7 +288,7 @@ func (c *S2StorageController) Start(parent context.Context, afterSeq uint64) (er
 		}
 		return start.err
 	}
-	if c.basin == "" || c.token == "" {
+	if c.open == nil {
 		c.mu.Unlock()
 		return nil
 	}
@@ -302,12 +308,17 @@ func (c *S2StorageController) Start(parent context.Context, afterSeq uint64) (er
 		return nil
 	}
 	runCtx, cancel := context.WithCancel(parent)
-	w := NewS2StorageWriter(c.es, c.basin, c.token, stream, afterSeq, c.cfg, c.log)
+	w := &S2StorageWriter{
+		es:       c.es,
+		open:     func(ctx context.Context) (Storage, error) { return c.open(ctx, stream) },
+		afterSeq: afterSeq,
+		log:      c.log,
+	}
 	if err = w.Start(runCtx); err != nil {
 		cancel()
 		return err
 	}
-	c.log.Info("S2 storage enabled", "basin", c.basin, "stream", stream)
+	c.log.Info("S2 storage enabled", append(slices.Clone(c.logAttr), "stream", stream)...)
 	c.mu.Lock()
 	c.writer, c.cancel, c.everStarted = w, cancel, true
 	c.mu.Unlock()

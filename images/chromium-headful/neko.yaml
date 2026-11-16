@@ -22,17 +22,18 @@ member:
       can_access_clipboard: true
       sends_inactive_cursor: true
       can_see_inactive_cursors: true
-    user_password: "neko"
+    # View-only member, used by the live-view proxy for read-only links.
+    user_password: "live-view-read-only"
     user_profile:
       name: "" # if empty, the login username is used
       is_admin: false
       can_login: true
       can_connect: true
       can_watch: true
-      can_host: true
-      can_share_media: true
-      can_access_clipboard: true
-      sends_inactive_cursor: true
+      can_host: false
+      can_share_media: false
+      can_access_clipboard: false
+      sends_inactive_cursor: false
       can_see_inactive_cursors: false
 
 session:

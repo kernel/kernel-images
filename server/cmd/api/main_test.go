@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kernel/kernel-images/server/cmd/config"
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/stretchr/testify/require"
 )
@@ -125,4 +126,12 @@ func TestChromeJSONProxyHandler_CancelsUpstreamRequestWithCallerContext(t *testi
 	}
 
 	require.Equal(t, http.StatusBadGateway, rec.Code)
+}
+
+func TestRelayBaseURL(t *testing.T) {
+	cfg := &config.Config{OTLPEndpoint: "169.254.0.1:8443"}
+	require.Equal(t, "https://metro.example", relayBaseURL("https://metro.example", cfg), "the identity's metro-api wins")
+	require.Equal(t, "https://169.254.0.1:8443", relayBaseURL("", cfg))
+	cfg.OTLPInsecure = true
+	require.Equal(t, "http://169.254.0.1:8443", relayBaseURL("", cfg))
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -941,6 +942,60 @@ func TestTelemetryStorageToggle(t *testing.T) {
 		require.NoError(t, err)
 		assert.False(t, storageOf(t, presp.(oapi.PatchTelemetry200JSONResponse).Config), "a clearing PATCH keeps the session's storage toggle")
 	})
+}
+
+// TestTelemetryStorageWithRealControllers runs the storage toggle against both
+// real storage controllers, direct S2 and the metro-api relay, rather than a
+// stub: storage opens once and refuses to turn off, and stays closed while the
+// fork gate resolves no stream.
+func TestTelemetryStorageWithRealControllers(t *testing.T) {
+	ctx := context.Background()
+	tr := true
+	networkOn := func(storage bool) *oapi.BrowserTelemetryConfig {
+		return &oapi.BrowserTelemetryConfig{
+			Browser: &oapi.BrowserTelemetryCategoriesConfig{Network: &oapi.BrowserTelemetryCategoryConfig{Enabled: &tr}},
+			Storage: &oapi.BrowserTelemetryStorageConfig{Enabled: &storage},
+		}
+	}
+	controllers := map[string]func(es *events.EventStream, stream func() string) *events.S2StorageController{
+		"s2": func(es *events.EventStream, stream func() string) *events.S2StorageController {
+			return events.NewS2StorageController(es, "test-basin", "test-token", stream, events.S2Config{}, slog.Default())
+		},
+		"relay": func(es *events.EventStream, stream func() string) *events.S2StorageController {
+			return events.NewRelayStorageController(es, events.RelayConfig{
+				BaseURLFunc: func() string { return "http://127.0.0.1:1" },
+				Path:        "/btel-relay/v1/records",
+				TokenFunc:   func() string { return "jwt" },
+			}, stream, slog.Default())
+		},
+	}
+	for name, build := range controllers {
+		t.Run(name, func(t *testing.T) {
+			svc := newTestService(t, newMockRecordManager())
+			c := build(svc.eventStream, func() string { return "instance-stream" })
+			svc.s2Storage = c
+			t.Cleanup(func() { _ = c.Stop(context.Background()) })
+
+			resp, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(true)})
+			require.NoError(t, err)
+			require.IsType(t, oapi.PutTelemetry201JSONResponse{}, resp)
+			assert.True(t, c.Running())
+
+			resp, err = svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(false)})
+			require.NoError(t, err)
+			require.IsType(t, oapi.PutTelemetry409JSONResponse{}, resp)
+			assert.True(t, c.Running())
+		})
+		t.Run(name+" fork gate", func(t *testing.T) {
+			svc := newTestService(t, newMockRecordManager())
+			c := build(svc.eventStream, func() string { return "" })
+			svc.s2Storage = c
+
+			_, err := svc.PutTelemetry(ctx, oapi.PutTelemetryRequestObject{Body: networkOn(true)})
+			require.NoError(t, err)
+			assert.False(t, c.EverStarted(), "no stream resolved, so nothing opens")
+		})
+	}
 }
 
 // stubS2Storage records starts for storage-toggle tests. Locked because

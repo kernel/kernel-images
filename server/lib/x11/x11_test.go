@@ -42,3 +42,48 @@ func TestSupportingWindowID(t *testing.T) {
 		})
 	}
 }
+
+func TestRootSize(t *testing.T) {
+	tests := []struct {
+		name   string
+		out    string
+		width  int
+		height int
+		ok     bool
+	}{
+		{
+			name: "root dump",
+			out: `xwininfo: Window id: 0x572 (the root window) (has no name)
+
+  Absolute upper-left X:  0
+  Absolute upper-left Y:  0
+  Width: 1920
+  Height: 1080
+  Depth: 24
+`,
+			width:  1920,
+			height: 1080,
+			ok:     true,
+		},
+		{
+			name:   "xwininfo failure output",
+			out:    "xwininfo: unable to open display :1\n",
+			ok:     false,
+		},
+		{
+			// Both dimensions must be present; a partial dump is not a size.
+			name: "width without height",
+			out: `  Width: 1920
+`,
+			ok: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w, h, ok := rootSize(tt.out)
+			if ok != tt.ok || (ok && (w != tt.width || h != tt.height)) {
+				t.Errorf("got (%d, %d, %v), want (%d, %d, %v) for %q", w, h, ok, tt.width, tt.height, tt.ok, tt.out)
+			}
+		})
+	}
+}

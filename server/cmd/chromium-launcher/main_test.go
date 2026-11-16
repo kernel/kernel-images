@@ -11,6 +11,68 @@ import (
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
 )
 
+func TestWithSeededRestoreBounds(t *testing.T) {
+	tests := []struct {
+		name   string
+		flags  []string
+		width  int
+		height int
+		want   []string
+	}{
+		{
+			name:   "start-maximized gets root-sized bounds",
+			flags:  []string{"--start-maximized", "--test-type"},
+			width:  1920,
+			height: 1080,
+			want:   []string{"--start-maximized", "--test-type", "--window-size=1920,1080", "--window-position=0,0"},
+		},
+		{
+			name:   "not maximized keeps chromium's own startup geometry",
+			flags:  []string{"--test-type"},
+			width:  1920,
+			height: 1080,
+			want:   []string{"--test-type"},
+		},
+		{
+			name:   "kiosk is left alone",
+			flags:  []string{"--kiosk", "--start-maximized"},
+			width:  1920,
+			height: 1080,
+			want:   []string{"--kiosk", "--start-maximized"},
+		},
+		{
+			name:   "explicit window-size keeps its geometry",
+			flags:  []string{"--start-maximized", "--window-size=1440,900"},
+			width:  1920,
+			height: 1080,
+			want:   []string{"--start-maximized", "--window-size=1440,900"},
+		},
+		{
+			name:   "explicit window-position keeps its geometry",
+			flags:  []string{"--start-maximized", "--window-position=100,50"},
+			width:  1920,
+			height: 1080,
+			want:   []string{"--start-maximized", "--window-position=100,50"},
+		},
+		{
+			name:   "unreadable root size skips seeding",
+			flags:  []string{"--start-maximized"},
+			width:  0,
+			height: 0,
+			want:   []string{"--start-maximized"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := withSeededRestoreBounds(tt.flags, tt.width, tt.height)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("withSeededRestoreBounds() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWithDefaultPrivateNetworkBypass(t *testing.T) {
 	tests := []struct {
 		name  string

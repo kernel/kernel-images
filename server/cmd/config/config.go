@@ -74,6 +74,17 @@ type Config struct {
 	OTLPMaxQueueSize   int           `envconfig:"BTEL_OTLP_MAX_QUEUE_SIZE" default:"2048"`
 	OTLPExportInterval time.Duration `envconfig:"BTEL_OTLP_EXPORT_INTERVAL" default:"1s"`
 	OTLPExportTimeout  time.Duration `envconfig:"BTEL_OTLP_EXPORT_TIMEOUT"  default:"30s"`
+	// Browser-telemetry storage through the metro-api relay. When StoragePath is
+	// set, storage posts event envelopes to the relay, which appends them to the
+	// instance's S2 stream, and the S2_* credentials are not used. The relay host
+	// is KERNEL_METRO_API_BASE_URL (or the fork identity's), falling back to
+	// BTEL_OTLP_ENDPOINT. MaxBytes is in S2 metered bytes.
+	StoragePath       string        `envconfig:"BTEL_STORAGE_PATH"        default:""`
+	StorageMaxRecords int           `envconfig:"BTEL_STORAGE_MAX_RECORDS" default:"200"`
+	StorageMaxBytes   int           `envconfig:"BTEL_STORAGE_MAX_BYTES"   default:"786432"`
+	StorageLinger     time.Duration `envconfig:"BTEL_STORAGE_LINGER"      default:"100ms"`
+	StorageMaxQueue   int           `envconfig:"BTEL_STORAGE_MAX_QUEUE"   default:"8192"`
+
 	// Platform-injected identity, reused to stamp the OTLP Resource. These are
 	// the same envs the VM already receives.
 	InstanceJWT  string `envconfig:"KERNEL_INSTANCE_JWT" default:""`
@@ -124,6 +135,11 @@ func (c *Config) LogValue() slog.Value {
 		slog.Int("otlp_max_queue_size", c.OTLPMaxQueueSize),
 		slog.Duration("otlp_export_interval", c.OTLPExportInterval),
 		slog.Duration("otlp_export_timeout", c.OTLPExportTimeout),
+		slog.String("storage_path", c.StoragePath),
+		slog.Int("storage_max_records", c.StorageMaxRecords),
+		slog.Int("storage_max_bytes", c.StorageMaxBytes),
+		slog.Duration("storage_linger", c.StorageLinger),
+		slog.Int("storage_max_queue", c.StorageMaxQueue),
 		slog.String("otlp_instance_name", c.InstanceName),
 		slog.String("otlp_metro", c.MetroName),
 		slog.String("metro_api_base_url", c.MetroAPIBaseURL),
@@ -179,6 +195,25 @@ func validate(config *Config) error {
 	}
 	if config.OTLPExportTimeout <= 0 {
 		return fmt.Errorf("BTEL_OTLP_EXPORT_TIMEOUT must be greater than 0")
+	}
+	if config.StoragePath != "" {
+		if config.MetroAPIBaseURL == "" && config.OTLPEndpoint == "" {
+			return fmt.Errorf("BTEL_STORAGE_PATH requires KERNEL_METRO_API_BASE_URL or BTEL_OTLP_ENDPOINT to reach the relay")
+		}
+		// The relay appends each batch as one S2 append: at most 1000 records
+		// and 1 MiB metered.
+		if config.StorageMaxRecords < 1 || config.StorageMaxRecords > 1000 {
+			return fmt.Errorf("BTEL_STORAGE_MAX_RECORDS must be between 1 and 1000")
+		}
+		if config.StorageMaxBytes < 1 || config.StorageMaxBytes > 1<<20 {
+			return fmt.Errorf("BTEL_STORAGE_MAX_BYTES must be between 1 and %d", 1<<20)
+		}
+		if config.StorageLinger <= 0 {
+			return fmt.Errorf("BTEL_STORAGE_LINGER must be greater than 0")
+		}
+		if config.StorageMaxQueue < config.StorageMaxRecords {
+			return fmt.Errorf("BTEL_STORAGE_MAX_QUEUE must be at least BTEL_STORAGE_MAX_RECORDS")
+		}
 	}
 
 	return nil

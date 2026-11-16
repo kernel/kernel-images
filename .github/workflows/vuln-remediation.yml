@@ -8,6 +8,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  # vuln-remediation exchanges the job's OIDC token for short-lived model credentials.
+  id-token: write
 
 jobs:
   remediate:

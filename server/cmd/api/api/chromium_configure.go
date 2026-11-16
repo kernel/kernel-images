@@ -19,6 +19,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/cdpclient"
 	"github.com/kernel/kernel-images/server/lib/extensionfetch"
 	"github.com/kernel/kernel-images/server/lib/logger"
+	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/kernel/kernel-images/server/lib/policy"
 	"github.com/kernel/kernel-images/server/lib/zstdutil"
@@ -174,6 +175,8 @@ func (s *ApiService) chromiumConfigureLive(ctx context.Context, st *chromiumConf
 			if resp := chromiumRunPatchDisplay(ctx, s, displayPlan.body); resp != nil {
 				return resp
 			}
+		} else if err := s.restoreHeadlessViewport(ctx); err != nil {
+			return cfg500ConfigureStep(chromiumConfigureStepDisplay, fmt.Sprintf("failed to restore viewport: %s", err))
 		}
 	}
 
@@ -908,6 +911,9 @@ func chromiumDisplayApplyWhileStopped(ctx context.Context, s *ApiService, plan *
 		return nil
 	}
 	_, _, err := s.applyResolutionAndConverge(ctx, w, h, rr, s.isNekoEnabled())
+	if errors.Is(err, nekoclient.ErrScreenConfigurationRejected) {
+		return cfg400(unsupportedDisplayMessage(w, h, rr))
+	}
 	if err != nil {
 		return cfg500ConfigureStep(chromiumConfigureStepDisplay, err.Error())
 	}

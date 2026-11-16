@@ -2,12 +2,18 @@ package nekoclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 
 	nekooapi "github.com/m1k1o/neko/server/lib/oapi"
 )
+
+// ErrScreenConfigurationRejected is returned when Neko answers a screen
+// configuration change with 422, which it does when the X server refuses the
+// requested size or refresh rate. Retrying the same request cannot succeed.
+var ErrScreenConfigurationRejected = errors.New("screen configuration rejected")
 
 // AuthClient wraps the Neko OpenAPI client and handles authentication automatically.
 // It manages token caching and refresh on 401 responses.
@@ -157,6 +163,9 @@ func (c *AuthClient) ScreenConfigurationChange(ctx context.Context, config nekoo
 		}
 	}
 
+	if resp.StatusCode() == http.StatusUnprocessableEntity {
+		return fmt.Errorf("%w: screen configuration API returned status %d: %s", ErrScreenConfigurationRejected, resp.StatusCode(), string(resp.Body))
+	}
 	if resp.StatusCode() != http.StatusOK && resp.StatusCode() != http.StatusNoContent {
 		return fmt.Errorf("screen configuration API returned status %d: %s", resp.StatusCode(), string(resp.Body))
 	}
