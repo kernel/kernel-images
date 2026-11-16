@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	retry "github.com/avast/retry-go/v5"
@@ -278,8 +279,8 @@ func (s *relayStorage) dropRemaining() {
 	}
 }
 
-// send posts one batch, retrying throttled and unavailable responses. Any
-// other outcome drops the batch and counts it.
+// send posts one batch, retrying recoverable transport failures and throttled
+// or unavailable responses. Any other outcome drops the batch and counts it.
 func (s *relayStorage) send(batch []relayRecord) {
 	body, err := json.Marshal(struct {
 		Records []relayRecord `json:"records"`
@@ -380,10 +381,17 @@ func (s *relayStorage) post(ctx context.Context, body []byte) (status int, retry
 	return resp.StatusCode, retryAfter, nil
 }
 
-// relayRetryable matches the OTLP exporter: retry 429, 502, 503, and 504, and
-// temporary transport errors; everything else is final.
+// relayRetryable retries 429, 502, 503, and 504, temporary transport errors,
+// and connection failures that net/http does not always replay on fresh dials.
 func relayRetryable(status int, err error) bool {
 	if err != nil {
+		// Temporary excludes common connection failures. Keep this list narrow
+		// so URL, configuration, and certificate errors remain final.
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+			errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+			errors.Is(err, syscall.ECONNABORTED) || errors.Is(err, syscall.EPIPE) {
+			return true
+		}
 		var urlErr *url.Error
 		return errors.As(err, &urlErr) && urlErr.Temporary()
 	}

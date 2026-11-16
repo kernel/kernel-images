@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -202,6 +205,151 @@ func TestRelayStorage_RetriesRetryableStatuses(t *testing.T) {
 	}
 }
 
+func TestRelayStorage_RetriesFailedDial(t *testing.T) {
+	relay := newFakeRelay(t)
+	var dials atomic.Int32
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if dials.Add(1) == 1 {
+				return nil, &net.OpError{Op: "dial", Net: network,
+					Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, addr)
+		},
+	}
+	t.Cleanup(transport.CloseIdleConnections)
+	cfg := testRelayConfig(relay.srv.URL)
+	cfg.Client = &http.Client{Transport: transport}
+	s := newTestRelayStorage(t, cfg)
+	env := relayEnvelope(1, `{"text":"retry me"}`)
+	require.NoError(t, s.Append(context.Background(), env))
+	closeRelay(t, s)
+
+	want, err := json.Marshal(env)
+	require.NoError(t, err)
+	require.Len(t, relay.records(), 1)
+	assert.JSONEq(t, string(want), string(relay.records()[0].Body))
+	assert.Equal(t, uint64(1), cfg.Metrics.Retries())
+	assert.Equal(t, uint64(1), cfg.Metrics.Exported())
+	assert.Empty(t, cfg.Metrics.Dropped())
+}
+
+func TestRelayStorage_RetriesBrokenFreshConnection(t *testing.T) {
+	for _, failure := range []string{"eof", "reset", "incomplete headers"} {
+		t.Run(failure, func(t *testing.T) {
+			relay := newFakeRelay(t)
+			relay.respond = func(n int, w http.ResponseWriter) bool {
+				if n > 1 {
+					return false
+				}
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if !assert.NoError(t, err) {
+					return true
+				}
+				defer conn.Close()
+				switch failure {
+				case "reset":
+					assert.NoError(t, conn.(*net.TCPConn).SetLinger(0))
+				case "incomplete headers":
+					_, err := io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
+					assert.NoError(t, err)
+				}
+				return true
+			}
+			s := newTestRelayStorage(t, testRelayConfig(relay.srv.URL))
+			require.NoError(t, s.Append(context.Background(), relayEnvelope(1, `{}`)))
+			closeRelay(t, s)
+
+			reqs := relay.requests()
+			require.Len(t, reqs, 2)
+			assert.Equal(t, reqs[0].body, reqs[1].body)
+			assert.Equal(t, uint64(1), s.cfg.Metrics.Retries(), "a fresh connection failure must reach the batch retry")
+			assert.Equal(t, uint64(1), s.cfg.Metrics.Exported())
+			assert.Empty(t, s.cfg.Metrics.Dropped())
+		})
+	}
+}
+
+func TestRelayStorage_DoesNotRetryPermanentTransportErrors(t *testing.T) {
+	tlsRelay := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("an untrusted certificate must prevent the request")
+	}))
+	defer tlsRelay.Close()
+	for _, base := range []string{"://", "http://127.0.0.1:invalid", tlsRelay.URL} {
+		t.Run(base, func(t *testing.T) {
+			s := newTestRelayStorage(t, testRelayConfig(base))
+			require.NoError(t, s.Append(context.Background(), relayEnvelope(1, `{}`)))
+			closeRelay(t, s)
+
+			assert.Zero(t, s.cfg.Metrics.Retries())
+			assert.Zero(t, s.cfg.Metrics.Exported())
+			assert.Equal(t, map[string]uint64{relayDropRejected: 1}, s.cfg.Metrics.Dropped())
+		})
+	}
+}
+
+func TestRelayStorage_CloseInterruptsTransportFailure(t *testing.T) {
+	for _, phase := range []string{"backoff", "in flight"} {
+		t.Run(phase, func(t *testing.T) {
+			started := make(chan struct{})
+			cfg := testRelayConfig("http://relay.invalid")
+			cfg.Client = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				close(started)
+				if phase == "in flight" {
+					<-r.Context().Done()
+					return nil, r.Context().Err()
+				}
+				return nil, io.EOF
+			})}
+			// Hold retries until Close cancels the sender.
+			cfg.retryOptions = []retry.Option{retry.WithTimer(relayBlockedRetryTimer{})}
+			s := newTestRelayStorage(t, cfg)
+			require.NoError(t, s.Append(context.Background(), relayEnvelope(1, `{}`)))
+			select {
+			case <-started:
+			case <-time.After(5 * time.Second):
+				t.Fatal("request did not start")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			start := time.Now()
+			require.ErrorIs(t, s.Close(ctx), context.DeadlineExceeded)
+			assert.Less(t, time.Since(start), time.Second)
+			select {
+			case <-s.done:
+			case <-time.After(time.Second):
+				t.Fatal("sender did not stop after Close")
+			}
+			assert.Zero(t, cfg.Metrics.Exported())
+			assert.Equal(t, map[string]uint64{relayDropShutdown: 1}, cfg.Metrics.Dropped())
+		})
+	}
+}
+
+func TestRelayStorage_RetriesClientTimeoutWithinBatchBudget(t *testing.T) {
+	var requests atomic.Int32
+	relay := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if requests.Add(1) == 1 {
+			<-r.Context().Done()
+		}
+	}))
+	defer relay.Close()
+	cfg := testRelayConfig(relay.URL)
+	cfg.Client = &http.Client{Timeout: 50 * time.Millisecond}
+	s := newTestRelayStorage(t, cfg)
+	require.NoError(t, s.Append(context.Background(), relayEnvelope(1, `{}`)))
+	closeRelay(t, s)
+
+	assert.Equal(t, uint64(1), cfg.Metrics.Retries())
+	assert.Equal(t, uint64(1), cfg.Metrics.Exported())
+	assert.Empty(t, cfg.Metrics.Dropped())
+}
+
+type relayBlockedRetryTimer struct{}
+
+func (relayBlockedRetryTimer) After(time.Duration) <-chan time.Time { return nil }
+
 func TestRelayStorage_HonorsRetryAfter(t *testing.T) {
 	relay := newFakeRelay(t)
 	relay.respond = func(n int, w http.ResponseWriter) bool {
@@ -241,14 +389,18 @@ func TestRelayStorage_DropsNonRetryableStatuses(t *testing.T) {
 	}
 }
 
-func TestRelayStorage_DropsOnConnectionFailure(t *testing.T) {
+func TestRelayStorage_DropsAfterRepeatedConnectionFailure(t *testing.T) {
 	relay := newFakeRelay(t)
 	relay.srv.Close()
-	s := newTestRelayStorage(t, testRelayConfig(relay.srv.URL))
+	cfg := testRelayConfig(relay.srv.URL)
+	cfg.retryOptions = append(cfg.retryOptions, retry.Attempts(3))
+	s := newTestRelayStorage(t, cfg)
 	require.NoError(t, s.Append(context.Background(), relayEnvelope(1, `{}`)))
 	closeRelay(t, s)
 	assert.Equal(t, map[string]uint64{"error": 1}, s.cfg.Metrics.Failed())
 	assert.Equal(t, map[string]uint64{relayDropRejected: 1}, s.cfg.Metrics.Dropped())
+	assert.Positive(t, s.cfg.Metrics.Retries())
+	assert.Zero(t, s.cfg.Metrics.Exported())
 }
 
 // A deploy replaces the metro-api process, and the old one closes kept-alive
