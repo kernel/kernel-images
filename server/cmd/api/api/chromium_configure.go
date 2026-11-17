@@ -28,7 +28,9 @@ import (
 const userDataProfileDir = "/home/kernel/user-data"
 const maxStartURLLen = 2048
 const startURLDispatchTimeout = 3 * time.Second
-const maxExtensionRefBytes = 8 << 10
+// maxExtensionRefBytes bounds one extensions.ref part. Its grant carries a
+// presigned URL, which with temporary credentials runs to a few KiB.
+const maxExtensionRefBytes = 16 << 10
 
 type chromiumConfigureState struct {
 	displayJSON        *string
