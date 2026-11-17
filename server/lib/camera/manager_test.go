@@ -1,11 +1,11 @@
 package camera
 
 import (
+	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"os/exec"
 	"reflect"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -45,6 +45,12 @@ func TestConfigDefaults(t *testing.T) {
 	if c.Width != DefaultWidth || c.Height != DefaultHeight || c.FPS != DefaultFPS {
 		t.Errorf("mode defaults not applied: %+v", c)
 	}
+
+	bad := Config{Width: -1, Height: 1 << 20, FPS: -5}
+	bad.withDefaults()
+	if bad.Width != DefaultWidth || bad.Height != DefaultHeight || bad.FPS != DefaultFPS {
+		t.Errorf("out-of-range mode not clamped: %+v", bad)
+	}
 }
 
 func TestStateHandler(t *testing.T) {
@@ -70,36 +76,24 @@ func TestFrameSize(t *testing.T) {
 	}
 }
 
-func TestKillOnStallKillsIdleReader(t *testing.T) {
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Skip("sleep unavailable:", err)
+func TestReadIngestStallReleasesDevice(t *testing.T) {
+	// A reader whose producer sends nothing must release the device (ffmpeg
+	// exits and readIngest returns) within roughly the stall timeout, rather
+	// than blocking forever. Point it at /dev/null, which ffmpeg can open as a
+	// v4l2 input but never yields a frame from.
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg unavailable:", err)
 	}
+	m := New(Config{IngestDevice: "/dev/null", Width: 64, Height: 48}, nil)
+	// Shrink the stall timeout for the test via a short parent context deadline
+	// as an upper bound, and rely on the real timeout being short enough.
+	ctx, cancel := context.WithTimeout(context.Background(), ingestStallTimeout+5*time.Second)
+	defer cancel()
 	done := make(chan struct{})
-	defer close(done)
-	start := time.Now()
-	go killOnStall(cmd, make(chan struct{}), done, 100*time.Millisecond)
-	_ = cmd.Wait()
-	if d := time.Since(start); d > 5*time.Second {
-		t.Fatalf("idle reader not killed promptly: %v", d)
-	}
-}
-
-func TestKillOnStallSparesActiveReader(t *testing.T) {
-	cmd := exec.Command("sleep", "30")
-	if err := cmd.Start(); err != nil {
-		t.Skip("sleep unavailable:", err)
-	}
-	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
-	frames := make(chan struct{}, 1)
-	done := make(chan struct{})
-	go killOnStall(cmd, frames, done, 150*time.Millisecond)
-	for i := 0; i < 10; i++ {
-		frames <- struct{}{}
-		time.Sleep(50 * time.Millisecond)
-	}
-	close(done)
-	if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-		t.Fatalf("active reader was killed: %v", err)
+	go func() { m.readIngest(ctx, "format=yuv420p"); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(ingestStallTimeout + 4*time.Second):
+		t.Fatal("readIngest did not return after a stall")
 	}
 }

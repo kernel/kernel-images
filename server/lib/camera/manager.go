@@ -3,7 +3,6 @@ package camera
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/kernel/kernel-images/server/lib/statefile"
 )
 
 // Config configures a Manager. Zero fields fall back to the package defaults.
@@ -45,13 +46,17 @@ func (c *Config) withDefaults() {
 	if c.IngestDevice == "" {
 		c.IngestDevice = DefaultIngestDevice
 	}
-	if c.Width == 0 {
+	// Clamp the mode to sane bounds: a non-positive or absurd value would panic
+	// make([]byte, …) for the frame buffer or time.NewTicker (non-positive
+	// duration) downstream. These come from env (CAMERA_WIDTH etc.), so don't
+	// trust them.
+	if c.Width <= 0 || c.Width > 7680 {
 		c.Width = DefaultWidth
 	}
-	if c.Height == 0 {
+	if c.Height <= 0 || c.Height > 4320 {
 		c.Height = DefaultHeight
 	}
-	if c.FPS == 0 {
+	if c.FPS <= 0 || c.FPS > 120 {
 		c.FPS = DefaultFPS
 	}
 	if c.FFmpegPath == "" {
@@ -92,6 +97,7 @@ func (m *Manager) Run(ctx context.Context) error {
 			return fmt.Errorf("ensure devices: %w", err)
 		}
 	}
+	m.secureDevices()
 
 	ph, err := m.placeholderFrame(ctx)
 	if err != nil {
@@ -111,9 +117,6 @@ func (m *Manager) Run(ctx context.Context) error {
 
 	go m.runIngest(ctx)
 	go m.runDetector(ctx)
-	if m.cfg.StateFile != "" {
-		go m.runStateFile(ctx)
-	}
 
 	return m.runMixer(ctx, ph)
 }
@@ -125,12 +128,25 @@ func (m *Manager) mux() http.Handler {
 	return mux
 }
 
+// frameFreshFor bounds how old the latest ingest frame may be and still be fed
+// to the browser instead of the placeholder. The mixer and snapshot share it so
+// a page is never told streaming=true while it is seeing the placeholder.
+const frameFreshFor = time.Second
+
+// live returns the latest ingest frame and whether it is still fresh.
+func (m *Manager) live() (frame []byte, fresh bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lastFrame, m.lastFrame != nil && time.Since(m.lastAt) < frameFreshFor
+}
+
 func (m *Manager) snapshot() State {
+	_, fresh := m.live()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return State{
 		Wanted:    m.wanted,
-		Streaming: time.Since(m.lastAt) < time.Second && m.lastFrame != nil,
+		Streaming: fresh,
 		Width:     m.cfg.Width,
 		Height:    m.cfg.Height,
 	}
@@ -164,14 +180,14 @@ func (m *Manager) placeholderFrame(ctx context.Context) ([]byte, error) {
 	return out[:m.frameSize()], nil
 }
 
+// ingestStallTimeout bounds how long the ingest reader may hold the device
+// without receiving a frame. It covers neko's first keyframe after a share
+// starts, and releases the device soon after a share stops.
+const ingestStallTimeout = 3 * time.Second
+
 // runIngest continuously decodes the ingest device into raw frames, keeping the
 // latest frame for the mixer. It waits for the device to exist and reconnects
 // whenever neko stops and restarts its webcam capture.
-//
-// A v4l2loopback read blocks forever once the producer goes away, and the
-// blocked reader keeps the device open with the previous session's format,
-// which stops the next neko session from streaming. So the reader is killed and
-// reopened whenever no frame arrives within ingestStallTimeout.
 func (m *Manager) runIngest(ctx context.Context) {
 	vf := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
 		m.cfg.Width, m.cfg.Height, m.cfg.Width, m.cfg.Height)
@@ -180,58 +196,45 @@ func (m *Manager) runIngest(ctx context.Context) {
 			sleep(ctx, 300*time.Millisecond)
 			continue
 		}
-		cmd := m.ffmpeg(ctx, "-f", "v4l2", "-i", m.cfg.IngestDevice, "-vf", vf, "-f", "rawvideo", "pipe:1")
-		stdout, err := cmd.StdoutPipe()
-		if err == nil && cmd.Start() == nil {
-			frames := make(chan struct{}, 1)
-			done := make(chan struct{})
-			go killOnStall(cmd, frames, done, ingestStallTimeout)
-			r := bufio.NewReaderSize(stdout, m.frameSize()*2)
-			for ctx.Err() == nil {
-				buf := make([]byte, m.frameSize())
-				if _, err := io.ReadFull(r, buf); err != nil {
-					break
-				}
-				m.mu.Lock()
-				m.lastFrame, m.lastAt = buf, time.Now()
-				m.mu.Unlock()
-				select {
-				case frames <- struct{}{}:
-				default:
-				}
-			}
-			close(done)
-			_ = cmd.Wait()
-		}
+		m.readIngest(ctx, vf)
 		sleep(ctx, 300*time.Millisecond)
 	}
 }
 
-// ingestStallTimeout bounds how long the ingest reader may hold the device
-// without receiving a frame. It covers neko's first keyframe after a share
-// starts, and releases the device soon after a share stops.
-const ingestStallTimeout = 3 * time.Second
-
-// killOnStall kills cmd if no value arrives on frames within timeout of the
-// previous one (or of the start). It returns when done is closed.
-func killOnStall(cmd *exec.Cmd, frames <-chan struct{}, done <-chan struct{}, timeout time.Duration) {
-	t := time.NewTimer(timeout)
-	defer t.Stop()
+// readIngest runs one ffmpeg reader until it stalls, fails, or ctx ends.
+//
+// A v4l2loopback read blocks forever once its producer goes away, and the
+// blocked reader keeps the device open with the previous session's format,
+// which stops the next neko session from streaming. A stall timer cancels this
+// attempt's context if no frame arrives within ingestStallTimeout, so the same
+// cancellation that kills ffmpeg is what lets Wait return — there is no
+// separate watchdog that could retire before Wait and leave ffmpeg wedged.
+func (m *Manager) readIngest(parent context.Context, vf string) {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	cmd := m.ffmpeg(ctx, "-f", "v4l2", "-i", m.cfg.IngestDevice, "-vf", vf, "-f", "rawvideo", "pipe:1")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		m.log.Error("ingest pipe", "err", err)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		m.log.Error("ingest start", "err", err)
+		return
+	}
+	defer func() { _ = cmd.Wait() }() // runs after cancel below (LIFO)
+	stall := time.AfterFunc(ingestStallTimeout, cancel)
+	defer stall.Stop()
+	r := bufio.NewReaderSize(stdout, m.frameSize()*2)
 	for {
-		select {
-		case <-done:
-			return
-		case <-frames:
-			if !t.Stop() {
-				<-t.C
-			}
-			t.Reset(timeout)
-		case <-t.C:
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
+		buf := make([]byte, m.frameSize())
+		if _, err := io.ReadFull(r, buf); err != nil {
 			return
 		}
+		stall.Reset(ingestStallTimeout)
+		m.mu.Lock()
+		m.lastFrame, m.lastAt = buf, time.Now()
+		m.mu.Unlock()
 	}
 }
 
@@ -259,11 +262,9 @@ func (m *Manager) runMixer(ctx context.Context, placeholder []byte) error {
 			if ctx.Err() != nil {
 				break
 			}
-			m.mu.Lock()
-			frame, fresh := m.lastFrame, time.Since(m.lastAt) < time.Second
-			m.mu.Unlock()
+			frame, fresh := m.live()
 			next := "placeholder"
-			if fresh && frame != nil {
+			if fresh {
 				next = "live"
 			} else {
 				frame = placeholder
@@ -284,43 +285,69 @@ func (m *Manager) runMixer(ctx context.Context, placeholder []byte) error {
 	return ctx.Err()
 }
 
+const (
+	detectInterval = 300 * time.Millisecond
+	// wantedHolds is how many consecutive polls must see a chromium process
+	// holding the device before `wanted` goes true. chromium opens the device
+	// briefly to read capabilities during enumerateDevices(), so a single
+	// latched sample is not consent to turn on the viewer's camera; requiring a
+	// sustained hold filters those blips. The client applies the real
+	// consent gate (auto-follow only after one manual share). A page-driven CDP
+	// signal would be cleaner than scanning /proc; see the PR notes.
+	wantedHolds = 3
+)
+
 // runDetector polls /proc for a chromium process holding the browser-facing
-// device open, which is the on-demand "a page wants the camera" signal.
-//
-// A page-driven CDP signal would be cleaner than scanning /proc; see the PR
-// notes. This is deliberately simple for the first cut.
+// device open — the on-demand "a page wants the camera" signal — debounces it,
+// and republishes the state file whenever the snapshot changes.
 func (m *Manager) runDetector(ctx context.Context) {
+	var last State
+	holds := 0
+	first := true
 	for ctx.Err() == nil {
-		want := chromiumHoldsDevice(m.cfg.OutputDevice)
-		m.mu.Lock()
-		m.wanted = want
-		m.mu.Unlock()
-		sleep(ctx, 300*time.Millisecond)
-	}
-}
-
-// runStateFile rewrites the state file whenever the snapshot changes so the
-// live-view client can poll it as a static asset under the live-view origin.
-func (m *Manager) runStateFile(ctx context.Context) {
-	last := ""
-	tmp := m.cfg.StateFile + ".tmp"
-	for ctx.Err() == nil {
-		b, _ := json.Marshal(m.snapshot())
-		if s := string(b); s != last {
-			if err := os.WriteFile(tmp, b, 0o644); err == nil {
-				if err := os.Rename(tmp, m.cfg.StateFile); err == nil {
-					last = s
-				}
+		if chromiumHoldsDevice(m.cfg.OutputDevice) {
+			if holds < wantedHolds {
+				holds++
 			}
+		} else {
+			holds = 0
 		}
-		sleep(ctx, 300*time.Millisecond)
+		m.mu.Lock()
+		m.wanted = holds >= wantedHolds
+		m.mu.Unlock()
+
+		if s := m.snapshot(); m.cfg.StateFile != "" && (first || s != last) {
+			if err := statefile.WriteJSON(m.cfg.StateFile, s); err != nil {
+				m.log.Error("camera state file", "path", m.cfg.StateFile, "err", err)
+			}
+			last, first = s, false
+		}
+		sleep(ctx, detectInterval)
 	}
 }
 
-// ensureDevices creates the loopback pair when the browser-facing device is
-// absent. Loading needs root; the daemon runs in the browser VM where it has it.
+// secureDevices restricts the device modes so a page in the browser can only
+// reach the mixer's output. The ingest device is root-only (0600) so chromium,
+// which runs unprivileged, can neither open nor enumerate it — otherwise a page
+// would see a second "kernel-ingest" camera and could select the raw,
+// un-letterboxed feed. The output device is world-accessible (0666) as the
+// camera the browser is meant to use.
+func (m *Manager) secureDevices() {
+	if err := os.Chmod(m.cfg.IngestDevice, 0o600); err != nil {
+		m.log.Warn("secure ingest device", "device", m.cfg.IngestDevice, "err", err)
+	}
+	if err := os.Chmod(m.cfg.OutputDevice, 0o666); err != nil {
+		m.log.Warn("secure output device", "device", m.cfg.OutputDevice, "err", err)
+	}
+}
+
+// ensureDevices creates the loopback pair when it is absent, then confirms both
+// nodes exist. Loading needs root; the daemon runs in the browser VM where it
+// has it. When the guest kernel already ships the devices this is a no-op.
 func (m *Manager) ensureDevices(ctx context.Context) error {
-	if _, err := os.Stat(m.cfg.OutputDevice); err == nil {
+	_, outErr := os.Stat(m.cfg.OutputDevice)
+	_, ingestErr := os.Stat(m.cfg.IngestDevice)
+	if outErr == nil && ingestErr == nil {
 		return nil
 	}
 	outNr := devNum(m.cfg.OutputDevice)
@@ -331,12 +358,14 @@ func (m *Manager) ensureDevices(ctx context.Context) error {
 		return err
 	}
 	for i := 0; i < 50; i++ {
-		if _, err := os.Stat(m.cfg.OutputDevice); err == nil {
+		_, outErr = os.Stat(m.cfg.OutputDevice)
+		_, ingestErr = os.Stat(m.cfg.IngestDevice)
+		if outErr == nil && ingestErr == nil {
 			return nil
 		}
 		sleep(ctx, 100*time.Millisecond)
 	}
-	return fmt.Errorf("%s did not appear after modprobe", m.cfg.OutputDevice)
+	return fmt.Errorf("camera devices %s/%s did not appear after modprobe", m.cfg.OutputDevice, m.cfg.IngestDevice)
 }
 
 // chromiumHoldsDevice reports whether any chromium process has dev open.

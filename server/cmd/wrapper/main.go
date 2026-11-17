@@ -23,6 +23,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/kernel/kernel-images/server/lib/camera"
 )
 
 const (
@@ -131,6 +133,27 @@ func main() {
 	// which would otherwise spam autolaunch errors).
 	_ = os.Setenv("DBUS_SESSION_BUS_ADDRESS", "unix:path="+dbusSocket)
 
+	// Camera passthrough rides on live view, so it requires the headful WebRTC
+	// path. When enabled, point neko's webcam capture at camerad's ingest
+	// device so the viewer's shared camera lands there; camerad mixes it onto
+	// the browser-facing device. neko reads these from its environment, which
+	// it inherits from supervisord, which inherits ours — so, like the dbus var
+	// above, they MUST be set before supervisord starts (line ~145) or the
+	// forked neko never sees them. Always set ENABLED explicitly so this
+	// wrapper is the gate: a stray true from elsewhere can't enable capture
+	// with camerad down.
+	cameraEnabled := prof == profileHeadful &&
+		os.Getenv("ENABLE_WEBRTC") == "true" &&
+		os.Getenv("KERNEL_ENABLE_CAMERA") == "true"
+	if cameraEnabled {
+		_ = os.Setenv("NEKO_CAPTURE_WEBCAM_ENABLED", "true")
+		if os.Getenv("NEKO_CAPTURE_WEBCAM_DEVICE") == "" {
+			_ = os.Setenv("NEKO_CAPTURE_WEBCAM_DEVICE", camera.DefaultIngestDevice)
+		}
+	} else {
+		_ = os.Setenv("NEKO_CAPTURE_WEBCAM_ENABLED", "false")
+	}
+
 	// Stale X locks from prior runs.
 	_ = os.Remove("/tmp/.X1-lock")
 	_ = os.Remove("/tmp/.X11-unix/X1")
@@ -178,19 +201,6 @@ func main() {
 	}
 	webrtc := prof == profileHeadful && os.Getenv("ENABLE_WEBRTC") == "true"
 
-	// Camera passthrough rides on live view, so it requires the headful WebRTC
-	// path. When enabled, point neko's webcam capture at the camera manager's
-	// ingest device so the viewer's shared camera lands there; camerad mixes it
-	// onto the browser-facing device. neko reads these from its environment,
-	// which it inherits from supervisord, which inherits ours.
-	camera := webrtc && os.Getenv("KERNEL_ENABLE_CAMERA") == "true"
-	if camera {
-		_ = os.Setenv("NEKO_CAPTURE_WEBCAM_ENABLED", "true")
-		if os.Getenv("NEKO_CAPTURE_WEBCAM_DEVICE") == "" {
-			_ = os.Setenv("NEKO_CAPTURE_WEBCAM_DEVICE", "/dev/video1")
-		}
-	}
-
 	// Pre-touch chromium's supervisord log so kernel-images-api's `tail -f`
 	// doesn't bail out and enter its 250ms retry backoff when started in
 	// parallel with chromium.
@@ -221,10 +231,13 @@ func main() {
 		startAll("kernel-images-api")
 	}
 	waitForSocket(dbusSocket, 10*time.Second)
-	if camera {
+	if cameraEnabled {
 		// Start camerad before neko so the browser-facing device and its
-		// placeholder feed exist by the time a page asks for the camera.
+		// placeholder feed exist before neko opens the ingest device. startAll
+		// only queues the start, so wait on camerad's health endpoint, which it
+		// serves once the devices and mixer are up.
 		startAll("camerad")
+		waitForHTTPProbe("camerad", "http://127.0.0.1:10004/healthz", 15*time.Second)
 	}
 	if prof == profileHeadful && webrtc {
 		startAll("neko")

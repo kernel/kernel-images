@@ -1,3 +1,6 @@
+// NOTE: this harness auto-follows the on-demand signal for automated testing and
+// omits the one-time consent gate the product controller (client/src/kernel/camera.ts)
+// enforces. camera.ts is authoritative.
 // Prototype: camera on demand for live view. Not production code.
 // When a page inside the Kernel browser asks for the camera, the viewer's camera turns on
 // automatically; when the page stops using it, it turns off. The button is a manual override.
