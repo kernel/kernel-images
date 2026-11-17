@@ -74,6 +74,77 @@ func TestWriteReadFile(t *testing.T) {
 	}
 }
 
+// TestReadFileDirectory verifies that reading a directory is rejected up front
+// instead of returning 200 with a body that fails on the first read.
+func TestReadFileDirectory(t *testing.T) {
+	t.Parallel()
+
+	svc := &ApiService{defaultRecorderID: "default"}
+	resp, err := svc.ReadFile(context.Background(), oapi.ReadFileRequestObject{Params: oapi.ReadFileParams{Path: t.TempDir()}})
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if _, ok := resp.(oapi.ReadFile400JSONResponse); !ok {
+		t.Fatalf("expected 400 response for a directory, got %T", resp)
+	}
+}
+
+// TestWriteFileModeOnOverwrite verifies that an explicit mode is applied when
+// overwriting an existing file and is not narrowed by the umask.
+func TestWriteFileModeOnOverwrite(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	svc := &ApiService{defaultRecorderID: "default"}
+	filePath := filepath.Join(t.TempDir(), "script.sh")
+
+	write := func(mode *string) {
+		t.Helper()
+		resp, err := svc.WriteFile(ctx, oapi.WriteFileRequestObject{
+			Params: oapi.WriteFileParams{Path: filePath, Mode: mode},
+			Body:   strings.NewReader("#!/bin/sh\n"),
+		})
+		if err != nil {
+			t.Fatalf("WriteFile returned error: %v", err)
+		}
+		if _, ok := resp.(oapi.WriteFile201Response); !ok {
+			t.Fatalf("unexpected response type from WriteFile: %T", resp)
+		}
+	}
+	modeOf := func() os.FileMode {
+		t.Helper()
+		info, err := os.Stat(filePath)
+		if err != nil {
+			t.Fatalf("stat: %v", err)
+		}
+		return info.Mode().Perm()
+	}
+
+	write(nil)
+	if got := modeOf(); got != 0o644 {
+		t.Fatalf("default mode: got %o want 644", got)
+	}
+
+	mode := "755"
+	write(&mode)
+	if got := modeOf(); got != 0o755 {
+		t.Fatalf("mode after overwrite with 755: got %o want 755", got)
+	}
+
+	// The umask (typically 022) would turn 0777 into 0755 on create.
+	mode = "777"
+	write(&mode)
+	if got := modeOf(); got != 0o777 {
+		t.Fatalf("mode after overwrite with 777: got %o want 777", got)
+	}
+
+	// Without a mode, an overwrite keeps the file's current mode.
+	write(nil)
+	if got := modeOf(); got != 0o777 {
+		t.Fatalf("mode after overwrite without mode: got %o want 777", got)
+	}
+}
+
 // TestWriteFileAndWatch verifies WriteFile operation and filesystem watch event generation.
 func TestWriteFileAndWatch(t *testing.T) {
 	t.Parallel()
