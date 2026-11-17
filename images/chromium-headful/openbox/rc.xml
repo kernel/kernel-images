@@ -26,6 +26,13 @@
     <animateIconify>no</animateIconify>
   </theme>
 
+  <!-- A docked app such as a tint2 panel with panel_dock = 1 must not reserve
+       part of the work area: the strut leaves a maximized browser short of
+       the display with the root background showing beside it. -->
+  <dock>
+    <noStrut>yes</noStrut>
+  </dock>
+
   <!-- This file replaces the distro rc.xml, so keep the input bindings needed
        for focus, titlebar movement, resizing, and popup close actions here. -->
   <mouse>

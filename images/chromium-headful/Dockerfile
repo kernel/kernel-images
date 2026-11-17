@@ -202,6 +202,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     x11-apps \
     # xprop, used to detect when the window manager has taken the display
     x11-utils \
+    # not started by the image: kept for workloads that start a tint2 panel
+    # through the process API
     tint2 \
     wget \
     xdg-utils \
