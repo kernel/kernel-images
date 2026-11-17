@@ -35,7 +35,7 @@ const (
 	DefaultIngestDevice = "/dev/video1"
 	DefaultWidth        = 1280
 	DefaultHeight       = 720
-	DefaultFPS          = 15
+	DefaultFPS          = 30
 )
 
 // State is the camera-on-demand signal the live-view client polls.

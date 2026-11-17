@@ -76,6 +76,10 @@ type Manager struct {
 	lastFrame []byte
 	lastAt    time.Time
 	wanted    bool
+
+	// newFrame is signalled by the ingest reader for each live frame so the
+	// mixer can forward it immediately instead of on its next tick.
+	newFrame chan struct{}
 }
 
 // New builds a Manager. It does not touch any devices until Run is called.
@@ -84,7 +88,7 @@ func New(cfg Config, log *slog.Logger) *Manager {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Manager{cfg: cfg, log: log}
+	return &Manager{cfg: cfg, log: log, newFrame: make(chan struct{}, 1)}
 }
 
 func (m *Manager) frameSize() int { return m.cfg.Width * m.cfg.Height * 3 / 2 } // yuv420p
@@ -192,13 +196,30 @@ func (m *Manager) runIngest(ctx context.Context) {
 	vf := fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
 		m.cfg.Width, m.cfg.Height, m.cfg.Width, m.cfg.Height)
 	for ctx.Err() == nil {
-		if _, err := os.Stat(m.cfg.IngestDevice); err != nil {
+		if !ingestProducing(m.cfg.IngestDevice) {
 			sleep(ctx, 300*time.Millisecond)
 			continue
 		}
 		m.readIngest(ctx, vf)
 		sleep(ctx, 300*time.Millisecond)
 	}
+}
+
+// sysfsVideo is where v4l2loopback publishes per-device state.
+var sysfsVideo = "/sys/class/video4linux"
+
+// ingestProducing reports whether neko is currently writing the ingest device.
+// v4l2loopback reports "capture" only while a producer is streaming. Waiting for
+// it, rather than retrying open, keeps the reader from opening the device while
+// neko is still negotiating its format, which can race neko's pipeline start.
+// Without the sysfs attribute it falls back to the device existing.
+func ingestProducing(dev string) bool {
+	b, err := os.ReadFile(filepath.Join(sysfsVideo, filepath.Base(dev), "state"))
+	if err != nil {
+		_, statErr := os.Stat(dev)
+		return statErr == nil
+	}
+	return strings.TrimSpace(string(b)) == "capture"
 }
 
 // readIngest runs one ffmpeg reader until it stalls, fails, or ctx ends.
@@ -212,7 +233,11 @@ func (m *Manager) runIngest(ctx context.Context) {
 func (m *Manager) readIngest(parent context.Context, vf string) {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	cmd := m.ffmpeg(ctx, "-f", "v4l2", "-i", m.cfg.IngestDevice, "-vf", vf, "-f", "rawvideo", "pipe:1")
+	// Low-latency input, and flush each frame to the pipe as soon as it is
+	// muxed: otherwise the tail of every frame waits in ffmpeg's output buffer
+	// until the next one arrives, adding a frame of delay.
+	cmd := m.ffmpeg(ctx, "-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0",
+		"-f", "v4l2", "-i", m.cfg.IngestDevice, "-vf", vf, "-flush_packets", "1", "-f", "rawvideo", "pipe:1")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		m.log.Error("ingest pipe", "err", err)
@@ -235,15 +260,22 @@ func (m *Manager) readIngest(parent context.Context, vf string) {
 		m.mu.Lock()
 		m.lastFrame, m.lastAt = buf, time.Now()
 		m.mu.Unlock()
+		select {
+		case m.newFrame <- struct{}{}:
+		default:
+		}
 	}
 }
 
-// runMixer is the single writer of the browser-facing device. It pushes the
-// latest live frame when one is fresh, otherwise the placeholder, at a steady
-// rate so chromium always sees a running camera.
+// runMixer is the single writer of the browser-facing device. Each live frame
+// is forwarded as soon as the ingest reader produces it, at the source's own
+// rate; while there is no fresh live frame it writes the placeholder every frame
+// interval so chromium always sees a running camera.
 func (m *Manager) runMixer(ctx context.Context, placeholder []byte) error {
+	interval := time.Second / time.Duration(m.cfg.FPS)
 	for ctx.Err() == nil {
-		wr := m.ffmpeg(ctx, "-f", "rawvideo", "-pix_fmt", "yuv420p",
+		wr := m.ffmpeg(ctx, "-probesize", "32", "-analyzeduration", "0",
+			"-f", "rawvideo", "-pix_fmt", "yuv420p",
 			"-s", fmt.Sprintf("%dx%d", m.cfg.Width, m.cfg.Height),
 			"-r", strconv.Itoa(m.cfg.FPS),
 			"-i", "pipe:0", "-f", "v4l2", m.cfg.OutputDevice)
@@ -256,13 +288,26 @@ func (m *Manager) runMixer(ctx context.Context, placeholder []byte) error {
 			sleep(ctx, time.Second)
 			continue
 		}
-		ticker := time.NewTicker(time.Second / time.Duration(m.cfg.FPS))
+		idle := time.NewTimer(interval)
 		src := ""
-		for range ticker.C {
+		for ctx.Err() == nil {
+			tick := false
+			select {
+			case <-ctx.Done():
+			case <-m.newFrame:
+			case <-idle.C:
+				tick = true
+			}
 			if ctx.Err() != nil {
 				break
 			}
+			idle.Reset(interval)
 			frame, fresh := m.live()
+			if tick && fresh {
+				// Live and the next frame is just late: don't interleave a stale
+				// duplicate ahead of it.
+				continue
+			}
 			next := "placeholder"
 			if fresh {
 				next = "live"
@@ -277,7 +322,7 @@ func (m *Manager) runMixer(ctx context.Context, placeholder []byte) error {
 				break
 			}
 		}
-		ticker.Stop()
+		idle.Stop()
 		_ = stdin.Close()
 		_ = wr.Wait()
 		sleep(ctx, 300*time.Millisecond)

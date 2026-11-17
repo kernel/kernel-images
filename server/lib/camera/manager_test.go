@@ -1,10 +1,13 @@
 package camera
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -95,5 +98,67 @@ func TestReadIngestStallReleasesDevice(t *testing.T) {
 	case <-done:
 	case <-time.After(ingestStallTimeout + 4*time.Second):
 		t.Fatal("readIngest did not return after a stall")
+	}
+}
+
+func TestMixerForwardsLiveFrameWithoutWaitingForTick(t *testing.T) {
+	// Stand in for ffmpeg with a script that copies the mixer's stdin to a file.
+	dir := t.TempDir()
+	out := filepath.Join(dir, "out")
+	fake := filepath.Join(dir, "ffmpeg")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec cat > "+out+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// FPS 1 makes the idle interval a full second, so a frame that shows up well
+	// before then can only have been forwarded on arrival.
+	m := New(Config{Width: 4, Height: 2, FPS: 1, FFmpegPath: fake}, nil)
+	placeholder := bytes.Repeat([]byte{'P'}, m.frameSize())
+	live := bytes.Repeat([]byte{'L'}, m.frameSize())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = m.runMixer(ctx, placeholder) }()
+
+	time.Sleep(100 * time.Millisecond)
+	m.mu.Lock()
+	m.lastFrame, m.lastAt = live, time.Now()
+	m.mu.Unlock()
+	m.newFrame <- struct{}{}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		if b, _ := os.ReadFile(out); bytes.Contains(b, live) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("live frame was not forwarded before the next idle tick")
+}
+
+func TestIngestProducing(t *testing.T) {
+	old := sysfsVideo
+	t.Cleanup(func() { sysfsVideo = old })
+	sysfsVideo = t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sysfsVideo, "video1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(sysfsVideo, "video1", "state")
+	for _, tc := range []struct {
+		state string
+		want  bool
+	}{{"capture\n", true}, {"output\n", false}} {
+		if err := os.WriteFile(state, []byte(tc.state), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if got := ingestProducing("/dev/video1"); got != tc.want {
+			t.Errorf("state %q: got %v, want %v", tc.state, got, tc.want)
+		}
+	}
+	// No sysfs attribute: fall back to whether the device node exists.
+	if !ingestProducing("/dev/null") {
+		t.Error("existing device without sysfs state should count as producing")
+	}
+	if ingestProducing("/dev/does-not-exist") {
+		t.Error("missing device should not count as producing")
 	}
 }

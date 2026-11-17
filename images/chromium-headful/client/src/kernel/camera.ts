@@ -25,12 +25,66 @@ interface CameraState {
 
 const STATE_POLL_MS = 700
 const STOP_GRACE_MS = 3000
-const LONG_EDGE = 1280
-const SHORT_EDGE = 720
+// The browser's camera mode. neko scales whatever it receives straight to this
+// size without keeping the aspect ratio, so the controller always sends exactly
+// this shape (see toLandscape).
+const WIDTH = 1280
+const HEIGHT = 720
+
+// toLandscape returns a WIDTH x HEIGHT track that carries source upright and
+// undistorted: a portrait phone camera is pillarboxed rather than squashed, and
+// rotating the phone just changes the source's shape, with no re-acquire.
+// The image is not mirrored; like any webcam, the page receives the scene as
+// others see it.
+export function toLandscape(source: MediaStreamTrack): { track: MediaStreamTrack; stop: () => void } {
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  // Kept in the DOM (invisibly) so mobile browsers keep decoding it.
+  video.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none'
+  video.srcObject = new MediaStream([source])
+  document.body.appendChild(video)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = WIDTH
+  canvas.height = HEIGHT
+  const ctx = canvas.getContext('2d')!
+  const out = canvas.captureStream(30)
+  let live = true
+
+  const schedule = () => {
+    if (!live) return
+    if ('requestVideoFrameCallback' in video) video.requestVideoFrameCallback(draw)
+    else requestAnimationFrame(draw)
+  }
+  const draw = () => {
+    const w = video.videoWidth
+    const h = video.videoHeight
+    if (w && h) {
+      const scale = Math.min(WIDTH / w, HEIGHT / h)
+      ctx.fillStyle = '#000'
+      ctx.fillRect(0, 0, WIDTH, HEIGHT)
+      ctx.drawImage(video, (WIDTH - w * scale) / 2, (HEIGHT - h * scale) / 2, w * scale, h * scale)
+    }
+    schedule()
+  }
+  video.play().then(schedule, schedule)
+
+  return {
+    track: out.getVideoTracks()[0],
+    stop: () => {
+      live = false
+      out.getTracks().forEach((t) => t.stop())
+      video.srcObject = null
+      video.remove()
+    },
+  }
+}
 
 export class CameraController {
   private client: NekoClient
   private stream: MediaStream | null = null
+  private shaped: { track: MediaStreamTrack; stop: () => void } | null = null
   private sender: RTCRtpSender | null = null
   private starting = false
   // gen advances on every stop so a start whose getUserMedia is still pending
@@ -47,20 +101,15 @@ export class CameraController {
   private userOff = false
   private idleSince = 0
   private timer: number | null = null
-  private mql: MediaQueryList | null = null
 
   constructor(client: NekoClient) {
     this.client = client
   }
 
-  // mount begins polling the on-demand signal and re-requesting the camera at a
-  // matching aspect ratio when the device orientation changes.
+  // mount begins polling the on-demand signal.
   mount() {
     this.stopped = false
     this.poll()
-    this.mql = window.matchMedia('(orientation: portrait)')
-    window.addEventListener('orientationchange', this.onOrientationChange)
-    this.mql.addEventListener('change', this.onOrientationChange)
   }
 
   unmount() {
@@ -69,9 +118,6 @@ export class CameraController {
       window.clearTimeout(this.timer)
       this.timer = null
     }
-    window.removeEventListener('orientationchange', this.onOrientationChange)
-    this.mql?.removeEventListener('change', this.onOrientationChange)
-    this.mql = null
     this.stop()
   }
 
@@ -96,34 +142,23 @@ export class CameraController {
     return this.stream !== null
   }
 
-  private constraints(): MediaStreamConstraints {
-    // Match the shared camera's aspect to the device orientation so the browser
-    // receives upright video. The server letterboxes onto its fixed native mode;
-    // per-orientation native caps are a follow-up (see PR notes).
-    const portrait = this.mql?.matches ?? window.matchMedia('(orientation: portrait)').matches
-    return {
-      video: {
-        width: { ideal: portrait ? SHORT_EDGE : LONG_EDGE },
-        height: { ideal: portrait ? LONG_EDGE : SHORT_EDGE },
-        frameRate: { ideal: 30 },
-      },
-      audio: false,
-    }
-  }
-
   private async start(): Promise<void> {
     if (this.stream || this.starting || this.stopped || !this.client.peerConnected) return
     this.starting = true
     const gen = this.gen
     try {
-      const stream = await navigator.mediaDevices.getUserMedia(this.constraints())
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: WIDTH }, height: { ideal: HEIGHT }, frameRate: { ideal: 30 } },
+        audio: false,
+      })
       if (gen !== this.gen || this.stopped) {
         // stop()/unmount() ran while getUserMedia was pending; discard it.
         stream.getTracks().forEach((t) => t.stop())
         return
       }
       this.stream = stream
-      this.sender = this.client.shareLocalCamera(stream.getVideoTracks()[0], stream) ?? null
+      this.shaped = toLandscape(stream.getVideoTracks()[0])
+      this.sender = this.client.shareLocalCamera(this.shaped.track, new MediaStream([this.shaped.track])) ?? null
       this.emitChange()
     } catch (err) {
       this.stream = null
@@ -140,20 +175,15 @@ export class CameraController {
       this.client.unshareLocalCamera(this.sender)
       this.sender = null
     }
+    if (this.shaped) {
+      this.shaped.stop()
+      this.shaped = null
+    }
     if (this.stream) {
       this.stream.getTracks().forEach((t) => t.stop())
       this.stream = null
     }
     this.emitChange()
-  }
-
-  private onOrientationChange = async (): Promise<void> => {
-    // Re-acquire at the new aspect ratio so the shared video stays upright.
-    if (!this.stream) return
-    const wasKeepOn = this.keepOn
-    this.stop()
-    this.keepOn = wasKeepOn
-    await this.start()
   }
 
   private async poll(): Promise<void> {
