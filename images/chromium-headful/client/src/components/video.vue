@@ -728,9 +728,11 @@
             } catch (err: any) {
               // if it still fails, we're not playing anything
               this.$accessor.video.pause()
+              this.askForTapIfRefused(err)
             }
           } else {
             this.$accessor.video.pause()
+            this.askForTapIfRefused(err)
           }
         }
       }
@@ -1202,6 +1204,13 @@
 
     resumeVideoWhenVisible() {
       if (!document.hidden) this.resumeVideo()
+    }
+
+    // iOS Safari in Low Power Mode refuses even a muted play() until a tap, so
+    // without a prompt the first load is a black box. Other rejections, such as
+    // an AbortError from a new stream replacing a pending play(), retry on their own.
+    askForTapIfRefused(err: any) {
+      if (this.is_touch_device && err?.name === 'NotAllowedError') this.videoBlocked = true
     }
 
     onTouchCancel() {
