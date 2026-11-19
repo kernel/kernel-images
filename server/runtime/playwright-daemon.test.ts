@@ -69,3 +69,80 @@ test('socket readiness does not wait for cold browser-engine imports', { timeout
   }
   assert.match(stderr, /CDP connection established/);
 });
+
+test('a crashed tab is not bound and a replacement page is opened', { timeout: 15000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'playwright-crash-'));
+  const socketPath = join(dir, 'daemon.sock');
+  const loader = join(dir, 'loader.mjs');
+  // A renderer killed by the OOM killer leaves the tab open and `isClosed()`
+  // false, which is what this fake reproduces: the crash event fires for a page
+  // that still reports itself as open.
+  const engine = `
+    const context = {
+      pages: () => [crashedPage],
+      newPage: async () => freshPage,
+      newCDPSession: async () => ({
+        send: async () => ({ targetInfo: { targetId: 'fresh-target' } }),
+        detach: async () => {},
+      }),
+    };
+    const crashedPage = {
+      on(event, cb) { if (event === 'crash') cb(); },
+      isClosed: () => false,
+      url: () => 'file:///crashed.html',
+      context: () => context,
+    };
+    const freshPage = {
+      on() {},
+      isClosed: () => false,
+      url: () => 'about:blank',
+      context: () => context,
+    };
+    export const chromium = { connectOverCDP: async () => ({
+      on() {}, isConnected() { return true; }, async close() {},
+      contexts: () => [context],
+    }) };
+    export const transform = async code => ({ code });
+    export const Browser = null, CDPSession = null, Page = null;
+  `;
+  await writeFile(loader, `
+    export async function resolve(specifier, context, nextResolve) {
+      if (['playwright-core', 'patchright', 'esbuild'].includes(specifier)) {
+        return { url: 'data:text/javascript,' + encodeURIComponent(${JSON.stringify(engine)}), shortCircuit: true };
+      }
+      if (['./page-target-id-cache', './webmcp'].includes(specifier)) specifier += '.ts';
+      return nextResolve(specifier, context);
+    }
+  `);
+  const child = spawn(process.execPath, [
+    '--experimental-loader', pathToFileURL(loader).href,
+    new URL('./playwright-daemon.ts', import.meta.url).pathname,
+  ], { env: { ...process.env, PLAYWRIGHT_DAEMON_SOCKET: socketPath }, stdio: ['ignore', 'ignore', 'pipe'] });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const exited = once(child, 'exit');
+  t.after(async () => {
+    child.kill('SIGKILL');
+    await exited;
+    await rm(dir, { recursive: true, force: true });
+  });
+  const startDeadline = performance.now() + 5000;
+  while (!existsSync(socketPath) && performance.now() < startDeadline && child.exitCode === null) {
+    await setTimeout(20);
+  }
+  const socket = createConnection(socketPath);
+  t.after(() => socket.destroy());
+  await once(socket, 'connect');
+  let buffered = '';
+  socket.on('data', chunk => { buffered += chunk; });
+  socket.write(JSON.stringify({ id: 'crash-1', code: 'return page.url();', timeout_ms: 8000 }) + '\n');
+  const responseDeadline = performance.now() + 10000;
+  while (!buffered.includes('\n') && performance.now() < responseDeadline) {
+    await setTimeout(20);
+  }
+  assert.ok(buffered.includes('\n'), `no response from daemon: ${stderr}`);
+  const response = JSON.parse(buffered.slice(0, buffered.indexOf('\n')));
+  assert.equal(response.success, true, `call failed: ${response.error} ${stderr}`);
+  assert.equal(response.result, 'about:blank', 'bound the crashed tab instead of a replacement');
+  assert.equal(response.tab_created, true);
+});
