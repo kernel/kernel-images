@@ -16,7 +16,13 @@ func ZipDir(sourceDir string) ([]byte, error) {
 	zipWriter := zip.NewWriter(&buf)
 	defer zipWriter.Close()
 
-	err := filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+	// filepath.Walk does not descend into a symlinked root, so resolve it first.
+	sourceDir, err := filepath.EvalSymlinks(sourceDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve source dir: %w", err)
+	}
+
+	err = filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return fmt.Errorf("walk error at %s: %w", path, err)
 		}
