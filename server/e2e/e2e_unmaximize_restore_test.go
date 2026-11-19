@@ -2,10 +2,12 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"testing"
 	"time"
 
+	instanceoapi "github.com/kernel/kernel-images/server/lib/oapi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,6 +31,36 @@ func setWindowBoundsCDP(ctx context.Context, c *TestContainer, bounds map[string
 	return err
 }
 
+// setWindowBoundsPlaywrightCDP sends Browser.setWindowBounds through the
+// Playwright executor, which is a separate client path from the CDP proxy.
+func setWindowBoundsPlaywrightCDP(ctx context.Context, c *TestContainer) error {
+	client, err := c.APIClient()
+	if err != nil {
+		return err
+	}
+	timeout := 5
+	code := `
+		const cdp = await context.newCDPSession(page);
+		const {windowId} = await cdp.send('Browser.getWindowForTarget');
+		await cdp.send('Browser.setWindowBounds', {
+			windowId,
+			bounds: {windowState: 'normal'},
+		});
+		return true;
+	`
+	rsp, err := client.ExecutePlaywrightCodeWithResponse(ctx, nil, instanceoapi.ExecutePlaywrightRequest{
+		Code:       code,
+		TimeoutSec: &timeout,
+	})
+	if err != nil {
+		return err
+	}
+	if rsp.JSON200 == nil || !rsp.JSON200.Success {
+		return fmt.Errorf("playwright window demotion failed: %s", string(rsp.Body))
+	}
+	return nil
+}
+
 // waitForWindowState polls the CDP window bounds until the window reports the
 // wanted state, returning the matching bounds.
 func waitForWindowState(t *testing.T, ctx context.Context, c *TestContainer, state string, label string) chromiumWindowBounds {
@@ -50,13 +82,8 @@ func waitForWindowState(t *testing.T, ctx context.Context, c *TestContainer, sta
 	}
 }
 
-// TestHeadfulUnmaximizeRestoreGeometry covers the restore geometry of a
-// --start-maximized headful window. Chromium boots maximized without any
-// normal-state geometry of its own; the launcher seeds --window-size to the X
-// root so the first un-maximize (CDP Browser.setWindowBounds from an
-// automation, or a demote before a viewport resize) restores to a root-sized
-// window instead of chromium's default ~1050x1080 sliver with the desktop
-// background showing beside it.
+// TestHeadfulUnmaximizeRestoreGeometry covers the recovery of a
+// --start-maximized headful window after both supported client paths demote it.
 func TestHeadfulUnmaximizeRestoreGeometry(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skipf("docker not available: %v", err)
@@ -81,16 +108,14 @@ func TestHeadfulUnmaximizeRestoreGeometry(t *testing.T) {
 	require.NoError(t, err, "x root resolution")
 	t.Logf("x root: %dx%d", rootW, rootH)
 
-	// Demote the window exactly the way customer CDP traffic (or the
-	// viewport-resize demote) does.
+	// Demote the window through the CDP proxy, as direct customer CDP traffic
+	// does. The running guard must restore the maximized state.
 	require.NoError(t, setWindowBoundsCDP(ctx, c, map[string]any{"windowState": "normal"}), "setWindowBounds normal")
-	restored := waitForWindowState(t, ctx, c, "normal", "un-maximized")
+	restored := waitForWindowState(t, ctx, c, "maximized", "re-maximized after direct CDP")
 
-	// The restored window must cover the desktop: no desktop background may
-	// show beside it. The seeded bounds are the root size, and the CSD window
-	// carries no WM decoration, so demand near-exact coverage of every edge —
-	// a large window shifted off-screen (e.g. Left=-500) also exposes the
-	// desktop, so the far edges are checked directly.
+	// The corrected window must cover the desktop. Check every edge so a large
+	// window shifted off-screen cannot satisfy the width and height checks while
+	// still exposing desktop background.
 	assert.GreaterOrEqual(t, restored.Width, rootW-40, "restored width leaves desktop background visible")
 	assert.GreaterOrEqual(t, restored.Height, rootH-40, "restored height leaves desktop background visible")
 	assert.LessOrEqual(t, restored.Left, 40, "restored window starts off-screen horizontally")
@@ -98,8 +123,10 @@ func TestHeadfulUnmaximizeRestoreGeometry(t *testing.T) {
 	assert.GreaterOrEqual(t, restored.Left+restored.Width, rootW-40, "restored window does not reach the right edge; desktop background visible")
 	assert.GreaterOrEqual(t, restored.Top+restored.Height, rootH-40, "restored window does not reach the bottom edge; desktop background visible")
 
-	// Maximizing again must still work — un-maximize never wedges the
-	// window in normal state.
-	require.NoError(t, setWindowBoundsCDP(ctx, c, map[string]any{"windowState": "maximized"}), "setWindowBounds maximized")
-	waitForWindowState(t, ctx, c, "maximized", "re-maximized")
+	// Repeat the same demotion through the Playwright executor. This path does
+	// not pass through the CDP proxy, so it must still be caught by X state.
+	require.NoError(t, setWindowBoundsPlaywrightCDP(ctx, c), "playwright setWindowBounds normal")
+	second := waitForWindowState(t, ctx, c, "maximized", "re-maximized after Playwright")
+	assert.GreaterOrEqual(t, second.Width, rootW-40, "Playwright demotion leaves desktop background visible")
+	assert.GreaterOrEqual(t, second.Height, rootH-40, "Playwright demotion leaves desktop background visible")
 }
