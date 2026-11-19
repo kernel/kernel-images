@@ -39,6 +39,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -ldflags="-s -w" -o /out/kernel-images-supervisord-shim ./cmd/supervisord-shim
 
+# Build camera passthrough daemon (lib/camera)
+RUN --mount=type=cache,target=/root/.cache/go-build,id=$CACHEIDPREFIX-go-build \
+    --mount=type=cache,target=/go/pkg/mod,id=$CACHEIDPREFIX-go-pkg-mod \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -ldflags="-s -w" -o /out/camerad ./cmd/camerad
+
 # webrtc client
 FROM node:22-bullseye-slim AS client
 WORKDIR /src
@@ -91,6 +97,21 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked,id=$CACHEIDPREFIX-ap
     ./configure; \
     make -j$(nproc); \
     make install;
+
+# camera kernel modules: V4L2 core + the camera-persona v4l2loopback, built
+# against the hypeman guest kernel they will load into (guests load unsigned
+# modules). CAMERA_KERNEL_TAG must match hypeman's DefaultKernelVersion — if
+# it drifts, camerad's finit_module fails at session start (camera unusable,
+# live view unaffected), which is the signal to bump it.
+FROM docker.io/debian:bookworm-slim AS camera-modules
+ARG CAMERA_KERNEL_TAG=ch-6.12.8-kernel-3.3-202611131
+RUN apt-get update -qq \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+    build-essential bc bison flex libssl-dev libelf-dev git curl ca-certificates \
+    kmod cpio python3 pahole dwarves \
+    && rm -rf /var/lib/apt/lists/*
+COPY images/chromium-headful/camera/ /src/
+RUN /src/build-modules.sh "$CAMERA_KERNEL_TAG" /out
 
 FROM docker.io/ubuntu:22.04 AS ffmpeg-downloader
 
@@ -401,6 +422,7 @@ ENV WITHDOCKER=true
 
 COPY images/chromium-headful/xorg.conf /etc/neko/xorg.conf
 COPY images/chromium-headful/neko.yaml /etc/neko/neko.yaml
+COPY images/chromium-headful/camera-placeholder.png /etc/kernel/camera-placeholder.png
 COPY images/chromium-headful/99-kernel-keyboard.gschema.override /usr/share/glib-2.0/schemas/
 RUN /usr/lib/*/glib-2.0/glib-compile-schemas --strict /usr/share/glib-2.0/schemas
 COPY images/chromium-headful/setxkbmap /usr/local/bin/setxkbmap
@@ -436,6 +458,8 @@ RUN chmod +x /usr/local/bin/init-envoy.sh
 COPY --from=server-builder /out/kernel-images-api /usr/local/bin/kernel-images-api
 COPY --from=server-builder /out/chromium-launcher /usr/local/bin/chromium-launcher
 COPY --from=server-builder /out/kernel-images-supervisord-shim /usr/local/bin/kernel-images-supervisord-shim
+COPY --from=server-builder /out/camerad /usr/local/bin/camerad
+COPY --from=camera-modules /out/ /usr/lib/kernel-camera/
 COPY --from=server-builder /out/wrapper /wrapper
 
 # Copy and compile the Playwright daemon

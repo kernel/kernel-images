@@ -1,0 +1,695 @@
+diff --git a/v4l2loopback.c b/v4l2loopback.c
+index ec2ec94..7216770 100644
+--- a/v4l2loopback.c
++++ b/v4l2loopback.c
+@@ -32,6 +32,7 @@
+ #include <media/v4l2-event.h>
+ 
+ #include <linux/miscdevice.h>
++#include <linux/platform_device.h>
+ #include "v4l2loopback.h"
+ 
+ #define V4L2LOOPBACK_CTL_ADD_legacy 0x4C80
+@@ -218,6 +219,27 @@ static char *card_label[MAX_DEVICES];
+ module_param_array(card_label, charp, NULL, 0000);
+ MODULE_PARM_DESC(card_label, "card labels for each device");
+ 
++/* Camera persona: USB identity exposed at
++ * /sys/class/video4linux/videoN/device/../idVendor et al. Chromium builds a
++ * UVC camera's label as "<interface> (<vid>:<pid>)" from these files; a
++ * platform device has none, which stands out. Report a conventional
++ * integrated-camera identity.
++ */
++static char *camera_usb_vid = "0bda";
++module_param(camera_usb_vid, charp, 0444);
++MODULE_PARM_DESC(camera_usb_vid,
++		 "USB vendor id reported by the camera persona (hex string)");
++
++static char *camera_usb_pid = "57f2";
++module_param(camera_usb_pid, charp, 0444);
++MODULE_PARM_DESC(camera_usb_pid,
++		 "USB product id reported by the camera persona (hex string)");
++
++static char *camera_usb_interface = "Integrated Camera";
++module_param(camera_usb_interface, charp, 0444);
++MODULE_PARM_DESC(camera_usb_interface,
++		 "USB interface string reported by the camera persona");
++
+ static bool exclusive_caps[MAX_DEVICES] = {
+ 	[0 ...(MAX_DEVICES - 1)] = V4L2LOOPBACK_DEFAULT_EXCLUSIVECAPS
+ };
+@@ -263,57 +285,25 @@ static DEFINE_MUTEX(v4l2loopback_ctl_mutex);
+ #define CID_TIMEOUT (V4L2LOOPBACK_CID_BASE + 2)
+ #define CID_TIMEOUT_IMAGE_IO (V4L2LOOPBACK_CID_BASE + 3)
+ 
+-static int v4l2loopback_s_ctrl(struct v4l2_ctrl *ctrl);
+-static const struct v4l2_ctrl_ops v4l2loopback_ctrl_ops = {
+-	.s_ctrl = v4l2loopback_s_ctrl,
+-};
+-static const struct v4l2_ctrl_config v4l2loopback_ctrl_keepformat = {
+-	// clang-format off
+-	.ops	= &v4l2loopback_ctrl_ops,
+-	.id	= CID_KEEP_FORMAT,
+-	.name	= "keep_format",
+-	.type	= V4L2_CTRL_TYPE_BOOLEAN,
+-	.min	= 0,
+-	.max	= 1,
+-	.step	= 1,
+-	.def	= 0,
+-	// clang-format on
+-};
+-static const struct v4l2_ctrl_config v4l2loopback_ctrl_sustainframerate = {
+-	// clang-format off
+-	.ops	= &v4l2loopback_ctrl_ops,
+-	.id	= CID_SUSTAIN_FRAMERATE,
+-	.name	= "sustain_framerate",
+-	.type	= V4L2_CTRL_TYPE_BOOLEAN,
+-	.min	= 0,
+-	.max	= 1,
+-	.step	= 1,
+-	.def	= 0,
+-	// clang-format on
+-};
+-static const struct v4l2_ctrl_config v4l2loopback_ctrl_timeout = {
+-	// clang-format off
+-	.ops	= &v4l2loopback_ctrl_ops,
+-	.id	= CID_TIMEOUT,
+-	.name	= "timeout",
+-	.type	= V4L2_CTRL_TYPE_INTEGER,
+-	.min	= 0,
+-	.max	= MAX_TIMEOUT,
+-	.step	= 1,
+-	.def	= 0,
+-	// clang-format on
+-};
+-static const struct v4l2_ctrl_config v4l2loopback_ctrl_timeoutimageio = {
+-	// clang-format off
+-	.ops	= &v4l2loopback_ctrl_ops,
+-	.id	= CID_TIMEOUT_IMAGE_IO,
+-	.name	= "timeout_image_io",
+-	.type	= V4L2_CTRL_TYPE_BUTTON,
+-	.min	= 0,
+-	.max	= 0,
+-	.step	= 0,
+-	.def	= 0,
+-	// clang-format on
++/* The stock loopback controls (keep_format, sustain_framerate, timeout,
++ * timeout_image_io) are not registered by this build: chromium resets every
++ * visible control to its default on open, and pressing timeout_image_io
++ * would poison every later open into the loopback's timeout mode. The
++ * defaults (all zero) are what the camera persona wants anyway.
++ */
++
++/* Camera persona: the standard user controls of an integrated UVC webcam.
++ * There is no sensor to program, so setting a control is a no-op; the
++ * control framework keeps the stored value for G_CTRL. Their presence is
++ * what capture clients (e.g. Chromium's ImageCapture photo capabilities)
++ * observe.
++ */
++static int v4l2loopback_cam_s_ctrl(struct v4l2_ctrl *ctrl)
++{
++	return 0;
++}
++static const struct v4l2_ctrl_ops v4l2loopback_cam_ctrl_ops = {
++	.s_ctrl = v4l2loopback_cam_s_ctrl,
+ };
+ 
+ /* module structures */
+@@ -397,6 +387,13 @@ struct v4l2_loopback_device {
+ 	u32 timeout_buffer_size; /* number bytes alloc'd for timeout buffer */
+ 	struct timer_list timeout_timer;
+ 	int timeout_happened;
++
++	/* camera persona: two-level device hierarchy mimicking a USB device
++	 * (usb_pdev, with idVendor/idProduct) and one of its interfaces
++	 * (iface_pdev, with the interface string); vdev->parent points at the
++	 * interface level, like a UVC camera's video device */
++	struct platform_device *usb_pdev;
++	struct platform_device *iface_pdev;
+ };
+ 
+ enum v4l2l_io_method {
+@@ -777,6 +774,86 @@ static ssize_t attr_show_state(struct device *cd, struct device_attribute *attr,
+ 
+ static DEVICE_ATTR(state, S_IRUGO, attr_show_state, NULL);
+ 
++/* Camera persona: USB identity files. Chromium reads
++ * /sys/class/video4linux/videoN/device/../idVendor and idProduct for the
++ * "(vid:pid)" suffix of a camera's label and device/interface for its
++ * display name; a plain platform device has none of them.
++ */
++static ssize_t idVendor_show(struct device *cd, struct device_attribute *attr,
++			     char *buf)
++{
++	return sprintf(buf, "%s\n", camera_usb_vid);
++}
++static DEVICE_ATTR_RO(idVendor);
++
++static ssize_t idProduct_show(struct device *cd, struct device_attribute *attr,
++			      char *buf)
++{
++	return sprintf(buf, "%s\n", camera_usb_pid);
++}
++static DEVICE_ATTR_RO(idProduct);
++
++static ssize_t interface_show(struct device *cd, struct device_attribute *attr,
++			      char *buf)
++{
++	return sprintf(buf, "%s\n", camera_usb_interface);
++}
++static DEVICE_ATTR_RO(interface);
++
++/* register the fake USB device (idVendor/idProduct) and interface
++ * (interface string) levels for one loopback device */
++static int v4l2l_camera_sysfs_init(struct v4l2_loopback_device *dev, int nr)
++{
++	struct platform_device *usb, *iface;
++	int err;
++
++	usb = platform_device_alloc("v4l2loopback-usb", nr);
++	if (!usb)
++		return -ENOMEM;
++	err = platform_device_add(usb);
++	if (err) {
++		platform_device_put(usb);
++		return err;
++	}
++	if (device_create_file(&usb->dev, &dev_attr_idVendor) ||
++	    device_create_file(&usb->dev, &dev_attr_idProduct)) {
++		platform_device_unregister(usb);
++		return -ENOMEM;
++	}
++
++	iface = platform_device_alloc("v4l2loopback-usbif", nr);
++	if (!iface) {
++		platform_device_unregister(usb);
++		return -ENOMEM;
++	}
++	iface->dev.parent = &usb->dev;
++	err = platform_device_add(iface);
++	if (err) {
++		platform_device_put(iface);
++		platform_device_unregister(usb);
++		return err;
++	}
++	if (device_create_file(&iface->dev, &dev_attr_interface)) {
++		platform_device_unregister(iface);
++		platform_device_unregister(usb);
++		return -ENOMEM;
++	}
++
++	dev->usb_pdev = usb;
++	dev->iface_pdev = iface;
++	return 0;
++}
++
++static void v4l2l_camera_sysfs_free(struct v4l2_loopback_device *dev)
++{
++	if (dev->iface_pdev)
++		platform_device_unregister(dev->iface_pdev);
++	if (dev->usb_pdev)
++		platform_device_unregister(dev->usb_pdev);
++	dev->iface_pdev = NULL;
++	dev->usb_pdev = NULL;
++}
++
+ static void v4l2loopback_remove_sysfs(struct video_device *vdev)
+ {
+ #define V4L2_SYSFS_DESTROY(x) device_remove_file(&vdev->dev, &dev_attr_##x)
+@@ -894,6 +971,98 @@ static const struct v4l2_file_operations v4l2_loopback_fops;
+ static const struct v4l2_ioctl_ops v4l2_loopback_ioctl_ops;
+ static void notify_mode_change(struct v4l2_loopback_device *dev, int mode);
+ 
++/* Camera persona: advertise a conventional UVC webcam profile instead of
++ * the loopback defaults, so capture clients (and their device lists) see an
++ * ordinary integrated camera. The mode table is what a typical integrated
++ * 720p-class sensor reports: 4:3 VGA/SVGA, then 16:9 HD, with full frame
++ * rates up to 720p and USB2-bandwidth rates at 1080p.
++ */
++#define CAMERA_DRIVER_NAME "uvcvideo"
++
++struct camera_mode {
++	__u32 width;
++	__u32 height;
++};
++static const struct camera_mode camera_modes[] = {
++	{ 640, 480 },
++	{ 800, 600 },
++	{ 1280, 720 },
++	{ 1920, 1080 },
++};
++#define CAMERA_MODE_COUNT ARRAY_SIZE(camera_modes)
++static const __u32 camera_fps_std[] = { 30, 25, 20, 15, 10, 5 };
++#define CAMERA_FPS_STD_COUNT ARRAY_SIZE(camera_fps_std)
++static const __u32 camera_fps_hd[] = { 15, 10, 5 };
++#define CAMERA_FPS_HD_COUNT ARRAY_SIZE(camera_fps_hd)
++
++static bool camera_mode_allowed(const struct v4l2_loopback_device *dev,
++				unsigned int i)
++{
++	return camera_modes[i].width >= dev->min_width &&
++	       camera_modes[i].width <= dev->max_width &&
++	       camera_modes[i].height >= dev->min_height &&
++	       camera_modes[i].height <= dev->max_height;
++}
++
++/* index into camera_modes of the nth allowed mode, or -1 */
++static int camera_mode_nth(const struct v4l2_loopback_device *dev,
++			   unsigned int n)
++{
++	unsigned int i;
++
++	for (i = 0; i < CAMERA_MODE_COUNT; i++) {
++		if (!camera_mode_allowed(dev, i))
++			continue;
++		if (!n)
++			return (int)i;
++		n--;
++	}
++	return -1;
++}
++
++static int camera_mode_index(const struct v4l2_loopback_device *dev,
++			     __u32 width, __u32 height)
++{
++	unsigned int i;
++
++	for (i = 0; i < CAMERA_MODE_COUNT; i++) {
++		if (camera_mode_allowed(dev, i) &&
++		    camera_modes[i].width == width &&
++		    camera_modes[i].height == height)
++			return (int)i;
++	}
++	return -1;
++}
++
++/* snap a requested size to the closest advertised mode, the way a UVC driver
++ * rounds an arbitrary request to a sensor mode: nearest aspect ratio, then
++ * nearest width. */
++static void camera_snap_size(__u32 *width, __u32 *height)
++{
++	unsigned int i, best = 0;
++	long bestscore = LONG_MAX;
++
++	for (i = 0; i < CAMERA_MODE_COUNT; i++) {
++		long ar_diff = (long)camera_modes[i].width * (long)(*height) -
++			       (long)(*width) * (long)camera_modes[i].height;
++		long size_diff = (long)camera_modes[i].width - (long)(*width);
++		long score;
++
++		if (ar_diff < 0)
++			ar_diff = -ar_diff;
++		if (size_diff < 0)
++			size_diff = -size_diff;
++		score = ar_diff * 64 + size_diff;
++
++		if (score < bestscore) {
++			bestscore = score;
++			best = i;
++		}
++	}
++	*width = camera_modes[best].width;
++	*height = camera_modes[best].height;
++}
++
+ /* V4L2 ioctl caps and params calls */
+ /* returns device capabilities
+  * called on VIDIOC_QUERYCAP
+@@ -906,10 +1075,10 @@ static int vidioc_querycap(struct file *file, void *fh,
+ 	int device_nr = v4l2loopback_get_vdev_nr(dev->vdev);
+ 	__u32 capabilities = V4L2_CAP_STREAMING | V4L2_CAP_READWRITE;
+ 
+-	strscpy(cap->driver, "v4l2 loopback", sizeof(cap->driver));
++	strscpy(cap->driver, CAMERA_DRIVER_NAME, sizeof(cap->driver));
+ 	snprintf(cap->card, sizeof(cap->card), "%s", dev->card_label);
+-	snprintf(cap->bus_info, sizeof(cap->bus_info),
+-		 "platform:v4l2loopback-%03d", device_nr);
++	snprintf(cap->bus_info, sizeof(cap->bus_info), "usb-0000:00:14.0-1.%d",
++		 device_nr + 2);
+ 
+ 	if (dev->announce_all_caps) {
+ 		capabilities |= V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_OUTPUT;
+@@ -938,44 +1107,24 @@ static int vidioc_enum_framesizes(struct file *file, void *fh,
+ {
+ 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
+ 	struct v4l2_loopback_opener *opener = v4l2l_f_to_opener(file, fh);
+-
+-	/* there can be only one... */
+-	if (argp->index)
+-		return -EINVAL;
++	int i;
+ 
+ 	if (dev->keep_format || has_other_owners(opener, dev)) {
+-		/* only current frame size supported */
++		/* the producer's pixel format is fixed (no transcoding), but
++		 * the frame size is negotiable: advertise the camera mode table */
+ 		if (argp->pixel_format != dev->pix_format.pixelformat)
+ 			return -EINVAL;
++	} else if (NULL == format_by_fourcc(argp->pixel_format)) {
++		return -EINVAL;
++	}
+ 
+-		argp->type = V4L2_FRMSIZE_TYPE_DISCRETE;
+-
+-		argp->discrete.width = dev->pix_format.width;
+-		argp->discrete.height = dev->pix_format.height;
+-	} else {
+-		/* return continuous sizes if pixel format is supported */
+-		if (NULL == format_by_fourcc(argp->pixel_format))
+-			return -EINVAL;
+-
+-		if (dev->min_width == dev->max_width &&
+-		    dev->min_height == dev->max_height) {
+-			argp->type = V4L2_FRMSIZE_TYPE_DISCRETE;
+-
+-			argp->discrete.width = dev->min_width;
+-			argp->discrete.height = dev->min_height;
+-		} else {
+-			argp->type = V4L2_FRMSIZE_TYPE_CONTINUOUS;
+-
+-			argp->stepwise.min_width = dev->min_width;
+-			argp->stepwise.min_height = dev->min_height;
+-
+-			argp->stepwise.max_width = dev->max_width;
+-			argp->stepwise.max_height = dev->max_height;
++	i = camera_mode_nth(dev, argp->index);
++	if (i < 0)
++		return -EINVAL;
+ 
+-			argp->stepwise.step_width = 1;
+-			argp->stepwise.step_height = 1;
+-		}
+-	}
++	argp->type = V4L2_FRMSIZE_TYPE_DISCRETE;
++	argp->discrete.width = camera_modes[i].width;
++	argp->discrete.height = camera_modes[i].height;
+ 	return 0;
+ }
+ 
+@@ -1020,37 +1169,33 @@ static int vidioc_enum_frameintervals(struct file *file, void *fh,
+ {
+ 	struct v4l2_loopback_device *dev = v4l2loopback_getdevice(file);
+ 	struct v4l2_loopback_opener *opener = v4l2l_f_to_opener(file, fh);
+-
+-	/* there can be only one... */
+-	if (argp->index)
+-		return -EINVAL;
++	int i;
+ 
+ 	if (dev->keep_format || has_other_owners(opener, dev)) {
+-		/* keep_format also locks the frame rate */
+-		if (argp->width != dev->pix_format.width ||
+-		    argp->height != dev->pix_format.height ||
+-		    argp->pixel_format != dev->pix_format.pixelformat)
++		if (argp->pixel_format != dev->pix_format.pixelformat)
+ 			return -EINVAL;
++	} else if (!format_by_fourcc(argp->pixel_format)) {
++		return -EINVAL;
++	}
+ 
++	i = camera_mode_index(dev, argp->width, argp->height);
++	if (i < 0)
++		return -EINVAL;
++
++	/* full frame rates up to 720p, reduced rates at 1080p */
++	if (camera_modes[i].width >= 1920) {
++		if (argp->index >= CAMERA_FPS_HD_COUNT)
++			return -EINVAL;
+ 		argp->type = V4L2_FRMIVAL_TYPE_DISCRETE;
+-		argp->discrete = dev->capture_param.timeperframe;
++		argp->discrete.numerator = 1;
++		argp->discrete.denominator = camera_fps_hd[argp->index];
+ 	} else {
+-		if (argp->width < dev->min_width ||
+-		    argp->width > dev->max_width ||
+-		    argp->height < dev->min_height ||
+-		    argp->height > dev->max_height ||
+-		    !format_by_fourcc(argp->pixel_format))
++		if (argp->index >= CAMERA_FPS_STD_COUNT)
+ 			return -EINVAL;
+-
+-		argp->type = V4L2_FRMIVAL_TYPE_CONTINUOUS;
+-		argp->stepwise.min.numerator = 1;
+-		argp->stepwise.min.denominator = V4L2LOOPBACK_FPS_MAX;
+-		argp->stepwise.max.numerator = V4L2LOOPBACK_FRAME_INTERVAL_MAX;
+-		argp->stepwise.max.denominator = 1;
+-		argp->stepwise.step.numerator = 1;
+-		argp->stepwise.step.denominator = 1;
++		argp->type = V4L2_FRMIVAL_TYPE_DISCRETE;
++		argp->discrete.numerator = 1;
++		argp->discrete.denominator = camera_fps_std[argp->index];
+ 	}
+-
+ 	return 0;
+ }
+ 
+@@ -1103,9 +1248,28 @@ static int vidioc_try_fmt_vid(struct file *file, void *fh,
+ 	if (v4l2l_fill_format(f, dev->min_width, dev->max_width,
+ 			      dev->min_height, dev->max_height) != 0)
+ 		return -EINVAL;
+-	if (dev->keep_format || has_other_owners(opener, dev))
+-		/* use existing format - including colorspace info */
+-		f->fmt.pix = dev->pix_format;
++	if (dev->keep_format || has_other_owners(opener, dev)) {
++		if (V4L2_TYPE_IS_CAPTURE(f->type) && !dev->keep_format) {
++			/* A producer is streaming: the pixel format is locked to
++			 * the producer's (there is no transcoding), but the frame
++			 * size stays negotiable. Snap the requested size to the
++			 * closest camera mode, like a UVC driver rounding to a
++			 * sensor mode. */
++			const struct v4l2l_format *cfmt =
++				format_by_fourcc(dev->pix_format.pixelformat);
++			__u32 w = f->fmt.pix.width, h = f->fmt.pix.height;
++
++			camera_snap_size(&w, &h);
++			f->fmt.pix.pixelformat = dev->pix_format.pixelformat;
++			if (cfmt)
++				pix_format_set_size(&f->fmt.pix, cfmt, w, h);
++			else
++				f->fmt.pix = dev->pix_format;
++		} else {
++			/* use existing format - including colorspace info */
++			f->fmt.pix = dev->pix_format;
++		}
++	}
+ 
+ 	return 0;
+ }
+@@ -1153,6 +1317,16 @@ static int vidioc_s_fmt_vid(struct file *file, void *fh, struct v4l2_format *f)
+ 	changed = !pix_format_eq(&dev->pix_format, &f->fmt.pix, 0);
+ 	if (changed || has_no_owners(dev)) {
+ 		result = allocate_buffers(dev, &f->fmt.pix);
++		if (result == -EBUSY && changed &&
++		    V4L2_TYPE_IS_CAPTURE(f->type) &&
++		    PAGE_ALIGN(f->fmt.pix.sizeimage) <= dev->buffer_size) {
++			/* The buffers are owned by a streaming producer and cannot
++			 * be reallocated, but the requested frame fits them: adopt
++			 * the new format and let the producer follow it. The frame
++			 * size, not the buffer size, is what a capture client
++			 * observes. */
++			result = 0;
++		}
+ 		if (result < 0)
+ 			goto exit_s_fmt_unlock;
+ 	}
+@@ -1362,73 +1536,6 @@ static int vidioc_querystd(struct file *file, void *fh, v4l2_std_id *norm)
+ }
+ #endif /* V4L2LOOPBACK_WITH_STD */
+ 
+-static int v4l2loopback_set_ctrl(struct v4l2_loopback_device *dev, u32 id,
+-				 s64 val)
+-{
+-	int result = 0;
+-	switch (id) {
+-	case CID_KEEP_FORMAT:
+-		if (val < 0 || val > 1)
+-			return -EINVAL;
+-		dev->keep_format = val;
+-		result = mutex_lock_killable(&dev->image_mutex);
+-		if (result < 0)
+-			return result;
+-		if (!dev->keep_format) {
+-			if (has_no_owners(dev) && !any_mapped_buffer(dev))
+-				free_buffers(dev);
+-		}
+-		mutex_unlock(&dev->image_mutex);
+-		break;
+-	case CID_SUSTAIN_FRAMERATE:
+-		if (val < 0 || val > 1)
+-			return -EINVAL;
+-		spin_lock_bh(&dev->lock);
+-		dev->sustain_framerate = val;
+-		check_timers(dev);
+-		spin_unlock_bh(&dev->lock);
+-		break;
+-	case CID_TIMEOUT:
+-		if (val < 0 || val > MAX_TIMEOUT)
+-			return -EINVAL;
+-		if (val > 0) {
+-			result = mutex_lock_killable(&dev->image_mutex);
+-			if (result < 0)
+-				return result;
+-			/* on-the-fly allocate if device is owned; else
+-			 * allocate occurs on next S_FMT or REQBUFS */
+-			if (!has_no_owners(dev))
+-				result = allocate_timeout_buffer(dev);
+-			mutex_unlock(&dev->image_mutex);
+-			if (result < 0) {
+-				/* disable timeout as buffer not alloc'd */
+-				spin_lock_bh(&dev->lock);
+-				dev->timeout_jiffies = 0;
+-				spin_unlock_bh(&dev->lock);
+-				return result;
+-			}
+-		}
+-		spin_lock_bh(&dev->lock);
+-		dev->timeout_jiffies = msecs_to_jiffies(val);
+-		check_timers(dev);
+-		spin_unlock_bh(&dev->lock);
+-		break;
+-	case CID_TIMEOUT_IMAGE_IO:
+-		dev->timeout_image_io = 1;
+-		break;
+-	default:
+-		return -EINVAL;
+-	}
+-	return 0;
+-}
+-
+-static int v4l2loopback_s_ctrl(struct v4l2_ctrl *ctrl)
+-{
+-	struct v4l2_loopback_device *dev = container_of(
+-		ctrl->handler, struct v4l2_loopback_device, ctrl_handler);
+-	return v4l2loopback_set_ctrl(dev, ctrl->id, ctrl->val);
+-}
+-
+ /* returns set of device outputs, in our case there is only one
+  * called on VIDIOC_ENUMOUTPUT
+  */
+@@ -2074,8 +2181,12 @@ static int vidioc_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
+ 
+ 	switch (type) {
+ 	case V4L2_BUF_TYPE_VIDEO_CAPTURE:
+-		if (has_output_token(dev->stream_tokens) && !dev->keep_format)
+-			return -EIO;
++		/* Upstream returns -EIO here when no producer is streaming.
++		 * Tolerate it instead: a producer that briefly detaches (e.g.
++		 * to switch frame size after this client's S_FMT) will be back
++		 * shortly, and a real camera does not refuse STREAMON. The
++		 * client's DQBUF simply waits for the producer to return.
++		 */
+ 		if (dev->stream_tokens & token) {
+ 			acquire_token(dev, opener, stream, token);
+ 			client_usage_queue_event(dev->vdev);
+@@ -2626,9 +2737,13 @@ static int allocate_buffers(struct v4l2_loopback_device *dev,
+ 			return -EBUSY;
+ 		dprintk("allocate_buffers() existing size=%lubytes\n",
+ 			dev->image_size);
+-		/* FIXME: prevent double allocation more intelligently! */
+-		if (image_size == dev->image_size) {
+-			dprintk("allocate_buffers() keep existing\n");
++		/* Keep the existing allocation whenever the new frame size fits:
++		 * the buffers are allocated once, at the maximum mode, and a
++		 * producer that restarts at a smaller mode must not shrink them
++		 * out from under future capture clients.
++		 */
++		if (image_size <= dev->image_size) {
++			dprintk("allocate_buffers() keep existing (fits)\n");
+ 			return 0;
+ 		}
+ 		free_buffers(dev);
+@@ -2993,13 +3108,49 @@ static int v4l2_loopback_add(struct v4l2_loopback_config *conf, int *ret_nr)
+ 	/* initialise the control handler and add controls */
+ 	MARK();
+ 	hdl = &dev->ctrl_handler;
+-	err = v4l2_ctrl_handler_init(hdl, 4);
++	err = v4l2_ctrl_handler_init(hdl, 16);
+ 	if (err)
+ 		goto out_unregister;
+-	v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_keepformat, NULL);
+-	v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_sustainframerate, NULL);
+-	v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_timeout, NULL);
+-	v4l2_ctrl_new_custom(hdl, &v4l2loopback_ctrl_timeoutimageio, NULL);
++	/* The stock loopback controls (keep_format, sustain_framerate, timeout,
++	 * timeout_image_io) are deliberately not registered: they are not
++	 * controls a real camera has, and chromium resets every visible control
++	 * to its default on open, which would press timeout_image_io and poison
++	 * every later open into the loopback's timeout mode.
++	 */
++	/* camera persona: the control set of a typical integrated webcam
++	 * (fixed focus, no pan/tilt/zoom) */
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops, V4L2_CID_BRIGHTNESS,
++			  0, 255, 1, 128);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops, V4L2_CID_CONTRAST,
++			  0, 255, 1, 32);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops, V4L2_CID_SATURATION,
++			  0, 255, 1, 64);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops, V4L2_CID_HUE, -180,
++			  180, 1, 0);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops,
++			  V4L2_CID_AUTO_WHITE_BALANCE, 0, 1, 1, 1);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops,
++			  V4L2_CID_WHITE_BALANCE_TEMPERATURE, 2800, 6500, 1, 4600);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops, V4L2_CID_GAMMA, 100,
++			  200, 1, 100);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops, V4L2_CID_SHARPNESS,
++			  0, 255, 1, 128);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops,
++			  V4L2_CID_BACKLIGHT_COMPENSATION, 0, 2, 1, 0);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops,
++			  V4L2_CID_EXPOSURE_AUTO_PRIORITY, 0, 1, 1, 0);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops,
++			  V4L2_CID_EXPOSURE_ABSOLUTE, 1, 5000, 1, 166);
++	v4l2_ctrl_new_std(hdl, &v4l2loopback_cam_ctrl_ops, V4L2_CID_GAIN, 0,
++			  255, 1, 0);
++	v4l2_ctrl_new_std_menu(hdl, &v4l2loopback_cam_ctrl_ops,
++			       V4L2_CID_POWER_LINE_FREQUENCY,
++			       V4L2_CID_POWER_LINE_FREQUENCY_AUTO, 0,
++			       V4L2_CID_POWER_LINE_FREQUENCY_50HZ);
++	v4l2_ctrl_new_std_menu(hdl, &v4l2loopback_cam_ctrl_ops,
++			       V4L2_CID_EXPOSURE_AUTO,
++			       V4L2_EXPOSURE_APERTURE_PRIORITY, 0,
++			       V4L2_EXPOSURE_APERTURE_PRIORITY);
+ 	if (hdl->error) {
+ 		err = hdl->error;
+ 		goto out_free_handler;
+@@ -3010,13 +3161,21 @@ static int v4l2_loopback_add(struct v4l2_loopback_config *conf, int *ret_nr)
+ 	if (err)
+ 		goto out_free_handler;
+ 
++	/* camera persona: the video device's parent is the fake USB interface,
++	 * so /sys/class/video4linux/videoN/device resolves like a UVC
++	 * camera's */
++	err = v4l2l_camera_sysfs_init(dev, nr);
++	if (err)
++		goto out_free_device;
++	dev->vdev->dev_parent = &dev->iface_pdev->dev;
++
+ 	/* register the device (creates /dev/video*) */
+ 	MARK();
+ 	if (video_register_device(dev->vdev, VFL_TYPE_VIDEO, nr) < 0) {
+ 		printk(KERN_ERR
+ 		       "v4l2-loopback add() failed video_register_device()\n");
+ 		err = -EFAULT;
+-		goto out_free_device;
++		goto out_free_camera_sysfs;
+ 	}
+ 	v4l2loopback_create_sysfs(dev->vdev);
+ 	/* NOTE: ambivalent if sysfs entries fail */
+@@ -3025,6 +3184,8 @@ static int v4l2_loopback_add(struct v4l2_loopback_config *conf, int *ret_nr)
+ 		*ret_nr = dev->vdev->num;
+ 	return 0;
+ 
++out_free_camera_sysfs:
++	v4l2l_camera_sysfs_free(dev);
+ out_free_device:
+ out_free_handler:
+ 	v4l2_ctrl_handler_free(&dev->ctrl_handler);
+@@ -3050,6 +3211,7 @@ static void v4l2_loopback_remove(struct v4l2_loopback_device *dev)
+ 	free_timeout_buffer(dev);
+ 	mutex_unlock(&dev->image_mutex);
+ 	v4l2loopback_remove_sysfs(dev->vdev);
++	v4l2l_camera_sysfs_free(dev);
+ 	v4l2_ctrl_handler_free(&dev->ctrl_handler);
+ 	kfree(video_get_drvdata(dev->vdev));
+ 	video_unregister_device(dev->vdev);
