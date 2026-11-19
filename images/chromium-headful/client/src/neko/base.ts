@@ -82,6 +82,10 @@ export const CONNECT_STAGE_TIMEOUT_MS = resolveConnectStageTimeoutMs(
 // prose. The three stages mean a bound expired; the rest never reached one.
 export type ConnectFailure = ConnectStage | 'unsupported' | 'peer' | 'server'
 
+// The live-view proxy closes the socket with this code when the browser session
+// no longer exists. Any other close leaves the browser possibly still running.
+export const SESSION_GONE_CLOSE_CODE = 4410
+
 export interface BaseEvents {
   info: (...message: any[]) => void
   warn: (...message: any[]) => void
@@ -101,6 +105,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _stage?: ConnectStage
   protected _everConnected = false
   protected _gaveUp = false
+  protected _sessionGone = false
   // Tagged where the failure happens, so a pre-connect disconnect is reported
   // with a reason an embedder can act on. Unset falls back to 'peer'.
   protected _failure?: ConnectFailure
@@ -127,6 +132,10 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
   get connected() {
     return this.peerConnected && this.socketOpen
+  }
+
+  get sessionGone() {
+    return this._sessionGone
   }
 
   public connect(url: string, password: string, displayname: string) {
@@ -162,6 +171,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._ws.onopen = () => this.armStage('signaling')
       this._ws.onclose = (event) => {
         this.emit('debug', `websocket closed: code=${event.code}, reason=${event.reason}`)
+        this._sessionGone = event.code === SESSION_GONE_CLOSE_CODE
         this._failure = 'transport'
         this.onDisconnected(new Error('websocket closed'))
       }
