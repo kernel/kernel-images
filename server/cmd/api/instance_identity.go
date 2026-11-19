@@ -100,3 +100,10 @@ func (p *instanceIdentityProvider) resolve() (instanceIdentity, bool) {
 		metroAPIURL:  forkidentity.FirstNonEmpty(forkidentity.MetroAPIURL(payload), p.boot.metroAPIURL),
 	}, true
 }
+
+// extensionFetchBaseURL resolves the metro API that serves configure
+// extensions, falling back to the boot session intel URL on variants that
+// boot without a metro API URL.
+func extensionFetchBaseURL(metroAPIURL func() string, sessionIntelURL string) func() string {
+	return func() string { return forkidentity.FirstNonEmpty(metroAPIURL(), sessionIntelURL) }
+}

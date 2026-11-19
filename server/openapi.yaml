@@ -1295,6 +1295,12 @@ paths:
         the instance while the non-2xx error propagates.
         Prefer this over separate `/chromium/*` and `/display` calls when multiple restart-triggering
         steps apply in one session configure.
+        An `extensions.ref` part names an extension to fetch from the metro API's extension cache
+        instead of uploading it: UTF-8 JSON `{"name": ..., "sha256": ..., "grant": ...}`, where `name`
+        is the extension ID, `sha256` the archive checksum, and `grant` the token authorizing this
+        instance to fetch it. Referenced extensions are fetched before anything is applied and are
+        then treated as uploaded ones. A failed fetch returns 500 with step `extension_fetch` and
+        leaves the instance unchanged. Images that predate references reject the part with 400.
       operationId: chromiumConfigure
       x-telemetry-category: platform
       parameters:
@@ -7217,6 +7223,7 @@ components:
             - display
             - chromium_flags
             - profile
+            - extension_fetch
     RecorderInfo:
       type: object
       required: [id, isRecording]
