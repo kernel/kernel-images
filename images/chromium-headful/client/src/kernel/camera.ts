@@ -158,7 +158,24 @@ export class CameraController {
       }
       this.stream = stream
       this.shaped = toLandscape(stream.getVideoTracks()[0])
+      // Keep the encode sharp and steady for the browser's camera device:
+      // detail over motion (documents held to the camera stay legible), a
+      // generous bitrate ceiling so flat regions don't turn to codec mush,
+      // and no resolution drops under pressure — a real camera's mode
+      // doesn't change mid-call.
+      this.shaped.track.contentHint = 'detail'
       this.sender = this.client.shareLocalCamera(this.shaped.track, new MediaStream([this.shaped.track])) ?? null
+      if (this.sender) {
+        const params = this.sender.getParameters() as RTCRtpSendParameters & {
+          degradationPreference?: string
+        }
+        params.degradationPreference = 'maintain-resolution'
+        for (const enc of params.encodings) {
+          enc.maxBitrate = 6_000_000
+          enc.scaleResolutionDownBy = 1
+        }
+        this.sender.setParameters(params).catch(() => {})
+      }
       this.emitChange()
     } catch (err) {
       this.stream = null

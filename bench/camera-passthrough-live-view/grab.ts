@@ -1,0 +1,21 @@
+import { chromium } from "playwright-core";
+const browser = await chromium.connectOverCDP(process.argv[2] ?? "http://127.0.0.1:9222");
+const ctx = browser.contexts()[0];
+await ctx.grantPermissions(["camera"], { origin: "https://webrtc.github.io" });
+const page = await ctx.newPage();
+await page.goto("https://webrtc.github.io/samples/src/content/getusermedia/gum/");
+const data = await page.evaluate(async () => {
+  const s = await navigator.mediaDevices.getUserMedia({ video: true });
+  const video = document.createElement("video");
+  video.muted = true; video.srcObject = s;
+  await video.play();
+  await new Promise((r) => setTimeout(r, 1500));
+  const c = document.createElement("canvas");
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext("2d")!.drawImage(video, 0, 0);
+  return c.toDataURL("image/png");
+});
+const base64 = data.split(",")[1];
+await Bun.write("/tmp/page-frame.png", Buffer.from(base64, "base64"));
+console.log("saved", data.length);
+await browser.close();
