@@ -123,7 +123,7 @@
         @touchend.stop.prevent="resumeVideo"
         @click.stop.prevent="resumeVideo"
       >
-        Tap to resume video
+        Resume video
       </button>
       <neko-resolution ref="resolution" v-if="admin" />
       <neko-clipboard
@@ -727,9 +727,11 @@
               await this._video.play()
             } catch (err: any) {
               // if it still fails, we're not playing anything
+              this.videoBlocked = true
               this.$accessor.video.pause()
             }
           } else {
+            this.videoBlocked = true
             this.$accessor.video.pause()
           }
         }
@@ -1194,10 +1196,10 @@
       this.gestures.touchEnd(e)
     }
 
-    // A phone browser can stop the video with nothing left to restart it while
-    // input still reaches the remote, so touch input checks it each time.
+    // Desktop Safari can refuse even muted autoplay. The recovery button and
+    // visibility changes must be able to resume playback on every device.
     resumeVideo() {
-      if (this.is_touch_device && this.playable) this.videoResume.resume()
+      if (this.playable) this.videoResume.resume()
     }
 
     resumeVideoWhenVisible() {
