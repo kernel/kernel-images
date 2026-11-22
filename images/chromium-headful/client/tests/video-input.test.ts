@@ -317,11 +317,11 @@ describe('resuming the video', () => {
     expect(calls).toEqual(['resume'])
   })
 
-  test('leaves desktop alone', () => {
+  test('desktop can resume from the recovery control or when the tab is shown', () => {
     const { methods, ctx, calls } = player(false)
     methods.resumeVideo.call(ctx)
     methods.resumeVideoWhenVisible.call(ctx)
-    expect(calls).toEqual([])
+    expect(calls).toEqual(['resume', 'resume'])
   })
 
   test('waits for the stream to be playable', () => {
