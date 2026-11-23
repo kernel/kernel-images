@@ -11,7 +11,7 @@ func TestApplyHeadlessDefaultFlags(t *testing.T) {
 	t.Setenv("CHROMIUM_FLAGS", "")
 	applyHeadlessDefaultFlags()
 	flags := strings.Fields(os.Getenv("CHROMIUM_FLAGS"))
-	for _, flag := range []string{"--disable-search-engine-choice-screen", "--silent-debugger-extension-api"} {
+	for _, flag := range []string{"--disable-search-engine-choice-screen", "--enable-features=WebMCP,WebMCPTesting,DevToolsWebMCPSupport", "--silent-debugger-extension-api"} {
 		if !slices.Contains(flags, flag) {
 			t.Errorf("default flags missing %s", flag)
 		}
