@@ -34,7 +34,7 @@
       </main>
       <neko-side v-if="!videoOnly && side" />
       <neko-connect v-if="!connected && !wasConnected" />
-      <neko-disconnected v-if="!connected && wasConnected" />
+      <neko-disconnected v-if="!connected && wasConnected" :reconnecting="reconnecting" />
       <neko-about v-if="about" />
       <notifications
         v-if="!videoOnly"
@@ -377,6 +377,10 @@
 
     get connected() {
       return this.$accessor.connected
+    }
+
+    get reconnecting() {
+      return this.$accessor.reconnecting
     }
 
     get playing() {

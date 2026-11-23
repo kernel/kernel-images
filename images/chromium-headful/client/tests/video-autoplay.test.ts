@@ -120,4 +120,19 @@ describe('first load autoplay', () => {
     await start()
     expect(component.videoBlocked).toBe(false)
   })
+
+  test('a drop hides the prompt, and a refused play after reconnecting asks again', async () => {
+    const { component, start } = firstLoad({ touch: true, unmuted: 'NotAllowedError', muted: 'NotAllowedError' })
+    await start()
+    expect(component.videoBlocked).toBe(true)
+
+    component.resetKeyboard = () => {}
+    component.onConnectedChanged(false)
+    expect(component.videoBlocked).toBe(false)
+
+    // the reconnected stream plays again, and iOS refuses it again
+    component._video.paused = true
+    await start()
+    expect(component.videoBlocked).toBe(true)
+  })
 })

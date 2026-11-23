@@ -118,7 +118,7 @@
       </button>
       <div v-if="touchNotice && !hideControls" class="touch-button touch-notice" role="status">{{ touchNotice }}</div>
       <button
-        v-if="videoBlocked"
+        v-if="videoBlocked && connected"
         class="touch-button video-resume"
         @touchend.stop.prevent="resumeVideo"
         @click.stop.prevent="resumeVideo"
@@ -1206,8 +1206,8 @@
       if (!document.hidden) this.resumeVideo()
     }
 
-    // iOS Safari in Low Power Mode refuses even a muted play() until a tap, so
-    // without a prompt the first load is a black box. Other rejections, such as
+    // iOS Safari in Low Power Mode can refuse even a muted play() until a tap,
+    // so without a prompt the stream stays a black box. Other rejections, such as
     // an AbortError from a new stream replacing a pending play(), retry on their own.
     askForTapIfRefused(err: any) {
       if (this.is_touch_device && err?.name === 'NotAllowedError') this.videoBlocked = true
@@ -1807,6 +1807,8 @@
     onConnectedChanged(connected: boolean) {
       if (!connected) {
         this.resetKeyboard()
+        // a tap can't start a stream that is gone; the next one asks again if refused
+        this.videoBlocked = false
       }
     }
 

@@ -23,6 +23,7 @@ export const EVENT = {
     ANSWER: 'signal/answer',
     PROVIDE: 'signal/provide',
     CANDIDATE: 'signal/candidate',
+    CLOSE: 'signal/close',
   },
   MEMBER: {
     LIST: 'member/list',
@@ -100,6 +101,7 @@ export type SignalEvents =
   | typeof EVENT.SIGNAL.ANSWER
   | typeof EVENT.SIGNAL.PROVIDE
   | typeof EVENT.SIGNAL.CANDIDATE
+  | typeof EVENT.SIGNAL.CLOSE
 
 export type ChatEvents = typeof EVENT.CHAT.MESSAGE | typeof EVENT.CHAT.EMOTE
 
