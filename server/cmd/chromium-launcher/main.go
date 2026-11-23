@@ -13,6 +13,7 @@ import (
 
 	"github.com/kernel/kernel-images/server/lib/browserlocation"
 	"github.com/kernel/kernel-images/server/lib/chromiumflags"
+	"github.com/kernel/kernel-images/server/lib/policy"
 	"github.com/kernel/kernel-images/server/lib/x11"
 )
 
@@ -59,6 +60,11 @@ func main() {
 	internalPort := strings.TrimSpace(os.Getenv("INTERNAL_PORT"))
 	if internalPort == "" {
 		internalPort = "9223"
+	}
+
+	if err := (&policy.Policy{}).ApplyURLBlocklistGuard(policy.RecursionGuardURLBlocklistFromEnv()); err != nil {
+		fmt.Fprintf(os.Stderr, "failed applying chromium recursion guard policy: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Wait for devtools port to be available (handles SIGKILL socket cleanup delay)
