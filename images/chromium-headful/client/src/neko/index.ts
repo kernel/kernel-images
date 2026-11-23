@@ -31,13 +31,19 @@ interface NekoEvents extends BaseEvents {}
 
 // how long a page that comes back watches for media before reconnecting
 const STREAM_CHECK_MS = 2000
+// a fetch on a dead network can hang, which would hold up the attempt
+const PROBE_TIMEOUT_MS = 5000
 
 async function probeLiveView(): Promise<ProbeResult> {
+  const abort = new AbortController()
+  const timer = window.setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS)
   try {
-    const response = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin' })
+    const response = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin', signal: abort.signal })
     return probeResult(response.status)
   } catch {
     return 'unknown'
+  } finally {
+    window.clearTimeout(timer)
   }
 }
 
