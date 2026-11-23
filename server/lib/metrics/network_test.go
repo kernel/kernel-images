@@ -11,13 +11,16 @@ import (
 )
 
 func TestNetworkCollectorZerosAndIndependentChromeFailure(t *testing.T) {
-	c := NewNetworkCollector(func() (uint64, uint64, bool) { return 0, 0, false })
+	c := NewNetworkCollector(func() (uint64, uint64, bool, map[string][2]uint64) {
+		return 0, 0, false, map[string][2]uint64{"unknown": {}}
+	})
 	w := &Writer{}
 	require.NoError(t, c.Collect(context.Background(), w))
 	for _, name := range []string{"kernel_chromium_connection_resets_total", "kernel_chromium_network_requests_completed_total", "kernel_chromium_network_monitor_up"} {
 		require.Contains(t, string(w.Bytes()), name+" 0\n")
 	}
-	require.NotContains(t, string(w.Bytes()), "{")
+	require.Contains(t, string(w.Bytes()), "kernel_chromium_network_failures_total{canceled=\"false\",error_code=\"unknown\"} 0\n")
+	require.Contains(t, string(w.Bytes()), "kernel_chromium_network_failures_total{canceled=\"true\",error_code=\"unknown\"} 0\n")
 	srv := fakeCDP(t)
 	defer srv.Close()
 	chrome := NewChromeCollector(staticUpstream("ws" + strings.TrimPrefix(srv.URL, "http")))

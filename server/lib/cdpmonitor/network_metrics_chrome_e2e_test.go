@@ -100,14 +100,14 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 		SessionID string `json:"sessionId"`
 	}
 	require.NoError(t, json.Unmarshal(attached, &observedSession))
-	failures := make(chan string, 64)
+	failures := make(chan cdpNetworkLoadingFailedParams, 64)
 	go func() {
 		for message := range observer.Events() {
 			if message.Method == "Network.loadingFailed" {
 				var p cdpNetworkLoadingFailedParams
 				if json.Unmarshal(message.Params, &p) == nil {
 					select {
-					case failures <- p.ErrorText:
+					case failures <- p:
 					case <-ctx.Done():
 						return
 					}
@@ -120,14 +120,20 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 	scrape := func() NetworkSnapshot {
 		t.Helper()
 		snapshot := m.NetworkSnapshot()
-		h := metrics.Handler(discardLogger, metrics.NewNetworkCollector(func() (uint64, uint64, bool) {
+		h := metrics.Handler(discardLogger, metrics.NewNetworkCollector(func() (uint64, uint64, bool, map[string][2]uint64) {
 			s := m.NetworkSnapshot()
-			return s.Resets, s.Completed, s.Up
+			return s.Resets, s.Completed, s.Up, s.Failures
 		}))
 		rr := httptest.NewRecorder()
 		h.ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
 		require.Contains(t, rr.Body.String(), fmt.Sprintf("kernel_chromium_connection_resets_total %d\n", snapshot.Resets))
 		require.Contains(t, rr.Body.String(), fmt.Sprintf("kernel_chromium_network_requests_completed_total %d\n", snapshot.Completed))
+		for code, counts := range snapshot.Failures {
+			for canceled, count := range counts {
+				require.Contains(t, rr.Body.String(), fmt.Sprintf("kernel_chromium_network_failures_total{canceled=%q,error_code=%q} %d\n", fmt.Sprint(canceled == 1), code, count))
+			}
+		}
+		assertNetworkTotals(t, snapshot, failureTotal(snapshot), snapshot.Completed)
 		return snapshot
 	}
 	settle := func() NetworkSnapshot {
@@ -145,8 +151,9 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 	}
 	for range 10 {
 		select {
-		case errorText := <-failures:
-			require.Equal(t, "net::ERR_CONNECTION_RESET", errorText)
+		case failure := <-failures:
+			require.Equal(t, "net::ERR_CONNECTION_RESET", failure.ErrorText)
+			require.False(t, failure.Canceled)
 		case <-ctx.Done():
 			t.Fatal("missing confirmed reset")
 		}
@@ -155,6 +162,8 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 	after := scrape()
 	require.Equal(t, before.Resets+10, after.Resets)
 	require.Equal(t, before.Completed+10, after.Completed)
+	require.Equal(t, failureTotal(before)+10, failureTotal(after))
+	require.Equal(t, before.Failures["ERR_CONNECTION_RESET"][0]+10, after.Failures["ERR_CONNECTION_RESET"][0])
 	require.Equal(t, after, settle(), "scraping must not increment counters")
 	require.Zero(t, es.Seq(), "telemetry off must not export customer data")
 
@@ -166,8 +175,30 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 	for _, test := range []struct {
 		path, want string
 		abort      bool
-	}{{"/ok", "200", false}, {"/500", "500", false}, {"/cancel", `"AbortError"`, true}, {refusedURL, `"TypeError"`, false}} {
+		code       string
+	}{{"/ok", "200", false, ""}, {"/500", "500", false, ""}, {"/cancel", `"AbortError"`, true, "ERR_ABORTED"}, {refusedURL, `"TypeError"`, false, "ERR_CONNECTION_REFUSED"}} {
+		b := settle()
 		require.JSONEq(t, test.want, string(fetch(session, "window", test.path, test.abort)))
+		require.Eventually(t, func() bool { return m.NetworkSnapshot().Completed == b.Completed+1 }, 5*time.Second, 10*time.Millisecond)
+		a := scrape()
+		if test.code == "" {
+			require.Equal(t, failureTotal(b), failureTotal(a), "HTTP status is not a loadingFailed outcome")
+			continue
+		}
+		select {
+		case failure := <-failures:
+			require.Equal(t, "net::"+test.code, failure.ErrorText)
+			require.Equal(t, test.abort, failure.Canceled)
+			t.Logf("independent CDP observed %s (canceled=%t)", failure.ErrorText, failure.Canceled)
+		case <-ctx.Done():
+			t.Fatal("missing independent browser failure")
+		}
+		index := 0
+		if test.abort {
+			index = 1
+		}
+		require.Equal(t, b.Failures[test.code][index]+1, a.Failures[test.code][index])
+		require.Equal(t, failureTotal(b)+1, failureTotal(a))
 	}
 	require.Eventually(t, func() bool { return m.NetworkSnapshot().Completed == after.Completed+4 }, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, after.Resets, scrape().Resets)
@@ -262,7 +293,8 @@ func TestAlwaysOnNetworkMetricsChrome(t *testing.T) {
 	// A fresh API-owned monitor starts with zero counters, even on the same Chrome.
 	m.Stop()
 	fresh := New(newTestUpstream(browserWS), ts.Publish, 0, discardLogger, nil)
-	require.Equal(t, NetworkSnapshot{}, fresh.NetworkSnapshot())
+	assertNetworkTotals(t, fresh.NetworkSnapshot(), 0, 0)
+	require.False(t, fresh.NetworkSnapshot().Up)
 	require.NoError(t, fresh.SetTelemetry(false))
 	require.NoError(t, fresh.Start(ctx))
 	defer fresh.Stop()
