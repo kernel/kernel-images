@@ -528,6 +528,15 @@ describe('live view dropped sessions', () => {
     expect(posted).toEqual([])
   })
 
+  test('a close the proxy marks as session gone ends the session', async () => {
+    const client = await establishedClient()
+
+    client['_ws']!.onclose({ code: 4410, reason: 'session no longer exists' } as CloseEvent)
+
+    expect(client.recoverable).toBe(false)
+    expect(posted).toEqual([])
+  })
+
   test('a disconnect the server sends ends the session', async () => {
     const client = await establishedClient()
 

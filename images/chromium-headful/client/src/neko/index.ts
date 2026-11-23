@@ -235,6 +235,10 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   protected [EVENT.SYSTEM.DISCONNECT]({ message }: SystemMessagePayload) {
+    // neko sends this as it stops, on a restart as well as on teardown; the
+    // socket close that follows decides whether to reconnect
+    if (message == 'connection shutdown') return
+
     if (message == 'kicked') {
       this.$accessor.logout()
       message = this.$vue.$t('connection.kicked') as string

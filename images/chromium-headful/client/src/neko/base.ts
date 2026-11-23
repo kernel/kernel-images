@@ -82,6 +82,9 @@ export const CONNECT_STAGE_TIMEOUT_MS = resolveConnectStageTimeoutMs(
 // prose. The three stages mean a bound expired; the rest never reached one.
 export type ConnectFailure = ConnectStage | 'unsupported' | 'peer' | 'server'
 
+// the live view proxy closes a viewer with this once the browser session is gone
+export const WS_CLOSE_SESSION_GONE = 4410
+
 export interface BaseEvents {
   info: (...message: any[]) => void
   warn: (...message: any[]) => void
@@ -103,6 +106,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   // Some connect in this page succeeded, so a later drop is a dropped session
   // to restore, and a reconnect attempt that fails is not a failed first connect.
   protected _established = false
+  protected _sessionGone = false
   protected _gaveUp = false
   // Tagged where the failure happens, so a pre-connect disconnect is reported
   // with a reason an embedder can act on. Unset falls back to 'peer'.
@@ -132,9 +136,9 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     return this.peerConnected && this.socketOpen
   }
 
-  // A dropped session can be restored unless the server ended it.
+  // A dropped session can be restored unless the server ended it or the browser is gone.
   get recoverable() {
-    return this._established && this._failure !== 'server'
+    return this._established && this._failure !== 'server' && !this._sessionGone
   }
 
   // Whether media still arrives. A page that iOS suspended can come back with
@@ -190,6 +194,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._ws.onclose = (event) => {
         this.emit('debug', `websocket closed: code=${event.code}, reason=${event.reason}`)
         this._failure = 'transport'
+        if (event.code === WS_CLOSE_SESSION_GONE) this._sessionGone = true
         this.onDisconnected(new Error('websocket closed'))
       }
       this.armStage('transport')
