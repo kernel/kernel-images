@@ -11,7 +11,7 @@ const compiled = ts.transpileModule(script, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020, experimentalDecorators: true },
 }).outputText
 
-function videoPrototype() {
+function videoPrototype(globals: Record<string, unknown> = {}) {
   const exports: { default?: { prototype: Record<string, any> } } = {}
   const noDecorator = () => () => undefined
   runInNewContext(compiled, {
@@ -28,6 +28,7 @@ function videoPrototype() {
       }
       return {}
     },
+    ...globals,
   })
   return exports.default!.prototype
 }
@@ -134,5 +135,36 @@ describe('first load autoplay', () => {
     component._video.paused = true
     await start()
     expect(component.videoBlocked).toBe(true)
+  })
+})
+
+describe('start prompt', () => {
+  const template = parseComponent(readFileSync(new URL('../src/components/video.vue', import.meta.url), 'utf8'))
+    .template!.content
+
+  function prompt(globals: Record<string, unknown>) {
+    const proto = videoPrototype(globals)
+    return Object.getOwnPropertyDescriptor(proto, 'startPrompt')!.get!.call({})
+  }
+
+  test('asks for a tap on a coarse pointer', () => {
+    const matchMedia = (query: string) => ({ matches: query === '(pointer: coarse)' })
+    expect(prompt({ window: { matchMedia }, navigator: {} })).toBe('Tap to start live view')
+  })
+
+  test('asks for a click on a fine pointer', () => {
+    const matchMedia = () => ({ matches: false })
+    expect(prompt({ window: { matchMedia }, navigator: { maxTouchPoints: 5 } })).toBe('Click to start live view')
+  })
+
+  test('falls back to touch support without matchMedia', () => {
+    expect(prompt({ window: { ontouchstart: null }, navigator: {} })).toBe('Tap to start live view')
+    expect(prompt({ window: {}, navigator: { maxTouchPoints: 0 } })).toBe('Click to start live view')
+  })
+
+  test('the button reads and announces the same prompt', () => {
+    const button = template.slice(template.indexOf('class="touch-button video-resume"'))
+    expect(button.slice(0, button.indexOf('</button>'))).toContain(':aria-label="startPrompt"')
+    expect(button.slice(0, button.indexOf('</button>'))).toContain('{{ startPrompt }}')
   })
 })

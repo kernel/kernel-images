@@ -122,8 +122,9 @@
         class="touch-button video-resume"
         @touchend.stop.prevent="resumeVideo"
         @click.stop.prevent="resumeVideo"
+        :aria-label="startPrompt"
       >
-        Tap to resume video
+        {{ startPrompt }}
       </button>
       <neko-resolution ref="resolution" v-if="admin" />
       <neko-clipboard
@@ -468,6 +469,13 @@
 
     get connected() {
       return this.$accessor.connected
+    }
+
+    get startPrompt() {
+      const coarse = window.matchMedia
+        ? window.matchMedia('(pointer: coarse)').matches
+        : 'ontouchstart' in window || navigator.maxTouchPoints > 0
+      return coarse ? 'Tap to start live view' : 'Click to start live view'
     }
 
     get connecting() {
