@@ -258,6 +258,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     this._state = 'disconnected'
+    // candidates from a dropped attempt must not reach the next peer
+    this._candidates = []
     this._displayname = undefined
     this._id = ''
   }

@@ -143,6 +143,27 @@ describe('reconnector', () => {
     expect(h.events).toEqual(['waiting 1', 'connect@40000'])
   })
 
+  test('a page that hides during the fetch waits instead of connecting', async () => {
+    const h = harness()
+    let hideDuringProbe = true
+    const original = h.reconnect['deps'].probe
+    h.reconnect['deps'].probe = async () => {
+      if (hideDuringProbe) h.setHidden(true)
+      return original()
+    }
+    h.tick(RECONNECT_STABLE_MS)
+    h.reconnect.dropped()
+    await h.advance(0)
+    expect(h.events).toEqual(['waiting 1'])
+    expect(h.reconnect.active).toBe(true)
+
+    hideDuringProbe = false
+    h.setHidden(false)
+    h.reconnect.wake()
+    await h.flush()
+    expect(h.events).toEqual(['waiting 1', 'connect@10000'])
+  })
+
   test('waking skips the backoff', async () => {
     const h = harness()
     h.tick(RECONNECT_STABLE_MS)

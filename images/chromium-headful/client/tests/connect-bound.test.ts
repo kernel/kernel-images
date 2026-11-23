@@ -537,6 +537,21 @@ describe('live view dropped sessions', () => {
     expect(posted).toEqual([])
   })
 
+  test('candidates buffered by a dropped attempt do not reach the next peer', async () => {
+    const client = await establishedClient()
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client['onMessage']({
+      data: JSON.stringify({ event: 'signal/candidate', data: JSON.stringify({ candidate: 'stale' }) }),
+    } as MessageEvent)
+    expect(client['_candidates']).toHaveLength(1)
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    expect(client['_candidates']).toEqual([])
+  })
+
   test('a disconnect the server sends ends the session', async () => {
     const client = await establishedClient()
 

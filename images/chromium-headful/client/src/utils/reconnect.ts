@@ -109,6 +109,11 @@ export class Reconnector {
       this.deps.onEnded()
       return
     }
+    // the page hid during the fetch; a suspended page can't hold the socket
+    if (this.deps.hidden()) {
+      this.phase = 'waiting'
+      return
+    }
     this.deps.connect()
   }
 }
