@@ -14,6 +14,7 @@ import (
 	"github.com/kernel/kernel-images/server/lib/devtoolsproxy"
 	"github.com/kernel/kernel-images/server/lib/egresspolicy"
 	"github.com/kernel/kernel-images/server/lib/events"
+	"github.com/kernel/kernel-images/server/lib/extensionfetch"
 	"github.com/kernel/kernel-images/server/lib/logger"
 	"github.com/kernel/kernel-images/server/lib/nekoclient"
 	oapi "github.com/kernel/kernel-images/server/lib/oapi"
@@ -177,6 +178,10 @@ type ApiService struct {
 	// connection; PUT /webauthn/hook turns it on and off.
 	webauthnHook *webauthnhook.Hook
 
+	// extensionFetcher downloads the extensions a configure request names
+	// instead of carrying; nil fails such requests.
+	extensionFetcher *extensionfetch.Fetcher
+
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
 }
@@ -196,6 +201,7 @@ func New(
 	s2Storage S2Storage,
 	egressPolicy *egresspolicy.State,
 	webauthnHook *webauthnhook.Hook,
+	extensionFetcher *extensionfetch.Fetcher,
 	processOutputConfig ProcessOutputConfig,
 ) (*ApiService, error) {
 	switch {
@@ -244,6 +250,7 @@ func New(
 		s2Storage:         s2Storage,
 		egressPolicy:      egressPolicy,
 		webauthnHook:      webauthnHook,
+		extensionFetcher:  extensionFetcher,
 		webmcp:            webmcpclient.NewManager(upstreamMgr),
 		browserRepl:       newBrowserReplManager(),
 		lifecycleCtx:      ctx,

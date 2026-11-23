@@ -58,7 +58,13 @@ Configure the server using environment variables:
 | `OUTPUT_DIR`   | `.`       | Directory to save recordings                |
 | `FFMPEG_PATH`  | `ffmpeg`  | Path to the ffmpeg binary                   |
 | `KERNEL_METRO_API_BASE_URL` | | Metro API base URL; answers the WebAuthn page hook (`PUT /webauthn/hook`) |
-| `KERNEL_INSTANCE_JWT` | | Instance credential sent to the metro API and the OTLP relay |
+| `KERNEL_INSTANCE_JWT` | | Instance credential sent to the metro API, the OTLP relay, and the storage relay |
+| `BTEL_STORAGE_PATH` | | Telemetry storage relay path on the metro API (e.g. `/btel-relay/v1/records`). When set, stored telemetry is posted to the relay, which appends it to the instance's S2 stream, and `S2_BASIN`/`S2_ACCESS_TOKEN` are ignored. The host is `KERNEL_METRO_API_BASE_URL` (or the fork identity's), else `BTEL_OTLP_ENDPOINT` with `BTEL_OTLP_INSECURE` picking the scheme |
+| `BTEL_STORAGE_MAX_RECORDS` | `200` | Records per relay request (at most 1000) |
+| `BTEL_STORAGE_MAX_BYTES` | `786432` | S2 metered bytes per relay request (at most 1 MiB) |
+| `BTEL_STORAGE_LINGER` | `100ms` | How long a partial batch waits before it is sent |
+| `BTEL_STORAGE_MAX_QUEUE` | `8192` | Records buffered for the relay; the oldest are dropped when full |
+| `S2_BASIN`, `S2_ACCESS_TOKEN`, `S2_STREAM` | | Direct S2 storage, used when `BTEL_STORAGE_PATH` is unset. `S2_STREAM` also gates relay storage: nothing is stored until it (or the fork identity's stream) is known |
 
 #### Example Configuration
 

@@ -14,7 +14,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.4.0
 
       - name: Compute short SHA
         id: vars
@@ -44,21 +44,22 @@ jobs:
           echo "BUILDX_CONFIG=${HOME}/.docker/buildx-ci" >> "$GITHUB_ENV"
 
       - name: Login to Docker Hub with OIDC
-        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        uses: docker/login-action@v4.7.0
         with:
           username: onkernel
         env:
           DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PUSH_CONNECTION_ID }}
+          DOCKERHUB_OIDC_EXPIREIN: '3600'
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v3.12.0
         with:
           name: deft-shared
           cleanup: false
           buildkitd-config: .github/buildkitd.toml
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v6.19.2
         with:
           builder: deft-shared
           context: .

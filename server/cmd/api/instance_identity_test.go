@@ -90,3 +90,35 @@ func TestInstanceIdentityProvider(t *testing.T) {
 		}
 	})
 }
+
+func TestExtensionFetchBaseURL(t *testing.T) {
+	metro := ""
+	resolve := extensionFetchBaseURL(func() string { return metro }, "https://intel.example")
+	if got := resolve(); got != "https://intel.example" {
+		t.Errorf("without a metro API URL got %q, want the session intel URL", got)
+	}
+	metro = "https://metro.example"
+	if got := resolve(); got != "https://metro.example" {
+		t.Errorf("with a metro API URL got %q, want it", got)
+	}
+
+	t.Run("fork payload with only a session intel URL", func(t *testing.T) {
+		withForkIdentityFiles(t)
+		t.Setenv(forkidentity.WaitEnv, "true")
+		p := newInstanceIdentityProvider(instanceIdentity{jwt: "boot-jwt", instanceName: "boot-inst"}, slog.Default())
+		payload := forkidentity.Payload{
+			"instance_name":       "fork-inst",
+			"session_intel_url":   "https://fork-intel.example",
+			"kernel_instance_jwt": "fork-jwt",
+		}
+		if err := forkidentity.WritePayload(payload); err != nil {
+			t.Fatalf("write payload: %v", err)
+		}
+		if err := forkidentity.WriteAppliedMarker(payload.InstanceName()); err != nil {
+			t.Fatalf("write applied marker: %v", err)
+		}
+		if got := extensionFetchBaseURL(p.MetroAPIURL, "https://boot-intel.example")(); got != "https://fork-intel.example" {
+			t.Errorf("got %q, want the applied payload's session intel URL", got)
+		}
+	})
+}
