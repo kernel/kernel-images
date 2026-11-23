@@ -6,11 +6,13 @@ workflows:
     '.github/workflows/breakglass.yml': []
     '.github/workflows/chromium-headful-image.yaml':
         - 'actions/checkout@v4.4.0'
+        - 'actions/upload-artifact@v4.6.2'
         - 'docker/build-push-action@v6.19.2'
         - 'docker/login-action@v4.7.0'
         - 'docker/setup-buildx-action@v3.12.0'
     '.github/workflows/chromium-headless-image.yaml':
         - 'actions/checkout@v4.4.0'
+        - 'actions/upload-artifact@v4.6.2'
         - 'docker/build-push-action@v6.19.2'
         - 'docker/login-action@v4.7.0'
         - 'docker/setup-buildx-action@v3.12.0'
@@ -24,6 +26,7 @@ workflows:
     '.github/workflows/semgrep.yml': []
     '.github/workflows/server-test.yaml':
         - 'actions/checkout@v4.4.0'
+        - 'actions/download-artifact@v4.3.0'
         - 'actions/setup-go@v5.6.0'
         - 'actions/setup-node@v4.4.0'
         - 'actions/upload-artifact@v4.6.2'
@@ -37,6 +40,11 @@ dependencies:
         commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
         owner_id: 44036562
         repo_id: 197814629
+    'actions/download-artifact@v4.3.0':
+        ref: 'v4.3.0'
+        commit: 'sha1-d3f86a106a0bac45b974a628896c90dbdf5c8093'
+        owner_id: 44036562
+        repo_id: 192626254
     'actions/setup-go@v5.6.0':
         ref: 'v5.6.0'
         commit: 'sha1-40f1582b2485089dde7abd97c1529aa768e1baff'

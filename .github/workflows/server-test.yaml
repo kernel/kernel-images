@@ -131,9 +131,11 @@ jobs:
         with:
           username: onkernel
         env:
-          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PULL_CONNECTION_ID }}
+          DOCKERHUB_OIDC_CONNECTIONID: e87832ce-a4e3-4386-8b17-44a6085109f2
+          DOCKERHUB_OIDC_EXPIREIN: '3600'
 
-      - name: Pull e2e images
+      - name: Pull published images
+        if: github.ref == 'refs/heads/main'
         shell: bash
         run: |
           set -euo pipefail
@@ -149,6 +151,23 @@ jobs:
         env:
           E2E_CHROMIUM_HEADFUL_IMAGE: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}
           E2E_CHROMIUM_HEADLESS_IMAGE: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}
+
+      - name: Download test images
+        if: github.ref != 'refs/heads/main'
+        uses: actions/download-artifact@v4.3.0
+        with:
+          pattern: chromium-*-image
+          path: ${{ runner.temp }}/chromium-images
+          merge-multiple: true
+
+      - name: Load test images
+        if: github.ref != 'refs/heads/main'
+        run: |
+          for image in chromium-headful chromium-headless; do
+            archive="$RUNNER_TEMP/chromium-images/$image.tar"
+            docker load -i "$archive"
+            rm "$archive"
+          done
 
       - name: Run server e2e tests
         run: make test-e2e

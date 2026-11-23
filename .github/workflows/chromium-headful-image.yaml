@@ -5,10 +5,9 @@ on:
 
 jobs:
   docker:
-    # Fork PRs must not reach the self-hosted pool or the publishing identity.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Do not run builds from forks on self-hosted runners.
+    if: github.repository == 'kernel/kernel-images' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, linux]
-    environment: dockerhub-publish
     permissions:
       contents: read
       id-token: write
@@ -48,7 +47,7 @@ jobs:
         with:
           username: onkernel
         env:
-          DOCKERHUB_OIDC_CONNECTIONID: ${{ vars.DOCKERHUB_OIDC_PUSH_CONNECTION_ID }}
+          DOCKERHUB_OIDC_CONNECTIONID: ${{ github.ref == 'refs/heads/main' && 'cd45e363-f834-4656-aec5-958933af9848' || 'e87832ce-a4e3-4386-8b17-44a6085109f2' }}
           DOCKERHUB_OIDC_EXPIREIN: '3600'
 
       - name: Set up Docker Buildx
@@ -58,11 +57,27 @@ jobs:
           cleanup: false
           buildkitd-config: .github/buildkitd.toml
 
-      - name: Build and push
+      - name: Build image
         uses: docker/build-push-action@v6.19.2
         with:
           builder: deft-shared
           context: .
           file: images/chromium-headful/Dockerfile
-          push: true
+          push: ${{ github.ref == 'refs/heads/main' }}
+          outputs: ${{ github.ref != 'refs/heads/main' && format('type=docker,dest={0}/chromium-headful.tar', runner.temp) || '' }}
           tags: onkernel/chromium-headful:${{ steps.vars.outputs.short_sha }}
+
+      - name: Upload test image
+        if: github.ref != 'refs/heads/main'
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: chromium-headful-image
+          path: ${{ runner.temp }}/chromium-headful.tar
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 3
+          overwrite: true
+
+      - name: Remove test image archive
+        if: ${{ always() && github.ref != 'refs/heads/main' }}
+        run: rm -f "$RUNNER_TEMP/chromium-headful.tar"
