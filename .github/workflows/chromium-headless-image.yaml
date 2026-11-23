@@ -5,13 +5,12 @@ on:
 
 jobs:
   docker:
-    # Fork PRs get no secrets and now must not reach the self-hosted pool
-    # either: skipping here (rather than failing at registry login, as
-    # before) also skips the dependent e2e job via its needs chain.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Do not run builds from forks on self-hosted runners.
+    if: github.repository == 'kernel/kernel-images' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, linux]
     permissions:
       contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4.4.0
@@ -43,11 +42,13 @@ jobs:
           # that root-run CI from other repos clobbers to root-owned.
           echo "BUILDX_CONFIG=${HOME}/.docker/buildx-ci" >> "$GITHUB_ENV"
 
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3.7.0
+      - name: Login to Docker Hub with OIDC
+        uses: docker/login-action@v4.7.0
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          username: onkernel
+        env:
+          DOCKERHUB_OIDC_CONNECTIONID: ${{ github.ref == 'refs/heads/main' && 'cd45e363-f834-4656-aec5-958933af9848' || 'e87832ce-a4e3-4386-8b17-44a6085109f2' }}
+          DOCKERHUB_OIDC_EXPIREIN: '3600'
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3.12.0
@@ -56,11 +57,27 @@ jobs:
           cleanup: false
           buildkitd-config: .github/buildkitd.toml
 
-      - name: Build and push
+      - name: Build image
         uses: docker/build-push-action@v6.19.2
         with:
           builder: deft-shared
           context: .
           file: images/chromium-headless/image/Dockerfile
-          push: true
+          push: ${{ github.ref == 'refs/heads/main' }}
+          outputs: ${{ github.ref != 'refs/heads/main' && format('type=docker,dest={0}/chromium-headless.tar', runner.temp) || '' }}
           tags: onkernel/chromium-headless:${{ steps.vars.outputs.short_sha }}
+
+      - name: Upload test image
+        if: github.ref != 'refs/heads/main'
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: chromium-headless-image
+          path: ${{ runner.temp }}/chromium-headless.tar
+          if-no-files-found: error
+          compression-level: 1
+          retention-days: 3
+          overwrite: true
+
+      - name: Remove test image archive
+        if: ${{ always() && github.ref != 'refs/heads/main' }}
+        run: rm -f "$RUNNER_TEMP/chromium-headless.tar"
