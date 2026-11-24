@@ -30,7 +30,7 @@ func TestPlaywrightExecuteAPI(t *testing.T) {
 	c := NewTestContainer(t, headlessImage)
 	require.NoError(t, c.Start(ctx, ContainerConfig{
 		Env: map[string]string{
-			"CHROMIUM_FLAGS": "--enable-features=WebMCPTesting,DevToolsWebMCPSupport",
+			"CHROMIUM_FLAGS": "--enable-features=WebMCP,WebMCPTesting,DevToolsWebMCPSupport",
 		},
 	}), "failed to start container")
 	defer c.Stop(ctx)
