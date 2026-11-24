@@ -6,13 +6,15 @@ workflows:
     '.github/workflows/breakglass.yml': []
     '.github/workflows/chromium-headful-image.yaml':
         - 'actions/checkout@v4.4.0'
+        - 'actions/upload-artifact@v4.6.2'
         - 'docker/build-push-action@v6.19.2'
-        - 'docker/login-action@v3.7.0'
+        - 'docker/login-action@v4.7.0'
         - 'docker/setup-buildx-action@v3.12.0'
     '.github/workflows/chromium-headless-image.yaml':
         - 'actions/checkout@v4.4.0'
+        - 'actions/upload-artifact@v4.6.2'
         - 'docker/build-push-action@v6.19.2'
-        - 'docker/login-action@v3.7.0'
+        - 'docker/login-action@v4.7.0'
         - 'docker/setup-buildx-action@v3.12.0'
     '.github/workflows/chromium-launcher-test.yaml':
         - 'actions/checkout@v4.4.0'
@@ -24,11 +26,12 @@ workflows:
     '.github/workflows/semgrep.yml': []
     '.github/workflows/server-test.yaml':
         - 'actions/checkout@v4.4.0'
+        - 'actions/download-artifact@v4.3.0'
         - 'actions/setup-go@v5.6.0'
         - 'actions/setup-node@v4.4.0'
         - 'actions/upload-artifact@v4.6.2'
         - 'browser-actions/setup-chrome@v2.2.0'
-        - 'docker/login-action@v3.7.0'
+        - 'docker/login-action@v4.7.0'
         - 'pnpm/action-setup@v4.3.0'
     '.github/workflows/vuln-remediation.yml': []
 dependencies:
@@ -37,6 +40,11 @@ dependencies:
         commit: 'sha1-11d5960a326750d5838078e36cf38b85af677262'
         owner_id: 44036562
         repo_id: 197814629
+    'actions/download-artifact@v4.3.0':
+        ref: 'v4.3.0'
+        commit: 'sha1-d3f86a106a0bac45b974a628896c90dbdf5c8093'
+        owner_id: 44036562
+        repo_id: 192626254
     'actions/setup-go@v5.6.0':
         ref: 'v5.6.0'
         commit: 'sha1-40f1582b2485089dde7abd97c1529aa768e1baff'
@@ -62,9 +70,9 @@ dependencies:
         commit: 'sha1-10e90e3645eae34f1e60eeb005ba3a3d33f178e8'
         owner_id: 5429470
         repo_id: 241092383
-    'docker/login-action@v3.7.0':
-        ref: 'v3.7.0'
-        commit: 'sha1-c94ce9fb468520275223c153574b00df6fe4bcc9'
+    'docker/login-action@v4.7.0':
+        ref: 'v4.7.0'
+        commit: 'sha1-81c6f93d4bc991e510b342a00b419b3bb4efc5c6'
         owner_id: 5429470
         repo_id: 287743349
     'docker/setup-buildx-action@v3.12.0':
