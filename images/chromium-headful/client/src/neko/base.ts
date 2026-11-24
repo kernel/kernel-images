@@ -82,6 +82,9 @@ export const CONNECT_STAGE_TIMEOUT_MS = resolveConnectStageTimeoutMs(
 // prose. The three stages mean a bound expired; the rest never reached one.
 export type ConnectFailure = ConnectStage | 'unsupported' | 'peer' | 'server'
 
+// the live view proxy closes a viewer with this once the browser session is gone
+export const WS_CLOSE_SESSION_GONE = 4410
+
 export interface BaseEvents {
   info: (...message: any[]) => void
   warn: (...message: any[]) => void
@@ -100,6 +103,10 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected _timeout?: number
   protected _stage?: ConnectStage
   protected _everConnected = false
+  // Some connect in this page succeeded, so a later drop is a dropped session
+  // to restore, and a reconnect attempt that fails is not a failed first connect.
+  protected _established = false
+  protected _sessionGone = false
   protected _gaveUp = false
   // Tagged where the failure happens, so a pre-connect disconnect is reported
   // with a reason an embedder can act on. Unset falls back to 'peer'.
@@ -127,6 +134,29 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
 
   get connected() {
     return this.peerConnected && this.socketOpen
+  }
+
+  // A dropped session can be restored unless the server ended it or the browser is gone.
+  get recoverable() {
+    return this._established && this._failure !== 'server' && !this._sessionGone
+  }
+
+  // Whether media still arrives. A page that iOS suspended can come back with
+  // a socket that still reads as open and a peer the server already destroyed;
+  // neither fires an event, but no bytes arrive. Audio and video both stream
+  // continuously, so a short window is enough.
+  public async streamAlive(windowMs: number): Promise<boolean> {
+    const peer = this._peer
+    if (!peer || !this.connected) return false
+    try {
+      const before = await receivedBytes(peer)
+      await new Promise((resolve) => window.setTimeout(resolve, windowMs))
+      // a drop in the meantime is handled by its own event
+      if (peer !== this._peer) return true
+      return (await receivedBytes(peer)) > before
+    } catch {
+      return true
+    }
   }
 
   public connect(url: string, password: string, displayname: string) {
@@ -163,6 +193,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       this._ws.onclose = (event) => {
         this.emit('debug', `websocket closed: code=${event.code}, reason=${event.reason}`)
         this._failure = 'transport'
+        if (event.code === WS_CLOSE_SESSION_GONE) this._sessionGone = true
         this.onDisconnected(new Error('websocket closed'))
       }
       this.armStage('transport')
@@ -226,6 +257,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     this._state = 'disconnected'
+    // candidates from a dropped attempt must not reach the next peer
+    this._candidates = []
     this._displayname = undefined
     this._id = ''
   }
@@ -481,6 +514,11 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
       return
     }
 
+    if (event === EVENT.SIGNAL.CLOSE) {
+      this.onDisconnected(new Error('peer closed by server'))
+      return
+    }
+
     if (event === EVENT.SIGNAL.CANDIDATE) {
       const { data } = payload as SignalCandidatePayload
       const candidate: RTCIceCandidate = JSON.parse(data)
@@ -519,7 +557,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     this.emit('error', (event as ErrorEvent).error)
   }
 
-  private postParentMessage(message: Record<string, unknown>) {
+  protected postParentMessage(message: Record<string, unknown>) {
     if (window.parent === window) {
       return
     }
@@ -553,6 +591,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     }
 
     this._everConnected = true
+    this._established = true
 
     this.emit('debug', `connected`)
     this[EVENT.CONNECTED]()
@@ -591,7 +630,8 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     // The bound expiring is this connect's terminal event, so report it here and
     // let onDisconnected take the ordinary disconnect path rather than reporting
     // a second event for the same failure.
-    this.reportFailure('KERNEL_CONNECTION_TIMEOUT', stage)
+    // a reconnect attempt that times out is retried, not reported as a failed connect
+    if (!this._established) this.reportFailure('KERNEL_CONNECTION_TIMEOUT', stage)
     this.onDisconnected(new Error(`${stage} timeout`))
   }
 
@@ -616,7 +656,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     // A disconnect before any peer was established is a failed connect, not a
     // dropped session. disconnect() clears the bound below, so without this the
     // parent frame would hear nothing at all.
-    if (!this._gaveUp && !this._everConnected) {
+    if (!this._gaveUp && !this._established) {
       this.giveUp(this._failure ?? 'peer', reason ?? new Error('connection failed'))
       return
     }
@@ -636,4 +676,12 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   protected abstract [EVENT.DISCONNECTED](reason?: Error): void
   protected abstract [EVENT.TRACK](event: RTCTrackEvent): void
   protected abstract [EVENT.DATA](data: any): void
+}
+
+async function receivedBytes(peer: RTCPeerConnection) {
+  let bytes = 0
+  ;(await peer.getStats()).forEach((stat) => {
+    if (stat.type === 'inbound-rtp') bytes += stat.bytesReceived || 0
+  })
+  return bytes
 }

@@ -454,3 +454,169 @@ describe('live view connect failures', () => {
     })
   })
 })
+
+// A client whose first connect succeeded, as a live view looks before a phone locks.
+async function establishedClient() {
+  const client = new TestClient()
+  client.connect('ws://host/ws', 'pw', 'kernel')
+  client.openSocket()
+  await client.provide()
+  client.connectPeer()
+  return client
+}
+
+describe('live view dropped sessions', () => {
+  test('a socket that closes after connecting is a recoverable drop, not a connect failure', async () => {
+    const client = await establishedClient()
+
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    expect(posted).toEqual([])
+    expect(client.reasons.map((r) => r?.message)).toEqual(['websocket closed'])
+    expect(client.recoverable).toBe(true)
+    expect(client['_ws']).toBeUndefined()
+  })
+
+  test('signal/close from the server drops the session while the socket is open', async () => {
+    const client = await establishedClient()
+    const socket = client['_ws']!
+
+    await client['onMessage']({ data: JSON.stringify({ event: 'signal/close' }) } as MessageEvent)
+
+    expect(socket.readyState).toBe(3)
+    expect(client.reasons.map((r) => r?.message)).toEqual(['peer closed by server'])
+    expect(client.recoverable).toBe(true)
+    expect(posted).toEqual([])
+  })
+
+  test('a reconnect attempt that fails before connecting is retried, not reported', async () => {
+    const client = await establishedClient()
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    expect(posted).toEqual([])
+    expect(client['_gaveUp']).toBe(false)
+    expect(client.recoverable).toBe(true)
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    expect(client['_ws']).toBeDefined()
+  })
+
+  test('a reconnect attempt that times out is retried, not reported', async () => {
+    const client = await establishedClient()
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    runTimers(CONNECT_STAGE_TIMEOUT_MS.transport)
+
+    expect(posted).toEqual([])
+    expect(client['_gaveUp']).toBe(false)
+    expect(client.reasons.map((r) => r?.message)).toEqual(['websocket closed', 'transport timeout'])
+  })
+
+  test('a reconnect attempt that succeeds reports connected again', async () => {
+    const client = await establishedClient()
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client.provide()
+    client.connectPeer()
+
+    expect(client.connectEvents).toBe(2)
+    expect(posted).toEqual([])
+  })
+
+  test('a close the proxy marks as session gone ends the session', async () => {
+    const client = await establishedClient()
+
+    client['_ws']!.onclose({ code: 4410, reason: 'session no longer exists' } as CloseEvent)
+
+    expect(client.recoverable).toBe(false)
+    expect(posted).toEqual([])
+  })
+
+  test('candidates buffered by a dropped attempt do not reach the next peer', async () => {
+    const client = await establishedClient()
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client.openSocket()
+    await client['onMessage']({
+      data: JSON.stringify({ event: 'signal/candidate', data: JSON.stringify({ candidate: 'stale' }) }),
+    } as MessageEvent)
+    expect(client['_candidates']).toHaveLength(1)
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    expect(client['_candidates']).toEqual([])
+  })
+
+  test('a disconnect the server sends ends the session', async () => {
+    const client = await establishedClient()
+
+    client['_failure'] = 'server'
+    client['onDisconnected'](new Error('kicked'))
+
+    expect(client.recoverable).toBe(false)
+  })
+
+  test('a connect that never succeeded is not recoverable', () => {
+    const client = new TestClient()
+    client.connect('ws://host/ws', 'pw', 'kernel')
+    client['_ws']!.onclose({ code: 1006, reason: '' } as CloseEvent)
+
+    expect(client.recoverable).toBe(false)
+    expect(posted.map((m) => m.type)).toEqual(['KERNEL_CONNECTION_FAILED'])
+  })
+})
+
+describe('live view stream liveness', () => {
+  function withStats(client: TestClient, samples: number[]) {
+    client['_peer']!.getStats = (async () => {
+      const bytes = samples.shift() ?? 0
+      return new Map([['in', { type: 'inbound-rtp', bytesReceived: bytes }]])
+    }) as unknown as RTCPeerConnection['getStats']
+  }
+
+  async function check(client: TestClient) {
+    const alive = client.streamAlive(2000)
+    // let the first sample resolve and the wait start
+    await Promise.resolve()
+    await Promise.resolve()
+    runTimers(2000)
+    return alive
+  }
+
+  test('a stream that still receives bytes is alive', async () => {
+    const client = await establishedClient()
+    withStats(client, [1000, 5000])
+    expect(await check(client)).toBe(true)
+  })
+
+  test('a stream that receives nothing is dead', async () => {
+    const client = await establishedClient()
+    withStats(client, [1000, 1000])
+    expect(await check(client)).toBe(false)
+  })
+
+  test.each(['disconnected', 'failed', 'closed'])(
+    'a peer that ICE marks %s is dead without sampling',
+    async (state) => {
+      const client = await establishedClient()
+      let sampled = false
+      client['_peer']!.getStats = (async () => {
+        sampled = true
+        return new Map()
+      }) as unknown as RTCPeerConnection['getStats']
+      client['_state'] = state
+      expect(client.connected).toBe(false)
+      expect(await client.streamAlive(2000)).toBe(false)
+      expect(sampled).toBe(false)
+    },
+  )
+
+  test('a client with no session is not alive', async () => {
+    expect(await new TestClient().streamAlive(2000)).toBe(false)
+  })
+})

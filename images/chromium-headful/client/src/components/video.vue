@@ -118,12 +118,13 @@
       </button>
       <div v-if="touchNotice && !hideControls" class="touch-button touch-notice" role="status">{{ touchNotice }}</div>
       <button
-        v-if="videoBlocked"
+        v-if="videoBlocked && connected"
         class="touch-button video-resume"
         @touchend.stop.prevent="resumeVideo"
         @click.stop.prevent="resumeVideo"
+        :aria-label="startPrompt"
       >
-        Tap to resume video
+        {{ startPrompt }}
       </button>
       <neko-resolution ref="resolution" v-if="admin" />
       <neko-clipboard
@@ -470,6 +471,13 @@
       return this.$accessor.connected
     }
 
+    get startPrompt() {
+      const coarse = window.matchMedia
+        ? window.matchMedia('(pointer: coarse)').matches
+        : 'ontouchstart' in window || navigator.maxTouchPoints > 0
+      return coarse ? 'Tap to start live view' : 'Click to start live view'
+    }
+
     get connecting() {
       return this.$accessor.connecting
     }
@@ -728,9 +736,11 @@
             } catch (err: any) {
               // if it still fails, we're not playing anything
               this.$accessor.video.pause()
+              this.askForTapIfRefused(err)
             }
           } else {
             this.$accessor.video.pause()
+            this.askForTapIfRefused(err)
           }
         }
       }
@@ -1202,6 +1212,13 @@
 
     resumeVideoWhenVisible() {
       if (!document.hidden) this.resumeVideo()
+    }
+
+    // iOS Safari in Low Power Mode can refuse even a muted play() until a tap,
+    // so without a prompt the stream stays a black box. Other rejections, such as
+    // an AbortError from a new stream replacing a pending play(), retry on their own.
+    askForTapIfRefused(err: any) {
+      if (this.is_touch_device && err?.name === 'NotAllowedError') this.videoBlocked = true
     }
 
     onTouchCancel() {
@@ -1798,6 +1815,8 @@
     onConnectedChanged(connected: boolean) {
       if (!connected) {
         this.resetKeyboard()
+        // a tap can't start a stream that is gone; the next one asks again if refused
+        this.videoBlocked = false
       }
     }
 

@@ -5,6 +5,7 @@ import { Member } from './types'
 import { EVENT } from './events'
 import { accessor } from '~/store'
 import { parseCursorImage } from '~/utils/cursor-shape'
+import { ProbeResult, Reconnector, probeResult } from '~/utils/reconnect'
 
 import {
   SystemMessagePayload,
@@ -28,10 +29,31 @@ import {
 
 interface NekoEvents extends BaseEvents {}
 
+// how long a page that comes back watches for media before reconnecting
+const STREAM_CHECK_MS = 2000
+// a fetch on a dead network can hang, which would hold up the attempt
+const PROBE_TIMEOUT_MS = 5000
+
+async function probeLiveView(): Promise<ProbeResult> {
+  const abort = new AbortController()
+  const timer = window.setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS)
+  try {
+    const response = await fetch(location.href, { cache: 'no-store', credentials: 'same-origin', signal: abort.signal })
+    return probeResult(response.status)
+  } catch {
+    return 'unknown'
+  } finally {
+    window.clearTimeout(timer)
+  }
+}
+
 export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   private $vue!: Vue
   private $accessor!: typeof accessor
   private url!: string
+  private reconnector!: Reconnector
+  private credentials?: { password: string; displayname: string }
+  private checkingStream = false
 
   init(vue: Vue) {
     const url =
@@ -48,6 +70,25 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
     this.url = url
     // convert ws url to http url
     this.$vue.$http.defaults.baseURL = url.replace(/^ws/, 'http').replace(/\/ws$/, '')
+
+    this.reconnector = new Reconnector({
+      now: () => performance.now(),
+      setTimeout: (fn, ms) => window.setTimeout(fn, ms),
+      clearTimeout: (id) => window.clearTimeout(id),
+      hidden: () => document.hidden,
+      probe: probeLiveView,
+      connect: () => {
+        if (this.credentials) this.connect(this.url, this.credentials.password, this.credentials.displayname)
+      },
+      onWaiting: (attempt) => {
+        this.$accessor.setReconnecting(true)
+        this.postParentMessage({ type: 'KERNEL_RECONNECTING', attempt })
+      },
+      onEnded: () => this.endSession(new Error('live view ended')),
+    })
+    document.addEventListener('visibilitychange', this.onWake)
+    window.addEventListener('pageshow', this.onWake)
+    window.addEventListener('online', this.onWake)
   }
 
   private cleanup() {
@@ -59,10 +100,13 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   login(password: string, displayname: string) {
+    this.credentials = { password, displayname }
     this.connect(this.url, password, displayname)
   }
 
   logout() {
+    this.credentials = undefined
+    this.reconnector.stop()
     this.disconnect()
     this.cleanup()
     this.$vue.$swal({
@@ -76,14 +120,12 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   // Internal Events
   /////////////////////////////
   protected [EVENT.RECONNECTING]() {
-    // KERNEL: Differentiate between temporary network issues and permanent disconnection
-    // If WebSocket is still open, this is likely a temporary ICE disconnection (network glitch)
-    // Allow WebRTC to attempt recovery automatically
-    // If WebSocket is closed, the browser process is likely gone - show disconnected overlay
+    // KERNEL: with the websocket still open this is likely a network glitch that
+    // WebRTC recovers from on its own; the server sends signal/close if it gives
+    // up on the peer. Without the websocket the session is gone, so restore it.
     if (!this.socketOpen) {
-      this.cleanup()
+      this.onDisconnected(new Error('peer disconnected'))
     }
-    // else: WebSocket still open, let WebRTC recover naturally
   }
 
   protected [EVENT.CONNECTING]() {
@@ -91,6 +133,8 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   protected [EVENT.CONNECTED]() {
+    this.reconnector.succeeded()
+    this.$accessor.setReconnecting(false)
     this.$accessor.user.setMember(this.id)
     this.$accessor.setConnected(true)
 
@@ -110,7 +154,38 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   protected [EVENT.DISCONNECTED](reason?: Error) {
+    if (this.recoverable && !this.reconnector.ended) {
+      this.reconnector.dropped()
+      this.cleanup()
+      return
+    }
+    this.endSession(reason)
+  }
+
+  // A page that comes back may hold a session that died while it was away
+  // without any event saying so.
+  private onWake = async () => {
+    if (document.hidden) return
+    if (this.reconnector.active) {
+      this.reconnector.wake()
+      return
+    }
+    if (!this._established || this.reconnector.ended || this.checkingStream) return
+    this.checkingStream = true
+    try {
+      if (!(await this.streamAlive(STREAM_CHECK_MS))) this.onDisconnected(new Error('stream stopped'))
+    } finally {
+      this.checkingStream = false
+    }
+  }
+
+  private endSession(reason?: Error) {
+    this.reconnector.stop()
     this.cleanup()
+    this.$accessor.setReconnecting(false)
+    if (this._established) {
+      this.postParentMessage({ type: 'KERNEL_DISCONNECTED', reason: reason ? reason.message : undefined })
+    }
 
     this.$vue.$notify({
       group: 'neko',
@@ -166,6 +241,10 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   }
 
   protected [EVENT.SYSTEM.DISCONNECT]({ message }: SystemMessagePayload) {
+    // neko sends this as it stops, on a restart as well as on teardown; the
+    // socket close that follows decides whether to reconnect
+    if (message == 'connection shutdown') return
+
     if (message == 'kicked') {
       this.$accessor.logout()
       message = this.$vue.$t('connection.kicked') as string
