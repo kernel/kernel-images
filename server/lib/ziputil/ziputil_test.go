@@ -2,6 +2,7 @@ package ziputil
 
 import (
 	"archive/zip"
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,6 +35,21 @@ func TestZipDirPreservesSymlinks(t *testing.T) {
 	target, err := os.Readlink(linkPath)
 	require.NoError(t, err)
 	assert.Equal(t, "target.txt", target)
+}
+
+func TestZipDirFollowsSymlinkedRoot(t *testing.T) {
+	realDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(realDir, "file.txt"), []byte("contents"), 0644))
+	linkDir := filepath.Join(t.TempDir(), "link")
+	require.NoError(t, os.Symlink(realDir, linkDir))
+
+	zipContent, err := ZipDir(linkDir)
+	require.NoError(t, err)
+
+	zipReader, err := zip.NewReader(bytes.NewReader(zipContent), int64(len(zipContent)))
+	require.NoError(t, err)
+	require.Len(t, zipReader.File, 1)
+	assert.Equal(t, "file.txt", zipReader.File[0].Name)
 }
 
 func TestUnzipRejectsEscapingSymlink(t *testing.T) {

@@ -40,6 +40,12 @@ func (l CompressionLevel) ToZstdLevel() zstd.EncoderLevel {
 // TarZstdDir creates a tar.zst archive from a directory and writes it to the provided writer.
 // This is a streaming implementation that doesn't buffer the entire archive in memory.
 func TarZstdDir(w io.Writer, sourceDir string, level CompressionLevel) error {
+	// filepath.Walk does not descend into a symlinked root, so resolve it first.
+	sourceDir, err := filepath.EvalSymlinks(sourceDir)
+	if err != nil {
+		return fmt.Errorf("resolve source dir: %w", err)
+	}
+
 	// Create zstd encoder
 	zw, err := zstd.NewWriter(w,
 		zstd.WithEncoderLevel(level.ToZstdLevel()),
