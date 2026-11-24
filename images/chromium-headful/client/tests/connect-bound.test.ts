@@ -600,11 +600,21 @@ describe('live view stream liveness', () => {
     expect(await check(client)).toBe(false)
   })
 
-  test('a peer that ICE marks disconnected is dead without waiting', async () => {
-    const client = await establishedClient()
-    client['_state'] = 'disconnected'
-    expect(await client.streamAlive(2000)).toBe(false)
-  })
+  test.each(['disconnected', 'failed', 'closed'])(
+    'a peer that ICE marks %s is dead without sampling',
+    async (state) => {
+      const client = await establishedClient()
+      let sampled = false
+      client['_peer']!.getStats = (async () => {
+        sampled = true
+        return new Map()
+      }) as unknown as RTCPeerConnection['getStats']
+      client['_state'] = state
+      expect(client.connected).toBe(false)
+      expect(await client.streamAlive(2000)).toBe(false)
+      expect(sampled).toBe(false)
+    },
+  )
 
   test('a client with no session is not alive', async () => {
     expect(await new TestClient().streamAlive(2000)).toBe(false)

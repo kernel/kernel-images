@@ -148,7 +148,6 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
   public async streamAlive(windowMs: number): Promise<boolean> {
     const peer = this._peer
     if (!peer || !this.connected) return false
-    if (['disconnected', 'failed', 'closed'].includes(this._state)) return false
     try {
       const before = await receivedBytes(peer)
       await new Promise((resolve) => window.setTimeout(resolve, windowMs))
@@ -657,7 +656,7 @@ export abstract class BaseClient extends EventEmitter<BaseEvents> {
     // A disconnect before any peer was established is a failed connect, not a
     // dropped session. disconnect() clears the bound below, so without this the
     // parent frame would hear nothing at all.
-    if (!this._gaveUp && !this._everConnected && !this._established) {
+    if (!this._gaveUp && !this._established) {
       this.giveUp(this._failure ?? 'peer', reason ?? new Error('connection failed'))
       return
     }
