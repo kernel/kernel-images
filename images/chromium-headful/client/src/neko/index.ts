@@ -80,6 +80,11 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
       connect: () => {
         if (this.credentials) this.connect(this.url, this.credentials.password, this.credentials.displayname)
       },
+      // the store reset a drop does, so tracks from the closed attempt don't linger
+      abort: () => {
+        this.disconnect()
+        this.cleanup()
+      },
       onWaiting: (attempt) => {
         this.$accessor.setReconnecting(true)
         this.postParentMessage({ type: 'KERNEL_RECONNECTING', attempt })
@@ -165,7 +170,10 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
   // A page that comes back may hold a session that died while it was away
   // without any event saying so.
   private onWake = async () => {
-    if (document.hidden) return
+    if (document.hidden) {
+      this.reconnector.hid()
+      return
+    }
     if (this.reconnector.active) {
       this.reconnector.wake()
       return

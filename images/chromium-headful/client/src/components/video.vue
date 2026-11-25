@@ -701,10 +701,20 @@
 
     @Watch('stream')
     onStreamChanged(stream?: MediaStream) {
-      if (!this._video || !stream) {
+      if (!this._video) {
         return
       }
 
+      if (!stream) {
+        // a stream left on the element still fires canplaythrough and marks
+        // the closed session playable again
+        if ('srcObject' in this._video) this._video.srcObject = null
+        return
+      }
+
+      // swapping srcObject pauses the element without a pause event; starting
+      // from unplayable lets the new stream's canplaythrough start playback
+      this.$accessor.video.setPlayable(false)
       if ('srcObject' in this._video) {
         this._video.srcObject = stream
       } else {
@@ -853,14 +863,7 @@
         this.onResize()
       })
 
-      this._video.addEventListener('canplaythrough', () => {
-        this.$accessor.video.setPlayable(true)
-        if (this.autoplay) {
-          this.$nextTick(() => {
-            this.$accessor.video.play()
-          })
-        }
-      })
+      this._video.addEventListener('canplaythrough', () => this.onCanPlayThrough())
 
       this._video.addEventListener('ended', () => {
         this.$accessor.video.setPlayable(false)
@@ -1043,6 +1046,15 @@
         this.onResize()
       } catch (err: any) {
         this.$log.error(err)
+      }
+    }
+
+    onCanPlayThrough() {
+      this.$accessor.video.setPlayable(true)
+      if (this.autoplay) {
+        this.$nextTick(() => {
+          this.$accessor.video.play()
+        })
       }
     }
 
