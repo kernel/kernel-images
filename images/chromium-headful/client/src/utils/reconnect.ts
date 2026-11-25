@@ -68,7 +68,6 @@ export class Reconnector {
       this.failures = this.deps.now() - this.connectedAt < RECONNECT_STABLE_MS ? this.failures + 1 : 0
     }
     this.phase = 'waiting'
-    this.dialed = false
     this.deps.onWaiting(this.failures + 1)
     this.schedule(reconnectDelay(this.failures))
   }

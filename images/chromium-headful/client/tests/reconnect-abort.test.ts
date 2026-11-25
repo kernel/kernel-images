@@ -29,9 +29,16 @@ test('aborting a reconnect attempt closes it and clears its media', () => {
 
   let closed = false
   let dropped = false
-  const socket = { close: () => (closed = true) }
-  client['_ws'] = socket as unknown as WebSocket
   client['onDisconnected'] = () => (dropped = true)
+  // like a real socket, closing runs whatever onclose handler is set then
+  const socket = {
+    onclose: () => client['onDisconnected'](new Error('websocket closed')),
+    close() {
+      closed = true
+      this.onclose()
+    },
+  }
+  client['_ws'] = socket as unknown as WebSocket
 
   client['reconnector']['deps'].abort()
 

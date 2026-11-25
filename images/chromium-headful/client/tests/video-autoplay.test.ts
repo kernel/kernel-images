@@ -138,6 +138,105 @@ describe('first load autoplay', () => {
   })
 })
 
+// The playing and playable state from store/video.ts, with the watcher that
+// calls onPlayingChanged when playing changes.
+function videoStore(component: Record<string, any>) {
+  const state = { playing: false, playable: false }
+  const set = (playing: boolean) => {
+    if (state.playing === playing) return
+    state.playing = playing
+    component.onPlayingChanged(playing)
+  }
+  return {
+    state,
+    play: () => state.playable && set(true),
+    pause: () => state.playable && set(false),
+    setPlayable: (playable: boolean) => {
+      if (!playable) set(false)
+      state.playable = playable
+    },
+    setMuted: () => {},
+    reset: () => {
+      set(false)
+      state.playable = false
+    },
+  }
+}
+
+describe('a stream that replaces a closed one', () => {
+  // An element that, like Chromium, pauses without a pause event when its
+  // srcObject changes, and fires canplaythrough only while it holds a stream.
+  function player() {
+    const video = {
+      paused: true,
+      muted: true,
+      srcObject: null as object | null,
+      play() {
+        this.paused = false
+        return Promise.resolve()
+      },
+      pause() {
+        this.paused = true
+      },
+    }
+    const component = Object.create(videoPrototype(), {
+      autoplay: { get: () => true },
+      playable: { get: () => store.state.playable },
+    })
+    const store = videoStore(component)
+    Object.assign(component, {
+      _video: new Proxy(video, {
+        set(target, key, value) {
+          if (key === 'srcObject') target.paused = true
+          return Reflect.set(target, key, value)
+        },
+      }),
+      isVideoSyncing: false,
+      videoBlocked: false,
+      $accessor: { video: store },
+      $nextTick: (fn: () => void) => fn(),
+    })
+    const canPlayThrough = async () => {
+      if (!video.srcObject) return
+      component.onCanPlayThrough()
+      await Promise.resolve()
+    }
+    return { component, video, store, canPlayThrough }
+  }
+
+  test('plays after an aborted attempt that had received its stream', async () => {
+    const { component, video, store, canPlayThrough } = player()
+    const aborted = {}
+    component.onStreamChanged(aborted)
+
+    // the attempt is aborted: the store resets and its stream goes away
+    store.reset()
+    component.onStreamChanged(undefined)
+    // the closed stream finishes buffering
+    await canPlayThrough()
+
+    component.onStreamChanged({})
+    await canPlayThrough()
+
+    expect(video.paused).toBe(false)
+    expect(store.state.playing).toBe(true)
+  })
+
+  test('plays a new stream that replaces one already playing', async () => {
+    const { component, video, store, canPlayThrough } = player()
+    component.onStreamChanged({})
+    await canPlayThrough()
+    expect(video.paused).toBe(false)
+
+    component.onStreamChanged({})
+    expect(video.paused).toBe(true)
+    await canPlayThrough()
+
+    expect(video.paused).toBe(false)
+    expect(store.state.playing).toBe(true)
+  })
+})
+
 describe('start prompt', () => {
   const template = parseComponent(readFileSync(new URL('../src/components/video.vue', import.meta.url), 'utf8'))
     .template!.content
