@@ -80,7 +80,11 @@ export class NekoClient extends BaseClient implements EventEmitter<NekoEvents> {
       connect: () => {
         if (this.credentials) this.connect(this.url, this.credentials.password, this.credentials.displayname)
       },
-      abort: () => this.disconnect(),
+      // the store reset a drop does, so tracks from the closed attempt don't linger
+      abort: () => {
+        this.disconnect()
+        this.cleanup()
+      },
       onWaiting: (attempt) => {
         this.$accessor.setReconnecting(true)
         this.postParentMessage({ type: 'KERNEL_RECONNECTING', attempt })
