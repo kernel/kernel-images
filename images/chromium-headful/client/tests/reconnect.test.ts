@@ -27,6 +27,7 @@ function harness(probe: () => ProbeResult = () => 'ok') {
     hidden: () => hidden,
     probe: async () => probe(),
     connect: () => events.push(`connect@${now}`),
+    abort: () => events.push(`abort@${now}`),
     onWaiting: (attempt) => events.push(`waiting ${attempt}`),
     onEnded: () => events.push('ended'),
   })
@@ -186,6 +187,36 @@ describe('reconnector', () => {
     h.reconnect.wake()
     await h.flush()
     expect(h.events.filter((e) => e.startsWith('connect'))).toHaveLength(1)
+  })
+
+  test('a page that hides while an attempt connects replaces it on wake', async () => {
+    const h = harness()
+    h.tick(RECONNECT_STABLE_MS)
+    h.reconnect.dropped()
+    await h.advance(0)
+    h.setHidden(true)
+    h.reconnect.hid()
+    h.tick(30000)
+    h.setHidden(false)
+    h.reconnect.wake()
+    await h.flush()
+    expect(h.events).toEqual(['waiting 1', 'connect@10000', 'abort@40000', 'connect@40000'])
+    expect(h.reconnect.active).toBe(true)
+    expect(h.pending()).toBe(0)
+  })
+
+  test('a hide before connect() leaves nothing to replace', async () => {
+    let answer!: (r: ProbeResult) => void
+    const h = harness()
+    h.reconnect['deps'].probe = () => new Promise((r) => (answer = r))
+    h.tick(RECONNECT_STABLE_MS)
+    h.reconnect.dropped()
+    await h.advance(0)
+    h.reconnect.hid()
+    h.reconnect.wake()
+    answer('ok')
+    await h.flush()
+    expect(h.events).toEqual(['waiting 1', 'connect@10000'])
   })
 
   test('a refused page ends the session without connecting', async () => {

@@ -23,6 +23,8 @@ export interface ReconnectDeps {
   hidden(): boolean
   probe(): Promise<ProbeResult>
   connect(): void
+  // closes the attempt connect() started without reporting a drop
+  abort(): void
   // an attempt is pending; attempt counts from 1 for each drop
   onWaiting(attempt: number): void
   onEnded(): void
@@ -44,6 +46,9 @@ export class Reconnector {
   private failures = 0
   private connectedAt = -Infinity
   private timer?: number
+  // connect() ran for the current attempt, and the page hid after it did
+  private dialed = false
+  private stale = false
 
   constructor(private deps: ReconnectDeps) {}
 
@@ -63,6 +68,7 @@ export class Reconnector {
       this.failures = this.deps.now() - this.connectedAt < RECONNECT_STABLE_MS ? this.failures + 1 : 0
     }
     this.phase = 'waiting'
+    this.dialed = false
     this.deps.onWaiting(this.failures + 1)
     this.schedule(reconnectDelay(this.failures))
   }
@@ -73,8 +79,20 @@ export class Reconnector {
     this.phase = 'idle'
   }
 
+  // the page was hidden; an attempt already dialing may have been suspended
+  hid() {
+    if (this.phase === 'connecting' && this.dialed) this.stale = true
+  }
+
   // the page became visible, was restored, or the network came back
   wake() {
+    // an attempt suspended mid-connect can sit until its timeout; replace it
+    if (this.phase === 'connecting' && this.stale) {
+      this.deps.abort()
+      this.phase = 'waiting'
+      this.attempt()
+      return
+    }
     if (this.phase !== 'waiting') return
     this.clear()
     this.attempt()
@@ -102,6 +120,8 @@ export class Reconnector {
   private async attempt() {
     if (this.phase !== 'waiting' || this.deps.hidden()) return
     this.phase = 'connecting'
+    this.dialed = false
+    this.stale = false
     const result = await this.deps.probe()
     if (this.phase !== 'connecting') return
     if (result === 'ended') {
@@ -114,6 +134,7 @@ export class Reconnector {
       this.phase = 'waiting'
       return
     }
+    this.dialed = true
     this.deps.connect()
   }
 }
