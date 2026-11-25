@@ -1,0 +1,70 @@
+<!doctype html>
+<html>
+<body style="margin:0;background:#111;color:#eee;font:14px sans-serif">
+<canvas id="c" width="1280" height="720" style="width:640px"></canvas>
+<pre id="log"></pre>
+<script>
+// Synthetic WHIP sender for latency measurement. Each frame carries the
+// bridge-clock time (sender clock + measured offset) as 44 bits in two rows of
+// 24px blocks (second row inverted for validation).
+const log = (m) => {
+  document.getElementById("log").textContent += m + "\n";
+  fetch("/log", { method: "POST", body: m });
+};
+const BITS = 44, B = 24;
+const c = document.getElementById("c"), g = c.getContext("2d");
+let offset = 0;
+
+async function measureOffset() {
+  let best = { rtt: Infinity, off: 0 };
+  for (let i = 0; i < 20; i++) {
+    const t0 = Date.now();
+    const s = Number(await (await fetch("/now", { cache: "no-store" })).text());
+    const t1 = Date.now();
+    if (t1 - t0 < best.rtt) best = { rtt: t1 - t0, off: s - (t0 + t1) / 2 };
+  }
+  log(`clock offset ${best.off.toFixed(1)}ms (rtt ${best.rtt}ms)`);
+  return best;
+}
+
+function draw() {
+  const t = Date.now() + offset;
+  g.fillStyle = "#406080"; g.fillRect(0, 0, c.width, c.height);
+  const a = (t / 1000) % (2 * Math.PI);
+  g.fillStyle = "#e0c040";
+  g.beginPath(); g.arc(640 + 250 * Math.cos(a), 400 + 200 * Math.sin(a), 80, 0, 7); g.fill();
+  g.fillStyle = "#fff"; g.font = "48px monospace"; g.fillText(new Date(t).toISOString(), 300, 680);
+  for (let i = 0; i < BITS; i++) {
+    const bit = Math.floor(t / 2 ** i) % 2;
+    g.fillStyle = bit ? "#fff" : "#000"; g.fillRect(i * B, 0, B, B);
+    g.fillStyle = bit ? "#000" : "#fff"; g.fillRect(i * B, B, B, B);
+  }
+  requestAnimationFrame(draw);
+}
+
+async function start() {
+  const off = await measureOffset();
+  offset = off.off;
+  window.offsetInfo = off;
+  draw();
+  const stream = c.captureStream(30);
+  const pc = new RTCPeerConnection();
+  const tr = pc.addTransceiver(stream.getVideoTracks()[0], { direction: "sendonly" });
+  const vp8 = RTCRtpSender.getCapabilities("video").codecs.filter((x) => /vp8/i.test(x.mimeType));
+  tr.setCodecPreferences(vp8);
+  pc.onconnectionstatechange = () => log("pc " + pc.connectionState);
+  await pc.setLocalDescription(await pc.createOffer());
+  await new Promise((r) => { if (pc.iceGatheringState === "complete") r(); pc.onicegatheringstatechange = () => pc.iceGatheringState === "complete" && r(); });
+  const res = await fetch("/whip", { method: "POST", headers: { "Content-Type": "application/sdp" }, body: pc.localDescription.sdp });
+  await pc.setRemoteDescription({ type: "answer", sdp: await res.text() });
+  window.pc = pc;
+  setInterval(async () => {
+    const st = await pc.getStats();
+    st.forEach((s) => s.type === "outbound-rtp" && s.framesEncoded &&
+      log(`enc ${s.encoderImplementation} ${s.frameWidth}x${s.frameHeight}@${s.framesPerSecond} avgEncodeMs ${(1000 * s.totalEncodeTime / s.framesEncoded).toFixed(1)} qlim ${s.qualityLimitationReason}`));
+  }, 10000);
+}
+start().catch((e) => log("error " + e));
+</script>
+</body>
+</html>
