@@ -66,9 +66,9 @@ func TestRootSize(t *testing.T) {
 			ok:     true,
 		},
 		{
-			name:   "xwininfo failure output",
-			out:    "xwininfo: unable to open display :1\n",
-			ok:     false,
+			name: "xwininfo failure output",
+			out:  "xwininfo: unable to open display :1\n",
+			ok:   false,
 		},
 		{
 			// Both dimensions must be present; a partial dump is not a size.
@@ -83,6 +83,59 @@ func TestRootSize(t *testing.T) {
 			w, h, ok := rootSize(tt.out)
 			if ok != tt.ok || (ok && (w != tt.width || h != tt.height)) {
 				t.Errorf("got (%d, %d, %v), want (%d, %d, %v) for %q", w, h, ok, tt.width, tt.height, tt.ok, tt.out)
+			}
+		})
+	}
+}
+
+func TestWorkArea(t *testing.T) {
+	tests := []struct {
+		name       string
+		out        string
+		x, y, w, h int
+		ok         bool
+	}{
+		{
+			name: "full display",
+			out:  "_NET_WORKAREA(CARDINAL) = 0, 0, 1920, 1080\n",
+			w:    1920,
+			h:    1080,
+			ok:   true,
+		},
+		{
+			// What a panel reserving the right half of the display looks like.
+			name: "reserved space",
+			out:  "_NET_WORKAREA(CARDINAL) = 0, 0, 960, 1080\n",
+			w:    960,
+			h:    1080,
+			ok:   true,
+		},
+		{
+			// Multiple desktops print four numbers each; only the first matters.
+			name: "several desktops",
+			out:  "_NET_WORKAREA(CARDINAL) = 0, 24, 1920, 1056, 0, 24, 1920, 1056\n",
+			y:    24,
+			w:    1920,
+			h:    1056,
+			ok:   true,
+		},
+		{
+			name: "property unset",
+			out:  "_NET_WORKAREA:  not found.\n",
+			ok:   false,
+		},
+		{
+			name: "truncated",
+			out:  "_NET_WORKAREA(CARDINAL) = 0, 0\n",
+			ok:   false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			x, y, w, h, ok := workArea(tt.out)
+			if ok != tt.ok || (ok && (x != tt.x || y != tt.y || w != tt.w || h != tt.h)) {
+				t.Errorf("got (%d, %d, %d, %d, %v), want (%d, %d, %d, %d, %v) for %q",
+					x, y, w, h, ok, tt.x, tt.y, tt.w, tt.h, tt.ok, tt.out)
 			}
 		})
 	}
